@@ -35,13 +35,21 @@
 // Concurrency: **one instance serves every core's store** - `Expeditor`
 // hands the same reference to each `CoreRuntime::Open` - and it is on
 // `rules.md` section 3's declared shared list. Nothing here is internally
-// synchronized, and the reason that is sound rather than lucky is the
-// write side: **core 0 alone grows the file**, and capacity only rises, so
-// a peer reading a stale value under-reads a bound and faults nothing it
-// should not. A device that could shrink, or that any core could grow,
-// would need real synchronization. (This comment said "owned by one core"
-// until the AL-S9 review; it had not been true since the store went
-// per-core.)
+// synchronized. That was sound rather than lucky while **core 0 alone grew
+// the file**: capacity only rises, so a peer reading a stale value
+// under-reads a bound and faults nothing it should not, and this paragraph
+// closed by saying a device "that any core could grow would need real
+// synchronization".
+//
+// **Any core grows it now**, and nothing was added when that became true.
+// A peer allocating through the instance's free map reaches
+// `EnsureCapacity` (since `2663001`, and from two more paths since AW-S1b),
+// which writes `page_capacity_` with no lock. Filed at
+// `docs/inflight/bugs/device-growth-is-not-core-0s-any-more.md`, AM-S3's to
+// decide: growth returns to core 0, or the field becomes atomic. The
+// monotone read is still what has kept it from tearing.
+// (This comment said "owned by one core" until the AL-S9 review; it had not
+// been true since the store went per-core.)
 //
 // **That argument covers `page_capacity_` and nothing else** (AM-S2 R8).
 // It is about a monotonically rising bound read racily; it says nothing

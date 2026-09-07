@@ -2191,7 +2191,6 @@ private:
     DispatchOutcome FinishRemoteReads(ResultSink* sink, const std::vector<PipelineTag>& tags,
                                       const PendingRemoteRender& render);
 
-
     bool logging(LogLevel level) const noexcept {
         return log_ != nullptr && log_->enabled(level);
     }

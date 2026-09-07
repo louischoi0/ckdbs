@@ -18,7 +18,6 @@
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/storage/page_header.hpp"
-#include "kds/wal/log_page_handoff.hpp"
 
 namespace kds::server {
 
@@ -495,46 +494,16 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // it owned was admitted with nothing checking it
     // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2).
     //
-    // **The one page range it needs and the system range does not cover.**
-    // A catalog relation's heap pages are all below `kFirstUserPageId`
-    // precisely so that a peer can read them (`catalog/well_known.hpp`), but
-    // a *spilled* value is not: `sys.assertions` keeps each declaration's
-    // text in a var-heap page taken from the general supply, so without this
-    // a peer's `ListAssertions` is refused the fetch and no assertion of its
-    // own can be revived.
-    //
-    // Read rights only, and self-granted rather than asked for, which is
-    // sound on three counts and is stated here because the grant model is
-    // core 0's: the pages are a *system* relation's, in the same class as
-    // the system range itself; nothing here may write them (`MayWrite`
-    // still refuses every page below the limit to every core but 0); and a
-    // var-heap value is immutable per version (invariant 14), so reading
-    // one without a coherence protocol is strictly safer than the catalog
-    // heap reads a peer already makes (`docs/inflight/known-gaps.md`).
-    //
-    // **Every catalog relation with a var-heap, by list** (CB2,
-    // `crosscore.md` CC12/CR1). The list is `sys.assertions` alone since
-    // `sys.pattern_defs` went with declared patterns on 2026-08-31, and it
-    // stays a list because the next catalog relation to gain a var-heap
-    // joins it by CR1 rather than by a second grant here.
-    //
-    // **The grants themselves went with CC7's fault rights** (AW-S1b): one
-    // frame table serves every core, so a peer reading a catalog var-heap
-    // page finds core 0's frame and needs no right to fault its own copy.
-    // The *read* below stays where it still says something - it is the
-    // only place that names which catalog pages spill - and is kept as the
-    // error path's subject rather than deleted with the grant it fed.
-    if (false) {
-        if (auto spills = exec::CatalogSpillPages(*runtime->catalog_, *runtime->store_,
-                                                  exec::kVarHeapCatalogRelations);
-            spills.ok()) {
-        } else if (log != nullptr && log->enabled(LogLevel::kError)) {
-            log->Error("recovery", "core " + std::to_string(config.core_id) +
-                                       ": could not read which pages the stored catalog "
-                                       "declarations spill into, so none can be read here: " +
-                                       spills.status().message());
-        }
-    }
+    // **The self-grant this used to need went with CC7's fault rights**
+    // (AW-S1b). `sys.assertions` keeps each declaration's text in a
+    // var-heap page taken from the general supply rather than the reserved
+    // range (`crosscore.md` CC12/CR1), which the system-range arm of the
+    // old fault predicate did not cover - so a peer granted itself read
+    // rights over exactly the pages its rows named
+    // (`exec::CatalogSpillPages`, deleted with the grant) or `ListAssertions`
+    // was refused the fetch and no assertion of its own could be revived.
+    // One frame table serves every core, so a peer reading such a page
+    // finds the frame core 0 wrote and needs no right to it.
 
     // `config.anchor` is this core's own WAL anchor, the one recovery just
     // scanned from, so the two cannot disagree about which checkpoint is
@@ -924,11 +893,6 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
                                    &recovery_.checkpoint_ns, &dispatcher_->assertions());
 }
 
-
-
-
-
-
 void CoreRuntime::InvalidateCatalog() {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
     const CurrentCoreGuard as_this_core(core_id());
@@ -1157,25 +1121,22 @@ void CoreRuntime::MaybeRefillRowIds() {
             // directory this core must see before its next statement
             // routes.
             if (row_id_refill_.entry_page != kInvalidPageId) {
-                {
-                    // The boundary core 0 just published. The broadcast is
-                    // coming anyway (BumpVersion's hook); doing it here
-                    // means the very next statement resolves against the
-                    // directory rather than the tick after - which is what
-                    // R4/IS3's routing needs, since until this core sees
-                    // its own range it keeps shipping the INSERT away.
-                    //
-                    // **`InvalidateCatalog` and not `InvalidateFromPeer`**,
-                    // which was this line and was a no-op for its stated
-                    // purpose: the cache is the memo and the resident
-                    // catalog frames are the authority, so dropping the
-                    // first without evicting the second re-reads the same
-                    // stale bytes and concludes the same nothing
-                    // (`InvalidateCatalog`'s own comment states it). Found
-                    // by IS3's end-to-end test, which never saw the range
-                    // it had just been granted.
-                    InvalidateCatalog();
-                }
+                // The boundary core 0 just published. The broadcast is
+                // coming anyway (BumpVersion's hook); doing it here means
+                // the very next statement resolves against the directory
+                // rather than the tick after - which is what R4/IS3's
+                // routing needs, since until this core sees its own range
+                // it keeps shipping the INSERT away.
+                //
+                // **`InvalidateCatalog` and not `InvalidateFromPeer`**,
+                // which was this line and was a no-op for its stated
+                // purpose: the cache is the memo and the resident catalog
+                // frames are the authority, so dropping the first without
+                // evicting the second re-reads the same stale bytes and
+                // concludes the same nothing (`InvalidateCatalog`'s own
+                // comment states it). Found by IS3's end-to-end test, which
+                // never saw the range it had just been granted.
+                InvalidateCatalog();
                 row_id_refill_.entry_page = kInvalidPageId;
             }
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
@@ -1189,7 +1150,6 @@ void CoreRuntime::MaybeRefillRowIds() {
             }
         }));
 }
-
 
 void CoreRuntime::MaybeBurnIdleTrxIdBlock() {
     if (!txn_manager_.has_value()) return;

@@ -293,10 +293,11 @@ public:
     // maps alone, not the frames. It is what an extent grant needed before
     // it left core 0 - a run of ids a peer would write into had to be
     // allocated on the device first, or a crash freed the run for the next
-    // mount's allocator to hand out over committed rows. The grants went at
-    // AW-S1b; the operation stays because "the claim is durable and the
-    // page is not" is a state anything that allocates can be interrupted
-    // in, and the recovery path that reads it back is unchanged.
+    // mount's allocator to hand out over committed rows. **That caller went
+    // at AW-S1b and the tests are what is left**: `Sync()` is what
+    // production reaches for, and this is the narrower operation a cell uses
+    // to construct "the claim is durable and the page is not" - the state
+    // `ResidentBytes`' all-zero arm answers `NotFound` for.
     Status PersistMaps();
 
     // ---- The writeback primitive (docs/spec/eviction.md §4, EVT03) ------
@@ -378,7 +379,6 @@ public:
     // default) disables it. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
 
-
     // **`SetStreamCoreId` and `core_id()` are gone** (AM-S2 step 3). The
     // first existed for an ordering that no longer exists: recovery stamps
     // pages before the lease may be installed, so a peer had to be told its
@@ -412,25 +412,12 @@ public:
     void SetStampSuppressed(bool suppressed) noexcept { stamp_suppressed_ = suppressed; }
     bool stamp_suppressed() const noexcept { return stamp_suppressed_; }
 
-    // Whether this store's core may **read** `page_id`.
-    //
-    // Core 0 may reach anything - it owns the superblock, the free map, the
-    // headerless map and the catalog pages. Any other core may reach ids
-    // inside an extent it was granted, plus the fixed system range
-    // read-only: the catalog lives there, and a core that cannot read the
-    // catalog cannot resolve a relation and so cannot serve a statement at
-    // all (workplan-crosscore.md P6).
-    //
-    // Enforced in the frame-load path **in debug builds only** (P2's
-    // "ownership-violation assert"), so release pays nothing. It is a
-    // mechanical check on shared-nothing rather than a security boundary:
-    // what it catches is a core reaching for a page that is not its own,
-    // which is a defect however it got there.
-    //
-    // A page this core may write, it may read: the write-rights set
-    // (grants and stamp claims, below) is consulted here too, so a write
-    // grant carries its own fault rights (the 95b45e8 review's C2) and a
-    // page claimed from its stamp is readable by the claim alone.
+    // **There is no read predicate.** `MayFault` stood here until AW-S1b -
+    // "core 0 may reach anything; any other core may reach ids inside an
+    // extent it was granted, plus the fixed system range read-only" -
+    // enforced on the frame-load path in debug builds only. One frame table
+    // serves every core, so every core faults every page and the question
+    // has no content.
 
     // Whether this store's core may **write** `page_id` - i.e. take a frame
     // it is allowed to dirty.
@@ -450,13 +437,6 @@ public:
     // the asymmetry AM-R2 and AO-R14 keep: the system range is readable by
     // every core and writable only by core 0.
     bool MayWrite(PageId page_id) const noexcept override;
-
-
-
-
-
-
-
 
     // Records that the record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn and, if this is the first record to dirty the
@@ -751,7 +731,6 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
                                                       bool bump_usage);
 
-
     struct Frame {
         std::unique_ptr<Page> bytes;
         bool dirty = false;
@@ -826,7 +805,6 @@ private:
         std::unique_ptr<Page> headerless_map;
         bool dirty = false;
     };
-
 
     DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept;
 
@@ -941,7 +919,6 @@ private:
     // (§5: a scan's touch must not look like heat).
     StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
                                                             bool bump_usage = true);
-
 
     // Whether the device holds nothing for `page_id` - not addressable, or
     // every byte zero: a page allocated in the map and never written. What

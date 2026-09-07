@@ -6508,14 +6508,17 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // every write to a constraint this core is enforcing correctly.
         //
         // What still refuses is an assertion this core knows of and cannot
-        // enforce (`CannotEnforce`): a cabin core 0 built for this
-        // relation before PW1c-6c, whose pages `MayWrite` denies. That is
-        // the arm's real predicate, and reading `AnyOn` for it was the
-        // defect - `AnyOn` is false on a core whose registry never heard of
-        // the assertion, which is exactly the core that must refuse
+        // enforce (`CannotEnforce`). Reading `AnyOn` for it was the defect -
+        // `AnyOn` is false on a core whose registry never heard of the
+        // assertion, which is exactly the core that must refuse
         // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
         // Finding 2: a shipped write put a second row in a group under
-        // `CHECK COUNT(*) <= 1`).
+        // `CHECK COUNT(*) <= 1`). **The case that fed it is gone** (AW-S1b):
+        // it was a cabin core 0 built for this relation before PW1c-6c,
+        // whose pages the owner's `MayWrite` denied, and a cabin page is a
+        // user page every core writes now. What reaches `CannotEnforce`
+        // today is a revive that failed or a checkpoint whose snapshots do
+        // not cover the base (`server/mount_recovery.cpp`).
         // **The foreign-key arm lifted 2026-09-01 (AH-T4, operator's
         // ratification).** It refused a write to any FK-linked relation on
         // any core but 0, and its reason was *"validation reads the linked
@@ -6552,10 +6555,9 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                 "a relation under an assertion this core cannot enforce cannot take "
                 "writes on core " +
                 std::to_string(core_id_) +
-                ": the assertion's entry pages are the system core's and carry no write "
-                "grant, so admitting the write would leave the constraint unchecked; "
-                "re-create the assertion so its owner builds it "
-                "(workplan-peer-writer.md §7d, PW1c-6c)");
+                ": the assertion's Bound Cabin could not be revived at this mount, so "
+                "admitting the write would leave the constraint unchecked; the mount log "
+                "names why (docs/spec/assertion.md 6.1)");
         }
         // **PW1c-7's rights probe went with the grants** (AW-S1b). It asked
         // the store whether this core could write a relation's creation

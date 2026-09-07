@@ -236,8 +236,6 @@ protected:
     SuperBlock config_superblock_;
 };
 
-
-
 TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
     // **Renamed with the mechanism it tests** (AU-S3). It was
     // `AShutdownMessageStopsTheReactorFromItsOwnThread`, and both halves of
@@ -590,10 +588,19 @@ TEST(CorePlacementTest, RotationSkipsTheSystemCoreAndCreatingStaysPut) {
 }
 
 TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
-    // The catalog half of P6c end to end: rotation chooses a peer, the
-    // publish hook fires with the facts the send needs, and the grant it
-    // implies lets that peer fault the relation - the same grant P6b's
-    // test drives, now produced by the placement path rather than by hand.
+    // The catalog half of P6c end to end: rotation chooses a peer, and the
+    // peer resolves the relation.
+    //
+    // **The publish hook this drives has no production installer since
+    // AW-S1b**, which deleted CC7's publish with the grants. What the hook
+    // half of this cell still pins is the *catalog*'s contract - it fires
+    // once, at the end of a CreateTable whose owner is not core 0, with the
+    // oid, owner, root, var-heap root and anchor, and with the root's
+    // creation `PageRef` already dropped - and that contract is load-bearing
+    // beyond this cell: `MaterializeIndexDefinition` keys its PW1c-6
+    // refusal on the hook's presence, so a catalog with one behaves
+    // differently from a catalog without
+    // (`docs/inflight/bugs/publish-hook-gate-is-test-only.md`).
     //
     // A two-core catalog over the same store, because the fixture's was
     // bootstrapped at core_count = 1 and rotation correctly degrades to
@@ -609,12 +616,13 @@ TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
         PageId varheap = kInvalidPageId;
         int calls = 0;
     } published;
-    // The evict runs *inside* the hook - CreateTable is still on the
-    // stack - which is what pins the 25059bf review's C-1: the root's
-    // creation PageRef must have dropped by publish time, or the
-    // production hook's EvictClean of departed pages fails on every peer
-    // CREATE TABLE. Flush first; eviction refuses dirty frames, and the
-    // production hook flushes before it too.
+    // The evict runs *inside* the hook - CreateTable is still on the stack -
+    // which is what pins the 25059bf review's C-1: the root's creation
+    // `PageRef` must have dropped by publish time, or any hook that touches
+    // the frame fails on every peer CREATE TABLE. Flush first; eviction
+    // refuses dirty frames. The production hook that did exactly this is
+    // gone (AW-S1b), so what this holds now is the catalog's guarantee
+    // about the stack it calls out from.
     Status evict_at_publish = Status::OK();
     catalog2.SetRelationPublishHook(
         [&](catalog::Oid oid, std::uint32_t owner, PageId root, PageId varheap, PageId anchor) {
@@ -907,8 +915,6 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     EXPECT_EQ(receiver.publishes(), 3u);
     EXPECT_GE(core0_->superblock.wal_anchor(0).checkpoint_lsn, folded);
 }
-
-
 
 // A peer that is told the volume has one stream, and handed nothing to
 // attach to, must refuse. Opening one of its own would write records into
@@ -2188,9 +2194,6 @@ TEST_F(CoreRuntimeTest, ACoreReadsARelationItOwnsButDoesNotWhollyHold) {
 
     auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    for (catalog::Oid oid : {split.value(), whole.value()}) {
-    }
-
     std::optional<SessionStepClient> client;
     std::optional<RemoteStepServer> server_0;
     std::optional<RemoteStepServer> server_2;
@@ -2323,9 +2326,6 @@ TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
     peer_config.core_count = 3;
     auto runtime = CoreRuntime::Open(peer_config, *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    for (catalog::Oid oid : {split.value(), whole.value()}) {
-    }
-
     std::optional<SessionStepClient> client;
     std::optional<RemoteStepServer> server_0;
     std::optional<RemoteStepServer> server_2;
@@ -2516,9 +2516,6 @@ TEST_F(CoreRuntimeTest, AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplit
 
     auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    for (catalog::Oid oid : {split.value(), whole.value()}) {
-    }
-
     std::optional<SessionStepClient> client;
     std::optional<RemoteStepServer> server_0;
     std::optional<RemoteStepServer> server_2;
@@ -2648,9 +2645,6 @@ TEST_F(CoreRuntimeTest, AWidenedShapeOverASingleOwnerRelationIsNotFannedIn) {
     peer_config.core_count = 3;
     auto runtime = CoreRuntime::Open(peer_config, *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    for (catalog::Oid oid : {split.value(), whole.value()}) {
-    }
-
     std::optional<SessionStepClient> client;
     std::optional<RemoteStepServer> server_0;
     std::optional<RemoteStepServer> server_2;
@@ -3229,6 +3223,54 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
     EXPECT_NE(sel.find(",9"), std::string::npos) << sel;
 }
 
+TEST_F(CoreRuntimeTest, ASpentLeaseRefusesWithTheWiresRetryableBit) {
+    // PW6's finding (2), closed and still closed: a peer whose lease is
+    // spent used to answer a bare `ERR` (ResourceExhausted is not
+    // IsRetryable), so a client retrying on the bit did not retry it and
+    // lost the row. The refusal is TxnConflict now and the dispatcher
+    // renders it through ErrorReply, so the wire carries `retryable=1` -
+    // the token a retry loop reads.
+    //
+    // **Two of PW6's three leases survive AW-S1b** (`base/status.hpp`): the
+    // page-id lease went, the transaction-id and row-id leases did not, and
+    // this is the cell that says each names itself.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "spent", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // No transaction-id block: BeginWrite refuses first, before the row.
+    const std::string kToken = "ERR TXN_CONFLICT retryable=1 ";
+    const auto no_trx = peer.value()->dispatcher().Dispatch("INSERT INTO spent VALUES (7)").response;
+    EXPECT_EQ(no_trx.substr(0, kToken.size()), kToken) << no_trx;
+    EXPECT_NE(no_trx.find("transaction-id lease"), std::string::npos) << no_trx;
+
+    // With transaction ids but no row-id block: the row's allocation refuses.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+    const auto no_rows = peer.value()->dispatcher().Dispatch("INSERT INTO spent VALUES (7)").response;
+    EXPECT_EQ(no_rows.substr(0, kToken.size()), kToken) << no_rows;
+    EXPECT_NE(no_rows.find("row-id lease"), std::string::npos) << no_rows;
+
+    // Both funded: the same statement runs. The refusals above were the
+    // lease's, never the relation's.
+    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
+    ASSERT_TRUE(first.ok());
+    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
+    const auto ins = peer.value()->dispatcher().Dispatch("INSERT INTO spent VALUES (7)").response;
+    EXPECT_NE(ins.rfind("ERR", 0), 0u) << ins;
+}
+
 // A peer that wrote a relation across several pages, then restarted, reads
 // it whole and writes it again.
 //
@@ -3324,6 +3366,16 @@ void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
         // log - the never-written-page case the store reads as NotFound.
         reopened.value().reset();
     }
+}
+
+TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestart) {
+    // **The device path**, which is the half that has nothing to do with
+    // the log: the pages were flushed, and the restarted owner reads and
+    // writes them again. It was `APeersOwnPagesSurviveARestartByTheirStamp`
+    // until AW-S1b, and what changed is the mechanism, not the outcome -
+    // the helper above says which. Run under the one topology every volume
+    // this build creates.
+    PeerPagesSurviveARestart(/*flush_before_restart=*/true, "survives_flushed");
 }
 
 TEST_F(CoreRuntimeTest, APeerRefusesACallerSuppliedKeyAndTakesTheSameRowWithout) {
@@ -7215,7 +7267,6 @@ TEST_F(CoreRuntimeTest, AParentDeleteMeetingALiveForeignIntentAnswersBusyBeforeA
               std::string::npos)
         << "the released intent was still being reported: " << after;
 }
-
 
 // **The finding this closes** (A5 of the post-SS5 verification order,
 // `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2):

@@ -443,7 +443,7 @@ The six restated cells:
 - `APeerDoesNotSeeADdlThatWasNotFlushed` → `APeerSeesADdlThatWasNotFlushedBecauseItReadsTheSameFrame`. The property **inverted** at AM-S2 step 3 and nothing had noticed.
 - `InvalidatingTheCatalogRefreshesThePeersFreeMap` → deleted; its mechanism is gone.
 - `APeerStoreTakesItsConfiguredFrameBudgetShare` → `APeerOnASharedPoolTakesNoBudgetOfItsOwn`, which is EV4's actual contract.
-- `APeersOwnPagesSurviveARestartByTheirStamp` keeps its end-to-end half (600 rows, restart, read and write again) and loses the stamp-claim assertions.
+- `APeersOwnPagesSurviveARestartByTheirStamp` → `APeersOwnPagesSurviveARestart`: it keeps its end-to-end half (600 rows, restart, read and write again) and loses the stamp-claim assertions. **This line was false when first written** — see §9.5 finding 1.
 - `APeerReadsTheCatalogAndCannotWriteIt`, `APeerIsWiredWithRecordingOff`, `APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt` each install the system boundary and ask under a `CurrentCoreGuard`. **This is AW-a's change of meaning arriving in the cells**: `MayWrite` answers "who is asking", so a question put from the test thread is core 0's question whichever runtime's store it names.
 - `AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt` and `TheAllocatedCountIsMaintainedNotSwept` lost the `ExtentAllocator` that set up their state; the first now reaches it with `CreateNew` + `PersistMaps` + a remount, which is the same state by the same route.
 
@@ -453,8 +453,97 @@ The six restated cells:
 - The **stamp field stays**, and its spec section is corrected rather than deleted: `SetPageStreamStamp` still records which stream's records may name a page, which is redo's business; what went is the *ownership* reading of it (`page-lsn-cross-stream.md` §9 rule 6).
 - `docs/inflight/bugs/flushmaps-lease-guard-and-unlatched-region-walk.md`: **defect 1 closed** — the lease guard is gone and the writeback every core now runs writes the one live map, so there is nothing stale to publish. **Defect 2 (the unlatched `map_regions_` walk) is open** and still AM-S3's, because taking the latch means restructuring a loop that calls `device_.WritePage` inside it.
 
-**Suite: 3314/3314.** Overhead not measured — `CLAUDE.md`'s suspension, and
-AM-S6 is the stage that lifts it.
+**Suite at the commit: 3314/3314**; 3316/3316 after §9.5's restorations.
+Overhead not measured — `CLAUDE.md`'s suspension, and AM-S6 is the stage
+that lifts it.
+
+
+### 9.5 What the `critics-developer` pass found, at `af86026`
+
+The review ran against the committed stage. It found no place where a
+deleted guard removed a check something still needed — the eight `lease_`
+arms, the publish hook's flush/handoff/grant/evict sequence and
+`AdmitWritePages` each carried only the lease's job — and two coverage
+holes, both closed. Everything else it found is a claim the tree makes and
+no longer earns.
+
+**Two cells it restored.** (1) The record above said
+`APeersOwnPagesSurviveARestartByTheirStamp` was *restated*; the `TEST_F` had
+in fact been deleted and only its 90-line helper kept, which
+`-Wall -Wextra` reported as defined-but-not-used. The whole restart path —
+600 rows across several pages, flush, destroy, reopen, write again,
+`COUNT(*) = 601` — had no cell. Restored as `APeersOwnPagesSurviveARestart`.
+(2) `ASpentLeaseRefusesWithTheWiresRetryableBit` was over-deletion: its
+subject is PW6's closed finding about the **row-id and transaction-id**
+leases, both of which survive — `status.hpp` was edited in this very stage
+to say so — and its only dependence on the struck machinery was two setup
+lines. Nothing else asserts that both spellings carry `retryable=1`.
+
+**One live defect, fixed.** The assertion resume's "cannot enforce"
+detector (`mount_recovery.cpp`) tested `MayWrite` on a revived Bound Cabin's
+chain root. A cabin root is a *user* page, so that arm became unconditionally
+false — the reviewer proved it by mutating the condition to `false && …` and
+finding the suite still green. What it detected was the PW1c-6c case, a
+cabin core 0 built for a peer-owned relation, and **the deletion makes those
+enforceable rather than silently unenforced**: the owner appends to the
+chain core 0 built, through the frame table they share. The arm is deleted,
+`assertion.md` §6.1 gains the fact, and the dispatcher's refusal message no
+longer offers a repair (`DROP` then `CREATE`) for a case that cannot occur.
+`CannotEnforce` keeps its other callers — a revive that failed, a checkpoint
+whose snapshots do not cover the base — so the refusal itself is unchanged.
+
+**Three things the deletion left alive that should not have been.**
+`CreateAtUnpinned` lost the only statement in the store that placing a page
+at a chosen id is core 0's; re-added keyed the way `MayWrite` now is, on
+`CurrentCore()`. `ResidentBytes` kept a `TxnConflict` arm that `!MayWrite`
+can no longer reach and whose message named four deleted mechanisms;
+collapsed to the one reachable code, and the prefetched-page plumbing the
+stamp claim fed goes with it. `exec::CatalogSpillPages` was left with its
+one call site inside an `if (false)` block held alive by thirty lines of
+justification; the block, the function and the argument are gone, and
+`ReferencedSpills` — the sweep's, and a different function — stays.
+
+**One decision filed rather than taken.**
+`MaterializeIndexDefinition`'s PW1c-6 refusal is keyed on
+`Catalog::on_publish_` being installed, deliberately: an installed publisher
+was what made ownership a *handoff* fact, and the P4e harness builds indexed
+fixtures through a hook-less catalog. Deleting `Expeditor`'s installer
+inverted the predicate — the gate is now **off in production and on in one
+test**. Re-keying it on ownership alone would refuse the harness the third
+conjunct exists to admit; deleting it removes the catalog-level door this
+file's own doctrine keeps. Filed as
+`docs/inflight/bugs/publish-hook-gate-is-test-only.md` with the three
+options, and the site and the hook's declaration both say plainly that the
+refusal no longer fires in production.
+
+**Roughly twenty comments and six spec sentences** described grants, leases
+and stamp claims in the present tense and are corrected: CC7's two
+"own lease, own-stamped" clauses, CC12's `CatalogSpillPages` citation,
+`assertion_build_service.hpp` and `assertion_check.hpp`'s premise that the
+owner *cannot* write a core-0-built cabin, `crosscore.md` §6 and
+`manual/sql/sql.md`'s `RelationWriteRightsPending`, `core_placement.hpp`'s
+"core 0 owns … extent leasing", `lease_refill_stats.hpp`'s three lease
+kinds, `keystoneid-k0-findings.md`'s `MayFault`, an orphaned nineteen-line
+doc block where `MayFault`'s declaration had been, and two cells that
+asserted `MayWrite` has "four callers outside the store" — this stage
+deleted three of the four, and the live consumer is the store's own write
+gate.
+
+**And one more contradiction the stage created**: CC11 was rewritten here to
+say file growth is no longer core 0's alone, while `page.md` §6 and
+`page_device.hpp` still said it was — the second using it as the reason the
+class needs no internal synchronization. Both corrected, and
+`device-growth-is-not-core-0s-any-more.md` now names all four sites.
+
+**Rejected: nothing.** Two findings are deferred by the order rather than by
+CLA — the unlatched `map_regions_` walk (AM-S3's, filed) and slice (d) — and
+one is deliberately left as a filed decision rather than a patch, above.
+`range_alloc.cpp`'s surviving `EvictClean` was removed on the reviewer's
+argument that it now evicts the *owner's* frame, and the PL §9 rule 1
+ordering beside it is kept whole with its comment narrowed to say its
+consumer is gone.
+
+**Suite after the review: 3316/3316.** Overhead not measured.
 
 ---
 

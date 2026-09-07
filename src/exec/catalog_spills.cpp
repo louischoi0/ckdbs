@@ -54,36 +54,4 @@ Status ReferencedSpills(const catalog::TableAccess& access, storage::PageStore& 
         });
 }
 
-StatusOr<std::vector<PageId>> CatalogSpillPages(catalog::Catalog& catalog,
-                                                storage::PageStore& store,
-                                                std::span<const catalog::Oid> relations) {
-    std::set<SpillRef> referenced;
-    for (const catalog::Oid oid : relations) {
-        auto access = catalog.InitTableAccess(oid);
-        if (!access.ok()) {
-            // A catalog relation this build knows and this instance has not
-            // materialized is not a failure - a fresh file may not have
-            // every one. Skipped, not reported as damage.
-            if (access.status().code() == StatusCode::kNotFound) continue;
-            return access.status();
-        }
-        // Nothing has spilled into this relation yet, so there is no chain
-        // and no row can name a page in one.
-        if (access.value()->varheap_page_id == kInvalidPageId) continue;
-        if (Status s = ReferencedSpills(*access.value(), store, referenced); !s.ok()) {
-            return s.WithContext("catalog spills: relation oid " + std::to_string(oid));
-        }
-    }
-
-    std::vector<PageId> pages;
-    for (const SpillRef& ref : referenced) {
-        if (ref.first == kInvalidPageId) continue;
-        // The set is ordered by (page, slot), so a page's slots arrive
-        // adjacent and the last id is the only one worth comparing.
-        if (!pages.empty() && pages.back() == ref.first) continue;
-        pages.push_back(ref.first);
-    }
-    return pages;
-}
-
 }  // namespace kds::exec

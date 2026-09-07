@@ -14,7 +14,10 @@ value"*. `include/kds/storage/file_page_device.hpp:48-51` states the same
 thing as the reason a read of `page_capacity_` needs no atomic: **"the only
 member a read touches is `page_capacity_` … and core 0 alone grows the
 file"**. `docs/spec/crosscore.md` CC11 said it too until AW-S1b corrected
-that sentence.
+that sentence, as do `docs/spec/page.md` section 6's last bullet and
+`include/kds/storage/page_device.hpp:39` - the second using it as the reason
+the class needs no internal synchronization at all. All four now name this
+file instead.
 
 ## What is true
 

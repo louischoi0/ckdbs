@@ -4,7 +4,6 @@
 #include <map>
 
 #include "kds/server/refusal_counters.hpp"
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -168,8 +167,8 @@ Status IndexBuildPending(std::uint32_t this_core, std::string_view relation);
 // The index builds a core is running or has built and not yet heard `done`
 // for (PW1c-6b-2). Opened, closed and expired by the index build service
 // (the ring half); asked by the dispatcher's write gate. Here for
-// the reason `PendingIndexBuilds` is: this is the dispatcher's whole
-// dependency on the path, a sink, and pulling the scheduler and transport
+// here rather than beside the ring functions: this is the dispatcher's
+// whole dependency on the path, and pulling the scheduler and transport
 // headers into command_dispatcher.hpp for it would tax every translation
 // unit that includes the dispatcher. Times are `sched::MonoTimeNs`, spelled as the integer they
 // are so this header pulls no scheduler header in.

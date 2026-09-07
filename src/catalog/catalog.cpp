@@ -3349,6 +3349,17 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
     // rule, one layer down). A row whose seed is the owner's
     // (`kByOwner`) writes no relation page here, so the refusal has
     // nothing to guard.
+    //
+    // **That predicate inverted at AW-S1b and this refusal is now off in
+    // production.** The hook was `Expeditor`'s and absent in the harness;
+    // the deletion of CC7's publish took the installer, so the only catalog
+    // that carries one is a test's. Left keyed this way rather than re-keyed
+    // on ownership alone, because re-keying would refuse the harness this
+    // arm was written to admit, and because what it guarded - a page
+    // already granted away - is a fact that no longer exists. The
+    // dispatcher's PW1c-6 refusal covers the statement path. Filed as an
+    // open decision:
+    // `docs/inflight/bugs/publish-hook-gate-is-test-only.md`.
     if (seed == AnchorSeed::kHere && access.value()->owner_core != core_id_ && on_publish_) {
         return Status::NotImplemented(
             "catalog: relation oid " + std::to_string(def.table_oid) + " is owned by core " +

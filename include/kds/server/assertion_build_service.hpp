@@ -31,20 +31,21 @@
 // read afterwards: **every write to the constrained relation appends to
 // it** (`exec::AssertionEnforcer::ReserveInsert`). So the cabin's pages are
 // written by whichever core writes the relation, and that is the relation's
-// owner, always and only. A cabin core 0 allocated from core 0's lease is a
-// cabin the owner may not write - `MayWrite` refuses a page carrying
-// neither this lease, a grant, nor this stream's stamp - which is why the
-// owner *could not* enforce such an assertion however faithfully its
-// registry were refreshed. Teaching the peer's registry about core 0's
-// cabin would have produced a refused write in place of an unenforced one.
+// owner, always and only. A cabin core 0 allocated from core 0's lease was
+// a cabin the owner could not write - `MayWrite` refused a page carrying
+// neither this core's lease, a grant, nor its stream's stamp - which is why
+// the owner *could not* enforce such an assertion however faithfully its
+// registry were refreshed. (AW-S1b ended that: a cabin page is a user page,
+// and `MayWrite` admits every core above the system range. The reason the
+// owner builds is now the one below, not this one.)
 //
 // The fix is ownership, and it is `CREATE INDEX`'s (PW1c-6b, §7c): core 0
 // keeps the catalog half - the checks, the id, the `sys.assertions` row -
-// and the **owner** runs the page half. The owner allocates the chain from
-// its own extent lease, so the pages are own-stamped by its own stream (PL-C)
-// and **no handoff record is needed**: nothing crosses a stream, because the
-// core that creates the pages is the core that will write them forever
-// after. PW3's peer checkpoint carries the cabin's group snapshot (AS6a) in
+// and the **owner** runs the page half. The owner scans under its own view,
+// which is the half core 0 cannot do: `Backfill` reads the device's last
+// checkpoint and misses every row the owner holds uncommitted or never
+// checkpointed. **No handoff record is needed** either, because the core
+// that creates the pages is the core that will write them forever after. PW3's peer checkpoint carries the cabin's group snapshot (AS6a) in
 // that same stream, so the owner's next mount folds its own base.
 //
 // ---- No refusal window, and why this differs from the index build --------

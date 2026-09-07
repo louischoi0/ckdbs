@@ -110,9 +110,12 @@ next, taken from a reserved range of low page ids
 (`kCatalogOverflowFirst`..`kCatalogOverflowLimit`,
 `include/kds/catalog/well_known.hpp`). A page holds 68 `sys.columns` rows,
 so the instance's ceiling is roughly 7,800 column rows. The range is
-reserved rather than unbounded because a catalog page has to sit below the
-first user page or a peer core may not fault it
-(`DevicePageStore::MayFault`). §3's scan is genuinely O(relations) across
+reserved rather than unbounded because the flush that precedes
+`kCatalogInvalidate` has to name every catalog page, and a bounded range can
+be named where an arbitrary set of general-supply ids cannot. (It was also
+because a catalog page above the first user page was one a peer could not
+fault at all — `DevicePageStore::MayFault`, which went with the fault grants
+at AW-S1b.) §3's scan is genuinely O(relations) across
 pages, and that scaling belongs to whoever owns the catalog's lookup path.
 
 ## 6. The oid half of (oid, pk)

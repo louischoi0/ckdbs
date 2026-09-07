@@ -125,14 +125,20 @@ public:
     // ---- What this core knows about but cannot enforce (PW1c-6c) --------
     //
     // An assertion whose declaration this core can read and whose Bound
-    // Cabin it may **not write**: an assertion built on core 0 for a
-    // relation a peer owns, which is what every such assertion in a file
-    // written before PW1c-6c is. There is no route to enforcing one - the
-    // cabin's pages carry another core's stamp and `MayWrite` refuses them
-    // - so what the knowledge buys is the *refusal*: the relation's owner
-    // declines writes by name instead of admitting them unchecked, which
-    // is the failure `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
+    // Cabin it cannot enforce from. What the knowledge buys is the
+    // *refusal*: the relation's owner declines writes by name instead of
+    // admitting them unchecked, which is the failure
+    // `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
     // Finding 2 measured.
+    //
+    // **The case that populated it went at AW-S1b**: an assertion built on
+    // core 0 for a relation a peer owns - every such assertion in a file
+    // written before PW1c-6c - whose cabin pages the owner's `MayWrite`
+    // refused, because they carried neither its lease, a grant, nor its
+    // stream's stamp. A cabin page is a user page and every core writes
+    // those now, so what reaches this set is a revive that failed or a
+    // checkpoint whose snapshots do not cover the base
+    // (`server/mount_recovery.cpp`).
     //
     // Deliberately not a `LiveAssertion`: nothing is enforced from this,
     // and holding a directory nobody may append to would put a second

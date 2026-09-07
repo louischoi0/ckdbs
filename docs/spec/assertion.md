@@ -291,13 +291,22 @@ atomic CAS loops, no cross-core sharing. v1 assertions are single-relation
   and the records folded onto it are that owner's.
 - **A core that knows of an assertion it cannot enforce refuses the
   relation's writes.** Refusing is recoverable; admitting an unchecked write
-  is not. The one such file is a cabin core 0 built for a relation another
-  core owns (a file from before owner-built cabins): the owner refuses the
-  relation's writes until the operator's repair, `DROP` then `CREATE`, which
-  builds the cabin on the owner. The refusal is the peer write path's
-  (`CheckWriteAffinity`'s peer branch); **on core 0** an unrecoverable
-  assertion on a core-0-owned relation reports `enforcing=0` and admits
-  writes.
+  is not. The refusal is the peer write path's (`CheckWriteAffinity`'s peer
+  branch); **on core 0** an unrecoverable assertion on a core-0-owned
+  relation reports `enforcing=0` and admits writes.
+- **The file that made a cabin unenforceable is not one any more** (AW-S1b).
+  A cabin core 0 built for a relation another core owns — every such
+  assertion in a file written before owner-built cabins — used to leave the
+  owner unable to append to the chain, so the mount's assertion resume
+  tested `MayWrite` on the chain root and refused the relation's writes
+  where it answered no. A cabin page is a *user* page and `MayWrite` admits
+  every core above the system range now: the owner appends to the chain core
+  0 built, through the frame table they share, and the assertion enforces.
+  The test is deleted with the machinery it read; what still reaches
+  "cannot enforce" is a revive that failed and a checkpoint whose snapshots
+  do not cover the base, so the bullet above is unchanged in every other
+  respect. The operator's repair — `DROP` then `CREATE` — is no longer
+  required for this case.
 
 `DROP ASSERTION` is core 0's statement and sends the owner one message to
 forget the directory; a lost one leaves the owner over-enforcing until its

@@ -246,13 +246,18 @@ public:
     void SetInvalidationHook(InvalidationHook hook) { on_invalidate_ = std::move(hook); }
 
     // Called at the end of a CreateTable whose owner is **not** the system
-    // core (workplan P6c) - the send side of CC7's flush-then-grant
-    // handoff. The system core's installer flushes the relation's pages and
-    // sends the owner a `kRelationFaultGrant`; with no hook installed a
-    // rotated relation is created and never granted, which the affinity
-    // check already refuses honestly. Arguments: the relation's oid, its
-    // owner core, its root page, its var-heap root (kInvalidPageId when
-    // none), and its anchor page (PW2-1).
+    // core (workplan P6c). It was the send side of CC7's flush-then-grant
+    // handoff: the system core's installer flushed the relation's pages and
+    // sent the owner its grants.
+    //
+    // **Nothing installs it in production since AW-S1b**, which deleted
+    // that installer with the grants. One test installs it
+    // (`tests/core_runtime_test.cpp`), and `MaterializeIndexDefinition`
+    // keys a refusal on its presence - see the note there, because that
+    // predicate's meaning inverted when this became test-only.
+    //
+    // Arguments: the relation's oid, its owner core, its root page, its
+    // var-heap root (kInvalidPageId when none), and its anchor page (PW2-1).
     using RelationPublishHook =
         std::function<void(Oid, std::uint32_t, PageId, PageId, PageId)>;
     void SetRelationPublishHook(RelationPublishHook hook) { on_publish_ = std::move(hook); }

@@ -20,7 +20,6 @@
 #include "kds/sched/send_retry.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/file_page_device.hpp"
-#include "kds/wal/log_page_handoff.hpp"
 
 #if KDS_WITH_TLS
 // The one unguessable-byte source this build has - SCRAM's own
@@ -894,9 +893,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     //     ceiling at construction (txn/trx_id.hpp): raising `next_trx_id`
     //     after building it would change a field nothing reads again, and
     //     the sequence would hand out ids the log already names;
-    //   - **no extent has been carved**, because the allocator's search hint
-    //     must start above the floor recovery establishes (RC04's
-    //     obligation 1, applied at StartPeers below).
+    //   - **nothing has allocated yet**, because a search must start above
+    //     the floor recovery establishes (RC04's obligation 1, which
+    //     `RaiseAllocationFloor` applies to the store every core allocates
+    //     through - it was the extent allocator's search hint until AW-S1b).
     // The wal dir goes in too (R6-4): core 0 is a participant like any
     // other - a peer's client writes core-0-owned relations - so its stream
     // can hold a prepared transaction whose verdict is in a peer's.
@@ -1096,7 +1096,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         !s.ok()) {
         return s;
     }
-
 
     expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
                                          expeditor->config_.decay_half_life_ns);

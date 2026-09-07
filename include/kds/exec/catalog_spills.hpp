@@ -11,25 +11,19 @@
 #include "kds/catalog/catalog.hpp"
 #include "kds/storage/page_store.hpp"
 
-// Which var-heap slots a catalog relation's rows point at - the one walk two
-// unrelated mechanisms both need, and which each used to carry its own copy
-// of.
+// Which var-heap slots a catalog relation's rows point at.
 //
-// The two consumers, so a change here is made against both:
-//
-//   - **The mount sweep** (`varheap_sweep.hpp`) compares what the pages hold
-//     against what the rows point at, and collects the difference.
-//   - **A peer's fault grant** (`CoreRuntime::Open`), until AW-S1b: it read
-//     the page ids its rows name and granted itself read rights over
-//     exactly those, because a catalog relation's var-heap sits *outside*
-//     the reserved range and was therefore not covered by the system-range
-//     arm of the fault predicate (`crosscore.md` CC12/CR1: the root page is
-//     reserved so bootstrap can find it, the var-heap is not). One frame
-//     table serves every core now, so there is no right to grant.
-//
-// **The ids the rows name, with no fetch of any of them.** That was the
-// property the grant depended on - it ran where the fetch was not yet
-// permitted - and the sweep keeps it because the fetch is its own work.
+// **One consumer since AW-S1b**, the mount sweep (`varheap_sweep.hpp`),
+// which compares what the pages hold against what the rows point at and
+// collects the difference. This header opened "the one walk two unrelated
+// mechanisms both need": the second was a peer's fault grant, which read
+// the page ids its rows name and granted itself read rights over exactly
+// those, because a catalog relation's var-heap sits *outside* the reserved
+// range and was therefore not covered by the system-range arm of the fault
+// predicate (`crosscore.md` CC12/CR1: the root page is reserved so
+// bootstrap can find it, the var-heap is not). One frame table serves every
+// core now, so there is no right to grant, and `CatalogSpillPages` - the
+// walk-every-relation wrapper that existed for it - went with it.
 
 namespace kds::exec {
 
@@ -68,23 +62,5 @@ inline constexpr catalog::Oid kVarHeapCatalogRelations[] = {
 // still be asked to read.
 Status ReferencedSpills(const catalog::TableAccess& access, storage::PageStore& store,
                         std::set<SpillRef>& out);
-
-// The distinct var-heap pages `relations`' rows point into, in ascending id
-// order.
-//
-// A relation with no var-heap chain - nothing has spilled into it yet -
-// contributes nothing and is not an error, and neither is one this build
-// knows and this instance has not materialized (`kNotFound`, skipped).
-//
-// It granted **page by page and never the extent around them**, because a
-// page admitted by a fault grant never reached the stamp claim, so an
-// extent-wide grant cost a restarted owner the write rights the claim
-// restored - measured, not reasoned: it failed
-// `APeersOwnPagesSurviveARestartByTheirStamp`. Both mechanisms went at
-// AW-S1b; the argument is kept because it is the record of why the list
-// this function returns is a list of pages and not a range.
-StatusOr<std::vector<PageId>> CatalogSpillPages(catalog::Catalog& catalog,
-                                                storage::PageStore& store,
-                                                std::span<const catalog::Oid> relations);
 
 }  // namespace kds::exec

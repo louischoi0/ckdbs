@@ -2,8 +2,9 @@
 
 #include <cstdint>
 
-// What one core's lease refills cost, per lease kind (extent, transaction
-// id, row id) - the counters PW6's four-writer cell asked for
+// What one core's lease refills cost, per lease kind - transaction id and
+// row id, the page-id extent having been the third until AW-S1b - the
+// counters PW6's four-writer cell asked for
 // (`bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md` §6a,
 // §11): every refill there completed hundreds of milliseconds to seconds
 // after a round trip that idle takes 2-7 ms, and nothing in the logs said

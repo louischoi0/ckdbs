@@ -33,8 +33,10 @@
 
 namespace kds::catalog {
 
-// Core 0 owns the superblock, the free map, file growth, extent leasing and
-// the catalog pages (M5). It is therefore excluded from user-relation
+// Core 0 owns the superblock, the free map's writes and the catalog pages
+// (M5) - and it owned file growth and extent leasing too until AW-S1b, when
+// the leases went and growth became any core's through the one map. It is
+// therefore excluded from user-relation
 // placement whenever there is anywhere else to put one - a system core that
 // also serves the busiest relation is the one core whose queue everybody
 // waits behind.
@@ -62,11 +64,15 @@ inline constexpr std::uint32_t kSystemCore = 0;
 //         return kSystemCore + 1 + (relation_seq % (core_count - 1));
 //     }
 //
-// Enabling that needs CREATE TABLE to allocate the relation's root - and
-// every page it later grows into - from the *owner's* lease. Either DDL
-// gains a cross-core allocation, or core 0 reserves an extent and hands it
-// to the owner before the relation is visible. Both are real designs;
-// neither is built.
+// Enabling that needed CREATE TABLE to allocate the relation's root - and
+// every page it later grows into - from the *owner's* lease, so either DDL
+// gained a cross-core allocation or core 0 reserved an extent and handed it
+// over before the relation was visible. **Neither is needed any more**
+// (AW-S1b): every core allocates from the one free map under the store's
+// structure latch, so a relation's pages are reachable and writable by
+// whichever core owns it whoever created them. What still blocks rotation
+// is the other half - DDL runs on core 0 (CC13) and a placement it does not
+// choose is a routing decision this file does not make.
 //
 // ---- How this was found -------------------------------------------------
 //

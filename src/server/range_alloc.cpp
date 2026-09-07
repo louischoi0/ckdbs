@@ -246,10 +246,17 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
     // owner faulted these bytes from the device and read the id back as
     // "allocated but was never written" (`ResidentBytes`' all-zero arm), so
     // the range had a head no core could write. One frame table serves
-    // every core since AM-S2 step 3, so the owner finds this very frame -
-    // and the flush stays because the *durability* half is unchanged: the
-    // handoff record below is appended and waited on, and PL §9 rule 1 is
-    // that the page it names reached the device first.
+    // every core since AM-S2 step 3, so the owner finds this very frame.
+    //
+    // **The flush stays for the record below, whose own reader is gone.**
+    // PL §9 rule 1 is that a page a handoff names reached the device first,
+    // and the handoff's consumer was the receiver's grant - struck at
+    // AW-S1b. Under one stream analysis does not erase on a PAGE_HANDOFF
+    // and redo skips it (`wal/analysis.cpp`, `wal/redo.cpp`), so what this
+    // pair costs today is one flush and one fsync per range opening for a
+    // record nothing reads. Retiring it belongs with the rest of the
+    // stamp's ownership reading (`page-lsn-cross-stream.md`); until then
+    // the ordering is kept whole rather than half-kept.
     if (Status s = store.FlushPages(head); !s.ok()) {
         return s.WithContext("flushing range entry page " + std::to_string(entry_page.value()) +
                              " before its handoff");
@@ -284,18 +291,14 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
         return s;
     }
 
-    // The departure completed on this side (the 95b45e8 review's C4, and
-    // the publish hook's closing step): core 0 would otherwise keep a
-    // frame of a page another core now owns, which is a stale-read window
-    // and - because core 0 has no lease and so `MayWrite`s everything - a
-    // later flush of that frame writing the empty image back over the
-    // owner's rows. Best-effort and logged: a dirty-frame refusal here
-    // would mean the flush above lied, and the range is already open.
-    if (Status s = store.EvictClean(head); !s.ok() && log != nullptr &&
-                                            log->enabled(LogLevel::kError)) {
-        log->Error("range", "core 0 could not evict handed-off range entry page " +
-                                std::to_string(entry_page.value()) + ": " + s.message());
-    }
+    // **The eviction that closed the departure went with the second copy**
+    // (AW-S1b). It dropped core 0's frame of a page another core now owns,
+    // because core 0 keeping one was a stale-read window and a later flush
+    // of it could write the empty image back over the owner's rows. There
+    // is one frame table: this frame *is* the owner's, and evicting it
+    // would buy the owner a device read on first touch and nothing else.
+    // The publish hook's identical step went the same way in the same
+    // stage; this one was left behind, and is removed here.
     return entry_page.value();
 }
 

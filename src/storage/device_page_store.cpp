@@ -200,7 +200,6 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     return &it->second;
 }
 
-
 StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& device,
                                                                  PageId first_new_page_id) {
     auto store = std::unique_ptr<DevicePageStore>(new DevicePageStore(device, first_new_page_id));
@@ -536,15 +535,16 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // this page" - a question a shared pool cannot ask, since every core
     // faults every page. Its write trigger is unreachable for the same
     // reason the machinery around it is: there is one frame table and one
-    // free map, so no store is one core's.
-    std::unique_ptr<Page> prefetched;
+    // free map, so no store is one core's. The prefetched page it handed
+    // down to the read below went with it, so the miss path always reads
+    // and always verifies.
     // **The shared-nothing check went with the fault grants** (AW-S1b,
     // AM-R4a). It refused a fault of a page belonging to another core, in
     // debug builds only, and a shared pool is precisely an arrangement in
     // which every core faults every page - so the predicate it called
     // answered `true` unconditionally from AM-S2 step 3 onwards and the
     // check was dead on every mountable volume before it was deleted.
-    // The write half is enforced in **every** build for a leased store,
+    // The write half is enforced in **every** build,
     // since PW1c-5: the interim peer-DML guard is gone, so this is what
     // stands between an unfunded peer write (a crashed publish, grants
     // lost to a restart) and a page whose next mount refuses with the
@@ -552,45 +552,26 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // Dirtying a system page would make a peer the second writer of a
     // single-writer page; two messages below because MayWrite refuses for
     // two reasons, and the not-from-this-lease one is the common case.
-    // Near-zero cost where it matters: core 0 answers on one id compare
-    // and one pointer compare (AW-a moved the system-range test above the
-    // lease test, so "no lease" is no longer the *first* test), and this
-    // runs on the frame-load path, never per row. Debug builds
-    // additionally get the fault check above.
+    // Near-zero cost: one id compare and one `CurrentCore()` read, on the
+    // frame-load path and never per row.
     //
-    // **The two reasons get two status codes** (H4, 2026-08-29), and until
-    // then both answered `InvalidArgument` while the paragraph above
-    // claimed "refused-retryably". They are not the same kind of refusal:
-    //
-    //   - a **system** page has one writer for the life of the instance, so
-    //     a peer asking for it is wrong now and wrong on every retry -
-    //     `InvalidArgument`, which `IsRetryable` does not admit, and the
-    //     client stops after one round trip.
-    //   - any **other** page is refused because a grant has not arrived
-    //     *yet*: a relation published moments ago, an extent grant still on
-    //     the ring, rights lost to a restart and re-requested by the drain
-    //     tick. `TxnConflict`, which carries `retryable=1` on the wire -
-    //     and it is safe to retry precisely because this refuses **before**
-    //     dirtying anything.
-    //
-    // The second is the one a client meets, roughly once in twenty cells of
-    // a freshly-placed relation's early INSERTs (RB6 found it feeding a
-    // driver), and insert spreading makes that path more frequent rather
-    // than less. Getting the bit right is what lets a driver retry on the
-    // classification instead of on the message - RB6's first attempt
-    // retried on any `ERR` and manufactured real duplicate rows, because a
-    // loop whose INSERT omits its pk cannot tell a pre-write refusal from a
-    // reply lost after the commit.
+    // **One reason and one code since AW-S1b**, where there were two. The
+    // second was "a grant has not arrived *yet*" - a relation published
+    // moments ago, an extent grant still on the ring, rights lost to a
+    // restart and re-requested by the drain tick - and it answered
+    // `TxnConflict` so a driver could retry on the classification rather
+    // than on the message (H4, 2026-08-29; RB6's first attempt retried on
+    // any `ERR` and manufactured real duplicate rows). There are no grants,
+    // so `!MayWrite` now implies the system range, which has one writer for
+    // the life of the instance: a peer asking for it is wrong now and wrong
+    // on every retry, and `InvalidArgument` is what `IsRetryable` does not
+    // admit. **The retryable arm was not deleted for tidiness** - it was
+    // unreachable, and leaving it would have been a code path promising a
+    // retry that changes nothing.
     if (mark_dirty && !MayWrite(page_id)) {
-        const bool permanent = page_id < first_evictable_page_id_;
-        const std::string message =
+        return Status::InvalidArgument(
             "DevicePageStore: core " + std::to_string(CurrentCore()) + " may not write page " +
-            std::to_string(page_id) +
-            (permanent ? "; the system range has one writer, the system core"
-                       : "; it is not from this core's extent lease, carries no write grant, and "
-                         "its stream stamp does not name this core (a relation fault grant "
-                         "conveys read rights only) - retry once the grant lands");
-        return permanent ? Status::InvalidArgument(message) : Status::TxnConflict(message);
+            std::to_string(page_id) + "; the system range has one writer, the system core");
     }
 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
@@ -615,16 +596,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
                                 std::to_string(device_.page_capacity()) + ")");
     }
 
-    // The claim attempt above may already hold the bytes, checksum-verified
-    // there; otherwise this is the read.
-    const bool verified_by_claim = prefetched != nullptr;
-    std::unique_ptr<Page> bytes = std::move(prefetched);
-    if (bytes == nullptr) {
-        bytes = std::make_unique<Page>();
-        if (Status s = device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes));
-            !s.ok()) {
-            return s;
-        }
+    auto bytes = std::make_unique<Page>();
+    if (Status s = device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes)); !s.ok()) {
+        return s;
     }
 
     // Verified on the miss path only, never on a hit (page.md section 10).
@@ -637,33 +611,28 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         // A page the map calls allocated whose bytes were never written:
         // all zero, page_type kInvalid - the shape Open() already reads as
         // "fresh" for the free map. Reached when an allocation outruns its
-        // first flush: an extent reserved for a peer's lease is allocated
-        // whole in the map core 0 flushes at startup, while the peer writes
-        // its pages lazily, so a crash between a page's PAGE_INIT and its
-        // write-back leaves exactly this (found by PW1c-7's restart test:
-        // a peer that crashed with one unflushed new page could not
-        // remount). NotFound, not Corruption: nothing was damaged, and
+        // first flush: the map records an id as it is claimed and the
+        // page's bytes reach the device only at a write-back, so a crash
+        // between a PAGE_INIT and that flush leaves exactly this (found by
+        // PW1c-7's restart test, where an extent reserved for a peer's
+        // lease was allocated whole in core 0's map while the peer wrote
+        // its pages lazily). NotFound, not Corruption: nothing was damaged, and
         // redo's PAGE_INIT arm *creates* a page the store does not hold,
         // where its checksum arm can only poison one it holds wrong and
         // wait for a full page image that never comes (wal/redo.cpp). A
         // torn page with a zero header and a nonzero body is not all zero
         // and still fails the checksum below.
         //
-        // Run even when the claim above verified the checksum, and
-        // deliberately: the claim verifies *that* check, not this one, and
+        // Run separately from the checksum below rather than left to it:
         // "an all-zero page cannot pass a checksum" is a fact about
         // CRC32C's value over 8192 zero bytes rather than anything this
-        // code says. Skipping it on the claim path would make the store's
-        // answer for a never-written page depend on that coincidence.
+        // code says, and the store's answer for a never-written page must
+        // not depend on that coincidence.
         if (PageIsAllZero(*bytes)) {
             return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
                                     " is allocated but was never written (all zero)");
         }
-        // The claim above verified these very bytes before it believed
-        // their stamp, so this is the one check it does subsume.
-        if (Status s = verified_by_claim
-                           ? Status::OK()
-                           : VerifyPageChecksum(std::span<const std::byte, kPageSize>(*bytes));
+        if (Status s = VerifyPageChecksum(std::span<const std::byte, kPageSize>(*bytes));
             !s.ok()) {
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore",
@@ -832,9 +801,6 @@ std::unique_ptr<ScanFetcher> DevicePageStore::OpenScanRing(std::size_t frames) {
     return std::make_unique<ScanRing>(*this, frames);
 }
 
-
-
-
 bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
     // Not addressable is the strongest form of never written. A failed read
     // answers "in use": refusing a CreateAt is the safe error.
@@ -843,8 +809,6 @@ bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
     if (!device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes)).ok()) return false;
     return PageIsAllZero(*bytes);
 }
-
-
 
 bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
     // Read-only for a peer, deliberately: one writer per catalog page is
@@ -963,6 +927,21 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(PageId page_id) {
+    // **Placing a page at a *chosen* id is core 0's, and this is the only
+    // thing that says so.** `CreateAt*` consults no other predicate - not
+    // `MayWrite`, which the ordinary mutation path asks - so without this
+    // the store layer would make no statement at all about a claim on the
+    // free map (`crosscore.md` CC11 still makes it). The guard was keyed on
+    // the lease until AW-S1b and is keyed the way `MayWrite` now is: on the
+    // core that is *asking*. Every caller is bootstrap, a fixed system page
+    // or redo's `CreateAt`, all of which are core 0's by M5, so this stays
+    // unreachable rather than restrictive - which is what it is here for.
+    if (page_id < first_evictable_page_id_ && CurrentCore() != 0) {
+        return Status::InvalidArgument(
+            "DevicePageStore: core " + std::to_string(CurrentCore()) +
+            " may not place a page at a chosen id in the system range; the free map's fixed "
+            "structures belong to the system core");
+    }
     if (page_id >= kMaxPageCount) {
         return Status::OutOfRange("DevicePageStore: page id " + std::to_string(page_id) +
                                   " is beyond the " + std::to_string(kMaxPageCount) +
@@ -1094,8 +1073,6 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_i
     if (!IsAllocated(page_id)) return NotAllocated(page_id);
     return ResidentBytes(page_id, mark_dirty, bump_usage);
 }
-
-
 
 Status DevicePageStore::NotAllocated(PageId page_id) const {
     // redo.cpp:322 learned this on its own path: "page id not found" alone
@@ -1538,8 +1515,6 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     }
     return s;
 }
-
-
 
 // ---- Frame reclamation (docs/inflight/in-progress/workplan-eviction.md EV01-EV02) -------------
 

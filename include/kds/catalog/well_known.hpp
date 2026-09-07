@@ -375,11 +375,11 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // rather than incidental, and binding on any catalog relation that gains a
 // var-heap: crosscore.md CC12/CR1 (operator ratification 2026-08-31).
 //
-// This is the one catalog var-heap a peer reads today, and it reads it by
-// the pages a row names being granted individually (exec::CatalogSpillPages,
-// core_runtime.cpp) rather than by an extent - an extent would cover pages
-// that core owns and cost it PW1c-7's stamp-claimed write rights. CC12 does
-// **not** ratify that page-at-a-time grant as the general mechanism; CR3
+// This is the one catalog var-heap a peer reads today, and since AW-S1b it
+// reads it the way it reads anything else: the frame table is the
+// instance's, so a page's id decides nothing about who may fault it. A peer
+// used to grant itself the individual pages a row named, never the extent
+// around them; CC12 never ratified that as the general mechanism, and CR3
 // (a grown catalog page managed outside the reserved range, on the ordinary
 // relation rules) is what governs.
 inline constexpr PageId kCatalogPageAssertions = 14;

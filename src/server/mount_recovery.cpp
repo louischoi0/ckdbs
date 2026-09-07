@@ -296,25 +296,20 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
             }
             continue;
         }
-        // The cabin this core would have to append to, tested **after** the
-        // revive, which walked the chain: a leased store claims an
-        // own-stamped page as it reads it (PW1c-7), so asking before the
-        // walk would answer no for a cabin that is in fact this core's.
-        if (!store.MayWrite(live.value().chain.root())) {
-            enforcer.NoteUnenforceable(def.target_oid, def.id);
-            ++report.assertions_unrecovered;
-            if (log != nullptr) {
-                log->Error("recovery",
-                           "assertion \"" + def.name + "\" on a relation core " +
-                               std::to_string(owner_core) +
-                               " owns has a Bound Cabin this core may not write (root page " +
-                               std::to_string(live.value().chain.root()) +
-                               "), so it cannot be enforced here and the relation's writes are "
-                               "refused instead; re-create it so its owner builds the cabin "
-                               "(workplan-peer-writer.md PW1c-6c)");
-            }
-            continue;
-        }
+        // **The writability test that stood here went with the lease**
+        // (AW-S1b). It asked whether this core may append to the Bound
+        // Cabin it had just revived, and refused the relation's writes
+        // where the answer was no - the PW1c-6c case, a cabin core 0 built
+        // for a relation a peer owns, which is every such assertion in a
+        // file written before owner-built cabins. A cabin chain root is a
+        // *user* page and `MayWrite` admits every core above the system
+        // range now, so the case cannot arise: the owner appends to the
+        // chain core 0 built, through the frame table they share, and the
+        // assertion enforces. `assertion.md` §6.1 carries the fact.
+        //
+        // `NoteUnenforceable` keeps its other callers - a revive that
+        // failed, and a checkpoint whose snapshots do not cover the base -
+        // so `CannotEnforce`'s refusal in the dispatcher is unchanged.
         revived.push_back(std::move(live.value()));
     }
     if (revived.empty()) {

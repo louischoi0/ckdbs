@@ -375,7 +375,6 @@ TEST(DevicePageStoreTest, ChecksumsAreStampedOnWriteAndVerifiedOnLoad) {
     EXPECT_EQ(store->Get(0).status().code(), StatusCode::kCorruption);
 }
 
-
 // ---- Headerless pages ---------------------------------------------------
 //
 // A headerless page's payload tiles 8 KiB exactly and carries no common
@@ -559,11 +558,13 @@ TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore)
     // and the lease was only ever installed on an *owned* one - so from then
     // on every core reached this predicate with a null lease and was told
     // yes to everything, the system range included. AW-S1b then removed the
-    // lease outright, which is why this is now the whole of the predicate:
-    // `MayWrite` has four callers outside the store
-    // (`mount_recovery.cpp`, `core_runtime.cpp`, `command_dispatcher.cpp`
-    // twice) that read it as a real gate, and AM-R2 and AO-R14 both keep it
-    // as one.
+    // lease outright, which is why this is now the whole of the predicate.
+    // **And why the store's own gate is what carries it**: `MayWrite` had
+    // four callers outside this class, and AW-S1b deleted three of them
+    // with the machinery they belonged to (`core_runtime.cpp`'s was inside
+    // the write-grant admission, the dispatcher's two were the rights
+    // probe). `ResidentBytes`' `mark_dirty && !MayWrite` is the live
+    // consumer, which is what AM-R2 and AO-R14 keep it for.
     //
     // **Mutation**: make the system arm `return true` and the peer arm
     // below answers true.
@@ -604,8 +605,9 @@ TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore)
 
 TEST(DevicePageStoreOwnershipTest, ASharedStoreRefusesAPeersSystemWriteAndNotItsUserWrite) {
     // The cell above pins the *predicate*; this one pins what the predicate
-    // is for. `MayWrite` has four callers outside this class, but the one
-    // that stands between a peer and a torn catalog page is inside it -
+    // is for. `MayWrite` has one live caller outside this class since
+    // AW-S1b, and the one that stands between a peer and a torn catalog
+    // page was always inside it -
     // `ResidentBytes`' `mark_dirty && !MayWrite(...)` gate - and the null
     // lease made that gate pass too. So the shared store gets the refusal
     // cell the leased store already has
@@ -699,7 +701,6 @@ TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
     ASSERT_TRUE(again.ok()) << again.status().message();
     EXPECT_TRUE(Matches(again.value().bytes(), 3));
 }
-
 
 // ---- The multi-page free map (FM2-FM5) --------------------------------
 //
