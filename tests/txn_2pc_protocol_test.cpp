@@ -116,9 +116,6 @@ protected:
         bool answered = false;
         Status status;
         std::string text;
-        // RR0 / D3: what the participant reported it is reading at, 0 where
-        // it reported nothing.
-        std::uint64_t watermark = 0;
 
         // What the executor and the log said **at the moment this answer
         // was produced** (XE3). Filled by every seam callback below, because
@@ -174,13 +171,11 @@ protected:
 
         auto answer = std::make_shared<Answer>();
         executor_->Seam()(std::move(statement),
-                          [this, answer](const Status& status, std::string_view text,
-                                         std::uint64_t watermark) {
+                          [this, answer](const Status& status, std::string_view text) {
                               StampAck(*answer);
                               answer->answered = true;
                               answer->status = status;
                               answer->text.assign(text);
-                              answer->watermark = watermark;
                           });
         last_ship_ = answer;
         Pump(answer, drain);
@@ -1005,41 +1000,7 @@ protected:
     std::optional<Txn2pcServer::DecideAsk> decided_;
 };
 
-TEST(CrossOwnerWatermarkTest, TheCoordinatorHoldsOneWatermarkPerParticipantAndItMayNotMove) {
-    // **RR0 / D3, the coordinator's half as a state machine.** The first
-    // reply from a participant establishes the value; every later one has
-    // to repeat it, because a participant's enrolled REPEATABLE READ
-    // transaction pins its view once and never re-mints it. A value that
-    // moved is what
-    // `CommandDispatcher::FinishShippedStatement` turns into a refusal -
-    // it means either the context was re-opened under the transaction or
-    // the level did not cross and the participant is running READ
-    // COMMITTED while its client was promised REPEATABLE READ.
-    Session session;
-    EXPECT_EQ(session.ParticipantWatermark(1), 0u);
-
-    EXPECT_TRUE(session.NoteParticipantWatermark(1, 500));
-    EXPECT_EQ(session.ParticipantWatermark(1), 500u);
-    EXPECT_TRUE(session.NoteParticipantWatermark(1, 500)) << "the same value is not a move";
-    EXPECT_FALSE(session.NoteParticipantWatermark(1, 501));
-    // Refusing does not overwrite: the held value is what the transaction
-    // has been reading at, and the refusal names it.
-    EXPECT_EQ(session.ParticipantWatermark(1), 500u);
-
-    // Per participant, and the two are never compared with each other -
-    // they are points in two independent streams (`wal.md` guideline 3).
-    EXPECT_TRUE(session.NoteParticipantWatermark(2, 12));
-    EXPECT_EQ(session.ParticipantWatermark(2), 12u);
-    EXPECT_EQ(session.ParticipantWatermark(1), 500u);
-
-    // And it belongs to the transaction that observed it.
-    session.EnrolParticipant(1);
-    (void)session.Finish();
-    EXPECT_EQ(session.ParticipantWatermark(1), 0u);
-    EXPECT_EQ(session.ParticipantWatermark(2), 0u);
-}
-
-TEST(CrossOwnerWatermarkTest, HasParticipantIsWhatTheJoinBitIsReadFrom) {
+TEST(CrossOwnerJoinTest, HasParticipantIsWhatTheJoinBitIsReadFrom) {
     Session session;
     EXPECT_FALSE(session.HasParticipant(1));
     session.EnrolParticipant(1);

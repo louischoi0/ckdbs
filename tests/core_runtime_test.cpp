@@ -5764,15 +5764,18 @@ TEST_F(CoreRuntimeTest, AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsCon
     ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
 }
 
-TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionCarriesOneWatermarkPerParticipant) {
-    // **RR0 / D3, both halves of the ratified `[OPEN]` in one test.**
-    // REPEATABLE READ carries a watermark per participant - the
-    // `up_to_trx_id` that participant's own transaction pinned, in that
-    // core's own id space - and it does not move across the transaction's
-    // statements, which is the consistent-per-core snapshot D3 promises.
-    // READ COMMITTED carries none at all, which is the `[OPEN]` ratified
-    // "yes, RC skips the watermark entirely" and is why the default level
-    // pays nothing for any of this.
+TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionReadsOnePinnedViewPerParticipant) {
+    // **RR0 / D3's promise, with no watermark standing over it** (AN-R5a,
+    // AN-S2). What delivers "consistent per core" is the participant's own
+    // enrolled REPEATABLE READ transaction, which pins its view at its
+    // BEGIN and cannot re-mint it, plus the `join` bit that refuses the one
+    // event that could replace it. The coordinator used to hold that
+    // participant's `up_to_trx_id` and compare it with itself one reply
+    // later; the field went with the trx-id predicate and the operator
+    // took removal over forwarding it. So this cell is the behaviour the
+    // check stood over, asserted directly: a commit on the participant
+    // between two reads of one RR transaction is invisible to the second,
+    // and visible to a READ COMMITTED transaction's next statement.
     std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "watermark_rr");
@@ -5787,8 +5790,6 @@ TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionCarriesOneWatermarkP
     auto read = rig.Start("SELECT * FROM watermark_rr", first, &rr);
     ASSERT_TRUE(rig.Drive(*read)) << first.response;
     ASSERT_NE(first.response.rfind("ERR", 0), 0u) << first.response;
-    const std::uint64_t watermark = rr.ParticipantWatermark(1);
-    EXPECT_NE(watermark, 0u) << "an RR participant reported no watermark";
 
     // **What "consistent per core" means, made concrete rather than
     // asserted**: the participant commits a row of its own between the two
@@ -5805,8 +5806,6 @@ TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionCarriesOneWatermarkP
     auto again = rig.Start("SELECT * FROM watermark_rr", second, &rr);
     ASSERT_TRUE(rig.Drive(*again)) << second.response;
     EXPECT_NE(second.response.rfind("ERR", 0), 0u) << second.response;
-    EXPECT_EQ(rr.ParticipantWatermark(1), watermark)
-        << "the participant's snapshot moved under a REPEATABLE READ transaction";
     EXPECT_EQ(second.response, first.response)
         << "two reads of one relation in one RR transaction disagreed";
     EXPECT_EQ(second.response.find(",444"), std::string::npos)
@@ -5825,11 +5824,8 @@ TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionCarriesOneWatermarkP
     auto rc_read = rig.Start("SELECT * FROM watermark_rr", rc_out, &rc);
     ASSERT_TRUE(rig.Drive(*rc_read)) << rc_out.response;
     ASSERT_NE(rc_out.response.rfind("ERR", 0), 0u) << rc_out.response;
-    EXPECT_EQ(rc.ParticipantWatermark(1), 0u)
-        << "READ COMMITTED carried a watermark it is ratified to skip";
-    // And it is not merely unwatermarked - it reads the latest committed
-    // state, which is the level's own contract and the reason a watermark
-    // for it would name a view already gone.
+    // READ COMMITTED reads the latest committed state, which is the level's
+    // own contract.
     EXPECT_NE(rc_out.response.find(",444"), std::string::npos) << rc_out.response;
 
     DispatchOutcome rc_rb;

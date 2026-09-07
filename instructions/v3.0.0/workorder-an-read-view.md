@@ -756,8 +756,10 @@ nothing and is not scheduled.
 | AN-S1 | **landed at `b5abab6`, suite green.** `include/kds/txn/instance_visibility.hpp` and `src/txn/instance_visibility.cpp`; publication from `TransactionManager` at three points plus its constructor; `CoreRuntime::Config::visibility` and the `Expeditor`'s `visibility_`, gated on `single_stream()`; ten cells in `tests/instance_visibility_test.cpp`. **3263/3263 pass** in Debug — the additive claim holds, since every existing cell reads the unchanged per-core predicate. **Its `critics-developer` pass was still running when it landed**, on the operator's word, and AN-7 gains its record when it returns; a finding against S1's code is therefore a fix on top of this commit rather than a change to it |
 | AN-S1 (fixes) | **two bugs found by review after `b5abab6` landed and fixed on top of it**, plus four cells over a real `WalManager` covering the publication points. 3267/3267. See AN-7's third pass; AN-R13 is live at this stage and unresolved |
 | AN-S1b | **built, suite green at 3274/3274, review running.** AN-R13's marked exit (a). `TrxIdSequence::can_burn()`/`BurnWindow()`; `InstanceVisibility::PinsFloor()`/`attached_cores()`; `TransactionManager::MaybeBurnIdleBlock()` with its three-part gate; the peer's tick asks through `burn_requested_` and core 0 rides the writeback tick. Seven cells |
-| AN-S2 | not started; **gated on AN-R10 and AN-R12, both of which now carry a CLA proposal** (2026-09-05): AN-R10 re-scopes `kShippedTxnIdleCeilingNs` to bound any idle transaction rather than only an enrolment, which keeps §4.1's "`SnapshotTooOld` is never raised" literally true and adds no second name for a quantity; AN-R12 takes the latched `{commit_lsn, floor}` pair over the re-read, because the re-read is sound by an argument the code does not state |
-| AN-S3..S5 | not started |
+| AN-S2 | **built 2026-09-07 on `an-s2-read-view-cutover` from `8d07d7e`; suite green three times over - 3299/3299 on the cutover alone, 3306/3306 with the stage's cells, 3309/3309 with the review's fixes and their cells - each time plain, armed (`KDS_TEST_PAGE_LATCH=1`) and budgeted (`KDS_TEST_FRAME_BUDGET=8`); overhead not measured.** The cutover as the row states it, and the two cells that had to fail first did: H1 and H2, written against the trx-id predicate, fail at `8d07d7e` (`instance_visibility_test.cpp:314`, `:339`, `:345`) and pass on the commit-LSN one. What AN-8 records beyond the row: a manager handed no visibility owns one (there is no second predicate), the AN-R9 ceiling is capped by a per-core pending-commit marker set *before* the append (the ruling's own shape had the AN-Q3 gap it was written to close), the undo purge is handed the floor and the catalog purge a two-branch predicate, the Cabin's rule gets the one bit it needs stamped at the mint, the 64-entry live-transaction bound retires, AN-R5a's watermark removal is a wire change (the reply text grows 992 → 1000), and `MintReadView` cannot fail. Gates: AN-R10 marked at AW (AN-R14 built), AN-R12 built at AW-S2, AN-R5a marked 2026-09-07 |
+| AN-S3 | not started; AN-R5's adoption half, still unmarked. **Its removal half landed inside AN-S2** (AN-R5a) |
+| AN-S4 | **built 2026-09-07 on `an-s2-read-view-cutover` after `18fed49`**, out of the order's sequence (S3 before S4) because the specs described the retired shape from `18fed49` on and S3 is unmarked. `txn.md` §4.1 rewritten whole - the `ReadView` block, the four branches, "why no commit table older than the window", when a commit becomes visible, readers registered and the horizon's scope (instance-wide), the two purges and the price - with §4.2's always-visible id named as `Visible`'s first branch, §4.4's cost sentence and §10 item 3 corrected; `crosscore.md` §5's "the trx-id domain is global, so ids compare cleanly" rewritten with the mechanism, and its RR bullet; `cross-owner-txn.md` §1 per AN-D6's first row (the rejection scoped to per-core streams, "no global counter" struck, commit order named global); `ddl-transactional.md` §5's two visibility sentences; `command_dispatcher.cpp`'s purge-gate comment names the gate as defence in depth; `rules.md` §3's row points at `txn.md`; `ratification-an-commit-order.md`'s header records AN-Q3 closed at AN-S2 with the marker correction; `CLAUDE.md`'s Transactions row. `client-manual.md` changed at AN-S2 already (AN-R5a's obligation), last as AN-D6 orders. **The condition AN-S4's row states holds only after this stage's `critics-developer` pass**, which found four documents the first sweep left on the retired shape and fixed them there: `ddl-transactional.md` §5d, whose purge predicate was still "cleared the core's read horizon" and whose core-0 gate still carried the per-core-horizon soundness argument the dispatcher comment above had just retired - the two contradicted each other in the same commit; `cabin.md`'s banking assumption, resting on a transaction appearing "in every other view's `in_flight`"; `foreign-keys.md` §4, still naming `MintReadView` for a check view that has called `MintCheckView` since AN-S2; and `rules.md`'s own window row, which called a reclamation pass a slot writer and said it read every bound under the latch (the floor candidate is read before it). §4.1's "a view's answer for any transaction never changes for its life" was scoped to a *held* view in the same pass, an unregistered check view's answer being exactly what reclamation may move. The grep the row named catches none of the four: three name no retired identifier at all. **Six more it reported and left, all taken**: `catalog.hpp`'s `PurgeSettledDeleteMarks` doc ("cleared the core's read horizon"), `relayout_planner.hpp`'s gate 1 ("the per-core horizon"), `visibility.hpp`'s two cost sentences ("one integer comparison"), `fk_probe_service.cpp`'s reason for minting on the owner (which no longer held, though its conclusion does), `crosscore.md`'s CC4 row ("the owning core's latest committed snapshot"), and the gate comment's "the catalog's pages *are* the system range", a subset stated as an equality. Nothing rejected: the pass's every finding was a sentence the code no longer bears out |
+| AN-S5 | not started |
 
 ## AN-7 — Review record
 
@@ -899,3 +901,253 @@ published a bound *above* the floor, so the candidate never dropped and
 the monotone CAS was never exercised. Both are rewritten, and four cells
 over a real `WalManager` now cover the publication points — which had
 **zero** coverage, and which is where both bugs were.
+
+## AN-8 — AN-S2 as built, 2026-09-07 on `an-s2-read-view-cutover` from `8d07d7e`
+
+The operator's word: *"start AN-S2 and do not stop until the milestone is
+reached; where a decision is needed follow CLA's proposal and record it in
+the document."* Every decision below is CLA's, recorded here as the word
+requires, and none of them is marked. §8.1 is what the row asked for and
+how it was built; §8.2 is what the build decided that the row and the
+rulings did not state; §8.3 is the cells; §8.4 what did not land and why.
+
+### 8.1 The cutover, as the row states it
+
+- **`ReadView`** loses `up_to_trx_id`, `in_flight`, `in_flight_count`,
+  `AddInFlight`, `MinVisibleBound` and `kMaxTrackedLiveTxns`; gains
+  `snapshot_lsn`, a `const InstanceVisibility*`, and two flags
+  (`sees_everything`, `in_flight_at_mint`). Still a POD.
+- **`Visible`** is AN-Q2's four branches, with AN-R12's pair on branch 4:
+  the atomic floor is read first as a fast path that can only answer true,
+  and `LookupCommit` answers the window *and the floor* under one hold for
+  everything else. `Classify` and `CheckVisibility` stop being `constexpr`,
+  since branch 4 takes a latch; they still fetch no page, which is the
+  property `parser-v2.md` I15 needs of them.
+- **`MintReadView`** reads `SnapshotCeiling()` — one atomic load, a walk
+  over the slots capped by `slots_in_use_` (one at `cores = 1`), and a walk
+  of `live_` for the Cabin's bit (§8.2). It **cannot fail**, so it returns
+  `ReadView` rather than `StatusOr<ReadView>`, and seven call sites lost a
+  failure arm: `AutocommitSnapshot`, `CabinOptimizerExecutor::MintCheckView`
+  (whose fallback view and its argument went with it), the two
+  `FkProbeService` check views, `AssertionBuildService`, and the
+  dispatcher's `CheckView` and `ViewFor`.
+- **`ReadHorizon()`** answers `InstanceVisibility::HorizonLsn()`, the
+  instance-wide oldest live `snapshot_lsn`. Each core publishes its term
+  (`LocalSnapshotBound()`, over active transactions' views and leased
+  readers) at Begin, Commit, Abort, the READ COMMITTED statement boundary,
+  and reader registration and release.
+- **The two consumers changed unit as AN-R3 rules**, differently, and the
+  difference is §8.2's third item.
+- **`Everything()`** sets `sees_everything` and a `snapshot_lsn` of
+  `kUnboundedBound`; `Snapshot::sees_everything()` reads the flag. All ten
+  sites in AN-3 B are untouched and answer as before: a view with the flag
+  admits a writer no window has heard of, which is the one thing the trx-id
+  form also did.
+
+### 8.2 Decisions the row did not state — CLA's, unmarked
+
+1. **A manager handed no visibility owns one.** There is no second
+   predicate to fall back to, so `TransactionManager` constructs a private
+   `InstanceVisibility` when `visibility == nullptr` — every fixture, the
+   sim, the single-manager tools — and runs the same code the shipped
+   `cores = 1` runs, over an object nobody else can see. The alternative
+   was keeping the trx-id predicate alive for the null case, which is two
+   predicates and the one thing this stage exists to end.
+
+2. **The AN-R9 ceiling is capped by a per-core marker set *before* the
+   append, and the ruling's own shape had the gap it was written to
+   close.** AN-R9 says the log core keeps "the set of commit LSNs reserved
+   and not yet published" under the window latch, and the ceiling is the
+   lowest such LSN. A set keyed on the LSN can only be entered *after* the
+   append returns, and the interval between that return and the insert is
+   exactly AN-Q3's: core A appends at 100, core B appends at 200 and
+   publishes first, and a mint in A's gap reads 200 and covers 100 — an
+   entry it cannot see and will flip on. AW-S4's additive `CommitCeiling()`
+   (the published maximum) has the same hole. The shape built:
+   `BeginCommit(core)` stores the published maximum into the core's slot
+   before `wal_->Commit`, `PublishCommit` inserts the entry and raises the
+   maximum, `EndCommit(core)` clears the marker; `SnapshotCeiling()` is the
+   maximum capped by every marker. The commit's LSN is assigned after every
+   commit the marker's value covers, so it is strictly above the marker,
+   and no snapshot ever covers an unpublished commit. It is a slot field
+   rather than a set because `TransactionManager::Commit` is synchronous on
+   its core — at most one commit per core is ever between its append and
+   its publication. The ceiling so defined is monotone over time, and
+   `instance_visibility.hpp` carries the proof. **`CommitCeiling()` stays**
+   for the cells; it is not what a mint reads, and its comment says so.
+   Cell: `ASnapshotNeverCoversACommitWhoseEntryIsNotYetPublished`, with a
+   named mutation. **Amended by the review (§8.5 C2, C3)**: the marker is
+   set *under the window latch*, the ceiling's two reads are ordered and
+   the order is documented as load-bearing, and a reclamation pass is
+   bounded by the markers as well as by the horizon.
+
+3. **The undo purge is handed the floor; the catalog purge a two-branch
+   predicate.** AN-R3 rules both consumers change to "below the floor, or
+   committed at or below the horizon LSN". The catalog sweep can judge
+   that per row — a mark carries its deleter's id, and
+   `TransactionManager::ResolvedForEveryReader` answers the two branches —
+   so `RetireDeleteMarksBelow(horizon)` became `RetireDeleteMarks(settled)`
+   over a predicate, the mount sweep passing "every deleter". The undo log
+   settles a *page* by its newest writer's id and knows no commit LSNs, so
+   its second branch is not computable there; it is handed the floor alone,
+   and the floor reaches it with the second branch already applied,
+   because reclamation never raises the floor past a commit a live snapshot
+   cannot see. The source lambda runs `Reclaim()` first so a growth reads a
+   current floor rather than the one the last thousandth commit left — the
+   purge is what asks, so the purge is what pays; nothing else changes the
+   reclamation cadence. Cell: `UndoPagesRecycleOnceTheirWritersClearTheHorizon`
+   still passes over the floor, and
+   `ALiveTransactionsUndoSurvivesAPurgePassTakenWhileItRuns` is the
+   retention duty AN-R3 said moved to `oldest_unresolved`, with a mutation.
+
+4. **The Cabin's banking rule gets one bit stamped at the mint.** cabin.md
+   §6a declined to bank from a view "carrying any in-flight transaction",
+   read as `in_flight_count != 0`. The commit-LSN view carries no set, and
+   the step VM holds no manager, so `MintReadView` stamps
+   `in_flight_at_mint` — another transaction active on this core at the
+   mint, the owner excluded — from the one walk of `live_` that survives.
+   The rule's meaning is unchanged and cabin.md §6a is rewritten to the new
+   spelling. Rejected: asking the manager at bank time (the VM has no
+   handle to it) and deriving the fact from the window (it is not there).
+
+5. **The 64-entry bound on live transactions retires**, as AN-3 C says the
+   mark implies: `Begin`'s `OutOfSpace` was the width of the in-flight
+   array. `kShippedMaxEnrolled = 16` stays at its number and loses its
+   `static_assert` and its "a quarter of the table" argument; its comment
+   and `cross-owner-txn.md`'s row now say it stands on the retention
+   argument alone, unmeasured. Cell: `MoreThanSixtyFourLiveTransactionsAreAdmitted`
+   replaces the bound's cell.
+
+6. **AN-R5a is a wire change and the reply text grows.** `read_watermark`
+   leaves `ShippedStatementReplyPayload`, `ReplyFn` loses its third
+   argument, `Session` its watermark table, the dispatcher its check and
+   `txn_watermark_refusals`, the executor its RR arm. The eight bytes were
+   not reserved ("nothing new is reserved lightly"): `kShippedStatementReplyFixedBytes`
+   is 24 and the text arm's cap is **1000** where it was 992, which is
+   client-visible and is in `crosscore.md`, `cross-owner-txn.md`, `kwp.hpp`
+   and `CLAUDE.md`. `client-manual.md` says in the client's words what the
+   mark leaves: "consistent per core" is delivered by the participant's
+   pinned view and no coordinator check stands over it; the single instant
+   is AN-S3's. The one test that carried the watermark's *behaviour* —
+   `core_runtime_test.cpp`'s RR-vs-RC cross-owner cell — keeps the
+   behaviour and drops the watermark asserts, so the removal is shown to
+   change no answer.
+
+7. **The unlogged order is the window's own.** `PublishCommit` with
+   `kNoCommitLsn` assigns one past the highest published, under the hold.
+   Without it every unlogged commit would sit above the floor with no entry
+   and read as live forever — every socket-free fixture. It is not a second
+   name for the LSN: where the log exists the LSN is always passed, and
+   where it does not the quantity has no other home. Cell:
+   `AnUnloggedCommitTakesTheNextPositionInCommitOrder`.
+
+8. **`ReadHorizon()` stays, with one consumer.** Its two consumers stopped
+   calling it (item 3), which would leave a function nothing calls;
+   `ResolvedForEveryReader` reads it, and it is what a cell asserts the
+   instance's horizon through.
+
+9. **The slot walks stop at `slots_in_use_`**, one past the highest core
+   that has published anything, so the shipped `cores = 1` pays one slot
+   per mint and not sixty-four. AN-0 forbids a fast path in AN; this is not
+   one — it is the mint's cost as it should have been counted, and AN-S5
+   measures it either way.
+
+10. **AN-R14's two "re-check at AN-S2" items close.** The burn no longer
+    moves any mint bound (the bound is the LSN ceiling, and a burn touches
+    cursors), and `Reclaim`'s `reachable` is now bounded by a horizon that
+    is published, so a burn cannot raise the floor past a commit a live
+    reader's view calls invisible. The *stopped-core* item does not close
+    and is in `known-gaps.md` as AN-R14 instructed.
+
+11. **What is deferred from AN-7's third pass**: the review's S1 (folding
+    the two floor publishers) is taken as `PublishBounds`, the paired call
+    the manager uses; the singles stay public for the cells that model the
+    interleaving, which is the reason the fold was deferred to here.
+
+### 8.3 Cells
+
+The AN-S2 row's list, in its order, and where each landed:
+
+| cell | where |
+|---|---|
+| H1: a commit on a core holding a higher id window is visible to a lower core's next view | `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView` — **fails at `8d07d7e`** (`instance_visibility_test.cpp:314`, `Actual: false`) |
+| H2: a transaction begun after the mint from a lower core's unspent range is invisible to the pinned view | `…ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible` — **fails at `8d07d7e`** (`:339`, `:345`, `Actual: true`) |
+| a view minted on core 1 while core 0's txn is live does not see it, before and after its commit; at RC the next statement does | `…AViewMintedBesideAnotherCoresLiveTransactionStaysBlindToIt` |
+| a commit is visible exactly when it leaves the in-flight set, not when its LSN is fixed (AN-R9) | `InstanceVisibilityTest.ASnapshotNeverCoversACommitWhoseEntryIsNotYetPublished` (structure; mutation named in the cell) and `…ACommitLeavesNoPendingMarkerBehindIt` (wiring) |
+| a rollback still finds its own undo after a purge pass taken while the transaction was live | `TxnManagerTest.ALiveTransactionsUndoSurvivesAPurgePassTakenWhileItRuns` (mutation named in the cell) |
+| all ten `Everything()` sites answer as at `004f949` | the suite, plus `ReadViewTest.TheEverythingViewAdmitsEveryWriter` |
+| a reclaimed window entry never turns a committed row invisible (the live floor) | `ReadViewTest.BelowTheFloorEveryWriterOnAPageIsAWinner` |
+| core 0's undo purge does not pass a reader on core 3 | `…CoreZerosUndoPurgeDoesNotPassAReaderOnAnotherCore` (core 1; the fixture has two) |
+| the delete-mark purge gate still refuses on a peer | the gate is `core_id_ == kSystemCore` and DDL is refused on a peer at dispatch (`PeerDdlRefused`), so the existing peer-DDL cells are the cell; its premise comment is AN-S4's to rewrite |
+
+Beside them: `ACorePublishesItsOldestLiveSnapshot`,
+`ALiveWriterIsInvisibleWhateverItsId`,
+`AViewOverNoInstanceAdmitsOnlyTheUnconditionalArms`,
+`AnUnloggedCommitTakesTheNextPositionInCommitOrder`,
+`MoreThanSixtyFourLiveTransactionsAreAdmitted`, and the rewritten horizon
+cells in `txn_manager_test.cpp`, which now assert the LSN and
+`ResolvedForEveryReader`. The two-core fixture is `VisibilityWiringTest`
+with a second `TrxIdSequence` over the same superblock — the disjoint
+blocks are what H1 and H2 need, and one thread is enough for what a view
+answers; what a rig would add (who runs when) is AV's.
+
+**Rewritten, not deleted**: `visibility_test.cpp`'s views are hand-built
+over an `InstanceVisibility` with ids 2..200 committed at LSN = id, so
+`ViewAt(n)` reads as it did and the chain cells stand unchanged;
+`step_vm_mvcc_test.cpp` and `catalog_test.cpp` the same way. One trap
+found on the way and stated in the fixture: `Snapshot`'s default view is
+`Everything()`, so a cell that sets two fields over the default keeps the
+flag and admits every writer — a whole view is assigned instead.
+
+### 8.4 What did not land
+
+- **AN-S3's adoption half.** Unmarked, and the mark it needs is stated in
+  AN-R5a's third bullet. The removal half landed here.
+- **`txn.md` §4.1's rewrite, `crosscore.md` §5 and the `command_dispatcher.cpp`
+  gate comment** — AN-S4's, landed in the commit after `18fed49` (the AN-6
+  row). Between the two commits the spec's `ReadView` block described the
+  retired shape.
+- **AN-S5's number.** The mint is now one atomic load plus a slot walk of
+  one; the window lookup is a latch per tuple whose writer is above the
+  floor, which is the cost the mark spends what the mint saved on. Not
+  measured here; the suspension on the interleaved measurement stands
+  everywhere but AM-S6.
+
+### 8.5 The `critics-developer` pass, 2026-09-07, 66 tool calls
+
+Run over the uncommitted tree with the suite live in `build/`, so the pass
+could read, grep and edit and could not build. It confirmed the structure
+- AN-R12's straddle closed under one hold, the AN-R9 marker's core claim,
+the floor's two bounds and their publication order, the wire arithmetic,
+the Cabin bit's equivalence, the `Everything()` sites - and found **two
+retention holes the rulings assert closed**, both in what bounds a
+reclamation pass. Both fixed, each with a cell and a named mutation.
+
+| finding | what it was | where it landed |
+|---|---|---|
+| **C1 - a pass outruns a snapshot minted and not yet published.** `MintReadView` read the ceiling and published nothing; `Begin` published after its WAL append and `AutocommitSnapshot` inside `RegisterReader`. A pass on another core in that gap saw no reader, dropped an entry above the new view's ceiling and raised the floor past it, and the view then answered that commit visible by the floor at an LSN above its own snapshot - a non-repeatable read inside one pinned snapshot, from a window neither AN-Q3 nor AN-R12 covers | AN-R1's lock-free argument, which holds for a snapshot minted *after* a pass and not for one minted before it and published after; the header and `ResolvedForEveryReader` both stated it as settled | **A held mint lowers its core's slot before it reads the ceiling** (`LowerSnapshotBound`, lower-only; `MintView(own, held)`), and the next `PublishCoreBounds` recomputes the slot exactly. A pass that misses the store is ordered before it and the ceiling read after, under `seq_cst` - the four operations are the store-buffer pattern, which release/acquire does not order. Check views (`MintCheckView`: constraint checks, the Cabin build, synchronous catalog resolution) are never held and do not touch the slot. Cells: `ALoweredSlotBoundsAPassLikeAPublishedSnapshot`, `AHeldMintLowersTheSlotBeforeItIsPublished` |
+| **C2 - a pass is not bounded by the pending-commit markers.** `SnapshotCeiling()` was capped by the markers and `Reclaim` by `HorizonLsn()` alone: core A's marker at 40, core B's commit at 50 published, a pass with no reader drops 50, core C mints at 40 and finds 50 committed by the floor - a snapshot that is not a prefix of commit order. The catalog purge had the same hole through `ResolvedForEveryReader` | the ruling's "bounded by the horizon", written before the marker existed | `Reclaim` is bounded by `min(HorizonLsn(), PendingCommitBound())`, both read **under the window latch**, and `BeginCommit` takes the latch too - a marker read outside it can be stale in a way no memory order repairs (the header's Concurrency note carries the interleaving). `ResolvedForEveryReader` reads the same bound and reads it **after** the lookup, which the comment there proves is the one order that works for a bound read live. Cell: `AReclamationPassIsCappedByAPendingCommit` |
+| **C3 - `SnapshotCeiling()`'s comment licensed swapping its two reads**, which reopens AN-Q3 exactly | CLA's comment ("the read order does not matter for soundness") | fixed by the pass: the proof for the order written, and the counterexample for the other |
+| the marker had two release sites and no RAII; a throw between them would cap every mint on the instance for good | `rules.md`'s RAII rule | `InstanceVisibility::PendingCommit`, one guard over both exits |
+| `CommitCeiling()`'s comment named it as the marker's source; `BeginCommit` reads the member | a comment | corrected: the cells read it, nothing in the engine does |
+| four comments still argued from `kMaxTrackedLiveTxns`; two docs still published `txn_watermark_refusals` and the 64-slot cost | stale prose | rewritten (`shipped_statement_executor.hpp/.cpp`, `command_dispatcher.cpp` ×2, `client-manual.md`, `cross-owner-txn.md`) |
+
+**Rejected, with the reason.** (1) *Fold `ResolvedForEveryReader` into
+`ReadView::Visible`* - it is branch 4 with the bound in place of the
+snapshot, but `Visible` reads its snapshot first and this must read the
+bound **after** the lookup (C2's fix depends on the order), so the fold
+would reintroduce the hole it closes; the function says so at the site.
+(2) *`RetireDeleteMarks` over a template rather than `std::function`* - the
+purge runs at DDL resolution and the one capturing lambda fits the
+small-object buffer; marginal, not taken. (3) *`slots_in_use_` and the four
+publishers* - the pass confirmed both as they stand.
+
+**Adjacent and pre-existing, flagged and not touched:** `Catalog::ScanAll`'s
+no-view arm answers "settled" from `OldestActiveTrxId()` and `IsInFlight`,
+both core-local, so on a peer with nothing running a delete-mark left by
+core 0's *open* DROP reads as gone. AN-S2 makes the instance-wide answer
+available (`ResolvedForEveryReader`); rewiring that site is a DT9 matter
+and not this stage's.
+
+**After the fixes**: the suite plain, armed and budgeted, counted in the
+AN-6 row.

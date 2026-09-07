@@ -153,12 +153,12 @@ inline constexpr std::size_t kShippedDedupMaxRecords = 4096;
 // envelope says the engine does not serve a transaction that runs past
 // 60 s, so aborting one is the ruled answer rather than a defect, and the
 // direction that is still purely a cost is the generous one - an abandoned
-// transaction pins `ReadHorizon()` and holds one of this core's
-// `txn::kMaxTrackedLiveTxns` slots for the whole ceiling. The table is 64
-// entries and is shared with every *local* client, so enough abandoned
-// enrolments would refuse an unrelated connection's `BEGIN` with nothing
-// saying why; `kShippedMaxEnrolled` below is what keeps that from being
-// local clients' problem.
+// transaction holds the instance's undo and its commit window down for the
+// whole ceiling (since AN-S2 the horizon is instance-wide, so every core
+// pays for it). Until AN-S2 it also held one of this core's 64
+// live-transaction slots, shared with every *local* client, which is the
+// cost `kShippedMaxEnrolled` below was sized against; that table has no
+// bound now, and the cap stands on retention alone.
 //
 // **The sweep is only sound while nothing here has prepared.** After a
 // participant replies prepared it may not unilaterally abort (D4), so R6-3
@@ -201,20 +201,17 @@ static_assert(kTxnLifetimeCeilingNs > kShippedStatementDeadlineNs,
 //
 // **A bound on a shared resource, not on memory** - which is what separates
 // it from `kShippedDedupMaxRecords` above. Every enrolment is a live local
-// transaction, and `txn::kMaxTrackedLiveTxns` (64) is the whole core's
-// supply of those, shared with every ordinary client on it. Without a cap
-// here, enough coordinators would take all 64 and a local `BEGIN` would be
-// refused `OutOfSpace` with nothing pointing at the cause.
-//
-// A quarter of the table, so three quarters stay local. Past it a
+// transaction holding the instance's undo and its commit window down for
+// the lifetime ceiling above, opened by a coordinator this core cannot
+// see. It was sized as a quarter of the core's 64-entry live-transaction
+// table; **that table has no bound since AN-S2** - the 64 was the read
+// view's in-flight array, which the commit-LSN snapshot retired - and the
+// number stands on the retention argument alone, unmeasured. Past it a
 // participant refuses **`TxnConflict`** - the one code the wire's
 // `retryable` bit follows (`status.hpp`, and PW6's finding (2)) - because
 // the right response is to retry once another cross-owner transaction ends,
 // which is a thing that happens on its own.
 inline constexpr std::size_t kShippedMaxEnrolled = 16;
-static_assert(kShippedMaxEnrolled < txn::kMaxTrackedLiveTxns,
-              "a participant may not take the whole core's live-transaction table; local "
-              "clients share it and would be refused BEGIN with nothing naming the cause");
 
 class ShippedStatementExecutor {
 public:

@@ -848,7 +848,7 @@ private:
         // Declining is free by §1's corollary - the value stays unobserved
         // and the authoritative scan answers it - and under autocommit with
         // nothing in flight this is two comparisons and no change.
-        if (snapshot_.view.in_flight_count != 0 ||
+        if (snapshot_.view.in_flight_at_mint ||
             snapshot_.view.own_trx_id != txn::kNoTrxId) {
             cabins_->NoteUnbankableView();
             co_return co_await RunWalkStep(steps, index, step, access);

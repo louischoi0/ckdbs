@@ -190,26 +190,38 @@ statement about an engine that no longer exists; re-verify or strike it.
   been running against a volume they contradicted. See the fixture entry
   under Testing.
 
-- **The read view and the read horizon are both per-core, and one spec
-  sentence asserts the opposite.** Verified at `004f949`. `ReadView::Visible`
-  (`include/kds/txn/read_view.hpp:81-90`) decides visibility from a bound on
-  transaction ids, and `TransactionManager::ReadHorizon()`
-  (`src/txn/manager.cpp:559-579`) walks this core's live set and reader slots
-  only. Both are sound only while a reader reads its own core's versions —
-  which `txn.md` §4.1 states of the horizon and states nowhere of the
-  predicate — and that holds today only because a peer reaches another core's
-  rows by shipping the statement. A shared buffer pool ends it, and the
-  failure is a dirty read and a purge that outruns a reader, not an error.
+- **A core that stops is not an idle core, and it pins the instance's
+  commit-order floor for good.** Verified at AN-S2 on
+  `an-s2-read-view-cutover`, recorded here per AN-R14's instruction that
+  it belongs in this file once the window is load-bearing — which AN-S2
+  made it. The floor (`include/kds/txn/instance_visibility.hpp`) is bounded
+  by the minimum issue cursor over attached cores, and AN-S1b unpins an
+  *idle* core by burning its block on that core's own tick. A core that
+  wedges or shuts down takes no tick, and nothing else ever republishes its
+  slot: its cursor stays where it stopped, the floor with it, and the
+  window grows by one entry per commit for the life of the process. Not
+  reachable today — the expeditor stops every core together — and stated
+  so AN-S1b's landing note is not read as closing AN-R13 entirely. Owner:
+  `instructions/v3.0.0/workorder-an-read-view.md` AN-R14, first bullet.
 
-  **`docs/spec/crosscore.md:288-290` states the false premise as a fact**:
-  *"the trx-id domain is global, so ids compare cleanly"*. Ids are leased to
-  each core in disjoint blocks (`include/kds/txn/trx_id.hpp:74`,
-  `:153-155`), so issue order across cores is not id order and no bound on
-  ids orders commits between them. That sentence is the gap, written down as
-  a guarantee.
+- **A cross-owner REPEATABLE READ transaction has no single instant across
+  cores, and since AN-S2 nothing checks the per-core promise either.**
+  Verified at AN-S2. The per-participant watermark went with the trx-id
+  predicate (AN-R5a, operator); what remains is the participant's own
+  pinned view, which delivers consistency per core, and the unbuilt
+  adoption of the coordinator's `snapshot_lsn` (AN-S3), which would deliver
+  the instant. `docs/spec/cross-owner-txn.md` §3 states both halves. Owner:
+  `instructions/v3.0.0/workorder-an-read-view.md` AN-R5, AN-S3.
 
-  Owner: `docs/spec/txn.md` §4.1. The source read and the mechanism that
-  closes it are `instructions/v3.0.0/workorder-an-read-view.md` AN-3 E.
+  *(The entry that stood here — "the read view and the read horizon are
+  both per-core, and one spec sentence asserts the opposite" — closed at
+  AN-S2: `ReadView::Visible` decides by the instance's commit-LSN window
+  and floor, `ReadHorizon()` answers the instance-wide oldest snapshot, and
+  `crosscore.md`'s "the trx-id domain is global, so ids compare cleanly" was
+  rewritten at AN-S4. The two cells that fail on the old predicate and
+  pass on the new one are
+  `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`
+  and `…ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible`.)*
 
 ## Decisions the revision has not taken
 

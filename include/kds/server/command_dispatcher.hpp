@@ -1282,7 +1282,7 @@ private:
 
     // A read view of **now**, for a constraint check. See §4: not the
     // statement's snapshot, because a check reads latest state.
-    StatusOr<txn::ReadView> CheckView(const WriteScope& scope);
+    txn::ReadView CheckView(const WriteScope& scope);
 
     // The forward check for one foreign key and one written value (§2),
     // **answered from what the extraction pass already resolved** (§2a,
@@ -2496,12 +2496,6 @@ private:
     // Per-statement pipeline ids: sequential, never pointer-derived
     // (crosscore.md §3, sched.md §7's determinism rule).
     std::uint64_t next_remote_request_ = 1;
-
-    // RR0 / D3: cross-owner transactions refused because a participant
-    // answered from a snapshot other than the one this transaction had been
-    // reading it at. Projected by `SHOW META` as `txn_watermark_refusals`,
-    // and only when non-zero.
-    std::uint64_t watermark_refusals_ = 0;
 
     // The read-path index switch (`indexes`, default on). Read-path only:
     // maintenance is not switchable, because an index that stops being

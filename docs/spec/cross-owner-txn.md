@@ -32,9 +32,12 @@ core owns. There is no declaration, no join, no registration up front:
 - A participant runs the transaction as an **ordinary local transaction**
   under **its own** trx id, carved from its own core's lease. The
   coordinator's `(session_id, transaction_id)` is recorded beside it when
-  prepare brings it. There is no shared transaction id and no global
-  counter — a shared id would put foreign ids in every participant's
-  stream, which `CoreRuntime::Open`'s mount check refuses.
+  prepare brings it. There is no shared transaction id — under per-core
+  streams a shared id would have put foreign ids in every participant's
+  stream, which `CoreRuntime::Open`'s mount check refused, and under one
+  stream the id stays per core because the lease is (`trx_id.hpp`). Commit
+  *order* is global: the commit record's LSN, which the instance read view
+  carries (`txn.md` §4.1, `ratification-an-commit-order.md` AN-D4).
 
 ### 1a. How a statement reaches a participant
 
@@ -49,11 +52,9 @@ autocommit case in exactly three wire bits:
 | `isolation` | request | the **coordinator's** level, because the level selects a branch (§3) and a participant that fell back to its own config default would give a transaction the weaker promise while its client was told the stronger one |
 | `join` | request | this statement may **join** a context and may not open one (§2a) |
 
-and one on the way back:
-
-| field | on | meaning |
-|---|---|---|
-| `read_watermark` | reply | the participant's watermark for this transaction (§3), or 0 for "none stated" |
+and none on the way back: the reply carried the participant's watermark
+(§3) until AN-S2 removed it with the quantity it was read from, and the
+eight bytes went to the reply text (`kShippedStatementReplyTextMax`, 1000).
 
 **Both reads and writes ship, and a read enrols.** A transaction that wrote
 a row on a peer and then reads that relation has to see its own uncommitted
@@ -302,42 +303,43 @@ weakening and it is a product property, not only a spec line —
 
 Concretely:
 
-- The coordinator carries a **per-participant watermark**: that
-  participant's `ReadView::up_to_trx_id`, established by the participant's
-  first reply and never moved for the transaction's life. It is compared
-  with nothing on this core and nothing on any other participant — **and
-  not because the id spaces differ**, since there is one instance-wide
-  trx-id sequence leased per core. It is because the quantity is a
-  high-water mark over the ids *that* core has issued plus its own
-  in-flight set, so two of them are two cores' answers to a question about
-  themselves and ordering them numerically orders nothing. The single
-  global instant that would let them be compared needs a global commit
-  sequence, which is the shared counter §1 rejects.
 - The participant's own enrolled transaction is what *delivers* the
   promise: opened at the coordinator's level, it pins its view at its own
   BEGIN and cannot re-mint it. §2a's join rule is what guarantees it cannot
   be silently replaced by a newer one either.
-- The coordinator's copy is the standing check on that: a reply naming a
-  different watermark means the snapshot moved, and the transaction is
-  refused rather than answered from two views. **That branch is
-  unreachable** — the one thing that moves a pinned view is the context
-  being replaced, which §2a's join rule refuses a leg earlier and on the
-  participant — and it is written down rather than left to be inferred,
-  because a check's existence otherwise reads as evidence its case occurs.
-  It does not catch a level that failed to cross: a participant running
-  READ COMMITTED reports no watermark at all, so nothing is held and
-  nothing is compared. `txn_watermark_refusals` counts what it does catch.
-- **READ COMMITTED carries no watermark at all.** RC already permits every
-  statement to observe the latest committed state, so there is nothing for
-  a watermark to pin, and the default level therefore pays nothing for any
-  of this.
+- **No check stands over it on the coordinator, since AN-S2** (AN-R5a,
+  operator, 2026-09-07). Until then the coordinator carried a
+  per-participant watermark — that participant's `ReadView::up_to_trx_id`,
+  established by its first reply and compared with itself on every later
+  one — and refused a reply that named a different value, counting it in
+  `txn_watermark_refusals`. The quantity was a high-water mark over the ids
+  *that* core had issued, comparable with nothing on any other core, and
+  the trx-id predicate it belonged to is gone
+  (`instructions/v3.0.0/workorder-an-read-view.md` AN-3 E). The operator
+  took removal over forwarding it as the participant's snapshot LSN: the
+  branch it guarded was unreachable on this tree — the one event that
+  moves a pinned view is the context being replaced, which §2a refuses a
+  leg earlier and on the participant — so the check's absence changes no
+  answer. What it leaves is stated rather than implied: **between this
+  removal and AN-S3, nothing on the engine checks or delivers a single
+  instant across cores**, and the paragraph below is a possible case with
+  no guard standing over it.
+- **READ COMMITTED never carried a watermark.** RC already permits every
+  statement to observe the latest committed state, so there was nothing for
+  one to pin, and the default level pays nothing for any of this.
 
 Two cross-owner RR transactions can disagree about the order of two commits
-on two cores. That is the price of a per-core ReadView, and it is the price
-`crosscore.md` §5 was already paying: this narrows it from *no ReadView at
-all* to *a ReadView per core* and stops there. Sharing the log did not
-change it — a shared WAL gives every commit a comparable LSN, but nothing
-mints a snapshot across cores, and AR0-3 declined the cut vector that
+on two cores. That was the price of a per-core `ReadView`, and it is the
+price `crosscore.md` §5 was already paying. **Since AN-S2 it is no longer
+structural**: the view is a commit-LSN snapshot over one instance-wide
+order (`txn.md` §4.1), so the coordinator's own `snapshot_lsn` *could* be
+adopted by every participant and the two transactions would then agree —
+that is AN-R5's other half, AN-S3, unmarked and unbuilt. Until it lands a
+participant mints its own snapshot at its own BEGIN, which is a later
+instant than the coordinator's, and the disagreement stays possible.
+Sharing the log did not change that on its own — a shared WAL gives every
+commit a comparable LSN, and it was AN, not M0, that minted a snapshot
+across cores; AR0-3 declined the cut vector that
 would.
 
 **The remote-step pipeline does not run inside such a transaction**, and
@@ -358,7 +360,7 @@ dispatcher with no 2PC client, or a path that cannot park, keeps the
 pipeline it had.
 
 **The reply cap.** A shipped read answered as *text* must fit one ring
-slot — `kShippedStatementReplyTextMax`, 992 bytes of reply text — and an
+slot — `kShippedStatementReplyTextMax`, 1000 bytes of reply text — and an
 answer past it is refused (*the read returned nothing and changed
 nothing*) rather than truncated: a refusal and not a wrong answer. A typed
 client's shipped read is answered in rows on an answer edge
@@ -413,7 +415,7 @@ such bound.
 |---|---|---|
 | `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` = 200 ms | **Nothing, since AO-S3** — the writer's stall was its only reader and that wait now ends on the holder's decide. Kept so a configuration carrying it still mounts; M3 re-scopes it to the lock-wait fault net (AO-R8). What bounds a writer that waits too long is `txn::kLockWaitFaultNetNs`, 11 s, a fault and not a ceiling. Log retention never tracked this knob; the floor in §2c holds the log back and `kTxnPhaseDeadlineNs` bounds a slow-but-alive coordinator |
 | `kTxnLifetimeCeilingNs` | `shipped_statement_executor.hpp`, 60 s | How long a participant context lives, measured from its own `BEGIN` and **not** from its last statement (AN-R14, `txn.md` §1). Above the statement deadline so a context outlives at least one full round trip taken from its own start; a transaction that is still busy at 60 s is rolled back all the same, so this is reachable on a healthy path and `shipped_enrolment_expiries` is not a defect counter |
-| `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is one of `txn::kMaxTrackedLiveTxns`, which local clients share — so without it a coordinator storm would refuse an unrelated connection's `BEGIN` with nothing naming the cause |
+| `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is a live transaction holding the instance's undo and commit window down for the lifetime ceiling, opened by a coordinator this core cannot see. It was sized as a quarter of the core's 64-entry live-transaction table; **that table has no bound since AN-S2** (the 64 was the read view's in-flight array, retired with the trx-id predicate), so the number stands on the retention argument alone, unmeasured |
 | wire sizing | `txn_2pc_service.hpp` | 24 bytes per request leg, 256 for the participant reply, against a 1,024-byte ring slot — asserted against `kCoreRingPayloadBytes`, never the literal |
 
 ### 5a. Measured sizing — what the protocol costs, in parts
@@ -451,12 +453,11 @@ structurally impossible.
 
 | field | reads |
 |---|---|
-| `shipped_enrolled` / `shipped_enrolments` | this core as a participant: how many cross-owner transactions it holds now, and how many it has opened. Each live one pins this core's read horizon and one of its 64 live-transaction slots |
+| `shipped_enrolled` / `shipped_enrolments` | this core as a participant: how many cross-owner transactions it holds now, and how many it has opened. Each live one holds the instance's undo and commit window down (the horizon is instance-wide since AN-S2) |
 | `shipped_enrolment_refusals` | enrolments this core declined — its own limit, or a trx-id lease it could not draw. Retryable |
 | `shipped_enrolment_expiries` | contexts the **lifetime** ceiling rolled back — either no decide arrived, or the transaction was still running at 60 s (AN-R14). It is no longer "should be 0": an abandoning coordinator and an over-long but healthy transaction reach it alike, and only the workload's own lifetime distribution separates them |
 | `shipped_join_refusals` | statements that could only join a context and found none — §2a, the other side of the line above. **A subset of `shipped_enrolment_refusals`**, not a count beside it: every refusal the enrolment path returns is counted there too, so the two are never summed |
 | `shipped_readonly_prepares` | participants prepared without a record because they wrote nothing (§1a) |
-| `txn_watermark_refusals` | transactions refused because a participant answered from a different snapshot than the one they had been reading it at (§3) |
 | `txn_in_doubt`, `_asks`, `_committed`, `_aborted`, `_unresolved` | the in-doubt population and what became of it. `txn_in_doubt_unresolved` is the one number naming a transaction nothing at runtime can finish |
 | `wal_syncs`, `wal_interval_syncs` | not this protocol's counters, but the ones its cost is read from (`docs/spec/client-manual.md`). Every device sync this core performed, and the D3 idle tick within it; `wal_syncs - wal_interval_syncs` is the part somebody was parked on. Cumulative from mount, so a reading is a before/after delta, and §5a's per-transaction sync counts are this field divided by the transactions between two readings |
 
@@ -474,7 +475,7 @@ structurally impossible.
 - Unit coverage: `tests/txn_2pc_protocol_test.cpp` (both halves of the
   protocol, in doubt, resolution, the blocked writer),
   `tests/shipped_statement_executor_test.cpp` (the participant's context,
-  the ceiling, the join rule, the watermark),
+  the ceiling, the join rule),
   `tests/core_runtime_test.cpp` (end to end over two real cores),
   `tests/prepared_recovery_test.cpp` (the fourth outcome at mount).
 - **What the simulation corpus does not cover**: `sim/instance.cpp` mounts

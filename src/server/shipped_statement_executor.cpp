@@ -26,12 +26,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                                        std::to_string(statement.sequence) +
                                        "; answered from the record, not run again");
             }
-            // **No watermark on a replayed answer** (RR0). The record holds
-            // an outcome, not a view: the transaction that pinned that view
-            // may since have been decided, and re-stating a watermark from
-            // a record would tell the coordinator this core is still
-            // reading where it once read.
-            reply(it->second.status, it->second.text, 0);
+            reply(it->second.status, it->second.text);
             return;
         }
         if (statement.sequence < it->second.sequence) {
@@ -46,7 +41,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                       " for this session and no longer holds the outcome of sequence " +
                       std::to_string(statement.sequence) +
                       "; whether it ran cannot be established from here"),
-                  {}, 0);
+                  {});
             return;
         }
     }
@@ -73,7 +68,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                   " is still running a statement for this session, so whether sequence " +
                   std::to_string(statement.sequence) +
                   " ran cannot be established from here"),
-              {}, 0);
+              {});
         return;
     }
 
@@ -96,7 +91,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                   " holds no record of sequence " + std::to_string(statement.sequence) +
                   " for this session; this is a retry, so whether it ran cannot be "
                   "established from an absent record"),
-              {}, 0);
+              {});
         return;
     }
 
@@ -130,7 +125,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
             // folding it in would make the one number SS-B4 reads mean two
             // unrelated things.
             ++enrolment_refusals_;
-            reply(enrolled.status(), {}, 0);
+            reply(enrolled.status(), {});
             return;
         }
         running = std::make_unique<Running>(std::move(statement.text),
@@ -160,7 +155,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
             const Status s = Status::Unsupported(
                 "statement shipping: core " + std::to_string(core_id_) +
                 " has no cross-core read path and cannot answer a statement in typed rows");
-            refused->reply(s, {}, 0);
+            refused->reply(s, {});
             running_.erase(key);
             return;
         }
@@ -169,7 +164,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
             running->reply = std::move(reply);
             Running* refused = running.get();
             running_.emplace(key, std::move(running));
-            refused->reply(s, {}, 0);
+            refused->reply(s, {});
             running_.erase(key);
             return;
         }
@@ -208,11 +203,6 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
     // back - so the text goes empty; a success's line **is** the answer.
     Status status = StatusFromErrorReply(state->out.response);
     std::string_view text;
-    // RR0: 0 unless the enrolled arm below finds a REPEATABLE READ context
-    // still standing, which is the only shape that has a watermark to
-    // report - an autocommit statement is a whole transaction, and an RC
-    // one is ratified to skip it.
-    std::uint64_t watermark = 0;
     if (status.ok()) {
         text = state->out.response;
     }
@@ -241,31 +231,8 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
         // were: drop it, so the next statement for this session opens a new
         // one rather than silently running outside any transaction.
         auto it_enrolled = enrolled_.find(key);
-        // Stamped at the statement's **end**, not its start. It measured
-        // idleness for the ceiling; since AN-R14 the ceiling reads
-        // `began_at_ns` instead and **nothing reads this field** - see its
-        // declaration, which carries the same note.
-        // **RR0 / D3: the watermark this core is reading this transaction
-        // at**, taken from the lookup that was already here rather than
-        // from one of its own - the RC path must pay nothing this row did
-        // not exist to make it pay. It is the `up_to_trx_id` the context's
-        // transaction pinned, and REPEATABLE READ only, per D3's ratified
-        // `[OPEN]`: an RC transaction re-mints its view at every statement
-        // boundary by design (`TransactionManager::StartStatement`), so a
-        // watermark for it would name a view already gone and would invite
-        // the coordinator to check something RC never promised.
-        if (it_enrolled != enrolled_.end() &&
-            it_enrolled->second->session.isolation() == txn::IsolationLevel::kRepeatableRead) {
-            const txn::Transaction* held = it_enrolled->second->session.transaction();
-            // A view's high-water mark is at least `kFirstUserTrxId` and so
-            // is never 0, which is what lets 0 mean "none stated" on the
-            // wire.
-            if (held != nullptr) watermark = held->view().up_to_trx_id;
-        }
         if (it_enrolled != enrolled_.end() && !it_enrolled->second->session.in_explicit_txn()) {
             enrolled_.erase(it_enrolled);
-            // The context is gone and so is the promise it carried.
-            watermark = 0;
             status = Status::Unsupported(
                 "statement shipping: a statement inside a cross-owner transaction ended that "
                 "transaction; the decision belongs to the coordinator, not to a shipped "
@@ -374,9 +341,9 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
         // read says the read returned nothing and changed nothing, and is
         // exactly right: it did not change anything.
         base::CrashPointHit("shipped.answer_edge_closed_prereply");
-        // The reply is the terminator now - it carries the status and the
-        // watermark and no rows, and `text` would be a rendering nobody
-        // asked for. Held in a local because `text` is a view.
+        // The reply is the terminator now - it carries the status and no
+        // rows, and `text` would be a rendering nobody asked for. Held in a
+        // local because `text` is a view.
         typed_text_holder.clear();
         text = typed_text_holder;
     }
@@ -397,9 +364,10 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
     // **Narrower than XG-R2's letter, and the narrowing is the wire's**:
     // this core cannot tell a *text-arm* read from a write, because nothing
     // on the request says so. A text read therefore keeps its record, which
-    // is what it always had and is bounded at 992 bytes either way.
+    // is what it always had and is bounded at `kShippedStatementReplyTextMax`
+    // either way.
     if (!state->typed_answer) Remember(key, state->sequence, status, text);
-    state->reply(status, text, watermark);
+    state->reply(status, text);
 }
 
 void ShippedStatementExecutor::Remember(const DedupKey& key, std::uint64_t sequence,
@@ -503,12 +471,13 @@ StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor
             "retry the transaction from the top");
     }
 
-    // **The participant's own capacity, refused before the table's.** Every
-    // enrolment is one of `txn::kMaxTrackedLiveTxns`, which local clients
-    // share - so without this a coordinator storm would refuse an unrelated
-    // connection's `BEGIN` with `OutOfSpace` and nothing naming the cause.
-    // `TxnConflict` because retrying once another cross-owner transaction
-    // ends is the right response and that happens on its own.
+    // **The participant's own capacity.** Every enrolment is a live
+    // transaction holding the instance's undo and commit window down for
+    // the lifetime ceiling, opened by a coordinator this core cannot see;
+    // the cap bounds what a coordinator storm can pin (the header says
+    // what it used to bound as well). `TxnConflict` because retrying once
+    // another cross-owner transaction ends is the right response and that
+    // happens on its own.
     if (enrolled_.size() >= kShippedMaxEnrolled) {
         return Status::TxnConflict(
             "statement shipping: core " + std::to_string(core_id_) + " already holds " +

@@ -78,13 +78,11 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
 StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t session_id,
                                                                std::uint64_t sequence,
                                                                const Status& status,
-                                                               std::string_view text,
-                                                               std::uint64_t read_watermark) {
+                                                               std::string_view text) {
     ShippedStatementReplyPayload out{};
     out.session_id = session_id;
     out.sequence = sequence;
     out.status_code = static_cast<std::uint32_t>(status.code());
-    out.read_watermark = read_watermark;
 
     // **The cap is asymmetric, and deliberately so.**
     //
@@ -206,14 +204,14 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
 
     auto text = ShippedStatementTextOf(request);
     if (!text.ok()) {
-        Reply(requester, request_id, session_id, sequence, text.status(), {}, 0);
+        Reply(requester, request_id, session_id, sequence, text.status(), {});
         return;
     }
     // Before the executor, because a rank this core cannot read is a
     // refusal and not an execution - and a refusal must cost nothing.
     auto role = ShippedStatementRoleOf(request);
     if (!role.ok()) {
-        Reply(requester, request_id, session_id, sequence, role.status(), {}, 0);
+        Reply(requester, request_id, session_id, sequence, role.status(), {});
         return;
     }
     // R6-8's level, on the same terms and for the same reason: a byte this
@@ -221,7 +219,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     // guessed for a transaction a client was promised something about.
     auto isolation = ShippedStatementIsolationOf(request);
     if (!isolation.ok()) {
-        Reply(requester, request_id, session_id, sequence, isolation.status(), {}, 0);
+        Reply(requester, request_id, session_id, sequence, isolation.status(), {});
         return;
     }
     // XG1's form, on the same terms as the two above and for a reason of
@@ -232,7 +230,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     // the byte it does not know is exactly the byte it refuses.
     auto typed_answer = ShippedAnswerTypedOf(request);
     if (!typed_answer.ok()) {
-        Reply(requester, request_id, session_id, sequence, typed_answer.status(), {}, 0);
+        Reply(requester, request_id, session_id, sequence, typed_answer.status(), {});
         return;
     }
     if (!execute_) {
@@ -242,7 +240,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
         Reply(requester, request_id, session_id, sequence,
               Status::NotImplemented("statement shipping: this core has no executor installed; "
                                   "the wire is built and the owner-side execution is not (SS3)"),
-              {}, 0);
+              {});
         return;
     }
 
@@ -264,17 +262,15 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     statement.join = request.join != 0;
     statement.text.assign(text.value());
     execute_(std::move(statement),
-             [this, requester, request_id, session_id, sequence](
-                 const Status& status, std::string_view reply_text, std::uint64_t watermark) {
-                 Reply(requester, request_id, session_id, sequence, status, reply_text,
-                       watermark);
+             [this, requester, request_id, session_id, sequence](const Status& status,
+                                                                 std::string_view reply_text) {
+                 Reply(requester, request_id, session_id, sequence, status, reply_text);
              });
 }
 
 void StatementShipServer::Reply(std::uint32_t requester, std::uint64_t request_id,
                                 std::uint64_t session_id, std::uint64_t sequence,
-                                const Status& status, std::string_view text,
-                                std::uint64_t read_watermark) {
+                                const Status& status, std::string_view text) {
     // The pair is decided **before** it is encoded, so there is one encode
     // and no arm that can fail. The earlier shape re-encoded on failure and
     // its own failure arm returned without sending - dropping the one thing
@@ -292,13 +288,7 @@ void StatementShipServer::Reply(std::uint32_t requester, std::uint64_t request_i
         answer_text = {};
     }
 
-    auto reply = ShippedStatementReplyOf(session_id, sequence, answer, answer_text,
-                                         // **Dropped on the refusal arm**, including the
-                                         // over-long-answer one above: a watermark is a
-                                         // promise about a view the client's transaction is
-                                         // reading through, and a statement whose answer this
-                                         // core could not carry has no such promise to make.
-                                         answer.ok() ? read_watermark : 0);
+    auto reply = ShippedStatementReplyOf(session_id, sequence, answer, answer_text);
     if (!reply.ok()) return;  // unreachable: neither arm above can refuse
     ++replies_;
     //  is the *requester's*, both ways: a shipped statement's
@@ -419,12 +409,6 @@ Status StatementShipClient::RegisterReplyReceiver() {
                 return;
             }
             it->second.text.assign(reply.text, reply.text_len);
-            // RR0 / D3: taken before the status is rebuilt, because the
-            // watermark is the owner's and this side neither interprets it
-            // nor compares it with anything of its own - the coordinator's
-            // session does that, once, against what it already held for
-            // this core (`CommandDispatcher::FinishShippedStatement`).
-            it->second.read_watermark = reply.read_watermark;
             it->second.status = Status::FromWire(reply.status_code, it->second.text);
             if (!it->second.status.ok()) ++refusals_;
             // A success carries the reply line in `text`; a refusal carries

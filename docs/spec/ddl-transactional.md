@@ -41,14 +41,15 @@ Three facts about the code make this tractable:
    when one is passed, hides rows whose writer is in flight.
 
 So **isolation** is: stamp the real transaction id, and filter catalog
-reads by the reader's view. While the creating transaction is live its id
-sits in every other view's in-flight set, so its rows are invisible to
-them and visible to itself. That is the whole of property B.
+reads by the reader's view. While the creating transaction is live the
+instance's commit window holds no entry for its id, so its rows are
+invisible to every other view and visible to itself (`txn.md` §4.1). That
+is the whole of property B.
 
-**Atomicity is not visibility.** `txn::ReadView::Visible` answers *"below
-the high-water mark and not in-flight"* → **visible**; it has no notion of
-"aborted", so once the aborting transaction is out of the live set a view
-minted afterwards reads its id as committed. The engine hides aborted work
+**Atomicity is not visibility.** `txn::ReadView::Visible` answers
+"committed" for any id below the instance's floor; it has no notion of
+"aborted" there, so once the floor has passed an aborting transaction's id
+a view reads it as committed. The engine hides aborted work
 by **compensation**: `TransactionManager::Abort` walks the transaction's
 trail in reverse and physically undoes each mutation, and for an insert
 that is `PageView::RetireSlot`. So DDL does what every other write does —
@@ -283,20 +284,25 @@ reports `catalog_marks_finalized`; zero is what a clean shutdown produces.
 ### 5d. Delete-marks purge at DDL resolution, horizon-gated
 
 The in-mount sibling of §5c's sweep: `Catalog::PurgeSettledDeleteMarks()`
-retires every delete-marked row whose deleter has cleared the core's
-**read horizon** (`TransactionManager::ReadHorizon()`, `txn.md` §4.1),
-and `CommandDispatcher::EndDdlScope` runs it at every DDL resolution —
-both endings, before the cache invalidation so the flush carries the
-retirements too.
+retires every delete-marked row whose deleter is **resolved for every
+reader** — below the instance's floor, or committed at or below every live
+and future snapshot (`TransactionManager::ResolvedForEveryReader()`,
+`txn.md` §4.1). `CommandDispatcher::EndDdlScope` runs it at every DDL
+resolution — both endings, before the cache invalidation so the flush
+carries the retirements too.
 
 **Why the horizon licenses what §5c's mount-only rule forbade.** After
 mount a mark may belong to a transaction that is still open — or to a
 committed drop an old live view still cannot see, which would resurrect
-the row for that reader's filtered reads. The horizon is precisely the
-missing proof: a deleter below it is committed (an active transaction
-bounds the horizon at or below its own id) and visible to every live and
-future view, so the row it marked is gone by every route — filtered reads
-see the drop, unfiltered reads settle the mark by the same comparison. A
+the row for that reader's filtered reads. The two-branch test is precisely
+the missing proof. A deleter **below the instance's floor** is resolved,
+and a loser's marks are compensated away, so a mark still on the page came
+from a winner — and an active transaction holds the floor at or below its
+own id, so no live deleter is ever below it. A deleter the **window** still
+carries at or below every live and future snapshot is committed to every
+view that can be minted. Either way the row it marked is gone by every
+route — filtered reads see the drop, unfiltered reads settle the mark by
+the same comparison. A
 rollback clears its own marks synchronously, so no aborted transaction's
 mark survives to be asked about.
 
@@ -308,12 +314,17 @@ unregistered synchronous view is live, which is the exemption `txn.md`
 §4.1's registration rule leans on. A mark whose deleter has not cleared
 the horizon survives to the next resolution or to §5c at the next mount;
 there is deliberately **no** background cadence. **System core only**, by
-an explicit gate at the call site: the horizon is per-core and blind to
-every other core's readers, so a peer's — no transactions, no leases —
-answers `UINT64_MAX` and would retire a mark whose deleter is live on
-core 0. A failed sweep is a maintenance failure, not the statement's: the
-marks it left are exactly as reachable as before, so it is logged and the
-reply stands.
+an explicit gate at the call site, and **defence in depth since AN-S2**:
+the predicate is instance-wide now, so a peer's sweep would judge every
+mark by the same floor and horizon; what keeps the sweep on core 0 is that
+the catalog's pages sit in the system range only core 0 may write
+(`DevicePageStore::MayWrite`) and that peers take no DDL
+(`PeerDdlRefused`). Until AN-S2 the gate carried the soundness argument
+itself: `ReadHorizon()` walked one core's readers, so a peer's — no
+transactions, no leases — answered `UINT64_MAX` and would have retired a
+mark whose deleter was live on core 0. A failed sweep is a maintenance
+failure, not the statement's: the marks it left are exactly as reachable as
+before, so it is logged and the reply stands.
 
 **No version bump, deliberately.** Every retired row was already gone to
 every reader — that is what the horizon proves — so no cached answer

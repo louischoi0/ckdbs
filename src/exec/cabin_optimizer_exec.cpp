@@ -25,26 +25,14 @@ constexpr std::uint64_t kEntriesPerPageProxy = 254;
 
 txn::ReadView CabinOptimizerExecutor::MintCheckView() {
     // No manager means no transactions: every row carries kBootstrapXid and
-    // is committed, which is what the all-visible view says.
+    // is committed, which is what the all-visible view says. With one, the
+    // mint cannot fail (AN-S2) - which retired the arm that used to stand
+    // here for a failed mint, and its argument that the all-visible view
+    // is the one fallback this site may never take, because under it
+    // `CheckVisibility` can never answer kBusy and the banked set is then
+    // missing a live pk (cabin.md §6a's break exactly).
     if (txn_ == nullptr) return txn::ReadView::Everything();
-    auto minted = txn_->MintReadView(txn::kNoTrxId);
-    if (minted.ok()) return minted.value();
-
-    // **A failed mint must not fall back to the all-visible view.** Under one,
-    // `CheckVisibility` can never answer kBusy - every id below UINT64_MAX is
-    // visible to it - so the busy-row abort that protects completeness stops
-    // firing, and an in-flight transaction's uncommitted delete-mark reads as
-    // kAbsent: the row is skipped, its ROLLBACK restores it, and the banked
-    // set is missing a live pk. That is cabin.md §6a's break exactly, in
-    // the other site that banks a set.
-    //
-    // The default view is the opposite fallback and the safe one: it makes
-    // every writer but the always-visible id kBusy, so the first user row
-    // defers the whole build (which the caller retries). Unreachable today -
-    // Begin() caps live transactions at kMaxTrackedLiveTxns, which is the
-    // exact width AddInFlight holds - and written for the day either bound
-    // moves.
-    return txn::ReadView{};
+    return txn_->MintCheckView(txn::kNoTrxId);
 }
 
 std::uint64_t CabinOptimizerExecutor::PagesProxyOf(std::uint64_t cabin_id) const {

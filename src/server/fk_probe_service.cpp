@@ -52,18 +52,12 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
     }
 
     // The view a constraint check reads under (§4): **latest state**, minted
-    // here rather than carried on the wire. Carrying it would be carrying
-    // one core's idea of who is live to a core with its own; what §4 asks
-    // for is the parent owner's own now, which is what this is.
+    // here rather than carried on the wire. Since AN-S2 a view would answer
+    // the same on either core; what §4 asks for is the *now* of the check,
+    // not the child statement's snapshot, and a view minted here is that.
     txn::ReadView check_view = txn::ReadView::Everything();
     if (txn_ != nullptr) {
-        auto minted = txn_->MintReadView(/*writer=*/0);
-        if (!minted.ok()) {
-            Reply(header.src_core, header.request_id, request.session_id, verdicts,
-                  minted.status());
-            return;
-        }
-        check_view = minted.value();
+        check_view = txn_->MintCheckView(/*writer=*/0);
     }
 
     const FkIntentHolder holder{header.src_core, request.session_id};
@@ -208,13 +202,7 @@ void FkProbeServer::AnswerReverse(std::uint32_t requester, std::uint64_t request
     // idea of who is live, applied to rows it cannot see.
     txn::ReadView check_view = txn::ReadView::Everything();
     if (txn_ != nullptr) {
-        auto minted = txn_->MintReadView(/*writer=*/0);
-        if (!minted.ok()) {
-            ReverseReply(requester, request_id, request.session_id, verdicts,
-                         minted.status());
-            return;
-        }
-        check_view = minted.value();
+        check_view = txn_->MintCheckView(/*writer=*/0);
     }
 
     exec::Budget budget;

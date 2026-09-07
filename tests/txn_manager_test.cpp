@@ -1,5 +1,6 @@
 #include "kds/txn/manager.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -109,20 +110,23 @@ protected:
 TEST_F(TxnManagerTest, ReadCommittedResnapshotsPerStatement) {
     Transaction* reader = Begin(IsolationLevel::kReadCommitted);
     ASSERT_NE(reader, nullptr);
-    const std::uint64_t at_begin = reader->view().up_to_trx_id;
+    const std::uint64_t at_begin = reader->view().snapshot_lsn;
 
     Transaction* writer = Begin();
     ASSERT_NE(writer, nullptr);
-    EXPECT_FALSE(reader->view().Visible(writer->id()))
+    const std::uint64_t writer_id = writer->id();
+    EXPECT_FALSE(reader->view().Visible(writer_id))
         << "the writer had not started when the reader's view was taken";
 
     ASSERT_TRUE(mgr_->Commit(*writer, wal::DurabilityClass::kRelaxed).ok());
     mgr_->Release(*writer);
+    EXPECT_FALSE(reader->view().Visible(writer_id))
+        << "the statement's view is pinned until the next statement boundary";
 
     ASSERT_TRUE(mgr_->StartStatement(*reader).ok());
-    EXPECT_GT(reader->view().up_to_trx_id, at_begin);
-    EXPECT_TRUE(reader->view().Visible(2)) << "a committed writer is visible to the next "
-                                              "statement";
+    EXPECT_GT(reader->view().snapshot_lsn, at_begin);
+    EXPECT_TRUE(reader->view().Visible(writer_id))
+        << "a committed writer is visible to the next statement";
 }
 
 TEST_F(TxnManagerTest, RepeatableReadHoldsOneViewForTheWholeTransaction) {
@@ -137,7 +141,7 @@ TEST_F(TxnManagerTest, RepeatableReadHoldsOneViewForTheWholeTransaction) {
     mgr_->Release(*writer);
 
     ASSERT_TRUE(mgr_->StartStatement(*reader).ok());
-    EXPECT_EQ(reader->view().up_to_trx_id, at_begin.up_to_trx_id);
+    EXPECT_EQ(reader->view().snapshot_lsn, at_begin.snapshot_lsn);
     EXPECT_FALSE(reader->view().Visible(writer_id))
         << "a transaction committed after BEGIN must stay invisible under REPEATABLE READ";
 }
@@ -146,11 +150,9 @@ TEST_F(TxnManagerTest, ATransactionAlwaysSeesItsOwnWrites) {
     Transaction* txn = Begin();
     ASSERT_NE(txn, nullptr);
     EXPECT_TRUE(txn->view().Visible(txn->id()));
-    // ...and never lists itself as in flight, which is what would make it
-    // invisible to itself.
-    for (std::size_t i = 0; i < txn->view().in_flight_count; ++i) {
-        EXPECT_NE(txn->view().in_flight[i], txn->id());
-    }
+    // ...and a view minted beside it does not, which is the same arm from
+    // the other side.
+    EXPECT_FALSE(mgr_->MintReadView(kNoTrxId).Visible(txn->id()));
 }
 
 TEST_F(TxnManagerTest, ALiveTransactionIsInvisibleToEveryOtherView) {
@@ -167,20 +169,27 @@ TEST_F(TxnManagerTest, TheBootstrapTransactionIsVisibleToEveryTransaction) {
     EXPECT_TRUE(txn->view().Visible(kAlwaysVisibleTrxId));
 }
 
-TEST_F(TxnManagerTest, MoreLiveTransactionsThanTheBoundIsOutOfSpace) {
+// The 64-entry bound on live transactions went with the in-flight array
+// it was the width of (AN-S2, AN-3 C): a view is a snapshot LSN that
+// tracks no set, so the sixty-fifth `BEGIN` is admitted and every view
+// still answers every other live transaction invisible.
+TEST_F(TxnManagerTest, MoreThanSixtyFourLiveTransactionsAreAdmitted) {
     std::vector<Transaction*> held;
-    for (std::size_t i = 0; i < kMaxTrackedLiveTxns; ++i) {
+    for (std::size_t i = 0; i < 65; ++i) {
         auto txn = mgr_->Begin(IsolationLevel::kReadCommitted);
         ASSERT_TRUE(txn.ok()) << "at " << i << ": " << txn.status().message();
         held.push_back(txn.value());
     }
-    auto past = mgr_->Begin(IsolationLevel::kReadCommitted);
-    EXPECT_FALSE(past.ok());
-    EXPECT_EQ(past.status().code(), StatusCode::kOutOfSpace);
-
-    // Committing one frees the slot: the bound is on *live* transactions.
-    ASSERT_TRUE(mgr_->Commit(*held.front(), wal::DurabilityClass::kRelaxed).ok());
-    EXPECT_TRUE(mgr_->Begin(IsolationLevel::kReadCommitted).ok());
+    EXPECT_EQ(mgr_->ActiveCount(), 65u);
+    const ReadView last = held.back()->view();
+    for (std::size_t i = 0; i + 1 < held.size(); ++i) {
+        EXPECT_FALSE(last.Visible(held[i]->id())) << "live transaction " << i;
+    }
+    for (Transaction* txn : held) {
+        ASSERT_TRUE(mgr_->Commit(*txn, wal::DurabilityClass::kRelaxed).ok());
+    }
+    const ReadView after = mgr_->MintReadView(kNoTrxId);
+    for (Transaction* txn : held) EXPECT_TRUE(after.Visible(txn->id()));
 }
 
 // ---- First-updater-wins (section 5) --------------------------------------
@@ -353,23 +362,27 @@ TEST_F(TxnManagerTest, AnEndedButUnreleasedTransactionIsNotInFlight) {
     Transaction* fresh = Begin();
     ASSERT_NE(fresh, nullptr);
     EXPECT_TRUE(fresh->view().Visible(ended->id()));
-    EXPECT_EQ(fresh->view().in_flight_count, 0u);
+    EXPECT_FALSE(fresh->view().in_flight_at_mint)
+        << "an ended transaction is not a contemporary of the next view";
 
     mgr_->Release(*ended);
 }
 
 // ---- Reader registration (docs/workplan-reader-registration.md) -----------
+//
+// The horizon is an LSN since AN-S2 (AN-R3): the oldest `snapshot_lsn` any
+// live view holds, instance-wide. What an active transaction's *own* undo
+// needs is not the horizon but the floor, which its `oldest_unresolved`
+// bound holds below its id; the last cell of this group is that.
 
 TEST_F(TxnManagerTest, TheHorizonIsUnboundedWithNoReaders) {
     EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
 }
 
-TEST_F(TxnManagerTest, AnActiveTransactionBoundsTheHorizonAtItsOwnId) {
+TEST_F(TxnManagerTest, AnActiveTransactionBoundsTheHorizonAtItsSnapshot) {
     Transaction* txn = Begin();
     ASSERT_NE(txn, nullptr);
-    // Its view's high-water mark is one past its id, so the binding term is
-    // the id itself - the versions its rollback may still need.
-    EXPECT_EQ(mgr_->ReadHorizon(), txn->id());
+    EXPECT_EQ(mgr_->ReadHorizon(), txn->view().snapshot_lsn);
 
     ASSERT_TRUE(mgr_->Commit(*txn, wal::DurabilityClass::kRelaxed).ok());
     // Ended-but-unreleased already binds nothing: no rollback is coming
@@ -379,11 +392,10 @@ TEST_F(TxnManagerTest, AnActiveTransactionBoundsTheHorizonAtItsOwnId) {
 }
 
 TEST_F(TxnManagerTest, ALeasedReaderBoundsTheHorizonUntilItsLeaseDies) {
-    auto view = mgr_->MintReadView(kNoTrxId);
-    ASSERT_TRUE(view.ok());
-    const std::uint64_t bound = view.value().MinVisibleBound();
+    const ReadView view = mgr_->MintReadView(kNoTrxId);
+    const std::uint64_t bound = view.snapshot_lsn;
 
-    auto lease = mgr_->RegisterReader(view.value());
+    auto lease = mgr_->RegisterReader(view);
     ASSERT_TRUE(lease.ok());
     EXPECT_TRUE(lease.value().held());
     EXPECT_EQ(mgr_->ReadHorizon(), bound);
@@ -401,31 +413,34 @@ TEST_F(TxnManagerTest, AnInFlightWriterKeepsBindingThroughAViewThatSawIt) {
     ASSERT_NE(writer, nullptr);
     const std::uint64_t writer_id = writer->id();
 
-    // An autocommit view minted while the writer runs carries it in its
-    // in-flight set, so the view's bound is the writer's id.
-    auto view = mgr_->MintReadView(kNoTrxId);
-    ASSERT_TRUE(view.ok());
-    auto lease = mgr_->RegisterReader(view.value());
+    // An autocommit view minted while the writer runs has a snapshot below
+    // the writer's eventual commit, so the view's bound holds the horizon
+    // under that commit.
+    const ReadView view = mgr_->MintReadView(kNoTrxId);
+    auto lease = mgr_->RegisterReader(view);
     ASSERT_TRUE(lease.ok());
 
     ASSERT_TRUE(mgr_->Commit(*writer, wal::DurabilityClass::kRelaxed).ok());
     mgr_->Release(*writer);
 
     // The writer is gone from live_, but the leased view still cannot see
-    // it - the lease is what keeps the horizon honest about that.
-    EXPECT_EQ(mgr_->ReadHorizon(), writer_id);
+    // it - the lease is what keeps the horizon honest about that, and what
+    // keeps the floor from passing the writer's entry.
+    EXPECT_FALSE(view.Visible(writer_id));
+    EXPECT_EQ(mgr_->ReadHorizon(), view.snapshot_lsn);
+    EXPECT_FALSE(mgr_->ResolvedForEveryReader(writer_id));
     lease.value().Release();
     EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+    EXPECT_TRUE(mgr_->ResolvedForEveryReader(writer_id));
 }
 
 TEST_F(TxnManagerTest, AMovedLeaseKeepsTheRegistrationAndTheHuskDropsNothing) {
-    auto view = mgr_->MintReadView(kNoTrxId);
-    ASSERT_TRUE(view.ok());
-    const std::uint64_t bound = view.value().MinVisibleBound();
+    const ReadView view = mgr_->MintReadView(kNoTrxId);
+    const std::uint64_t bound = view.snapshot_lsn;
 
     ReaderLease moved;
     {
-        auto lease = mgr_->RegisterReader(view.value());
+        auto lease = mgr_->RegisterReader(view);
         ASSERT_TRUE(lease.ok());
         moved = std::move(lease.value());
         // The moved-from husk dies here; the registration must survive it.
@@ -438,11 +453,10 @@ TEST_F(TxnManagerTest, AMovedLeaseKeepsTheRegistrationAndTheHuskDropsNothing) {
 }
 
 TEST_F(TxnManagerTest, MoveAssigningOverAHeldLeaseReleasesTheOverwrittenSlot) {
-    auto view = mgr_->MintReadView(kNoTrxId);
-    ASSERT_TRUE(view.ok());
+    const ReadView view = mgr_->MintReadView(kNoTrxId);
 
-    auto first = mgr_->RegisterReader(view.value());
-    auto second = mgr_->RegisterReader(view.value());
+    auto first = mgr_->RegisterReader(view);
+    auto second = mgr_->RegisterReader(view);
     ASSERT_TRUE(first.ok());
     ASSERT_TRUE(second.ok());
 
@@ -457,23 +471,22 @@ TEST_F(TxnManagerTest, MoveAssigningOverAHeldLeaseReleasesTheOverwrittenSlot) {
 }
 
 TEST_F(TxnManagerTest, SlotExhaustionIsOutOfSpaceAndAReleaseReopensIt) {
-    auto view = mgr_->MintReadView(kNoTrxId);
-    ASSERT_TRUE(view.ok());
+    const ReadView view = mgr_->MintReadView(kNoTrxId);
 
     std::vector<ReaderLease> held;
     held.reserve(kMaxRegisteredReaders);
     for (std::size_t i = 0; i < kMaxRegisteredReaders; ++i) {
-        auto lease = mgr_->RegisterReader(view.value());
+        auto lease = mgr_->RegisterReader(view);
         ASSERT_TRUE(lease.ok()) << "slot " << i;
         held.push_back(std::move(lease.value()));
     }
 
-    auto refused = mgr_->RegisterReader(view.value());
+    auto refused = mgr_->RegisterReader(view);
     ASSERT_FALSE(refused.ok());
     EXPECT_EQ(refused.status().code(), StatusCode::kOutOfSpace);
 
     held.pop_back();
-    auto reopened = mgr_->RegisterReader(view.value());
+    auto reopened = mgr_->RegisterReader(view);
     EXPECT_TRUE(reopened.ok());
 }
 
@@ -516,6 +529,75 @@ TEST_F(TxnManagerTest, UndoPagesRecycleOnceTheirWritersClearTheHorizon) {
     EXPECT_LE(undo_->LivePages(), 3u) << "undo grew where it should have recycled";
     ASSERT_TRUE(mgr_->Commit(*b, wal::DurabilityClass::kRelaxed).ok());
     mgr_->Release(*b);
+}
+
+// **The retention duty that changed hands at AN-S2** (AN-R3). Over the
+// trx-id predicate an active transaction's own id was folded into the
+// horizon, which is what kept its own undo from being retired under it. An
+// LSN horizon over snapshots says nothing about that; what holds the floor
+// below a live transaction now is its core's `oldest_unresolved` bound
+// (AN-R8). This is that bound doing the duty: a purge pass taken while `a`
+// runs - another writer's growth - leaves `a`'s records readable, and
+// `a`'s rollback then finds them.
+//
+// **Mutation**: publish `kUnboundedBound` for the oldest unresolved id and
+// the floor passes `a`; its pages recycle under it and the read below
+// returns another writer's bytes.
+TEST_F(TxnManagerTest, ALiveTransactionsUndoSurvivesAPurgePassTakenWhileItRuns) {
+    const std::vector<std::byte> mine(kUndoPageCapacity / 4 - kUndoRecordHeaderSize,
+                                      std::byte{0xA1});
+    const std::vector<std::byte> theirs(kUndoPageCapacity / 4 - kUndoRecordHeaderSize,
+                                        std::byte{0xB2});
+    UndoRecordFields fields{};
+    fields.type = static_cast<std::uint8_t>(UndoRecordType::kOverwrite);
+    fields.prior_trx_id = kAlwaysVisibleTrxId;
+    fields.prior_undo_ptr = kNoUndoPtr;
+    fields.target_page_id = 300;
+    fields.target_slot = 2;
+
+    Transaction* a = Begin();
+    ASSERT_NE(a, nullptr);
+    auto first = mgr_->AppendUndo(*a, fields, /*pk=*/1, mine);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    for (int i = 0; i < 4; ++i) ASSERT_TRUE(mgr_->AppendUndo(*a, fields, 1, mine).ok());
+
+    // Another writer grows the log twice over while `a` is live, and every
+    // growth runs the purge.
+    Transaction* b = Begin();
+    ASSERT_NE(b, nullptr);
+    for (int i = 0; i < 12; ++i) ASSERT_TRUE(mgr_->AppendUndo(*b, fields, 1, theirs).ok());
+    ASSERT_TRUE(mgr_->Commit(*b, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*b);
+    Transaction* c = Begin();
+    ASSERT_NE(c, nullptr);
+    for (int i = 0; i < 8; ++i) ASSERT_TRUE(mgr_->AppendUndo(*c, fields, 1, theirs).ok());
+
+    EXPECT_EQ(undo_->PagesRecycled(), 0u) << "a live transaction's undo was recycled under it";
+    auto record = undo_->Read(first.value());
+    ASSERT_TRUE(record.ok()) << record.status().message();
+    EXPECT_EQ(record.value().image.size(), mine.size());
+    EXPECT_TRUE(std::equal(record.value().image.begin(), record.value().image.end(),
+                           mine.begin()))
+        << "the record at a's first undo pointer holds another writer's bytes";
+
+    ASSERT_TRUE(mgr_->Abort(*a).ok());
+    ASSERT_TRUE(mgr_->Commit(*c, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*c);
+}
+
+// An unlogged instance has no commit record to take an order from, so the
+// window assigns one: each commit takes the next position, and a view
+// minted after it sits exactly one above a view minted before.
+TEST_F(TxnManagerTest, AnUnloggedCommitTakesTheNextPositionInCommitOrder) {
+    const ReadView before = mgr_->MintReadView(kNoTrxId);
+    Transaction* txn = Begin();
+    ASSERT_NE(txn, nullptr);
+    ASSERT_TRUE(mgr_->Commit(*txn, wal::DurabilityClass::kRelaxed).ok());
+    const ReadView after = mgr_->MintReadView(kNoTrxId);
+    EXPECT_EQ(after.snapshot_lsn, before.snapshot_lsn + 1);
+    EXPECT_FALSE(before.Visible(txn->id()));
+    EXPECT_TRUE(after.Visible(txn->id()));
+    mgr_->Release(*txn);
 }
 
 // ---- Isolation-level parsing ----------------------------------------------

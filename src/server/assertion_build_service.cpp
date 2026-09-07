@@ -144,11 +144,7 @@ void AssertionBuildServer::Build(std::uint32_t requester, std::uint64_t request_
     // view, which is the point of building on the owner. A core with no
     // manager reads everything, which is the pre-MVCC engine.
     txn::ReadView check_view = txn::ReadView::Everything();
-    if (txn_ != nullptr) {
-        auto minted = txn_->MintReadView(txn::kNoTrxId);
-        if (!minted.ok()) return fail(minted.status());
-        check_view = minted.value();
-    }
+    if (txn_ != nullptr) check_view = txn_->MintCheckView(txn::kNoTrxId);
 
     auto build = exec::BuildAssertionCabin(catalog_, store_, *stmt, request.assertion_id,
                                           check_view, wal_);

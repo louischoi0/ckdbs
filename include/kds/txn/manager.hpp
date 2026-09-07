@@ -221,8 +221,9 @@ private:
 // manager already holds: autocommit snapshots held across a park, which
 // today means the shipped pipeline stages alone - `RunProducer` and
 // `RunConsumer` keep theirs on a coroutine frame across every credit gate.
-// Bounded and fixed like kMaxTrackedLiveTxns, for the same reason:
-// a reader the registry could not admit would be a reader a purge cannot
+// Bounded and fixed so the registry is an array and never a malloc on a
+// statement's front door, and the bound refuses rather than drops: a
+// reader the registry could not admit would be a reader a purge cannot
 // see, so exhaustion refuses the reader rather than unsoundly proceeding.
 inline constexpr std::size_t kMaxRegisteredReaders = 256;
 
@@ -281,12 +282,15 @@ class TransactionManager final : public wal::ActiveTransactions {
 public:
     // `wal` may be null - the unlogged path the socket-free tests run on.
     //
-    // `visibility` is the instance's shared visibility state (AN-R1), null
-    // wherever there is no instance to share - every fixture, and the
-    // single-manager tools. **A manager given one publishes what its core
-    // knows and reads nothing back**: at AN-S1 the predicate is still the
-    // per-core `ReadView`, so this wiring is additive and the suite is what
-    // proves it. `core` names the slot this manager owns.
+    // `visibility` is the instance's shared visibility state (AN-R1) - the
+    // `Expeditor`'s, handed to every core. **Null means this manager owns
+    // one of its own** (AN-S2): the predicate reads the floor and the
+    // window on every call, so there is no manager without a visibility,
+    // and a fixture or a single-manager tool that passes none gets a
+    // private instance with one slot - the same code the shipped
+    // `cores = 1` runs, over an object nobody else can see. There is no
+    // second predicate to fall back to. `core` names the slot this manager
+    // owns.
     // `locks` is the instance's lock table (AO-R2), borrowed on the same
     // terms as `visibility` and **null everywhere today**: AO-S3 is the
     // stage that constructs one and hands it to every core. Null means
@@ -296,8 +300,15 @@ public:
                        wal::WalManager* wal = nullptr,
                        InstanceVisibility* visibility = nullptr,
                        std::uint32_t core = 0, LockTable* locks = nullptr)
-        : ids_(ids), undo_(undo), store_(store), wal_(wal), visibility_(visibility),
-          core_(core), locks_(locks) {
+        : ids_(ids),
+          undo_(undo),
+          store_(store),
+          wal_(wal),
+          own_visibility_(visibility == nullptr ? std::make_unique<InstanceVisibility>()
+                                                : nullptr),
+          visibility_(visibility != nullptr ? visibility : own_visibility_.get()),
+          core_(core),
+          locks_(locks) {
         // **`noexcept` came off here when the floor did.** `Reclaim()` takes
         // the window latch, and `std::mutex::lock` is a throwing call - so
         // the old `noexcept` would have turned a lock failure into
@@ -319,12 +330,28 @@ public:
         // as written by a live writer. Reclamation is the mechanism that
         // computes the floor, so attaching runs one pass over an empty
         // window rather than growing a second way to raise it.
-        if (visibility_ != nullptr) visibility_->Reclaim();
+        visibility_->Reclaim();
         // Arms the undo purge (docs/inflight/in-progress/workplan-undo-purge.md): the log's
         // only appender is this manager, so `this` is alive at every call
         // by construction. Structural, like the snapshot lease - a
         // manager-owned log purges, a bare one (tests, tools) does not.
-        undo_.SetHorizonSource([this]() noexcept { return ReadHorizon(); });
+        //
+        // **What the purge is handed is the floor, not the horizon** (AN-R3,
+        // AN-S2). The undo log settles a page by its newest writer's id, and
+        // below the floor every writer is resolved and visible to every live
+        // and future snapshot, so its records are unreachable by any
+        // traversal. The horizon's other half - "committed at or below the
+        // oldest live snapshot" - cannot be judged per page, because a page
+        // knows its writers' ids and not their commit LSNs; it reaches the
+        // undo purge only through the floor, which reclamation holds below
+        // any commit a live snapshot cannot see. A pass runs first so the
+        // floor a growth reads is current rather than the one the last
+        // thousandth commit left: the purge is what asks, so the purge is
+        // what pays.
+        undo_.SetHorizonSource([this]() {
+            visibility_->Reclaim();
+            return visibility_->Floor();
+        });
     }
 
     // Uninstalls the horizon source. The lambda above dangles past this
@@ -348,10 +375,10 @@ public:
         undo_.SetHorizonSource(nullptr);
     }
 
-    // Starts a transaction and takes its first read view. Fails with
-    // OutOfSpace past kMaxTrackedLiveTxns live transactions - the bound
-    // ReadView documents, surfaced rather than silently dropping an id,
-    // because a dropped in-flight id makes an uncommitted row visible.
+    // Starts a transaction and takes its first read view. **No bound on how
+    // many may be live** since AN-S2: the 64 was the width of the view's
+    // in-flight array, and a view is now a snapshot LSN that tracks no
+    // set. What bounds the population is the sessions holding it.
     StatusOr<Transaction*> Begin(IsolationLevel isolation);
 
     // Re-mints the read view at a statement boundary. A no-op under
@@ -500,8 +527,26 @@ public:
     }
 
     // A read view for a statement outside any transaction - autocommit's
-    // read path, and the one every SELECT takes today.
-    StatusOr<ReadView> MintReadView(std::uint64_t own_trx_id);
+    // read path, and the one every SELECT takes today. **Cannot fail** since
+    // AN-S2: a mint is one read of the instance's snapshot ceiling and a
+    // walk of `live_` for the Cabin's one bit, where it used to fill a
+    // bounded array.
+    //
+    // **A held snapshot**: the caller registers it (`AutocommitSnapshot`)
+    // or holds it on a transaction (`Begin`, `StartStatement`), and this
+    // core's slot is lowered to cover it *before* the ceiling is read, so
+    // no reclamation pass can outrun it in the gap. A view that will be
+    // neither takes `MintCheckView` instead.
+    ReadView MintReadView(std::uint64_t own_trx_id) noexcept;
+
+    // A **latest-state check view** (`visibility.hpp`, `foreign-keys.md`
+    // §4): what a constraint check or a synchronous catalog resolution
+    // reads under, with `writer_trx_id` as its own id so a transaction's
+    // own pending rows satisfy its own constraints. Never registered and
+    // never held across a park, so it holds nothing back: it does not
+    // touch this core's slot, and the only thing a reclamation pass can do
+    // to it is answer a committed writer "committed" a moment earlier.
+    ReadView MintCheckView(std::uint64_t writer_trx_id) noexcept;
 
     // Frees a transaction the caller is done holding. Separate from
     // Commit/Abort on purpose: those end the transaction and leave the
@@ -612,21 +657,27 @@ public:
     // alone: an instance whose window drains has nothing to buy.
     BurnOutcome MaybeBurnIdleBlock();
 
-    // The smallest transaction id any live reader on this core might still
-    // need a superseded version from: the minimum of MinVisibleBound()
-    // over every active transaction's view (and its own id) and every
-    // leased reader. `UINT64_MAX` with no readers at all.
+    // **The oldest snapshot LSN any live reader on any core holds**
+    // (AN-R3, AN-Q4): the minimum over every core's published bound, which
+    // this core publishes from its active transactions' views and its
+    // leased readers. `UINT64_MAX` with no readers anywhere.
     //
-    // What it licenses: a version superseded by a **committed** transaction
-    // with id below this is invisible to every live view and every future
-    // view - future views only raise the high-water mark, and a committed
-    // id joins no in-flight set - so a purge may retire it. An id at or
-    // above it proves nothing and its versions must stay.
-    //
-    // Per-core, like everything here: sound while every reader reads its
-    // own core's versions (CC3/CC4). A cross-core writer must revisit -
-    // the workplan's D1 names the condition.
+    // An LSN, not a trx id, and instance-wide, not per-core. What it
+    // licenses: a version superseded by a transaction whose commit LSN is
+    // at or below it is invisible to every live view - each sees the
+    // superseding writer - and to every future view, since a mint never
+    // reads a ceiling below a live snapshot. A commit above it proves
+    // nothing and its versions must stay. `ResolvedForEveryReader` is that
+    // test per transaction, with the floor's branch beside it.
     std::uint64_t ReadHorizon() const noexcept;
+
+    // Whether every live and future reader sees `trx_id` as committed, so a
+    // version it superseded - or a delete-mark it set - can go. Two
+    // branches, the same two `ReadView::Visible` decides by: below the
+    // floor, or in the window at or below `ReadHorizon()`. False for a
+    // transaction that is live, aborted, or committed above some live
+    // snapshot. The catalog's delete-mark purge is the caller.
+    bool ResolvedForEveryReader(std::uint64_t trx_id) const;
 
 private:
     friend class ReaderLease;
@@ -635,17 +686,30 @@ private:
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);
 
-    // Republishes this core's two id-valued bounds into the instance slot:
-    // the sequence's cursor and the oldest transaction still running. Both
-    // move on every Begin, Commit and Abort, and a no-op with no
-    // `visibility_`. The snapshot bound is AN-S2's - a read view carries no
-    // LSN yet.
+    // The one mint. `held` is whether the view will be registered or held
+    // on a transaction, which is what decides whether this core's slot is
+    // lowered ahead of it.
+    ReadView MintView(std::uint64_t own_trx_id, bool held) noexcept;
+
+    // Republishes what this core contributes to the instance's three
+    // bounds: its oldest live snapshot LSN (the horizon's term), the
+    // sequence's cursor and the oldest transaction still running (the
+    // floor's two terms). All three move on Begin, Commit and Abort; the
+    // first also on a READ COMMITTED statement boundary and on a reader
+    // registering or releasing.
     void PublishCoreBounds() noexcept;
+
+    // The horizon's term: the oldest `snapshot_lsn` over this core's active
+    // transactions and leased readers, `kUnboundedBound` with none.
+    std::uint64_t LocalSnapshotBound() const noexcept;
 
     TrxIdSequence& ids_;
     UndoLog& undo_;
     storage::PageStore& store_;
     wal::WalManager* wal_;
+    // The visibility this manager owns when it was handed none; declared
+    // before `visibility_` because that pointer is initialised from it.
+    std::unique_ptr<InstanceVisibility> own_visibility_;
     InstanceVisibility* visibility_;
     std::uint32_t core_;
     // The instance lock table (AO-R2), borrowed on `visibility_`'s terms
@@ -665,20 +729,19 @@ private:
     // never reaches it and one whose floor is pinned reaches it quickly.
     static constexpr std::size_t kBurnWindowThreshold = 4096;
 
-    // Live transactions, in id order. A vector because the set is bounded
-    // by kMaxTrackedLiveTxns and a scan over 64 entries beats a hash on
-    // every read view minted - which under READ COMMITTED is every
-    // statement.
+    // Live transactions, in id order. A vector because the set is the size
+    // of the sessions holding one, and a scan over it beats a hash for the
+    // walks that read it - the oldest live id on every Begin, Commit and
+    // Abort, and the Cabin's "anything in flight" bit on every mint.
     std::vector<std::unique_ptr<Transaction>> live_;
 
-    // Leased readers: slot value is the view's MinVisibleBound(), and the
+    // Leased readers: slot value is the view's `snapshot_lsn`, and the
     // bitmap beside it says which slots are held - the value itself
     // carries no free/held meaning, because **a view can genuinely bound
-    // at 0** (a core whose id sequence has issued nothing mints
-    // `up_to_trx_id == 0`; a full-suite run on a peer core found it).
-    // Register scans four words for a zero bit, release clears one: O(1),
-    // no allocation, per read_view.hpp's POD rule. ReadHorizon() visits
-    // only set bits, and runs only at a purge.
+    // at 0** (a fresh instance that has published no commit mints
+    // `snapshot_lsn == 0`). Register scans four words for a zero bit,
+    // release clears one: O(1), no allocation, per read_view.hpp's POD
+    // rule. `LocalSnapshotBound()` visits only set bits.
     std::array<std::uint64_t, kMaxRegisteredReaders> reader_slots_{};
     std::array<std::uint64_t, kMaxRegisteredReaders / 64> reader_used_{};
 };
@@ -729,12 +792,11 @@ struct LeasedSnapshot {
 // because with no manager there is no purge either.
 inline StatusOr<LeasedSnapshot> AutocommitSnapshot(TransactionManager* manager) {
     if (manager == nullptr) return LeasedSnapshot{};
-    auto view = manager->MintReadView(kNoTrxId);
-    if (!view.ok()) return view.status();
-    auto lease = manager->RegisterReader(view.value());
+    const ReadView view = manager->MintReadView(kNoTrxId);
+    auto lease = manager->RegisterReader(view);
     if (!lease.ok()) return lease.status();
     LeasedSnapshot out;
-    out.snap.view = view.value();
+    out.snap.view = view;
     out.snap.undo = &manager->undo();
     out.lease = std::move(lease.value());
     return out;

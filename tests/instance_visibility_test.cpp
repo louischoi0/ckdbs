@@ -241,11 +241,38 @@ protected:
         superblock_ = server::SuperBlock::CreateFresh(/*now_unix_seconds=*/1000);
         ids_ = std::make_unique<TrxIdSequence>(superblock_);
         undo_ = std::make_unique<UndoLog>(store_, wal_.get());
+        // **A second core, as far as visibility can tell one apart**: its
+        // own sequence over the same superblock, so the first id it issues
+        // carves a block *above* whatever core 0 has carved - the disjoint
+        // per-core blocks AN-3 E's H1 and H2 rest on - its own undo log,
+        // and the same store, stream and visibility. What it is not is a
+        // second reactor: both managers run on this thread, which is
+        // enough for cells about what a view answers and not for cells
+        // about who runs when (those are the two-core rig's, AV).
+        ids1_ = std::make_unique<TrxIdSequence>(superblock_);
+        undo1_ = std::make_unique<UndoLog>(store_, wal_.get());
     }
 
     std::unique_ptr<TransactionManager> Attach() {
         return std::make_unique<TransactionManager>(*ids_, *undo_, store_, wal_.get(), &vis_,
                                                     kCore0);
+    }
+
+    std::unique_ptr<TransactionManager> AttachPeer() {
+        return std::make_unique<TransactionManager>(*ids1_, *undo1_, store_, wal_.get(), &vis_,
+                                                    kCore1);
+    }
+
+    // Begin-and-commit one transaction, which on a fresh sequence is what
+    // carves that core's first block. Returns the id it spent.
+    static std::uint64_t CommitOne(TransactionManager& mgr) {
+        auto txn = mgr.Begin(IsolationLevel::kReadCommitted);
+        EXPECT_TRUE(txn.ok()) << txn.status().message();
+        if (!txn.ok()) return 0;
+        const std::uint64_t id = txn.value()->id();
+        EXPECT_TRUE(mgr.Commit(*txn.value(), wal::DurabilityClass::kRelaxed).ok());
+        mgr.Release(*txn.value());
+        return id;
     }
 
     sched::ManualClock clock_;
@@ -256,7 +283,331 @@ protected:
     InstanceVisibility vis_;
     std::unique_ptr<TrxIdSequence> ids_;
     std::unique_ptr<UndoLog> undo_;
+    std::unique_ptr<TrxIdSequence> ids1_;
+    std::unique_ptr<UndoLog> undo1_;
 };
+
+// ---- AN-S2: the two shapes the per-core view cannot get right -------------
+//
+// Written **before** the cutover and run against it, because the AN-S2 row
+// asks for exactly that: both must fail on the trx-id predicate and pass on
+// the commit-LSN one. Neither is a fixture artefact - each core issues from
+// its own block, as a real peer does, and that is the whole cause.
+
+// AN-3 E's H1. Core 1 holds the higher block. It commits, and core 0's
+// *next* view - minted after that commit - must see the row. Under a bound
+// on trx ids it does not: the committed id is above core 0's cursor and so
+// reads as "not yet started", until core 0 burns through its own block.
+TEST_F(VisibilityWiringTest, ACommitOnAHigherBlockIsVisibleToALowerCoresNextView) {
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    // Core 0 carves the low block and spends one id: its cursor is low and
+    // most of its block is unspent.
+    CommitOne(*core0);
+    ASSERT_GT(ids_->remaining(), 0u);
+    // Core 1 carves the high block and commits from it.
+    const std::uint64_t committed = CommitOne(*core1);
+    ASSERT_GT(committed, ids_->peek()) << "the fixture did not put core 1's block above core 0's";
+
+    const ReadView view = core0->MintReadView(kNoTrxId);
+    EXPECT_TRUE(view.Visible(committed))
+        << "H1: a transaction committed on a core holding a higher id block is invisible to "
+           "the next view minted on a lower core";
+}
+
+// AN-3 E's H2. Core 1 holds the higher block and mints a view. Core 0 then
+// begins a transaction out of its own unspent range, *below* that view's
+// cursor and in no in-flight set the view could have taken. A bound on trx
+// ids answers "committed" for a transaction that had not started when the
+// view was taken - a dirty read - and keeps answering it after the commit,
+// which a pinned view must never do.
+TEST_F(VisibilityWiringTest, ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible) {
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    CommitOne(*core0);
+    CommitOne(*core1);
+    ASSERT_GT(ids1_->peek(), ids_->peek());
+
+    const ReadView pinned = core1->MintReadView(kNoTrxId);
+
+    auto late = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(late.ok()) << late.status().message();
+    const std::uint64_t late_id = late.value()->id();
+    ASSERT_LT(late_id, ids1_->peek()) << "the fixture did not issue from the lower block";
+    EXPECT_FALSE(pinned.Visible(late_id))
+        << "H2: a transaction begun after the mint, from a lower core's unspent range, reads "
+           "as committed to the pinned view";
+
+    ASSERT_TRUE(core0->Commit(*late.value(), wal::DurabilityClass::kRelaxed).ok());
+    core0->Release(*late.value());
+    EXPECT_FALSE(pinned.Visible(late_id))
+        << "the view is pinned: a commit after the mint stays invisible to it";
+    // And a view minted now sees it, on either core.
+    EXPECT_TRUE(core1->MintReadView(kNoTrxId).Visible(late_id));
+    EXPECT_TRUE(core0->MintReadView(kNoTrxId).Visible(late_id));
+}
+
+// A view minted on core 1 while core 0's transaction is live does not see
+// it - before its commit, and after, because the view is pinned. A READ
+// COMMITTED transaction's next statement does, because that is the one
+// event that re-mints.
+TEST_F(VisibilityWiringTest, AViewMintedBesideAnotherCoresLiveTransactionStaysBlindToIt) {
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    CommitOne(*core0);
+    CommitOne(*core1);
+
+    auto live = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(live.ok()) << live.status().message();
+    const std::uint64_t live_id = live.value()->id();
+
+    auto reader = core1->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(reader.ok()) << reader.status().message();
+    const ReadView pinned = reader.value()->view();
+    EXPECT_FALSE(pinned.Visible(live_id)) << "live on another core";
+    EXPECT_FALSE(pinned.in_flight_at_mint)
+        << "the Cabin's bit is this core's: core 1 had nothing else live";
+
+    ASSERT_TRUE(core0->Commit(*live.value(), wal::DurabilityClass::kRelaxed).ok());
+    core0->Release(*live.value());
+    EXPECT_FALSE(pinned.Visible(live_id)) << "committed after the mint; the view is pinned";
+    EXPECT_FALSE(reader.value()->view().Visible(live_id))
+        << "the transaction's current view is the pinned one until a statement boundary";
+
+    ASSERT_TRUE(core1->StartStatement(*reader.value()).ok());
+    EXPECT_TRUE(reader.value()->view().Visible(live_id))
+        << "READ COMMITTED: the next statement sees what committed before it";
+    ASSERT_TRUE(core1->Commit(*reader.value(), wal::DurabilityClass::kRelaxed).ok());
+    core1->Release(*reader.value());
+}
+
+// **AN-R9, and the interval AN-Q3 names, at the structure.** Core 0 has
+// begun a commit - its LSN is fixed, its entry is not yet in - when core 1
+// publishes a commit at a *higher* LSN. The published maximum is now above
+// core 0's unpublished commit; a snapshot that took it would answer core
+// 0's commit invisible now and visible once its entry lands. The pending
+// marker caps the ceiling instead, so no snapshot covers an LSN whose
+// entry it cannot see, and every view's answer is stable for its life.
+//
+// **Mutation**: read the published maximum at the mint instead of the
+// capped ceiling, and `early.Visible(11)` flips from false to true when
+// core 0 publishes.
+TEST(InstanceVisibilityTest, ASnapshotNeverCoversACommitWhoseEntryIsNotYetPublished) {
+    InstanceVisibility vis;
+    vis.PublishCommit(10, 100);
+    ASSERT_EQ(vis.SnapshotCeiling(), 100u);
+
+    // Core 0 is between its append and its publication.
+    vis.BeginCommit(kCore0);
+    // Core 1 appends after core 0 - a higher LSN - and publishes first.
+    vis.PublishCommit(20, 200);
+    EXPECT_EQ(vis.CommitCeiling(), 200u) << "the published maximum moved";
+    EXPECT_EQ(vis.SnapshotCeiling(), 100u) << "the ceiling a mint takes did not";
+
+    ReadView early;
+    early.visibility = &vis;
+    early.snapshot_lsn = vis.SnapshotCeiling();
+    EXPECT_FALSE(early.Visible(20)) << "committed above the snapshot";
+    EXPECT_FALSE(early.Visible(11)) << "not yet published";
+
+    // Core 0's commit lands, at the LSN it was assigned before core 1's.
+    vis.PublishCommit(11, 150);
+    vis.EndCommit(kCore0);
+    EXPECT_EQ(vis.SnapshotCeiling(), 200u) << "the cap lifted with the publication";
+    EXPECT_FALSE(early.Visible(11)) << "the early view's answer must not flip";
+    EXPECT_FALSE(early.Visible(20));
+
+    ReadView later;
+    later.visibility = &vis;
+    later.snapshot_lsn = vis.SnapshotCeiling();
+    EXPECT_TRUE(later.Visible(11));
+    EXPECT_TRUE(later.Visible(20));
+    // Monotone: a later mint never reads below an earlier one.
+    EXPECT_GE(later.snapshot_lsn, early.snapshot_lsn);
+}
+
+// **The review's C2**: a pass is bounded by the pending-commit markers as
+// well as by the horizon. Core 0 has begun a commit with the ceiling at
+// 40; core 1 publishes at 50; a pass with no reader anywhere must not drop
+// core 1's entry, because a mint capped by core 0's marker takes 40 and
+// would then find 50 committed by the floor.
+//
+// **Mutation**: bound the pass by the horizon alone and the entry goes.
+TEST(InstanceVisibilityTest, AReclamationPassIsCappedByAPendingCommit) {
+    InstanceVisibility vis;
+    vis.PublishBounds(kCore0, kUnboundedBound, /*cursor=*/1000);
+    vis.PublishCommit(10, 40);
+    vis.BeginCommit(kCore0);
+    vis.PublishCommit(20, 50);
+
+    EXPECT_EQ(vis.Reclaim(), 1u) << "10 committed at 40 is below the marker and may go";
+    EXPECT_EQ(vis.LookupCommit(20).commit_lsn, 50u) << "20 committed at 50 must stay";
+    EXPECT_LE(vis.Floor(), 20u);
+    ReadView capped;
+    capped.visibility = &vis;
+    capped.snapshot_lsn = vis.SnapshotCeiling();
+    ASSERT_EQ(capped.snapshot_lsn, 40u);
+    EXPECT_FALSE(capped.Visible(20));
+
+    // The marker lifts. The capped view is now what holds the entry, and it
+    // does so the way any held view does - through its core's slot, which
+    // a real mint lowers before it reads the ceiling (the manager's half,
+    // `AHeldMintLowersTheSlotBeforeItIsPublished`).
+    vis.EndCommit(kCore0);
+    vis.PublishSnapshotBound(kCore1, capped.snapshot_lsn);
+    EXPECT_EQ(vis.Reclaim(), 0u);
+    EXPECT_FALSE(capped.Visible(20)) << "still not: the view was minted at 40";
+    vis.PublishSnapshotBound(kCore1, kUnboundedBound);
+    EXPECT_EQ(vis.Reclaim(), 1u);
+    EXPECT_GT(vis.Floor(), 20u);
+}
+
+// **The review's C1**: a mint that has read its ceiling and not yet
+// published is a reader a pass cannot see - unless the mint lowered its
+// core's slot first. The structure's half: a lowered slot bounds a pass
+// exactly as a published one does.
+TEST(InstanceVisibilityTest, ALoweredSlotBoundsAPassLikeAPublishedSnapshot) {
+    InstanceVisibility vis;
+    vis.PublishBounds(kCore0, kUnboundedBound, /*cursor=*/1000);
+    vis.PublishCommit(20, 50);
+    vis.LowerSnapshotBound(kCore1, 40);
+    EXPECT_EQ(vis.HorizonLsn(), 40u);
+    EXPECT_EQ(vis.Reclaim(), 0u);
+    EXPECT_EQ(vis.LookupCommit(20).commit_lsn, 50u);
+    // Lower-only: a later, higher value does not raise it.
+    vis.LowerSnapshotBound(kCore1, 60);
+    EXPECT_EQ(vis.HorizonLsn(), 40u);
+    // A publication does.
+    vis.PublishSnapshotBound(kCore1, kUnboundedBound);
+    EXPECT_EQ(vis.Reclaim(), 1u);
+}
+
+// The manager's half of C1: the slot covers a held view from the moment
+// it is minted, before anything registers or holds it, and a check view
+// leaves the slot alone because nothing will hold it.
+TEST_F(VisibilityWiringTest, AHeldMintLowersTheSlotBeforeItIsPublished) {
+    auto mgr = Attach();
+    CommitOne(*mgr);
+    ASSERT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), kUnboundedBound);
+
+    const ReadView held = mgr->MintReadView(kNoTrxId);
+    EXPECT_NE(vis_.slot(kCore0).min_snapshot_lsn.load(), kUnboundedBound)
+        << "a minted, unregistered view is invisible to a reclamation pass";
+    EXPECT_LE(vis_.slot(kCore0).min_snapshot_lsn.load(), held.snapshot_lsn);
+
+    // Registering recomputes the slot exactly, and releasing restores it.
+    auto lease = mgr->RegisterReader(held);
+    ASSERT_TRUE(lease.ok());
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), held.snapshot_lsn);
+    lease.value().Release();
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), kUnboundedBound);
+
+    const ReadView check = mgr->MintCheckView(kNoTrxId);
+    EXPECT_EQ(check.snapshot_lsn, held.snapshot_lsn);
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), kUnboundedBound)
+        << "a check view is never held and holds nothing back";
+}
+
+// The marker is a slot field because at most one commit per core is ever
+// between its append and its publication; a failed append lifts it too, or
+// every later mint on the instance would stay capped.
+TEST_F(VisibilityWiringTest, ACommitLeavesNoPendingMarkerBehindIt) {
+    auto mgr = Attach();
+    EXPECT_EQ(vis_.slot(kCore0).pending_commit_bound.load(), kUnboundedBound);
+    const std::uint64_t id = CommitOne(*mgr);
+    EXPECT_EQ(vis_.slot(kCore0).pending_commit_bound.load(), kUnboundedBound);
+    EXPECT_EQ(vis_.SnapshotCeiling(), vis_.LookupCommit(id).commit_lsn)
+        << "one core, one commit: the ceiling is that commit";
+}
+
+// The manager publishes its oldest live snapshot into its slot at every
+// point the set of live views changes, so the instance horizon is what
+// this core's readers hold and nothing staler.
+TEST_F(VisibilityWiringTest, ACorePublishesItsOldestLiveSnapshot) {
+    auto mgr = Attach();
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), kUnboundedBound);
+
+    auto txn = mgr->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), txn.value()->view().snapshot_lsn);
+    EXPECT_EQ(mgr->ReadHorizon(), txn.value()->view().snapshot_lsn);
+
+    // A leased reader below the transaction's snapshot lowers it further.
+    const ReadView older = txn.value()->view();
+    ASSERT_TRUE(mgr->Commit(*txn.value(), wal::DurabilityClass::kRelaxed).ok());
+    mgr->Release(*txn.value());
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), kUnboundedBound);
+    auto lease = mgr->RegisterReader(older);
+    ASSERT_TRUE(lease.ok());
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), older.snapshot_lsn);
+    lease.value().Release();
+    EXPECT_EQ(vis_.slot(kCore0).min_snapshot_lsn.load(), kUnboundedBound);
+}
+
+// **Core 0's undo purge does not pass a reader on another core.** A reader
+// on core 1 holds a snapshot from before core 0's writer committed; that
+// commit sits above the instance horizon, so the floor stops at the
+// writer's id and the pages holding its undo stay - however much core 0
+// grows its log. Releasing the lease lets the next growth recycle them.
+//
+// Before AN-S2 core 0's horizon walked core 0's readers alone, and this
+// reader was invisible to it.
+TEST_F(VisibilityWiringTest, CoreZerosUndoPurgeDoesNotPassAReaderOnAnotherCore) {
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    CommitOne(*core0);
+    CommitOne(*core1);
+
+    // The reader on core 1, registered before the writer runs.
+    const ReadView reader_view = core1->MintReadView(kNoTrxId);
+    auto lease = core1->RegisterReader(reader_view);
+    ASSERT_TRUE(lease.ok());
+
+    const std::vector<std::byte> image(kUndoPageCapacity / 4 - kUndoRecordHeaderSize,
+                                       std::byte{0x5A});
+    UndoRecordFields fields{};
+    fields.type = static_cast<std::uint8_t>(UndoRecordType::kOverwrite);
+    fields.prior_trx_id = kAlwaysVisibleTrxId;
+    fields.prior_undo_ptr = kNoUndoPtr;
+    fields.target_page_id = 300;
+    fields.target_slot = 2;
+
+    // The writer on core 0: two pages of undo, then a commit the reader's
+    // snapshot predates.
+    auto writer = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(writer.ok()) << writer.status().message();
+    const std::uint64_t writer_id = writer.value()->id();
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(core0->AppendUndo(*writer.value(), fields, /*pk=*/1, image).ok());
+    }
+    ASSERT_TRUE(core0->Commit(*writer.value(), wal::DurabilityClass::kRelaxed).ok());
+    core0->Release(*writer.value());
+    EXPECT_FALSE(reader_view.Visible(writer_id));
+
+    // A second writer grows the log past the first's pages while the
+    // reader still holds its snapshot: nothing may recycle.
+    auto next = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(next.ok()) << next.status().message();
+    for (int i = 0; i < 8; ++i) {
+        ASSERT_TRUE(core0->AppendUndo(*next.value(), fields, /*pk=*/1, image).ok());
+    }
+    EXPECT_EQ(undo_->PagesRecycled(), 0u)
+        << "core 0 recycled undo a reader on core 1 can still reach";
+    EXPECT_LE(vis_.Floor(), writer_id) << "the floor passed a commit above the horizon";
+    ASSERT_TRUE(core0->Commit(*next.value(), wal::DurabilityClass::kRelaxed).ok());
+    core0->Release(*next.value());
+
+    // The reader lets go, and the next growth finds the pages settled.
+    lease.value().Release();
+    auto after = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    for (int i = 0; i < 8; ++i) {
+        ASSERT_TRUE(core0->AppendUndo(*after.value(), fields, /*pk=*/1, image).ok());
+    }
+    EXPECT_GE(undo_->PagesRecycled(), 1u) << "with no reader left, nothing held the pages";
+    ASSERT_TRUE(core0->Commit(*after.value(), wal::DurabilityClass::kRelaxed).ok());
+    core0->Release(*after.value());
+}
 
 // AN-R8's mount case. The floor is **not** zero once a core has attached: at
 // mount both of its terms sit at the post-recovery high-water, and a floor

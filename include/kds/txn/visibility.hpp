@@ -31,10 +31,12 @@
 // **The copy is only paid when the answer is not already known.** A tuple
 // whose writer is visible - which is every row of a single-transaction
 // workload, and every catalog row forever - is decided by Classify() with
-// no copy and no fetch, so the ordinary read path costs one integer
-// comparison. Only an invisible writer pays for the scratch copy, and the
-// copy is a fixed number of bytes because invariant 13 makes a row's size a
-// schema constant.
+// no copy and no fetch: a bootstrap row or the view's own writer costs one
+// comparison, a writer below the instance's floor one atomic load, and a
+// writer above it one latched window lookup (`read_view.hpp`, AN-S2). Only
+// an invisible writer pays for the scratch copy, and the copy is a fixed
+// number of bytes because invariant 13 makes a row's size a schema
+// constant.
 //
 // ---- Every chain terminates -----------------------------------------------
 //
@@ -56,10 +58,13 @@ enum class Visibility : std::uint8_t {
     kNeedsUndoWalk,
 };
 
-// Phase 1 (txn.md section 4.3 step 2 and 3). Pure, no page fetch, safe to
-// call with a page span live.
-constexpr Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool deleted,
-                              std::uint64_t undo_ptr) noexcept {
+// Phase 1 (txn.md section 4.3 step 2 and 3). No page fetch, safe to call
+// with a page span live. **Not pure since AN-S2**: an invisible-by-floor
+// writer costs the view one latched window lookup (`read_view.hpp`), which
+// is why this is no longer `constexpr` - and still no fetch, which is the
+// property the span rule needs.
+inline Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool deleted,
+                           std::uint64_t undo_ptr) {
     if (view.Visible(trx_id)) {
         // The version exists iff it is not delete-marked. A delete-mark by
         // a writer I can see is a row that is gone for me.
@@ -77,7 +82,7 @@ constexpr Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool d
 
 // Convenience over a tuple the caller already read. Same phase-1 contract:
 // no fetch, safe under a span.
-inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tuple) noexcept {
+inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tuple) {
     return Classify(view, tuple.trx_id, tuple.deleted, tuple.undo_ptr);
 }
 
@@ -138,14 +143,12 @@ enum class CheckVerdict : std::uint8_t {
 
 // `undo_ptr` is deliberately absent from the parameter list: latest state
 // never consults it. See the note above.
-constexpr CheckVerdict CheckVisibility(const ReadView& view, std::uint64_t trx_id,
-                                       bool deleted) noexcept {
+inline CheckVerdict CheckVisibility(const ReadView& view, std::uint64_t trx_id, bool deleted) {
     if (!view.Visible(trx_id)) return CheckVerdict::kBusy;
     return deleted ? CheckVerdict::kAbsent : CheckVerdict::kLive;
 }
 
-inline CheckVerdict CheckVisibility(const ReadView& view,
-                                    const heap::PageView::Tuple& tuple) noexcept {
+inline CheckVerdict CheckVisibility(const ReadView& view, const heap::PageView::Tuple& tuple) {
     return CheckVisibility(view, tuple.trx_id, tuple.deleted);
 }
 
@@ -167,11 +170,10 @@ struct Snapshot {
 
     // True when this snapshot can never need the undo chain, so a reader
     // may skip the classification entirely. Not an optimization the reader
-    // depends on - Classify() is one comparison - but it makes "nothing
-    // changed for a non-transactional caller" checkable in one place.
-    bool sees_everything() const noexcept {
-        return view.up_to_trx_id == UINT64_MAX && view.in_flight_count == 0;
-    }
+    // depends on - Classify() answers this view in one branch - but it
+    // makes "nothing changed for a non-transactional caller" checkable in
+    // one place.
+    bool sees_everything() const noexcept { return view.sees_everything; }
 };
 
 }  // namespace kds::txn

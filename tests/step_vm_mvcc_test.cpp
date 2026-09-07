@@ -38,6 +38,12 @@ protected:
         ASSERT_TRUE(boot.ok());
         boot_.emplace(std::move(boot.value()));
         undo_ = std::make_unique<txn::UndoLog>(store_, /*wal=*/nullptr);
+        // Every writer these cells name is committed, in id order, at an
+        // LSN equal to its id - so `ViewUpTo(n)` below reads exactly as it
+        // did over the trx-id predicate: writers below `n` visible, at or
+        // above it not. The cells are about the *reader* stepping through
+        // versions, and this keeps their numbers meaning what they meant.
+        for (std::uint64_t id = 2; id <= 1000; ++id) vis_.PublishCommit(id, id);
     }
 
     void Create(const std::string& sql) {
@@ -178,9 +184,17 @@ protected:
         return out;
     }
 
+    // A snapshot that sees every writer below `up_to` and none at or above
+    // it - the commits published in SetUp sit at LSN = id.
     txn::Snapshot ViewUpTo(std::uint64_t up_to) {
         txn::Snapshot snap;
-        snap.view.up_to_trx_id = up_to;
+        // A whole view, not two fields over the default: `Snapshot`'s
+        // default is `Everything()`, whose flag would otherwise stay set
+        // beside the snapshot LSN and admit every writer.
+        txn::ReadView view;
+        view.snapshot_lsn = up_to - 1;
+        view.visibility = &vis_;
+        snap.view = view;
         snap.undo = undo_.get();
         return snap;
     }
@@ -235,6 +249,8 @@ protected:
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::unique_ptr<txn::UndoLog> undo_;
+    // The commit order every hand-built view here reads through.
+    txn::InstanceVisibility vis_;
 };
 
 // The whole reason the default snapshot exists: a caller that passes none
@@ -347,8 +363,7 @@ TEST_F(StepVmMvccTest, AViewWithNoUndoLogIsRefusedRatherThanGuessed) {
     const Placed row = Insert("t", {Int(10)});
     SupersedeWith("t", row, {Int(99)}, /*writer=*/60);
 
-    txn::Snapshot no_log;
-    no_log.view.up_to_trx_id = 60;
+    txn::Snapshot no_log = ViewUpTo(60);
     no_log.undo = nullptr;
 
     auto chain = Compile(boot_->catalog,
