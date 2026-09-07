@@ -1014,10 +1014,20 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // null the manager still accepts is for the embedded callers that
     // build one directly.
     expeditor->visibility_.emplace();
+    // **The instance's lock table** (AO-S5), before the manager that takes
+    // it. Sized by the instance's core count, so its partitions are latched
+    // exactly where a second reactor can reach them and latchless at one
+    // core; its wake registry is installed at `Start`, where the registry
+    // is built. The header says what this is the first of.
+    {
+        auto locks = txn::LockTable::Create(expeditor->config_.cores);
+        if (!locks.ok()) return locks.status();
+        expeditor->locks_ = std::move(locks.value());
+    }
     expeditor->txn_manager_.emplace(*expeditor->trx_ids_, *expeditor->undo_log_,
                                     *expeditor->store_, &*expeditor->wal_,
                                     &*expeditor->visibility_,
-                                    /*core=*/0);
+                                    /*core=*/0, expeditor->locks_.get());
 
     expeditor->dispatcher_.emplace(
         expeditor->database_->superblock, expeditor->database_->catalog, *expeditor->store_,
@@ -1041,6 +1051,15 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // a copy, so the block reports the mount's own report and cannot drift from
     // it; `recovery_` is declared above the dispatcher and so outlives it.
     expeditor->dispatcher_->set_recovery(&expeditor->recovery_);
+    // **The dispatcher is deliberately not handed the table** (AO-S5(a)).
+    // The manager above took it on every count, which is the wake's need;
+    // the dispatcher's use of it is AO-S4a's admission - a transaction
+    // holding rows may park because a detector catches the cycle - and a
+    // server never ran that: `CoreRuntime` wires it at `core_count == 1`,
+    // and a server's core 0 is this class. Handing it here at `cores = 1`
+    // is one line and a behaviour change in a shipped configuration, so
+    // it waits for the operator's word rather than riding in with the
+    // wake (`workorder-ao-m2-lock-family.md` AO-S5's row).
 
     // **Assertion enforcement, resumed** (RC07, AS6a). Here rather than beside
     // the recovery call above, because the registry it refills lives on the
@@ -1607,6 +1626,10 @@ Status Expeditor::Start() {
         // by design - AR0-6 retires the ring and keeps the wake - so it is
         // built beside it rather than inside it.
         wakers_.emplace(config_.cores);
+        // AO-S5: and the lock table kicks through it - a decide's slot flip
+        // on one core ends the block a waiter's reactor sits in on another
+        // (AU-S2). The same registry a send and a stop kick through.
+        locks_->SetWakeRegistry(&*wakers_);
         // AU-S1b: and the transport asks *it* who is asleep. Instance-wide
         // and installed once, because a reactor registers itself: a send and
         // a stop now kick through the same registry, where until AU-S1b the
@@ -1784,6 +1807,10 @@ Status Expeditor::Start() {
             // Borrowed on the same terms and for the same reason (AN-R1):
             // one stream is what makes these LSNs comparable across cores.
             core_config.visibility = &*visibility_;
+            // And the instance's lock table (AO-S5), on the same terms: one
+            // table is what lets this peer's decide wake a waiter on core 0
+            // and core 0's wake one here.
+            core_config.locks = locks_.get();
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

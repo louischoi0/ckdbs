@@ -321,6 +321,17 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // is the only place in the tree that would notice.
     EXPECT_EQ(db.wakers()->core_count(), db.transport()->core_count())
         << "the waker table is not sized for every core the transport can address";
+    // **And the lock table kicks through the same registry** (AO-S5,
+    // AU-S2) - the third object with the same silent failure: a table
+    // handed no registry flips a waiter's slot and kicks nobody, and the
+    // waiter's reactor sleeps out its block. The same statement one level
+    // down: the peer's manager releases into *this* table, or a decide on
+    // core 1 wakes a waiter core 0 queued in some other one.
+    ASSERT_NE(db.locks(), nullptr) << "a two-core instance built no lock table";
+    EXPECT_EQ(db.locks()->wake_registry(), db.wakers())
+        << "the lock table kicks through a registry that is not this instance's";
+    EXPECT_EQ(db.locks()->partition_count(), 64u * 2u)
+        << "the lock table is not partitioned for both cores";
 
     // **The superblock image.** A peer used to hold a default-constructed
     // copy, and zero is a legal value of most of its fields - so it reported

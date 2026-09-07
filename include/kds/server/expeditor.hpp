@@ -29,6 +29,7 @@
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/stop_signal.hpp"
+#include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -699,6 +700,11 @@ public:
     // are: whether the transport was handed *this* table is the kind of
     // wiring whose failure is silent - every cross-core message would pay
     // its destination's idle block, and no result would change.
+    // **The instance's lock table** (AO-S5), exposed for the same reason:
+    // whether it kicks through *this* instance's registry, and whether
+    // every core was handed *this* table, are wiring facts whose failure
+    // is a waiter that sleeps out its block rather than a wrong answer.
+    const txn::LockTable* locks() const noexcept { return locks_.get(); }
     const sched::WakerTable* wakers() const noexcept {
         return wakers_.has_value() ? &*wakers_ : nullptr;
     }
@@ -779,6 +785,23 @@ private:
     // there was no order to record. `SuperBlock::Decode` refuses such a
     // volume now, so every mount has one order and records it.
     std::optional<txn::InstanceVisibility> visibility_;
+
+    // **The instance's lock table** (AO-R2, built here at AO-S5): one for
+    // every core, sized `64 x cores` partitions, latchless at one. Core 0's
+    // manager takes it below and every peer borrows it through
+    // `CoreRuntime::Config::locks`, so a decide on any core releases into
+    // the one table and wakes - and kicks, through `wakers_` - a waiter
+    // queued from any other (AU-S2). Declared above the manager that holds
+    // it, so it outlives it.
+    //
+    // **Until AO-S5 no server had a lock table at all.** `CoreRuntime`
+    // built one at `core_count == 1`, and a server's core 0 is this class
+    // rather than a `CoreRuntime` - so AO-S4a's detector, wired "at one
+    // core, where per-core and instance-wide are the same object", ran in
+    // every fixture and in no instance. The manager takes the table here;
+    // the dispatcher does not, yet (`Open` says why), so a server's
+    // admission rule is what it was and only the wake crosses.
+    std::unique_ptr<txn::LockTable> locks_;
 
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
