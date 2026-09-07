@@ -297,6 +297,17 @@ public:
         // built without one keeps the per-core `ReadView`, which at AN-S1
         // is what every core is still reading anyway.
         txn::InstanceVisibility* visibility = nullptr;
+
+        // **This core's reactor configuration** (AV-S1). `Expeditor` leaves
+        // it default-constructed, which is what every core ran on before the
+        // field existed; the two-core rig raises `max_idle_block_ms` so that
+        // a reactor which times out instead of waking fails a cell rather
+        // than passing it slowly - the same thing `scheduler_test.cpp`'s
+        // wake cells do on a bare `Scheduler`, and the only thing about a
+        // reactor a rig has to be able to say. The existing struct rather
+        // than one field copied out of it: `rules.md`'s second-name rule,
+        // and the shape an operator knob would take if one ever lands.
+        sched::SchedulerConfig scheduler;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -509,6 +520,12 @@ public:
     void set_instance_stop(std::function<void()> stop) { instance_stop_ = std::move(stop); }
     wal::WalManager& wal() noexcept { return *wal_; }
     catalog::Catalog& catalog() noexcept { return *catalog_; }
+    // This core's transaction-id sequence, exposed for one caller: a rig
+    // whose core 0 is a `CoreRuntime` registers production's own grant
+    // handler over it (`trx_id_lease_service.hpp`), which `Expeditor` does
+    // over its own sequence. Two sequences over one superblock would issue
+    // one id twice, so a rig must carve a peer's block from this one.
+    txn::TrxIdSequence& trx_ids() noexcept { return *trx_ids_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
     // This core's Cabin store, or null under `cabins = off` (AK-S2).
     stats::CabinStore* cabins() noexcept { return cabin_store_ ? &*cabin_store_ : nullptr; }

@@ -143,7 +143,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     if (!backend.ok()) return backend.status();
     runtime->io_backend_ = std::make_unique<sched::EpollIoBackend>(std::move(backend.value()));
 
-    runtime->scheduler_.emplace(clock, *runtime->io_backend_);
+    runtime->scheduler_.emplace(clock, *runtime->io_backend_, config.scheduler);
     runtime->scheduler_->SetLogger(log);
 
     // **The instance's one stream** (AR0 M0, AL-S1c; AM-S4(d)). This core
@@ -355,16 +355,47 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The transaction stack. `superblock_` is a copy (see the header): the
     // sequence would write through it, which is why the persist callback
     // below refuses rather than pretending.
-    runtime->trx_ids_.emplace(runtime->superblock_, [core_id = config.core_id] {
+    runtime->trx_ids_.emplace(runtime->superblock_, [runtime = runtime.get(), is_peer] {
         // A peer may not write the superblock - it is page 0 and belongs to
         // the system core (M5). Since PW1 a peer does not come here at all:
         // its sequence draws windows from the lease installed below, and
         // this callback is the backstop that says a lease source went
         // missing rather than a gap that has not been filled.
-        return Status::NotImplemented("core " + std::to_string(core_id) +
-                                    " cannot raise the transaction-id ceiling; the superblock "
-                                    "belongs to the system core, and this core's transaction-id "
-                                    "lease source is not installed");
+        if (is_peer) {
+            return Status::NotImplemented(
+                "core " + std::to_string(runtime->core_id()) +
+                " cannot raise the transaction-id ceiling; the superblock belongs to the "
+                "system core, and this core's transaction-id lease source is not installed");
+        }
+        // **Core 0 is the system core, wherever it was built** (AV-S1).
+        // A core-0 `CoreRuntime` exists only in a rig, and until the rig
+        // needed one it refused every carve through the arm above - so a
+        // core 0 built this way could not open a single writing transaction,
+        // and every two-core fixture in the tree built core 0 by hand
+        // instead. The raised ceiling reaches page 0 before the block is
+        // handed out, which is the ordering `Carve` says is a correctness
+        // statement rather than a preference.
+        //
+        // **Read-modify-write, not `Expeditor::PersistSuperBlock`'s blanket
+        // encode.** The Expeditor writes the one image every writer of page
+        // 0 goes through; `superblock_` here is a *copy* taken at `Open`,
+        // and encoding it whole would erase any anchor a checkpoint had
+        // written to the page since - silently, the symptom being a later
+        // mount replaying from the head of the log. Nothing writes page 0
+        // beside this on a core-0 runtime today (its `AttachTransport`
+        // builds no anchor and a rig drops the peer's), and the shape is
+        // what keeps that from being load-bearing. The store's sync alone:
+        // page 0 is unlogged, so there is no record to make durable first.
+        auto page = runtime->store_->Get(kSuperBlockPageId);
+        if (!page.ok()) return page.status();
+        auto on_disk = SuperBlock::Decode(page.value().bytes());
+        if (!on_disk.ok()) return on_disk.status();
+        if (Status s = on_disk.value().SetNextTrxId(runtime->superblock_.next_trx_id());
+            !s.ok()) {
+            return s;
+        }
+        on_disk.value().Encode(page.value().bytes());
+        return runtime->store_->Sync();
     });
     // Transaction ids come from a leased block on a peer, exactly as row
     // ids do above (`docs/inflight/in-progress/workplan-peer-writer.md` PW1). Installed here
