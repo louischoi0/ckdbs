@@ -1,0 +1,3 @@
+loading: users=100 assets=30 accounts~300  (tables suffixed _s0c1g)
+stress aborted: could not create trades_s0c1g
+  server said: ERR HEAP storage is suspended (SUS-1) and no new heap relation is created (byte 124); BTREE is the default and every existing heap relation still mounts and serves. The suspension, its rulings and the condition that lifts it are instructions/v3.0.0/workorder-as-sus1-heap-suspended.md

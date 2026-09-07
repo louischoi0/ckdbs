@@ -1,0 +1,2 @@
+scenario2 aborted: could not create freights_s2c1g
+  server said: ERR HEAP storage is suspended (SUS-1) and no new heap relation is created (byte 154); BTREE is the default and every existing heap relation still mounts and serves. The suspension, its rulings and the condition that lifts it are instructions/v3.0.0/workorder-as-sus1-heap-suspended.md

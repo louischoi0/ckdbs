@@ -1,0 +1,40 @@
+read view bench: 2000000 calls per run, 5 runs per cell, ns per call
+
+| cell                               | live |    median |       min |
+|------------------------------------|------|-----------|-----------|
+  (checksum 640000000)
+| mint (MintReadView)                |    0 |       6.3 |       6.3 |
+  (checksum 10000000)
+| visible: bootstrap id              |    0 |       0.5 |       0.5 |
+  (checksum 10000000)
+| visible: below the floor           |    0 |       0.5 |       0.5 |
+  (checksum 10000000)
+| visible: window hit (committed)    |    0 |       8.5 |       8.2 |
+  (checksum 0)
+| visible: window miss (live)        |    0 |       8.3 |       8.2 |
+  (checksum 5000000)
+| visible: hit/miss alternating      |    0 |       8.7 |       8.5 |
+  (checksum 640000000)
+| mint (MintReadView)                |    8 |       6.6 |       6.5 |
+  (checksum 10000000)
+| visible: bootstrap id              |    8 |       0.5 |       0.5 |
+  (checksum 10000000)
+| visible: below the floor           |    8 |       0.5 |       0.5 |
+  (checksum 10000000)
+| visible: window hit (committed)    |    8 |       8.2 |       8.1 |
+  (checksum 0)
+| visible: window miss (live)        |    8 |       8.0 |       7.9 |
+  (checksum 5000000)
+| visible: hit/miss alternating      |    8 |       8.4 |       8.3 |
+  (checksum 640000000)
+| mint (MintReadView)                |   64 |       6.6 |       6.5 |
+  (checksum 10000000)
+| visible: bootstrap id              |   64 |       0.6 |       0.5 |
+  (checksum 10000000)
+| visible: below the floor           |   64 |       0.6 |       0.6 |
+  (checksum 10000000)
+| visible: window hit (committed)    |   64 |       8.3 |       8.1 |
+  (checksum 0)
+| visible: window miss (live)        |   64 |       8.2 |       8.2 |
+  (checksum 5000000)
+| visible: hit/miss alternating      |   64 |       8.6 |       8.5 |

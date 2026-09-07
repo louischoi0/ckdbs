@@ -1,0 +1,5 @@
+== 2026-09-07T11:29:14Z ==
+-- /proc/loadavg --
+1.41 3.08 3.16 1/282 150825
+-- pgrep -a -f cc1plus|cmake --build|ctest --
+150784 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1788769837888-km4stf.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build-release -j8 --target kds_read_view_bench 2>&1 | grep -E '"'"'error|warning'"'"' | head -5; sh /home/cdkbs/bench-runs/an-s5-v2.7.0-265-g13b6b55/precheck.sh | tee /home/cdkbs/bench-runs/an-s5-v2.7.0-265-g13b6b55/precheck-microbench.txt; ./build-release/kds_read_view_bench --iterations 2000000 --repeats 5 2>&1 | tee /home/cdkbs/bench-runs/an-s5-v2.7.0-265-g13b6b55/read_view_bench.txt | grep -v checksum' < /dev/null && pwd -P >| /tmp/claude-2873-cwd

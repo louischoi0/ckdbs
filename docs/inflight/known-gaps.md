@@ -112,6 +112,23 @@ statement about an engine that no longer exists; re-verify or strike it.
   states the gap; `docs/spec/client-manual.md`'s ring-counter row now does
   too. Owner: `docs/spec/wal.md` §16.
 
+- **AL-S8's scenario matrix cannot be re-run on a post-SUS-1 engine, so
+  no measurement stage can produce the delta it was written to
+  produce.** Verified at `13b6b55` on `an-s3-snapshot-adoption`, 2026-09-07,
+  by attempting AN-S5's cells: `tools/scenario0_stockmarket.py` and
+  `tools/scenario2_freight.py` declare part of their schema `HEAP` with no
+  override, and `CREATE TABLE … HEAP` is refused `Unsupported` since SUS-1
+  (2026-09-05). `s0-c1-g` and `s2-c1-g` were refused at schema creation
+  (`bench/v3.0.0/results-an-s5-scenario0-v2.7.0-265-g13b6b55.md`,
+  `…scenario2…`); every other cell of the matrix declares the same tables.
+  AN-S5's scenario half, AM-S6 (AW-S5) and any future delta against
+  `results-scenario0-stockmarket-v2.7.0-157-gf6ed10c.md` /
+  `results-scenario2-freight-…` are unreachable until the drivers stop
+  emitting the word - `workorder-as-sus1-heap-suspended.md` AS-Q6, the
+  operator's, which named these tools on the day. Not a defect in either
+  driver or in SUS-1; a measurement the tree can no longer take. Owner:
+  `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md` AS-Q6.
+
 ## WAL
 
 - **`PAGE_HANDOFF` is written and never read.** Verified at AM-S4(d),
