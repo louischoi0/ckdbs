@@ -1,4 +1,8 @@
-# `FlushMaps` walks the shared region map unlatched (defect 1 closed at AW-S1b)
+# The free map has no concurrency protocol (defect 1 closed at AW-S1b; defects 2 and 3 open)
+
+> **Re-titled 2026-09-07.** This file opened as a finding about `FlushMaps`
+> and is really about `map_regions_`: §3 is the one that matters, and it is
+> a write racing a read rather than a walk racing a write.
 
 **Found** 2026-09-07 by the `critics-developer` pass on AW-a (finding C),
 verified at `8eabbc3` on `worktree-aw-m1-close`. Two defects in one
@@ -69,7 +73,60 @@ every core** — today N checkpointers each would.
 frame table (AW-S1 corrected the prose and left the behaviour to AM-S3);
 this is the free-map half of it.
 
+## 3. Defect 2 is wider than this file said — OPEN, and it is the worse half
+
+**Re-surveyed 2026-09-07 at `6fae9ae`** on `worktree-am-s4d-s3-close`,
+sizing AM-S3. §2 above names `FlushMaps`' walk. That is one reader among
+several, and it is not the dangerous one: **`map_regions_` is *mutated*
+outside the structure latch, on the ordinary allocation path.**
+
+`CreateNewUnpinned` (`device_page_store.cpp:1010-1020`) loops:
+
+```cpp
+{ LatchGuard alloc(structure_latch());
+  claimed = ClaimNextFreeIdLocked(&missing_region); }   // iterates map_regions_
+if (page_id != kInvalidPageId) break;
+if (auto region = EnsureRegionResident(missing_region); ...)  // <- emplaces, NO hold
+```
+
+The hold is dropped deliberately — `EnsureRegionResident` reads the device
+and may grow the file, which AM-S2's discipline forbids under the latch —
+and `EnsureRegionResident` ends in `map_regions_.emplace` (`:199`), a
+`std::map` insertion that rebalances the tree. Concurrently, on another
+core:
+
+- `ClaimNextFreeIdLocked` iterates `map_regions_` **under** the hold, which
+  does not help: the writer is not taking it.
+- `IsAllocated` (`:399`) and `IsHeaderless` (`:270`) reach
+  `free_map_bytes_for` / `headerless_map_bytes_for` → `FindRegion` →
+  `map_regions_.find`, **unlatched**, and `IsAllocated` sits on the fault
+  path, the writeback path and the WAL gate by its own comment.
+- `CreateAtUnpinned` (`:956`) calls `EnsureRegionResident` outside its hold
+  too, and `CreateNewHeaderlessUnpinned` (`:298-303`) calls it twice, with
+  a comment saying it is deliberately before the hold.
+
+So this is a `std::map::find` racing a `std::map::insert` — undefined
+behaviour, not a stale read, and the same shape AM-S2 step 3c-ii measured
+as *"a segfault, not a slow path"* for the frame table (two inserters plus
+two readers segfaulted in 3 of 5 runs). It is reachable in production at
+`cores > 1` whenever two cores allocate and one runs off the end of the
+last resident region.
+
+**`EnsureRegionResident`'s own comment asserts the opposite** (`:154-158`,
+written at AW-S1b): *"every caller reaches this map under the structure
+latch, so the unsynchronised read that arm avoided cannot arise"*. Three
+of its four call sites reach it with the hold **not** held, and two of them
+say so in their own comments one line away. That claim is what has to be
+struck.
+
+**Why it is not a one-line fix, same as §2.** The latch may not span the
+device read, so the shape is `FetchPinned`'s: resolve outside, re-take,
+re-check, and let the loser of a race find the region already present —
+which `EnsureRegionResident`'s existing double-check at `:150`/`:161`
+already half is. What it needs is for the *emplace* and the *find* to be
+inside a hold, with the device work between them.
+
 ## Owner
 
-AM-S3 owns writeback under sharing, and defect 2 with it. Verified still
-open after AW-S1b.
+AM-S3 owns writeback under sharing, defect 2, and §3. Verified still open
+after AW-S1b and re-surveyed after AM-S4(d).
