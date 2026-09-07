@@ -2118,6 +2118,12 @@ std::unordered_multiset<PageId>& SharedHoldsHere() {
 // already counted, and a frame with pins > 0 is never an eviction victim
 // (EV4), so it is this frame that is waited for however long the wait is.
 void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept {
+#ifdef NDEBUG
+    // Read only by the never-upgrade detector below, which is debug-only.
+    // Named rather than dropped from the signature: a release-only unused
+    // parameter is the shape a reader mistakes for a forgotten argument.
+    (void)page_id;
+#endif
     if (latch_armed_) {
         // The page latch (AM-S1, the header's "The page latch" section).
         // Taken where the pin is taken, in the accessor's mode, and never
