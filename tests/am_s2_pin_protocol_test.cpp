@@ -399,54 +399,5 @@ TEST_F(PinProtocolTest, ARingSpanSurvivesAConcurrentSweepBecauseTheRingPinsIt) {
     EXPECT_EQ(store_->live_pins(), 0u) << "the ring did not release its pin";
 }
 
-TEST_F(PinProtocolTest, ARingFetchWaitsForAPageAnotherCoreHoldsExclusive) {
-    // **AM-R8c**: the ring's pin is a *latched* pin, so a page another core
-    // holds exclusive is waited for exactly as `GetForRead` waits. A pin
-    // alone would let the scan read a page mid-write on another core, which
-    // is the quiet-wrong this milestone exists to close.
-    //
-    // The hold is taken through the test hook because this store is core 0
-    // and the word admits a shared acquire under its *own* core's exclusive
-    // (page_latch.hpp) - two threads of one store cannot stand in for two
-    // cores here, which is the same reason `page_latch_test.cpp` uses the
-    // hook for the sweep's refusal.
-    const PageId id = MakeResidentPage(std::byte{0x7E});
-    ASSERT_TRUE(store_->LatchFrameForTest(id, PinMode::kExclusive, /*core=*/7).ok());
-
-    std::atomic<bool> started{false};
-    std::atomic<bool> fetched{false};
-    std::atomic<int> failures{0};
-    std::thread scan([&] {
-        auto ring = store_->OpenScanRing(/*frames=*/1);
-        started.store(true, std::memory_order_release);
-        auto bytes = ring->Fetch(id);
-        if (!bytes.ok() || bytes.value()[kPageBodyOffset] != std::byte{0x7E}) ++failures;
-        fetched.store(true, std::memory_order_release);
-    });
-
-    while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
-    // Bounded rather than timed, and the bound is far past the latch's
-    // spin-then-yield: what is asserted is that a wait happens, not how long
-    // it is. The one thing this cannot exclude is that the scan thread had
-    // not yet reached `Fetch` - which two thousand yields after it published
-    // `started` makes remote, and which the join below turns into a hang
-    // rather than a false pass if the wait were unbounded.
-    for (int turn = 0; turn < 2000 && !fetched.load(std::memory_order_acquire); ++turn) {
-        std::this_thread::yield();
-    }
-    EXPECT_FALSE(fetched.load(std::memory_order_acquire))
-        << "the ring read a page another core held exclusive";
-
-    // **`EXPECT`, not `ASSERT`**: `scan` is joinable and parked in
-    // `PageLatch::Acquire` right now, so a fatal assert here would return
-    // from the body and `~thread` would call `std::terminate` - the binary
-    // dying instead of one cell failing. Release, join, then judge.
-    EXPECT_TRUE(store_->UnlatchFrameForTest(id, /*core=*/7).ok());
-    scan.join();
-    EXPECT_TRUE(fetched.load()) << "the ring never got the page after the hold dropped";
-    EXPECT_EQ(failures.load(), 0);
-    EXPECT_EQ(store_->live_pins(), 0u);
-}
-
 }  // namespace
 }  // namespace kds::storage

@@ -102,9 +102,19 @@ reachable are two things**: a reactor becomes wakeable *by a sender* only
 when `AttachWakerTable` registers it in the instance's one wake registry
 (`sched/waker_table.hpp`), which is where a ring send and a stop both go.
 A core that attached a transport and no table is never kicked and waits out
-its idle block — slow, never wrong. A sender wakes **only a destination that
-is actually asleep**,
-reading that core's `sleeping` flag first, because an eventfd write is a
+its idle block — slow, never wrong. **The attach points take an interface,
+`WakeRegistry`, and `WakerTable` is its one production implementation**
+(AU-S1c, on AV-R1's mark): the seam is the *table*, never `Waker`, whose
+`Wake()` stays non-virtual — so the fence and the skip counter have one
+implementation, and the cost is on the send path: one indirect call per
+cross-core `Kick`, carrying the fence, the flag load and the skip that
+used to inline into `TrySend`. The other implementation is
+`SimWakerTable` (`sched/sim_waker_table.hpp`), the two-core rig's: it
+wraps a real table, logs `(tick, dst)` per kick and forwards at
+`tick + delay(seed, dst, tick)`, where the tick is a counter the rig
+advances and never wall time. A sender wakes **only a destination that is
+actually asleep**, reading that core's `sleeping` flag first, because an
+eventfd write is a
 syscall on the sender's critical path and the cells shipping is already fast
 in are exactly the ones where the owner is never asleep. The flag cannot be
 missed: sender and receiver touch the two variables in opposite orders with
@@ -193,6 +203,18 @@ own deadline** so a lost wake fails a named assertion rather than timing out
 a suite. The `SimRingTransport` answers the wake's two halves honestly and
 wakes nobody: its reactors are multiplexed by a seeded harness, and a second
 "who runs now" input is the nondeterminism this section forbids.
+
+**The two-core rig is the other deterministic shape, and it is deterministic
+over less** (`instructions/v3.0.0/workorder-av-two-core-rig.md` AV-R3).
+Two real reactors on two threads over one store, one stream and one
+`SimWakerTable` (`sched/sim_waker_table.hpp`): what the seed fixes is the
+delay each kick draws, as a pure function of `(seed, dst, tick)` with no
+stream between draws — so which kicks happen and at which tick is the two
+threads' interleaving, which nothing reproduces, and what each of them
+costs in ticks is the seed's. A single-threaded driver reproduces the whole
+log. A cell that needs a state reached deterministically reaches it by a
+barrier, and the rig's tick is advanced by the cell rather than by any
+clock, so a held kick ends a real idle block only when the cell says so.
 
 ## 9. Invariants
 

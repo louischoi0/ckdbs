@@ -23,6 +23,29 @@
 // caller of this path, not a second copy of it, so AU-S5 removes a user
 // rather than unpicking a registry.
 //
+// ---- The seam, and why it is the table rather than the waker ------------
+//
+// `WakeRegistry` is what the attach points take - `Scheduler::AttachWakerTable`
+// and `RealRingTransport::AttachWakers` - and `WakerTable` is its one
+// production implementation. The interface exists for exactly one other
+// implementation, `SimWakerTable` (`sim_waker_table.hpp`), which *wraps* a
+// real table for the two-core rig: it logs `(tick, dst)` per kick and
+// forwards at a seeded tick. AU-R3 first placed the seam on `Waker` itself
+// ("a `Waker`-shaped seam"), and that could not be built: `Waker::Wake()`
+// is not virtual and `Kick` calls it statically, so a derived waker through
+// the table's pointer would run the base and write to an eventfd it does not
+// own (`workorder-av-two-core-rig.md` AV-R1). The operator took the table
+// instead (AV-R1's mark, 2026-09-07): `Waker` gains no vtable, the wake path
+// keeps its static call, and the cost sits on the *send* path rather than
+// the wake's - one indirect call per cross-core `Kick`, and with it the
+// whole of what `Kick` inlined before (the fence, the flag load and the
+// skip) now behind a pointer `RealRingTransport::TrySend` cannot
+// devirtualize, since what it holds may be the sim. That is the trade the
+// mark accepts, stated as what it is. What the wrap buys over a second
+// implementation of the fence is that there is no second implementation:
+// the `sleeping` fence and the skip counter live once, below, and a rig
+// cannot disagree with the protocol it is testing.
+//
 // ---- Why the flag, and what a missed kick costs -------------------------
 //
 // A write to an eventfd is a syscall, and a busy reactor is never asleep, so
@@ -41,7 +64,24 @@
 
 namespace kds::sched {
 
-class WakerTable {
+class WakeRegistry {
+public:
+    virtual ~WakeRegistry() = default;
+
+    // Called by each reactor for itself, before any peer can kick it, and
+    // never again (`WakerTable::Register` says why that needs no latch).
+    virtual void Register(std::uint32_t core, const std::atomic<bool>* sleeping,
+                          const Waker* waker) = 0;
+
+    // **Callable from any thread.** The caller has already published what
+    // it wants seen; this ends the destination's idle block if it is in one.
+    virtual void Kick(std::uint32_t core) const noexcept = 0;
+
+    // Kicks actually written - what `Scheduler::wakes_sent()` reports.
+    virtual std::uint64_t kicks() const noexcept = 0;
+};
+
+class WakerTable final : public WakeRegistry {
 public:
     explicit WakerTable(std::uint32_t core_count) : entries_(core_count) {}
 
@@ -49,7 +89,8 @@ public:
     // never again - so this is not synchronised and does not need to be.
     // A core that never registers is simply never kicked and falls back to
     // its idle block, which is what every build did before this existed.
-    void Register(std::uint32_t core, const std::atomic<bool>* sleeping, const Waker* waker) {
+    void Register(std::uint32_t core, const std::atomic<bool>* sleeping,
+                  const Waker* waker) override {
         if (core >= entries_.size()) return;
         entries_[core] = Entry{sleeping, waker};
     }
@@ -83,7 +124,7 @@ public:
     // look and its raising of the flag reads clear, skips the kick, and the
     // destination waits out one idle block. Slow, never wrong, and
     // AR0-6-R1's stated cost.
-    void Kick(std::uint32_t core) const noexcept {
+    void Kick(std::uint32_t core) const noexcept override {
         if (core >= entries_.size()) return;
         const Entry& entry = entries_[core];
         if (entry.sleeping == nullptr || entry.waker == nullptr) return;
@@ -110,7 +151,9 @@ public:
     // so the identity was already false on any instance that stopped a
     // peer. The one residual gap is a *failed* eventfd write, which is
     // `EAGAIN` at 2^64 pending wakes and lands in `wake_failures_`.
-    std::uint64_t kicks() const noexcept { return kicks_.load(std::memory_order_relaxed); }
+    std::uint64_t kicks() const noexcept override {
+        return kicks_.load(std::memory_order_relaxed);
+    }
     std::uint64_t kicks_skipped() const noexcept {
         return skipped_.load(std::memory_order_relaxed);
     }

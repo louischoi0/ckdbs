@@ -81,7 +81,7 @@ Status Scheduler::ArmWaker() {
     return Status::OK();
 }
 
-Status Scheduler::AttachWakerTable(WakerTable* table, std::uint32_t core_id) {
+Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id) {
     core_id_ = core_id;
     wakers_ = table;
     if (table == nullptr) return Status::OK();
@@ -475,10 +475,12 @@ bool Scheduler::RunOnce() {
         // transport supplies one; a kick has none** (AR0-6-R1, and
         // `waker_table.hpp` says why): with no queue there is nothing to
         // ask, and the general form - re-evaluate the predicate you are
-        // about to park on - belongs with a consumer that has one. Until
-        // AU-S2 gives it one, a reactor with no transport takes the
-        // accepted cost of a lost kick: one idle block, slow and never
-        // wrong.
+        // about to park on - belongs with a consumer that has one. AU-S2's
+        // consumer, the lock table's slot, built none and owes none: a
+        // parked task is level-triggered, re-polled after every block, so
+        // a kick lost to this window costs the block and never the wake.
+        // A reactor with no transport takes that accepted cost: one idle
+        // block, slow and never wrong.
         if (transport_ != nullptr && transport_->HasPending(core_id_)) {
             sleeping_.store(false, std::memory_order_seq_cst);
             timeout_ms = 0;

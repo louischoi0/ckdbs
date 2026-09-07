@@ -6,6 +6,9 @@ add_executable(kds_tests
     heap_suspension_env.cpp
     am_s2_pin_protocol_test.cpp
     waker_table_test.cpp
+    sim_waker_table_test.cpp
+    two_core_rig_test.cpp
+    lock_wake_rig_test.cpp
     current_core_test.cpp
     alloc_race_test.cpp
     free_map_race_test.cpp

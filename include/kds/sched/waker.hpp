@@ -40,7 +40,7 @@
 // waking it would be a syscall per message bought for nothing — and a busy
 // owner is the case shipping is *fast* in (0.93-0.99x from four sessions
 // up, same file §5). The sender therefore reads the destination's
-// `sleeping` flag first and writes only when it is set; `ring_transport.hpp`
+// `sleeping` flag first and writes only when it is set; `waker_table.hpp`
 // carries that protocol and the argument for why the flag cannot be missed.
 
 namespace kds::sched {
