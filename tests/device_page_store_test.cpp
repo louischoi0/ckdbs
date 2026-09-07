@@ -633,6 +633,55 @@ TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore)
     EXPECT_TRUE(store->MayWrite(system_page));
 }
 
+TEST(DevicePageStoreOwnershipTest, ASharedStoreRefusesAPeersSystemWriteAndNotItsUserWrite) {
+    // The cell above pins the *predicate*; this one pins what the predicate
+    // is for. `MayWrite` has four callers outside this class, but the one
+    // that stands between a peer and a torn catalog page is inside it -
+    // `ResidentBytes`' `mark_dirty && !MayWrite(...)` gate - and the null
+    // lease made that gate pass too. So the shared store gets the refusal
+    // cell the leased store already has
+    // (`AMissingGrantIsRetryableAndASystemPageIsNot`), with the same two
+    // readings of the same two page ids.
+    //
+    // **Mutation**: restore `if (lease_ == nullptr) return true;` above the
+    // system check and the system write is admitted.
+    auto device = MakeDevice(64, 0);
+    {
+        // Core 0's half: the pages have to exist, or the refusal below
+        // would be `NotFound` arriving before the gate rather than the gate.
+        auto core0 = OpenStore(*device);
+        ASSERT_NE(core0, nullptr);
+        auto system_page = core0->CreateAt(4);
+        ASSERT_TRUE(system_page.ok()) << system_page.status().message();
+        FormatPage(system_page.value().bytes(), PageType::kHeap);
+        auto relation_page = core0->CreateAt(130);
+        ASSERT_TRUE(relation_page.ok()) << relation_page.status().message();
+        FormatPage(relation_page.value().bytes(), PageType::kHeap);
+        ASSERT_TRUE(core0->Sync().ok());
+    }
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    // The shared arrangement: the boundary installed directly, no lease -
+    // `Expeditor::Open` and `CoreRuntime::Open` between them (AM-S2 step 3).
+    store->SetResidentLimit(128);
+
+    const CurrentCoreGuard as_peer(3);
+    // Wrong now and wrong on every retry: the system range has one writer
+    // for the life of the instance, so the code is the non-retryable one.
+    auto refused = store->Get(4);
+    ASSERT_FALSE(refused.ok()) << "a peer dirtied a system page on the shared pool";
+    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument)
+        << refused.status().message();
+    EXPECT_FALSE(refused.status().retryable());
+
+    // And nothing more: a shared pool exists so that every core writes the
+    // user pages through it. Routing to the relation's owner is what gates
+    // that, not this predicate.
+    auto admitted = store->Get(130);
+    EXPECT_TRUE(admitted.ok()) << admitted.status().message();
+}
+
 TEST(DevicePageStoreOwnershipTest, AWriteGrantAdmitsExactPagesAndNothingElse) {
     // PW1c-4 (workplan-peer-writer.md §8 rule 1): write rights are
     // exact-page, never extent - a fault grant's superset stays unwritable,
@@ -1166,7 +1215,8 @@ TEST(DevicePageStoreOwnershipTest, APageStampedByThisStreamIsClaimedWithoutAGran
     // for the life of the instance and stays `InvalidArgument`, while any
     // other page is refused because a grant *has not arrived yet* and
     // becomes `TxnConflict`, which carries `retryable=1` on the wire
-    // (`device_page_store.cpp`'s `permanent = page_id < system_page_limit_`).
+    // (`device_page_store.cpp`'s `permanent = page_id <
+    // first_evictable_page_id_`).
     // `foreign` and `blank` are user pages, so the retryable code is the
     // right answer and this line was asserting the pre-split one.
     //

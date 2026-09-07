@@ -697,9 +697,36 @@ public:
     // the declaration exists to prevent.
     //
     // `SetCoreOwnership` already raises it, since its `system_page_limit` is
-    // the same boundary by the same definition; this is for a store that
-    // never calls that, and for AST04, whose Bound Cabin pages are resident
-    // by class and are allocated above the system range.
+    // the same boundary by the same definition; this is also for a store
+    // that never calls that - `Expeditor` installs the volume's boundary on
+    // core 0's (now the instance's) store directly.
+    //
+    // **It is the write/fault boundary too since AW-a, so this is no longer
+    // a residency-only knob.** The two members that carried this one
+    // quantity were collapsed into it, so `MayWrite` and `MayFault` read
+    // *this* value as "the system range". Raising it therefore moves an
+    // authorization boundary, and the system-range arm is tested **before**
+    // `lease_->Owns()` and before `CurrentCore()`:
+    //
+    //   - on a leased store, a raise to `N` makes every page below `N`
+    //     unwritable by that core, **including pages from its own extent**,
+    //     and readable by it whether or not it was granted them;
+    //   - on the shared store, a raise to `N` makes every page below `N`
+    //     writable only from core 0.
+    //
+    // So the only value any caller may install is the volume's own layout
+    // boundary (`server::kFirstUserPageId`). **AST04 must not use this**:
+    // a Bound Cabin page is allocated above the system range, and declaring
+    // it resident by raising the floor past it would take every user page
+    // beneath it out of the peers' write set. Its residency needs the kind
+    // half of `IsPinnedClass` (which already answers for
+    // `PageType::kCabinBound`) or a pin, not this.
+    //
+    // **Install-time only**, and that is what makes it safe to read
+    // unlatched: the member is a plain `PageId` that `MayWrite`/`MayFault`
+    // read from every core's thread, so a raise after the peers exist would
+    // be a data race on the shared store as well as an authorization
+    // change. `Expeditor::Open` sets it before the first peer is built.
     void SetResidentLimit(PageId first_evictable_page_id) noexcept;
 
     // The floor, for the assembly cell that checks it was installed. The
@@ -1423,8 +1450,6 @@ private:
     std::map<std::uint32_t, RightsRegion> rights_regions_;
     std::uint64_t stamp_claims_ = 0;
     std::uint64_t map_refreshes_on_miss_ = 0;
-    // First non-system page id; 0 means no readable system range. See
-    // SetCoreOwnership.
 
     // FM2: the resident map pages, keyed by region (free_map.hpp's
     // placement arithmetic). Ordered rather than hashed so a flush writes

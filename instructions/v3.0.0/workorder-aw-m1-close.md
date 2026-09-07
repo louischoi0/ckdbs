@@ -456,5 +456,43 @@ removing it would be work with a known expiry. It is a debug-only check
 whose call site pre-filters the system range, so unlike `MayWrite` it
 gates nothing in a release build.
 
-**Suite: 3362/3362 plain, armed, and armed with `KDS_TEST_FRAME_BUDGET=8`.**
+### What the `critics-developer` pass changed
+
+It confirmed all four steps of the diagnosis and **corrected the mechanism
+CLA gave for the third**. The comment claimed nothing caught the defect
+because "the one store-side call site pre-filters the system range out" —
+there are *two* store-side sites, and the one that is the actual gate,
+`ResidentBytes`' `mark_dirty && !MayWrite`, does **not** pre-filter. What
+hid it was the other half of the same defect: with `system_page_limit_`
+reading 0 the arm could not have fired from any call site even with the
+early return gone. A cost note beside it was stale for the same reason —
+"core 0 has no lease, so `MayWrite` returns at its first test" stopped
+being true when the range test moved above the lease test.
+
+**The cell pinned the predicate, not the refusal.** `MayWrite`'s
+consequence in production is `ResidentBytes`' write gate, and the leased
+store already had a refusal cell for it
+(`AMissingGrantIsRetryableAndASystemPageIsNot`) where the shared store had
+none. `ASharedStoreRefusesAPeersSystemWriteAndNotItsUserWrite` is that
+cell: a peer's `Get(system page)` is refused non-retryably, its
+`Get(user page)` is not.
+
+**The collapse is safe today and was a footgun tomorrow.**
+`SetResidentLimit` is public and additive, and it now sets an
+*authorization* boundary that is tested before `lease_->Owns()` — so a
+later raise would make pages unwritable by the core that owns them. Its
+own declaration invited exactly that, naming AST04's Bound Cabin pages,
+a use already served by `IsPinnedClass`'s kind half. The contract is
+narrowed: volume layout only, install-time only.
+
+**Two findings left open rather than fixed**, both recorded:
+`docs/inflight/bugs/flushmaps-lease-guard-and-unlatched-region-walk.md` is
+the same lease-vacuity defect one function away, plus an unlatched walk of
+the shared region map — UB rather than a stale read. And the gate now
+**fails open on a missing identity**: `CurrentCore()` defaults to 0, so a
+future thread that touches the store without declaring itself is told it
+may write the system range. That is the failure just fixed, reached by a
+different omission, and nothing asserts it.
+
+**Suite: 3363/3363 plain, armed, and armed with `KDS_TEST_FRAME_BUDGET=8`.**
 Overhead not measured.

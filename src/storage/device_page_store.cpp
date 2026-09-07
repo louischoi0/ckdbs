@@ -608,9 +608,11 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // Dirtying a system page would make a peer the second writer of a
     // single-writer page; two messages below because MayWrite refuses for
     // two reasons, and the not-from-this-lease one is the common case.
-    // Zero cost where it matters: core 0 has no lease, so MayWrite
-    // returns at its first test, and this runs on the frame-load path,
-    // never per row. Debug builds additionally get the fault check above.
+    // Near-zero cost where it matters: core 0 answers on one id compare
+    // and one pointer compare (AW-a moved the system-range test above the
+    // lease test, so "no lease" is no longer the *first* test), and this
+    // runs on the frame-load path, never per row. Debug builds
+    // additionally get the fault check above.
     //
     // **The two reasons get two status codes** (H4, 2026-08-29), and until
     // then both answered `InvalidArgument` while the paragraph above
@@ -1062,9 +1064,12 @@ bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
     // core 0's store (`core_runtime.cpp`, `SetCoreOwnership` runs only on an
     // owned store), so **every** core reached this predicate with a null
     // lease, took the early return, and was told it may write anything -
-    // system pages included. Nothing caught it because the one store-side
-    // call site pre-filters the system range out, so the arm below was
-    // unreachable from there and the four callers outside this class each
+    // system pages included. Nothing caught it because the *other* half of
+    // the same defect hid it: `system_page_limit_` was a second member that
+    // only `SetCoreOwnership` set, so on a shared store it read 0 and the
+    // arm below could not have fired from any call site even with the early
+    // return gone. The store's own write gate (`ResidentBytes`' `mark_dirty
+    // && !MayWrite`) and the four callers outside this class therefore each
     // got an unconditional yes.
     //
     // The lease cannot be the key any more, and `CurrentCore()` is the one
