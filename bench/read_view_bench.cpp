@@ -96,7 +96,8 @@ Options ParseOptions(int argc, char** argv) {
 // (the floor cannot pass them while anything is live below them, and the
 // bench keeps one transaction live below every commit for exactly that).
 struct Rig {
-    server::SuperBlock superblock = server::SuperBlock::CreateFresh(/*now_unix_seconds=*/1000);
+    kds::server::SuperBlock superblock =
+        kds::server::SuperBlock::CreateFresh(/*now_unix_seconds=*/1000);
     kds::storage::InMemoryPageStore store{128};
     std::unique_ptr<kds::txn::TrxIdSequence> ids;
     std::unique_ptr<kds::txn::UndoLog> undo;
@@ -128,6 +129,15 @@ struct Cell {
     double median_ns = 0;
     double min_ns = 0;
 };
+
+// Hides a value from the optimiser so a branch that is a constant
+// comparison is priced as the call it is rather than folded: the first run
+// of this bench printed 0.0 ns for the bootstrap and floor arms, which is
+// the loop compiled away, not the engine.
+inline std::uint64_t Launder(std::uint64_t x) {
+    asm volatile("" : "+r"(x));
+    return x;
+}
 
 template <typename Body>
 Cell Time(const Options& options, Body&& body) {
@@ -173,21 +183,21 @@ int main(int argc, char** argv) {
         const std::uint64_t miss = live > 0 ? rig.live[live / 2]->id() : rig.anchor->id();
 
         PrintRow("visible: bootstrap id", live, Time(options, [&](std::uint64_t) {
-                     return view.Visible(kds::txn::kAlwaysVisibleTrxId) ? 1u : 0u;
+                     return view.Visible(Launder(kds::txn::kAlwaysVisibleTrxId)) ? 1u : 0u;
                  }));
         PrintRow("visible: below the floor", live, Time(options, [&](std::uint64_t) {
-                     return view.Visible(below_floor) ? 1u : 0u;
+                     return view.Visible(Launder(below_floor)) ? 1u : 0u;
                  }));
         PrintRow("visible: window hit (committed)", live, Time(options, [&](std::uint64_t) {
-                     return view.Visible(hit) ? 1u : 0u;
+                     return view.Visible(Launder(hit)) ? 1u : 0u;
                  }));
         PrintRow("visible: window miss (live)", live, Time(options, [&](std::uint64_t) {
-                     return view.Visible(miss) ? 1u : 0u;
+                     return view.Visible(Launder(miss)) ? 1u : 0u;
                  }));
         // Alternating hit and miss, which is closer to a scan over rows
         // written by a mix of committed and live writers.
         PrintRow("visible: hit/miss alternating", live, Time(options, [&](std::uint64_t i) {
-                     return view.Visible((i & 1) ? hit : miss) ? 1u : 0u;
+                     return view.Visible(Launder((i & 1) ? hit : miss)) ? 1u : 0u;
                  }));
     }
     return 0;

@@ -761,7 +761,7 @@ nothing and is not scheduled.
 | AN-S2 | **built 2026-09-07 on `an-s2-read-view-cutover` from `8d07d7e`; suite green three times over - 3299/3299 on the cutover alone, 3306/3306 with the stage's cells, 3309/3309 with the review's fixes and their cells - each time plain, armed (`KDS_TEST_PAGE_LATCH=1`) and budgeted (`KDS_TEST_FRAME_BUDGET=8`); overhead not measured.** The cutover as the row states it, and the two cells that had to fail first did: H1 and H2, written against the trx-id predicate, fail at `8d07d7e` (`instance_visibility_test.cpp:314`, `:339`, `:345`) and pass on the commit-LSN one. What AN-8 records beyond the row: a manager handed no visibility owns one (there is no second predicate), the AN-R9 ceiling is capped by a per-core pending-commit marker set *before* the append (the ruling's own shape had the AN-Q3 gap it was written to close), the undo purge is handed the floor and the catalog purge a two-branch predicate, the Cabin's rule gets the one bit it needs stamped at the mint, the 64-entry live-transaction bound retires, AN-R5a's watermark removal is a wire change (the reply text grows 992 → 1000), and `MintReadView` cannot fail. Gates: AN-R10 marked at AW (AN-R14 built), AN-R12 built at AW-S2, AN-R5a marked 2026-09-07 |
 | AN-S3 | **built 2026-09-07 on `an-s3-snapshot-adoption` from `57c609d`** (AN-8 §8.6): the coordinator's `snapshot_lsn` rides every shipped statement (`ShippedStatementRequestPayload`, eight bytes, the statement cap 976 → 968), the encoder zeroes it outside `in_txn` with REPEATABLE READ, and the participant adopts it when it opens a REPEATABLE READ context (`TransactionManager::AdoptSnapshot`, through `CommandDispatcher::AdoptSnapshot`) before its first statement reads and before the context is recorded; a snapshot above the participant's own ceiling is refused `InvalidArgument` and the fresh transaction rolled back. The two cells the row asks for, plus two: the §3 case at the managers (`AnAdoptedSnapshotReadsTheCoordinatorsInstantAndHoldsIt`, with the slot published before the first read and the entry held after the coordinator ends) and end to end over the two-core rig (`ARepeatableReadCrossOwnerTransactionReadsOneInstantOnEveryCore`), the participant's own (`ARepeatableReadContextReadsAtTheCoordinatorsSnapshot`), the refusal, and the wire (`TheCoordinatorsSnapshotCrossesUnderRepeatableReadOnly`). **Two mutants, four cells, four kills**: adoption skipped at the executor, and adoption without lowering or publishing the slot. **Its removal half landed inside AN-S2** (AN-R5a) |
 | AN-S4 | **built 2026-09-07 on `an-s2-read-view-cutover` after `18fed49`**, out of the order's sequence (S3 before S4) because the specs described the retired shape from `18fed49` on and S3 is unmarked. `txn.md` §4.1 rewritten whole - the `ReadView` block, the four branches, "why no commit table older than the window", when a commit becomes visible, readers registered and the horizon's scope (instance-wide), the two purges and the price - with §4.2's always-visible id named as `Visible`'s first branch, §4.4's cost sentence and §10 item 3 corrected; `crosscore.md` §5's "the trx-id domain is global, so ids compare cleanly" rewritten with the mechanism, and its RR bullet; `cross-owner-txn.md` §1 per AN-D6's first row (the rejection scoped to per-core streams, "no global counter" struck, commit order named global); `ddl-transactional.md` §5's two visibility sentences; `command_dispatcher.cpp`'s purge-gate comment names the gate as defence in depth; `rules.md` §3's row points at `txn.md`; `ratification-an-commit-order.md`'s header records AN-Q3 closed at AN-S2 with the marker correction; `CLAUDE.md`'s Transactions row. `client-manual.md` changed at AN-S2 already (AN-R5a's obligation), last as AN-D6 orders. **The condition AN-S4's row states holds only after this stage's `critics-developer` pass**, which found four documents the first sweep left on the retired shape and fixed them there: `ddl-transactional.md` §5d, whose purge predicate was still "cleared the core's read horizon" and whose core-0 gate still carried the per-core-horizon soundness argument the dispatcher comment above had just retired - the two contradicted each other in the same commit; `cabin.md`'s banking assumption, resting on a transaction appearing "in every other view's `in_flight`"; `foreign-keys.md` §4, still naming `MintReadView` for a check view that has called `MintCheckView` since AN-S2; and `rules.md`'s own window row, which called a reclamation pass a slot writer and said it read every bound under the latch (the floor candidate is read before it). §4.1's "a view's answer for any transaction never changes for its life" was scoped to a *held* view in the same pass, an unregistered check view's answer being exactly what reclamation may move. The grep the row named catches none of the four: three name no retired identifier at all. **Six more it reported and left, all taken**: `catalog.hpp`'s `PurgeSettledDeleteMarks` doc ("cleared the core's read horizon"), `relayout_planner.hpp`'s gate 1 ("the per-core horizon"), `visibility.hpp`'s two cost sentences ("one integer comparison"), `fk_probe_service.cpp`'s reason for minting on the owner (which no longer held, though its conclusion does), `crosscore.md`'s CC4 row ("the owning core's latest committed snapshot"), and the gate comment's "the catalog's pages *are* the system range", a subset stated as an equality. Nothing rejected: the pass's every finding was a sentence the code no longer bears out |
-| AN-S5 | not started |
+| AN-S5 | **half measured 2026-09-07, half blocked** (AN-8 §8.7). The microbench half is measured at engine `13b6b55` (`v2.7.0-265-g13b6b55`, harness `451022b`): `bench/v3.0.0/results-an-s5-read-view-v2.7.0-265-g13b6b55.md` — the mint is 6.3–6.6 ns per statement and does not move with the live count; `Visible`'s bootstrap and floor arms 0.5 ns; a writer above the floor costs one latched window lookup of ~8 ns, hit or miss, at 0, 8 and 64 live transactions alike. **The scenario half could not run**: `tools/scenario0_stockmarket.py` and `tools/scenario2_freight.py` declare part of their schema `HEAP` with no override, and SUS-1 refuses `CREATE TABLE … HEAP` since 2026-09-05 — exactly what `workorder-as-sus1-heap-suspended.md` AS-Q6 predicted for "three others [that] emit explicit HEAP". `results-an-s5-scenario0-…md` and `…scenario2-…md` are the blocker reports, no number in either. The delta against AL-S8 that this row, AM-S6 (AW-S5) and every future scenario cell need is unreachable on any post-SUS-1 commit until AS-Q6 is marked; changing a driver inside a measurement stage measures the driver, so nothing was routed around |
 
 ## AN-7 — Review record
 
@@ -1255,3 +1255,44 @@ pass's alternative to F1 - refusing an `in_txn` request that states no
 level - is a behaviour change against `statement_ship_service.hpp`'s "the
 fallback is this core's default, exactly as before" and needs the
 operator's word.
+
+### 8.7 AN-S5, 2026-09-07 — the instrument, the number, and the half that could not run
+
+The operator's word: *"start the AN-S5 measurement."* AN-S5 is two
+measurements, and they ended differently.
+
+**The instrument.** No microbenchmark survived the 2026-09-02 emptying of
+`bench/`, so the mint and the window needed one: `bench/read_view_bench.cpp`,
+behind `KDS_BUILD_BENCH` (returned, off by default). One unlogged manager
+over its own visibility, 64 committed transactions held in the window
+under an anchor, `MintReadView` and each branch of `Visible` priced
+separately at 0, 8 and 64 live transactions, the median and minimum of
+five runs of two million calls. Two harness commits after the engine's
+(`77a78a6`, `451022b`): a namespace the Release build wanted, and a
+`Launder()` on the argument - the first run printed 0.0 ns for the
+constant arms because the loop folded, which is the harness lying and is
+recorded in the results file rather than smoothed.
+
+**The number** (`results-an-s5-read-view-v2.7.0-265-g13b6b55.md`, engine
+`13b6b55`): mint 6.3–6.6 ns, flat across 0/8/64 live; bootstrap and floor
+arms 0.5 ns; window hit 8.1–8.5 ns, miss 7.9–8.3 ns, alternating 8.3–8.7 ns,
+flat across live counts and window size. So the mint is one load's worth
+and the Cabin's `live_` walk costs nothing measurable, and every tuple
+whose writer is above the floor pays ~8 ns for the latch and the hash -
+which at `cores = 1` is uncontended and at `cores = 8` is not, and the
+contended number is AV's rig to take. What the row asked to compare
+against - the trx-id mint's cost - was never measured on the old engine,
+so "smaller" stays an expectation with a number on one side only.
+
+**The half that could not run.** Both scenario drivers declare part of
+their schema `HEAP` (`trades`/`user_periodic_profit`, `freights`/`charges`)
+with no flag, and SUS-1 refuses the `CREATE TABLE` at this commit — AS-Q6
+said so on 2026-09-05 and left the bench rule to the operator. `s0-c1-g`
+and `s2-c1-g` were attempted and refused at schema creation; the other six
+would refuse identically and were not run. No `tools/` file was touched:
+a driver change inside a measurement stage measures the driver. The two
+scenario files are blocker reports and carry no number. **What this
+blocks is wider than AN-S5**: AM-S6 (AW-S5)'s whole deliverable is the
+AL-S8 delta, and AL-S8's matrix cannot be re-run on any post-SUS-1 commit
+as the tools stand. AS-Q6 is the decision that unblocks it; the honest
+shapes are the ones that order lists.
