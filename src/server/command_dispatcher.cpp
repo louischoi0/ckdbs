@@ -4415,10 +4415,16 @@ void CommandDispatcher::ReleaseIntentsWithoutWaiting(Session& session) {
         session.ship_id() == 0) {
         return;
     }
+    //
+    // **`AbortAndForget`'s leg, not `Decide`'s** (AO-S5(b) C2): this path
+    // cannot wait, and a waiter opened by `Decide` and closed at once
+    // counted a phase timeout and a late reply for an acknowledgement
+    // nobody was going to read. The no-waiter leg counts what it is - an
+    // abort forgotten - and names transaction 0 as this statement must:
+    // it ran no transaction, and the session's last id is a committed one.
     const std::vector<std::uint32_t> holders = session.intent_holders();
-    const std::uint64_t request_id = next_remote_request_++;
-    if (Status sent = txn_2pc_->Decide(request_id, session.ship_id(), /*transaction_id=*/0,
-                                       TxnDecision::kAbort, holders, /*intent_only=*/holders);
+    if (Status sent = txn_2pc_->AbortAndForget(session.ship_id(), /*transaction_id=*/0, holders,
+                                               /*intent_only=*/holders);
         !sent.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("fk", "core " + std::to_string(core_id_) + " could not release " +
@@ -4427,7 +4433,6 @@ void CommandDispatcher::ReleaseIntentsWithoutWaiting(Session& session) {
                                   "probed refused: " + sent.message());
         }
     }
-    txn_2pc_->Close(request_id);
     session.ClearIntentHolders();
 }
 

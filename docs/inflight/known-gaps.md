@@ -231,6 +231,30 @@ statement about an engine that no longer exists; re-verify or strike it.
   `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`
   and `…ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible`.)*
 
+## Foreign keys
+
+- **A transaction whose participant is deleting the parent is answered
+  busy across cores where one core answers violation, and inside an
+  explicit transaction that busy cannot clear.** Verified on
+  `ao-s5b-c1c2` over `25c5849` (AO-S5(b) C1), by reading: the forward
+  probe's check view now carries the requester's own participant as its
+  writer, so `CheckParentPresent` would answer that participant's own
+  delete-mark `kViolation` as it does locally - but `FkProbeServer::Answer`
+  consults `FkPendingDeleteTable::Pending` first, and that table is keyed
+  on the deleting session with no coordinator identity to exclude the
+  asker by (`fk_intent.hpp`, the `Pending` comment). So a `BEGIN`, a
+  `DELETE` of the parent shipped to its owner, then a child `INSERT`
+  naming that parent at home is refused `TxnConflict retryable=1` on
+  every retry until the transaction ends - a retry loop that cannot
+  succeed, the shape F1 named. Pre-existing (before C1 the same probe was
+  answered busy by the delete-mark itself); C1 made it the one asymmetry
+  left between one core and two. The fix is an own-aware pre-gate, which
+  needs the coordinator's identity in the registration, or the probe
+  running the pre-gate after the visibility read for a writer view. Owner:
+  `docs/spec/foreign-keys.md` §5, which states the asymmetry;
+  `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-S6's units are
+  where the delete side's waits belong.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own

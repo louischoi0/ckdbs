@@ -3961,8 +3961,9 @@ struct ForeignIndexRig {
     // Past the floor the loop sleeps rather than spins, so the writer gets
     // a CPU instead of racing this thread for one.
     template <typename Turn, typename Done>
-    bool TurnUntil(Turn turn, Done done, int max_rounds) {
-        const auto deadline = std::chrono::steady_clock::now() + kDriveCeiling;
+    bool TurnUntil(Turn turn, Done done, int max_rounds,
+                   std::chrono::milliseconds ceiling = kDriveCeiling) {
+        const auto deadline = std::chrono::steady_clock::now() + ceiling;
         for (int i = 0;; ++i) {
             if (done()) return true;
             turn();
@@ -3980,11 +3981,15 @@ struct ForeignIndexRig {
         return TurnUntil([this] { Pump(); }, done, max_rounds);
     }
     // Polls `statement` between turns until it finishes; false if it does
-    // not within `TurnUntil`'s bound.
-    bool Drive(sched::CoroTask& statement, int max_rounds = 256) {
+    // not within `TurnUntil`'s bound. A statement whose *specified* wait is
+    // the probe deadline - five seconds, the ceiling's own length - passes
+    // its ceiling explicitly, since the default cannot hold it plus
+    // whatever follows the deadline.
+    bool Drive(sched::CoroTask& statement, int max_rounds = 256,
+               std::chrono::milliseconds ceiling = kDriveCeiling) {
         return TurnUntil([this] { Pump(); },
                          [&statement] { return statement.Poll() == sched::PollResult::kDone; },
-                         max_rounds);
+                         max_rounds, ceiling);
     }
     // Long enough that a slow device's sync is never mistaken for a hang,
     // short enough that a real hang fails the cell rather than the suite's
@@ -7263,7 +7268,14 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnInFlightParentAnswersRetryable)
 
     DispatchOutcome out;
     auto child = rig.StartOnPeer("INSERT INTO inflc VALUES (9)", out);
-    ASSERT_TRUE(rig.Drive(*child)) << out.response;
+    // The child's whole probe deadline, since AO-S5(b) parks the probe on
+    // the holder and this holder never decides - and then the decide the
+    // refusal arm sends for whatever the owner may have granted, which
+    // AO-S5(b) C2 found had been refused at the sender until then. That
+    // round trip is what put this statement past the rig's default
+    // ceiling, which equals the probe deadline.
+    ASSERT_TRUE(rig.Drive(*child, 256, ForeignIndexRig::kDriveCeiling + std::chrono::seconds(3)))
+        << out.response;
     EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
     EXPECT_NE(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
     EXPECT_NE(out.response.find("retryable=1"), std::string::npos) << out.response;

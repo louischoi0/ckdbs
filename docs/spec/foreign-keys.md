@@ -231,7 +231,15 @@ says a constraint may not have.
 ## 2b. The intent's end — a holder is not a participant
 
 §2a's intent is released by the transaction's **decide** and by nothing
-else.
+else. The decide releases by **(coordinator core, session)** alone, so a
+decide addressed only to intent holders may name no transaction — and
+the one an autocommit statement sends after being refused with its probes
+already out does name none, since the refused statement ran no
+transaction and the session's last id belongs to a committed one. A
+prepare always names the transaction; a decide must only when some target
+prepared (AO-S5(b) C2, which found that decide refused at the sender for
+naming none, and the intents it should have released held for the life
+of the process).
 
 **A core that answered a probe is an intent holder, not a participant.**
 The distinction is what the two lists exist to keep:
@@ -404,7 +412,9 @@ in-flight *insert* of the parent: `undo_ptr == 0` with an invisible
 writer, which `Classify` answers `kNoVersion` and the check must answer
 **busy**, not violation. A transaction's own pending image needs no
 special case — a fresh view carries `own_trx_id`, so it is visible to
-its own check by the ordinary rule.
+its own check by the ordinary rule — on the parent's core too, where the
+probe's view carries the requester's own participant there as
+`own_trx_id` (§5, AO-S5(b) C1).
 
 Implementation rule: this mode lives beside the snapshot visibility
 routine in the same translation unit. A second, FK-private visibility
@@ -427,6 +437,26 @@ implementation is the failure mode to refuse in review.
   is refused naming deadlock rather than netted (AO-S4a/S4b, `txn.md` §5).
   Past the deadline with the writer undecided the answer is `busy` as
   before, which is the fault-net shape now rather than the ordinary one.
+  **The fresh view's writer is the requester's own participant on the
+  parent's core, when it has one**: a transaction that shipped its parent
+  `INSERT` there and then writes the child at home is asking about its
+  own pending image, and §4's `own_trx_id` rule answers it at once - pass
+  or violation - rather than parking it on a holder that decides only at
+  its own `COMMIT`, which the parked statement stands ahead of (AO-S5(b)
+  C1). Forward only: the reverse probe's view stays writerless, so a
+  transaction's own child rows are invisible to its own reverse probe,
+  which answers busy as it does for any writer. And one asymmetry with a
+  single core remains: a transaction whose participant is *deleting* the
+  parent - the row registered pending on that core (§2a's pre-gate, ahead
+  of the visibility read) - is answered busy there where one core answers
+  violation, and inside an explicit transaction that busy cannot clear
+  until the transaction ends; the pre-gate stores no coordinator identity
+  to exclude the asker by. **And a decide for the child that arrives while its probe is
+  parked abandons the park**: the child's waiter is closed and its
+  intents are released by that decide, so the park ends without answering
+  and grants nothing - where a re-answer stamped after the child's
+  deadline would have granted an intent no decide will ever release
+  (AO-S5(b) C2).
 - No ON UPDATE actions of any kind (K2).
 - No cross-relation write hooks: both checks are *reads* injected into
   the writing statement's own path; FK never writes to the other

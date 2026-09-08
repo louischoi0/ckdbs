@@ -687,8 +687,16 @@ public:
     // every refusal happens before the first message leaves. A refusal here
     // is not a failed rollback - this core's own half is already unwound -
     // so the caller logs it rather than reporting it.
+    //
+    // `intent_only` names the targets that hold a reference intent and
+    // nothing else, per target as `Decide` marks them; over such targets
+    // alone `transaction_id` may be 0, `Decide`'s rule. This is the leg an
+    // autocommit statement's intents end on when the statement had nothing
+    // to park on (`ReleaseIntentsWithoutWaiting`): a waiter opened and
+    // closed at once would count a phase timeout that never happened.
     Status AbortAndForget(std::uint64_t session_id, std::uint64_t transaction_id,
-                          std::span<const std::uint32_t> participants);
+                          std::span<const std::uint32_t> participants,
+                          std::span<const std::uint32_t> intent_only = {});
 
     // The parked coordinator's predicate: every participant answered, the
     // deadline passed, or the waiter is gone. One clock read per turn.

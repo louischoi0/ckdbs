@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -199,6 +200,8 @@ inline constexpr sched::MonoTimeNs kFkProbeReplyDeadlineNs = 5ull * 1'000'000'00
 
 // ---- The parent owner's half ---------------------------------------------
 
+class ShippedStatementExecutor;
+
 class FkProbeServer {
 public:
     FkProbeServer(catalog::Catalog& catalog, storage::PageStore& store, std::uint32_t core_id,
@@ -251,28 +254,58 @@ public:
 
     // Every intent a holder took, released. Wired to the 2PC decide, which
     // is the only thing that ends an intent (AH-R5): a decide is idempotent
-    // and so is this.
+    // and so is this. **And every park up for that holder is abandoned**
+    // (AO-S5(b) C2): the child that parked it has decided, so its waiter is
+    // closed and nothing will ever release an intent granted from here on -
+    // a park that re-answered after this would have stranded one, and the
+    // parent row would have answered busy to every DELETE for the life of
+    // the process. A flag rather than a deadline margin, because the decide
+    // and the park run on this one reactor, and the park is on record from
+    // the drain that decided to park - before this handler can run in the
+    // same batch or any later one - so a decide either flags it or arrives
+    // after the park has ended.
     std::size_t ReleaseIntents(std::uint32_t coordinator_core, std::uint64_t session_id) {
-        return intents_.Release(FkIntentHolder{coordinator_core, session_id});
+        const FkIntentHolder holder{coordinator_core, session_id};
+        for (auto [it, end] = parked_.equal_range(holder); it != end; ++it) {
+            if (*it->second) continue;  // a second, idempotent decide
+            *it->second = true;
+            probe_wait_abandoned_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return intents_.Release(holder);
     }
 
     std::uint64_t probes() const noexcept { return probes_; }
     std::uint64_t reverse_probes() const noexcept { return reverse_probes_; }
     // AO-S5(b): parks a probe took on an in-flight holder (a probe that
-    // parks on two parents in sequence counts twice), and parks that ended
-    // at the deadline with the holder still undecided. Read by a rig cell
-    // from another thread, so atomic (AV-S1's rule for `wakes_received`).
+    // parks on two parents in sequence counts twice), parks that ended at
+    // the deadline with the holder still undecided, and parks a decide for
+    // the child reached while they were up - ended without an answer and
+    // granting nothing (C2). Read by a rig cell from another thread, so
+    // atomic (AV-S1's rule for `wakes_received`).
     std::uint64_t probe_waits() const noexcept {
         return probe_waits_.load(std::memory_order_relaxed);
     }
     std::uint64_t probe_wait_expiries() const noexcept {
         return probe_wait_expiries_.load(std::memory_order_relaxed);
     }
+    std::uint64_t probe_wait_abandoned() const noexcept {
+        return probe_wait_abandoned_.load(std::memory_order_relaxed);
+    }
 
     // The instance's lock table (AO-S5(b)): a parked probe records
     // `child -> holder` in its wait-for graph, the edge a cycle through a
     // probe was missing. Null leaves the park without the edge.
     void SetLockTable(txn::LockTable* locks) noexcept { locks_ = locks; }
+
+    // This core's shipped-statement executor (AO-S5(b) C1): the probe asks
+    // it whether the requester's session holds a participant here, and
+    // mints its check view with that participant's local transaction as the
+    // writer whose pending image is its own - `foreign-keys.md` §4's rule,
+    // which the crossing was breaking. Null leaves the view writerless,
+    // which is every fixture that builds no executor and so no participant.
+    void SetShippedStatements(ShippedStatementExecutor* shipped) noexcept {
+        shipped_ = shipped;
+    }
 
 private:
     void Reply(std::uint32_t requester, std::uint64_t request_id, std::uint64_t session_id,
@@ -288,23 +321,33 @@ private:
                        const FkReverseProbeRequestPayload& request);
 
     // **The forward probe's answer, and where it waits** (AO-S5(b)). Every
-    // parent is checked under one fresh check view; a parent being written
-    // by an in-flight transaction of this core parks the probe here rather
-    // than answering busy - the wait belongs where the holder is, and this
-    // core is the only one that can poll its decide. `deadline_ns` is the
-    // child's own reply deadline: a wait past it would answer a waiter that
-    // has already given up, so it ends there with `kBusy`, the answer the
-    // probe gave unconditionally before this stage.
+    // parent is checked under one fresh check view whose writer is the
+    // requester's own participant on this core, when it has one (C1); a
+    // parent being written by an in-flight transaction of this core parks
+    // the probe here rather than answering busy - the wait belongs where
+    // the holder is, and this core is the only one that can poll its
+    // decide. `deadline_ns` is the child's own reply deadline: a wait past
+    // it would answer a waiter that has already given up, so it ends there
+    // with `kBusy`, the answer the probe gave unconditionally before this
+    // stage.
     void Answer(std::uint32_t requester, std::uint64_t request_id,
                 const FkProbeRequestPayload& request, sched::MonoTimeNs deadline_ns);
     // The park: records `child -> holder` in the instance's wait-for graph
     // (the edge a cycle through a probe was missing; a registration that
     // closes one refuses the child naming deadlock), waits until `holder`
-    // decides or the deadline passes, clears the edge keyed on the holder,
-    // and answers again from the top under a fresh view.
+    // decides, the deadline passes or `abandoned` is set by the child's own
+    // decide, clears the edge keyed on the holder and its `parked_` entry,
+    // and answers again from the top under a fresh view - or, abandoned,
+    // not at all (C2). `abandoned` is `Answer`'s, registered before this
+    // coroutine is submitted: a `sched::Coro` starts at its first poll, one
+    // reactor phase after the drain that decided to park, and a decide in
+    // that same drain batch must find the park already on record.
     sched::Coro WaitForHolder(std::uint32_t requester, std::uint64_t request_id,
                               FkProbeRequestPayload request, std::uint64_t holder,
-                              sched::MonoTimeNs deadline_ns);
+                              sched::MonoTimeNs deadline_ns, std::shared_ptr<bool> abandoned);
+    // Erases the `parked_` entry holding `flag` for `key` - every exit of
+    // `WaitForHolder` takes it.
+    void ForgetPark(const FkIntentHolder& key, const bool* flag);
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
@@ -329,13 +372,28 @@ private:
     // records on the child's behalf (AO-S5(b)); null means no graph, which
     // is every fixture that builds no table, and the park still happens.
     txn::LockTable* locks_ = nullptr;
+    // This core's shipped-statement executor, for the one question the
+    // probe asks it (C1): which local transaction, if any, the requester's
+    // session holds here as a participant. Null where none is built.
+    ShippedStatementExecutor* shipped_ = nullptr;
+    // Parks up right now, by the holder their re-answer would grant to,
+    // each sharing the park's `abandoned` flag (C2). One reactor writes and
+    // reads it - the decide handler flags, the park's coroutine reads - so
+    // it needs no latch; shared rather than pointed into the coroutine
+    // frame, so neither side's lifetime is a premise. A session has one
+    // statement in flight, so a holder maps to one park nearly always; a
+    // multimap because a park whose child gave up stays up until its own
+    // deadline while the session's next statement opens another.
+    std::multimap<FkIntentHolder, std::shared_ptr<bool>> parked_;
     std::uint64_t probes_ = 0;
     std::uint64_t reverse_probes_ = 0;
-    // Parks taken, and parks that ended at the deadline with the holder
-    // still undecided - the busy answers that remain, which are the
-    // fault-net shape now rather than the ordinary one.
+    // Parks taken; parks that ended at the deadline with the holder still
+    // undecided - the busy answers that remain, which are the fault-net
+    // shape now rather than the ordinary one; and parks the child's own
+    // decide ended, which answered nothing.
     std::atomic<std::uint64_t> probe_waits_{0};
     std::atomic<std::uint64_t> probe_wait_expiries_{0};
+    std::atomic<std::uint64_t> probe_wait_abandoned_{0};
 };
 
 // ---- The child core's half -----------------------------------------------

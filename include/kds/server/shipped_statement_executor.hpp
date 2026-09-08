@@ -432,6 +432,32 @@ public:
         return it->second->session.isolation();
     }
 
+    // The local transaction this core holds for a coordinator's session,
+    // or nothing when it holds no participant for it (AO-S5(b) C1). **The
+    // foreign-key probe's reader**: a child statement on the coordinator's
+    // core naming a parent row this participant wrote is asking about its
+    // own pending image, and the probe's check view carries this id as
+    // `own_trx_id` so `foreign-keys.md` §4's ordinary rule answers it. A
+    // view minted with no writer answered busy and parked the probe on a
+    // holder that decides only at the coordinator's `COMMIT` - which the
+    // parked statement stood ahead of.
+    //
+    // **Why the context found is the requester's current transaction and
+    // never a previous one's**: `Session::Finish()` clears `ship_id_`
+    // whenever the transaction had participants (`session.hpp`), so a
+    // session's next transaction mints a fresh id and a context this core
+    // failed to erase - `FinishDecision`'s refusal arm can leave one - is
+    // keyed on an id no later probe carries. A poisoned context still
+    // standing is the *same* transaction's, and its prepare refuses.
+    std::optional<std::uint64_t> enrolled_transaction_id(std::uint32_t coordinator,
+                                                         std::uint64_t session_id) const {
+        auto it = enrolled_.find(DedupKey{coordinator, session_id});
+        if (it == enrolled_.end() || it->second->session.transaction() == nullptr) {
+            return std::nullopt;
+        }
+        return it->second->session.transaction()->id();
+    }
+
     // Prepares this core has asked a coordinator about, ever (R6-5). One
     // per ceiling per in-doubt transaction, so a rising number against a
     // flat `in_doubt()` is a coordinator that is not answering.

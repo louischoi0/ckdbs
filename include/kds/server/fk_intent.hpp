@@ -283,15 +283,18 @@ public:
     // table exists to prevent, reintroduced by the guard meant to be
     // harmless.
     //
-    // **Nothing is lost by dropping it.** A forward probe never originates
-    // on the core that answers it - `SendForeignKeyProbes` defers only a
-    // parent whose owner is *another* core - so no registrant of this table
-    // can ever be the asker. And a transaction meeting its own pending
-    // delete through a peer is answered `kBusy` by the delete-mark itself
-    // under `CheckParentPresent`, with or without this test, so even a
-    // working exclusion would not change that answer. The identity that
-    // could make one meaningful is the *coordinator's*, which this table
-    // does not store and which AJ-R5 gives it no reason to.
+    // **Nothing is lost by dropping it, for the local asker.** A forward
+    // probe never originates on the core that answers it -
+    // `SendForeignKeyProbes` defers only a parent whose owner is *another*
+    // core - so no registrant of this table can ever be the asker. **A
+    // transaction meeting its own pending delete through a peer is the one
+    // shape this pre-gate now decides alone** (AO-S5(b) C1): the probe's
+    // check view carries that transaction's own participant as its writer,
+    // so `CheckParentPresent` would answer its own delete-mark `kViolation`,
+    // as it does on one core - and this test, consulted first, answers
+    // `kBusy` instead. The identity that could make an exclusion here is
+    // the *coordinator's*, which this table does not store (AJ-R5 gives it
+    // no reason to); `foreign-keys.md` §5 states the asymmetry.
     bool Pending(catalog::Oid parent_oid, std::uint64_t parent_pk) const {
         // An entry is erased the moment its last registrant leaves
         // (`Release`), so a key that is present is a row someone is

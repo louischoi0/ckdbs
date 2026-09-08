@@ -8,6 +8,7 @@
 
 #include "kds/base/crash_point.hpp"
 #include "kds/server/command_dispatcher.hpp"  // DeadlockVictim
+#include "kds/server/shipped_statement_executor.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/send_retry.hpp"
 #include "kds/sched/task.hpp"
@@ -70,9 +71,28 @@ void FkProbeServer::Answer(std::uint32_t requester, std::uint64_t request_id,
     // here rather than carried on the wire. Since AN-S2 a view would answer
     // the same on either core; what §4 asks for is the *now* of the check,
     // not the child statement's snapshot, and a view minted here is that.
+    //
+    // **Its writer is the requester's own participant on this core, when
+    // it has one** (AO-S5(b) C1). §4's rule - a transaction's own pending
+    // image is visible to its own check through `own_trx_id` - held on one
+    // core and broke at the crossing: a transaction that shipped its parent
+    // `INSERT` here and then wrote the child on its own core was asking
+    // about a row its participant holds, and a writerless view answered
+    // busy. Before the park that was an immediate `TxnConflict`; with it,
+    // the whole deadline spent on a holder that decides only at the
+    // coordinator's `COMMIT`, which the parked statement stood ahead of -
+    // and no cycle the detector could see, since a participant waits on
+    // nothing the graph records. With the participant as the writer the row
+    // is the transaction's own, and the answer is pass or violation at
+    // once, as it is on one core.
+    std::uint64_t own_trx_id = 0;
+    if (shipped_ != nullptr) {
+        own_trx_id =
+            shipped_->enrolled_transaction_id(requester, request.session_id).value_or(0);
+    }
     txn::ReadView check_view = txn::ReadView::Everything();
     if (txn_ != nullptr) {
-        check_view = txn_->MintCheckView(/*writer=*/0);
+        check_view = txn_->MintCheckView(own_trx_id);
     }
 
     const FkIntentHolder holder{requester, request.session_id};
@@ -145,9 +165,23 @@ void FkProbeServer::Answer(std::uint32_t requester, std::uint64_t request_id,
         if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0 && txn_ != nullptr &&
             scheduler_.clock().Now() < deadline_ns) {
             probe_waits_.fetch_add(1, std::memory_order_relaxed);
+            // **On record for the child's decide here, not in the
+            // coroutine** (AO-S5(b) C2). The child stamped its waiter's
+            // deadline at the send and this park's is stamped at the drain,
+            // so the park can outlive the waiter by transit plus drain lag,
+            // and a child that gave up in that gap has decided already -
+            // its decide may be the next message of this very drain batch.
+            // A `sched::Coro` runs its body at its first poll, a phase after
+            // the drain, so a registration inside it would let that decide
+            // find no park and the park then re-answer and grant an intent
+            // no decide is coming for. `ReleaseIntents` flags the park; the
+            // wait ends on the flag, and nothing is answered past it.
+            auto abandoned = std::make_shared<bool>(false);
+            parked_.emplace(holder, abandoned);
             scheduler_.Submit(sched::MakeCoroTask(
                 sched::SchedulingGroup::kForeground,
-                WaitForHolder(requester, request_id, request, busy_trx, deadline_ns)));
+                WaitForHolder(requester, request_id, request, busy_trx, deadline_ns,
+                              std::move(abandoned))));
             return;
         }
 
@@ -177,7 +211,9 @@ void FkProbeServer::Answer(std::uint32_t requester, std::uint64_t request_id,
 
 sched::Coro FkProbeServer::WaitForHolder(std::uint32_t requester, std::uint64_t request_id,
                                          FkProbeRequestPayload request, std::uint64_t holder,
-                                         sched::MonoTimeNs deadline_ns) {
+                                         sched::MonoTimeNs deadline_ns,
+                                         std::shared_ptr<bool> abandoned) {
+    const FkIntentHolder key{requester, request.session_id};
     // **The edge, on the child's behalf** (AO-S4b's shape, the shipped
     // park's twin): the child is parked on this probe's reply, waiting for
     // `holder`, and only this core knows that. A registration that closes
@@ -187,20 +223,34 @@ sched::Coro FkProbeServer::WaitForHolder(std::uint32_t requester, std::uint64_t 
     // is a wait no cycle can pass through.
     const std::uint64_t child = request.transaction_id;
     if (locks_ != nullptr && child != 0 && locks_->NoteWaitFor(child, holder)) {
+        ForgetPark(key, abandoned.get());
         Reply(requester, request_id, request.session_id, {},
               DeadlockVictim("core " + std::to_string(core_id_) + "'s transaction " +
                              std::to_string(holder) + ", which holds the parent row"));
         co_return Status::OK();
     }
-    // AO-S3's same-core wait, run on the holder's core on the child's behalf.
-    const std::function<bool()> decided = [this, holder, deadline_ns] {
-        return !txn_->IsInFlight(holder) || scheduler_.clock().Now() >= deadline_ns;
+    // AO-S3's same-core wait, run on the holder's core on the child's
+    // behalf - and ended early by the child's own decide (C2; `Answer`
+    // registered the flag before submitting this).
+    const std::function<bool()> decided = [this, holder, deadline_ns, flag = abandoned.get()] {
+        return *flag || !txn_->IsInFlight(holder) || scheduler_.clock().Now() >= deadline_ns;
     };
     co_await sched::WaitUntil{&decided};
+    ForgetPark(key, abandoned.get());
     if (locks_ != nullptr && child != 0) locks_->ClearWaitFor(child, holder);
+    if (*abandoned) co_return Status::OK();
     if (txn_->IsInFlight(holder)) probe_wait_expiries_.fetch_add(1, std::memory_order_relaxed);
     Answer(requester, request_id, request, deadline_ns);
     co_return Status::OK();
+}
+
+void FkProbeServer::ForgetPark(const FkIntentHolder& key, const bool* flag) {
+    for (auto [it, end] = parked_.equal_range(key); it != end; ++it) {
+        if (it->second.get() == flag) {
+            parked_.erase(it);
+            return;
+        }
+    }
 }
 
 // ---- The child owner's half (AJ-T2) --------------------------------------

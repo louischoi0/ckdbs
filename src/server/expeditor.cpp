@@ -2012,8 +2012,11 @@ Status Expeditor::Start() {
                                  fk_pending_deletes_, scheduler, *transport_,
                                  txn_manager_.has_value() ? &*txn_manager_ : nullptr, &*logger_,
                                  cabin_store_.has_value() ? &*cabin_store_ : nullptr);
-        // AO-S5(b): the graph a parked probe records the child's edge in.
+        // AO-S5(b): the graph a parked probe records the child's edge in,
+        // and the participant lookup its check view takes its writer from
+        // (C1).
         fk_probe_server_->SetLockTable(locks_.get());
+        fk_probe_server_->SetShippedStatements(&*shipped_executor_);
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kFkProbeRequest,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
