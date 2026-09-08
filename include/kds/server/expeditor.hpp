@@ -142,6 +142,17 @@ public:
         // (CheckFrameBudget) rather than rounded to an unbounded share.
         std::size_t buffer_pool_frames = 0;
 
+        // **The borrow cap, per transaction** (AO-R10, AR2 E2; the
+        // operator's mark of 2026-09-08 fixes the value at 65,536 and
+        // calls it `[provisional]` until AO-S7 names it). One name for the
+        // quantity, here and in `txn::kMaxLocksPerTxnDefault`, per
+        // `CLAUDE.md`'s rule against a second spelling. Reaching it is a
+        // refusal and never an escalation: the borrow model does not widen
+        // a transaction's fine borrows into a coarse one, so a cap refuses
+        // rather than truncating, and it is not retryable because a cap
+        // cannot be waited out.
+        std::size_t max_locks_per_txn = txn::kMaxLocksPerTxnDefault;
+
         // Direct TLS on the text port (docs/spec/protocol.md §1, decided
         // 2026-08-13): with `tls = on` the first byte every client sends
         // is a ClientHello, and there is no plaintext fallback and no

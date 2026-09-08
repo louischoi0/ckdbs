@@ -119,6 +119,19 @@ const std::atomic<std::uint64_t>& LockTable::FenceCounterFor(catalog::Oid rel) c
 
 StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key, LockMode mode,
                                            LockHoldings& holdings) {
+    return AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/true);
+}
+
+StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
+                                     LockHoldings& holdings) {
+    auto r = AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/false);
+    if (!r.ok()) return r.status();
+    return r.value().granted;
+}
+
+StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey& key,
+                                                LockMode mode, LockHoldings& holdings,
+                                                bool queue_on_conflict) {
     AcquireResult result;
 
     // **A transaction waits on at most one unit**, which `LockHoldings`
@@ -132,7 +145,9 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
     //
     // Withdrawn **before** the partition latch below, so only one partition
     // latch is ever held at a time (AO-R2's order).
-    if (holdings.waiting_ && !(*holdings.waiting_ == key)) {
+    // Only a queueing ask withdraws: a `TryAcquire` puts no wait in the
+    // place of the one it would drop (the declaration says why).
+    if (queue_on_conflict && holdings.waiting_ && !(*holdings.waiting_ == key)) {
         DequeueWaiter(txn, *holdings.waiting_);
         holdings.waiting_.reset();
     }
@@ -198,6 +213,14 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
                         FenceCounterFor(key.rel_oid).fetch_sub(1, std::memory_order_release);
                     result.granted = false;
                     result.blocking_txn = h.txn;
+                    // **The non-queueing exit** (AO-S6a): the caller asked
+                    // for the unit only if it was free, so a conflict
+                    // leaves the table exactly as it was found - no waiter
+                    // record, no slot, and `holdings.waiting_` untouched.
+                    // `blocking_txn` is still reported, because a caller
+                    // that declines to wait may still want to say who it
+                    // declined to wait for.
+                    if (!queue_on_conflict) return result;
                     // Queued, and **recorded in `holdings`** so it can be
                     // withdrawn: a transaction is one thread of control, so
                     // it waits on at most one unit and one record suffices.

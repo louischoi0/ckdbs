@@ -84,6 +84,21 @@ cores = 1
 # of a small budget's intent.
 # buffer_pool_frames = 0
 
+# Per-transaction borrow cap (AO-R10, AR2-R4): entries in the lock table,
+# one per relation a transaction writes and one per row. Its value is
+# `[provisional]` at 65,536 - the operator's mark of 2026-09-08 fixes it
+# and says AO-S7 is what would name it from a measurement. 0 is refused:
+# there is no unbounded setting, because a transaction that borrows
+# without limit is the escalation the borrow model exists to refuse.
+#
+# **What happens at the cap is a property of the stage, not of the
+# setting.** At AO-S6a the borrow is advisory - nothing waits on it - so a
+# transaction that reaches the cap stops recording borrows and its write
+# proceeds, counted so the truncation is visible rather than silent. When
+# the lock becomes the wait (AO-S6b) an incomplete ledger is an incorrect
+# one, and the cap will refuse `ResourceExhausted`, non-retryable, instead.
+# max_locks_per_txn = 65536
+
 # Per-core listeners (docs/inflight/in-progress/workplan-peer-writer.md PW5). `on` binds the
 # text port on every core with SO_REUSEPORT and the kernel distributes
 # connections; a session lives on the core that accepted it, forever. A

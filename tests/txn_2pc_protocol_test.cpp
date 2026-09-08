@@ -1754,6 +1754,61 @@ TEST_F(Txn2pcBlockedWriterTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid
 // what turns AO-S3's narrow rule ("only a transaction holding nothing may
 // wait") into AO-S4a's ("any transaction may wait, and the one that closes
 // a cycle is aborted").
+
+// AO-S6a's borrow cap, on a table sized so three rows reach it: one entry
+// for the relation `IX` and one per row, so a cap of 3 admits the relation
+// and two rows and stops on the third.
+//
+// **The write proceeds past the cap** (the operator's decision of
+// 2026-09-08). At S6a a borrow protects nothing - a `TryAcquire` the
+// dispatcher declines to wait for changes no verdict - so a ledger that
+// has run out must not fail a statement that would otherwise succeed. It
+// stops recording and says so through `borrow_cap_stops()`, which is what
+// keeps the truncation visible rather than silent. **S6b propagates
+// instead**, where the lock is the wait and an incomplete ledger is an
+// incorrect one.
+class LockCapTest : public Txn2pcBlockedWriterTest {
+protected:
+    void SetUp() override {
+        Txn2pcBlockedWriterTest::SetUp();
+        auto table = txn::LockTable::Create(/*core_count=*/1, /*max_locks_per_txn=*/3);
+        ASSERT_TRUE(table.ok()) << table.status().message();
+        locks_ = std::move(table.value());
+        dispatcher_->set_locks(locks_.get());
+    }
+
+    std::unique_ptr<txn::LockTable> locks_;
+};
+
+TEST_F(LockCapTest, AWritePastTheBorrowCapKeepsWritingAndCountsTheTruncation) {
+    Session session;
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u) << "an INSERT takes no borrow at S6a";
+
+    // Four rows, a cap of three: the relation and two rows fit, the third
+    // and fourth rows do not.
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9", session);
+    EXPECT_EQ(out.response, "UPDATED 4") << out.response;
+    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u)
+        << "the cap was reached and the truncation was not counted";
+}
+
+TEST_F(LockCapTest, AWriteInsideTheBorrowCapCountsNoTruncation) {
+    Session session;
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
+
+    // Two rows plus the relation is exactly the cap, and the cap refuses
+    // the entry *at* it rather than past it - so two rows fit in three.
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9", session);
+    EXPECT_EQ(out.response, "UPDATED 2") << out.response;
+    EXPECT_EQ(dispatcher_->borrow_cap_stops(), 0u)
+        << "a statement inside the cap must record every borrow it takes";
+}
+
 class LockDeadlockTest : public Txn2pcBlockedWriterTest {
 protected:
     void SetUp() override {
