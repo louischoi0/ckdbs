@@ -8,7 +8,20 @@ document (AV) that gates what comes after them. Every `path:line` is
 `[source-read]` at `15a57c2`; the rest is `[design]`; the one
 `[measured]` deliverable is AW-S5's and does not exist until it is run.
 
-**Status: AW-S0, S1, S1b, S2, S6 done, and AM-S4's slice (d) with them
+**Status: CLOSED 2026-09-08 with M1** — every stage of this order has
+landed, AW-S5 last (`bench/v3.0.0/results-am-s6-m1-baseline-v2.7.0-286-g1e7148f.md`),
+and the milestone it was written to finish is complete
+(`workorder-am-m1-shared-pool.md` §AM-7, which is the close and lists what
+M1 carries forward). **One thing this order opened and did not finish, by
+its own finding rather than by omission**: AW-S3 landed AN-R14 for
+cross-owner participant contexts only, and a plain local `BEGIN` is
+reached by nothing — §11.2 sizes the instance-wide half and says it is
+its own letter, since it lands in `txn/` rather than in AM or AN. It is
+**unlettered and unordered**, and M1's close carries it forward rather
+than closing it.
+
+*(The line below is what this header said until the close.)* **AW-S0, S1,
+S1b, S2, S6 done, and AM-S4's slice (d) with them
 (§9.4, 2026-09-07 — which is what makes "AM has no open stage" true for
 every stage but S6); AW-S3 *half* done and reviewed;
 AW-S4 *surveyed, one piece landed*, and the operator has since marked its

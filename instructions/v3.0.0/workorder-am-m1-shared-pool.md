@@ -4,10 +4,16 @@ Written 2026-09-03 on `worktree-v3.0.0-arch-revision` at `f6ed10c`
 (`v2.7.0-157-gf6ed10c`), while M0's baseline (AL-S8) was still measuring.
 The survey below is a source read at that commit.
 
-**Status: AM-S0 through AM-S5 are done - S3 built 2026-09-07, less the one
-cell that belongs to the two-core rig; AM-S6 has not started and is
-gated on AN-S2 and the operator's host** (`workorder-aw-m1-close.md`
-AW-S5). AM-S4 closed 2026-09-07 with its slice (d).
+**Status: CLOSED 2026-09-08. Every stage AM-S0..AM-S6 is done and AR0's
+M1 is complete** — §AM-7 is the close, and it is where a reader should
+start: what M1 delivered, what it measured, what it carries forward and
+what it opens. The stage rows in AM-6 are the detail.
+
+*(The line below is what this header said until the close.)* **AM-S0
+through AM-S5 are done - S3 built 2026-09-07, less the one cell that
+belongs to the two-core rig; AM-S6 has not started and is gated on AN-S2
+and the operator's host** (`workorder-aw-m1-close.md` AW-S5). AM-S4
+closed 2026-09-07 with its slice (d).
 
 *(The line below is what this order said when it was written, kept because
 a work order records what was true when it was ordered.)* **AM-S0 (a) and
@@ -294,3 +300,87 @@ review, the full suite, sync with `origin/main` on the branch, stop.
 | AM-S4 | done, all four slices; see the two rows above |
 | AM-S5 | done, as AW-S1 |
 | AM-S6 | **Run 2026-09-08 on `am-s6-results` with the B arm built at `1e7148f`, and its delta is not produced — the stage is complete and its question is unanswered at `cores = 8`** (`bench/v3.0.0/results-am-s6-m1-baseline-v2.7.0-286-g1e7148f.md`). The 2026-09-07 stop stands as history: that box was 4 logical CPUs and this one is AL-S8's 8, so the host gate AW-R1 named is met now, and AN-S2 landed besides. **64 runs**: eight AL-S8 cells x two arms x four passes, the arm order alternating per pass, every run its own server and data file from its own hashed binary - A is the archived `f6ed10c` at the sha256 AL-S8's stamp records, B is `1e7148f` Release, both driven by AS-Q6's BTREE drivers since SUS-1 makes AL-S8's own schema uncreatable on B. **Two scope corrections the row could not anticipate**: this is not M1's cost (B carries AN, AO, AU, AV, AS and the device-growth change beside M1), and the comparator is the BTREE re-baseline rather than AL-S8's files. **The result**: at `cores = 1` the two engines are the same to within 1.4% on four cells and two instruments - which is the first end-to-end measurement of AR0's `cores = 1` rule against a change set that added a page latch per frame, a structure latch, a free-map latch, an instance visibility window and a lock table - and at `cores = 8` **the host cannot answer**: the eight-core cells are bimodal on *both* engines (`s0-c8-g` ran 469, 781, 551, 554 on A and 539, 536, 783, 545 on B), spreads of 46-80%, so no delta below roughly 50% is visible. Every cell's delta is inside at least one arm's own spread and seven of eight have a mixed pairwise sign across the four passes. **Two passes would have reported +12.7% and +19.8% on two cells and both are artefacts**; passes 3 and 4 were added for that reason and did not resolve the eight-core cells either. One near-miss recorded as such: `s2-c8-s`'s median booking latency is 15% lower on B with the pairwise sign consistent in all four passes, inside arm spreads of 24-29%. The document's §9 noise floor is its most reusable output - **one core below ~7% is noise, eight cores below ~50% is noise** - and both BTREE baseline files gained a note saying their single-run eight-core numbers are single draws |
+
+---
+
+## AM-7 — M1 closed, 2026-09-08
+
+**AR0 M1 is complete.** Every stage of this order has landed on `main`,
+and the sequencing order that carried its last two (`workorder-aw-m1-close.md`)
+has no stage of its own left. Written on `am-s6-results` from `1e7148f`,
+the commit AM-S6's B arm was built at.
+
+### What M1 delivered
+
+One buffer pool for the instance, and the discipline a pool that every
+core reaches has to have. In the order the stages built it:
+
+| | what it is | where it lives |
+|---|---|---|
+| The **page latch** (AM-S1, AM-R3) | one `uint32` per frame — an exclusive bit, the owning core, a count — CAS'd through `std::atomic_ref`, shared readers, re-entrant for the owner, never upgraded, armed only at `cores > 1`. **Outer** to the WAL stream latch, which the survey had backwards | `storage/page_latch.hpp`, `rules.md` §3 |
+| The **shared frame table** (AM-S2) | one table, one CLOCK hand, `buffer_pool_frames` an undivided instance total; a structure latch and a pin protocol the table never had, because sharing it is "give it a concurrency protocol", not "share it" | `page.md` §6 |
+| The **scan ring**, ported (AM-S2-P) | one shared, page-latched pin on the page the last `Fetch` returned; the `loading_` protocol in place of an eight-attempt `ResourceExhausted` | `workorder-am-s2-p-scan-ring-port.md` |
+| The **free map's own latch** (AM-S3) | `map_regions_` was mutated outside any hold and read from three paths with none; the census that sized it worked by hanging rather than by aborting | `page.md` §5 |
+| The **ownership apparatus retired** (AM-S4, AW-S1b, AM-S4(d)) | the extent lease, `MayFault`, the CC7 fault grants, `TryClaimByStamp`, the write grants, `storage::Extent`, and then the second WAL topology itself — `Decode` refuses a pre-M0 volume, so the branches below the door are dead code and go. 44 cells left with the machinery | `crosscore.md` CC7, CC11 |
+| The **prose** (AM-S5 = AW-S1) | no spec claims a core-local pool | five specs and `CLAUDE.md` |
+| The **measurement** (AM-S6) | see below | `bench/v3.0.0/results-am-s6-m1-baseline-v2.7.0-286-g1e7148f.md` |
+
+### What it measured, and the honest shape of that
+
+**At `cores = 1`, M1 and everything since costs nothing measurable** —
+four cells, throughput and median latency, all within 1.4% of M0. That is
+AR0's `cores = 1`-byte-identical rule verified end to end for the first
+time, against a change set that put a latch word on every frame, a
+structure latch on the frame table, a latch on the free map, an instance
+visibility window in every reader's path and a lock table on every
+dispatcher.
+
+**At `cores = 8` the host cannot answer**, and the stage says so rather
+than reporting a number: those cells are bimodal on *both* engines, with
+per-arm spreads of 46–80%, so nothing below roughly 50% is visible. The
+noise floor is the reusable output — **one core below ~7% is noise, eight
+cores below ~50%** — and it retroactively bounds every single-run
+eight-core number in `bench/v3.0.0/`, which is why both BTREE baseline
+files gained a note.
+
+**So M1's own cost is unmeasured at the core count where it could have
+one.** Nothing in this order claims otherwise, and the results file's §8
+lists four instruments that would resolve it, in preference order, none
+of them ordered.
+
+### What M1 carries forward — not closed by this close
+
+1. **EV8's exhaustion protocol does not exist**, and `eviction.md`
+   describes it as though it did. AM-R6 narrows a thing that is not
+   there: there is no retry budget, and an undersized pool grows past its
+   budget rather than refusing. Recorded in `docs/inflight/known-gaps.md`
+   under Eviction, owned by `eviction.md` EV8 and by AM-R6, **which needs
+   re-scoping onto a stage that builds EV8 first**. M1 did not build it
+   and does not pretend to.
+2. **AM-R6's cross-core exhaustion counter** waits on the same thing.
+3. **`MaterializeIndexDefinition`'s owner refusal is keyed on a hook only
+   a test installs** — AW-S1b deleted its one production installer, so a
+   predicate that read "on in production, off in the harness" now reads
+   the other way round. `docs/inflight/bugs/publish-hook-gate-is-test-only.md`;
+   the fix is a decision among three options, not a patch.
+4. **The instance-wide transaction lifetime ceiling** (AN-R14's other
+   half): AW-S3 landed it for cross-owner participant contexts, and a
+   plain local `BEGIN` is reached by nothing — `txn/manager.hpp` has no
+   clock, no start stamp and no sweep. AW-S3's row sizes it and says it
+   is its own letter, since it lands in `txn/` rather than in AM or AN.
+   **Unlettered and unordered.**
+
+### What closing M1 opens
+
+`raft-ar2-A.md` §6: *"M2 opens when M1 (AM) and AN-S2 close."* Both are
+closed — AN-S2 landed at `18fed49`. **M2 is open.**
+
+Stated plainly because it is unusual: **most of M2 is already built.**
+`workorder-ao-m2-lock-family.md` has AO-S0 through AO-S5(b) landed, each
+on the operator's word ahead of this gate — the lock family's core, the
+wait, the deadlock detector on one core and then across cores, the
+instance table, the cross-core wake, and the foreign-key probe's wait.
+What the gate opening changes is that AO-S6 (the units), AO-S7 (C3's
+measurement) and AO-S8 (the prose) no longer wait on M1. AO-S6 is where
+the borrow model's unit table becomes real, and AO-S7 is the first
+measurement whose instrument this order's own AM-S6 has now bounded.
