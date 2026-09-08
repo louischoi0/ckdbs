@@ -525,6 +525,28 @@ to *prefer* rather than one that must write — and `docs/spec/wal.md:58`'s
 is the anchor's warm-up, defined over "every core has published", which
 nothing in this draft touches. E9 carries both.
 
+**Amended 2026-09-08 (operator): E9 is withdrawn, and this paragraph is
+why it had to be.** Neither ground survives.
+
+- **The warm-up ground is already dead**, and was when this was written.
+  AM-S4(d) left `SetWalAnchor` refusing every `core_id` but 0 — "slot 0
+  is the only slot, full stop" (`src/server/superblock.cpp`) — and the
+  fold seeds from the lowest *populated* slot. "Every core has published"
+  is therefore a condition over exactly one core, and a changed count
+  neither parks the fold nor advances it past anyone. `wal.md` §3 still
+  asserts the live version of this and is corrected with this amendment.
+- **The ownership ground dies at AT.** AR0-5 D17 drops `owner_core` from
+  `sys.tables` and `sys.ranges` at M3, so there is no field left to name
+  a core that does not exist.
+
+**What is withdrawn is the item, not the pin.** The mount refusal is in
+the code today (`src/bootstrap/bootstrap.cpp`) and this amendment does not
+remove it. It removes the argument that it must stay, and hands the
+question to AT with the rest of core specialization. **A third statement
+of the reason is also false and is code rather than spec**: the refusal's
+own message tells the operator that "WAL streams are per core", which
+AM-S4(d) ended. It is a one-line fix nobody has made.
+
 ### 5.7 The range refusals
 
 A multi-owner relation today refuses a write naming no pk, a join,
@@ -596,7 +618,7 @@ added at AR2-A's request.
 | E6 | Observational bank rule under the LSN view | OPEN, AN's | keep the rule's content; AN-S2 re-expresses the test (R11) |
 | E7 | Execution default: local unless routed, or routed unless local | measurement-gated — C1/C2 measured, C3 pending (AR2-A) | CLA proposes **local** for `UPDATE`/`DELETE` (stands per AR2-A §4) and, on C2's evidence, **routed** for `INSERT`; C3 decides the rest (R12, §9) |
 | E8 | NS10's verb: "selects the core that owns" → "declares the affinity of" | user-visible | take it; `owner_core` fields keep their bytes (§5.6) |
-| E9 | `core_count` pinning once `owner_core` means affinity | format / mount rule | stays pinned: E7 answers the ownership ground and `wal.md:58`'s warm-up ground is untouched by anything here (§5.6) |
+| E9 | `core_count` pinning once `owner_core` means affinity | format / mount rule | **WITHDRAWN by the operator, 2026-09-08.** It read "stays pinned: E7 answers the ownership ground and `wal.md:58`'s warm-up ground is untouched by anything here (§5.6)". Both grounds are gone (§5.6 as amended): the warm-up one died at AM-S4(d), which left slot 0 as the only anchor slot `SetWalAnchor` admits, and the ownership one dies at AT with `owner_core` (AR0-5 D17). **The item is not "unpin the count" either** — it is withdrawn because it argued from two dead premises, and what replaces it is AT's to decide with the rest of core specialization |
 | E10 | "A relation with a durable auxiliary does not split" (ratification AE, 2026-09-01) under AR2 | spec | re-ratify or retire in M3's work order after §5.7's gate-by-gate check |
 | E11 | Borrow scope: by scope, never by clock | **ratified (AR2-A)** | R1 as written; no expiry, no renewal, no revocation |
 | E12 | A read borrow: `IS` at the position's finest lock unit (R14) | **ratified (AR2-A)**; its price is C3's to report, not to decide | taken; without it no move can wait (R3, §5.4) |

@@ -67,7 +67,8 @@ struck. Replaced by:
 | E3 (FK reverse with no covering structure) | AR1/AR2 unification, M3 | `[quiet-wrong]`; the relation `S` fence is correct and is the coarse arm; the covering structure that narrows it to a slice is AR1-8's supporting Cabin, i.e. a legal move (§6 item 3) |
 | E5 (affinity collector) | M3, **amended** — see §5 item 2 | grant counts alone are not the optimizer's signal |
 | E7 (execution default) | C1/C2 numbers | measurement-gated; CLA's "local" proposal stands |
-| E8, E9 (NS10 verb, `core_count` pin) | M3 | user-visible; no reason to move them before the code they describe |
+| E8 (NS10 verb) | M3 | user-visible; no reason to move it before the code it describes |
+| ~~E9~~ (`core_count` pin) | — | **WITHDRAWN by the operator, 2026-09-08**, rather than deferred: it argued the pin stays on two grounds, and the anchor warm-up one was already dead at AM-S4(d) while the ownership one dies at AT (AR0-5 D17). AR2 §5.6 as amended carries the reasoning. The pin itself is code and stays until AT decides it |
 | E10 (AE re-ratify or retire) | M3 work order, §5.7 gate-by-gate | as AR2 proposes |
 | D12 priority | M2 opening | see §5 item 1 |
 

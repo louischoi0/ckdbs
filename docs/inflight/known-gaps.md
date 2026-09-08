@@ -267,6 +267,31 @@ statement about an engine that no longer exists; re-verify or strike it.
   `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-S6's units are
   where the delete side's waits belong.
 
+## Multi-core state, continued
+
+- **The mount refuses a changed core count for a reason that no longer
+  exists, and tells the operator so in the refusal.** Verified at
+  `0e1ed85`, 2026-09-08. `src/bootstrap/bootstrap.cpp` refuses when the
+  running `cores` differs from the superblock's `core_count`, and its
+  message reads *"WAL streams are per core, so mounting under a different
+  count would leave streams with nothing to replay them"*. There has been
+  one stream per instance since AM-S4(d), and `Decode` refuses a volume
+  claiming otherwise, so the sentence is false to the one person who
+  reads it. `wal.md` §3 carried a second reason - the anchor's warm-up
+  over "every core has published" - which is equally dead: `SetWalAnchor`
+  admits `core_id` 0 alone, the fold seeds from the lowest populated
+  slot, and the condition is over one core. That spec bullet is corrected
+  with this entry; the code message is not, because it is an engine
+  change and this entry is not one.
+
+  **What actually still ties a volume to its core count** is
+  `sys.tables.owner_core` and `sys.ranges.owner_core`: at a lower count a
+  relation names a core that does not exist. AR0-5 D17 drops both columns
+  at M3, so the last real ground goes with AT. AR2's E9 argued the pin
+  must stay and was **withdrawn by the operator on 2026-09-08** for
+  resting on the two dead grounds. Owner: `ar0-5-amendment-uniformity.md`
+  (AT), with the one-line message fix owed by whoever touches it first.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own
