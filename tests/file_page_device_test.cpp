@@ -1,10 +1,12 @@
 #include "kds/storage/file_page_device.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -103,6 +105,44 @@ TEST_F(FilePageDeviceTest, EnsureCapacityRejectsBeyondDesignCeiling) {
     EXPECT_FALSE(status.ok());
     EXPECT_EQ(status.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(device->page_capacity(), 0u);
+}
+
+// Any core grows the file (the operator's decision of 2026-09-08,
+// `rules.md` section 3's device row): eight growers running off the end at
+// once, each asking for a rising target of its own, end with one capacity
+// covering the largest ask and a file of exactly that size - one grow per
+// extent, a second grower finding the first's under the lock. What it
+// pins is the serialisation: without the lock a small grower's store can
+// land after a large one's, and the capacity then disagrees with the
+// file. The atomic itself it cannot pin - the tree offers no sanitizer
+// build - and the memory device's copy of this cell was dropped for
+// pinning nothing its `mu_` did not already give.
+TEST_F(FilePageDeviceTest, ConcurrentGrowersEndWithOneCapacityAndAFileOfThatSize) {
+    constexpr std::uint32_t kExtent = 4;
+    auto device = OpenDevice(kExtent);
+    ASSERT_NE(device, nullptr);
+
+    constexpr int kThreads = 8;
+    constexpr std::uint32_t kStepsPerThread = 64;
+    std::atomic<int> failures{0};
+    std::vector<std::thread> growers;
+    for (int t = 0; t < kThreads; ++t) {
+        growers.emplace_back([&device, &failures, t] {
+            for (std::uint32_t i = 1; i <= kStepsPerThread; ++i) {
+                // Interleaved targets, so no one thread owns the ceiling and
+                // every extent is contended by up to eight asks.
+                const std::uint32_t target = i * kThreads + static_cast<std::uint32_t>(t);
+                if (!device->EnsureCapacity(target).ok()) failures.fetch_add(1);
+            }
+        });
+    }
+    for (std::thread& grower : growers) grower.join();
+    EXPECT_EQ(failures.load(), 0);
+
+    const std::uint32_t largest = kStepsPerThread * kThreads + (kThreads - 1);
+    const std::uint32_t expected = (largest + kExtent - 1) / kExtent * kExtent;
+    EXPECT_EQ(device->page_capacity(), expected);
+    EXPECT_EQ(FileSize(), static_cast<std::uint64_t>(expected) * kPageSize);
 }
 
 TEST_F(FilePageDeviceTest, WriteThenReadRoundTrips) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -50,10 +51,12 @@
 // Concurrency: **not core-local, and not unsynchronized** (AM-S2 R8). One
 // device serves every core's store, so `page_device.hpp`'s contract - reads
 // may run concurrently, including with each other - applies here, and the
-// whole mutating surface is under `mu_` below. The two accessors that hand
-// out a reference (`trace()`, `stats()`) are the stated exception: a lock
-// cannot cover a reference the caller still holds, so they need the device
-// quiescent.
+// whole mutating surface is under `mu_` below. Three things are the stated
+// exception, and each needs the device quiescent: the two accessors that
+// hand out a reference (`trace()`, `stats()`), because a lock cannot cover
+// a reference the caller still holds; and `Crash()`, which **lowers**
+// `page_capacity_` to the durable one and is therefore the one place the
+// monotonically rising bound `page_device.hpp` argues from does not hold.
 
 namespace kds::storage {
 
@@ -97,11 +100,19 @@ public:
     static StatusOr<std::unique_ptr<MemoryPageDevice>> Create(
         std::uint32_t extent_pages = kDefaultExtentPages, std::uint32_t initial_pages = 0);
 
-    std::uint32_t page_capacity() const noexcept override { return page_capacity_; }
+    // Atomic loads, the one read this class answers outside `mu_` (the
+    // operator's decision of 2026-09-08, `rules.md` section 3's device
+    // row): any core grows the device, and a store asks the bound on every
+    // allocation.
+    std::uint32_t page_capacity() const noexcept override {
+        return page_capacity_.load(std::memory_order_acquire);
+    }
     std::uint32_t extent_pages() const noexcept { return extent_pages_; }
 
     // Capacity as of the last Sync() - what Crash() would revert to.
-    std::uint32_t durable_page_capacity() const noexcept { return durable_page_capacity_; }
+    std::uint32_t durable_page_capacity() const noexcept {
+        return durable_page_capacity_.load(std::memory_order_acquire);
+    }
 
     Status ReadPage(PageId page_id, std::span<std::byte, kPageSize> out) override;
     Status WritePage(PageId page_id, std::span<const std::byte, kPageSize> in) override;
@@ -178,8 +189,11 @@ private:
     std::uint32_t RoundUpToExtent(std::uint32_t nr_pages) const noexcept;
 
     std::uint32_t extent_pages_;
-    std::uint32_t page_capacity_;
-    std::uint32_t durable_page_capacity_;
+    // Written under `mu_` only (grow, sync, crash); read without it by the
+    // two accessors above, so atomic. The grow itself needs no lock of its
+    // own here - `mu_` already serialises it with everything else.
+    std::atomic<std::uint32_t> page_capacity_;
+    std::atomic<std::uint32_t> durable_page_capacity_;
 
     // Sparse, and split so Crash() can drop exactly the un-synced half.
     // Reads see pending_ overlaid on durable_.

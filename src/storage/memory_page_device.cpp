@@ -87,7 +87,8 @@ Status MemoryPageDevice::WritePage(PageId page_id, std::span<const std::byte, kP
 Status MemoryPageDevice::ReadPageRun(PageId first_page_id, std::uint32_t nr_pages,
                                      std::span<std::byte> out) {
     std::lock_guard<std::mutex> guard(mu_);
-    Status status = CheckPageRunRange(first_page_id, nr_pages, page_capacity_);
+    Status status = CheckPageRunRange(first_page_id, nr_pages,
+                                      page_capacity_.load(std::memory_order_relaxed));
     if (!status.ok()) {
         return status;
     }
@@ -116,7 +117,8 @@ Status MemoryPageDevice::ReadPageRun(PageId first_page_id, std::uint32_t nr_page
 Status MemoryPageDevice::WritePageRun(PageId first_page_id, std::uint32_t nr_pages,
                                       std::span<const std::byte> in) {
     std::lock_guard<std::mutex> guard(mu_);
-    Status status = CheckPageRunRange(first_page_id, nr_pages, page_capacity_);
+    Status status = CheckPageRunRange(first_page_id, nr_pages,
+                                      page_capacity_.load(std::memory_order_relaxed));
     if (!status.ok()) {
         return status;
     }
@@ -170,7 +172,7 @@ Status MemoryPageDevice::EnsureCapacity(std::uint32_t nr_pages) {
                                        std::to_string(nr_pages) + " pages exceeds the " +
                                        std::to_string(kMaxPageCount) + "-page design ceiling");
     }
-    if (nr_pages <= page_capacity_) {
+    if (nr_pages <= page_capacity_.load(std::memory_order_relaxed)) {
         return Status::OK();  // never shrinks, and so is idempotent on replay
     }
 
@@ -179,9 +181,10 @@ Status MemoryPageDevice::EnsureCapacity(std::uint32_t nr_pages) {
         return std::move(*failure);
     }
 
-    page_capacity_ = RoundUpToExtent(nr_pages);
+    const std::uint32_t grown = RoundUpToExtent(nr_pages);
+    page_capacity_.store(grown, std::memory_order_release);
     ++stats_.grows;
-    trace_.push_back(TraceEntry{OpKind::kGrow, 0, page_capacity_});
+    trace_.push_back(TraceEntry{OpKind::kGrow, 0, grown});
     return Status::OK();
 }
 
@@ -198,7 +201,8 @@ Status MemoryPageDevice::Sync() {
         durable_[page_id] = page;
     }
     pending_.clear();
-    durable_page_capacity_ = page_capacity_;
+    durable_page_capacity_.store(page_capacity_.load(std::memory_order_relaxed),
+                                 std::memory_order_release);
     return Status::OK();
 }
 
@@ -236,7 +240,8 @@ void MemoryPageDevice::ClearInjections() noexcept {
 void MemoryPageDevice::Crash() {
     std::lock_guard<std::mutex> guard(mu_);
     pending_.clear();
-    page_capacity_ = durable_page_capacity_;
+    page_capacity_.store(durable_page_capacity_.load(std::memory_order_relaxed),
+                         std::memory_order_release);
 }
 
 }  // namespace kds::storage

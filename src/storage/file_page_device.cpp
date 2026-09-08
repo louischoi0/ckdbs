@@ -5,8 +5,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -86,7 +88,10 @@ StatusOr<std::unique_ptr<FilePageDevice>> FilePageDevice::Open(const std::string
 }
 
 Status FilePageDevice::ReadAt(PageId first_page_id, std::uint32_t nr_pages, std::byte* buffer) {
-    Status status = CheckPageRunRange(first_page_id, nr_pages, page_capacity_);
+    // One load, checked and then reported: the bound only rises, so a read
+    // inside the value loaded here is inside every later one.
+    const std::uint32_t capacity = page_capacity_.load(std::memory_order_acquire);
+    Status status = CheckPageRunRange(first_page_id, nr_pages, capacity);
     if (!status.ok()) {
         return status;
     }
@@ -107,7 +112,7 @@ Status FilePageDevice::ReadAt(PageId first_page_id, std::uint32_t nr_pages, std:
             // means the file shrank underneath us - never a legal state.
             return Status::Corruption("FilePageDevice: unexpected EOF at offset " +
                                       std::to_string(offset) + " within capacity " +
-                                      std::to_string(page_capacity_));
+                                      std::to_string(capacity));
         }
         buffer += n;
         offset += static_cast<std::uint64_t>(n);
@@ -118,7 +123,8 @@ Status FilePageDevice::ReadAt(PageId first_page_id, std::uint32_t nr_pages, std:
 
 Status FilePageDevice::WriteAt(PageId first_page_id, std::uint32_t nr_pages,
                                const std::byte* buffer) {
-    Status status = CheckPageRunRange(first_page_id, nr_pages, page_capacity_);
+    Status status = CheckPageRunRange(first_page_id, nr_pages,
+                                      page_capacity_.load(std::memory_order_acquire));
     if (!status.ok()) {
         return status;
     }
@@ -172,22 +178,40 @@ Status FilePageDevice::EnsureCapacity(std::uint32_t nr_pages) {
                                        std::to_string(nr_pages) + " pages exceeds the " +
                                        std::to_string(kMaxPageCount) + "-page design ceiling");
     }
-    if (nr_pages <= page_capacity_) {
+    if (nr_pages <= page_capacity_.load(std::memory_order_acquire)) {
         // Never shrinks: truncation is a recorded v1 non-goal (page.md
         // section 14). This is also what makes replay of ALLOC records
-        // idempotent.
+        // idempotent. Lock-free, and it answers nearly every call: the
+        // store asks on each allocation and the file grows an extent at a
+        // time.
+        return Status::OK();
+    }
+
+    // **The grow, under its lock** (the header's concurrency paragraph):
+    // any core may reach here, and two reaching it for the same extent
+    // must produce one fallocate and one published capacity. Re-checked
+    // under the lock, because the other grower may have done this grow
+    // between the load above and the acquire.
+    std::lock_guard<std::mutex> guard(grow_mu_);
+    const std::uint32_t current = page_capacity_.load(std::memory_order_acquire);
+    if (nr_pages <= current) {
         return Status::OK();
     }
 
     // Round up to a whole extent, clamped so rounding cannot push a
-    // near-ceiling request past the ceiling.
+    // near-ceiling request past the ceiling. The clamp is also what keeps
+    // the fallocate below non-empty: `nr_pages` is above `current` and at
+    // most the ceiling, so `target` stays above `current` - and a
+    // zero-length `posix_fallocate` returns `EINVAL`, which
+    // `FallocateUnsupported` would misread as a filesystem that cannot
+    // preallocate.
     std::uint64_t target = (static_cast<std::uint64_t>(nr_pages) + extent_pages_ - 1) /
                            extent_pages_ * extent_pages_;
     if (target > kMaxPageCount) {
         target = kMaxPageCount;
     }
 
-    const std::uint64_t old_bytes = PageOffset(page_capacity_);
+    const std::uint64_t old_bytes = PageOffset(current);
     const std::uint64_t new_bytes = target * kPageSize;
 
     // posix_fallocate, not ftruncate: page.md section 14 wants real block
@@ -208,7 +232,9 @@ Status FilePageDevice::EnsureCapacity(std::uint32_t nr_pages) {
         }
     }
 
-    page_capacity_ = static_cast<std::uint32_t>(target);
+    // Published after the file has the blocks, so a reader that loads the
+    // new bound can address every page inside it.
+    page_capacity_.store(static_cast<std::uint32_t>(target), std::memory_order_release);
     return Status::OK();
 }
 
