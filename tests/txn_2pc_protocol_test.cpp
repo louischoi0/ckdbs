@@ -66,6 +66,21 @@ protected:
     static constexpr std::uint64_t kSession = 99;
     static constexpr std::uint64_t kCoordinatorTxn = 4242;
 
+    // The cap of the lock table this fixture wants, or `nullopt` for no
+    // lock family at all - which is what every cell but the AO ones wants,
+    // and what keeps them measuring an engine with no table rather than
+    // one with an empty table.
+    virtual std::optional<std::size_t> LockCap() const { return std::nullopt; }
+
+    // **Declared here, above every member below, and it has to be**:
+    // `~TransactionManager` releases the borrows of every still-live
+    // transaction through this table (AO-R6's other end), so `txns_` must
+    // die first and a member dies before the ones declared above it. Moving
+    // this down beside `txns_` is a use-after-free at teardown, not a tidy.
+    // Both production owners order it the same way (`expeditor.hpp`,
+    // `core_runtime.hpp`).
+    std::unique_ptr<txn::LockTable> locks_;
+
     void SetUp() override {
         auto device = wal::MemoryLogDevice::Create(kSegmentSize);
         ASSERT_TRUE(device.ok()) << device.status().message();
@@ -81,11 +96,32 @@ protected:
         boot_.emplace(std::move(boot.value()));
         ids_.emplace(boot_->superblock);
         undo_.emplace(store_, wal_.get());
-        txns_.emplace(*ids_, *undo_, store_, wal_.get());
+        // **The lock family goes into the manager as well as the
+        // dispatcher, and it has to** (AO-S6c). The manager is what
+        // releases a transaction's borrows at its decide
+        // (`txn/manager.hpp`, AO-R6), so a fixture that wires the table
+        // into the dispatcher alone builds a family that takes borrows and
+        // never gives them back: entries accumulate across statements and
+        // the next statement conflicts with rows whose writers committed
+        // long ago. Production passes it to both - `core_runtime.cpp`
+        // constructs the manager with it and then calls `set_locks` - and
+        // this fixture was passing it to one. That stayed invisible while
+        // only UPDATE and DELETE borrowed and each cell ran a single
+        // write; it stopped being invisible the moment AO-S6c gave INSERT
+        // its borrow, and the cell that caught it read `entries=5` after
+        // four committed autocommit inserts.
+        if (const std::optional<std::size_t> cap = LockCap(); cap.has_value()) {
+            auto table = txn::LockTable::Create(/*core_count=*/1, *cap);
+            ASSERT_TRUE(table.ok()) << table.status().message();
+            locks_ = std::move(table.value());
+        }
+        txns_.emplace(*ids_, *undo_, store_, wal_.get(), /*visibility=*/nullptr, /*core=*/0,
+                      locks_.get());
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_,
                             wal_.get(), Durability(), exec::Budget(),
                             /*recorder=*/nullptr, /*replay_enabled=*/false,
                             /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
+        dispatcher_->set_locks(locks_.get());
         scheduler_.emplace(clock_, io_);
         executor_.emplace(/*core_id=*/1, *dispatcher_, *scheduler_, clock_, /*log=*/nullptr,
                           wal_.get());
@@ -1769,15 +1805,7 @@ TEST_F(Txn2pcBlockedWriterTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid
 // incorrect one.
 class LockCapTest : public Txn2pcBlockedWriterTest {
 protected:
-    void SetUp() override {
-        Txn2pcBlockedWriterTest::SetUp();
-        auto table = txn::LockTable::Create(/*core_count=*/1, /*max_locks_per_txn=*/3);
-        ASSERT_TRUE(table.ok()) << table.status().message();
-        locks_ = std::move(table.value());
-        dispatcher_->set_locks(locks_.get());
-    }
-
-    std::unique_ptr<txn::LockTable> locks_;
+    std::optional<std::size_t> LockCap() const override { return 3; }
 };
 
 TEST_F(LockCapTest, AWritePastTheBorrowCapKeepsWritingAndCountsTheTruncation) {
@@ -1786,7 +1814,12 @@ TEST_F(LockCapTest, AWritePastTheBorrowCapKeepsWritingAndCountsTheTruncation) {
     ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u) << "an INSERT takes no borrow at S6a";
+    // An INSERT takes a borrow since AO-S6c, but one row's worth: the
+    // relation `IX` and its own tuple, which is two entries inside a cap of
+    // three, and each of these is its own autocommit transaction whose
+    // decide gives them back.
+    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u)
+        << "an INSERT of one row fits any cap this fixture uses";
 
     // Four rows, a cap of three: the relation and two rows fit, the third
     // and fourth rows do not.
@@ -1841,18 +1874,33 @@ TEST_F(LockCapTest, AWhereLessWriteDeclaresTheRelationAndTakesOneBorrow) {
            "at the third of these four rows";
 }
 
+// ---- AO-S6c-a: every writer takes its borrow, and gives it back --------
+
+TEST_F(LockCapTest, AnAutocommitStatementGivesItsBorrowsBackAtItsDecide) {
+    // **The cell that would have caught the half-wired fixture.** Borrows
+    // are released by the *manager* at a decide (AO-R6), not by the
+    // dispatcher, so a table wired into one and not the other takes
+    // tenancies and never gives them back - and the next statement then
+    // conflicts with rows whose writers committed long ago. That is what
+    // this fixture did until AO-S6c, invisibly, because only UPDATE and
+    // DELETE borrowed and no cell ran two writes over the same rows.
+    ASSERT_EQ(locks_->EntryCount(), 0u) << "nothing is held before the first statement";
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(locks_->EntryCount(), 0u)
+        << "two committed autocommit inserts left tenancies in the table; the manager is what "
+           "releases them and it must have been given the table";
+
+    Session session;
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE v = 0", session);
+    ASSERT_EQ(out.response, "UPDATED 2") << out.response;
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "and an autocommit UPDATE's borrows go the same way";
+}
+
 // A cap of one, so the *declaration itself* is what the cap refuses.
 class LockCapOfOneTest : public Txn2pcBlockedWriterTest {
 protected:
-    void SetUp() override {
-        Txn2pcBlockedWriterTest::SetUp();
-        auto table = txn::LockTable::Create(/*core_count=*/1, /*max_locks_per_txn=*/1);
-        ASSERT_TRUE(table.ok()) << table.status().message();
-        locks_ = std::move(table.value());
-        dispatcher_->set_locks(locks_.get());
-    }
-
-    std::unique_ptr<txn::LockTable> locks_;
+    std::optional<std::size_t> LockCap() const override { return 1; }
 };
 
 TEST_F(LockCapOfOneTest, ARefusedDeclarationFallsBackToThePerRowBorrow) {
@@ -1872,11 +1920,55 @@ TEST_F(LockCapOfOneTest, ARefusedDeclarationFallsBackToThePerRowBorrow) {
     ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
 
+    // **The baseline, and it is load-bearing since AO-S6c-a.** Under a cap
+    // of one every INSERT above now stops on its own tuple - the relation
+    // `IX` fills the ledger before the row is asked for - so the counter
+    // already reads four here. An absolute threshold would be met before
+    // the statement under test ran, and the cell would pass with the
+    // fallback reverted. The *delta* is what discriminates.
+    const std::uint64_t before = dispatcher_->borrow_cap_stops();
+
     const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE id > 1", session);
     EXPECT_EQ(out.response, "UPDATED 3") << out.response;
-    EXPECT_GE(dispatcher_->borrow_cap_stops(), 2u)
+    EXPECT_GE(dispatcher_->borrow_cap_stops() - before, 2u)
         << "only the declaration's own refusal was counted, so the rows below it took no "
            "borrow at all - the statement recorded less than the per-row path it replaced";
+}
+
+TEST_F(LockCapOfOneTest, AnInsertTakesTheBorrowOfTheRowItWrites) {
+    // AO-S6c-a. Until this sub-stage an INSERT borrowed nothing, which was
+    // not a gap but the thing standing between AO-S6 and its own goal: the
+    // wait's blocker is moving from the tuple header to the lock table, and
+    // a row whose only writer was an INSERT would have a header `trx_id`
+    // and no entry - so the table alone would answer that the row is free.
+    //
+    // A cap of one is what makes the borrow observable without a second
+    // session: the relation `IX` fills the ledger, so the row's own tuple
+    // is refused by the cap and counted. A statement that borrowed nothing
+    // would count nothing.
+    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u)
+        << "the INSERT took no borrow, so the wait's blocker cannot come from the table";
+}
+
+TEST_F(LockCapOfOneTest, ASortedFillBorrowsTheIdBlockItCarved) {
+    // The INSERT path that routes **past** `InsertOneRow`: `t` is HEAP with
+    // no var-heap, no index, no cabin and no assertion, so a multi-row
+    // VALUES whose every row omits its pk goes to `SortedFillInner`. Until
+    // AO-S6c-a it wrote rows and borrowed nothing at all - the one writer
+    // left in the "header `trx_id`, no table entry" shape the sub-stage
+    // exists to remove, and the review is what found it.
+    //
+    // One `Range` over the carved block rather than an entry per row, so
+    // the observation is the same as any coarse unit's under a cap of one:
+    // the relation `IX` fills the ledger and the range itself is refused
+    // and counted. A run that borrowed nothing would count nothing.
+    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5), (6)").rfind("INSERTED", 0), 0u)
+        << "the rows must omit their keys, or this takes the per-row path instead";
+    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u)
+        << "the sorted fill placed rows without borrowing the ids it carved";
 }
 
 TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) {
@@ -1899,13 +1991,7 @@ TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) 
 
 class LockDeadlockTest : public Txn2pcBlockedWriterTest {
 protected:
-    void SetUp() override {
-        Txn2pcBlockedWriterTest::SetUp();
-        auto table = txn::LockTable::Create(/*core_count=*/1);
-        ASSERT_TRUE(table.ok()) << table.status().message();
-        locks_ = std::move(table.value());
-        dispatcher_->set_locks(locks_.get());
-    }
+    std::optional<std::size_t> LockCap() const override { return txn::kMaxLocksPerTxnDefault; }
 
     // Starts a statement on the served path and returns its handles; the
     // caller decides what it is waiting to observe, which is the only way
@@ -1943,8 +2029,6 @@ protected:
             scheduler_->RunOnce();
         }
     }
-
-    std::unique_ptr<txn::LockTable> locks_;
 };
 
 TEST_F(LockDeadlockTest, ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds) {

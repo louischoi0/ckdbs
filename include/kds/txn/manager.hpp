@@ -292,10 +292,15 @@ public:
     // second predicate to fall back to. `core` names the slot this manager
     // owns.
     // `locks` is the instance's lock table (AO-R2), borrowed on the same
-    // terms as `visibility` and **null everywhere today**: AO-S3 is the
-    // stage that constructs one and hands it to every core. Null means
-    // every decide releases nothing, which is exactly the behaviour before
-    // AO-S2.
+    // terms as `visibility`. **Every production owner passes one** - AO-S5(a)
+    // gave the `Expeditor` and every `CoreRuntime` the instance's table -
+    // and null is what a fixture that wants no lock family gets: every
+    // decide then releases nothing, which is exactly the behaviour before
+    // AO-S2. **Passing it here is not optional for an owner that also calls
+    // `set_locks` on its dispatcher**: the dispatcher is what *takes* a
+    // borrow and this manager is what gives it back, so wiring one and not
+    // the other builds a family whose tenancies accumulate for the life of
+    // the instance. A fixture did exactly that until AO-S6c-a.
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
                        wal::WalManager* wal = nullptr,
                        InstanceVisibility* visibility = nullptr,

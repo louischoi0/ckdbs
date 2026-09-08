@@ -7431,6 +7431,28 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         return {ErrorReply(first.status()), false, 0, first.status()};
     }
 
+    // **The run's borrow, over the block of ids it just carved**
+    // (AO-S6c-a). This path routes past `InsertOneRow` entirely, so without
+    // this it would be the one writer left borrowing nothing - the exact
+    // "header `trx_id`, no table entry" shape this sub-stage exists to
+    // remove, and the one AO-S6c-b would then read as a free row. SUS-1
+    // keeps the path off every relation created since the suspension, but
+    // a pre-suspension heap relation still reaches it and the test binary
+    // lifts the suspension, so it is live rather than theoretical.
+    //
+    // **One range rather than one entry per row, and the interval is exact
+    // rather than a superset**: `AllocateRowIdRange` carved
+    // `[first, first + rows)` and every row of this run takes an id from
+    // it, so the declared unit covers precisely what is written. That is
+    // item 14's shape arrived at from the other direction - the ids are
+    // known instead of a predicate - and it is what keeps a bulk fill of
+    // any size inside `max_locks_per_txn`.
+    if (const std::size_t rows = stmt.rows.size(); rows != 0) {
+        auto took = BorrowChain(
+            scope, txn::LockKey::Range(ta.oid, first.value(), first.value() + rows));
+        if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
+    }
+
     // Encoded up front, ids contiguous from the range. The gate excluded
     // spillable schemas, so the sink is never reached.
     std::vector<std::vector<std::byte>> payloads;
@@ -7702,6 +7724,36 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         }
         row_id = issued.value();
     }
+
+    // **The row's borrow, before anything of it is written** (AO-S6c-a).
+    // An INSERT took none until this sub-stage, and that was not a missing
+    // feature but the thing standing between AO-S6 and its own goal: the
+    // wait's blocker is about to come from the lock table instead of from
+    // the tuple header, and a row whose only writer was an INSERT has a
+    // header `trx_id` and no table entry - so a reader of the table alone
+    // would stop waiting for in-flight inserters and answer as though the
+    // row were free. A wrong answer, not a gap.
+    //
+    // Per row and with no coarse declaration: item 14's unit is read off a
+    // *predicate* and an INSERT has none. The bulk path that carves a
+    // contiguous id block does declare one, in `SortedFillInner`.
+    //
+    // **Placed here rather than beside the placement call** so that every
+    // write attributable to this row follows its borrow: `EncodeRow` below
+    // appends the row's overflow values to the var-heap before the tuple
+    // itself is placed. That is an ordering of this row's own writes, not
+    // a claim over the var-heap page - which is shared with every other row
+    // of the relation and which no unit in `LockKey` names.
+    //
+    // The refusal is not read, exactly as the UPDATE and DELETE sites do
+    // not read theirs: the borrow is advisory until AO-S6c-b. **This site
+    // is not symmetric with them, though, and S6c-b must not assume it
+    // is** - they follow an ignored refusal with `CheckWriteConflictBlocking`,
+    // which still produces a verdict from the header, and an INSERT has no
+    // conflict check at all. There is nothing here for S6c-b to convert; it
+    // has to add a park outright.
+    auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, row_id));
+    if (!took.ok()) return ErrorReply(took.status());
 
     std::vector<exec::AppendedSpill> spills;
     auto encoded = exec::EncodeRow(
