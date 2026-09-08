@@ -1028,6 +1028,36 @@ private:
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                       std::uint64_t pk);
 
+    // **The borrow a row write takes, before its header is interpreted**
+    // (AO-S6a, on the operator's choice of 2026-09-08 between the two
+    // orders `lock_table.hpp` left open). The intention chain first -
+    // relation `IX`, then tuple `X` - because a tuple borrowed without it
+    // is invisible to a relation-level ask, which is what AO-S6's later
+    // sub-stages add. **Ordered and conditional**: a relation `IX` that is
+    // not granted takes no tuple under it, so the pair is a chain rather
+    // than two independent asks that happen to run in sequence.
+    //
+    // **Non-queueing, and that is the whole of S6a's claim.** It takes the
+    // units when they are free and reports nothing when they are not; the
+    // undecided-writer wait stays where AO-S3 put it until S6b moves it
+    // here. So the only status this returns other than OK is the cap's,
+    // which is a refusal rather than a conflict and cannot be waited out
+    // (AO-R10, AR2-R4).
+    //
+    // A dispatcher with no lock table borrows nothing and answers OK -
+    // every fixture that builds none. The null-transaction arm is reached
+    // by no caller today: both write sites test `scope.txn` themselves
+    // before calling, so the bootstrap-xid path never arrives here at all.
+    // Kept as the guard for the callers AO-S6's later sub-stages add.
+    Status BorrowRowForWrite(const WriteScope& scope, catalog::Oid rel_oid, std::uint64_t pk);
+
+    // The cap's refusal, turned into "stop recording and carry on" while
+    // the borrow is advisory (the operator's decision of 2026-09-08; the
+    // definition carries the argument and the counter's contract). Every
+    // other status passes through unchanged.
+    Status SwallowBorrowCap(const Status& refused);
+
+
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables(Session& session);
 
@@ -1756,6 +1786,11 @@ public:
     // AO-S3's guard, where only a transaction holding nothing waits and no
     // cycle can form. Both states are correct; the second is narrower.
     void set_locks(txn::LockTable* locks) noexcept { locks_ = locks; }
+    // Transactions that reached `max_locks_per_txn` and kept writing with
+    // an incomplete borrow ledger. **Expected zero**, and a cell that sees
+    // it nonzero has found a statement whose borrows S6b would have to
+    // refuse rather than truncate.
+    std::uint64_t borrow_cap_stops() const noexcept { return borrow_cap_stops_; }
     // Which table this dispatcher records its edges in, so an assembly cell
     // can name it (AO-S4b).
     const txn::LockTable* locks() const noexcept { return locks_; }
@@ -2524,6 +2559,9 @@ private:
     // Per-statement pipeline ids: sequential, never pointer-derived
     // (crosscore.md §3, sched.md §7's determinism rule).
     std::uint64_t next_remote_request_ = 1;
+
+    // AO-S6a's truncation counter; the accessor above states its contract.
+    std::uint64_t borrow_cap_stops_ = 0;
 
     // The read-path index switch (`indexes`, default on). Read-path only:
     // maintenance is not switchable, because an index that stops being

@@ -348,8 +348,10 @@ struct LockKey {
     constexpr bool ContainsKey(std::uint64_t pk) const noexcept { return pk >= lo && pk < hi; }
 };
 
-// AO-R10's value. A constant and not a config key at this stage: E2 is
-// where the operator marks it, on M2's opening.
+// AO-R10's value, and the default behind `max_locks_per_txn` since AO-S6a
+// wired the key through `Expeditor::Config` (`server/expeditor.hpp`).
+// `[provisional]` on the operator's mark of 2026-09-08 until AO-S7 names
+// it. One name for the quantity: nothing else spells this number.
 inline constexpr std::size_t kMaxLocksPerTxnDefault = 65536;
 
 // AO-R2's partition count, per core. `[constant]`, re-measured in AO-S7.
@@ -480,6 +482,34 @@ public:
     StatusOr<AcquireResult> Acquire(std::uint64_t txn, const LockKey& key, LockMode mode,
                                     LockHoldings& holdings);
 
+    // **The non-queueing acquire** (AO-S6a). Grants and records exactly as
+    // `Acquire` does when the unit is free, and on a conflict returns
+    // `false` having touched nothing: no waiter is queued, no slot is
+    // handed back, and `holdings.waiting_` is not moved. The cap still
+    // refuses, because a cap is not a conflict.
+    //
+    // **Why the engine's first acquire is this one and not `Acquire`.**
+    // Until S6a nothing in `src/` called either, so the write path's wait
+    // is `IsInFlight` polling with its own wait-for edges
+    // (`command_dispatcher.cpp`'s park loop). Taking `Acquire` there would
+    // put a second wait beside the first, on the same conflict, with two
+    // sets of edges into one detector - which is the shape AO-S3's review
+    // caught once already ("widening alone opens a deadlock"). So S6a
+    // takes the borrow where it is free and leaves contention to the
+    // mechanism that already handles it; **S6b makes the lock the wait and
+    // deletes the other**. A borrow this returns `false` for is one the
+    // engine does not hold, so the *conflict verdict* is exactly what it
+    // was before S6a and the row is exactly as protected.
+    //
+    // **The cap is the one thing that is not a no-op.** A writer now
+    // spends an entry per relation and an entry per row, so a transaction
+    // past `max_locks_per_txn` is refused `ResourceExhausted` where it
+    // used to run - a 100k-row `DELETE` reaches it. That refusal is
+    // AO-R10's and deliberate; it is stated here because it is what a
+    // reader of "no-op" would otherwise not expect.
+    StatusOr<bool> TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
+                              LockHoldings& holdings);
+
     // Releases every borrow `holdings` records, **wakes everyone queued on
     // the units it let go**, and withdraws its own pending wait, then
     // empties it.
@@ -570,6 +600,22 @@ public:
     bool latched() const noexcept { return !latches_.empty(); }
 
 private:
+    // `Acquire` and `TryAcquire` are one body; `queue_on_conflict` is the
+    // only difference between them, and it gates two things rather than
+    // one - whether a conflict queues, and whether the preamble withdraws
+    // a wait this transaction already holds on another unit. A
+    // non-queueing ask must not withdraw one: it puts no wait in the place
+    // of the one it would drop, so a transaction asking opportunistically
+    // for a second unit would silently give up the queue position it is
+    // still parked on. **Not a lost wakeup** - `DequeueWaiter` flips the
+    // slot on the way out, exactly so a still-parked waiter is re-entered
+    // and re-asks - but a live wait turned into a re-ask nobody ordered,
+    // which is a loss of place and, at the back of a busy unit, of
+    // liveness. Withdrawing belongs to the queueing ask, because only it
+    // replaces what it takes.
+    StatusOr<AcquireResult> AcquireInner(std::uint64_t txn, const LockKey& key, LockMode mode,
+                                         LockHoldings& holdings, bool queue_on_conflict);
+
     // One tenancy. Holders and waiters are the same shape, so they are the
     // same type: a waiter is a tenant that has not been admitted.
     struct Tenant {

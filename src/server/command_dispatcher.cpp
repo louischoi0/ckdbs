@@ -10237,6 +10237,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // scanned past. No lock and no wait - the verdict is a pure
         // function of the tuple's current writer and this view.
         if (scope.txn != nullptr) {
+            // **The borrow, before the conflict is decided** (AO-S6a) -
+            // the operator's choice of order over reviving AO-R4's
+            // disjunction.
+            //
+            // **It is not before the header is read, and S6b needs to know
+            // that.** `apply` read this tuple's header at its top: it
+            // Classified the version and captured `trx_id` into the local
+            // below, and `CheckWriteConflictBlocking` judges that captured
+            // value rather than re-reading the page. So what this
+            // establishes is the order of the two *mechanisms*, not the
+            // order AO-R4's departure needs. Making the grant the
+            // authority still costs S6b one of: a re-read after the grant,
+            // or this borrow moved above `ReadTuple`.
+            if (Status s = BorrowRowForWrite(scope, ta.oid, id.value()); !s.ok()) return s;
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value()); !s.ok()) {
                 // **AO-S3b: a conflict a wait can get past stops the walk
                 // rather than failing the statement.** `blocking_writer_`
@@ -11063,6 +11077,67 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     blocked_pk_ = pk;
 }
 
+Status CommandDispatcher::BorrowRowForWrite(const WriteScope& scope, catalog::Oid rel_oid,
+                                           std::uint64_t pk) {
+    if (locks_ == nullptr || scope.txn == nullptr) return Status::OK();
+    txn::LockHoldings& holdings = scope.txn->borrows();
+    const std::uint64_t id = scope.txn->id();
+
+    // The chain, outermost first. A refusal from either is the cap's, and
+    // it ends the statement rather than the row: a transaction at its cap
+    // cannot proceed by trying a different row.
+    auto rel = locks_->TryAcquire(id, txn::LockKey::Relation(rel_oid),
+                                  txn::LockMode::kIntentionExclusive, holdings);
+    if (!rel.ok()) return SwallowBorrowCap(rel.status());
+    // **No tuple without the intention above it.** `lock_table.hpp` states
+    // the obligation and states its failure mode: a tuple `X` held under a
+    // relation entry this transaction has no `IX` on is invisible to a
+    // relation-level ask, so the table answers a later `S`/`X` at the
+    // relation "free" while a row beneath it is held - a wrong answer
+    // given quietly rather than a refusal. Unreachable today, because
+    // nothing takes a relation `S` or `X` and `IX` never conflicts with
+    // `IX`; taken structurally now so the chain is a property of this
+    // function rather than of what the rest of the engine happens not to
+    // do yet.
+    if (!rel.value()) return Status::OK();
+    auto tuple = locks_->TryAcquire(id, txn::LockKey::Tuple(rel_oid, pk),
+                                    txn::LockMode::kExclusive, holdings);
+    if (!tuple.ok()) return SwallowBorrowCap(tuple.status());
+    return Status::OK();
+}
+
+Status CommandDispatcher::SwallowBorrowCap(const Status& refused) {
+    // **The cap does not refuse a statement while the borrow protects
+    // nothing** (the operator's decision of 2026-09-08). AO-R10 says a cap
+    // refuses and never truncates, and that is the right rule for a borrow
+    // that is the authority - reaching it means the transaction cannot be
+    // given what it needs, so it must be told. At S6a the borrow is
+    // advisory: a `TryAcquire` this function declines to wait for changes
+    // nothing, and the row is exactly as protected as it was before the
+    // sub-stage. Propagating the cap there would take a statement that
+    // would otherwise succeed and fail it on the size of a ledger that
+    // guards nothing - which is a cost with no matching benefit, and it is
+    // newly reachable rather than long-standing: the cap has been 65,536
+    // since AO-S1 and was unreachable until this sub-stage first made
+    // `held_` non-empty.
+    //
+    // **This is a truncation and is counted as one.** `borrow_cap_stops_`
+    // is what makes it visible rather than silent, and it is the number
+    // that must be zero on every cell of the suite: a transaction past the
+    // cap stops recording borrows and keeps writing, so the ledger under
+    // it is incomplete from that row on. **S6b propagates instead**, where
+    // the lock is the wait and an incomplete ledger is an incorrect one.
+    if (refused.code() != StatusCode::kResourceExhausted) return refused;
+    ++borrow_cap_stops_;
+    if (logging(LogLevel::kWarn)) {
+        log_->Warn("lock", "core " + std::to_string(core_id_) +
+                               " stopped recording borrows for a transaction at "
+                               "max_locks_per_txn and let the write proceed: " +
+                               refused.message());
+    }
+    return Status::OK();
+}
+
 Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                                      std::uint64_t pk) {
     Status verdict = txn_->CheckWriteConflict(*scope.txn, cur, pk);
@@ -11482,6 +11557,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         }
 
         if (scope.txn != nullptr) {
+            // The borrow first, `UpdateInner`'s site states the order.
+            if (Status s = BorrowRowForWrite(scope, ta.oid, id); !s.ok()) return s;
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id); !s.ok()) {
                 // AO-S3b, and `UpdateInner`'s site states the argument,
                 // including why this is an equality and not a non-zero test.

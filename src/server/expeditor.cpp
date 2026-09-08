@@ -79,6 +79,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_max_entries_per_value", "cores", "placement",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
             "join_build_max_rows",   "in_doubt_ceiling_ms",
+            "max_locks_per_txn",
             "range_size_ids",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
@@ -207,6 +208,22 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetUint("buffer_pool_frames");
         if (!v.ok()) return v.status();
         buffer_pool_frames = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("max_locks_per_txn")) {
+        // AO-R10's cap, one entry per unit a transaction borrows. A cap of
+        // 0 would refuse every borrow and is rejected rather than read as
+        // "unbounded": unbounded is what the model refuses to offer, since
+        // an uncapped transaction is the escalation R4 exists to prevent.
+        auto v = file.GetUint("max_locks_per_txn");
+        if (!v.ok()) return v.status();
+        if (v.value() == 0) {
+            return Status::InvalidArgument(
+                file.origin() +
+                ": max_locks_per_txn must be at least 1; there is no unbounded setting, because "
+                "a transaction that borrows without limit is the escalation the borrow model "
+                "refuses (AR2-R4)");
+        }
+        max_locks_per_txn = static_cast<std::size_t>(v.value());
     }
     if (file.Has("checkpoint_interval_ms")) {
         auto v = file.GetUint("checkpoint_interval_ms");
@@ -1020,7 +1037,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // core; its wake registry is installed at `Start`, where the registry
     // is built. The header says what this is the first of.
     {
-        auto locks = txn::LockTable::Create(expeditor->config_.cores);
+        auto locks = txn::LockTable::Create(expeditor->config_.cores,
+                                            expeditor->config_.max_locks_per_txn);
         if (!locks.ok()) return locks.status();
         expeditor->locks_ = std::move(locks.value());
     }
