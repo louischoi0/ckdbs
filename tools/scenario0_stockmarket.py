@@ -101,9 +101,15 @@ measurement as much as the workload is:
                               which would make the update phase a function
                               of the account count rather than of the engine
     trades, user_periodic_profit
-                              HEAP - insert-only, never read by pk here, so
-                              a tail append is exactly right and a tree
-                              would buy a descent and a split per row
+                              BTREE since 2026-09-08 (AS-Q6's mark) - these
+                              are insert-only and never read by pk here, so
+                              HEAP's tail append was exactly right and they
+                              were HEAP through the AL-S8 files at f6ed10c;
+                              heap relations are suspended (SUS-1) and
+                              measurement is BTREE only for now, so every
+                              trade pays a descent and its share of splits.
+                              A number from this driver is comparable only
+                              to a number from this driver.
 
 Simulated time. `--days` (default 180) is a **business** span compressed
 into the `--seconds` the run actually takes: a trade's `trade_day` and the
@@ -172,13 +178,15 @@ SCHEMA = {
         "id int64, name varchar, country varchar, tier int32, created_day int32", "BTREE"),
     "assets": (
         "id int64, symbol varchar, asset_class int32, last_price int64", "BTREE"),
-    # HEAP: insert-only, appended at the chain tail, never probed by pk.
+    # BTREE since AS-Q6 (2026-09-08): insert-only and never probed by pk,
+    # which was HEAP's case, but heap relations are suspended (SUS-1) and
+    # measurement is BTREE only for now.
     "trades": (
         "id int64, account_id int64, asset_id int64, side int32, qty int64, "
-        "price int64, trade_day int32", "HEAP"),
+        "price int64, trade_day int32", "BTREE"),
     "user_periodic_profit": (
         "id int64, user_id int64, period_day int32, realized int64, "
-        "trade_count int64", "HEAP"),
+        "trade_count int64", "BTREE"),
 }
 
 # Creation order is load-bearing under `--fk` and cosmetic without it: a
@@ -1367,7 +1375,7 @@ def main():
                              "accounts, latency measured across all four; qps here IS "
                              "the TPS")
         elif name == "trade-insert":
-            merged.detail = "heap chain tail append, WAL-logged"
+            merged.detail = "clustered-btree append (BTREE since AS-Q6), WAL-logged"
         else:
             merged.detail = ("in-place overwrite after a clustered-btree descent, "
                              "WAL-logged as HEAP_OVERWRITE")
@@ -1483,9 +1491,12 @@ def main():
          "reporter's `WHERE user_id = <n>` walks the whole accounts relation per user, "
          "per period, which is what a reporting job on an unindexed foreign key "
          "costs."),
-        "accounts/users/assets are BTREE and trades/user_periodic_profit are HEAP - a "
-        "heap accounts relation would make every UPDATE a full chain scan, and the "
-        "update number would then be a function of --users, not of the engine.",
+        "every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under "
+        "SUS-1 and measurement is BTREE only for now). trades/user_periodic_profit were "
+        "HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only "
+        "with a number from this driver; a heap accounts relation would in any case "
+        "make every UPDATE a full chain scan, and the update number a function of "
+        "--users rather than of the engine.",
     ])
 
     print_scenario(meta, trader_results, profit_result, verify)

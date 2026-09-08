@@ -80,9 +80,14 @@ which is the part of that run that is a measurement rather than a workload:
     accounts, users, assets   PRIMARY KEY on id  <- ckdbs BTREE: every access
                               is `WHERE id = <n>`, an index descent on both
     trades, user_periodic_profit
-                              identity, no index <- ckdbs HEAP: insert-only,
-                              never probed by pk, so a plain heap append on
-                              both and no index maintenance per row on either
+                              PRIMARY KEY on id  <- ckdbs BTREE since
+                              2026-09-08 (AS-Q6's mark: heap relations are
+                              suspended and measurement is BTREE only for
+                              now). Insert-only and never probed by pk, so
+                              both sides now pay index maintenance per row
+                              for a key nothing reads; through the AL-S8
+                              files at f6ed10c these were HEAP on ckdbs and
+                              an identity with no index here
 
 Simulated time is identical: `--days` (default 180) is a **business** span
 compressed into the `--seconds` the run takes, and both the trade's
@@ -187,13 +192,14 @@ SCHEMA = {
         "created_day integer", "BTREE"),
     "assets": (
         "symbol varchar(64), asset_class integer, last_price bigint", "BTREE"),
-    # HEAP: insert-only, appended at the end of the heap, never probed by pk.
+    # BTREE since AS-Q6 (2026-09-08), mirroring the ckdbs driver: a pk index
+    # on both sides for rows nothing probes by pk.
     "trades": (
         "account_id bigint, asset_id bigint, side integer, qty bigint, "
-        "price bigint, trade_day integer", "HEAP"),
+        "price bigint, trade_day integer", "BTREE"),
     "user_periodic_profit": (
         "user_id bigint, period_day integer, realized bigint, "
-        "trade_count bigint", "HEAP"),
+        "trade_count bigint", "BTREE"),
 }
 
 # The column the reporting job filters on - `--user-id-index` puts a btree on

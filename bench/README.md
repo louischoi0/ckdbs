@@ -58,3 +58,20 @@ The drivers themselves are unmodified `tools/` scripts — a driver change
 inside a measurement stage measures the driver. `bench/docs/` stays closed
 until there is a v3 driver whose behaviour is not already documented in the
 tool's own `--help`.
+
+## What a v3 number is measured on — BTREE only, since 2026-09-08
+
+The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08.md`):
+**every relation a driver creates is `BTREE`, and a delta is taken only
+against a BTREE baseline of the same driver.** Heap relations are suspended
+(SUS-1), so a post-2026-09-05 engine refuses the shape the AL-S8 files at
+`f6ed10c` measured — `trades`/`user_periodic_profit` and
+`freights`/`charges` were `HEAP` there. Those files stay as history and are
+compared against nothing: a heap number beside a btree number is two
+workloads. The comparator for every later delta is `f6ed10c` re-measured
+with the changed drivers, on the same host and from the archived binary
+AL-S8's stamp names; its files carry the driver shape in the benchmark
+name (`results-scenario0-stockmarket-btree-<describe>.md`) so the two
+series cannot be mistaken for one. The driver change itself was a tools
+stage outside any measurement stage, which is what the rule above
+requires and why the baseline is re-measured rather than reused.
