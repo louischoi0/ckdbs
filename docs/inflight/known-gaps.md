@@ -128,7 +128,7 @@ statement about an engine that no longer exists; re-verify or strike it.
   operator's, which named these tools on the day. Not a defect in either
   driver or in SUS-1; a measurement the tree can no longer take. Owner:
   `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md` AS-Q6.
-  **Answered 2026-09-08** (`raft-marks-2026-09-08.md`): the drivers' four
+  **Answered 2026-09-08** (`raft-marks-2026-09-08-as-q6.md`): the drivers' four
   heap relations are `BTREE` on `as-q6-drivers-btree`, `f6ed10c` is **to
   be** re-measured with the changed drivers as the new baseline (not
   measured as of this entry), and measurement is BTREE only for now. What stays true of this entry: the

@@ -99,7 +99,7 @@ Archive: the probe cell's aborted output is kept at
 not as a results archive.
 
 **Superseded on the comparator, 2026-09-08.** The operator's mark on AS-Q6
-(`instructions/v3.0.0/raft-marks-2026-09-08.md`): the driver's `freights`
+(`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`): the driver's `freights`
 and `charges` are `BTREE`, `f6ed10c` is to be re-measured with the changed
 driver as the new baseline, and measurement is BTREE only for now. The
 AL-S8 file this document names as the standing baseline is history from

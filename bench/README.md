@@ -61,7 +61,7 @@ tool's own `--help`.
 
 ## What a v3 number is measured on — BTREE only, since 2026-09-08
 
-The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08.md`):
+The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`):
 **every relation a driver creates is `BTREE`, and a delta is taken only
 against a BTREE baseline of the same driver** — a driver still emitting
 `HEAP` is refused at `CREATE TABLE` and produces no v3 number until AS-S3
