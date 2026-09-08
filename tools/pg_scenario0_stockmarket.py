@@ -71,8 +71,10 @@ written idiomatically, and each is stated here so a quoted number carries it.
 4. **`id` is server-generated on both sides.** ckdbs invariant 11 forbids a
    caller-supplied pk, so every relation uses
    `id bigint GENERATED ALWAYS AS IDENTITY` and INSERT names only the body
-   columns. An identity column is a sequence, not an index, which is what lets
-   the heap-analogue relations below have genuinely zero indexes.
+   columns. An identity column is a sequence, not an index, which is what let
+   the heap-analogue relations below carry genuinely zero indexes through the
+   AL-S8 files at f6ed10c; since AS-Q6 (2026-09-08) every relation here takes
+   `PRIMARY KEY` on that identity, so no relation is index-free any more.
 
 Storage organization mirrors the ckdbs `clustered_type` choice per relation,
 which is the part of that run that is a measurement rather than a workload:
@@ -1232,8 +1234,8 @@ def main():
                              "accounts, latency measured across all four; qps here IS "
                              "the TPS")
         elif name == "trade-insert":
-            merged.detail = ("heap append into an index-free relation, WAL-logged, one "
-                             "commit per statement")
+            merged.detail = ("heap append plus one pk index entry (PRIMARY KEY since "
+                             "AS-Q6), WAL-logged, one commit per statement")
         else:
             merged.detail = ("new row version after a pk index scan (MVCC), WAL-logged, "
                              "one commit per statement")
@@ -1356,9 +1358,11 @@ def main():
          "the reporter's `WHERE user_id = <n>` seqscans the whole accounts relation per "
          "user, per period, which is what a reporting job on an unindexed foreign key "
          "costs."),
-        "accounts/users/assets carry a PRIMARY KEY and trades/user_periodic_profit carry "
-        "none, mirroring the ckdbs run's BTREE/HEAP choice per relation - so neither "
-        "engine is paying for an index the other does not have.",
+        "every relation carries a PRIMARY KEY on its identity, mirroring the ckdbs run's "
+        "all-BTREE schema (AS-Q6, 2026-09-08) - so neither engine is paying for an index "
+        "the other does not have. Through the AL-S8 files at f6ed10c the ckdbs run stored "
+        "trades/user_periodic_profit HEAP and those two carried no index here, so a "
+        "number from this driver compares only with a number from this driver.",
         "PostgreSQL UPDATE writes a new row version and leaves dead tuples behind; "
         "autovacuum ran or did not run according to the cluster's settings, and no "
         "manual VACUUM was issued between phases.",

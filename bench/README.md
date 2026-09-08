@@ -63,15 +63,19 @@ tool's own `--help`.
 
 The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08.md`):
 **every relation a driver creates is `BTREE`, and a delta is taken only
-against a BTREE baseline of the same driver.** Heap relations are suspended
+against a BTREE baseline of the same driver** — a driver still emitting
+`HEAP` is refused at `CREATE TABLE` and produces no v3 number until AS-S3
+changes it. Heap relations are suspended
 (SUS-1), so a post-2026-09-05 engine refuses the shape the AL-S8 files at
 `f6ed10c` measured — `trades`/`user_periodic_profit` and
 `freights`/`charges` were `HEAP` there. Those files stay as history and are
 compared against nothing: a heap number beside a btree number is two
 workloads. The comparator for every later delta is `f6ed10c` re-measured
 with the changed drivers, on the same host and from the archived binary
-AL-S8's stamp names; its files carry the driver shape in the benchmark
-name (`results-scenario0-stockmarket-btree-<describe>.md`) so the two
-series cannot be mistaken for one. The driver change itself was a tools
+AL-S8's stamp names — **not yet measured as of 2026-09-08**; its files
+will carry the driver shape in the benchmark name
+(`results-scenario0-stockmarket-btree-<describe>.md`) so the two series
+cannot be mistaken for one. Until those files exist there is no valid
+comparator for scenario0 or scenario2 at all. The driver change itself was a tools
 stage outside any measurement stage, which is what the rule above
 requires and why the baseline is re-measured rather than reused.

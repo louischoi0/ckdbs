@@ -97,3 +97,12 @@ unchanged).
 Archive: the probe cell's aborted output is kept at
 `bench/v3.0.0/archive/an-s5-v2.7.0-265-g13b6b55/` for the reproduction,
 not as a results archive.
+
+**Superseded on the comparator, 2026-09-08.** The operator's mark on AS-Q6
+(`instructions/v3.0.0/raft-marks-2026-09-08.md`): the driver's `freights`
+and `charges` are `BTREE`, `f6ed10c` is to be re-measured with the changed
+driver as the new baseline, and measurement is BTREE only for now. The
+AL-S8 file this document names as the standing baseline is history from
+that mark on and is compared against nothing (`bench/README.md`); the
+driver lines cited above now say `BTREE`. Nothing above is re-measured or
+edited.

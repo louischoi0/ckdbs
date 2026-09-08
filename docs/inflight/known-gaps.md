@@ -129,9 +129,9 @@ statement about an engine that no longer exists; re-verify or strike it.
   driver or in SUS-1; a measurement the tree can no longer take. Owner:
   `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md` AS-Q6.
   **Answered 2026-09-08** (`raft-marks-2026-09-08.md`): the drivers' four
-  heap relations are `BTREE` on `as-q6-drivers-btree`, `f6ed10c` is
-  re-measured with the changed drivers as the new baseline, and
-  measurement is BTREE only for now. What stays true of this entry: the
+  heap relations are `BTREE` on `as-q6-drivers-btree`, `f6ed10c` is **to
+  be** re-measured with the changed drivers as the new baseline (not
+  measured as of this entry), and measurement is BTREE only for now. What stays true of this entry: the
   AL-S8 heap files are history, and no delta against them is ever valid -
   the comparator is the `f6ed10c` BTREE re-baseline. The entry closes when
   that baseline is in `bench/v3.0.0/`.

@@ -1805,6 +1805,10 @@ def main():
         "runs the analytic reporter beside them. The PostgreSQL twin is",
         "tools/pg_scenario2_freight.py (single booker, reporter interleaved);",
         "diff the two --json files with tools/compare_scenario2.py.",
+        "every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended "
+        "under SUS-1 and measurement is BTREE only for now); freights/charges were "
+        "HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares "
+        "only with a number from this driver.",
     ))
     if result is not None:
         print_bookings(result, args)

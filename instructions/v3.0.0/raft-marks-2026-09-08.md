@@ -29,9 +29,30 @@ This mark is the answer that entry named the operator's to give.
 
 ## What it does not cover
 
-Four tools still emit an explicit `HEAP` and are refused at `CREATE TABLE`
-on a post-SUS-1 engine: `bulk_insert_benchmark.py`, `kwp_load_benchmark.py`,
-`aggregate_benchmark.py`'s heap arm and `cabin_scope_ab_benchmark.py`'s two
-heap arms. None of them is on the AL-S8 matrix or on any open stage's
+**Five** tools still emit an explicit `HEAP` and are refused at
+`CREATE TABLE` on a post-SUS-1 engine: `bulk_insert_benchmark.py:70`,
+`kwp_load_benchmark.py:65`, `aggregate_benchmark.py`'s heap arm (`:179`,
+emitted at `:127`), `range_directory_probe.py:301`, and — the one that
+matters most, because it is a **third scenario driver of the same family
+as the two this mark changes** — `tools/scenario1_backtest.py`, whose
+`daily_stats` and `model_results` are `HEAP` at `:256` and `:263` for the
+same stated reason (`"appended and then walked, never probed by pk"`),
+with an ad-hoc `write_probe` table at `:1662-1663` and a PostgreSQL twin
+(`pg_scenario1_backtest.py`) that mirrors "no PRIMARY KEY". Its two
+SCHEMA relations abort `create_tables`; the `write_probe` sweep only
+skips.
+
+`cabin_scope_ab_benchmark.py` is **not** in that class and was named here
+in error: its `ch`/`uh` arms emit no storage word at all
+(`:219`, `:221`), so they take the default, which SUS-1 flipped to
+`BTREE`. They are not refused — they run, measure a btree, and label
+every arm "heap". That is `tools/benchmark.py`'s `--clustered heap`
+failure mode, so it belongs with the six tools sharing that shape, which
+the 2026-09-05 mark already sent to AS-S3.
+
+None of the five is on the AL-S8 matrix or on any open stage's
 measurement list; they belong to AS-S3, the tools stage the 2026-09-05 mark
 sized S, and this mark's "BTREE only" is the rule that stage applies to them.
+`scenario1_backtest.py` is the one to take first: it is the only remaining
+tool for which "BTREE only" changes what is measured rather than only what
+is labelled.
