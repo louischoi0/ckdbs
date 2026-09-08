@@ -190,5 +190,17 @@ and whose throughput does not.
 **A repeat is the first thing to add** if any later delta against this
 file lands inside a few percent.
 
+**Amended the same day by AM-S6's four-sample A/B**
+(`results-am-s6-m1-baseline-v2.7.0-286-g1e7148f.md` §4, §9), which ran
+this arm four times per cell: the `cores = 1` cells are stable to 2–7%,
+so §3's two one-core numbers are sound to about that. **The `cores = 8`
+cells are bimodal on this host** — `s0-c8-g` on this very binary ran
+469, 781, 551 and 554 TPS across four runs — so **§3's `s0-c8-g` of
+794.3 is a single draw from the high mode, not a central value**, and
+`s0-c8-s`'s 213.0 is one draw of a distribution whose spread was 4.1%
+there and reached 66.6% on the sibling cell. No eight-core delta against
+this file is meaningful below roughly 50%. Nothing above is re-measured
+or edited; this note is what a later reader needs to not misuse it.
+
 Archive: `bench/v3.0.0/archive/scenario0-btree-v2.7.0-157-gf6ed10c/` —
 per-cell JSON, driver stdout, prechecks, the run script and the timeline.

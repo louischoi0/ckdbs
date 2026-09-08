@@ -170,5 +170,15 @@ later delta inside a few percent is believed.** The pair that comes
 closest to a floor is `s2-c1-g` and `s2-c1-s` — 589.0 and 553.0 under
 loads 1.04 and 1.05, differing by their durability class and 6.5%.
 
+**Amended the same day by AM-S6's four-sample A/B**
+(`results-am-s6-m1-baseline-v2.7.0-286-g1e7148f.md` §4, §9), which ran
+this arm four times per cell: the two `cores = 1` cells are stable to
+3.5–4.1%, so §3's 589.0 and 553.0 are sound to about that. **The two
+`cores = 8` cells are not** — `s2-c8-g` on this binary ran 325, 194, 349
+and 317 TPS across four runs, a 79.9% spread, and `s2-c8-s` 293–322 —
+so §3's 308.5 and 294.0 are single draws and no eight-core delta against
+them is meaningful below roughly 50%. Nothing above is re-measured or
+edited.
+
 Archive: `bench/v3.0.0/archive/scenario2-btree-v2.7.0-157-gf6ed10c/` —
 per-cell JSON, driver stdout and prechecks.
