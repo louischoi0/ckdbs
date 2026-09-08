@@ -72,10 +72,19 @@ changes it. Heap relations are suspended
 compared against nothing: a heap number beside a btree number is two
 workloads. The comparator for every later delta is `f6ed10c` re-measured
 with the changed drivers, on the same host and from the archived binary
-AL-S8's stamp names — **not yet measured as of 2026-09-08**; its files
-will carry the driver shape in the benchmark name
-(`results-scenario0-stockmarket-btree-<describe>.md`) so the two series
-cannot be mistaken for one. Until those files exist there is no valid
-comparator for scenario0 or scenario2 at all. The driver change itself was a tools
-stage outside any measurement stage, which is what the rule above
-requires and why the baseline is re-measured rather than reused.
+AL-S8's stamp names — **measured 2026-09-08**, eight cells, all of
+AL-S8's own arguments and its cell order:
+
+- `results-scenario0-stockmarket-btree-v2.7.0-157-gf6ed10c.md`
+- `results-scenario2-freight-btree-v2.7.0-157-gf6ed10c.md`
+
+The `-btree-` in the benchmark name is what keeps the two series apart,
+and it is load-bearing: the same commit now has two results files per
+scenario, measuring two workloads. **A delta is read against the
+`-btree-` pair and never against the other.** Each carries, once and
+marked not to be reused, the difference between the two — which prices
+the driver change and the five days between the runs together, and
+separates neither, because a statement whose storage class did not change
+moved as well. The driver change itself was a tools stage outside any
+measurement stage, which is what the rule above requires and why the
+baseline was re-measured rather than reused.

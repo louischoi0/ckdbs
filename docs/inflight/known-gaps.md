@@ -128,13 +128,18 @@ statement about an engine that no longer exists; re-verify or strike it.
   operator's, which named these tools on the day. Not a defect in either
   driver or in SUS-1; a measurement the tree can no longer take. Owner:
   `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md` AS-Q6.
-  **Answered 2026-09-08** (`raft-marks-2026-09-08-as-q6.md`): the drivers' four
-  heap relations are `BTREE` on `as-q6-drivers-btree`, `f6ed10c` is **to
-  be** re-measured with the changed drivers as the new baseline (not
-  measured as of this entry), and measurement is BTREE only for now. What stays true of this entry: the
-  AL-S8 heap files are history, and no delta against them is ever valid -
-  the comparator is the `f6ed10c` BTREE re-baseline. The entry closes when
-  that baseline is in `bench/v3.0.0/`.
+  **Closed 2026-09-08** (`raft-marks-2026-09-08-as-q6.md`): the drivers'
+  four heap relations are `BTREE`, and `f6ed10c` was re-measured with the
+  changed drivers the same day — eight cells, AL-S8's own arguments and
+  cell order, all committing their full targets
+  (`results-scenario0-stockmarket-btree-v2.7.0-157-gf6ed10c.md`,
+  `results-scenario2-freight-btree-v2.7.0-157-gf6ed10c.md`). AM-S6 and
+  AN-S5's scenario half have a comparator again, and it is that pair; the
+  AL-S8 heap files stay as history and no delta against them is ever
+  valid. What the entry leaves behind rather than closes: measurement is
+  BTREE only until the operator says otherwise, so no v3 number prices a
+  heap relation, and four tools still emit an explicit `HEAP` and are
+  refused (AS-S3).
 
 ## WAL
 
