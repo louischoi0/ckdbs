@@ -95,7 +95,9 @@ carries no delta against any v2.x number, and `bench/README.md` states the
 five rules a run is invalid without. **`docs/inflight/` reopened on
 2026-09-03 on the operator's word**, with a narrower job than it had —
 `instructions/` took the plans, so this holds only what a plan is not.
-Three buckets under `docs/`, one rule each:
+**`docs/blueprint/` opened on 2026-09-08 on the operator's word**, with
+CN-1: concept notes, which are neither built, nor a rule, nor a gap in
+what is built. Four buckets under `docs/`, one rule each:
 
 - **`docs/spec/`** — what is confirmed and implemented. The authoritative
   specifications; when this file and a spec conflict, the spec wins.
@@ -109,6 +111,12 @@ Three buckets under `docs/`, one rule each:
   verified at; an entry older than its subsystem's last change is a
   statement about an engine that no longer exists. Open work orders are
   **not** here — they are `instructions/<version>/`.
+- **`docs/blueprint/`** — concept notes: an idea with its reasoning, its
+  boundaries and the decisions it leaves open, recorded before anything is
+  built and possibly before anything ever is. A note opens no stage and
+  licenses no code; when one is taken up, the work order cites it and
+  becomes the authority. Its own `README.md` carries the rule and the
+  header every note must have.
 
 A closed workplan is deleted, not archived: the spec that owns the
 subsystem carries everything durable. The plans closed before 2026-08-26

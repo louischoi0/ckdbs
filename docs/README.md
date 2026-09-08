@@ -8,6 +8,7 @@ this file says only where a document goes.
 | `spec/` | what is confirmed **and implemented** | the code does what it says; when the spec and `/CLAUDE.md` disagree, the spec wins |
 | `rules/` | concepts and constraints that hold **across the codebase** | it constrains code that does not know it exists |
 | `inflight/` | what is **missing**: `known-gaps.md`, `bugs/` (found and not yet fixed), `blocked/` | it names a gap, not a plan — and it carries the commit it was verified at |
+| `blueprint/` | **concept notes** (opened 2026-09-08 with CN-1): an idea recorded with its boundaries and its open decisions, before anything is built and possibly before anything ever is | nothing in it is decided, so it opens no stage and gates nothing; every note carries a status line, its claim tags, the commit it was written against, and what it does not license |
 
 Outside `docs/`, and named here because the boundary is what people get
 wrong: **`instructions/<version>/`** holds the operator's work orders and
