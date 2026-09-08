@@ -135,3 +135,13 @@ No archive directory entries exist for this document beyond the aborted
 attempt's own logs (§2), which are kept at
 `bench/v3.0.0/archive/an-s5-v2.7.0-265-g13b6b55/` for the reproduction —
 not a results archive, since no cell produced a result.
+
+**Superseded on the comparator, 2026-09-08.** The operator's mark on AS-Q6
+(`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`) took the step §5 above
+declined to take on its own: the driver's `trades` and
+`user_periodic_profit` are `BTREE`, `f6ed10c` is to be re-measured with the
+changed driver as the new baseline, and measurement is BTREE only for now.
+The AL-S8 file this document names as "the standing baseline" is history
+from that mark on and is compared against nothing (`bench/README.md`); the
+driver lines this document cites now say `BTREE`. Nothing above is
+re-measured or edited.

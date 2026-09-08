@@ -20,10 +20,12 @@ What is deliberately *not* mirrored, and why the comparison is still fair:
   contract - a system-generated ascending identity the client never chooses.
 
   **clustering** ckdbs picks heap or clustered-btree per relation at CREATE
-  TABLE. PostgreSQL has one table shape plus a pk index, so `freights` and
-  `charges` - HEAP on ckdbs, deliberately unindexed there - get a pk index
-  here whether they want one or not. The booking never probes them by pk, so
-  this costs PostgreSQL a little on insert and gives it nothing back.
+  TABLE, and since 2026-09-08 (AS-Q6's mark) the ckdbs driver creates every
+  relation BTREE - heap relations are suspended under SUS-1 and measurement
+  is BTREE only for now. PostgreSQL has one table shape plus a pk index, so
+  `freights` and `charges` get one here as they do there now; through the
+  AL-S8 files at f6ed10c they were HEAP on ckdbs and this index was a cost
+  PostgreSQL alone paid. The booking never probes them by pk either way.
 
   **the non-pk lookups** get the index PostgreSQL's planner would expect:
   `freights(operation_id)` and `recipes(cargo_type)`. On ckdbs those two

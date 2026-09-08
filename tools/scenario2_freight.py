@@ -76,10 +76,14 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # never supplied on INSERT (invariant 11). It is written out in each column
 # list because CREATE TABLE declares it; only INSERT omits it.
 #
-# BTREE wherever the booking transaction probes by pk, or where a foreign
+# BTREE everywhere. The booking transaction probes by pk, and a foreign
 # key needs a parent to descend into - a heap parent is refused at
-# declaration, so `--fk` requires it. HEAP for the two append-only ledgers,
-# which are written at the chain tail and never probed by pk.
+# declaration, so `--fk` requires it - which decided six of the eight; the
+# two append-only ledgers, `freights` and `charges`, were HEAP (written at
+# the chain tail, never probed by pk) through the AL-S8 files at f6ed10c
+# and are BTREE since 2026-09-08 (AS-Q6's mark): heap relations are
+# suspended under SUS-1 and measurement is BTREE only for now. A number
+# from this driver compares only with a number from this driver.
 #
 # 68 columns per run against a **7,616**-column instance ceiling, so ~112
 # runs per data file. Nothing reclaims a catalog row: there is no DROP
@@ -114,10 +118,10 @@ SCHEMA = {
         "valid_from int32, valid_to int32", "BTREE"),
     "freights": (
         "id int64, operation_id int64, ship_id int64, cargo_id int64, cbm int32, "
-        "price_per_cbm int64, booked_day int32, status int32", "HEAP"),
+        "price_per_cbm int64, booked_day int32, status int32", "BTREE"),
     "charges": (
         "id int64, freight_id int64, fee_id int64, amount int64, "
-        "applied_day int32", "HEAP"),
+        "applied_day int32", "BTREE"),
 }
 
 # Creation order is load-bearing under `--fk` and cosmetic without it: a
@@ -1801,6 +1805,10 @@ def main():
         "runs the analytic reporter beside them. The PostgreSQL twin is",
         "tools/pg_scenario2_freight.py (single booker, reporter interleaved);",
         "diff the two --json files with tools/compare_scenario2.py.",
+        "every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended "
+        "under SUS-1 and measurement is BTREE only for now); freights/charges were "
+        "HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares "
+        "only with a number from this driver.",
     ))
     if result is not None:
         print_bookings(result, args)

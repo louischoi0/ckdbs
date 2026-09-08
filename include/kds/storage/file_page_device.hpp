@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "kds/base/file_descriptor.hpp"
@@ -37,27 +39,37 @@
 // (page.md section 9) does not exist yet to satisfy. Nothing in this
 // class's shape blocks it later.
 //
-// Concurrency: **it meets `page_device.hpp`'s contract without a lock, and
-// that is a source read rather than an expectation** (AM-R11, 2026-09-06).
-// Concurrent ReadPage/ReadPageRun of *distinct* pages from distinct threads
-// is permitted there, and this class holds no per-read state to
+// Concurrency: **reads and writes take no lock; growth takes one of its
+// own** (AM-R11, 2026-09-06; the growth half on the operator's decision of
+// 2026-09-08, `rules.md` §3's device row). Concurrent ReadPage/ReadPageRun
+// of *distinct* pages from distinct threads is permitted by
+// `page_device.hpp`'s contract, and this class holds no per-read state to
 // synchronise: every transfer is a pread/pwrite at an offset computed from
-// the page id (`file_page_device.cpp:97`, `:129`), never lseek plus read,
-// so there is no shared file offset; the caller owns the buffer; and the
-// loop's `offset`, `buffer` and `remaining` are locals. The only mutable
-// member a read touches is `page_capacity_`, which is exactly the
-// monotonically rising bound `page_device.hpp` argues about. Write, grow
-// and sync stay the caller's to serialise - `EnsureCapacity` writes
-// `page_capacity_`, and **nothing serialises that write any more**: this
-// paragraph ended "and core 0 alone grows the file", which stopped being
-// true when a peer began allocating through the instance's free map
-// (`docs/inflight/bugs/device-growth-is-not-core-0s-any-more.md`, AM-S3's).
+// the page id (`file_page_device.cpp`), never lseek plus read, so there is
+// no shared file offset; the caller owns the buffer; and the loop's
+// `offset`, `buffer` and `remaining` are locals. The one mutable member a
+// read touches is `page_capacity_`, and **any core may grow it**: a peer
+// allocating through the instance's free map reaches `EnsureCapacity`
+// (since `2663001`, and from two more paths since AW-S1b), so the field
+// is a `std::atomic<uint32_t>` - a reader loads a bound that only rises -
+// and the grow itself is serialised by `grow_mu_`, so two cores running
+// off the end of the file at once produce one `posix_fallocate` and one
+// published capacity, the second grower re-checking under the lock and
+// finding the first's. Write and sync stay the caller's to serialise.
 //
-// (This said "core-local, like every PageDevice" until AM-R11. It had not
-// been true since one device began serving every core's store, and the
-// clause it justified - "usable from a second core's instance over a
-// disjoint id range if that becomes the ownership model" - was hedging
-// about a future that had already arrived.)
+// `grow_mu_` is a leaf - nothing is taken under it - and is never held
+// across a park, since the grow is a synchronous syscall. **A page latch
+// is outer to it**: what reaches the grow is a split or a chain growth,
+// which holds its page exclusive across `PageStore::CreateNew()`
+// (`heap_chain.cpp`'s `tail_bytes`, `btree.cpp`'s `descent.leaf`). Neither
+// of the store's own latches is held there - the frame table's structure
+// latch drops across the device read (`page.md` §6) and the free map's
+// `map_latch_` never spans device work (`page.md` §5) - so the order is
+// the page latch, then this, and nothing under it.
+//
+// (This said "core-local, like every PageDevice" until AM-R11, and "core 0
+// alone grows the file" until 2026-09-08; neither had been true since one
+// device began serving every core's store.)
 
 namespace kds::storage {
 
@@ -73,7 +85,9 @@ public:
     static StatusOr<std::unique_ptr<FilePageDevice>> Open(
         const std::string& path, std::uint32_t extent_pages = kDefaultExtentPages);
 
-    std::uint32_t page_capacity() const noexcept override { return page_capacity_; }
+    std::uint32_t page_capacity() const noexcept override {
+        return page_capacity_.load(std::memory_order_acquire);
+    }
     std::uint32_t extent_pages() const noexcept { return extent_pages_; }
     const std::string& path() const noexcept { return path_; }
 
@@ -110,7 +124,12 @@ private:
     FileDescriptor fd_;
     std::string path_;
     std::uint32_t extent_pages_;
-    std::uint32_t page_capacity_;
+    // The bound every core reads and any core raises; the rise is published
+    // with release after the file has the blocks, and read with acquire.
+    std::atomic<std::uint32_t> page_capacity_;
+    // Serialises `EnsureCapacity`'s grow (the header's concurrency
+    // paragraph): a leaf, never held across a park.
+    std::mutex grow_mu_;
 };
 
 }  // namespace kds::storage

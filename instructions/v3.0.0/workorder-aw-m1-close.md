@@ -544,7 +544,9 @@ gate.
 say file growth is no longer core 0's alone, while `page.md` §6 and
 `page_device.hpp` still said it was — the second using it as the reason the
 class needs no internal synchronization. Both corrected, and
-`device-growth-is-not-core-0s-any-more.md` now names all four sites.
+`device-growth-is-not-core-0s-any-more.md` named all four sites until the
+operator's decision of 2026-09-08 closed it (growth is any core's;
+`fix-device-growth-all-cores`), when the file left `docs/inflight/bugs/`.
 
 **Rejected: nothing.** Two findings are deferred by the order rather than by
 CLA — the unlatched `map_regions_` walk (AM-S3's, filed) and slice (d) — and
