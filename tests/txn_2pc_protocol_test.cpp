@@ -2031,6 +2031,41 @@ protected:
     }
 };
 
+// ---- AO-S6c-b: the lock is what the statement waits for ----------------
+
+TEST_F(LockDeadlockTest, AWriteBlockedByARangeFenceWaitsForItsHolder) {
+    // **The wait the tuple header could not express.** A declares a window
+    // over `(4, ...)` whose second conjunct matches nothing, so it holds
+    // `Range(t, 5, ...)` and writes **no row** - which is the whole point:
+    // row 5's header still names the committed inserter, so the MVCC check
+    // passes it and first-updater-wins has nothing to say. Before AO-S6c-b
+    // the blocker came from that header, so B had nobody to wait for and
+    // the fence either refused it outright or, worse, was not consulted at
+    // the wait at all.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    const DispatchOutcome fenced =
+        dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 4 AND v = 99", &a);
+    ASSERT_EQ(fenced.response, "UPDATED 0") << fenced.response;
+
+    // B writes a row inside A's window. Nothing about the row itself
+    // refuses it; the declared range does.
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*wb.done) << "B did not wait on the fence: " << wb.out->response;
+
+    // And the wait ends where every wait in this family ends - at the
+    // holder's decide, with the statement run again.
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "B never resumed after the fence was released";
+    EXPECT_EQ(wb.out->response, "UPDATED 1") << wb.out->response;
+}
+
 TEST_F(LockDeadlockTest, ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds) {
     // AO-5's S4a cell. Without a detector this is the deadlock AO-S3's
     // guard exists to prevent; with one, the guard lifts and the cycle is

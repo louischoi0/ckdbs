@@ -123,9 +123,14 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
 }
 
 StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
-                                     LockHoldings& holdings) {
+                                     LockHoldings& holdings, std::uint64_t* blocker) {
     auto r = AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/false);
     if (!r.ok()) return r.status();
+    // `AcquireInner` has always computed this and this wrapper has always
+    // dropped it. Reported only on a refusal: `blocking_txn` is zero on a
+    // grant, and writing that out would let a caller read "granted by
+    // nobody" as "refused by transaction 0".
+    if (blocker != nullptr && !r.value().granted) *blocker = r.value().blocking_txn;
     return r.value().granted;
 }
 

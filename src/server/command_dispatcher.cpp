@@ -7745,13 +7745,18 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // a claim over the var-heap page - which is shared with every other row
     // of the relation and which no unit in `LockKey` names.
     //
-    // The refusal is not read, exactly as the UPDATE and DELETE sites do
-    // not read theirs: the borrow is advisory until AO-S6c-b. **This site
-    // is not symmetric with them, though, and S6c-b must not assume it
-    // is** - they follow an ignored refusal with `CheckWriteConflictBlocking`,
-    // which still produces a verdict from the header, and an INSERT has no
-    // conflict check at all. There is nothing here for S6c-b to convert; it
-    // has to add a park outright.
+    // **The refusal is still not read here, and since AO-S6c-b that is an
+    // asymmetry rather than a shared rule.** The UPDATE and DELETE sites
+    // now act on theirs: a refused borrow is a conflict of its own there,
+    // and the wait's holder comes from the table. This site cannot convert
+    // the same way, because there is nothing here to convert - they follow
+    // an ignored refusal with `CheckWriteConflictBlocking`, which produces
+    // a verdict from the header, and an INSERT has no conflict check at
+    // all; it needs a park added outright, which S6c-b did not do. What
+    // that leaves standing is stated rather than implied: **a range fence
+    // does not stop an insert into its window**, so item 14's declared
+    // unit protects a declaring transaction against writers of rows that
+    // exist and not against rows that appear.
     auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, row_id));
     if (!took.ok()) return ErrorReply(took.status());
 
@@ -10234,8 +10239,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // unit was held by somebody else records *nothing at all*, not
         // even the relation `IX`, which is strictly less than the per-row
         // path this replaced. Demoting is right while the borrow is
-        // advisory; AO-S6c, where the lock is the wait, parks on the
-        // coarse unit instead of falling back to a finer one.
+        // advisory. **AO-S6c-b left this a demotion rather than a park on
+        // the coarse unit**: the per-row borrows below meet the same
+        // holder the declaration met, so the statement waits for it either
+        // way, one row later and at one ledger entry per row.
         if (!took.value()) declared.reset();
     }
 
@@ -10332,11 +10339,13 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // order AO-R4's departure needs. Making the grant the
             // authority still costs S6b one of: a re-read after the grant,
             // or this borrow moved above `ReadTuple`.
+            std::uint64_t blocker = 0;
             if (!declared.has_value()) {
-                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id.value()));
+                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id.value()), &blocker);
                 if (!took.ok()) return took.status();
             }
-            if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value()); !s.ok()) {
+            if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value(), blocker);
+                !s.ok()) {
                 // **AO-S3b: a conflict a wait can get past stops the walk
                 // rather than failing the statement.** `blocking_writer_`
                 // is the discriminator `CheckWriteConflictBlocking` already
@@ -10355,9 +10364,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 // row's verdict and park the statement on a transaction that
                 // holds nothing it wants - waiting for the wrong decide and
                 // resuming into the same refusal. `NoteBlockingWriter` is
-                // called here with `cur`, so equality is exactly "this row's
-                // check is the one that recorded it".
-                if (trx_id != 0 && blocking_writer_ == trx_id) {
+                // called here with this row's own `blocker`, so equality is
+                // exactly "this row's check is the one that recorded it".
+                //
+                // **Against `blocker` rather than `trx_id` since AO-S6c-b**:
+                // the two name the same transaction for a row an in-flight
+                // writer holds, but only the lock can name a holder of a
+                // *range* covering this key - and testing the header there
+                // would compare a leftover against a holder the header does
+                // not know, refusing a wait the table had already offered.
+                // This is not the narrower test it looks like:
+                // `CheckWriteConflictBlocking` writes the holder it
+                // recorded back into `blocker`, which is `trx_id` itself
+                // wherever the table named nobody.
+                if (blocker != 0 && blocking_writer_ == blocker) {
                     parked_on_row = true;
                     blocked_verdict = s;
                     return Status::OK();
@@ -11163,7 +11183,8 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
 }
 
 StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
-                                             const txn::LockKey& unit) {
+                                             const txn::LockKey& unit,
+                                             std::uint64_t* blocker) {
     if (locks_ == nullptr || scope.txn == nullptr) return true;
     txn::LockHoldings& holdings = scope.txn->borrows();
     const std::uint64_t id = scope.txn->id();
@@ -11181,7 +11202,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
 
     // A relation unit is outermost and takes no intention above it.
     if (unit.unit == txn::LockUnit::kRelation) {
-        auto rel = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings);
+        auto rel = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
         if (!rel.ok()) return swallowed(rel.status());
         return rel.value();
     }
@@ -11193,10 +11214,10 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // relation "free" while a key beneath it is held - a wrong answer
     // given quietly rather than a refusal.
     auto rel = locks_->TryAcquire(id, txn::LockKey::Relation(unit.rel_oid),
-                                  txn::LockMode::kIntentionExclusive, holdings);
+                                  txn::LockMode::kIntentionExclusive, holdings, blocker);
     if (!rel.ok()) return swallowed(rel.status());
     if (!rel.value()) return false;
-    auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings);
+    auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
     if (!under.ok()) return swallowed(under.status());
     return under.value();
 }
@@ -11314,8 +11335,11 @@ Status CommandDispatcher::SwallowBorrowCap(const Status& refused) {
     // is what makes it visible rather than silent, and it is the number
     // that must be zero on every cell of the suite: a transaction past the
     // cap stops recording borrows and keeps writing, so the ledger under
-    // it is incomplete from that row on. **S6b propagates instead**, where
-    // the lock is the wait and an incomplete ledger is an incorrect one.
+    // it is incomplete from that row on. **AO-S6c-c propagates instead**
+    // (S6a and S6b both said S6b would, and neither did). Until it does,
+    // the incompleteness is why AO-S6c-b's wait reads the header where the
+    // table names nobody rather than taking the table as the authority:
+    // the rows past this stop have an in-flight writer and no entry.
     if (refused.code() != StatusCode::kResourceExhausted) return refused;
     ++borrow_cap_stops_;
     if (logging(LogLevel::kWarn)) {
@@ -11328,8 +11352,28 @@ Status CommandDispatcher::SwallowBorrowCap(const Status& refused) {
 }
 
 Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
-                                                     std::uint64_t pk) {
+                                                     std::uint64_t pk,
+                                                     std::uint64_t& blocker) {
     Status verdict = txn_->CheckWriteConflict(*scope.txn, cur, pk);
+
+    // **A refused borrow is a conflict in its own right** (AO-S6c-b), and
+    // this is what makes the lock the wait rather than a name attached to
+    // somebody else's refusal. The MVCC check answers about the row's own
+    // *writer*: it is silent about a transaction that holds a **range**
+    // over this key and has not reached this row yet, because the header
+    // still names whoever wrote it last and that writer is long visible.
+    // So a fence-blocked write used to pass this check and go on to write a
+    // row another transaction had already claimed the right to move - the
+    // lost update item 14's coarse units exist to prevent.
+    //
+    // The message follows `CheckWriteConflict`'s, which `txn/manager.cpp`
+    // calls part of the wire contract rather than a diagnostic: same shape,
+    // and it names the holder rather than the writer because that is who
+    // the client is waiting for.
+    if (verdict.ok() && blocker != 0) {
+        verdict = Status::TxnConflict("row id=" + std::to_string(pk) +
+                                      " is held by transaction " + std::to_string(blocker));
+    }
     if (verdict.ok()) return verdict;
     // **The row is held by a writer that has not decided, so the statement
     // waits for it instead of refusing** (AO-S3, AO-3 B rows 1 and 2).
@@ -11355,7 +11399,34 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     // which is the failure atomicity §6 states. `NoteBlockingWriter` is
     // where every condition on recording it lives, including the two that
     // keep this stage deadlock-free and its waits non-futile.
-    NoteBlockingWriter(scope.txn, cur, pk);
+    // **The holder is the table's where the table names one, and the
+    // header's where it does not** (AO-S6c-b). The lock names holders the
+    // header never could - a transaction holding a *range* over this key,
+    // which is what item 14's declared units put in the table - and
+    // sourcing the wait from the header alone leaves those refusing
+    // instead of waiting, which is the refusal AR2-A §1 measures this
+    // milestone by removing.
+    //
+    // **The table is not read alone, because the ledger is not complete.**
+    // Two states put an in-flight writer in the header with no entry to
+    // find: a borrow the cap swallowed (`SwallowBorrowCap` is still a
+    // swallow at this sub-stage, so a transaction past `max_locks_per_txn`
+    // keeps writing and records nothing more), and a dispatcher with no
+    // table at all, where `BorrowChain` grants everything vacuously. Both
+    // are exactly the state AO-S3 waited through, so making the table the
+    // sole authority does not *move* those waits, it deletes them - 7 of
+    // the 12 blocked-writer cells, and the cell
+    // `WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe` for the second
+    // state. The ledger becomes the sole authority where the cap
+    // propagates (AO-S6c-c) and not before; until then the two sources are
+    // a union.
+    //
+    // Written back rather than kept local, because the write sites tell
+    // this row's own recording from a leftover on the same member by
+    // comparing against it - and what they must compare against is the
+    // holder that was recorded, not the half of it the table supplied.
+    if (blocker == 0) blocker = cur;
+    NoteBlockingWriter(scope.txn, blocker, pk);
     return verdict;
 }
 
@@ -11727,8 +11798,10 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // unit was held by somebody else records *nothing at all*, not
         // even the relation `IX`, which is strictly less than the per-row
         // path this replaced. Demoting is right while the borrow is
-        // advisory; AO-S6c, where the lock is the wait, parks on the
-        // coarse unit instead of falling back to a finer one.
+        // advisory. **AO-S6c-b left this a demotion rather than a park on
+        // the coarse unit**: the per-row borrows below meet the same
+        // holder the declaration met, so the statement waits for it either
+        // way, one row later and at one ledger entry per row.
         if (!took.value()) declared.reset();
     }
 
@@ -11764,14 +11837,16 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
         if (scope.txn != nullptr) {
             // The borrow first, `UpdateInner`'s site states the order.
+            std::uint64_t blocker = 0;
             if (!declared.has_value()) {
-                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id));
+                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id), &blocker);
                 if (!took.ok()) return took.status();
             }
-            if (Status s = CheckWriteConflictBlocking(scope, trx_id, id); !s.ok()) {
-                // AO-S3b, and `UpdateInner`'s site states the argument,
-                // including why this is an equality and not a non-zero test.
-                if (trx_id != 0 && blocking_writer_ == trx_id) {
+            if (Status s = CheckWriteConflictBlocking(scope, trx_id, id, blocker); !s.ok()) {
+                // AO-S3b, and `UpdateInner`'s site states the argument -
+                // including why this is an equality, and why it is against
+                // the lock's blocker rather than the header's writer.
+                if (blocker != 0 && blocking_writer_ == blocker) {
                     parked_on_row = true;
                     blocked_verdict = s;
                     return Status::OK();

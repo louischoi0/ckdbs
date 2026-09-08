@@ -1025,8 +1025,32 @@ private:
     // line reaches the debug arm and nobody else.
     void RefuseParkedWrite(DispatchOutcome& out, Session& session, const Status& refused);
 
+    // `cur` is the row's own writer, from the tuple header, and decides the
+    // **MVCC verdict** (first-updater-wins, `txn.md` §5) - a writer this
+    // view cannot see refuses the write whether or not anybody holds a
+    // lock, and a *committed* one is a refusal no wait can get past.
+    //
+    // `blocker` is in-out, and it is who to **wait** for.
+    //
+    // *In*, whoever refused this write's borrow, from the lock table
+    // (AO-S6c-b). Zero when the table refused nobody: the borrow was
+    // granted, or none was asked for because a coarse unit already covers
+    // the row, or the cap swallowed it. Before this the wait's holder was
+    // `cur`, which is why a statement could only ever wait for the writer
+    // of the row it was looking at - a transaction refused by a range
+    // fence had no holder to name and simply failed.
+    //
+    // *Out*, the holder this write is blocked by: the table's where the
+    // table named one, `cur` where it did not. The two sources are a
+    // **union and not a cutover** - the table names holders the header
+    // never could (a fence over a key nobody has written), and the header
+    // names writers the table does not (a ledger the cap truncated, and
+    // every row on a dispatcher with no table at all), so reading either
+    // alone drops a wait AO-S3 already made. Zero out means there is
+    // nothing to wait for and the refusal is the plain conflict it always
+    // was, which is what the two write sites test it for.
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
-                                      std::uint64_t pk);
+                                      std::uint64_t pk, std::uint64_t& blocker);
 
     // Is `cond` a non-negative integer literal compared against `access`'s
     // primary key, and if so which id? The shared half of the test
@@ -1113,7 +1137,8 @@ private:
     // reached by no caller today: both write sites test `scope.txn`
     // themselves before calling, so the bootstrap-xid path never arrives
     // here at all. Kept as the guard for the callers AO-S6c adds.
-    StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit);
+    StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
+                               std::uint64_t* blocker = nullptr);
 
     // The cap's refusal, turned into "stop recording and carry on" while
     // the borrow is advisory (the operator's decision of 2026-09-08; the

@@ -533,27 +533,23 @@ public:
     // handed back, and `holdings.waiting_` is not moved. The cap still
     // refuses, because a cap is not a conflict.
     //
-    // **Why the engine's first acquire is this one and not `Acquire`.**
-    // Until S6a nothing in `src/` called either, so the write path's wait
-    // is `IsInFlight` polling with its own wait-for edges
-    // (`command_dispatcher.cpp`'s park loop). Taking `Acquire` there would
-    // put a second wait beside the first, on the same conflict, with two
-    // sets of edges into one detector - which is the shape AO-S3's review
-    // caught once already ("widening alone opens a deadlock"). So S6a
-    // takes the borrow where it is free and leaves contention to the
-    // mechanism that already handles it; **S6b makes the lock the wait and
-    // deletes the other**. A borrow this returns `false` for is one the
-    // engine does not hold, so the *conflict verdict* is exactly what it
-    // was before S6a and the row is exactly as protected.
+    // **Why the engine's acquire is this one and not `Acquire`.** The two
+    // write sites run inside a page-latched span (`BtreeVisitLeafPage`'s,
+    // for the first of them), which is no place to park - so the borrow is
+    // taken where it is free and a conflict is *reported* rather than
+    // waited on here. AO-S3b's shape is what carries the wait: the walk
+    // stops holding nothing, and the park happens on the statement, in
+    // `DispatchAsync`, outside every span. That is why `blocker` exists.
     //
-    // **The cap is the one thing that is not a no-op.** A writer now
-    // spends an entry per relation and an entry per row, so a transaction
-    // past `max_locks_per_txn` is refused `ResourceExhausted` where it
-    // used to run - a 100k-row `DELETE` reaches it. That refusal is
-    // AO-R10's and deliberate; it is stated here because it is what a
-    // reader of "no-op" would otherwise not expect.
+    // **`blocker`, when given, receives the transaction this ask lost to**
+    // (AO-S6c-b). It is what makes the lock the wait rather than merely the
+    // ledger: before it, the waiting statement learned who to wait for from
+    // the *tuple header*, which can only ever name the row's own writer -
+    // so a transaction blocked by a range fence had nothing to name and no
+    // wait to take. Untouched on a grant, and untouched by the cap's
+    // refusal, which is not a conflict and names nobody.
     StatusOr<bool> TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
-                              LockHoldings& holdings);
+                              LockHoldings& holdings, std::uint64_t* blocker = nullptr);
 
     // Releases every borrow `holdings` records, **wakes everyone queued on
     // the units it let go**, and withdraws its own pending wait, then
