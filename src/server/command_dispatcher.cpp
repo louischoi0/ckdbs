@@ -8230,35 +8230,25 @@ Status CommandDispatcher::VisitRelation(
                               " has an unknown clustered_type");
 }
 
-std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
-    const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
-    // Deliberately storage-agnostic: this answers "is this statement a bare
-    // pk point lookup", which is a property of the WHERE clause alone.
-    // Whether anything can shortcut it - a tree descent, or nothing at
-    // all - is LocateByPk's question.
+std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAccess& access,
+                                                          const parser::Condition& cond) const {
     if (access.schema.columns.empty()) return std::nullopt;
-    // Exactly one condition: an extra AND could exclude the row the probe
-    // would find, and the probe cannot evaluate the second predicate.
-    // Falling through costs a scan; getting this wrong costs a wrong answer.
-    if (where.size() != 1) return std::nullopt;
-
-    const parser::Condition& cond = where.front();
     // **`op` only means anything for a `kCompareValue`** (`ast.hpp:226`
     // says so), and every other kind leaves it at its `kEq` default. For
     // most of them that is harmless because `val` is unset and the type
     // test below rejects it - but **`kBetween` carries a real integer
     // literal in `val`: its *low bound*.** Without this line
-    // `WHERE id BETWEEN 2 AND 5` reads here as `WHERE id = 2`, and the two
-    // callers then act on it: the point-lookup fast path applies an
-    // UPDATE/DELETE to the low bound's row alone and reports `UPDATED 1`,
-    // and `WriteTargetCore` narrows the write's `PkSpan` to that row's
-    // range so a split relation never walks the ranges above it. Both are
-    // silent wrong answers; the read path is unaffected because
+    // `WHERE id BETWEEN 2 AND 5` reads as `WHERE id = 2`, and the callers
+    // then act on it: the point-lookup fast path applies an UPDATE/DELETE
+    // to the low bound's row alone and reports `UPDATED 1`, and
+    // `WriteTargetCore` narrows the write's `PkSpan` to that row's range
+    // so a split relation never walks the ranges above it. Both are silent
+    // wrong answers; the read path is unaffected because
     // `exec::CompileWhere` lowers a `kBetween` into two conjuncts before
-    // anything executes, and this function is the one consumer that reads
-    // the raw condition instead.
+    // anything executes, and the consumers of the *raw* condition are what
+    // this function exists to keep honest.
     if (cond.kind != parser::PredicateKind::kCompareValue) return std::nullopt;
-    if (cond.op != parser::CompareOp::kEq) return std::nullopt;
+    if (cond.rhs_kind != parser::RhsKind::kLiteral) return std::nullopt;
     if (cond.val.type != parser::ValueType::kInt) return std::nullopt;
     // Negative ids do not exist (invariant 6 zero-extends the 40-bit id),
     // so a negative literal is a guaranteed miss - and casting it to
@@ -8268,6 +8258,25 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
         return std::nullopt;
     }
     return static_cast<std::uint64_t>(cond.val.int_val);
+}
+
+std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
+    const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
+    // Deliberately storage-agnostic: this answers "is this statement a bare
+    // pk point lookup", which is a property of the WHERE clause alone.
+    // Whether anything can shortcut it - a tree descent, or nothing at
+    // all - is LocateByPk's question.
+    //
+    // Exactly one condition: an extra AND could exclude the row the probe
+    // would find, and the probe cannot evaluate the second predicate.
+    // Falling through costs a scan; getting this wrong costs a wrong answer.
+    // **That is what keeps this separate from `DeclaredWriteBorrow`**,
+    // which asks a different question of the same conjuncts - "what window
+    // does this AND-list bound" - and is right to read every one of them.
+    if (where.size() != 1) return std::nullopt;
+    const parser::Condition& cond = where.front();
+    if (cond.op != parser::CompareOp::kEq) return std::nullopt;
+    return PkLiteral(access, cond);
 }
 
 StatusOr<std::uint32_t> CommandDispatcher::WriteTargetCore(
@@ -10157,6 +10166,27 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::uint32_t pages_touched = 0;
     PageId last_page = kInvalidPageId;
 
+    // **The unit this write declares** (AO-0 item 14, marked 2026-09-08),
+    // read off the predicate before a row is touched and taken once. A
+    // coarse declaration is what keeps a bulk write inside
+    // `max_locks_per_txn`; the declaration's own definition carries the
+    // argument for why choosing coarsely up front is not the escalation
+    // the mark forbids.
+    std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    if (declared.has_value()) {
+        auto took = BorrowChain(scope, *declared);
+        if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
+        // **A declaration the table refused is not a declaration.** The
+        // rows below must then take their own tuple borrows, exactly as
+        // they did before item 14 - otherwise a statement whose coarse
+        // unit was held by somebody else records *nothing at all*, not
+        // even the relation `IX`, which is strictly less than the per-row
+        // path this replaced. Demoting is right while the borrow is
+        // advisory; AO-S6c, where the lock is the wait, parks on the
+        // coarse unit instead of falling back to a finer one.
+        if (!took.value()) declared.reset();
+    }
+
     // Applies the SET list to one slot if it matches the WHERE. Shared by
     // the probe path and the scan, for the same reason SELECT shares its
     // formatter: two copies of "how a row is updated" is two chances for
@@ -10250,7 +10280,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // order AO-R4's departure needs. Making the grant the
             // authority still costs S6b one of: a re-read after the grant,
             // or this borrow moved above `ReadTuple`.
-            if (Status s = BorrowRowForWrite(scope, ta.oid, id.value()); !s.ok()) return s;
+            if (!declared.has_value()) {
+                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id.value()));
+                if (!took.ok()) return took.status();
+            }
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value()); !s.ok()) {
                 // **AO-S3b: a conflict a wait can get past stops the walk
                 // rather than failing the statement.** `blocking_writer_`
@@ -11077,33 +11110,137 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     blocked_pk_ = pk;
 }
 
-Status CommandDispatcher::BorrowRowForWrite(const WriteScope& scope, catalog::Oid rel_oid,
-                                           std::uint64_t pk) {
-    if (locks_ == nullptr || scope.txn == nullptr) return Status::OK();
+StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
+                                             const txn::LockKey& unit) {
+    if (locks_ == nullptr || scope.txn == nullptr) return true;
     txn::LockHoldings& holdings = scope.txn->borrows();
     const std::uint64_t id = scope.txn->id();
 
-    // The chain, outermost first. A refusal from either is the cap's, and
-    // it ends the statement rather than the row: a transaction at its cap
-    // cannot proceed by trying a different row.
-    auto rel = locks_->TryAcquire(id, txn::LockKey::Relation(rel_oid),
-                                  txn::LockMode::kIntentionExclusive, holdings);
-    if (!rel.ok()) return SwallowBorrowCap(rel.status());
-    // **No tuple without the intention above it.** `lock_table.hpp` states
-    // the obligation and states its failure mode: a tuple `X` held under a
+    // **The cap's swallow must not be returned as a `StatusOr`**
+    // (`base/status.hpp`): one built from `Status::OK()` reports `ok()`
+    // and then dereferences an empty optional in `value()`, which is the
+    // single hazard that header documents. A swallowed cap means the unit
+    // was not taken, so it answers `false` and the caller treats it as any
+    // other refusal.
+    const auto swallowed = [this](const Status& refused) -> StatusOr<bool> {
+        if (Status s = SwallowBorrowCap(refused); !s.ok()) return s;
+        return false;
+    };
+
+    // A relation unit is outermost and takes no intention above it.
+    if (unit.unit == txn::LockUnit::kRelation) {
+        auto rel = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings);
+        if (!rel.ok()) return swallowed(rel.status());
+        return rel.value();
+    }
+
+    // **No unit without the intention above it.** `lock_table.hpp` states
+    // the obligation and states its failure mode: a unit borrowed under a
     // relation entry this transaction has no `IX` on is invisible to a
     // relation-level ask, so the table answers a later `S`/`X` at the
-    // relation "free" while a row beneath it is held - a wrong answer
-    // given quietly rather than a refusal. Unreachable today, because
-    // nothing takes a relation `S` or `X` and `IX` never conflicts with
-    // `IX`; taken structurally now so the chain is a property of this
-    // function rather than of what the rest of the engine happens not to
-    // do yet.
-    if (!rel.value()) return Status::OK();
-    auto tuple = locks_->TryAcquire(id, txn::LockKey::Tuple(rel_oid, pk),
-                                    txn::LockMode::kExclusive, holdings);
-    if (!tuple.ok()) return SwallowBorrowCap(tuple.status());
-    return Status::OK();
+    // relation "free" while a key beneath it is held - a wrong answer
+    // given quietly rather than a refusal.
+    auto rel = locks_->TryAcquire(id, txn::LockKey::Relation(unit.rel_oid),
+                                  txn::LockMode::kIntentionExclusive, holdings);
+    if (!rel.ok()) return swallowed(rel.status());
+    if (!rel.value()) return false;
+    auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings);
+    if (!under.ok()) return swallowed(under.status());
+    return under.value();
+}
+
+std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
+    const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
+    if (locks_ == nullptr || access.schema.columns.empty()) return std::nullopt;
+
+    // No predicate at all: the statement touches every row of the
+    // relation, so the relation is what it declares.
+    if (where.empty()) return txn::LockKey::Relation(access.oid);
+
+    // Otherwise, the pk window the conjuncts name - if they name one.
+    //
+    // **The vector is an AND-list**, so a conjunct this loop skips can only
+    // remove rows from the set, never add one: the window derived from the
+    // pk conjuncts alone is a *superset* of what the statement writes, and
+    // a borrow over a superset covers every row written. That is what makes
+    // it sound to ignore `WHERE name = 'x'` sitting beside `WHERE id < 50`.
+    std::uint64_t lo = 0;
+    std::uint64_t hi = catalog::kIdSpaceEnd;
+    bool bounded = false;
+
+    for (const parser::Condition& cond : where) {
+        if (cond.kind == parser::PredicateKind::kBetween) {
+            // The one kind `PkLiteral` deliberately declines, because it
+            // carries two bounds rather than one. Its own guards, in the
+            // same order and for the same reasons.
+            if (cond.rhs_kind != parser::RhsKind::kLiteral) continue;
+            if (cond.val.type != parser::ValueType::kInt) continue;
+            if (cond.val_high.type != parser::ValueType::kInt) continue;
+            if (cond.val.int_val < 0 || cond.val_high.int_val < 0) continue;
+            if (!IEquals(cond.col.name,
+                         catalog::NameView(access.schema.columns.front().name))) {
+                continue;
+            }
+            // Inclusive at both ends (`ast.hpp`), and `PkSpan` is half-open.
+            lo = std::max(lo, static_cast<std::uint64_t>(cond.val.int_val));
+            hi = std::min(hi, static_cast<std::uint64_t>(cond.val_high.int_val) + 1);
+            bounded = true;
+            continue;
+        }
+        const std::optional<std::uint64_t> v = PkLiteral(access, cond);
+        if (!v.has_value()) continue;
+        switch (cond.op) {
+            case parser::CompareOp::kEq:
+                lo = std::max(lo, *v);
+                hi = std::min(hi, *v + 1);
+                bounded = true;
+                break;
+            case parser::CompareOp::kGt:
+                lo = std::max(lo, *v + 1);
+                bounded = true;
+                break;
+            case parser::CompareOp::kGte:
+                lo = std::max(lo, *v);
+                bounded = true;
+                break;
+            case parser::CompareOp::kLt:
+                hi = std::min(hi, *v);
+                bounded = true;
+                break;
+            case parser::CompareOp::kLte:
+                hi = std::min(hi, *v + 1);
+                bounded = true;
+                break;
+            // `kNeq` names no window, and the two null tests name no id at
+            // all. Left per-row rather than widened to the relation: a
+            // predicate that does not bound the pk is exactly the shape the
+            // mark leaves alone.
+            case parser::CompareOp::kNeq:
+            case parser::CompareOp::kIsNull:
+            case parser::CompareOp::kIsNotNull:
+                break;
+        }
+    }
+
+    if (!bounded) return std::nullopt;
+    // An empty window writes nothing, so there is nothing to declare.
+    if (lo >= hi) return std::nullopt;
+    // **A window of one key stays per-row**, and this is not a
+    // micro-optimisation: a tuple `X` is the finer expression of the same
+    // hold at the same cost of one entry, and taking a *fence* instead
+    // would raise the relation's fence counter - which sends every other
+    // writer of that relation through the all-partition scan AO-R3 exists
+    // to keep them out of. The commonest OLTP write there is must not pay
+    // that, and it is `WHERE id = k`.
+    if (hi - lo <= 1) return std::nullopt;
+    // **A window that is the whole id space is the relation**, which is
+    // both cheaper and stronger: one entry instead of two, no fence
+    // counter raised, and a real `X` at the relation entry rather than an
+    // interval that has to be scanned for. `WHERE id >= 0` is the same
+    // statement as no `WHERE` at all and must borrow the same way.
+    if (lo == 0 && hi == catalog::kIdSpaceEnd) return txn::LockKey::Relation(access.oid);
+
+    return txn::LockKey::Range(access.oid, lo, hi);
 }
 
 Status CommandDispatcher::SwallowBorrowCap(const Status& refused) {
@@ -11526,6 +11663,23 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
     std::uint32_t deleted = resume_from.rows_done;  // AO-S3b, as UPDATE
 
+    // The unit this write declares, as UPDATE - `UpdateInner`'s site
+    // states the argument and the demotion.
+    std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    if (declared.has_value()) {
+        auto took = BorrowChain(scope, *declared);
+        if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
+        // **A declaration the table refused is not a declaration.** The
+        // rows below must then take their own tuple borrows, exactly as
+        // they did before item 14 - otherwise a statement whose coarse
+        // unit was held by somebody else records *nothing at all*, not
+        // even the relation `IX`, which is strictly less than the per-row
+        // path this replaced. Demoting is right while the borrow is
+        // advisory; AO-S6c, where the lock is the wait, parks on the
+        // coarse unit instead of falling back to a finer one.
+        if (!took.value()) declared.reset();
+    }
+
     auto mark = [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
         std::uint64_t trx_id = 0;
         std::uint64_t undo_ptr = 0;
@@ -11558,7 +11712,10 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
         if (scope.txn != nullptr) {
             // The borrow first, `UpdateInner`'s site states the order.
-            if (Status s = BorrowRowForWrite(scope, ta.oid, id); !s.ok()) return s;
+            if (!declared.has_value()) {
+                auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id));
+                if (!took.ok()) return took.status();
+            }
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id); !s.ok()) {
                 // AO-S3b, and `UpdateInner`'s site states the argument,
                 // including why this is an equality and not a non-zero test.

@@ -1028,28 +1028,92 @@ private:
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                       std::uint64_t pk);
 
-    // **The borrow a row write takes, before its header is interpreted**
-    // (AO-S6a, on the operator's choice of 2026-09-08 between the two
-    // orders `lock_table.hpp` left open). The intention chain first -
-    // relation `IX`, then tuple `X` - because a tuple borrowed without it
-    // is invisible to a relation-level ask, which is what AO-S6's later
-    // sub-stages add. **Ordered and conditional**: a relation `IX` that is
-    // not granted takes no tuple under it, so the pair is a chain rather
-    // than two independent asks that happen to run in sequence.
+    // Is `cond` a non-negative integer literal compared against `access`'s
+    // primary key, and if so which id? The shared half of the test
+    // `PkEqualityTarget` and `DeclaredWriteBorrow` both need.
     //
-    // **Non-queueing, and that is the whole of S6a's claim.** It takes the
-    // units when they are free and reports nothing when they are not; the
-    // undecided-writer wait stays where AO-S3 put it until S6b moves it
+    // **`kind` before `op` and before `val`, and that is the whole reason
+    // this is one function.** `ast.hpp` records that both default to a
+    // value reading as a legal equality, and names the two consumers of a
+    // raw `Condition` that were burned by it - the catalog view's bound
+    // reader and `PkEqualityTarget`, where a `kBetween`'s low bound made
+    // an UPDATE write one row and answer `UPDATED 1`. A third reader
+    // arrived with AO-S6b; a third copy of the test would be a third
+    // chance to get it wrong. Answers `nullopt` for every kind that is not
+    // a `kCompareValue` against a literal, which is what leaves `kBetween`
+    // to the caller that knows it carries two bounds.
+    std::optional<std::uint64_t> PkLiteral(const catalog::TableAccess& access,
+                                           const parser::Condition& cond) const;
+
+    // **The unit a write declares before it walks** (AO-0 item 14, marked
+    // by the operator on 2026-09-08), or `nullopt` for the per-row borrow
+    // that was the only shape before it. A write whose predicate covers a
+    // key window borrows that window **once** instead of accumulating one
+    // entry per row, which is what keeps a bulk write inside
+    // `max_locks_per_txn` when AO-S6c makes the cap refuse rather than
+    // truncate.
+    //
+    // **A declaration, never an escalation.** The unit is read off the
+    // predicate at dispatch, before a row is touched, so it does not
+    // depend on how many rows turn out to match. That distinction is the
+    // whole reason this is admissible: the mark of 2026-09-08 §1 item 4
+    // forbids *widening* a transaction's accumulated tuple borrows into a
+    // coarse one, because that makes one transaction's refusal into a wait
+    // other transactions pay for with no record of why. Choosing coarsely
+    // up front is what AR2 §3 already does for DDL, for a mover's changed
+    // key interval, and for an FK reverse check with no covering
+    // structure - "a refusal-class fact rather than a performance one".
+    //
+    // **What it costs, and it runs in both directions** - the first half
+    // is user-visible, the second was a review finding against the first
+    // draft of this stage. A coarse borrow blocks concurrent writers that
+    // the per-row borrow admitted: a `DELETE FROM t` with no `WHERE` holds
+    // the relation against every other writer of it for the length of the
+    // transaction. And two coarse borrows must still meet each other -
+    // `WHERE id > 1` and `WHERE id BETWEEN 2 AND 3` overlap at row 2 - or
+    // the declaration would be *weaker* in detection than the per-row
+    // borrow it replaces, which is a wrong answer rather than a cost.
+    // `LockTable::ConflictingOverlap` is what makes them meet.
+    //
+    // **What it does not reach**: a predicate that names no pk window -
+    // `WHERE name = 'x'` - is left per-row, because it names no interval
+    // to borrow. Such a write still accumulates an entry per row and is
+    // still the one shape the cap can refuse once S6c propagates it.
+    std::optional<txn::LockKey> DeclaredWriteBorrow(
+        const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const;
+
+    // **The borrow a write takes, before the header it judges is
+    // interpreted** (AO-S6a, on the operator's choice of 2026-09-08
+    // between the two orders `lock_table.hpp` left open) - one chain for
+    // every unit, the declared one before the walk and a tuple per row
+    // where nothing was declared. The intention above it first - relation
+    // `IX`, then the unit - because a unit borrowed without it is
+    // invisible to a relation-level ask. **Ordered and conditional**: a
+    // relation `IX` that is not granted takes nothing under it, so the
+    // pair is a chain rather than two independent asks that happen to run
+    // in sequence. A relation unit is the exception with no intention
+    // above it, being outermost itself.
+    //
+    // **Non-queueing, and that is still the whole of the claim.** It takes
+    // the unit when it is free and reports `false` when it is not; the
+    // undecided-writer wait stays where AO-S3 put it until AO-S6c moves it
     // here. So the only status this returns other than OK is the cap's,
     // which is a refusal rather than a conflict and cannot be waited out
     // (AO-R10, AR2-R4).
     //
-    // A dispatcher with no lock table borrows nothing and answers OK -
-    // every fixture that builds none. The null-transaction arm is reached
-    // by no caller today: both write sites test `scope.txn` themselves
-    // before calling, so the bootstrap-xid path never arrives here at all.
-    // Kept as the guard for the callers AO-S6's later sub-stages add.
-    Status BorrowRowForWrite(const WriteScope& scope, catalog::Oid rel_oid, std::uint64_t pk);
+    // **The `bool` is what a refused declaration needs**, and leaving it
+    // out was a defect in this stage's first draft: a caller that declared
+    // a coarse unit and never looked at the answer recorded *nothing* for
+    // the whole statement when the unit was refused - no relation `IX` and
+    // no rows - which is strictly less than the per-row path it replaced.
+    // The caller demotes to per-row instead.
+    //
+    // A dispatcher with no lock table borrows nothing and answers granted
+    // - every fixture that builds none. The null-transaction arm is
+    // reached by no caller today: both write sites test `scope.txn`
+    // themselves before calling, so the bootstrap-xid path never arrives
+    // here at all. Kept as the guard for the callers AO-S6c adds.
+    StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit);
 
     // The cap's refusal, turned into "stop recording and carry on" while
     // the borrow is advisory (the operator's decision of 2026-09-08; the

@@ -932,5 +932,179 @@ TEST(LockTableTest, AWakeIsNotAGrant) {
     EXPECT_EQ(table->EntryCount(), 0u);
 }
 
+// ---- AO-S6b: the fence has two sides ------------------------------------
+//
+// Until this sub-stage the fence was a probe nobody called: `AcquireInner`
+// tested `e.key == key` and nothing else, so a range `X` and a tuple `X`
+// inside it were different keys in different partitions and both were
+// granted. These cells are the containment the acquire path now enforces,
+// in both directions.
+
+TEST(LockTableTest, AFenceRefusesAWriteInsideIt) {
+    auto table = MakeTable();
+    LockHoldings fence_holder;
+    ASSERT_TRUE(
+        table->Acquire(1, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder)
+            .value()
+            .granted);
+
+    LockHoldings writer;
+    auto inside = table->TryAcquire(2, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer);
+    ASSERT_TRUE(inside.ok());
+    EXPECT_FALSE(inside.value()) << "a tuple inside a range X is not free, and before this "
+                                    "sub-stage the exact-key test granted it";
+
+    // Outside the interval is untouched: the fence is a key window, not a
+    // relation-wide stop.
+    auto outside = table->TryAcquire(2, LockKey::Tuple(kRel, 25), LockMode::kExclusive, writer);
+    ASSERT_TRUE(outside.ok());
+    EXPECT_TRUE(outside.value());
+    // And the upper bound stays exclusive at the acquire path, not only at
+    // the probe `ASliceIsFoundAfter...` tests directly.
+    auto at_hi = table->TryAcquire(2, LockKey::Tuple(kRel, 20), LockMode::kExclusive, writer);
+    ASSERT_TRUE(at_hi.ok());
+    EXPECT_TRUE(at_hi.value());
+
+    // A transaction's own fence does not stand in its own way.
+    auto own = table->TryAcquire(1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, fence_holder);
+    ASSERT_TRUE(own.ok());
+    EXPECT_TRUE(own.value());
+}
+
+TEST(LockTableTest, AWriteInsideAFenceRefusesTheFence) {
+    // The other side, and the one the counter alone could never give: the
+    // writer got there first, so no counter reading would have told it
+    // anything. The fence-taker publishes and then scans for descendants.
+    auto table = MakeTable();
+    LockHoldings writer;
+    ASSERT_TRUE(
+        table->Acquire(1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer).value().granted);
+
+    LockHoldings fence_holder;
+    auto fence =
+        table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+    ASSERT_TRUE(fence.ok());
+    EXPECT_FALSE(fence.value().granted);
+    EXPECT_EQ(fence.value().blocking_txn, 1u) << "the blocker is named, so a caller can report it";
+
+    // A fence that covers no held key is granted.
+    LockHoldings elsewhere;
+    auto clear = table->Acquire(3, LockKey::Range(kRel, 100, 200), LockMode::kExclusive, elsewhere);
+    ASSERT_TRUE(clear.ok());
+    EXPECT_TRUE(clear.value().granted);
+}
+
+TEST(LockTableTest, ARefusedFenceLeavesTheTableAsItFoundIt) {
+    // The verify publishes before it scans, so a refusal is an *unwind*
+    // rather than a path never taken - which makes "leaves nothing behind"
+    // a claim that has to be checked rather than assumed. A fence counter
+    // left raised is the expensive failure: every writer on the relation
+    // pays the all-partition scan for the life of the instance.
+    auto table = MakeTable();
+    LockHoldings writer;
+    ASSERT_TRUE(
+        table->Acquire(1, LockKey::Tuple(kRel, 15), LockMode::kExclusive, writer).value().granted);
+    const std::size_t entries_before = table->EntryCount();
+
+    LockHoldings fence_holder;
+    auto fence =
+        table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+    ASSERT_TRUE(fence.ok());
+    ASSERT_FALSE(fence.value().granted);
+
+    EXPECT_EQ(table->RelationFenceCount(kRel), 0u)
+        << "the counter was raised before the entry was published and must come back down with it";
+    EXPECT_EQ(table->EntryCount(), entries_before) << "the entry the verify published is gone";
+    EXPECT_EQ(fence_holder.size(), 0u)
+        << "and the ledger record with it, or the cap is spent on a borrow nobody holds and "
+           "Release lowers the fence counter a second time";
+    EXPECT_FALSE(table->FenceCoversKey(kRel, 15, /*txn=*/3))
+        << "a third transaction must not meet a fence that was refused";
+
+    // The refusal is repeatable rather than a one-shot: nothing about the
+    // first attempt makes the second answer differently.
+    auto again = table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, fence_holder);
+    ASSERT_TRUE(again.ok());
+    EXPECT_FALSE(again.value().granted);
+    EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
+}
+
+TEST(LockTableTest, AFencesModeDecidesWhichDescendantsItAdmits) {
+    // The compatibility table decides, not a fixed "any fence blocks any
+    // tuple" pair - so an `S` fence over a key an `S` reader holds is
+    // granted, and the same fence in `X` is not.
+    auto table = MakeTable();
+    LockHoldings reader;
+    ASSERT_TRUE(
+        table->Acquire(1, LockKey::Tuple(kRel, 15), LockMode::kShared, reader).value().granted);
+
+    LockHoldings s_fence;
+    auto shared = table->Acquire(2, LockKey::Range(kRel, 10, 20), LockMode::kShared, s_fence);
+    ASSERT_TRUE(shared.ok());
+    EXPECT_TRUE(shared.value().granted) << "S over S is compatible at a distance as it is in place";
+
+    LockHoldings x_fence;
+    auto exclusive = table->Acquire(3, LockKey::Range(kRel, 10, 20), LockMode::kExclusive, x_fence);
+    ASSERT_TRUE(exclusive.ok());
+    EXPECT_FALSE(exclusive.value().granted);
+
+    // And the writer's side reads the same table: the `S` fence now
+    // standing admits another reader and refuses a writer.
+    LockHoldings other_reader;
+    auto read_inside = table->TryAcquire(4, LockKey::Tuple(kRel, 12), LockMode::kShared, other_reader);
+    ASSERT_TRUE(read_inside.ok());
+    EXPECT_TRUE(read_inside.value());
+    LockHoldings other_writer;
+    auto write_inside =
+        table->TryAcquire(5, LockKey::Tuple(kRel, 12), LockMode::kExclusive, other_writer);
+    ASSERT_TRUE(write_inside.ok());
+    EXPECT_FALSE(write_inside.value());
+}
+
+TEST(LockTableTest, TwoOverlappingFencesMeetEachOther) {
+    // The review finding against this stage's first draft. The scan looked
+    // at tuple units only, so two ranges over one relation conflicted only
+    // where their bounds were byte-identical - and a predicate-declared
+    // unit (AO-0 item 14) makes unequal-but-overlapping the ordinary case:
+    // `WHERE id > 1` and `WHERE id BETWEEN 2 AND 3` both write row 2. The
+    // per-row borrow they replaced met at `Tuple(rel, 2)`, so granting
+    // both would make the coarse declaration *weaker* in detection than
+    // the thing it replaces.
+    auto table = MakeTable();
+    LockHoldings wide;
+    ASSERT_TRUE(table->Acquire(1, LockKey::Range(kRel, 2, 1u << 20), LockMode::kExclusive, wide)
+                    .value()
+                    .granted);
+
+    LockHoldings narrow;
+    auto overlapping = table->Acquire(2, LockKey::Range(kRel, 2, 4), LockMode::kExclusive, narrow);
+    ASSERT_TRUE(overlapping.ok());
+    EXPECT_FALSE(overlapping.value().granted) << "the two intervals meet at key 2";
+    EXPECT_EQ(overlapping.value().blocking_txn, 1u);
+
+    // Adjacent but disjoint is not overlapping: `hi` is exclusive on both
+    // sides, so `[2, 20)` and `[20, 30)` share no key.
+    LockHoldings adjacent;
+    auto after = table->Acquire(3, LockKey::Range(kRel, 1u << 20, 1u << 21), LockMode::kExclusive,
+                                adjacent);
+    ASSERT_TRUE(after.ok());
+    EXPECT_TRUE(after.value().granted);
+
+    // A fence over another relation never meets this one.
+    LockHoldings elsewhere;
+    auto other_rel = table->Acquire(4, LockKey::Range(kOtherRel, 2, 4), LockMode::kExclusive,
+                                    elsewhere);
+    ASSERT_TRUE(other_rel.ok());
+    EXPECT_TRUE(other_rel.value().granted);
+
+    // And a transaction's own overlapping fence is not a conflict with
+    // itself - which is also what excludes the asker's own just-published
+    // entry from its own scan.
+    LockHoldings second_of_one;
+    auto own = table->Acquire(1, LockKey::Range(kRel, 3, 5), LockMode::kExclusive, second_of_one);
+    ASSERT_TRUE(own.ok());
+    EXPECT_TRUE(own.value().granted);
+}
+
 }  // namespace
 }  // namespace kds::txn

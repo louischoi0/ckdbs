@@ -162,10 +162,38 @@
 // It does **not** order a writer that reads zero against a fence-taker
 // that has not yet incremented: the two touch different keys in different
 // partitions, and their relation-level `IX` and `IS` are compatible, so
-// nothing serializes them. Closing that needs a second side - the
-// fence-taker scanning for conflicting descendants after it publishes -
-// and that is AO-S6's, where the fence gets its first taker. Until then
-// this is a gate on a probe, not a guarantee about a race.
+// nothing serializes them.
+//
+// **Both sides therefore publish first and verify second** (AO-S6b, where
+// the fence gets its first taker). A grant is written into its own
+// partition under that partition's latch; the latch is dropped; and only
+// then does the acquirer look at the other side - a fence-taker scanning
+// for tuple holders inside its interval, a tuple-taker reading the
+// counter and, if it is nonzero, scanning for a fence over its key. A
+// verify that finds a conflict unwinds the grant it just published and
+// answers as a conflict.
+//
+// **Why publishing first is what closes the race**, and the ordering is
+// the whole argument: suppose a fence F and a write T of a key inside it
+// both proceed. T's scan of fences did not see F, so it ran before F was
+// published; F's scan of tuples did not see T, so it ran before T was
+// published. Each side publishes before it scans, so
+// `publish(T) < scan(T) < publish(F) < scan(F) < publish(T)` - a cycle,
+// and therefore impossible. The partition latches supply the release and
+// acquire edges that make "<" mean something across threads. Neither side
+// may verify before it publishes, and neither may hold its partition
+// latch across the scan - AO-R2's one-latch rule - which is why the
+// verify sits outside the block that grants.
+//
+// **What that argument proves is "never both granted", not "never both
+// refused".** Two overlapping asks that publish before either scans can
+// each find the other and each unwind, so both are refused and neither
+// holds anything. While the borrow is advisory and every engine caller is
+// a non-queueing `TryAcquire`, that costs one wasted round and changes no
+// verdict. It stops being free at AO-S6c, where the lock becomes the wait
+// and a mutual refusal is a livelock rather than a retry - so S6c owes a
+// bias (the lower transaction id keeps its grant, or one re-ask after the
+// unwind) and this note is where the obligation is recorded.
 //
 // ---- The wait-for graph and the victim (AO-R7, D12) -----------------------
 //
@@ -346,6 +374,14 @@ struct LockKey {
     }
 
     constexpr bool ContainsKey(std::uint64_t pk) const noexcept { return pk >= lo && pk < hi; }
+
+    // Do two units' key intervals meet? A relation unit carries the empty
+    // interval `[0, 0)` and therefore overlaps nothing - which is right,
+    // because a relation conflict is caught at the relation entry by the
+    // intention rule and never needs a scan.
+    constexpr bool Overlaps(const LockKey& other) const noexcept {
+        return rel_oid == other.rel_oid && lo < other.hi && other.lo < hi;
+    }
 };
 
 // AO-R10's value, and the default behind `max_locks_per_txn` since AO-S6a
@@ -400,8 +436,17 @@ struct AcquireResult {
     bool already_held = false;
     // Set only when `granted` is false: what to park on
     // (`sched::WaitUntil` over `LockWaitReady(slot)`), and what a decide on
-    // the blocking unit flips. Never null on a refusal, so a caller cannot
-    // mistake "no slot" for "no wait needed".
+    // the blocking unit flips.
+    //
+    // **Null on exactly one refusal, and a caller must test for it**: the
+    // cross-unit conflict AO-S6b's verify finds (a fence over a tuple, or a
+    // tuple under a fence). That refusal names a blocker in another
+    // partition, and the release that would wake a waiter is the *other*
+    // unit's, which `WakeWaiters` cannot reach - so no slot is handed back
+    // rather than one nobody will ever flip. `LockWaitReady` has no null
+    // branch by design, so parking on this without the test is a crash;
+    // AO-S6c is where a cross-unit refusal becomes waitable and this
+    // exception goes. Every same-key refusal still carries a slot.
     std::shared_ptr<LockWaitSlot> slot;
 };
 
@@ -567,7 +612,37 @@ public:
     // Tuple-unit conflicts are **not** its business - those are found by
     // looking the tuple's own key up - and neither are relation-unit
     // borrows, which the intention rule catches at the relation entry.
-    bool FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn) const;
+    // `want` is the mode the asker is taking, and the compatibility table
+    // decides against it - so an `S` fence covers an `X` write of a key it
+    // spans and admits an `S` read of the same key. It defaults to `X`,
+    // which is the probe's original question ("is this key fenced at all")
+    // and what every caller written before AO-S6b meant by it.
+    //
+    // `holder`, when given, receives the covering transaction's id, which
+    // is what a refused caller reports as its blocker.
+    bool FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn,
+                        LockMode want = LockMode::kExclusive,
+                        std::uint64_t* holder = nullptr) const;
+
+    // The fence's **other side** (AO-S6b): does any key interval this
+    // relation holds meet `fence`, in a mode `fence`'s own mode conflicts
+    // with, held by anyone but `txn`? A fence spans keys whose entries live
+    // in other partitions, so its own partition's conflict test cannot see
+    // them; this is the scan that does. `holder` receives the conflicting
+    // transaction's id.
+    //
+    // **Every interval-carrying unit, not only tuples.** A tuple is the
+    // unit-length interval `[pk, pk + 1)`, so one overlap test serves both
+    // - and it has to, because two *fences* over one relation are the
+    // ordinary case the moment a write declares its unit from a predicate
+    // (AO-0 item 14): `WHERE id > 1` and `WHERE id BETWEEN 2 AND 3` derive
+    // different ranges that meet at row 2, and an exact-key test grants
+    // both. That would make a coarse declaration **weaker** in detection
+    // than the per-row borrow it replaces, which is the one thing it must
+    // not be. A relation-unit holder is still not looked at: it carries the
+    // empty interval and is caught at the relation entry.
+    bool ConflictingOverlap(const LockKey& fence, LockMode mode, std::uint64_t txn,
+                            std::uint64_t* holder) const;
 
     // How many range- and slice-unit fences exist for `rel`. The gate a
     // writer reads on the `IX` it takes anyway; only nonzero costs the
@@ -657,6 +732,20 @@ private:
     // Drops `txn`'s queued request on `key`, erasing the entry if that
     // leaves it empty. One partition, taken and released here.
     void DequeueWaiter(std::uint64_t txn, const LockKey& key);
+
+    // Removes one holder record from the table: the body `Release` runs
+    // per held unit, factored so the verify's unwind runs exactly the same
+    // steps in the same order - erase the holder, erase an entry nobody is
+    // left on, lower the fence counter only if a holder actually went, and
+    // wake whoever was queued. A second copy of that order is how a fence
+    // counter drifts.
+    void ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held);
+
+    // Unwinds a grant this call published, after the verify found a
+    // conflict its partition could not see. Drops the `holdings` record
+    // too, so the cap and `Release` see the borrow as never taken.
+    void ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
+                    LockHoldings& holdings);
 
     // The wait-for graph, `waiter -> holder`. One entry per waiting
     // transaction, so it is bounded by the number of live transactions and

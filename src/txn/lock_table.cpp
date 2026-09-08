@@ -296,6 +296,52 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
 
     if (holdings.waiting_ && *holdings.waiting_ == key) holdings.waiting_.reset();
     holdings.held_.push_back(LockHoldings::Held{key, mode});
+
+    // ---- The verify, outside the grant's latch (AO-S6b) ------------------
+    //
+    // The grant is published; now look at the side this key's own
+    // partition cannot see. The declaration carries the ordering argument
+    // for why publishing first is what makes a mutual miss impossible; what
+    // matters here is only that this runs **after** the block above and
+    // holds no partition latch of its own when it starts, so the scans may
+    // take theirs one at a time (AO-R2).
+    std::uint64_t blocker = 0;
+    bool conflicted = false;
+    if (fence) {
+        // A fence-taker looks down: any tuple inside the interval, held in
+        // a mode this fence conflicts with.
+        conflicted = ConflictingOverlap(key, mode, txn, &blocker);
+    } else if (key.unit == LockUnit::kTuple) {
+        // A tuple-taker looks up, and reads the counter first: AO-R3's
+        // whole point is that the common case pays one acquire load and
+        // no scan at all. The counter is raised before its
+        // fence is published, so a nonzero reading may name a fence that
+        // is not there yet - a false positive that costs one scan, never
+        // an answer.
+        if (RelationFenceCount(key.rel_oid) != 0) {
+            conflicted = FenceCoversKey(key.rel_oid, key.lo, txn, mode, &blocker);
+        }
+    }
+    if (conflicted) {
+        // Unwound to exactly the state the in-latch conflict path leaves:
+        // no holder record, no ledger entry, no counter movement. The
+        // caller is told the same thing it would have been told had the
+        // conflict been visible one line earlier.
+        ReleaseOne(txn, key, mode, holdings);
+        result.granted = false;
+        result.blocking_txn = blocker;
+        // **A queueing ask is not queued here, and that is stated rather
+        // than implied.** The entry this caller would park on is its own
+        // key's, but the release that would wake it is the *other* unit's
+        // - a fence's, or a tuple's - and `WakeWaiters` wakes only the key
+        // it was given. Queuing across units therefore needs the wake to
+        // find waiters by containment, which is AO-S6c's, where the lock
+        // becomes the wait. Until then a cross-unit conflict is reported
+        // and the caller decides; the write path's `TryAcquire` never
+        // queues in the first place, so this narrows nothing it does.
+        return result;
+    }
+
     result.granted = true;
     return result;
 }
@@ -446,47 +492,66 @@ void LockTable::DequeueWaiter(std::uint64_t txn, const LockKey& key) {
     KickAll(kick);
 }
 
-void LockTable::Release(std::uint64_t txn, LockHoldings& holdings) {
-    for (const LockHoldings::Held& held : holdings.held_) {
-        bool removed_holder = false;
-        {
-            Partition& part = PartitionFor(held.key);
-            LatchGuard guard(part.latch);
-            for (std::size_t i = 0; i < part.entries.size(); ++i) {
-                Entry& e = part.entries[i];
-                if (!(e.key == held.key)) continue;
-                for (std::size_t j = 0; j < e.holders.size(); ++j) {
-                    if (e.holders[j].txn == txn && e.holders[j].mode == held.mode) {
-                        e.holders.erase(e.holders.begin() + static_cast<std::ptrdiff_t>(j));
-                        removed_holder = true;
-                        break;
-                    }
+void LockTable::ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held) {
+    bool removed_holder = false;
+    {
+        Partition& part = PartitionFor(held.key);
+        LatchGuard guard(part.latch);
+        for (std::size_t i = 0; i < part.entries.size(); ++i) {
+            Entry& e = part.entries[i];
+            if (!(e.key == held.key)) continue;
+            for (std::size_t j = 0; j < e.holders.size(); ++j) {
+                if (e.holders[j].txn == txn && e.holders[j].mode == held.mode) {
+                    e.holders.erase(e.holders.begin() + static_cast<std::ptrdiff_t>(j));
+                    removed_holder = true;
+                    break;
                 }
-                // An entry nobody holds and nobody waits on is erased, so
-                // the table measures live borrows rather than every key
-                // ever touched.
-                if (e.holders.empty() && e.waiters.empty()) {
-                    part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
-                }
-                break;
             }
+            // An entry nobody holds and nobody waits on is erased, so
+            // the table measures live borrows rather than every key
+            // ever touched.
+            if (e.holders.empty() && e.waiters.empty()) {
+                part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+            break;
         }
-        // Lowered **only when a holder was actually removed**, and after
-        // the entry is gone - the mirror of raising it before publication.
-        // Unconditional here would underflow the counter to 2^64-1 on any
-        // double release, and a permanently nonzero gate sends every writer
-        // on the relation through the all-partition scan for the life of
-        // the instance.
-        if (removed_holder && IsFence(held.key, held.mode)) {
-            FenceCounterFor(held.key.rel_oid).fetch_sub(1, std::memory_order_release);
-        }
-        // Then wake whoever was queued on it, in a second acquisition of the
-        // same partition latch rather than inside the one above: a wake is
-        // a store nobody is waiting on synchronously, and keeping it out of
-        // the release's own critical section keeps that section the length
-        // of a vector erase.
-        if (removed_holder) WakeWaiters(held.key);
     }
+    // Lowered **only when a holder was actually removed**, and after
+    // the entry is gone - the mirror of raising it before publication.
+    // Unconditional here would underflow the counter to 2^64-1 on any
+    // double release, and a permanently nonzero gate sends every writer
+    // on the relation through the all-partition scan for the life of
+    // the instance.
+    if (removed_holder && IsFence(held.key, held.mode)) {
+        FenceCounterFor(held.key.rel_oid).fetch_sub(1, std::memory_order_release);
+    }
+    // Then wake whoever was queued on it, in a second acquisition of the
+    // same partition latch rather than inside the one above: a wake is
+    // a store nobody is waiting on synchronously, and keeping it out of
+    // the release's own critical section keeps that section the length
+    // of a vector erase.
+    if (removed_holder) WakeWaiters(held.key);
+}
+
+void LockTable::ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
+                           LockHoldings& holdings) {
+    ReleaseHeld(txn, LockHoldings::Held{key, mode});
+    // **The ledger entry goes with the table's.** The cap counts
+    // `held_`, so a record left behind for a borrow the transaction does
+    // not have would spend the cap on nothing and would be released a
+    // second time at `Release` - which `ReleaseHeld`'s own comment says
+    // underflows the fence counter.
+    for (std::size_t i = holdings.held_.size(); i > 0; --i) {
+        const LockHoldings::Held& h = holdings.held_[i - 1];
+        if (h.key == key && h.mode == mode) {
+            holdings.held_.erase(holdings.held_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+            break;
+        }
+    }
+}
+
+void LockTable::Release(std::uint64_t txn, LockHoldings& holdings) {
+    for (const LockHoldings::Held& held : holdings.held_) ReleaseHeld(txn, held);
     holdings.held_.clear();
 
     // A transaction that ended while queued takes its request with it, and
@@ -504,7 +569,8 @@ std::uint64_t LockTable::RelationFenceCount(catalog::Oid rel) const {
     return FenceCounterFor(rel).load(std::memory_order_acquire);
 }
 
-bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn) const {
+bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn,
+                               LockMode want, std::uint64_t* holder) const {
     // Every partition, because a fence's partition is decided by its own
     // `lo` and the key being probed is not it. Reached only when the
     // relation's fence counter is nonzero (AO-R3), which is why a scan is
@@ -517,7 +583,53 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
             if (!e.key.ContainsKey(pk)) continue;
             for (const Tenant& h : e.holders) {
                 if (h.txn == txn) continue;
-                if (h.mode == LockMode::kShared || h.mode == LockMode::kExclusive) return true;
+                // A fence is held in `S` or `X`; an intention mode on a
+                // range key is not one and fences nothing. Given a real
+                // fence, the compatibility table is what decides - the
+                // same table `ConflictingDescendant` reads from the other
+                // side, so the two answers cannot drift apart.
+                if (h.mode != LockMode::kShared && h.mode != LockMode::kExclusive) continue;
+                if (!Compatible(h.mode, want)) {
+                    if (holder != nullptr) *holder = h.txn;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uint64_t txn,
+                                   std::uint64_t* holder) const {
+    // The mirror of `FenceCoversKey`, and it scans every partition for the
+    // mirror reason: an overlapping unit's partition is decided by its own
+    // `lo`, which this interval does not name. Reached only by a
+    // fence-taker, which is one statement's single ask rather than a
+    // per-row cost.
+    for (const Partition& part : partitions_) {
+        LatchGuard guard(part.latch);
+        for (const Entry& e : part.entries) {
+            // One overlap test for tuples and fences alike - the
+            // declaration says why it must reach both, and why a relation
+            // unit's empty interval correctly matches nothing. `Overlaps`
+            // tests the relation too, so no separate `rel_oid` guard.
+            if (!e.key.Overlaps(fence)) continue;
+            for (const Tenant& h : e.holders) {
+                // **This is also what excludes the asker's own entry**,
+                // which by now is published and overlaps itself: a
+                // transaction never conflicts with itself, so no separate
+                // identity test is needed or would be correct - the key
+                // passed in is the caller's copy, not the table's.
+                if (h.txn == txn) continue;
+                // **The fence's own mode decides**, not a fixed pair: an
+                // `S` fence admits an `S` descendant and refuses an `X`
+                // one, and the compatibility table is the single place
+                // that knows which - re-deriving it here is how the two
+                // answers drift apart.
+                if (!Compatible(h.mode, mode)) {
+                    if (holder != nullptr) *holder = h.txn;
+                    return true;
+                }
             }
         }
     }

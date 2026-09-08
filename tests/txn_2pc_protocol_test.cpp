@@ -1790,7 +1790,14 @@ TEST_F(LockCapTest, AWritePastTheBorrowCapKeepsWritingAndCountsTheTruncation) {
 
     // Four rows, a cap of three: the relation and two rows fit, the third
     // and fourth rows do not.
-    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9", session);
+    //
+    // **The predicate is on `v`, not on the pk, and that is what makes this
+    // cell still about the cap** (AO-S6b). A `WHERE`-less write now
+    // declares the relation and takes one entry, so the shape this cell was
+    // written with - `UPDATE t SET v = 9` - can no longer reach a cap of
+    // three. A predicate that names no pk window is left per-row by
+    // `DeclaredWriteBorrow`, and is the one shape that still accumulates.
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE v = 0", session);
     EXPECT_EQ(out.response, "UPDATED 4") << out.response;
     EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u)
         << "the cap was reached and the truncation was not counted";
@@ -1803,10 +1810,91 @@ TEST_F(LockCapTest, AWriteInsideTheBorrowCapCountsNoTruncation) {
 
     // Two rows plus the relation is exactly the cap, and the cap refuses
     // the entry *at* it rather than past it - so two rows fit in three.
-    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9", session);
+    // Per-row for the reason the cell above states.
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE v = 0", session);
     EXPECT_EQ(out.response, "UPDATED 2") << out.response;
     EXPECT_EQ(dispatcher_->borrow_cap_stops(), 0u)
         << "a statement inside the cap must record every borrow it takes";
+}
+
+// ---- AO-0 item 14, marked 2026-09-08: the unit a bulk write declares ----
+//
+// Both cells are sized so the *difference* is what fails them: four rows
+// under a cap of three, where per-row accumulation reaches the cap and a
+// declared coarse unit does not. Without the declaration each of these
+// counts a truncation.
+
+TEST_F(LockCapTest, AWhereLessWriteDeclaresTheRelationAndTakesOneBorrow) {
+    Session session;
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
+
+    // A write with no predicate touches every row there is, so it declares
+    // the relation: one entry for four rows, and a cap of three is never
+    // approached.
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9", session);
+    EXPECT_EQ(out.response, "UPDATED 4") << out.response;
+    EXPECT_EQ(dispatcher_->borrow_cap_stops(), 0u)
+        << "a declared relation unit is one borrow; accumulating per row would reach the cap "
+           "at the third of these four rows";
+}
+
+// A cap of one, so the *declaration itself* is what the cap refuses.
+class LockCapOfOneTest : public Txn2pcBlockedWriterTest {
+protected:
+    void SetUp() override {
+        Txn2pcBlockedWriterTest::SetUp();
+        auto table = txn::LockTable::Create(/*core_count=*/1, /*max_locks_per_txn=*/1);
+        ASSERT_TRUE(table.ok()) << table.status().message();
+        locks_ = std::move(table.value());
+        dispatcher_->set_locks(locks_.get());
+    }
+
+    std::unique_ptr<txn::LockTable> locks_;
+};
+
+TEST_F(LockCapOfOneTest, ARefusedDeclarationFallsBackToThePerRowBorrow) {
+    // The review finding against this stage's first draft: the per-row skip
+    // keyed on the declaration having been *made*, not on its having been
+    // *granted*, so a statement whose coarse unit was refused recorded
+    // nothing at all - not even the rows - which is strictly less than the
+    // path it replaced.
+    //
+    // A cap of one is what makes the refusal reachable without a second
+    // session: the relation `IX` fills the ledger, so the range under it is
+    // refused. The count then discriminates - the range's own stop is one,
+    // and each row that falls back to a tuple borrow adds another.
+    Session session;
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
+
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE id > 1", session);
+    EXPECT_EQ(out.response, "UPDATED 3") << out.response;
+    EXPECT_GE(dispatcher_->borrow_cap_stops(), 2u)
+        << "only the declaration's own refusal was counted, so the rows below it took no "
+           "borrow at all - the statement recorded less than the per-row path it replaced";
+}
+
+TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) {
+    Session session;
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
+
+    // `id > 1` is a pk window of three rows. Declared, it is the relation
+    // `IX` plus one range - two entries under a cap of three. Per-row it
+    // would be the `IX` plus three tuples, which reaches the cap on the
+    // last of them.
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE id > 1", session);
+    EXPECT_EQ(out.response, "UPDATED 3") << out.response;
+    EXPECT_EQ(dispatcher_->borrow_cap_stops(), 0u)
+        << "a range-shaped predicate declares one window; accumulating its rows would reach "
+           "the cap";
 }
 
 class LockDeadlockTest : public Txn2pcBlockedWriterTest {
