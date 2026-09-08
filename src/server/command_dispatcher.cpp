@@ -10330,15 +10330,21 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // the operator's choice of order over reviving AO-R4's
             // disjunction.
             //
-            // **It is not before the header is read, and S6b needs to know
-            // that.** `apply` read this tuple's header at its top: it
-            // Classified the version and captured `trx_id` into the local
-            // below, and `CheckWriteConflictBlocking` judges that captured
-            // value rather than re-reading the page. So what this
-            // establishes is the order of the two *mechanisms*, not the
-            // order AO-R4's departure needs. Making the grant the
-            // authority still costs S6b one of: a re-read after the grant,
-            // or this borrow moved above `ReadTuple`.
+            // **And it is before the header matters, which AO-S6b settled
+            // and this comment used to deny.** It said the grant could only
+            // become the authority at the cost of a re-read after it or the
+            // borrow moved above `ReadTuple`. Neither is owed: the borrow's
+            // key *is* the row's pk and the pk comes only from the tuple,
+            // so moving it above the read is impossible in principle; and a
+            // re-read would be redundant, because this whole walk runs
+            // inside a live write `PageRef` for the page and carries no
+            // `co_await`, so no peer core can write it and no coroutine on
+            // this core can interleave. The captured `trx_id` cannot go
+            // stale between the read and the grant.
+            //
+            // Per row, so no refusal of an earlier row is ever read as this
+            // one's - `CheckWriteConflictBlocking` falls it back to `cur`
+            // where the table has nothing to say.
             std::uint64_t blocker = 0;
             if (!declared.has_value()) {
                 auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, id.value()), &blocker);
