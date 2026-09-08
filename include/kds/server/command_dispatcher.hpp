@@ -43,6 +43,7 @@
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/manager.hpp"
+#include "kds/wire/error_registry.hpp"
 
 // Command dispatch: turns one client-supplied line of text into an action
 // against the running database and a text response. Deliberately pure
@@ -451,6 +452,18 @@ struct DispatchOutcome {
     // code from, and the four spellings it recovers exactly are the ones
     // that matter there.
     Status status = Status::OK();
+
+    // **The wire detail this failure carries**, or `kNoDetail`. A `Status`
+    // has no room for one - `protocol.md` §11's details live on the wire
+    // error, which the session builds - so a refusal that knows *which*
+    // limit it hit has to carry the answer up here beside the status. Only
+    // the borrow cap sets it today: `wire::ResourceDetail::kLockCap` was
+    // numbered at AO-S1 and had no setter for as long as the cap was
+    // swallowed, because a refusal nobody ever saw needed no detail. The
+    // client's fix for it differs from every other `ResourceExhausted` -
+    // not a smaller statement or a slower client, but a shorter
+    // transaction - which is the whole reason it has a number of its own.
+    std::uint16_t resource_detail = wire::kNoDetail;
 
     // A remote read this statement opened (workplan P4c): the reply is not
     // in `response` yet - the caller awaits the read and finishes through
@@ -1035,7 +1048,7 @@ private:
     // *In*, whoever refused this write's borrow, from the lock table
     // (AO-S6c-b). Zero when the table refused nobody: the borrow was
     // granted, or none was asked for because a coarse unit already covers
-    // the row, or the cap swallowed it. Before this the wait's holder was
+    // the row, or no table exists to hold one. Before this the wait's holder was
     // `cur`, which is why a statement could only ever wait for the writer
     // of the row it was looking at - a transaction refused by a range
     // fence had no holder to name and simply failed.
@@ -1044,7 +1057,7 @@ private:
     // table named one, `cur` where it did not. The two sources are a
     // **union and not a cutover** - the table names holders the header
     // never could (a fence over a key nobody has written), and the header
-    // names writers the table does not (a ledger the cap truncated, and
+    // names writers the table does not (a dispatcher with no lock table, and
     // every row on a dispatcher with no table at all), so reading either
     // alone drops a wait AO-S3 already made. Zero out means there is
     // nothing to wait for and the refusal is the plain conflict it always
@@ -1066,11 +1079,12 @@ private:
     // means it is not - and the holder has already been recorded where
     // `DispatchAsync` can park on it, so the caller has only to render it.
     //
-    // **A refusal naming nobody is the cap's and is not one of these**:
-    // `SwallowBorrowCap` still turns `ResourceExhausted` into "not granted"
-    // at this sub-stage, so that bool has two causes and `blocker` is what
-    // tells them apart. Without the test an insert past the cap is refused
-    // as though transaction 0 held its row.
+    // **A refusal naming nobody is not one of these.** Since AO-S6c-c the
+    // cap comes back as a `Status` rather than as "not granted", so the two
+    // causes no longer share a bool - but the `blocker` test stays, because
+    // a grant and a conflict are still the only two things the bool can
+    // mean and reading it without asking who refused is how the cap looked
+    // like transaction 0 holding a row for as long as it did.
     //
     // The message is rendered from the **unit**, because a fence is not a
     // row: a run that borrowed `[lo, hi)` and was refused must not tell the
@@ -1156,7 +1170,7 @@ private:
     // a coarse unit and never looked at the answer recorded *nothing* for
     // the whole statement when the unit was refused - no relation `IX` and
     // no rows - which is strictly less than the per-row path it replaced.
-    // The caller demotes to per-row instead.
+    // The caller waited on it instead, until AO-S6c-c made a refused declaration a wait of its own.
     //
     // A dispatcher with no lock table borrows nothing and answers granted
     // - every fixture that builds none. The null-transaction arm is
@@ -1166,11 +1180,7 @@ private:
     StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
                                std::uint64_t* blocker = nullptr);
 
-    // The cap's refusal, turned into "stop recording and carry on" while
-    // the borrow is advisory (the operator's decision of 2026-09-08; the
-    // definition carries the argument and the counter's contract). Every
-    // other status passes through unchanged.
-    Status SwallowBorrowCap(const Status& refused);
+
 
 
     DispatchOutcome HandleShowMeta();
@@ -1905,6 +1915,9 @@ public:
     // an incomplete borrow ledger. **Expected zero**, and a cell that sees
     // it nonzero has found a statement whose borrows S6b would have to
     // refuse rather than truncate.
+    // The cap's refusals since this dispatcher was built. A **refusal**
+    // now, not a truncation: AO-S6c-c stopped swallowing it, so this counts
+    // statements the cap ended rather than ledgers it silently shortened.
     std::uint64_t borrow_cap_stops() const noexcept { return borrow_cap_stops_; }
     // Which table this dispatcher records its edges in, so an assembly cell
     // can name it (AO-S4b).
@@ -2675,8 +2688,34 @@ private:
     // (crosscore.md §3, sched.md §7's determinism rule).
     std::uint64_t next_remote_request_ = 1;
 
-    // AO-S6a's truncation counter; the accessor above states its contract.
+    // the borrow cap's refusal counter; the accessor above states its contract.
     std::uint64_t borrow_cap_stops_ = 0;
+
+    // **The refusal the borrow cap raised on this statement, and the wire
+    // detail that goes with it.** Carried as a member for
+    // `blocking_writer_`'s reason - the refusal is raised deep inside a row
+    // callback and the outcome is built at the top, with no return path
+    // between them wide enough to hold it.
+    //
+    // **The `Status` and not only the detail**, which is what the first
+    // draft carried and was a defect: `InsertOneRow` answers a rendered
+    // string with no status, so the outcome reached `KwpSession` status-less
+    // and `StatusFromErrorReply` folded the cap's line into
+    // `InvalidArgument` - `kErrorSpellings` has no `ResourceExhausted`
+    // entry. The detail rode out beside it, and `protocol.md` §11's details
+    // are **per category**, so a client was handed `kLockCap` in the
+    // invalid-argument namespace, where it means nothing. That is worse
+    // than carrying no detail at all, on the path most likely to reach the
+    // cap.
+    //
+    // Cleared at the top of `DispatchAndStage` as well as at the bottom,
+    // exactly as `blocking_writer_` is and for the same reason: a public
+    // seam can set it and never reach the copy-out. `ExecuteInsert` is that
+    // seam - `KwpLoadServer` drives it on the same dispatcher a session
+    // uses - so without the top clear a load chunk's cap refusal would
+    // label the next unrelated statement's failure.
+    Status last_refusal_ = Status::OK();
+    std::uint16_t last_refusal_detail_ = wire::kNoDetail;
 
     // The read-path index switch (`indexes`, default on). Read-path only:
     // maintenance is not switchable, because an index that stops being

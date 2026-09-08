@@ -111,7 +111,10 @@ ERR <message>                             for everything else
 
 **`ERR TXN_CONFLICT retryable=1 ...` is the one error worth
 special-casing.** It means another transaction wrote a row this one
-wanted — first-updater-wins, no lock to wait on, no partial recovery. The
+wanted — first-updater-wins, and no partial recovery. A writer that meets
+an undecided holder waits for its decide rather than being refused
+(`docs/spec/txn.md` §5), so a conflict reaching a client is one no wait
+could resolve. The
 correct response, always: `ROLLBACK`, then retry the whole transaction.
 After a conflict inside an explicit transaction the session is **failed**
 and answers only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` until rolled

@@ -91,12 +91,19 @@ cores = 1
 # there is no unbounded setting, because a transaction that borrows
 # without limit is the escalation the borrow model exists to refuse.
 #
-# **What happens at the cap is a property of the stage, not of the
-# setting.** At AO-S6a the borrow is advisory - nothing waits on it - so a
-# transaction that reaches the cap stops recording borrows and its write
-# proceeds, counted so the truncation is visible rather than silent. When
-# the lock becomes the wait (AO-S6b) an incomplete ledger is an incorrect
-# one, and the cap will refuse `ResourceExhausted`, non-retryable, instead.
+# **At the cap the statement is refused** `ResourceExhausted`,
+# non-retryable, carrying a wire detail of its own so a client can tell it
+# from every other exhausted resource: the fix is a shorter transaction,
+# not a smaller statement or a slower client. It was swallowed while the
+# borrow was advisory - a ledger that guarded nothing must not fail a
+# statement that would otherwise succeed - and stopped being swallowed at
+# AO-S6c-c, when the lock became what a writer waits on and a truncated
+# ledger became rows with no protection and no wait behind them.
+#
+# The shape that reaches it is a write whose predicate names no primary-key
+# window, such as `WHERE name = 'x'`: one whose predicate does name one
+# borrows that window once instead of a row at a time, so a bulk write by
+# key range costs a single entry however many rows it touches.
 # max_locks_per_txn = 65536
 
 # Per-core listeners (docs/inflight/in-progress/workplan-peer-writer.md PW5). `on` binds the

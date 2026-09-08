@@ -768,7 +768,9 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   `BEGIN ISOLATION LEVEL` (this transaction).
 - No nested transactions, no savepoints: a second `BEGIN` is an error.
   `SET ISOLATION LEVEL` inside an open transaction is an error.
-- Write conflicts are first-updater-wins, no waiting:
+- Write conflicts are first-updater-wins, and a writer meeting an
+  undecided holder **waits for it** rather than being refused
+  (`docs/spec/txn.md` §5):
   `ERR TXN_CONFLICT retryable=1 row id=<n> was written by transaction <n>`.
 - A failed statement inside an explicit transaction **poisons the session**:
   only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` are admitted (a whitelist)

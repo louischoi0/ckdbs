@@ -1808,32 +1808,32 @@ protected:
     std::optional<std::size_t> LockCap() const override { return 3; }
 };
 
-TEST_F(LockCapTest, AWritePastTheBorrowCapKeepsWritingAndCountsTheTruncation) {
+TEST_F(LockCapTest, AWritePastTheBorrowCapIsRefusedAndNamesTheCap) {
+    // **The cap refuses since AO-S6c-c.** It was swallowed while the borrow
+    // was advisory, on the operator's decision of 2026-09-08: a ledger that
+    // guards nothing must not fail a statement that would otherwise
+    // succeed. That condition has lapsed - the lock is the wait now, and a
+    // fence stops an insert - so a truncated ledger would be rows with no
+    // fence over them and no wait behind them, which is AO-R10's reason for
+    // refusing instead.
+    //
+    // The predicate names no pk window, which is the shape item 14's
+    // declared units deliberately do not reach, so it still accumulates one
+    // entry per row - and is the one shape that can meet the cap at all.
     Session session;
     ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
-    // An INSERT takes a borrow since AO-S6c, but one row's worth: the
-    // relation `IX` and its own tuple, which is two entries inside a cap of
-    // three, and each of these is its own autocommit transaction whose
-    // decide gives them back.
-    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u)
-        << "an INSERT of one row fits any cap this fixture uses";
 
-    // Four rows, a cap of three: the relation and two rows fit, the third
-    // and fourth rows do not.
-    //
-    // **The predicate is on `v`, not on the pk, and that is what makes this
-    // cell still about the cap** (AO-S6b). A `WHERE`-less write now
-    // declares the relation and takes one entry, so the shape this cell was
-    // written with - `UPDATE t SET v = 9` - can no longer reach a cap of
-    // three. A predicate that names no pk window is left per-row by
-    // `DeclaredWriteBorrow`, and is the one shape that still accumulates.
     const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE v = 0", session);
-    EXPECT_EQ(out.response, "UPDATED 4") << out.response;
-    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u)
-        << "the cap was reached and the truncation was not counted";
+    EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted) << out.response;
+    EXPECT_FALSE(IsRetryable(out.status.code()))
+        << "a retry meets the same cap, so the wire's retryable bit must not invite one";
+    EXPECT_EQ(out.resource_detail, static_cast<std::uint16_t>(wire::ResourceDetail::kLockCap))
+        << "the client's fix for this is a shorter transaction, not a smaller statement, which "
+           "is why protocol.md gave it a detail of its own - and it had no setter until now";
+    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u);
 }
 
 TEST_F(LockCapTest, AWriteInsideTheBorrowCapCountsNoTruncation) {
@@ -1903,36 +1903,23 @@ protected:
     std::optional<std::size_t> LockCap() const override { return 1; }
 };
 
-TEST_F(LockCapOfOneTest, ARefusedDeclarationFallsBackToThePerRowBorrow) {
-    // The review finding against this stage's first draft: the per-row skip
-    // keyed on the declaration having been *made*, not on its having been
-    // *granted*, so a statement whose coarse unit was refused recorded
-    // nothing at all - not even the rows - which is strictly less than the
-    // path it replaced.
+TEST_F(LockCapOfOneTest, ADeclaredUnitTheCapRefusesEndsTheStatement) {
+    // The behaviour that replaced `ARefusedDeclarationFallsBackToThePerRowBorrow`
+    // when AO-S6c-c removed the demotion, and the review's B4: under a cap
+    // of one the relation `IX` fills the ledger and the range under it is
+    // refused, so the statement ends there having written nothing rather
+    // than falling back to a per-row walk that would meet the same cap on
+    // its first row.
     //
-    // A cap of one is what makes the refusal reachable without a second
-    // session: the relation `IX` fills the ledger, so the range under it is
-    // refused. The count then discriminates - the range's own stop is one,
-    // and each row that falls back to a tuple borrow adds another.
+    // No row is seeded, and none is needed: under this cap no INSERT can
+    // succeed either, and the declaration is borrowed **before** the walk -
+    // so what the cell measures happens whether or not the relation is
+    // empty, which is itself the point.
     Session session;
-    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 0)").rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
-
-    // **The baseline, and it is load-bearing since AO-S6c-a.** Under a cap
-    // of one every INSERT above now stops on its own tuple - the relation
-    // `IX` fills the ledger before the row is asked for - so the counter
-    // already reads four here. An absolute threshold would be met before
-    // the statement under test ran, and the cell would pass with the
-    // fallback reverted. The *delta* is what discriminates.
-    const std::uint64_t before = dispatcher_->borrow_cap_stops();
-
-    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE id > 1", session);
-    EXPECT_EQ(out.response, "UPDATED 3") << out.response;
-    EXPECT_GE(dispatcher_->borrow_cap_stops() - before, 2u)
-        << "only the declaration's own refusal was counted, so the rows below it took no "
-           "borrow at all - the statement recorded less than the per-row path it replaced";
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 9 WHERE id > 0", session);
+    EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted) << out.response;
+    EXPECT_EQ(out.resource_detail, static_cast<std::uint16_t>(wire::ResourceDetail::kLockCap))
+        << out.response;
 }
 
 TEST_F(LockCapOfOneTest, AnInsertTakesTheBorrowOfTheRowItWrites) {
@@ -1946,10 +1933,21 @@ TEST_F(LockCapOfOneTest, AnInsertTakesTheBorrowOfTheRowItWrites) {
     // session: the relation `IX` fills the ledger, so the row's own tuple
     // is refused by the cap and counted. A statement that borrowed nothing
     // would count nothing.
-    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u);
-    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 0)").rfind("INSERTED", 0), 0u);
-    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u)
-        << "the INSERT took no borrow, so the wait's blocker cannot come from the table";
+    // A cap of one admits the relation `IX` and nothing under it, so an
+    // insert that borrows its row is refused and an insert that borrows
+    // nothing sails through. Since AO-S6c-c that refusal is the statement's,
+    // which is a sharper observation than the counter this used to read.
+    // **Observed on the outcome, not on the rendered line.** A text-only
+    // check passed while the cap's refusal was reaching a KWP client as
+    // `INVALID_ARGUMENT` carrying the cap's detail - the review's B1 - so
+    // the category and the detail are what this asserts.
+    Session session;
+    const DispatchOutcome out = RunAsync("INSERT INTO t VALUES (1, 0)", session);
+    EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted)
+        << "the INSERT took no borrow, so the wait's blocker cannot come from the table: "
+        << out.response;
+    EXPECT_EQ(out.resource_detail, static_cast<std::uint16_t>(wire::ResourceDetail::kLockCap))
+        << out.response;
 }
 
 TEST_F(LockCapOfOneTest, ASortedFillBorrowsTheIdBlockItCarved) {
@@ -1964,11 +1962,15 @@ TEST_F(LockCapOfOneTest, ASortedFillBorrowsTheIdBlockItCarved) {
     // the observation is the same as any coarse unit's under a cap of one:
     // the relation `IX` fills the ledger and the range itself is refused
     // and counted. A run that borrowed nothing would count nothing.
-    ASSERT_EQ(dispatcher_->borrow_cap_stops(), 0u);
-    ASSERT_EQ(Local("INSERT INTO t VALUES (5), (6)").rfind("INSERTED", 0), 0u)
-        << "the rows must omit their keys, or this takes the per-row path instead";
-    EXPECT_GE(dispatcher_->borrow_cap_stops(), 1u)
-        << "the sorted fill placed rows without borrowing the ids it carved";
+    // As the single-row cell above: the cap admits the relation `IX` and
+    // refuses the range under it, so a fill that borrows its block is
+    // refused and one that borrows nothing is not.
+    Session session;
+    const DispatchOutcome out = RunAsync("INSERT INTO t VALUES (5), (6)", session);
+    EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted)
+        << "the sorted fill placed rows without borrowing the ids it carved: " << out.response;
+    EXPECT_EQ(out.resource_detail, static_cast<std::uint16_t>(wire::ResourceDetail::kLockCap))
+        << out.response;
 }
 
 TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) {
@@ -2308,8 +2310,20 @@ TEST_F(LockDeadlockTest, AStatementThatHasWrittenRowsNowWaitsInsteadOfBeingRefus
               0u);
 
     // A multi-row UPDATE that writes row 1 and then meets row 2.
+    //
+    // **The predicate names no pk window, and since AO-S6c-c that is what
+    // keeps this cell about a mid-walk park.** `WHERE id <= 2` would now
+    // declare `Range(t, 0, 3)` (item 14), which overlaps the holder's tuple
+    // and is refused *before* the walk starts - so the statement would wait
+    // having written nothing, hold no rows, and correctly register no edge
+    // at all. That is the better behaviour and it is why the declaration
+    // exists; it is simply not the shape this cell measures. Both rows
+    // are matched by `v > 0` whichever value the page carries - `apply`
+    // evaluates the WHERE against the page's current bytes, so row 2 reads
+    // as the holder's uncommitted `9` rather than as the `1` this writer's
+    // view would resolve.
     Session writer;
-    Started w = Start("UPDATE t SET v = 3 WHERE id <= 2", writer);
+    Started w = Start("UPDATE t SET v = 3 WHERE v > 0", writer);
     Pump();
     ASSERT_FALSE(*w.done) << "the statement was refused rather than parked: " << w.out->response;
 
@@ -2392,6 +2406,19 @@ protected:
         }
     }
 
+    // **Why every cell here writes `WHERE v >= 0` rather than no predicate
+    // or a pk one.** A `WHERE`-less write declares the relation (AO-0 item
+    // 14) and a pk-shaped one declares its range, and a declared unit is
+    // borrowed **before the walk starts** - so such a statement waits
+    // having written nothing and re-runs cleanly, which is the better
+    // behaviour and has its own cell
+    // (`ACoarseDeclarationWaitsBeforeItWritesAnythingAndThenSucceeds`).
+    // The mid-walk park these cells exist to measure is what a predicate
+    // naming no pk window still takes. Every row is inserted with `v = 0`
+    // and a holder's row carries `9`, so `v >= 0` matches all ten whichever
+    // value the page holds - `apply` evaluates the WHERE against the page's
+    // current bytes, not against the version the view would resolve.
+    //
     // How many rows carry the new value. The point of every cell here is
     // *which* rows the statement wrote, so this is what they assert on.
     int RowsWith(int v) {
@@ -2427,7 +2454,8 @@ TEST_F(MidWalkWaitTest, ATenRowUpdateMeetingAHeldRowKeepsWhatItWroteAndWaits) {
               0u);
 
     Session w;
-    Started walk = Start("UPDATE t SET v = 1", w);
+        // `v >= 0` for the fixture's reason: the per-row path.
+    Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
 
     // **It waited rather than answering**, which is the whole stage: before
@@ -2458,6 +2486,40 @@ TEST_F(MidWalkWaitTest, ATenRowUpdateMeetingAHeldRowKeepsWhatItWroteAndWaits) {
     EXPECT_EQ(RowsWith(1), 10);
 }
 
+TEST_F(MidWalkWaitTest, ACoarseDeclarationWaitsBeforeItWritesAnythingAndThenSucceeds) {
+    // **The behaviour item 14's declared units buy, marked by the operator
+    // on 2026-09-08 against `txn.md` §5's ratified refusal.** A `WHERE`-less
+    // write declares the relation and borrows it before the walk, so it
+    // waits having written nothing - and an autocommit statement's re-run
+    // mints a fresh view, so it succeeds where the same statement used to
+    // write six rows, meet the seventh, and be refused `TxnConflict` with
+    // those six compensated. That is AR2-A §1's "refusal → wait" delivered,
+    // and it is a real semantic change: for autocommit this shape is now
+    // closer to PostgreSQL's READ COMMITTED than to the stricter rule §5
+    // states. An explicit transaction keeps its view across the re-run and
+    // is refused exactly as before.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    Started walk = Start("UPDATE t SET v = 1", w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << walk.out->response;
+    EXPECT_EQ(RowsWith(1), 0)
+        << "the declaration is borrowed before the walk, so nothing is written while it waits";
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+
+    ASSERT_TRUE(*walk.done) << "the wait never ended after the holder committed";
+    EXPECT_EQ(walk.out->response.rfind("UPDATED 10", 0), 0u)
+        << "the re-run mints a fresh view and writes every row: " << walk.out->response;
+    EXPECT_EQ(RowsWith(1), 10);
+}
+
 TEST_F(MidWalkWaitTest, TheCommitArmRefusesAndUnwindsWhatTheStatementHadWritten) {
     // The other decide. `txn.md` section 5 already ratifies this as
     // deliberate - stricter than PostgreSQL's READ COMMITTED, which would
@@ -2471,7 +2533,8 @@ TEST_F(MidWalkWaitTest, TheCommitArmRefusesAndUnwindsWhatTheStatementHadWritten)
               0u);
 
     Session w;
-    Started walk = Start("UPDATE t SET v = 1", w);
+        // `v >= 0` for the fixture's reason: the per-row path.
+    Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << walk.out->response;
     ASSERT_EQ(RowsWith(1), 0) << "uncommitted rows must stay invisible";
@@ -2500,7 +2563,8 @@ TEST_F(MidWalkWaitTest, InsideAnExplicitTransactionTheRowsAreWrittenOnceNotTwice
 
     Session w;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
-    Started walk = Start("UPDATE t SET v = 1", w);
+        // `v >= 0` for the fixture's reason: the per-row path.
+    Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << walk.out->response;
 
@@ -2529,7 +2593,8 @@ TEST_F(MidWalkWaitTest, ADeleteParksInTheMiddleOfItsWalkToo) {
               0u);
 
     Session w;
-    Started walk = Start("DELETE FROM t", w);
+        // `v >= 0` for the fixture's reason: the per-row path.
+    Started walk = Start("DELETE FROM t WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << "the DELETE did not park: " << walk.out->response;
 
@@ -2554,7 +2619,8 @@ TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
 
     Session w;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
-    Started walk = Start("UPDATE tb SET v = 1", w);
+        // `v >= 0` for the fixture's reason: the per-row path.
+    Started walk = Start("UPDATE tb SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << "the btree walk did not park: " << walk.out->response;
     ASSERT_NE(w.transaction(), nullptr);
@@ -2660,7 +2726,11 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
 
     Session w;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
-    Started walk = Start("UPDATE ts SET v = 1", w);
+    // `v >= 0` rather than no predicate: a `WHERE`-less write declares the
+    // relation (item 14) and is borrowed before the walk, so it would wait
+    // having written nothing and there would be no parked cursor for a
+    // split to straddle. Every row of `ts` is inserted with `v = 0`.
+    Started walk = Start("UPDATE ts SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << walk.out->response;
     ASSERT_EQ(w.transaction()->trail().size(), 6u)
@@ -2723,25 +2793,39 @@ TEST_F(MidWalkWaitTest, ADeadlockBetweenTwoMidWalkParksUnwindsTheVictimsOpenScop
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
 
-    // The two anchors, at opposite ends of the walk order.
-    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id = 1", &a)
+    // **The anchors carry distinguishing values, and since AO-S6c-c that is
+    // what makes the shape reachable at all.** The cell used to give the two
+    // walkers disjoint pk windows (`id >= 5`, `id >= 2`); a pk-shaped
+    // predicate now declares a range and is borrowed before the walk, so
+    // neither would write anything before conflicting. A non-pk predicate
+    // keeps the per-row path - but both walkers then start at row 1, and
+    // the second meets the first's rows immediately and writes nothing,
+    // which is the coverage this cell exists to add. So the anchors' values
+    // are what carve the two walks apart: A takes row 10 and B row 5, and
+    // each walker's predicate selects the rows the other has not touched.
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id = 10", &a)
                   .response.rfind("UPDATED", 0),
               0u);
-    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 10", &b)
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 5", &b)
                   .response.rfind("UPDATED", 0),
               0u);
 
-    // A walks 5..9, writes them, and meets row 10 - B's. It parks holding
-    // six rows, and the graph gets the edge A -> B.
-    Started wa = Start("UPDATE t SET v = 3 WHERE id >= 5", a);
+    // A walks 1..4, writes them, and meets row 5 - B's. It parks holding
+    // four rows, and the graph gets the edge A -> B.
+    Started wa = Start("UPDATE t SET v = 3 WHERE v >= 0", a);
     Pump();
     ASSERT_FALSE(*wa.done) << "A did not park mid-walk: " << wa.out->response;
     EXPECT_EQ(locks_->WaitEdgeCount(), 1u);
 
-    // B walks 2..4, writes them, and meets row 5 - which A is now holding.
+    // B walks 6..9, writes them, and meets row 10 - which A is holding.
     // That edge closes the cycle, so B is the victim by AO-R7's rule, and
-    // B is parked mid-walk with an open scope of its own.
-    Started wb = Start("UPDATE t SET v = 4 WHERE id >= 2", b);
+    // B has an open scope with four rows of its own already written.
+    //
+    // `v <= 1` selects exactly those: rows 1..4 now read as A's uncommitted
+    // `3`, row 5 as B's own `2`, and row 10 as A's anchor `1` - `apply`
+    // evaluates the WHERE against the page's current bytes, so the
+    // uncommitted values are what the predicate sees.
+    Started wb = Start("UPDATE t SET v = 4 WHERE v <= 1", b);
     Pump();
     ASSERT_TRUE(*wb.done) << "the cycle was not detected; only the 11 s net would end this";
     const Status victim = StatusFromErrorReply(wb.out->response);
@@ -2764,14 +2848,18 @@ TEST_F(MidWalkWaitTest, ADeadlockBetweenTwoMidWalkParksUnwindsTheVictimsOpenScop
     // A was never touched - a detector aborts the waiter, never the holder
     // - and proceeds once B's rollback releases row 10.
     ASSERT_TRUE(*wa.done) << "the survivor never proceeded, so the cycle was broken at both ends";
-    EXPECT_EQ(wa.out->response.rfind("UPDATED 6", 0), 0u)
-        << "rows 5..10, counted across A's park: " << wa.out->response;
+    EXPECT_EQ(wa.out->response.rfind("UPDATED 10", 0), 0u)
+        << "every row, counted across A's park: " << wa.out->response;
+    // Non-vacuous only because B genuinely wrote rows 6..9 before it was
+    // refused: the assertion below is what proves they went with its
+    // rollback, and it says nothing at all if B never wrote any.
+    ASSERT_EQ(RowsWith(2), 0) << "B's anchor outlived its rollback";
     ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
     EXPECT_EQ(locks_->WaitEdgeCount(), 0u);
     // B's writes are gone and A's are all there: nothing of the victim's
     // open scope survived its refusal.
     EXPECT_EQ(RowsWith(4), 0) << "the victim's rows outlived its rollback";
-    EXPECT_EQ(RowsWith(3), 6);
+    EXPECT_EQ(RowsWith(3), 10);
 }
 
 TEST_F(MidWalkWaitTest, ARefusedAutocommitParkDoesNotLeaveItsScopeForTheNextStatement) {
@@ -2837,7 +2925,8 @@ TEST_F(MidWalkWaitTest, WithoutADetectorTheMidWalkParkIsNotOffered) {
               0u);
 
     Session w;
-    Started walk = Start("UPDATE t SET v = 1", w);
+        // `v >= 0` for the fixture's reason: the per-row path.
+    Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_TRUE(*walk.done) << "it parked with no detector to end a cycle it could join";
     EXPECT_EQ(StatusFromErrorReply(walk.out->response).code(), StatusCode::kTxnConflict)

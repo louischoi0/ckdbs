@@ -90,7 +90,7 @@ first — so a statement that resolves a relation without reading rows
 (`DESCRIBE`, `SHOW TABLES`) resolves under its own view, never the
 previous statement's.
 
-**`READ COMMITTED` is the default.** Rationale: under first-updater-wins with no
+**`READ COMMITTED` is the default.** Rationale: under first-updater-wins with little
 waiting (§5), `REPEATABLE READ` holds one read view for the whole transaction and
 therefore converts more concurrent writes into retryable aborts; `READ COMMITTED`
 re-snapshots per statement and conflicts strictly less. This differs from
@@ -548,7 +548,15 @@ callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
 ## 5. Write conflicts — first-updater-wins
 
 A conflict is detected from the tuple header alone, and the Keystone lock byte
-stays unused. **What follows the detection is no longer a refusal alone**
+stays unused. **The header is no longer the only source of one**
+(AO-S6c-b): a transaction may hold a *unit* rather than a row - a range
+declared by a predicate-covering write (AO-0 item 14) - and the header of a
+row inside that range names whoever wrote it last, which says nothing about
+the holder. A borrow the lock table refuses is therefore a conflict of its
+own, reported in the same shape and naming the **holder** rather than the
+writer, because that is who the waiter is waiting for. Where a dispatcher
+has no lock table the header is all there is and this section reads as it
+always did. **What follows the detection is no longer a refusal alone**
 (M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`, until AO-S8
 moves it here): a writer meeting an undecided holder waits for its decide
 (AO-S3), a transaction holding rows may wait because a wait-for graph in
@@ -568,8 +576,39 @@ with read view `V` over the *current* header `trx_id` (`cur`):
 Under `REPEATABLE READ` this is exactly first-updater-wins. Under `READ
 COMMITTED` the last arm can still fire in the narrow window between a statement's
 snapshot and its write; KDS aborts retryably rather than re-reading. That is
-stricter than PostgreSQL's `READ COMMITTED` and is a deliberate simplification —
-there is no re-read loop and no lock to wait on.
+stricter than PostgreSQL's `READ COMMITTED` and was a deliberate simplification —
+there is no re-read loop.
+
+**"And no lock to wait on" is no longer true, and for one shape the verdict
+above is now reached less often** (the operator's mark of 2026-09-08, built
+in AO-S6c-c). A write whose predicate covers a key window declares that
+window and borrows it **before it walks** (AO-0 item 14). If the unit is
+held, the statement waits having written nothing — and an autocommit
+statement's re-run mints a fresh read view, so it proceeds where the same
+statement used to write part of its rows, meet a held one, and be refused
+with the written rows compensated. For that shape autocommit is now closer
+to PostgreSQL's `READ COMMITTED` than to the rule this section states,
+which is what AR2-A §1 measures M2 by: a refusal converted into a wait.
+
+**The widest case is a write with no `WHERE` at all**, and it is worth
+naming because it is the commonest bulk shape: it declares the *relation*
+and borrows it in `X`, which is incompatible with the `IX` every other
+writer of that relation holds. So `UPDATE t SET v = 1` now waits for any
+transaction holding any row of `t`, and once granted blocks every other
+writer of `t` for the length of its walk. That is a table-level
+serialization point where the per-row path had none, and such a statement
+can join a deadlock cycle where before it could not. It is the price of the
+guarantee the declaration buys — the statement's whole walk sees one state —
+and it is paid only by writes that name no key window.
+
+Three things bound it, and none of them is a re-read loop. An **explicit
+transaction** keeps its read view across the re-run, so `REPEATABLE READ`
+reaches the verdict above exactly as before. A predicate that names **no pk
+window** — `WHERE name = 'x'` — declares nothing, takes the per-row path,
+and can still park mid-walk with rows already written, where the table
+above is what decides. And the wait is the ordinary one: it ends at the
+holder's decide, it is an edge in the wait-for graph, and it is refused
+rather than entered where it would close a cycle.
 
 The engine reports `StatusCode::kTxnConflict`, which maps to the
 wire contract `wire::ErrorCategory::kTxnConflict` with **`retryable = 1`**
@@ -580,7 +619,19 @@ Warn-vs-Debug logging:
 
 ```
 ERR TXN_CONFLICT retryable=1 row id=42 was written by transaction 118
+ERR TXN_CONFLICT retryable=1 row id=42 is held by transaction 118
+ERR TXN_CONFLICT retryable=1 rows id=[42, 51) are held by transaction 118
 ```
+
+The second and third are the lock's (AO-S6c-b, AO-S6c-c) and name the
+holder; the third is a declared unit, and it says a window rather than a row
+because the key that conflicted may be any of them.
+
+**One refusal in this family is not retryable and is not a conflict**: a
+transaction that reaches `max_locks_per_txn` is refused `ResourceExhausted`
+carrying `wire::ResourceDetail::kLockCap` (AO-R10, AO-S6c-c). A retry meets
+the same cap, so the bit is 0 and the client's fix is a shorter transaction
+rather than a later one.
 
 A conflict inside an explicit transaction puts the session in `failed-txn`; in
 autocommit it aborts immediately.

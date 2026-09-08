@@ -1021,6 +1021,8 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     pending_commit_lsn_ = wal::kNoLsn;
     blocking_writer_ = 0;
     blocked_pk_ = 0;
+    last_refusal_ = Status::OK();
+    last_refusal_detail_ = wire::kNoDetail;
     statement_trail_mark_ = 0;
 
     // ---- H6 step 2: the trace, when this session asked for one ----------
@@ -1076,6 +1078,16 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
         !outcome.pending_shipped.has_value()) {
         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
     }
+    // **The refusal, installed where the path that raised it could not
+    // carry one.** `InsertOneRow` answers a rendered string and leaves
+    // `status` OK, so without this the cap's category is recovered by
+    // parsing the line - and `kErrorSpellings` cannot recover
+    // `ResourceExhausted`, so it becomes `InvalidArgument` with the cap's
+    // detail attached to it. Only installed over an OK status: a path that
+    // carried its own has already said something more specific.
+    if (!last_refusal_.ok() && outcome.status.ok()) outcome.status = last_refusal_;
+    outcome.resource_detail = std::exchange(last_refusal_detail_, wire::kNoDetail);
+    last_refusal_ = Status::OK();
     blocking_writer_ = 0;
     blocked_pk_ = 0;
 
@@ -10225,21 +10237,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // `max_locks_per_txn`; the declaration's own definition carries the
     // argument for why choosing coarsely up front is not the escalation
     // the mark forbids.
-    std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    //
+    // **A declaration the table refused is waited for, not demoted**
+    // (AO-S6c-c). Falling back to per-row was right while the borrow was
+    // advisory: it restored a ledger that would otherwise have recorded
+    // nothing at all. With the lock as the wait it is the worse of the two,
+    // and by a clear margin - a demoted statement writes the rows that do
+    // not conflict and then parks on one that does, which AO-S3b's
+    // re-runnability rule turns into a refusal, while waiting on the coarse
+    // unit parks having written nothing and re-runs cleanly.
+    const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
-        auto took = BorrowChain(scope, *declared);
-        if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
-        // **A declaration the table refused is not a declaration.** The
-        // rows below must then take their own tuple borrows, exactly as
-        // they did before item 14 - otherwise a statement whose coarse
-        // unit was held by somebody else records *nothing at all*, not
-        // even the relation `IX`, which is strictly less than the per-row
-        // path this replaced. Demoting is right while the borrow is
-        // advisory. **AO-S6c-b left this a demotion rather than a park on
-        // the coarse unit**: the per-row borrows below meet the same
-        // holder the declaration met, so the statement waits for it either
-        // way, one row later and at one ledger entry per row.
-        if (!took.value()) declared.reset();
+        if (std::optional<Status> held = BorrowOrWait(scope, *declared)) {
+            return {ErrorReply(*held), false, 0, *held};
+        }
     }
 
     // Applies the SET list to one slot if it matches the WHERE. Shared by
@@ -11191,21 +11202,35 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     txn::LockHoldings& holdings = scope.txn->borrows();
     const std::uint64_t id = scope.txn->id();
 
-    // **The cap's swallow must not be returned as a `StatusOr`**
-    // (`base/status.hpp`): one built from `Status::OK()` reports `ok()`
-    // and then dereferences an empty optional in `value()`, which is the
-    // single hazard that header documents. A swallowed cap means the unit
-    // was not taken, so it answers `false` and the caller treats it as any
-    // other refusal.
-    const auto swallowed = [this](const Status& refused) -> StatusOr<bool> {
-        if (Status s = SwallowBorrowCap(refused); !s.ok()) return s;
-        return false;
-    };
+    // **The cap refuses the statement** (AO-S6c-c). While the borrow was
+    // advisory it was swallowed - failing a statement for the size of a
+    // ledger that guarded nothing is a cost with no matching benefit, which
+    // is the operator's decision of 2026-09-08 and the condition it
+    // attached. That condition has lapsed: since AO-S6c-b a refused borrow
+    // refuses the write, and since AO-S6c-c a fence stops an insert, so the
+    // ledger is what the engine reads to decide who may write. A truncated
+    // one is rows with no fence over them and no wait behind them, silently.
+    // AO-R10's rule - a cap refuses and never truncates - takes over, which
+    // is what AO-0 item 1's mark said the end state would be.
+    //
+    // The detail is recorded rather than attached: a `Status` carries none,
+    // so `DispatchOutcome::resource_detail` is how `kLockCap` reaches the
+    // session that builds the wire error.
+    const auto refused = [this](const Status& cap) -> Status {
+        ++borrow_cap_stops_;
+        last_refusal_ = cap;
+        last_refusal_detail_ = static_cast<std::uint16_t>(wire::ResourceDetail::kLockCap);
+        if (logging(LogLevel::kWarn)) {
+            log_->Warn("lock", "core " + std::to_string(core_id_) +
+                                   " refused a statement at max_locks_per_txn: " + cap.message());
+        }
+        return cap;
+    };  // `Status`, not `StatusOr<bool>`: the cap has no granted arm to report.
 
     // A relation unit is outermost and takes no intention above it.
     if (unit.unit == txn::LockUnit::kRelation) {
         auto rel = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
-        if (!rel.ok()) return swallowed(rel.status());
+        if (!rel.ok()) return refused(rel.status());
         return rel.value();
     }
 
@@ -11217,10 +11242,10 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // given quietly rather than a refusal.
     auto rel = locks_->TryAcquire(id, txn::LockKey::Relation(unit.rel_oid),
                                   txn::LockMode::kIntentionExclusive, holdings, blocker);
-    if (!rel.ok()) return swallowed(rel.status());
+    if (!rel.ok()) return refused(rel.status());
     if (!rel.value()) return false;
     auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
-    if (!under.ok()) return swallowed(under.status());
+    if (!under.ok()) return refused(under.status());
     return under.value();
 }
 
@@ -11318,41 +11343,6 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     return txn::LockKey::Range(access.oid, lo, hi);
 }
 
-Status CommandDispatcher::SwallowBorrowCap(const Status& refused) {
-    // **The cap does not refuse a statement while the borrow protects
-    // nothing** (the operator's decision of 2026-09-08). AO-R10 says a cap
-    // refuses and never truncates, and that is the right rule for a borrow
-    // that is the authority - reaching it means the transaction cannot be
-    // given what it needs, so it must be told. At S6a the borrow is
-    // advisory: a `TryAcquire` this function declines to wait for changes
-    // nothing, and the row is exactly as protected as it was before the
-    // sub-stage. Propagating the cap there would take a statement that
-    // would otherwise succeed and fail it on the size of a ledger that
-    // guards nothing - which is a cost with no matching benefit, and it is
-    // newly reachable rather than long-standing: the cap has been 65,536
-    // since AO-S1 and was unreachable until this sub-stage first made
-    // `held_` non-empty.
-    //
-    // **This is a truncation and is counted as one.** `borrow_cap_stops_`
-    // is what makes it visible rather than silent, and it is the number
-    // that must be zero on every cell of the suite: a transaction past the
-    // cap stops recording borrows and keeps writing, so the ledger under
-    // it is incomplete from that row on. **AO-S6c-c propagates instead**
-    // (S6a and S6b both said S6b would, and neither did). Until it does,
-    // the incompleteness is why AO-S6c-b's wait reads the header where the
-    // table names nobody rather than taking the table as the authority:
-    // the rows past this stop have an in-flight writer and no entry.
-    if (refused.code() != StatusCode::kResourceExhausted) return refused;
-    ++borrow_cap_stops_;
-    if (logging(LogLevel::kWarn)) {
-        log_->Warn("lock", "core " + std::to_string(core_id_) +
-                               " stopped recording borrows for a transaction at "
-                               "max_locks_per_txn and let the write proceed: " +
-                               refused.message());
-    }
-    return Status::OK();
-}
-
 Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
     return Status::TxnConflict("row id=" + std::to_string(pk) + " is held by transaction " +
                                std::to_string(holder));
@@ -11437,19 +11427,21 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     // instead of waiting, which is the refusal AR2-A §1 measures this
     // milestone by removing.
     //
-    // **The table is not read alone, because the ledger is not complete.**
-    // Two states put an in-flight writer in the header with no entry to
-    // find: a borrow the cap swallowed (`SwallowBorrowCap` is still a
-    // swallow at this sub-stage, so a transaction past `max_locks_per_txn`
-    // keeps writing and records nothing more), and a dispatcher with no
-    // table at all, where `BorrowChain` grants everything vacuously. Both
-    // are exactly the state AO-S3 waited through, so making the table the
-    // sole authority does not *move* those waits, it deletes them - 7 of
-    // the 12 blocked-writer cells, and the cell
-    // `WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe` for the second
-    // state. The ledger becomes the sole authority where the cap
-    // propagates (AO-S6c-c) and not before; until then the two sources are
-    // a union.
+    // **The table is not read alone, and one of the two reasons has since
+    // gone.** A truncated ledger was the first: while the cap was swallowed
+    // a transaction past `max_locks_per_txn` kept writing and recorded
+    // nothing more, so its later rows had an in-flight writer in the header
+    // and no entry to find. AO-S6c-c ended that - the cap refuses the
+    // statement now, so no row is ever written without its borrow.
+    //
+    // The second stands and is why this is still a union: **a dispatcher
+    // with no lock table at all**, where `BorrowChain` grants everything
+    // vacuously and `blocker` is zero for every row. That is exactly the
+    // state AO-S3 waited through, so reading the table alone would not
+    // *move* those waits, it would delete them - 7 of the 12 blocked-writer
+    // cells failed at once when this was tried, and
+    // `WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe` is the cell that
+    // says the configuration still behaves.
     //
     // Written back rather than kept local, because the write sites tell
     // this row's own recording from a leftover on the same member by
@@ -11817,22 +11809,12 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     std::uint32_t deleted = resume_from.rows_done;  // AO-S3b, as UPDATE
 
     // The unit this write declares, as UPDATE - `UpdateInner`'s site
-    // states the argument and the demotion.
-    std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    // states the argument.
+    const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
-        auto took = BorrowChain(scope, *declared);
-        if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
-        // **A declaration the table refused is not a declaration.** The
-        // rows below must then take their own tuple borrows, exactly as
-        // they did before item 14 - otherwise a statement whose coarse
-        // unit was held by somebody else records *nothing at all*, not
-        // even the relation `IX`, which is strictly less than the per-row
-        // path this replaced. Demoting is right while the borrow is
-        // advisory. **AO-S6c-b left this a demotion rather than a park on
-        // the coarse unit**: the per-row borrows below meet the same
-        // holder the declaration met, so the statement waits for it either
-        // way, one row later and at one ledger entry per row.
-        if (!took.value()) declared.reset();
+        if (std::optional<Status> held = BorrowOrWait(scope, *declared)) {
+            return {ErrorReply(*held), false, 0, *held};
+        }
     }
 
     auto mark = [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {

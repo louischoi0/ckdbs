@@ -664,7 +664,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         if (Status failed = !outcome.status.ok() ? outcome.status
                                                  : StatusFromErrorReply(outcome.response);
             !failed.ok()) {
-            (void)Refuse(out, wire::ErrorFromStatus(failed));
+            (void)Refuse(out, wire::ErrorFromStatus(failed, outcome.resource_detail));
             return;
         }
         // **`S_TXN_OK` is sent only after the WAL ack point of the chosen
@@ -733,7 +733,13 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         // from here on - nothing below reads it.
         portals_.erase(running_portal_);
         running_portal_.clear();
-        (void)Refuse(out, wire::ErrorFromStatus(failed));
+        // **The detail the dispatcher named, where it named one** (AO-S6c-c).
+        // `protocol.md` §11's details live on the wire error and a `Status`
+        // carries none, so the dispatcher hands the answer up beside the
+        // status; `kNoDetail` everywhere else, which is what
+        // `ErrorFromStatus` defaults to and what every refusal but the
+        // borrow cap's still means.
+        (void)Refuse(out, wire::ErrorFromStatus(failed, outcome.resource_detail));
         return;
     }
 
