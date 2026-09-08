@@ -34,22 +34,19 @@
 //
 // Concurrency: **one instance serves every core's store** - `Expeditor`
 // hands the same reference to each `CoreRuntime::Open` - and it is on
-// `rules.md` section 3's declared shared list. Nothing here is internally
-// synchronized. That was sound rather than lucky while **core 0 alone grew
-// the file**: capacity only rises, so a peer reading a stale value
-// under-reads a bound and faults nothing it should not, and this paragraph
-// closed by saying a device "that any core could grow would need real
-// synchronization".
-//
-// **Any core grows it now**, and nothing was added when that became true.
-// A peer allocating through the instance's free map reaches
-// `EnsureCapacity` (since `2663001`, and from two more paths since AW-S1b),
-// which writes `page_capacity_` with no lock. Filed at
-// `docs/inflight/bugs/device-growth-is-not-core-0s-any-more.md`, AM-S3's to
-// decide: growth returns to core 0, or the field becomes atomic. The
-// monotone read is still what has kept it from tearing.
-// (This comment said "owned by one core" until the AL-S9 review; it had not
-// been true since the store went per-core.)
+// `rules.md` section 3's declared shared list. **Any core grows it**, and
+// an implementation owes the synchronisation that takes (the operator's
+// decision of 2026-09-08, closing
+// `device-growth-is-not-core-0s-any-more.md`): a peer allocating through
+// the instance's free map reaches `EnsureCapacity` (since `2663001`, and
+// from two more paths since AW-S1b), so `page_capacity()` is an atomic
+// load of a bound that only rises - a reader with a stale value under-reads
+// the bound and faults nothing it should not - and the grow itself is
+// serialised inside the device, so two cores running off the end at once
+// produce one grow. How each implementation does that is its own
+// header's to state. Growth was core 0's alone while each core had its
+// own store and its own extent lease; this paragraph said so until
+// 2026-09-08, and "owned by one core" before the AL-S9 review.
 //
 // **That argument covers `page_capacity_` and nothing else** (AM-S2 R8).
 // It is about a monotonically rising bound read racily; it says nothing
@@ -70,10 +67,11 @@
 // thread-safe for distinct offsets, and holds no per-read state - **read
 // rather than assumed** (AM-R11, 2026-09-06): every transfer is a `pread`
 // or `pwrite` at an offset computed from the page id
-// (`file_page_device.cpp:97` and `:129`), never `lseek` plus `read`, and
-// the loop's `offset`, `buffer` and `remaining` are locals. It needed no
-// change; its own header's "core-local" claim did.
-// Write, grow and sync remain the caller's to serialise; nothing here
+// (`file_page_device.cpp`'s `ReadAt` and `WriteAt`), never `lseek` plus
+// `read`, and the loop's `offset`, `buffer` and `remaining` are locals. It
+// needed no change; its own header's "core-local" claim did.
+// **Growth is the device's own to serialise** since 2026-09-08, per the
+// paragraph above; write and sync remain the caller's, and nothing here
 // promises they are safe against a concurrent read.
 
 namespace kds::storage {

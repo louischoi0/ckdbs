@@ -565,6 +565,11 @@ std::uint32_t DevicePageStore::allocated_pages() const noexcept {
 }
 
 Status DevicePageStore::EnsureAddressable(PageId page_id) {
+    // The device's growth lock is a leaf under the page latch and under
+    // nothing of this store's (`file_page_device.hpp`, `rules.md` §3's
+    // device row); this is the assert that keeps the map half of that
+    // sentence true, the way the map's own readers keep theirs.
+    AssertNotUnderMapHold("EnsureAddressable");
     if (page_id < device_.page_capacity()) return Status::OK();
     return device_.EnsureCapacity(page_id + 1);
 }
