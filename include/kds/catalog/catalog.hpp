@@ -740,7 +740,21 @@ public:
     // the engine later issues an id that is already a tuple's identity.
     //
     // Fails with NotFound if no sys.tables row names `table_oid`.
-    Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id);
+    //
+    // **`before_mark` runs after every refusal above has been decided and
+    // before anything is written**, and its non-OK return aborts the admit
+    // with nothing changed. It exists because this call is the *only*
+    // validation a caller-named key ever gets - `TableAccess` deliberately
+    // carries no `next_id`, so no caller can ask "is this key legal" without
+    // asking here - while the caller that takes the row's lock needs to take
+    // it before the mark moves, or a statement that parks and re-runs finds
+    // the mark advanced past the very key it waited for and is refused
+    // `OutOfRange` on a heap relation. Doing it outside, on either side,
+    // buys one at the price of the other: borrow first and an illegal key
+    // waits on a lock before being told it was never legal; admit first and
+    // the wait cannot be re-run.
+    Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
+                              const std::function<Status()>& before_mark = {});
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 

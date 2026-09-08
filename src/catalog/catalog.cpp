@@ -2590,7 +2590,8 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
     return issued;
 }
 
-Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
+Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
+                                   const std::function<Status()>& before_mark) {
     // Spellability first, before the catalog page is touched at all: an id
     // outside the Keystone field cannot be stored by any path, so there is
     // nothing to check a relation for.
@@ -2640,6 +2641,14 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
                 // move - it is a ceiling on what has been placed, and this id
                 // is under it.
                 //
+                // **The caller's hook, at the first point the key is known
+                // to be admissible and before any of the three writes
+                // below.** The declaration says why it is here rather than
+                // on either side of the call.
+                if (before_mark) {
+                    if (Status s = before_mark(); !s.ok()) return s;
+                }
+
                 // What *does* move, once per relation ever, is the order
                 // flag: from here on a page's slot order is not its key
                 // order, so ORDER BY <pk> can no longer be discarded
@@ -2672,6 +2681,9 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
             // where the reverse would leave one too low, and a too-low mark
             // is how the engine later issues an id that is already a tuple's
             // identity.
+            if (before_mark) {
+                if (Status s = before_mark(); !s.ok()) return s;
+            }
             row.next_id = id + 1;
             auto encoded = row.Encode();
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {

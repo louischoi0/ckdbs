@@ -1052,6 +1052,32 @@ private:
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                       std::uint64_t pk, std::uint64_t& blocker);
 
+    // The refusal a borrow the table declined produces, in
+    // `CheckWriteConflict`'s own shape - `txn/manager.cpp` calls that
+    // message part of the wire contract rather than a diagnostic, so the
+    // three sites that can now raise it must not each invent one. It names
+    // the **holder** rather than the row's writer, because that is who the
+    // client is waiting for and, for a range fence, the two are not the
+    // same transaction.
+    static Status HeldByHolder(std::uint64_t pk, std::uint64_t holder);
+
+    // **The borrow, and the refusal a unit somebody else holds produces.**
+    // `nullopt` means the unit is this statement's to write. A `Status`
+    // means it is not - and the holder has already been recorded where
+    // `DispatchAsync` can park on it, so the caller has only to render it.
+    //
+    // **A refusal naming nobody is the cap's and is not one of these**:
+    // `SwallowBorrowCap` still turns `ResourceExhausted` into "not granted"
+    // at this sub-stage, so that bool has two causes and `blocker` is what
+    // tells them apart. Without the test an insert past the cap is refused
+    // as though transaction 0 held its row.
+    //
+    // The message is rendered from the **unit**, because a fence is not a
+    // row: a run that borrowed `[lo, hi)` and was refused must not tell the
+    // client that `lo` is held, since the descendant that conflicted may be
+    // any key in the window.
+    std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit);
+
     // Is `cond` a non-negative integer literal compared against `access`'s
     // primary key, and if so which id? The shared half of the test
     // `PkEqualityTarget` and `DeclaredWriteBorrow` both need.

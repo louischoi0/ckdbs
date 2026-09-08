@@ -7447,10 +7447,16 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // item 14's shape arrived at from the other direction - the ids are
     // known instead of a predicate - and it is what keeps a bulk fill of
     // any size inside `max_locks_per_txn`.
-    if (const std::size_t rows = stmt.rows.size(); rows != 0) {
-        auto took = BorrowChain(
-            scope, txn::LockKey::Range(ta.oid, first.value(), first.value() + rows));
-        if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
+    // The run is re-runnable - no row of it is written yet - and the cost
+    // of a park is the block already carved, which `AllocateRowIdRange`
+    // above has bumped the mark by. That is the same cost the single-id
+    // path states, and `sys.tables.next_id` being a mark on what has been
+    // *placed* is what allows it. `rows` is provably nonzero: the range
+    // allocation refuses a count of zero and returned above.
+    if (std::optional<Status> held = BorrowOrWait(
+            scope, txn::LockKey::Range(ta.oid, first.value(),
+                                       first.value() + stmt.rows.size()))) {
+        return {ErrorReply(*held), false, 0, *held};
     }
 
     // Encoded up front, ids contiguous from the range. The gate excluded
@@ -7713,52 +7719,42 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                 ": admitting one writes the relation's catalog row, the system core's page "
                 "(workplan-peer-writer.md §7a) - omit the key and this core issues one"));
         }
-        if (Status s = catalog_.AdmitExplicitRowId(oid, supplied_id); !s.ok()) {
+        // **The borrow rides inside the admit** (AO-S6c-c), which is the
+        // only place both orderings can hold at once: after the key has
+        // been judged legal - this call is the sole validation a named key
+        // ever gets - and before the mark moves, so a statement that parks
+        // here and re-runs still finds its own key admissible rather than
+        // `OutOfRange` below a mark its first attempt advanced. The hook's
+        // refusal comes back as this call's status, so a held row and an
+        // illegal key reach the client by the same path.
+        if (Status s = catalog_.AdmitExplicitRowId(
+                oid, supplied_id,
+                [&]() -> Status {
+                    if (std::optional<Status> held =
+                            BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, supplied_id))) {
+                        return *held;
+                    }
+                    return Status::OK();
+                });
+            !s.ok()) {
             return ErrorReply(s);
         }
         row_id = supplied_id;
     } else {
+        // An issued id cannot be borrowed any earlier - the borrow's key is
+        // the id - and needs no such care: a re-run draws a fresh one, and
+        // burning one is what `sys.tables.next_id` being a high-water mark
+        // on what has been *placed* allows.
         auto issued = catalog_.AllocateRowId(oid);
         if (!issued.ok()) {
             return ErrorReply(issued.status());
         }
         row_id = issued.value();
+        if (std::optional<Status> held =
+                BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, row_id))) {
+            return ErrorReply(*held);
+        }
     }
-
-    // **The row's borrow, before anything of it is written** (AO-S6c-a).
-    // An INSERT took none until this sub-stage, and that was not a missing
-    // feature but the thing standing between AO-S6 and its own goal: the
-    // wait's blocker is about to come from the lock table instead of from
-    // the tuple header, and a row whose only writer was an INSERT has a
-    // header `trx_id` and no table entry - so a reader of the table alone
-    // would stop waiting for in-flight inserters and answer as though the
-    // row were free. A wrong answer, not a gap.
-    //
-    // Per row and with no coarse declaration: item 14's unit is read off a
-    // *predicate* and an INSERT has none. The bulk path that carves a
-    // contiguous id block does declare one, in `SortedFillInner`.
-    //
-    // **Placed here rather than beside the placement call** so that every
-    // write attributable to this row follows its borrow: `EncodeRow` below
-    // appends the row's overflow values to the var-heap before the tuple
-    // itself is placed. That is an ordering of this row's own writes, not
-    // a claim over the var-heap page - which is shared with every other row
-    // of the relation and which no unit in `LockKey` names.
-    //
-    // **The refusal is still not read here, and since AO-S6c-b that is an
-    // asymmetry rather than a shared rule.** The UPDATE and DELETE sites
-    // now act on theirs: a refused borrow is a conflict of its own there,
-    // and the wait's holder comes from the table. This site cannot convert
-    // the same way, because there is nothing here to convert - they follow
-    // an ignored refusal with `CheckWriteConflictBlocking`, which produces
-    // a verdict from the header, and an INSERT has no conflict check at
-    // all; it needs a park added outright, which S6c-b did not do. What
-    // that leaves standing is stated rather than implied: **a range fence
-    // does not stop an insert into its window**, so item 14's declared
-    // unit protects a declaring transaction against writers of rows that
-    // exist and not against rows that appear.
-    auto took = BorrowChain(scope, txn::LockKey::Tuple(ta.oid, row_id));
-    if (!took.ok()) return ErrorReply(took.status());
 
     std::vector<exec::AppendedSpill> spills;
     auto encoded = exec::EncodeRow(
@@ -11357,6 +11353,37 @@ Status CommandDispatcher::SwallowBorrowCap(const Status& refused) {
     return Status::OK();
 }
 
+Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
+    return Status::TxnConflict("row id=" + std::to_string(pk) + " is held by transaction " +
+                               std::to_string(holder));
+}
+
+std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
+                                                      const txn::LockKey& unit) {
+    std::uint64_t blocker = 0;
+    auto took = BorrowChain(scope, unit, &blocker);
+    if (!took.ok()) return took.status();
+    if (took.value() || blocker == 0) return std::nullopt;
+
+    // **A refused borrow stops the write.** An insert has no conflict check
+    // of its own to convert - the row does not exist, so there is no header
+    // to judge - which is why AO-S6c-b left both insert paths alone and why
+    // a range fence did not stop an insert into its window until AO-S6c-c.
+    // Without this, item 14's declared unit guarded its holder against
+    // writers of rows that *exist* and not against rows that *appear*,
+    // which is the one thing a range fence is for.
+    //
+    // `NoteBlockingWriter` is the recorder every other wait in this file
+    // uses and carries the same conditions - it records nothing outside
+    // `DispatchAsync`'s `may_park_`, so a synchronous dispatch still gets
+    // the plain refusal rather than a park nothing would resume.
+    NoteBlockingWriter(scope.txn, blocker, unit.lo);
+    if (unit.unit == txn::LockUnit::kTuple) return HeldByHolder(unit.lo, blocker);
+    return Status::TxnConflict("rows id=[" + std::to_string(unit.lo) + ", " +
+                               std::to_string(unit.hi) + ") are held by transaction " +
+                               std::to_string(blocker));
+}
+
 Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                                      std::uint64_t pk,
                                                      std::uint64_t& blocker) {
@@ -11376,10 +11403,7 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     // calls part of the wire contract rather than a diagnostic: same shape,
     // and it names the holder rather than the writer because that is who
     // the client is waiting for.
-    if (verdict.ok() && blocker != 0) {
-        verdict = Status::TxnConflict("row id=" + std::to_string(pk) +
-                                      " is held by transaction " + std::to_string(blocker));
-    }
+    if (verdict.ok() && blocker != 0) verdict = HeldByHolder(pk, blocker);
     if (verdict.ok()) return verdict;
     // **The row is held by a writer that has not decided, so the statement
     // waits for it instead of refusing** (AO-S3, AO-3 B rows 1 and 2).

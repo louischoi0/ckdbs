@@ -2066,6 +2066,89 @@ TEST_F(LockDeadlockTest, AWriteBlockedByARangeFenceWaitsForItsHolder) {
     EXPECT_EQ(wb.out->response, "UPDATED 1") << wb.out->response;
 }
 
+TEST_F(LockDeadlockTest, AnInsertIntoAFencedWindowWaitsForItsHolder) {
+    // AO-S6c-c's first piece, and the gap AO-S6c-b's review named: until
+    // this cell an INSERT wrote straight through a range fence, because the
+    // insert sites took their borrow and never read the answer. There is no
+    // header here to fall back on - the row does not exist yet - so the
+    // borrow is the *only* thing that can refuse it, which is why a fence
+    // guarded its holder against writers of rows that exist and not against
+    // rows that appear.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    const DispatchOutcome fenced =
+        dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 4 AND v = 99", &a);
+    ASSERT_EQ(fenced.response, "UPDATED 0") << fenced.response;
+
+    // Above the relation's high-water mark, because `t` is heap-clustered
+    // and its chain grows only at the tail - a key below the mark is a
+    // btree-only shape and would be refused before the borrow is reached.
+    Started wb = Start("INSERT INTO t VALUES (100, 1)", b);
+    Pump();
+    ASSERT_FALSE(*wb.done) << "the insert went through A's fence: " << wb.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the insert never resumed after the fence was released";
+    EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
+}
+
+TEST_F(LockDeadlockTest, AnIllegalKeyIsRefusedWithoutWaitingOnAFence) {
+    // The regression AO-S6c-c's own first draft introduced and its review
+    // caught. Moving the borrow ahead of `AdmitExplicitRowId` was right for
+    // the re-run, but that call is the **only** validation a caller-named
+    // key ever gets - `TableAccess` carries no `next_id` on purpose - so it
+    // also put the borrow ahead of every reason to refuse the key at all.
+    // An insert that could never succeed then waited out a fence, burned
+    // ledger entries, and inside an explicit transaction could be killed as
+    // a deadlock victim for a statement with no future.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 4 AND v = 99", &a).response,
+              "UPDATED 0");
+
+    // Key 5 sits inside A's window and below the relation's high-water
+    // mark, so on a heap relation it can never be written by anyone. It
+    // must be told so at once.
+    Started wb = Start("INSERT INTO t VALUES (5, 9)", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "an illegal key waited on a fence it could never write past";
+    EXPECT_NE(wb.out->response.find("high-water mark"), std::string::npos) << wb.out->response;
+}
+
+TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
+    // The other insert path, which routes past `InsertOneRow` entirely and
+    // whose park had no cell of its own until here - the review's C5. Every
+    // row omits its key, so the fill carves one contiguous block and
+    // borrows it as a range.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 4 AND v = 99", &a).response,
+              "UPDATED 0");
+
+    // The block is carved from the mark, which sits inside A's window, and
+    // the window runs to the end of the id space - so a re-run that carves
+    // a fresh block is still covered.
+    Started wb = Start("INSERT INTO t VALUES (1), (2)", b);
+    Pump();
+    ASSERT_FALSE(*wb.done) << "the fill wrote through A's fence: " << wb.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the fill never resumed after the fence was released";
+    EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
+}
+
 TEST_F(LockDeadlockTest, ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds) {
     // AO-5's S4a cell. Without a detector this is the deadlock AO-S3's
     // guard exists to prevent; with one, the guard lifts and the cycle is
