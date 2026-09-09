@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <span>
 #include <string>
@@ -167,10 +166,10 @@ StatusOr<AssertionBuildRequestPayload> AssertionBuildRequestOf(catalog::Oid tabl
 
 class AssertionBuildServer {
 public:
-    // Runs on `done(committed)`: the runtime drops its catalog cache here,
-    // so the published `sys.assertions` row is seen by this core's
-    // `SHOW ASSERTIONS`. The one seam that reaches back into its owner.
-    using OnCommittedFn = std::function<void()>;
+    // The published `sys.assertions` row is seen by this core's
+    // `SHOW ASSERTIONS` at its next boundary, through the schema word
+    // (AT-S2); the `on_committed` seam that reached back into the owner
+    // for it is gone.
 
     // `enforcer` is this core's live registry - the build adopts into it,
     // which is the whole point of building here. `txn` may be null (the
@@ -180,7 +179,7 @@ public:
                          wal::WalManager* wal, txn::TransactionManager* txn,
                          exec::AssertionEnforcer& enforcer, std::uint32_t core_id,
                          sched::Scheduler& scheduler, sched::RingTransport& transport,
-                         OnCommittedFn on_committed = {}, Logger* log = nullptr) noexcept
+                         Logger* log = nullptr) noexcept
         : catalog_(catalog),
           store_(store),
           wal_(wal),
@@ -189,7 +188,6 @@ public:
           core_id_(core_id),
           scheduler_(scheduler),
           transport_(transport),
-          on_committed_(std::move(on_committed)),
           log_(log) {}
 
     // The kAssertionBuildRequest handler: bound the text, check the owner,
@@ -197,7 +195,7 @@ public:
     // core 0 is parked on one.
     void OnRequest(const sched::MessageHeader& header, std::span<const std::byte> payload);
     // The kAssertionBuildDone handler: `aborted` evicts what the build
-    // adopted, `committed` drops the catalog cache.
+    // adopted; `committed` has nothing left to do but log (AT-S2).
     void OnDone(const sched::MessageHeader& header, std::span<const std::byte> payload);
 
     // Builds attempted. Diagnostics and tests.
@@ -217,7 +215,6 @@ private:
     std::uint32_t core_id_;
     sched::Scheduler& scheduler_;
     sched::RingTransport& transport_;
-    OnCommittedFn on_committed_;
     Logger* log_;
     std::uint64_t builds_ = 0;
 };

@@ -331,6 +331,20 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
         }
     }
 
+    // **Everything read off `schema` is read here, before the BEGIN.**
+    // `Dispatch` is a statement boundary and drops this core's catalog
+    // cache when the schema word has moved (AT-S2), which frees the entry
+    // `schema` refers into - so what the load needs is copied out first and
+    // the borrow is not touched again.
+    LoadState load;
+    load.relation = begin.value().relation;
+    load.field_count = schema.columns.size() - 1;
+    for (std::size_t i = 1; i < schema.columns.size(); ++i) {
+        load.type_vals.push_back(schema.columns[i].type_val);
+    }
+    auto fields = wire::DescribeSchema(schema);
+    fields.erase(fields.begin());  // the pk is the engine's, never the client's
+
     // The implicit transaction (KW5, BI11): the same BEGIN the text
     // protocol runs, so every semantics is the session's own. A session
     // already inside a transaction is refused by BEGIN itself.
@@ -340,13 +354,8 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
         return;
     }
 
-    conn.load = LoadState{};
+    conn.load = std::move(load);
     conn.load.load_id = next_load_id_++;
-    conn.load.relation = begin.value().relation;
-    conn.load.field_count = schema.columns.size() - 1;
-    for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        conn.load.type_vals.push_back(schema.columns[i].type_val);
-    }
     conn.phase = Phase::kLoading;
 
     // S_LOAD_READY: the numbers, then the post-pk field descriptors in the
@@ -358,8 +367,6 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     w.U32(kKwpMaxChunkBytes);
     w.U16(static_cast<std::uint16_t>(conn.load.field_count));
     auto head = w.Take();
-    auto fields = wire::DescribeSchema(schema);
-    fields.erase(fields.begin());  // the pk is the engine's, never the client's
     wire::EncodeRowDescription(fields, head);
     Send(conn, wire::ServerFrameType::kLoadReady, head);
 

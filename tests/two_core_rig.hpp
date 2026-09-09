@@ -61,7 +61,6 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/ring_transport.hpp"
-#include "kds/sched/send_retry.hpp"
 #include "kds/sched/sim_waker_table.hpp"
 #include "kds/server/core_runtime.hpp"
 #include "kds/server/row_id_lease_service.hpp"
@@ -244,6 +243,7 @@ private:
             config.shared_writer = wal_->writer();
             config.visibility = &*visibility_;
             config.locks = locks_.get();
+            config.schema_word = &schema_word_;
             config.wal_drain_interval_ns = options_.wal_drain_interval_ns;
             config.scheduler.max_idle_block_ms = options_.max_idle_block_ms;
             auto core = CoreRuntime::Open(config, *device_, clock_, /*log=*/nullptr);
@@ -284,21 +284,10 @@ private:
             !s.ok()) {
             return s;
         }
-        // Placement, then the DDL choke point: flush the unlogged catalog
-        // pages, then tell the peer to re-read them - `Expeditor::
-        // BroadcastCatalogInvalidation`'s order, on core 0's own reactor,
-        // which is the thread every DDL runs on.
+        // Placement. The DDL choke point needs no wiring since AT-S2: both
+        // cores' catalogs share `schema_word_` through their configs, and
+        // the peer revalidates at its next cached read.
         core0.catalog().SetPlacementPolicy(options_.placement);
-        core0.catalog().SetInvalidationHook([this, &core0] {
-            if (!store_->FlushPages(catalog::kEveryCatalogPage).ok()) return;
-            sched::MessageHeader header{};
-            header.src_core = 0;
-            header.dst_core = 1;
-            header.session_core = 0;
-            header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kCatalogInvalidate);
-            header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-            core0.scheduler().Submit(sched::MakeSendRetryTask(*transport_, header, {}));
-        });
         // The peer's first transaction-id block, carved from the one
         // sequence - which persists page 0 through core 0's runtime - so
         // the peer can write before its tick has asked for anything.
@@ -321,6 +310,7 @@ private:
     std::optional<sched::WakerTable> wakers_;
     std::optional<sched::SimWakerTable> sim_;
     std::unique_ptr<txn::LockTable> locks_;
+    std::atomic<std::uint64_t> schema_word_{0};  // AT-S2: one for both cores
     std::array<std::thread, 2> threads_;
     // Last, so they die first: every runtime borrows everything above.
     std::array<std::unique_ptr<CoreRuntime>, 2> cores_;

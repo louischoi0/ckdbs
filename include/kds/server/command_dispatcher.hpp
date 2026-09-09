@@ -908,12 +908,21 @@ public:
     // every caller that predates transactions gets - and what keeps their
     // behaviour identical, because an autocommit statement outside an
     // explicit transaction is exactly what the engine did before.
+    // A cache-dropping boundary, as `DispatchAndStage` below states.
     DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
 
     // The statement path without the durability wait: it runs the statement
     // and reports any commit it staged through `DispatchOutcome::pending_lsn`.
     // Both entry points above go through it; they differ only in how they
     // wait.
+    //
+    // **A statement boundary, and since AT-S2 a cache-dropping one**: its
+    // head revalidates this core's catalog against the schema word, which
+    // frees every cached `TableAccess` when the word has moved. Every public
+    // entry - `Dispatch`, `DispatchAsync`, this - is therefore one: hold no
+    // `const TableAccess*` and no `Schema&` borrowed from the catalog across
+    // a call to any of them; copy out what you need first
+    // (`kwp_load_server.cpp`'s load begin is the shape).
     DispatchOutcome DispatchAndStage(std::string_view line, Session* session);
 
     // The suspendable form. Writes its reply through `out` - which the
@@ -971,6 +980,7 @@ public:
         kAtAppend,
     };
 
+    // A cache-dropping boundary, as `DispatchAndStage` states.
     sched::Coro DispatchAsync(std::string_view line, Session* session, DispatchOutcome* out,
                               CommitAck commit_ack = CommitAck::kWhenDurable);
 
@@ -1195,15 +1205,13 @@ private:
     //
     // **Why the window's own close is what makes the re-run correct**, and
     // why this is not the relation `X` M2's census names: the owner's
-    // `OnDone` closes the window and *then* drops the catalog cache, in one
-    // handler task that runs to completion before the next task is polled,
-    // so a park ending on the close cannot have missed the drop. A lock
+    // `OnDone` closes the window in one handler task that runs to
+    // completion before the next task is polled, and the index's row bumped
+    // the schema word ahead of `done` - so a park ending on the close
+    // re-runs through a boundary that cannot miss the index (AT-S2). A lock
     // released by core 0 at the DDL's decide is a write to a table both
     // cores share, seen here before either ring message is drained - it
     // would admit exactly the unindexed write the window exists to prevent.
-    // One exception, pre-existing and not this row's:
-    // `CoreRuntime::InvalidateCatalog` returns before dropping the cache if
-    // its `EvictClean` fails, which a retry met the same way.
     //
     // On return `out->index_window` is empty, whichever way it ended.
     sched::Coro AwaitIndexWindow(std::string_view line, Session* session, DispatchOutcome* out,
@@ -2049,13 +2057,6 @@ public:
     // `cores = 1` byte-identical.
     void SetStatementShip(StatementShipClient* client) noexcept { statement_ship_ = client; }
 
-    // Drops every fact this core caches about the catalog. Wired by
-    // `CoreRuntime` to the same `InvalidateCatalog()` the `kCatalogInvalidate`
-    // ring handler runs, so a DDL this core shipped and a DDL core 0 was
-    // told about converge on one implementation. Unset on a dispatcher
-    // nobody wired (the tests' path), where no DDL can be shipped either.
-    void SetCatalogInvalidate(std::function<void()> fn) { catalog_invalidate_ = std::move(fn); }
-
     // **Where this core's access shapes go** (CR7). Unset on core 0, which
     // writes `sys.access_stats` directly because it is the only core that
     // may. Set on a peer, whose accesses are folded here and flushed to
@@ -2685,10 +2686,6 @@ private:
     // core 0 the handler's applied counts.
     const stats::AccessBatchCounters* access_batch_counters_ = nullptr;
 
-    // `SetCatalogInvalidate`. Empty on a dispatcher nobody wired, which is
-    // every test fixture and every single-core instance - both of which are
-    // also instances where no DDL is ever shipped.
-    std::function<void()> catalog_invalidate_;
     // R6-3's coordinator half; null on a single-core instance and every
     // fixture, which is also where no session ever has a participant.
     Txn2pcClient* txn_2pc_ = nullptr;

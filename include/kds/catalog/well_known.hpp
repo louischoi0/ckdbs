@@ -423,8 +423,7 @@ inline constexpr PageId kAllCatalogPages[] = {
 // read-only and nothing else it was not leased - so a catalog page at an id
 // above that limit was one a peer could not read at all. That rule went
 // with the fault grants at AW-S1b (every core faults every page now). And
-// the flush that
-// precedes `kCatalogInvalidate` has to name every catalog page; a bounded
+// a flush of "every catalog page" has to be able to name them; a bounded
 // range can be named, an arbitrary set of general-supply ids cannot without
 // storing it somewhere durable.
 //
@@ -473,10 +472,12 @@ static_assert(CatalogRootsAreDistinctAndBelowOverflow(),
 // Every page a catalog relation can occupy: the roots, then the whole
 // overflow range.
 //
-// The two callers - the flush that precedes `kCatalogInvalidate` and a
-// peer's eviction of its stale copy - both need "all of them", and both
-// tolerate an id that is not resident (`FlushPages` skips a page it has no
-// frame for; `EvictClean` erases nothing). So the range is named in full
+// Its callers were the flush that preceded the catalog broadcast and a
+// peer's eviction of its stale copy; both went at AT-S2, when one pool and
+// a schema word made them moves of bytes nobody re-read. What remains is
+// the fixtures' flush of unlogged catalog pages, which needs "all of them"
+// and tolerates an id that is not resident (`FlushPages` skips a page it
+// has no frame for). So the range is named in full
 // rather than tracked: an exact set would have to be discovered by walking
 // every chain, and a walk that happens on the invalidation path is a walk
 // that can fail there.

@@ -2048,12 +2048,13 @@ private:
             if (resume_gate_ != nullptr && index == 0 && !(*resume_gate_)()) {
                 co_await sched::WaitUntil{resume_gate_};
 
-                // The park ran other tasks on this core, and any DDL
-                // anywhere broadcasts kCatalogInvalidate, whose handler
-                // clears the whole TableAccess cache - killing every
-                // borrow this runner holds (bound_, schemas_, the frame's
-                // schema pointers, the visitor's access). Re-take them: a
-                // refill from catalog storage restores the same physical
+                // The park ran other tasks on this core, and any task's
+                // boundary may revalidate against a schema word a DDL
+                // anywhere moved (AT-S2), dropping the whole TableAccess
+                // cache - killing every borrow this runner holds (bound_,
+                // schemas_, the frame's schema pointers, the visitor's
+                // access). Re-take them: a refill from catalog storage
+                // restores the same physical
                 // values for a live relation (no DDL can change a live
                 // relation's shape), and a relation dropped while we were
                 // parked surfaces here as a clean error instead of a read

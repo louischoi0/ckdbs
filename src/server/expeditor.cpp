@@ -805,6 +805,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // along, but re-setting it keeps that fact local instead of depending
     // on a copy elsewhere staying a copy.
     expeditor->database_->catalog.SetLogger(&*expeditor->logger_);
+    expeditor->database_->catalog.SetSchemaWord(&expeditor->schema_version_);  // AT-S2
     // The placement rule, before any DDL can run (workplan P6c). At
     // cores = 1 rotate degrades to the creating core by the formula, so no
     // validation couples the two keys.
@@ -936,7 +937,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // (bootstrap on an existing database reads only the superblock), so
     // dropping whatever the cache holds is the whole ordering fix - the
     // stated rule is that nothing may start.
-    expeditor->database_->catalog.InvalidateFromPeer();
+    expeditor->database_->catalog.DropCache();
 
     // RV3's audit (RC09): with catalog mutations logged (2026-08-19) this
     // asks whether the relations the *recovered* catalog describes can be
@@ -1246,36 +1247,6 @@ void PinToCore(std::thread& thread, std::uint32_t core_id, Logger* log) {
 }
 
 }  // namespace
-
-void Expeditor::BroadcastCatalogInvalidation(sched::Scheduler& core0_scheduler) {
-    if (!transport_.has_value() || cores_.empty()) return;
-
-    // **Flush before telling anyone.** Catalog writes are unlogged and
-    // otherwise reach the device only at checkpoint or SYNC, so a peer told
-    // to re-read now would read the state *before* this DDL - and conclude
-    // the new relation does not exist, permanently, until something else
-    // happened to flush. This is the ordering the whole scheme rests on.
-    if (Status s = store_->FlushPages(catalog::kEveryCatalogPage); !s.ok()) {
-        // Reported and not propagated: the DDL itself has already succeeded
-        // and the caller is BumpVersion(), which returns void. The cost is
-        // peers that keep a stale catalog until the next flush - stale, not
-        // wrong, because a stale catalog answers "not found" and never a
-        // wrong row.
-        logger_->Error("catalog", "flushing catalog pages before invalidating peers failed: " +
-                                      s.message());
-        return;
-    }
-
-    for (const auto& core : cores_) {
-        sched::MessageHeader header{};
-        header.src_core = 0;
-        header.dst_core = core->core_id();
-        header.session_core = 0;
-        header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kCatalogInvalidate);
-        header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-        core0_scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, {}));
-    }
-}
 
 void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
     // **AU-S3: a flag and a kick, not a message.** This sent every peer a
@@ -1836,6 +1807,7 @@ Status Expeditor::Start() {
             // table is what lets this peer's decide wake a waiter on core 0
             // and core 0's wake one here.
             core_config.locks = locks_.get();
+            core_config.schema_word = &schema_version_;
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
@@ -2121,12 +2093,6 @@ Status Expeditor::Start() {
             return s;
         }
         dispatcher_->SetAccessStatsApplied(&access_batch_counters_);
-
-        // Core 0's DDL choke point, wired to the broadcast. Installed after
-        // the peers exist so the loop below always has somebody to tell.
-        database_->catalog.SetInvalidationHook([this, &scheduler] {
-            BroadcastCatalogInvalidation(scheduler);
-        });
 
         // **CC7's publish hook went with the grants** (AW-S1b). It ran at
         // every DDL that placed a relation on a peer: flush the creation

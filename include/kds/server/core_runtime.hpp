@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -60,10 +61,11 @@
 //
 //   1. **The catalog is read-only here.** The catalog's fixed pages have one
 //      writer, core 0 (M5). A peer faults them read-only - the page store
-//      enforces it (`MayWrite`) - and re-reads them when core 0 broadcasts
-//      `kCatalogInvalidate` after a DDL. A peer that has not yet processed
-//      the broadcast answers "table not found", which crosscore.md §5
-//      already specifies as retryable.
+//      enforces it (`MayWrite`) - and since AT-S2 its cache revalidates
+//      against the instance's schema version word at each task boundary,
+//      so a DDL's rows are seen by the next statement with nothing sent. The
+//      broadcast that stood here, and the retryable "table not found" a
+//      peer answered until it arrived, are gone.
 //   2. **Allocation reaches the one free map**, under the structure latch.
 //      It came from a per-core extent lease until AW-S1b, because a store a
 //      core did not own could not reach that map at all.
@@ -316,6 +318,12 @@ public:
         // `core_count == 1`, which is a fixture's shape (`core_runtime_test`'s
         // core-0 runtimes), and none above it.
         txn::LockTable* locks = nullptr;
+
+        // **The instance's schema version word** (AT-S2), borrowed the same
+        // way: `Expeditor` owns the atomic and every core's catalog reads
+        // it at each task boundary. Null leaves the catalog revalidating
+        // nothing, which is a fixture's shape.
+        std::atomic<std::uint64_t>* schema_word = nullptr;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -430,11 +438,6 @@ public:
     // fails: the data is durable through the syncs, and the cost is a slower
     // next mount, which the caller logs.
     Status ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor);
-
-    // Drops this core's cached view of the catalog - both the derived facts
-    // and the page frames they came from. What the `kCatalogInvalidate`
-    // handler calls; exposed so a test can drive it without a reactor.
-    void InvalidateCatalog();
 
     // The same, for this core's transaction ids (PW1): a peer may not raise
     // the superblock's ceiling, so its windows are granted. Peers only -

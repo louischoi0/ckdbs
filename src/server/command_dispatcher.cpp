@@ -516,14 +516,12 @@ sched::Coro CommandDispatcher::AwaitIndexWindow(std::string_view line, Session* 
     // ---- AO-S6e-a: census row 4's refusal, converted --------------------
     //
     // The window is the owner's own, and so is its close. `OnDone` shuts it
-    // and *then* drops the catalog cache - and the handler runs **inside a
-    // task**, not inside the drain: `Scheduler` submits a `FunctionTask`
-    // and says so at the site ("The handler runs inside a task, not here").
-    // What the property needs is only that the task runs to completion
-    // before another is polled, which it does, and that `InvalidateCatalog`
-    // takes no suspension point, which it does not. So a park that ends on
-    // `!Covers(oid)` cannot have observed the close without the drop, and
-    // the re-run writes into an index this core knows about.
+    // inside a task that runs to completion before another is polled, and
+    // the index's catalog row bumped the schema word in phase 2, ahead of
+    // the commit and so ahead of `done` (AT-S2). The re-run is a whole
+    // statement through `DispatchAndStage`, whose head revalidates - so a
+    // park that ends on `!Covers(oid)` cannot resolve without seeing the
+    // index, and writes into one this core knows about.
     //
     // That ordering is the whole reason AO-S6e-a is a window and not the
     // relation `X` census row 4 names. A lock released on core 0 at the
@@ -1350,6 +1348,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
 }
 
 DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Session* session) {
+    // The statement boundary is where the catalog asks whether the schema
+    // moved (AT-S2; `Catalog::Revalidate`): before this statement resolves
+    // anything and after the previous one released everything it held.
+    catalog_.Revalidate();
     // **This statement runs as this dispatcher's core** (AM-S2 step 3,
     // `base/current_core.hpp`). On a reactor thread it is what
     // `Scheduler::RunOnce` already declared and this costs a redundant
@@ -1838,17 +1840,18 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (MayShip(session)) {
             DispatchOutcome shipped = ShipStatement(line, catalog::kSysTablesTable,
                                                     catalog::kSystemCore, "sys.tables", session);
-            // **Why this core drops its own cache when the answer comes**
-            // (CB6). Core 0 flushes the catalog pages *inline* before
-            // publishing, but the invalidation broadcast is a **task**
-            // (`Expeditor::BroadcastCatalogInvalidation` submits a
-            // send-retry), so nothing orders it against the reply to this
-            // ship. Before CR5 that race only ever cost another session a
-            // retryable "not found"; now it is the DDL's *own* session,
-            // which would be told its committed `CREATE TABLE` does not
-            // exist by the very core it typed it on. The pages are on the
-            // device by then, so dropping this core's cache is sufficient
-            // and needs nothing from the broadcast.
+            // **This core used to drop its own cache when the answer came**
+            // (CB6): the invalidation broadcast was a task nothing ordered
+            // against the reply to this ship, so the DDL's own session
+            // could be told its committed `CREATE TABLE` did not exist.
+            // Since AT-S2 there is no broadcast: core 0's write bumped the
+            // schema word before it answered, and this core's next cached
+            // read revalidates. The paragraph stays because the race it
+            // describes is the reason the word is bumped at the *write*
+            // and not at the decide - CR5's own session, which would
+            // otherwise be told its committed `CREATE TABLE` does not
+            // exist by the very core it typed it on. The word moved before
+            // the answer, so the next statement's boundary is sufficient.
             if (shipped.pending_shipped.has_value()) shipped.pending_shipped->ddl = true;
             return shipped;
         }
@@ -2923,8 +2926,8 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     // not write page 1"), and in a release build - where that check is
     // compiled out - it dirtied a frame of a page this core does not own,
     // to be written back by the next Sync, checkpoint or eviction, and
-    // left `InvalidateCatalog`'s EvictClean failing on a dirty catalog
-    // frame so the peer's cache never dropped again. PW1c's guard covers
+    // left the peer's catalog eviction (a path AT-S2 retired) failing on
+    // a dirty catalog frame so its cache never dropped again. PW1c's guard covers
     // the DML verbs; this one was a read all along.
     auto page = page_store_.GetForRead(page_id);
     if (!page.ok()) {
@@ -3331,7 +3334,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
 
     // The drop's cross-core hole the gate lift opens (PW1c-6b-4, the
     // review's finding). DROP INDEX marks the sys.indexes row and
-    // `BumpVersion` broadcasts *at the mark*, before the commit; on the
+    // `BumpVersion` bumps the schema word *at the mark*, before the commit; on the
     // owner, DT9's "is the deleter in flight" predicate walks that core's
     // own live list and never finds core 0's transaction, so the mark
     // reads as settled and the index leaves the owner's view at once. With
@@ -6677,12 +6680,10 @@ DispatchOutcome CommandDispatcher::FinishShippedStatement(
     // `Unsupported`, `OutOfRange`, ...), which every shipped refusal in
     // that set reached a typed client as until this line.
     if (!reply->status.ok()) out.status = reply->status;
-    // CB6: a DDL this core shipped has changed catalog pages core 0 flushed
-    // before it answered, so every fact cached here about them is stale.
-    // Dropped on success only - a refused DDL wrote nothing - and before the
-    // reply reaches the client, which is what makes the client's next
-    // statement on this core see its own DDL.
-    if (shipped.ddl && reply->status.ok() && catalog_invalidate_) catalog_invalidate_();
+    // CB6, since AT-S2: a DDL this core shipped bumped the schema word
+    // before core 0 answered, and the client's next statement on this core
+    // revalidates at its head - so it sees its own DDL with nothing dropped
+    // here.
     statement_ship_->Close(shipped.request_id);
     return out;
 }

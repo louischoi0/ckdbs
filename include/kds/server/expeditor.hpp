@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -815,6 +816,14 @@ private:
     // waiter under AO-S4a's rule and the graph it checks spans every core.
     std::unique_ptr<txn::LockTable> locks_;
 
+    // **The instance's schema version word** (AT-S2; AR0-5 §2.1, D21).
+    // Memory-resident and never persisted: every cache is empty at mount.
+    // Core 0's catalog and every peer's read and bump it through
+    // `Catalog::SetSchemaWord`; it replaced the flush-then-broadcast every
+    // DDL used to send. Declared beside the lock table for the same
+    // lifetime reason: every catalog that holds a pointer to it is below.
+    std::atomic<std::uint64_t> schema_version_{0};
+
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
@@ -944,12 +953,6 @@ private:
     // an instance that never entered core 0's reactor has nothing to sync
     // and nothing to checkpoint.
     void StopStartedCores();
-
-    // Flushes the catalog pages and tells every peer to drop its cache.
-    // Hooked to `Catalog::BumpVersion()`, the single DDL choke point, so a
-    // DDL added later broadcasts without knowing this exists.
-    void BroadcastCatalogInvalidation(sched::Scheduler& core0_scheduler);
-
 
     std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
     std::optional<SuperBlockCheckpointAnchor> checkpoint_anchor_;

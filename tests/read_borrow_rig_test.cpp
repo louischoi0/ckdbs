@@ -111,7 +111,6 @@ TEST(ReadBorrowRigTest, ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer) {
     ASSERT_TRUE(row.ok()) << row.status().message();
     ASSERT_EQ(row.value().owner_core, 1u) << "r is not the peer's, so no reader of it is either";
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
-    rig->core(1).InvalidateCatalog();
 
     Reader reader;
     Dropper drop;

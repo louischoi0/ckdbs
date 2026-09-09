@@ -746,8 +746,10 @@ TEST_F(RemoteStepServiceTest, ACatalogInvalidationAcrossAParkNeitherCrashesNorCh
     Pump();
     ASSERT_EQ(server_->open_pipelines(), 1u) << "the producer must be parked mid-walk";
 
-    // Verbatim what CoreRuntime's kCatalogInvalidate handler runs.
-    boot_->catalog.InvalidateFromPeer();
+    // What a peer's catalog does when the schema word has moved under a
+    // parked producer (AT-S2): drop the memo. The producer's copied schema
+    // and per-park re-`Bind` are what make that safe.
+    boot_->catalog.DropCache();
 
     for (int round = 0; round < 500 && server_->open_pipelines() > 0; ++round) {
         GrantCredits(4);

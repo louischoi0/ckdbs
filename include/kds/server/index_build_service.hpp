@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <span>
 
@@ -55,19 +54,13 @@
 // later rolls back is in the tree, and the probe's MVCC check drops it, the
 // same way it drops it from every index today.
 //
-// ---- The order core 0 keeps, and why `done` may cross the broadcast ------
+// ---- The order core 0 keeps, and why `done` needs no cache drop ---------
 //
-// The owner learns of the published index two ways: the catalog
-// invalidation broadcast every DDL sends, and `done(committed)`, whose
-// handler drops the owner's cache itself. Either may arrive first; both
-// are sound because `InvalidateCatalog` **re-reads the catalog pages off
-// the device**, and core 0 flushes them *before either message leaves*:
-// the row write's own invalidation hook (`Catalog::BumpVersion` ->
-// `Expeditor::BroadcastCatalogInvalidation`, flush then send) runs inside
-// phase 2, ahead of the commit, and `done` is sent after the commit. An
-// instance wired without that hook (a test over a bare catalog) has to
-// flush by hand before `done`, or the owner re-reads the state before the
-// row and keeps refusing on the shape gate rather than the window.
+// The owner learns of the published index at its next cached read: the
+// row write bumps the instance's schema version word inside phase 2,
+// ahead of the commit, and the owner's catalog revalidates against it
+// (AT-S2). `done(committed)` still closes the window; it no longer needs
+// to drop anything, because there is no broadcast to be ordered against.
 //
 // `done(committed)` is sent when the commit record is *appended*, not when
 // it is durable - the durability wait is the statement's, taken after
@@ -220,11 +213,11 @@ catalog::Catalog::IndexDef IndexDefOf(const IndexBuildRequestPayload& request);
 
 class IndexBuildServer {
 public:
-    // Runs on `done(committed)` and on an expiry - the runtime drops its
-    // catalog cache here, so the published index is seen. The one seam
-    // that reaches back into its owner; the sends and the build's task go
-    // straight to the reactor and the ring, as the client's do.
-    using OnCommittedFn = std::function<void()>;
+    // On `done(committed)` and on an expiry the published index is seen at
+    // the owner's next boundary through the schema word; the `on_committed`
+    // seam that reached back into its owner is gone with the broadcast (AT-S2):
+    // the sends and the build's task go straight to the reactor and the
+    // ring, as the client's do.
 
     // `scheduler` is this core's reactor - the build runs on it as a
     // `system` task, its clock dates the window, and every reply leaves
@@ -232,7 +225,7 @@ public:
     IndexBuildServer(catalog::Catalog& catalog, storage::PageStore& store, wal::WalManager* wal,
                      std::uint32_t core_id, PendingIndexBuilds& pending,
                      sched::Scheduler& scheduler, sched::RingTransport& transport,
-                     OnCommittedFn on_committed = {}, Logger* log = nullptr) noexcept
+                     Logger* log = nullptr) noexcept
         : catalog_(catalog),
           store_(store),
           wal_(wal),
@@ -240,19 +233,20 @@ public:
           pending_(pending),
           scheduler_(scheduler),
           transport_(transport),
-          on_committed_(std::move(on_committed)),
           log_(log) {}
 
     // The kIndexBuildRequest handler: bound the counts, check the owner,
     // open the window, build (as a `system` task), seed, reply. Every
     // refusal is a reply - core 0 is parked on one.
     void OnRequest(const sched::MessageHeader& header, std::span<const std::byte> payload);
-    // The kIndexBuildDone handler: closes the window; `committed` also
-    // drops the catalog cache. A `done` naming no open window is ignored.
+    // The kIndexBuildDone handler: closes the window. `committed` drops
+    // nothing since AT-S2 - the index's row bumped the schema word ahead
+    // of `done`, and the re-run's boundary asks. A `done` naming no open
+    // window is ignored.
     void OnDone(const sched::MessageHeader& header, std::span<const std::byte> payload);
     // The tick: closes every window older than the ceiling, each logged as
-    // the `done` that never came, and drops the cache in case it was a
-    // commit whose `done` was lost.
+    // the `done` that never came; a lost commit's index is seen the same
+    // way, through the word.
     void Expire(sched::MonoTimeNs now);
 
     // Builds attempted. Diagnostics and tests.
@@ -271,7 +265,6 @@ private:
     PendingIndexBuilds& pending_;
     sched::Scheduler& scheduler_;
     sched::RingTransport& transport_;
-    OnCommittedFn on_committed_;
     Logger* log_;
     std::uint64_t builds_ = 0;
 };

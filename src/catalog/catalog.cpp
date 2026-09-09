@@ -837,11 +837,37 @@ void Catalog::BumpVersion(std::string_view what) {
         log_->Debug("catalog", "cache invalidated by " + std::string(what) + ": version " +
                                    std::to_string(catalog_version_));
     }
-    // After the local invalidation, never before: the hook flushes the
-    // catalog pages and tells peers to re-read, and a peer that re-read
-    // while this instance still held stale entries would be reading a
-    // catalog its own owner disagrees with.
-    if (on_invalidate_) on_invalidate_();
+    // After the local drop, never before (AT-S2): a peer that revalidated
+    // against the new word while this instance still held stale entries
+    // would be reading a catalog its own writer disagrees with. The word
+    // is bumped at the write, which is before the DDL's relation `X` is
+    // released at its decide - D21's order.
+    BumpWord();
+}
+
+void Catalog::BumpWord() {
+    if (schema_word_ == nullptr) return;
+    const std::uint64_t prev = schema_word_->fetch_add(1, std::memory_order_acq_rel);
+    // Adopt the bump only if this cache was current. A writer whose cache
+    // `BumpVersion()` just dropped, or the flip site keeping its entry, has
+    // `cache_built_at_ == prev` and moves with the word. A bump from
+    // another core this cache has not yet revalidated against leaves it
+    // behind, so the next boundary still drops - otherwise this write would
+    // swallow that change and serve the other relation's old schema for
+    // good, a wrong answer and not a refusal. Sound today with one writer
+    // and required the day a peer writes (AT-S3, AT-S5).
+    if (cache_built_at_ == prev) cache_built_at_ = prev + 1;
+}
+
+void Catalog::Revalidate() {
+    if (schema_word_ == nullptr) return;
+    const std::uint64_t now = schema_word_->load(std::memory_order_acquire);
+    if (now == cache_built_at_) return;
+    cache_.Invalidate();
+    cache_built_at_ = now;
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("catalog", "cache dropped: the schema word moved to " + std::to_string(now));
+    }
 }
 
 void Catalog::InvalidateAfterCompensation() {
@@ -948,15 +974,13 @@ StatusOr<std::uint64_t> Catalog::PurgeSettledDeleteMarks() {
     return swept;
 }
 
-void Catalog::InvalidateFromPeer() {
-    // No version bump. `catalog_version_` is the counter parser-v2.md I5
-    // stamps *this instance's* bound statements with; another core's DDL is
-    // not an event in this instance's numbering, and advancing it here
-    // would invalidate bound statements for a reason they cannot check.
-    // What has to go is the cached content.
+void Catalog::DropCache() {
+    // No bump of either counter: nothing changed on this instance's
+    // numbering, and the word belongs to whoever wrote. What has to go is
+    // the memo, because the frames under it were rewritten by redo.
     cache_.Invalidate();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("catalog", "cache invalidated by a peer's DDL");
+        log_->Debug("catalog", "cache dropped after redo");
     }
 }
 
@@ -1032,12 +1056,11 @@ Status Catalog::InsertRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRow
     // A new range row changes which core a resolver would name for part of
     // this relation's id space, so every cached routing answer is stale.
     //
-    // **This is `kCatalogInvalidate`, and it is not all of CC10.** The
-    // version bump reaches peers through `Expeditor`'s hook, so the cache
-    // half of step 5 is here - but the hook is installed on one catalog, so
-    // an insert on a peer invalidates locally and broadcasts nothing, and
-    // the bump fires before the transaction commits, so a peer can re-read
-    // a split that later rolls back.
+    // **This is CC10's cache half, and it is not all of CC10.** The bump
+    // reaches every core through the schema word (AT-S2), from whichever
+    // catalog writes - and it fires before the transaction commits, so a
+    // peer can re-read a split that later rolls back; DT3 and catalog MVCC
+    // are what keep that a re-read and not a wrong answer.
     //
     // **`OpenRangeRows` does not come through here**, and that is CC10's
     // ordering rather than tidiness: a range's head page must be flushed,
@@ -2717,16 +2740,18 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
     // needs. Worse, the elision is exactly what makes such a statement
     // shippable (`session_step_client.cpp` refuses a sorted chain but not an
     // elided one), so the stale read would answer out of order rather than
-    // refuse. Hence the version bump and the peer notification, without the
-    // local drop - and in that order, `BumpVersion`'s rule verbatim: a peer
-    // must never re-read while this instance still holds a stale entry.
+    // refuse. Hence the version bump and the schema word's, without the
+    // local drop: every other core drops at its next boundary and re-reads
+    // the flag, and this core keeps the entry the running INSERT holds -
+    // `BumpWord` adopts the bump precisely so that entry is not dropped by
+    // its own doing.
     //
     // Affordable because it happens **once per relation, ever**. `next_id`'s
     // advance - once per ascending key - is not cached and publishes nothing.
     if (flipped_order) {
         cache_.MarkKeysUnordered(table_oid);
         ++catalog_version_;
-        if (on_invalidate_) on_invalidate_();
+        BumpWord();  // every other core re-reads; this one keeps its entry
     }
     return Status::OK();
 }

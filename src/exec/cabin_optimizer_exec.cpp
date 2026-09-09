@@ -42,6 +42,7 @@ std::uint64_t CabinOptimizerExecutor::PagesProxyOf(std::uint64_t cabin_id) const
 Status CabinOptimizerExecutor::Tick(stats::OptimizerSignals& signals,
                                     const std::function<bool()>& enabled) {
     if (!enabled()) return Status::OK();  // off means off: not even a snapshot
+    catalog_.Revalidate();  // a task boundary (AT-S2): every apply below resolves
     ++counters_.ticks;
     const stats::OptimizerSnapshot snapshot = signals.Snapshot();
     return Apply(controller_.Decide(snapshot), enabled);

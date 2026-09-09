@@ -35,6 +35,7 @@ StatusOr<AssertionBuildRequestPayload> AssertionBuildRequestOf(catalog::Oid tabl
 
 void AssertionBuildServer::OnRequest(const sched::MessageHeader& header,
                                      std::span<const std::byte> payload) {
+    catalog_.Revalidate();  // a handler is a task boundary (AT-S2)
     AssertionBuildRequestPayload request{};
     if (payload.size() != sizeof(request)) {
         // No reply: nothing here names the assertion core 0 is waiting on.
@@ -216,10 +217,8 @@ void AssertionBuildServer::OnDone(const sched::MessageHeader& header,
     }
     std::memcpy(&done, payload.data(), sizeof(done));
     if (done.committed != 0) {
-        // The catalog cache, so this core's `SHOW ASSERTIONS` resolves the
-        // row core 0 has just written. Nothing else moves: the directory
-        // has been enforcing since the build.
-        if (on_committed_) on_committed_();
+        // Nothing moves: the directory has been enforcing since the build,
+        // and `SHOW ASSERTIONS` sees the row at its next boundary (AT-S2).
         if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
             log_->Info("assertion", "assertion id " + std::to_string(done.assertion_id) +
                                         " published by core " +

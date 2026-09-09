@@ -96,6 +96,7 @@ protected:
                                                  /*log=*/nullptr);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         core0_.emplace(std::move(boot.value()));
+        core0_->catalog.SetSchemaWord(&schema_word_);
 
         ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -170,6 +171,7 @@ protected:
         // participant that adopted an LSN from another instance's order
         // would read nonsense.
         c.visibility = &visibility_;
+        c.schema_word = &schema_word_;
         // What `Expeditor` hands a peer on a single-stream volume, and what
         // `CoreRuntime::Open` refuses to proceed without (AM-S0). Null on
         // the per-core arm, where a peer opens its own log.
@@ -246,6 +248,10 @@ protected:
     // The instance read view every core of this fixture shares (AN-S3;
     // `ConfigFor` says why one and not one per side).
     txn::InstanceVisibility visibility_;
+    // **The instance's schema version word** (AT-S2), one for the fixture:
+    // core 0's catalog bumps it and every peer's revalidates against it,
+    // which is what replaced the broadcast the rigs here used to send.
+    std::atomic<std::uint64_t> schema_word_{0};
 };
 
 TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
@@ -415,37 +421,70 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationCoreZeroCreated) {
     EXPECT_EQ(access.value()->schema.columns.size(), 2u);
 }
 
-TEST_F(CoreRuntimeTest, APeerSeesADdlThatWasNotFlushedBecauseItReadsTheSameFrame) {
-    // **The property this cell holds inverted at AM-S2 step 3**, and it was
-    // `APeerDoesNotSeeADdlThatWasNotFlushed`. Catalog writes are unlogged,
-    // so with a frame table of its own a peer read the device's older bytes
-    // until core 0 flushed, and answered "not found" - stale rather than
-    // wrong, and the flush-then-invalidate ordering was what closed it. One
-    // frame table serves every core now: the peer resolves off the very
-    // frame core 0 wrote into, with no flush at all, and the ordering the
-    // old cell pinned has nothing left to order.
-    //
-    // Kept rather than deleted because the *cache* is still a cache: what
-    // makes the row visible here is dropping the peer's derived facts, not
-    // any device traffic, and that distinction is what the second half
-    // below states.
+TEST_F(CoreRuntimeTest, APeerStatementSeesADdlThroughItsOwnBoundary) {
+    // The boundary the engine actually has: `DispatchAndStage`'s head asks
+    // the schema word before a statement resolves anything (AT-S2). What
+    // the word guards is a cached fact that *changed* - a new relation is
+    // never in anyone's memo, so its first resolve is fresh whatever the
+    // word says. So: a peer statement fills `early`'s entry, core 0 renames
+    // a column of it, and the peer's next *statement* - not a hand-driven
+    // read - describes the new name. `DESCRIBE`, because it is a diagnostic
+    // read every core serves through `InitTableAccess`. This is the cell a
+    // mutant removing that head's `Revalidate()` kills.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "early", TwoColumnSchema(),
+                                           catalog::ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    Session s;
+    const std::string first = peer.value()->dispatcher().Dispatch("DESCRIBE early", &s).response;
+    ASSERT_NE(first.rfind("ERR", 0), 0u) << first;
+    ASSERT_NE(first.find("v"), std::string::npos) << first;
+
+    ASSERT_TRUE(core0_->catalog.RenameColumn(oid.value(), "v", "renamed").ok());
+    const std::string second = peer.value()->dispatcher().Dispatch("DESCRIBE early", &s).response;
+    ASSERT_NE(second.rfind("ERR", 0), 0u) << second;
+    EXPECT_NE(second.find("renamed"), std::string::npos)
+        << "the peer's statement described a column name a DDL had renamed: " << second;
+}
+
+TEST_F(CoreRuntimeTest, APeerSeesADdlAtItsNextCachedReadWithNothingSent) {
+    // AT-S2's cell, and `APeerSeesADdlThatWasNotFlushedBecauseItReadsTheSameFrame`
+    // before it: one frame table serves every core, so the bytes are there
+    // with no flush; what stood between a peer and a row was its own
+    // *memo*, dropped by a broadcast. The broadcast is gone. Core 0's DDL
+    // bumps the instance's schema word and the peer's next cached read
+    // compares it - so the cache fills, the DDL happens, and the very next
+    // lookup sees the row with nothing sent and nothing called.
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // Fill the peer's memo first: a cached `TableAccess` for a relation that
+    // exists, and a cached "no such name" is not a thing - so the fact
+    // that goes stale is the table list.
+    ASSERT_TRUE(core0_->catalog
+                    .CreateTable(catalog::kNamespacePublic, "early", TwoColumnSchema(),
+                                 catalog::ClusteredType::kHeap)
+                    .ok());
+    auto listed = peer.value()->catalog().ListTables();
+    ASSERT_TRUE(listed.ok()) << listed.status().message();
+    const std::size_t before = listed.value().size();
 
     ASSERT_TRUE(core0_->catalog
                     .CreateTable(catalog::kNamespacePublic, "late", TwoColumnSchema(),
                                  catalog::ClusteredType::kHeap)
                     .ok());
 
-    // Unflushed, and visible: the bytes are in the frame both cores hold.
-    auto before = peer.value()->catalog().FindTableOidByName("late");
-    EXPECT_TRUE(before.ok()) << before.status().message();
-
-    FlushCatalog();
-    peer.value()->InvalidateCatalog();
-
-    auto after = peer.value()->catalog().FindTableOidByName("late");
-    EXPECT_TRUE(after.ok()) << after.status().message();
+    // The peer's next boundary - what `DispatchAndStage`'s head does for
+    // a statement, and what this cell does by hand because it reads the
+    // catalog directly. Nothing sent, nothing dropped by anyone else.
+    peer.value()->catalog().Revalidate();
+    auto found = peer.value()->catalog().FindTableOidByName("late");
+    EXPECT_TRUE(found.ok()) << found.status().message();
+    auto relisted = peer.value()->catalog().ListTables();
+    ASSERT_TRUE(relisted.ok());
+    EXPECT_EQ(relisted.value().size(), before + 1)
+        << "the peer's cached table list survived a DDL it was never told about";
 }
 
 // **The free-map refresh cell went with the refresh** (AW-S1b). It
@@ -490,10 +529,9 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverf
     ASSERT_TRUE(core0_store_->IsAllocated(first_overflow))
         << "the catalog never spilled; this test needs a chain that grows";
 
-    // Core 0's half of the ordering, exactly as BroadcastCatalogInvalidation
-    // runs it: FlushPages writes the dirty maps after the pages.
+    // The pages are unlogged, so the flush is what puts them on the
+    // device; the peer's memo revalidates by itself (AT-S2).
     ASSERT_TRUE(core0_store_->FlushPages(catalog::kEveryCatalogPage).ok());
-    peer.value()->InvalidateCatalog();
 
     // The last relation created is the one whose rows are furthest along
     // the chain, so resolving it is what walks onto the overflow page.
@@ -1350,16 +1388,10 @@ TEST_F(CoreRuntimeTest, APeerInsertsIntoItsOwnRangeInsteadOfShippingToTheOwner) 
         peer.value()->scheduler().RunOnce();
         core0.RunOnce();
     }
-    // What `Catalog::BumpVersion`'s hook does in a running instance and
-    // nothing does in a fixture: flush the rows core 0 just wrote, and
-    // broadcast the invalidation the peer answers by **evicting** its own
-    // frames of those pages. `InvalidateFromPeer` alone is not enough and
-    // that is not a fixture artefact - it drops the catalog cache but
-    // leaves the peer's resident catalog page, so the re-read finds the
-    // same stale bytes (`CoreRuntime::InvalidateCatalog` is the half that
-    // evicts).
+    // Since AT-S2 nothing is sent: the peer's next cached read compares the
+    // schema word core 0 bumped and drops its memo. The flush stays only
+    // because these pages are unlogged.
     FlushCatalog();
-    peer.value()->InvalidateCatalog();
 
     auto ranges = core0_->catalog.RangesOf(oid.value());
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
@@ -1441,7 +1473,6 @@ TEST_F(CoreRuntimeTest, TwoPeersEachInsertIntoTheirOwnRangesTail) {
         core0.RunOnce();
     }
     FlushCatalog();
-    for (auto& peer : peers) peer->InvalidateCatalog();
 
     auto ranges = core0_->catalog.RangesOf(oid.value());
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
@@ -4018,11 +4049,11 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
 
     rig.catalog2.emplace(*core0_store_, storage::kDefaultInlineCellWidth, /*core_count=*/2);
     rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-    // What Expeditor's invalidation hook does before any peer is told
-    // (index_build_service.hpp's ordering): the catalog pages are unlogged
-    // here, so nothing else puts the row on the device the owner re-reads
-    // at `done`.
-    rig.catalog2->SetInvalidationHook([this] { FlushCatalog(); });
+    // The same word the peer's catalog reads (AT-S2): this catalog's DDL
+    // bumps it, and the owner revalidates off the shared frame at `done`.
+    // The flush that stood here carried the row to the *device*, for an
+    // owner that re-read from there; one pool serves every core now.
+    rig.catalog2->SetSchemaWord(&schema_word_);
     auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema(),
                                          catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
@@ -4207,7 +4238,6 @@ void CoreRuntimeTest::OpenCrossOwnerFkPair(ForeignIndexRig& rig, const std::stri
     // read before restamping it, and a creation page still only in core 0's
     // cache abandons the whole grant silently.
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
     FundPeerForRelation(rig, child_oid.value());
 }
 
@@ -4310,11 +4340,11 @@ TEST_F(CoreRuntimeTest, APeerWriteMeetingAnOpenIndexBuildWindowWaitsInsteadOfBei
     //
     // **Why this stayed a window and did not become the relation `X`
     // census row 4 names.** `IndexBuildServer::OnDone` closes the window
-    // and then calls `on_committed_`, which the runtime binds to
-    // `InvalidateCatalog()`, both inside one handler that runs to
-    // completion in the drain before the next task is polled. So a park
-    // that ends on `!Covers(oid)` cannot observe the close without the
-    // cache drop, and the re-run below writes into an index this core knows
+    // inside one handler that runs to completion in the drain before the
+    // next task is polled, and the index's catalog row bumped the schema
+    // word before `done` was ever sent (AT-S2). So a park that ends on
+    // `!Covers(oid)` cannot observe the close before the word, and the
+    // re-run below revalidates and writes into an index this core knows
     // about. A relation `X` released on core 0 at the DDL's decide is a
     // write to a shared table, seen here before either ring message is
     // drained - the writer it admits writes a row into nobody's index,
@@ -4667,6 +4697,10 @@ TEST_F(CoreRuntimeTest, ASecondCreateIndexOnTheRelationIsRefusedByTheOwnerWhileT
     EXPECT_TRUE(rig.peer->pending_index_builds().empty());
     EXPECT_TRUE(rig.catalog2->FindIndexByName("rix").ok());
     EXPECT_FALSE(rig.catalog2->FindIndexByName("rix_second").ok());
+    // The owner's next boundary (AT-S2): the engine's re-run of a parked
+    // write passes `DispatchAndStage`'s head; this direct read does it by
+    // hand.
+    rig.peer->catalog().Revalidate();
     auto access = rig.peer->catalog().InitTableAccess(rig.oid);
     ASSERT_TRUE(access.ok()) << access.status().message();
     EXPECT_EQ(access.value()->indexes.size(), 1u);
@@ -6126,7 +6160,6 @@ TEST_F(CoreRuntimeTest, AShippedStatementDoesNotShipOnward) {
     ASSERT_TRUE(row.ok());
     ASSERT_EQ(row.value().owner_core, 0u);
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
 
     ASSERT_NE(rig.peer->statement_ship(), nullptr);
     ASSERT_TRUE(rig.peer->statement_ship()
@@ -6675,7 +6708,6 @@ TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
                   .response.substr(0, 3),
               "CRE");
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
 
     // The owner's own answer, which is what the shape gate is a property
     // of. Whatever refuses now, it is not the FK arm.
@@ -6707,7 +6739,6 @@ TEST_F(CoreRuntimeTest, ACabinedPeerRelationTakesWritesAndItsOwnerServesTheCabin
                   .response.substr(0, 3),
               "CRE");
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
     auto oid = rig.catalog2->FindTableOidByName("cabined");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     FundPeerForRelation(rig, oid.value());
@@ -6836,7 +6867,6 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
     // only in core 0's cache abandons the whole grant silently and the peer
     // is left owning a relation it may not write.
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
     FundPeerForRelation(rig, child_oid.value());
 
     // A parent row with a **named** pk, so the child below references a
@@ -6967,7 +6997,6 @@ TEST_F(CoreRuntimeTest, ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsT
     auto child_oid = rig.catalog2->FindTableOidByName("txnchild");
     ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
     FundPeerForRelation(rig, child_oid.value());
     ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO txnparent VALUES (7, 5)").response.rfind("ERR",
                                                                                              0),
@@ -7856,13 +7885,11 @@ TEST_F(CoreRuntimeTest, AStatementWhoseSubqueryNamesASecondCoresRelationIsNotShi
     ASSERT_TRUE(row.ok());
     ASSERT_EQ(row.value().owner_core, 0u);
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
 
     ASSERT_EQ(rig.dispatcher->Dispatch("INSERT INTO sub_core0 VALUES (10)").response.rfind("ERR",
                                                                                           0),
               std::string::npos);
     ASSERT_TRUE(core0_store_->Sync().ok());
-    rig.peer->InvalidateCatalog();
 
     // The read: outer on the peer, sub-chain on core 0.
     DispatchOutcome out;

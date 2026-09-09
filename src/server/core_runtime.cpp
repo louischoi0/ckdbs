@@ -338,6 +338,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width, config.core_count,
                               config.core_id);
     runtime->catalog_->SetLogger(log);
+    runtime->catalog_->SetSchemaWord(config.schema_word);  // AT-S2
     // RV3: a peer may not write a catalog page (P6), so this should never
     // fire - but if a write ever slips through, logged beats silent.
     runtime->catalog_->SetWal(runtime->wal_.get());
@@ -468,14 +469,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {
         runtime->dispatcher_->SetCatalogReadOnly(true);
-        // CR5/CB6: a DDL this core ships to core 0 changes catalog pages
-        // core 0 flushes before it answers, and the invalidation broadcast
-        // is a task that nothing orders against that answer. The same
-        // `InvalidateCatalog()` the ring handler runs, so the two paths
-        // cannot come to mean different things.
-        runtime->dispatcher_->SetCatalogInvalidate([runtime = runtime.get()] {
-            runtime->InvalidateCatalog();
-        });
         // CR7: a peer records its access shapes into a local batch and
         // flushes them to core 0 on the tick. Before this it recorded
         // nothing at all - the dispatcher above is constructed with
@@ -585,23 +578,6 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // kicks it awake (`Expeditor::BroadcastShutdown`, AR0-6-R1) - the kind
     // is gone from `ring_message.hpp` with it.
 
-    // Core 0 did a DDL. Drop every cached fact so the next statement
-    // re-reads the catalog pages off the device, which core 0 flushed
-    // before sending this (workplan P6).
-    //
-    // The window between the DDL and this arriving is real and is *not* an
-    // error to close: a statement in it resolves against the old catalog and
-    // answers "table not found", which crosscore.md §5 already specifies as
-    // retryable. Nothing here waits for anything.
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kCatalogInvalidate,
-            [this](const sched::MessageHeader&, std::span<const std::byte>) {
-                InvalidateCatalog();
-            });
-        !s.ok()) {
-        return s;
-    }
-
     // **CC7's two grant handlers went with the grants** (AW-S1b): core 0
     // used to hand a peer fault rights over a relation's page range and
     // write rights over its exact creation pages, because a peer's own
@@ -683,11 +659,13 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // relations' indexes in the statement and never asks itself. The
     // build is a `system` task on this reactor and its replies ride the
     // retry task on `transport` - the parameter, since `transport_` is
-    // assigned below; `done(committed)` drops the catalog cache so the
-    // published index is seen by the first admitted write.
+    // assigned below. `done(committed)` used to drop the catalog cache so
+    // the published index was seen by the first admitted write; since
+    // AT-S2 the row write's bump of the schema word does that at the next
+    // cached read, and the callback has nothing left to do.
     if (config_.core_id != 0) {
         index_builds_.emplace(*catalog_, *store_, &*wal_, config_.core_id, pending_index_builds_,
-                              *scheduler_, transport, [this] { InvalidateCatalog(); }, log_);
+                              *scheduler_, transport, log_);
         if (Status s = scheduler_->RegisterMessageHandler(
                 sched::RingMessageKind::kIndexBuildRequest,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
@@ -710,11 +688,12 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         // only, the build a `system` task on this reactor, and the
         // directory adopted into **this** dispatcher's registry, which is
         // the core of the change - the cabin is written by whoever writes
-        // the relation. `done(committed)` drops the catalog cache so this
-        // core's `SHOW ASSERTIONS` resolves the row core 0 wrote.
+        // the relation. This core's `SHOW ASSERTIONS` resolves the row
+        // core 0 wrote at its next boundary, through the schema word
+        // (AT-S2); `done(committed)` drops nothing.
         assertion_builds_.emplace(*catalog_, *store_, &*wal_, &*txn_manager_,
                                   dispatcher_->assertions(), config_.core_id, *scheduler_,
-                                  transport, [this] { InvalidateCatalog(); }, log_);
+                                  transport, log_);
         if (Status s = scheduler_->RegisterMessageHandler(
                 sched::RingMessageKind::kAssertionBuildRequest,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
@@ -922,41 +901,6 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
                                    &recovery_.checkpoint_ns, &dispatcher_->assertions());
 }
 
-void CoreRuntime::InvalidateCatalog() {
-    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
-    const CurrentCoreGuard as_this_core(core_id());
-
-    // The catalog's own growth is the case no grant covers: `sys.indexes`
-    // spills onto `kCatalogOverflowFirst`, and without this the chain walk
-    // the eviction below forces answers `page id not found` forever - 58
-    // shipped `CREATE INDEX`es, then every write to that relation failed
-    // permanently and not retryably
-    // (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d).
-    // **The free-map refresh that stood here went with the lease**
-    // (AW-S1b). It reconciled a peer's private copy of the map, taken at
-    // that peer's mount and stale from that moment; every core reads the
-    // one map now, so the page core 0 has just allocated is allocated here
-    // by the same bit.
-    // **Both halves, and the order matters little but the pairing does.**
-    // Dropping the catalog's derived facts without dropping the page frames
-    // they were derived from is a no-op: the next scan reads the same stale
-    // bytes back and reaches the same conclusion. The frames are the
-    // authority, the cache is the memo.
-    if (Status s = store_->EvictClean(catalog::kEveryCatalogPage); !s.ok()) {
-        // A dirty catalog frame on a peer means something wrote a page it
-        // may not write, which the store's own check should already have
-        // refused. Reported rather than propagated - there is no caller,
-        // this runs in a message handler - and the cache is left alone,
-        // because a half-invalidated view is worse than a stale one.
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("core", "core " + std::to_string(config_.core_id) +
-                                    ": catalog invalidation failed: " + s.message());
-        }
-        return;
-    }
-    catalog_->InvalidateFromPeer();
-}
-
 void CoreRuntime::Run() {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
     const CurrentCoreGuard as_this_core(core_id());
@@ -1019,6 +963,9 @@ void CoreRuntime::Run() {
         // review's S4; they were one registration apiece).
         if (config_.core_id != 0) {
             scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
+                // A task boundary (AT-S2): the refill below reads the
+                // catalog, and stale here is a range that does not open.
+                catalog_->Revalidate();
                 // **Before the refill, and that order is the mechanism**
                 // (AN-R13): the burn check is what sets `burn_requested_`,
                 // and the refill below is what acts on it. A peer that
@@ -1150,22 +1097,20 @@ void CoreRuntime::MaybeRefillRowIds() {
             // directory this core must see before its next statement
             // routes.
             if (row_id_refill_.entry_page != kInvalidPageId) {
-                // The boundary core 0 just published. The broadcast is
-                // coming anyway (BumpVersion's hook); doing it here means
-                // the very next statement resolves against the directory
-                // rather than the tick after - which is what R4/IS3's
-                // routing needs, since until this core sees its own range
-                // it keeps shipping the INSERT away.
+                // The boundary core 0 just published. Asking here rather
+                // than at the next statement's head means the very next
+                // statement resolves against the directory rather than
+                // the tick after - which is what R4/IS3's routing needs,
+                // since until this core sees its own range it keeps
+                // shipping the INSERT away.
                 //
-                // **`InvalidateCatalog` and not `InvalidateFromPeer`**,
-                // which was this line and was a no-op for its stated
-                // purpose: the cache is the memo and the resident catalog
-                // frames are the authority, so dropping the first without
-                // evicting the second re-reads the same stale bytes and
-                // concludes the same nothing (`InvalidateCatalog`'s own
-                // comment states it). Found by IS3's end-to-end test, which
-                // never saw the range it had just been granted.
-                InvalidateCatalog();
+                // This completion is a task boundary and the next thing it
+                // reads is the range core 0 just opened, whose `sys.ranges`
+                // row bumped the schema word - so ask now (AT-S2). A drop
+                // stood here, and before it a no-op: IS3's end-to-end test
+                // found the peer never saw the range it had just been
+                // granted.
+                catalog_->Revalidate();
                 row_id_refill_.entry_page = kInvalidPageId;
             }
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {

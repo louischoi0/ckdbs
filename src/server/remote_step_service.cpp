@@ -347,6 +347,12 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
         SendError(head.tag, session, step.status());
         return;
     }
+    // A handler is a task boundary, so this is where the schema word is
+    // asked (AT-S2). Not because nothing holds a borrow across one - a
+    // parked producer does - but because every borrow that crosses a park
+    // is re-taken or copied after it (`RunWalkStep`'s re-`Bind`, the
+    // producer's schema copy), which is the invariant a drop here relies on.
+    catalog_.Revalidate();
 
     // **The executing core declares what it executes** (AT-S1;
     // `read_borrow.hpp`). The coordinator's borrow is a stack object of
@@ -1058,10 +1064,11 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
                                           std::unique_ptr<ReadBorrow> borrow) {
 
     // Copied into this frame, not borrowed: a park can cross a catalog
-    // invalidation (`kCatalogInvalidate` is broadcast by *any* DDL and its
-    // handler clears the whole TableAccess cache), which frees a borrowed
-    // Schema under a parked coroutine. The executor's own borrows get the
-    // same treatment one layer down - RunWalkStep re-Binds after every
+    // drop (any task boundary may revalidate against a schema word another
+    // core's DDL moved, AT-S2, and the drop clears the whole TableAccess
+    // cache), which frees a borrowed Schema under a parked coroutine. The
+    // executor's own borrows get the same treatment one layer down -
+    // RunWalkStep re-Binds after every
     // real park - and the copy is priced per statement, not per row. The
     // copy also fixes what the batch *means*: §5 says a remote step
     // trusts the descriptor and does not re-resolve, and a copy is

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <optional>
 #include <string_view>
@@ -228,22 +229,41 @@ public:
     // design (an abort burns ids, K3).
     void SetDdlUndoHook(DdlUndoHook hook) { ddl_undo_hook_ = std::move(hook); }
 
-    // Called after every DDL that invalidates cached facts - i.e. from
-    // BumpVersion(), the single choke point, and from nowhere else
-    // (docs/inflight/in-progress/workplan-crosscore.md P6).
+    // **The schema version word** (AT-S2, `docs/spec/catalog.md`; AR0-5
+    // §2.1, D21). One `std::atomic` for the instance, owned by `Expeditor`
+    // and handed to every core's catalog; `BumpVersion()` - the single DDL
+    // choke point - advances it, and `Revalidate()` below drops this
+    // cache when it has moved. That replaces the `kCatalogInvalidate`
+    // broadcast: a peer no longer waits to be told, it asks. **A generation
+    // counter every invalidation bumps** (AT-R2): the local
+    // `catalog_version_` is not one - a peer's drop never advanced it -
+    // which is why the word is a second thing and not that counter shared.
+    // Neither `AllocateRowId()` nor `RegisterPattern()` bumps it: an id or
+    // a pattern is not a cached fact. Null is a catalog with no instance
+    // around it (a fixture, bootstrap), which revalidates nothing.
     //
-    // On the system core this is what broadcasts `kCatalogInvalidate` so
-    // peers drop their caches and re-read. Hooking the choke point rather
-    // than each DDL site is the whole reason that choke point was built:
-    // a DDL added later broadcasts without knowing this exists.
-    //
-    // Deliberately **not** fired by `AllocateRowId()` or `RegisterPattern()`.
-    // Neither bumps the version - a sequence position and a pattern's
-    // existence are not cached facts (catalog_cache.hpp) - so neither is a
-    // DDL a peer needs to hear about, and firing on them would put a
-    // broadcast on the statement path.
-    using InvalidationHook = std::function<void()>;
-    void SetInvalidationHook(InvalidationHook hook) { on_invalidate_ = std::move(hook); }
+    // **Correctness never rests on the word** (AT-R3): it saves a re-parse.
+    // The relation `IS` a statement holds from its bind is what a DDL's `X`
+    // waits for; `read_borrow.hpp` states the defence and its direction.
+    void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
+
+    // **Asked at a task boundary and nowhere inside one.** One acquire load
+    // of the word; on a mismatch the cache is dropped and the value
+    // adopted. It is the caller's - `DispatchAndStage`'s head, a ring
+    // handler's, a system task's - and never a cached read's, because a
+    // drop frees every `const TableAccess*` a running statement holds
+    // (`catalog_cache.hpp`: the entries are reference-stable *until the
+    // next drop*), and a drop inside a statement is a read through freed
+    // memory. The broadcast this replaced ran as a task and so dropped only
+    // between tasks; this keeps that boundary by construction. A task that
+    // reads the catalog without asking first serves a memo at most one
+    // DDL stale, which is what a peer served while a broadcast was in
+    // flight - stale, never wrong (DT1, catalog MVCC). **A drop of the memo
+    // is enough only because one frame table serves every core** (AM-S2
+    // step 3): the re-read finds the bytes core 0 wrote. On a per-core pool
+    // it would re-read the same stale frame and conclude the same nothing,
+    // which is why the broadcast's handler evicted frames as well.
+    void Revalidate();
 
     // Called at the end of a CreateTable whose owner is **not** the system
     // core (workplan P6c). It was the send side of CC7's flush-then-grant
@@ -309,11 +329,11 @@ public:
         return row.value().next_id;
     }
 
-    // Drops every cached fact without bumping the version. What a **peer**
-    // does on receiving `kCatalogInvalidate`: the version counter is
-    // per-instance and means nothing across cores, but the cache contents
-    // are what would otherwise be stale.
-    void InvalidateFromPeer();
+    // Drops every cached fact without bumping anything. Its callers are
+    // the mount's post-redo drops - `Expeditor`'s and the sim harness's -
+    // after redo has mutated catalog pages under a catalog built above it
+    // (RV3 D3a). Every other drop is the word's, at `Revalidate()`.
+    void DropCache();
 
     // A transaction that wrote catalog rows has resolved, and what this
     // catalog cached while it was open may now be a lie. **Both endings
@@ -334,8 +354,8 @@ public:
     // The name says "compensation" for the case it was built for; it is
     // the resolution of a catalog-writing transaction that calls it.
     //
-    // Drops cached content **and bumps the version**, unlike
-    // `InvalidateFromPeer`: this *is* an event in this instance's
+    // Drops cached content **and bumps the version** - and the word -
+    // unlike `DropCache`: this *is* an event in this instance's
     // numbering - the rows really did change here - and a bound statement
     // compiled against the relation that just vanished must not be
     // considered current.
@@ -1426,7 +1446,6 @@ private:
     // overshoot - costing at most one sweep that finds less than it
     // expected, never a missed mark.
     std::uint64_t pending_marks_ = 0;
-    InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
     // The engine's default is `kNamespace` (`Expeditor::Config`, AF-T2);
     // a bare Catalog - bootstrap, recovery, a test over a store - keeps
@@ -1447,6 +1466,16 @@ private:
     SysObjectRegistry sys_objects_;
     CatalogCache cache_;
     std::uint64_t catalog_version_ = 0;
+
+    // The word and the value this cache was built at (`SetSchemaWord`,
+    // `Revalidate()`). `BumpWord()` runs at every DDL write and adopts the
+    // new value **only if this cache was current** - so a writer whose
+    // cache `BumpVersion()` just dropped, or whose entry the flip site
+    // keeps on purpose, is not dropped again by its own bump, while a bump
+    // it never saw from another core still stands until the next boundary.
+    void BumpWord();
+    std::atomic<std::uint64_t>* schema_word_ = nullptr;
+    std::uint64_t cache_built_at_ = 0;
 };
 
 }  // namespace kds::catalog

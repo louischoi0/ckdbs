@@ -118,7 +118,6 @@ struct DeadlockRig {
                                            std::to_string(row.value().owner_core) + ", not 1");
         }
         if (Status s = rig->store().FlushPages(catalog::kEveryCatalogPage); !s.ok()) return s;
-        rig->core(1).InvalidateCatalog();
         if (Status s = rig->FundPeerRelation(r1.value()); !s.ok()) return s;
         if (Status s = Expect("insert r0", d0.Dispatch("INSERT INTO r0 VALUES (1, 0)").response,
                               "INSERTED");

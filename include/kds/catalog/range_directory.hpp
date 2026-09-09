@@ -39,9 +39,9 @@
 //
 // **The plan-time rule.** §2c: *a resolved range set is a plan-time
 // value, re-resolved after any park, never re-validated with
-// `catalog_version()`* - because `InvalidateFromPeer()` clears a peer's
-// cache without advancing that counter, so a set guarded by it is wrong
-// on every peer. The resolved set is a **span into
+// `catalog_version()`* - because a peer's cache is dropped by the schema
+// word's `Revalidate()` (AT-S2), which never advances that counter, so a
+// set guarded by it is wrong on every peer. The resolved set is a **span into
 // `TableAccess::ranges`**, the storage the catalog cache owns and
 // `CatalogCache::Invalidate()` frees.
 //

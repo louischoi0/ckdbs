@@ -33,6 +33,7 @@ void SetMessage(char (&dst)[kFkProbeReplyMessageBytes], std::string_view text) {
 
 void FkProbeServer::OnRequest(const sched::MessageHeader& header,
                               std::span<const std::byte> payload) {
+    catalog_.Revalidate();  // a handler is a task boundary (AT-S2)
     ++probes_;
     FkProbeRequestPayload request{};
     if (payload.size() != sizeof(request)) {
@@ -257,6 +258,7 @@ void FkProbeServer::ForgetPark(const FkIntentHolder& key, const bool* flag) {
 
 void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
                                      std::span<const std::byte> payload) {
+    catalog_.Revalidate();  // a handler is a task boundary (AT-S2)
     ++reverse_probes_;
     FkReverseProbeRequestPayload request{};
     if (payload.size() != sizeof(request)) {

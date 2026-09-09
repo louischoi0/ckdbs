@@ -68,6 +68,7 @@ catalog::Catalog::IndexDef IndexDefOf(const IndexBuildRequestPayload& request) {
 
 void IndexBuildServer::OnRequest(const sched::MessageHeader& header,
                                  std::span<const std::byte> payload) {
+    catalog_.Revalidate();  // a handler is a task boundary (AT-S2)
     IndexBuildRequestPayload request{};
     if (payload.size() != sizeof(request)) {
         // No reply: nothing here names the index core 0 is waiting on. A
@@ -251,7 +252,6 @@ void IndexBuildServer::OnDone(const sched::MessageHeader& header,
         return;
     }
     if (done.committed != 0) {
-        if (on_committed_) on_committed_();
         if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
             log_->Info("index", "index oid " + std::to_string(done.index_oid) +
                                     " published by core " + std::to_string(header.src_core) +
@@ -277,8 +277,9 @@ void IndexBuildServer::Expire(sched::MonoTimeNs now) {
         }
     }
     // In case one of them was a commit whose `done` was lost: the
-    // published index must be seen by the writes this release admits.
-    if (on_committed_) on_committed_();
+    // published index is seen by the writes this release admits because
+    // its catalog row bumped the schema word, which the re-run's boundary
+    // asks (AT-S2) - nothing to drop here.
 }
 
 // ---- Core 0's half ---------------------------------------------------------

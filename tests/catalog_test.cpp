@@ -2,6 +2,7 @@
 
 #include "kds/storage/anchor_page.hpp"
 
+#include <atomic>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -27,6 +28,9 @@ class CatalogTest : public ::testing::Test {
 protected:
     storage::InMemoryPageStore store_{server_first_new_page_id_};
     Catalog catalog_{store_};
+    // The schema word the AT-S2 cells share between this catalog and a
+    // reader (a fixture member, so it outlives every catalog pointing at it).
+    std::atomic<std::uint64_t> word{0};
 
     // Matches kds::server::kFirstUserPageId (128) so freshly-created user
     // tables never collide with the fixed catalog pages (4-15).
@@ -1315,6 +1319,171 @@ TEST_F(CatalogTest, CreatingAndDroppingAnIndexBumpsTheCatalogVersion) {
     EXPECT_GT(catalog_.catalog_version(), after_create);
 }
 
+// ---- AT-S2: the schema version word ------------------------------------
+
+TEST_F(CatalogTest, EveryDdlBumpsTheSchemaWordAndTheWriterKeepsItsOwnCache) {
+    // One atomic for the instance (`Expeditor` owns it; a fixture stands in).
+    // `BumpVersion()` advances it at every catalog write - which is before
+    // the DDL's relation `X` is released, D21's order - and the writer's own
+    // cache, dropped by `BumpVersion()` itself, is not dropped a second
+    // time by its own bump: `cache_built_at_` moves with the word.
+    catalog_.SetSchemaWord(&word);
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    const std::uint64_t after_bootstrap = word.load();
+    EXPECT_GT(after_bootstrap, 0u) << "bootstrap writes catalog rows and bumps";
+
+    auto oid = catalog_.CreateTable(kNamespacePublic, "w", MinimalPkSchema(), ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    EXPECT_GT(word.load(), after_bootstrap);
+
+    // The writer's cache holds across its own bumps: two resolves, one fill.
+    const auto stats_before = catalog_.cache_stats();
+    ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
+    ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
+    EXPECT_EQ(catalog_.cache_stats().fills, stats_before.fills + 1)
+        << "the writer dropped its own cache on its own bump";
+}
+
+TEST_F(CatalogTest, AReaderDropsOnlyAtItsBoundaryNeverInsideARead) {
+    // The defect AT-S2's review found and the rule that closes it: a drop
+    // frees every `const TableAccess*` a running statement holds, so the
+    // word is asked at a task boundary and never inside a cached read. A
+    // reader that filled `a`, saw the word move, and then read `b` - as a
+    // join's second bind does - still holds `a`; its next `Revalidate()` is
+    // what drops.
+    catalog_.SetSchemaWord(&word);
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto a = catalog_.CreateTable(kNamespacePublic, "a", MinimalPkSchema(), ClusteredType::kBtree);
+    auto b = catalog_.CreateTable(kNamespacePublic, "b", MinimalPkSchema(), ClusteredType::kBtree);
+    ASSERT_TRUE(a.ok() && b.ok());
+
+    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    reader.SetSchemaWord(&word);
+    reader.Revalidate();
+    auto held = reader.InitTableAccess(a.value());
+    ASSERT_TRUE(held.ok());
+    const std::uint64_t drops = reader.cache_stats().invalidations;
+
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "c", MinimalPkSchema(), ClusteredType::kBtree).ok());
+    ASSERT_TRUE(reader.InitTableAccess(b.value()).ok());
+    // ASSERT, not EXPECT: under the mutant this cell exists to kill the
+    // next line reads through a freed entry and would crash the binary
+    // instead of failing this cell.
+    ASSERT_EQ(reader.cache_stats().invalidations, drops)
+        << "a cached read dropped the cache under a pointer the statement holds";
+    EXPECT_EQ(held.value()->oid, a.value()) << "the held entry was freed";
+
+    reader.Revalidate();
+    EXPECT_EQ(reader.cache_stats().invalidations, drops + 1) << "the boundary did not drop";
+}
+
+TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
+    // `BumpWord`'s guard, the half no other cell reaches: a catalog whose
+    // cache is behind the word bumps it - a peer's own write, once AT-S3
+    // admits one - and must **not** adopt the new value, or the bump it
+    // never revalidated against is swallowed and the stale memo stands for
+    // good. The next boundary must still drop.
+    catalog_.SetSchemaWord(&word);
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto oid = catalog_.CreateTable(kNamespacePublic, "s", MinimalPkSchema(), ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok());
+
+    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    reader.SetSchemaWord(&word);
+    reader.Revalidate();
+    ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
+    const std::uint64_t drops = reader.cache_stats().invalidations;
+
+    // The reader falls behind, then bumps while behind.
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "s2", MinimalPkSchema(), ClusteredType::kBtree).ok());
+    reader.InvalidateAfterCompensation();
+    // Its own bump dropped its cache once; the boundary must drop again for
+    // the change it missed, which is what a swallowed bump would hide.
+    const std::uint64_t after_own = reader.cache_stats().invalidations;
+    EXPECT_EQ(after_own, drops + 1);
+    reader.Revalidate();
+    EXPECT_EQ(reader.cache_stats().invalidations, after_own + 1)
+        << "the reader's own bump adopted a word it had never revalidated against";
+}
+
+TEST_F(CatalogTest, AKeyOrderFlipBumpsTheWordAndKeepsTheWritersOwnEntry) {
+    // The one DDL-frequency write that keeps its local entry across a bump:
+    // a named key below the mark flips `key_order` in place, because the
+    // INSERT doing it holds the relation's `TableAccess*`. The word still
+    // moves, so a reader re-reads the flag at its next boundary - a stale
+    // `kAscending` there would elide an `ORDER BY <pk>` the relation now
+    // needs, and answer out of order rather than refuse.
+    catalog_.SetSchemaWord(&word);
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto oid = catalog_.CreateTable(kNamespacePublic, "f", MinimalPkSchema(), ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok());
+    for (int i = 0; i < 3; ++i) ASSERT_TRUE(catalog_.AllocateRowId(oid.value()).ok());
+    ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
+
+    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    reader.SetSchemaWord(&word);
+    reader.Revalidate();
+    ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
+    const auto reader_before = reader.cache_stats();
+    const auto writer_before = catalog_.cache_stats();
+    const std::uint64_t word_before = word.load();
+
+    ASSERT_TRUE(catalog_.AdmitExplicitRowId(oid.value(), /*below the mark*/ 1).ok());
+    EXPECT_EQ(word.load(), word_before + 1) << "the flip did not bump the word";
+    ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
+    EXPECT_EQ(catalog_.cache_stats().fills, writer_before.fills)
+        << "the writer dropped the entry the flip site exists to keep";
+
+    reader.Revalidate();
+    ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
+    EXPECT_EQ(reader.cache_stats().fills, reader_before.fills + 1) << "the reader kept its stale memo";
+    auto row = reader.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().key_order, KeyOrder::kUnordered);
+}
+
+TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
+    // A second catalog over the same store, sharing the word: what a peer
+    // is. It fills its memo, the word moves, and its next cached read
+    // drops the memo and refills - with nothing sent. While the word is
+    // still, the memo is served.
+    catalog_.SetSchemaWord(&word);
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto oid = catalog_.CreateTable(kNamespacePublic, "r", MinimalPkSchema(), ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok());
+
+    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    reader.SetSchemaWord(&word);
+    reader.Revalidate();
+    ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
+    const auto filled = reader.cache_stats();
+    reader.Revalidate();
+    ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
+    EXPECT_EQ(reader.cache_stats().fills, filled.fills) << "the word is still and the memo went";
+
+    // A DDL on the writer: the reader's next boundary drops, its next read
+    // refills.
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "r2", MinimalPkSchema(), ClusteredType::kBtree).ok());
+    reader.Revalidate();
+    ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
+    EXPECT_EQ(reader.cache_stats().fills, filled.fills + 1)
+        << "the word moved and the reader served its stale memo";
+}
+
+TEST_F(CatalogTest, InvalidateAfterCompensationBumpsTheWordAndDropCacheDoesNot) {
+    // `InvalidateAfterCompensation()` is the call both endings of a
+    // catalog-writing transaction make (`TxnSessionTest` runs the endings
+    // themselves); it bumps. `DropCache()` is the mount's post-redo drop;
+    // it bumps nothing, since nothing on this instance's numbering changed.
+    catalog_.SetSchemaWord(&word);
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    const std::uint64_t before = word.load();
+    catalog_.InvalidateAfterCompensation();
+    EXPECT_EQ(word.load(), before + 1);
+    catalog_.DropCache();
+    EXPECT_EQ(word.load(), before + 1);
+}
+
 // The version counter parser.md I5 / PR20 stamp bound statements with. Its
 // contract is monotonic-on-DDL, not "+1 per statement": one CreateTable
 // bumps it once per catalog row it writes.
@@ -2021,9 +2190,8 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
 
     // Follow sys.columns' links: more than one page, and every page after
     // the root inside the reserved range. That was what kept a peer able to
-    // fault it at all until AW-S1b; what it still buys is the flush before
-    // `kCatalogInvalidate`, which has to name every catalog page and can
-    // only name a bounded range (well_known.hpp).
+    // fault it at all until AW-S1b; what it still buys is that "every
+    // catalog page" can be named as a bounded range (well_known.hpp).
     PageId at = kCatalogPageColumns;
     int pages = 0;
     while (at != kInvalidPageId) {

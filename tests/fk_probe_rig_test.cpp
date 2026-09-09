@@ -229,7 +229,6 @@ struct FkRig {
                                            std::to_string(row.value().owner_core) + ", not 1");
         }
         if (Status s = rig->store().FlushPages(catalog::kEveryCatalogPage); !s.ok()) return s;
-        rig->core(1).InvalidateCatalog();
         return rig->FundPeerRelation(child.value());
     }
 

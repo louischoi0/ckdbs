@@ -76,7 +76,7 @@ Status SimInstance::Boot() {
         recovery_ = recovered.value();
         // RV3 D3a, exactly as the expeditor does it: redo mutated catalog
         // pages, so whatever the cache holds predates them.
-        boot_->catalog.InvalidateFromPeer();
+        boot_->catalog.DropCache();
         if (recovered.value().next_trx_id > boot_->superblock.next_trx_id()) {
             if (Status s = boot_->superblock.SetNextTrxId(recovered.value().next_trx_id); !s.ok()) {
                 return s;
