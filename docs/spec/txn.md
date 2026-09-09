@@ -630,6 +630,14 @@ level: **can the re-run answer differently once this holder decides?**
   wait ends in a row written, or in `AlreadyExists` for a key the holder
   took - and `AlreadyExists` is not retryable, which is the honest answer
   either way.
+- **Yes, for the foreign-key forward check.** Its `check_view` is minted
+  at the check rather than at `BEGIN` — a constraint reads latest state
+  (§4.4) — so the level does not enter: the holder's commit makes the
+  parent visible to the re-run, and its abort makes the answer a terminal
+  `FkViolation` instead of a retryable conflict. The cross-owner half of
+  the same check parks without asking the level at all, so this is also
+  what keeps one statement's answer independent of which core its parent
+  lives on.
 - **No, where the site cannot tell.** A statement that declared a coarse
   unit and had it refused knows *who* refused it and not *what* they hold,
   so a holder that already wrote a row the walk will reach is
@@ -718,7 +726,7 @@ fault net.
 A commit record that reached the platter under a failed sync is followed in
 the log by the compensations and by `TXN_ABORT`, and analysis reads that as
 aborted rather than as a winner (`wal.md` §12) — `kAborted` overwrites
-`kWinner`, only `kPrepared` may not be overwritten. **What that does not
+`kWinner`, which neither `kLoser` nor `kPrepared` may do. **What that does not
 cover is a crash inside the unwind**: `TXN_ABORT` is appended without a
 durability wait, so a stream whose `TXN_COMMIT` bytes reached the device
 while the compensations and the abort record did not replays the

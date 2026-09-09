@@ -43,6 +43,13 @@ struct ParentWriter {
     DispatchOutcome end_out;
     DispatchOutcome after_out;
     std::function<bool()> end_pred;
+    std::function<bool()> go_pred;
+    // Ungated by default. A cell that has to seed rows on this core first
+    // sets `gated` and releases it, which is the same `go` shape
+    // `ChildWriter` has and for the same reason - a reactor runs its tasks
+    // interleaved, so "submitted first" is not "ran first".
+    std::atomic<bool> go{false};
+    bool gated = false;
     std::atomic<bool> holding{false};
     std::atomic<bool> may_end{false};
     std::atomic<bool> ended{false};
@@ -53,6 +60,10 @@ struct ParentWriter {
 };
 
 sched::Coro WriteParent(CommandDispatcher& d, ParentWriter& p) {
+    if (p.gated) {
+        p.go_pred = [&p] { return p.go.load(std::memory_order_acquire); };
+        co_await sched::WaitUntil{&p.go_pred};
+    }
     co_await d.DispatchAsync("BEGIN", &p.session, &p.begin_out);
     co_await d.DispatchAsync(p.statement, &p.session, &p.insert_out);
     p.holding.store(true, std::memory_order_release);
@@ -86,13 +97,14 @@ struct ChildWriter {
     std::atomic<bool> inserted{false};
     std::atomic<bool> done{false};
     bool in_txn = false;
+    std::string statement = "INSERT INTO c VALUES (7)";
 };
 
 sched::Coro WriteChild(CommandDispatcher& d, ChildWriter& c) {
     c.go_pred = [&c] { return c.go.load(std::memory_order_acquire); };
     co_await sched::WaitUntil{&c.go_pred};
     if (c.in_txn) co_await d.DispatchAsync("BEGIN", &c.session, &c.begin_out);
-    co_await d.DispatchAsync("INSERT INTO c VALUES (7)", &c.session, &c.out);
+    co_await d.DispatchAsync(c.statement, &c.session, &c.out);
     c.inserted.store(true, std::memory_order_release);
     if (c.in_txn) co_await d.DispatchAsync("COMMIT", &c.session, &c.commit_out);
     c.done.store(true, std::memory_order_release);
@@ -144,6 +156,26 @@ sched::Coro HoldTheReactor(Stall& s) {
     co_await sched::WaitUntil{&s.go_pred};
     s.begun.store(true, std::memory_order_release);
     std::this_thread::sleep_for(s.length);
+    co_return Status::OK();
+}
+
+// Rows on a peer-owned child relation, which only a reactor can write: a
+// child `INSERT` carrying a foreign parent raises a probe, and the
+// synchronous `Dispatch` has nowhere to park it, so it is refused. Seeded
+// through `DispatchAsync` like everything else that crosses.
+struct RowSeeder {
+    Session session;
+    DispatchOutcome out;
+    std::atomic<bool> done{false};
+    std::vector<std::string> statements;
+};
+
+sched::Coro SeedRows(CommandDispatcher& d, RowSeeder& r) {
+    for (const std::string& sql : r.statements) {
+        co_await d.DispatchAsync(sql, &r.session, &r.out);
+        if (r.out.response.rfind("INSERTED", 0) != 0) break;
+    }
+    r.done.store(true, std::memory_order_release);
     co_return Status::OK();
 }
 
@@ -236,6 +268,40 @@ struct FkRig {
         return Status::OK();
     }
 
+    // AO-S6d's B1 shape: three child rows on core 1, a holder taking the
+    // middle one, and a victim whose `SET` names a **foreign** parent - so
+    // its first dispatch raises a probe and its walk happens on the resume,
+    // which is where the mid-walk park is now withheld.
+    Status SubmitMidWalkOnResume() {
+        for (const char* sql : {"INSERT INTO p VALUES (7, 0)", "INSERT INTO p VALUES (8, 0)"}) {
+            if (Status s = Expect("insert parent",
+                                  rig->core(0).dispatcher().Dispatch(sql).response, "INSERTED");
+                !s.ok()) {
+                return s;
+            }
+        }
+        // **Issued keys, not named ones**: a caller-supplied primary key is
+        // refused on a peer (`workplan-peer-writer.md` §7a), so the three
+        // rows take 1, 2 and 3 from the block `Seed` funded, and the holder
+        // names the middle one by a *window* rather than by a key. The
+        // `UPDATED 1` the cell asserts is what makes that arithmetic
+        // checked rather than assumed.
+        seeder.statements = {"INSERT INTO c VALUES (7)", "INSERT INTO c VALUES (7)",
+                             "INSERT INTO c VALUES (7)"};
+        parent.gated = true;
+        parent.statement = "UPDATE c SET pid = 7 WHERE id > 1 AND id < 3";
+        child.in_txn = true;
+        child.statement = "UPDATE c SET pid = 8 WHERE pid = 7";
+        rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground, SeedRows(rig->core(1).dispatcher(), seeder)));
+        rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground, WriteParent(rig->core(1).dispatcher(), parent)));
+        rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground, WriteChild(rig->core(1).dispatcher(), child)));
+        rig->Start();
+        return Status::OK();
+    }
+
     // C1's shape: one session on core 1 does everything.
     void SubmitOwn() {
         rig->core(1).scheduler().Submit(sched::MakeCoroTask(
@@ -251,6 +317,7 @@ struct FkRig {
     ParentWriter parent;
     ChildWriter child;
     OwnParentWriter own;
+    RowSeeder seeder;
     Stall stall;
     std::unique_ptr<TwoCoreRig> rig;
 };
@@ -512,6 +579,70 @@ TEST(FkProbeRigTest, AResumedChildInsideATransactionWaitsRatherThanBeingToldErrA
         << r.child.out.response;
     EXPECT_EQ(r.child.commit_out.response.rfind("COMMIT", 0), 0u)
         << r.child.commit_out.response;
+}
+
+TEST(FkProbeRigTest, AResumedWriteThatHasAlreadyWrittenRowsIsRefusedRatherThanParkedMidWalk) {
+    // The item-16 review's B1. Letting a probe's resume park is right;
+    // letting it park **mid-walk** is not, and the difference is that a
+    // mid-walk park leaves the walk's position and its count on the session
+    // while the wait's re-run is a whole statement that re-resolves every
+    // foreign parent - so the re-run raises a fresh probe before it reaches
+    // the walk, `AbandonWriteForShipping` keeps the rows inside an explicit
+    // transaction, and the parked write is gone.
+    //
+    // **The mutation**: drop `resumed_from_fk_probe_` from `UpdateInner`'s
+    // park test. The victim below parks instead of being refused, so the
+    // `KickUntil` fails - and let it run on to the holder's commit and it
+    // answers, measured rather than predicted, `UPDATED 2` followed by
+    // `COMMIT`: it wrote row 1 in the round that parked, lost its cursor to
+    // the fresh probe the wait's re-run raised, walked again from the start
+    // where its own row 1 no longer matches `pid = 7`, and committed three
+    // written rows having reported two. That is the silent partial count
+    // AO-S3b exists to prevent, made durable.
+    FkRig r(Ticking());
+    ASSERT_NE(r.rig, nullptr);
+    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
+    if (Status submitted = r.SubmitMidWalkOnResume(); !submitted.ok()) {
+        FAIL() << submitted.message();
+    }
+
+    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.seeder.done.load(std::memory_order_acquire); },
+                          5000ms))
+        << "the child rows were never seeded: " << r.seeder.out.response;
+    ASSERT_EQ(r.seeder.out.response.rfind("INSERTED", 0), 0u) << r.seeder.out.response;
+
+    // The holder takes row 2, the middle of the victim's walk.
+    r.parent.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(
+        KickUntil(*r.rig, 1, [&] { return r.parent.holding.load(std::memory_order_acquire); },
+                  5000ms))
+        << r.parent.insert_out.response;
+    ASSERT_EQ(r.parent.insert_out.response, "UPDATED 1") << r.parent.insert_out.response;
+
+    // The victim: `SET pid = 8` names a parent on core 0, so round 1 raises
+    // the probe having written nothing and the walk runs on the resume,
+    // writing row 1 and then meeting row 2.
+    r.child.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.child.inserted.load(std::memory_order_acquire); },
+                          3000ms))
+        << "the resumed write parked mid-walk instead of being refused";
+    EXPECT_EQ(StatusFromErrorReply(r.child.out.response).code(), StatusCode::kTxnConflict)
+        << r.child.out.response;
+
+    // And the refusal is a failed statement inside an explicit transaction,
+    // so the rows it did write stay and the client must ROLLBACK - §6's
+    // failure atomicity, which is what the refusal falls back to.
+    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.child.done.load(std::memory_order_acquire); },
+                          3000ms))
+        << r.child.commit_out.response;
+    EXPECT_NE(r.child.commit_out.response.find("aborted"), std::string::npos)
+        << "the failed statement did not poison its transaction: "
+        << r.child.commit_out.response;
+
+    r.parent.may_end.store(true, std::memory_order_release);
+    EXPECT_TRUE(KickUntil(*r.rig, 1, [&] { return r.parent.ended.load(std::memory_order_acquire); },
+                          4000ms))
+        << r.parent.end_out.response;
 }
 
 }  // namespace

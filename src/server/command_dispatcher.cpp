@@ -280,6 +280,13 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     // they are kept because what they guard is a dereference and a
     // never-reached deadline (`NowNs()` answers 0 with no clock, so a
     // deadline built from it would make the bounded wait unbounded).
+    //
+    // **The first conjunct is the callers' guard repeated, and it stays**
+    // (AO-S6d, a review suggestion declined with its reason). Both callers
+    // test it so the frame is only allocated where there is something to
+    // wait for; what this one additionally guards is the statement's
+    // deadline, which is taken below and would otherwise start running for
+    // a caller that had nothing to wait on.
     if (out->write_block.has_value() && txn_ != nullptr && clock_ != nullptr) {
         // **The bound is a fault net, not a ceiling** (AO-R8). Before AO-S3
         // this was `in_doubt_ceiling_ns_`, 200 ms, and reaching it was an
@@ -605,7 +612,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // and took the plain refusal, which is precisely the refusal
             // AR2-A §1's first axis measures this milestone by removing.
             {
-                const MayParkScope parking(*this, true);
+                const MayParkScope parking(*this, /*allowed=*/true, /*resumed=*/true);
                 *out = DispatchAndStage(probe.line, session);
             }
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
@@ -4468,12 +4475,24 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // *when* the check runs, never what protects the row afterwards
         // (AO-R14).
         if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0) {
-            // `kFutile` for a repeatable-read child: the holder wrote the
-            // parent row's pending version, `check_view` is the
-            // transaction's own and is not re-minted, so a commit leaves
-            // the parent as invisible to the re-run as it is now and the
-            // violation is the answer either way.
-            NoteBlockingWriter(waiter, busy_trx, pk, RepeatableReadWait::kFutile);
+            // **`kCapable`, and the reason is one line up in this file.**
+            // The first draft called this futile on the ground that a
+            // repeatable-read child's check view is minted at `BEGIN`;
+            // `CheckView` says the opposite in its own first sentence -
+            // "**Minted here, not taken from the statement.** A constraint
+            // check reads latest state" - and every caller takes it from
+            // there, whatever the level. So a commit makes the parent
+            // visible to the re-run and the child passes, an abort makes it
+            // a terminal `FkViolation` instead of the retryable
+            // `TxnConflict` that sends a client into a loop, and the wait
+            // pays off in both arms.
+            //
+            // It also makes the two sides of the same check agree: the
+            // cross-core probe parks on the parent's core with no isolation
+            // test at all (`fk_probe_service.cpp`), so excluding the level
+            // here answered one statement differently depending on which
+            // core its parent lived on.
+            NoteBlockingWriter(waiter, busy_trx, pk, RepeatableReadWait::kCapable);
         }
 
         // Recorded **per resolution, not per row**, which is the mechanism
@@ -10808,7 +10827,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // is invisible, so the wait would end in the same refusal it
         // started with. Resuming buys something only once there are rows
         // that cannot be re-applied, which is exactly this test.
-        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_) {
+        //
+        // **And a probe's resume never takes the second arm**
+        // (`resumed_from_fk_probe_`, whose declaration states the failure
+        // it prevents): the cursor a mid-walk park leaves on the session
+        // does not survive the fresh probe the wait's re-run raises, so a
+        // resume that has written rows is answered with its conflict, which
+        // is exactly what it was answered with before the resume could park
+        // at all.
+        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_ ||
+            resumed_from_fk_probe_) {
             return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
         }
         DispatchOutcome parked;
@@ -11985,13 +12013,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
-        // `kFutile`: a declared unit is refused by whoever conflicts with
-        // it, and the table reports who and not what they hold - so a
-        // holder that already wrote a row this walk will reach cannot be
-        // told from a fence that wrote nothing, and a repeatable-read
-        // statement keeps the exclusion rather than guessing. The row-level
-        // arm below is where the two *are* distinguishable, because there
-        // the header names the row's own writer.
+        // `kFutile`, and `UpdateInner`'s site states the argument.
         if (std::optional<Status> held =
                 BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile)) {
             return {ErrorReply(*held), false, 0, *held};
@@ -12187,9 +12209,11 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         &walk_cursor);
     if (!scan.ok()) return {ErrorReply(scan), false, 0, scan};
 
-    // AO-S3b, and `UpdateInner`'s site states both arms of the argument.
+    // AO-S3b, and `UpdateInner`'s site states both arms of the argument -
+    // the probe-resume arm (AO-S6d) included.
     if (parked_on_row) {
-        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_) {
+        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_ ||
+            resumed_from_fk_probe_) {
             return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
         }
         DispatchOutcome parked;

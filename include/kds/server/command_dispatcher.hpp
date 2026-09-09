@@ -1102,9 +1102,15 @@ private:
     // `DispatchAsync` ran this wait before that arm and never after it, so
     // a statement that parked on a foreign parent and met a held row on
     // its resume was refused where the same statement dispatched directly
-    // would have waited - and, inside an explicit transaction, refused
-    // carrying the poison `EndWrite` withholds for a wait still to come,
-    // which is a client told `ERR` over a transaction that then commits.
+    // would have waited. `foreign-keys.md` §2a carries the rest of the
+    // argument, that section being the one that owns the resume.
+    //
+    // **What it was not**: unsound. The resume ran without `may_park_`, so
+    // no blocker was recorded there and `EndWrite` poisoned an explicit
+    // transaction normally. The refusal was unhelpful, not a client told
+    // `ERR` over a transaction that then commits - that is what *this*
+    // change would produce if the allowance around the resume landed
+    // without the wait beside it, which is the mutation its cell names.
     //
     // `statement_deadline_ns` is in-out and zero means "not taken yet":
     // the fault net bounds the *statement*, so a second entry inherits the
@@ -2559,6 +2565,34 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
 
+    // **Whether the statement running right now is a foreign-key probe's
+    // resume** (AO-S6d, the item-16 review's B1). A resume can park like
+    // any other statement since `may_park_` reaches it - but it must not
+    // park **mid-walk**, and that is the one thing this flag is for.
+    //
+    // Why: a mid-walk park leaves the walk's position and its count on the
+    // session, and the wait's re-run is a whole statement that re-resolves
+    // every foreign parent from scratch (the held verdicts are dropped, for
+    // the reason the probe arm states). So the re-run raises a **fresh
+    // probe** before it reaches the walk, `HandleUpdate` hands that outcome
+    // to `AbandonWriteForShipping` - which, inside an explicit transaction,
+    // ends nothing and keeps the rows - and the parked write it had already
+    // taken off the session is gone. The next round then walks from the
+    // beginning with `rows_done` at 0, and a `WHERE` the earlier rows no
+    // longer match reports a count short of what the transaction changed:
+    // the silent partial `UPDATE` AO-S3b exists to prevent, arrived at from
+    // the other side.
+    //
+    // The whole-statement wait is untouched, and it is item 16's actual
+    // deliverable: a resume that meets a held row **before writing
+    // anything** is refused, `EndWrite` keeps the blocker, and
+    // `AwaitWriteBlock` re-runs it. What this flag withholds is only the
+    // park that needs a cursor to survive a round trip, and it withholds it
+    // by falling back to exactly what a resume did before AO-S6d - the
+    // refusal, with the rows written so far kept and the session poisoned,
+    // which is §6's failure atomicity and not a new outcome.
+    bool resumed_from_fk_probe_ = false;
+
     // **The allowance, taken and given back structurally** (AO-S6d).
     // `CommitAckScope`'s shape, and the argument for it is the one the
     // `DispatchAsync` site already makes about a hand-placed pair: it is
@@ -2571,17 +2605,27 @@ private:
     // about what "off" was.
     class MayParkScope {
     public:
-        MayParkScope(CommandDispatcher& owner, bool allowed) noexcept
-            : owner_(owner), saved_(owner.may_park_) {
+        // `resumed` is `resumed_from_fk_probe_`, carried here because the
+        // two windows are the same window at every site: the allowance and
+        // what the statement inside it is are set and restored together.
+        MayParkScope(CommandDispatcher& owner, bool allowed, bool resumed = false) noexcept
+            : owner_(owner),
+              saved_(owner.may_park_),
+              saved_resumed_(owner.resumed_from_fk_probe_) {
             owner_.may_park_ = allowed;
+            owner_.resumed_from_fk_probe_ = resumed;
         }
-        ~MayParkScope() { owner_.may_park_ = saved_; }
+        ~MayParkScope() {
+            owner_.may_park_ = saved_;
+            owner_.resumed_from_fk_probe_ = saved_resumed_;
+        }
         MayParkScope(const MayParkScope&) = delete;
         MayParkScope& operator=(const MayParkScope&) = delete;
 
     private:
         CommandDispatcher& owner_;
         bool saved_;
+        bool saved_resumed_;
     };
     // Where the statement now in flight owes a D2 commit's acknowledgement
     // (see `CommitAck`). A member for `may_park_`'s reason; unlike it, the

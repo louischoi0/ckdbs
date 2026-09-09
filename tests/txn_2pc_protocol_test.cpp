@@ -3293,6 +3293,68 @@ TEST_F(Txn2pcBlockedWriterTest, AChildInsertWaitsOutAnInFlightParentAndPassesWhe
     EXPECT_EQ(out->response.rfind("INSERTED", 0), 0u) << out->response;
 }
 
+TEST_F(Txn2pcBlockedWriterTest, ARepeatableReadChildWaitsOutItsParentBecauseTheCheckViewIsFresh) {
+    // AO-S6d's item 17, on the forward check - and the correction the
+    // second `critics-developer` pass made to its first build, which had
+    // labelled this wait futile on the ground that a repeatable-read
+    // transaction's check view is minted at `BEGIN`.
+    //
+    // It is not. `CheckView` says so in its own first sentence - a
+    // constraint check reads latest state, so it mints a view of *now* -
+    // and every caller takes it from there whatever the level. So the wait
+    // pays off in both arms: the parent's commit makes it visible to the
+    // re-run, and its abort makes the answer a terminal `FkViolation`
+    // rather than the retryable conflict that sends a client into a loop.
+    //
+    // It is also what keeps one statement's answer independent of where its
+    // parent lives: the cross-owner half of this check parks on the
+    // parent's core with no isolation test at all
+    // (`fk_probe_service.cpp`), so excluding the level here answered the
+    // same `INSERT` differently on a two-core instance.
+    ASSERT_EQ(Local("CREATE TABLE accounts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+
+    Session parent;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &parent).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO accounts VALUES (5, 1)", &parent)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Session child;
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &child)
+                  .response.rfind("ERR", 0),
+              std::string::npos)
+        << "the level must be settable for this cell to mean anything";
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &child).response.rfind("BEGIN", 0), 0u);
+
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("INSERT INTO orders VALUES (1, 5)", &child, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    // **The mutation**: label this site `kFutile` and the child is refused
+    // `TxnConflict` here, where the same statement at READ COMMITTED waits.
+    ASSERT_FALSE(*done) << "the repeatable-read child was refused instead of waiting for its "
+                           "parent: " << out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &parent).response.rfind("COMMIT", 0), 0u);
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done) << "the wait never ended";
+    EXPECT_EQ(out->response.rfind("INSERTED", 0), 0u)
+        << "the parent committed before the check view was minted, so the child is legal: "
+        << out->response;
+}
+
 TEST_F(Txn2pcBlockedWriterTest, AChildInsertWaitingOnAParentThatRollsBackIsAViolation) {
     // The other decide, and the reason the wait is worth having: the same
     // child statement gets two different *correct* answers depending on how

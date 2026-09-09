@@ -223,17 +223,36 @@ it can meet everything a first dispatch can - a row an undecided
 transaction holds, a range fence over the key it is about to write. Until
 AO-S6d it could not *wait* for any of them: the write-block wait ran before
 this arm and never after it, so a statement that parked on a foreign parent
-was refused where the same statement dispatched directly would have parked,
-and inside an explicit transaction it was refused carrying the poison
-`EndWrite` withholds for a wait still to come - a client told `ERR` over a
-transaction that then commits. The wait now runs over the resumed outcome
-on the same terms as over the first one, and its re-run is a whole
-statement, so the probe it raises is a **new round** of this same loop:
-verdicts held from the rounds before it are dropped, because a verdict is
-"as of the view the probe was answered under" and the point of the wait is
-that the holder has since decided. The lock-wait fault net is taken once
-for the statement rather than once per arm, so a statement that waits, then
-probes, then waits again still ends inside one net.
+was refused where the same statement dispatched directly would have parked.
+Unhelpful rather than unsound — the resume ran without the parking
+allowance, so no blocker was recorded there and a failed statement poisoned
+its transaction exactly as any other does. The wait now runs over the
+resumed outcome on the same terms as over the first one, and its re-run is
+a whole statement, so the probe it raises is a **new round** of this same
+loop: verdicts held from the rounds before it are dropped, because a
+verdict is "as of the view the probe was answered under" and the point of
+the wait is that the holder has since decided. The lock-wait fault net is
+taken once for the statement rather than once per arm, so a statement that
+waits, then probes, then waits again still ends inside one net.
+
+**One thing a resume may not do is park mid-walk.** A mid-walk park leaves
+the walk's position and its count on the session, and the re-run that ends
+the wait is a whole statement that re-resolves every foreign parent - so it
+raises a fresh probe before it reaches the walk, and the parked write it
+had already taken off the session is gone. The next round would then walk
+from the beginning with its count at zero and, where the `WHERE` no longer
+matches the rows the earlier round wrote, report a count short of what the
+transaction changed. So a resume that has already written rows is answered
+with its conflict, which is what it was answered with before it could park
+at all; the wait a resume does get is the whole-statement one, taken before
+anything is written.
+
+**The forward check's own busy answer is a wait at every level**, including
+`REPEATABLE READ`, because the check view is minted at the check and not at
+`BEGIN` (`txn.md` §5's list): a commit makes the parent visible to the
+re-run and an abort makes the violation terminal, so neither arm is futile.
+The cross-core probe has always parked without asking the level; this is
+the same-core half agreeing with it.
 
 The peer-writer funding gate (`CheckWriteAffinity`) does not refuse a
 write for carrying a foreign key; the cross-owner check is what
