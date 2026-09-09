@@ -14,11 +14,20 @@
 // The cross-core transport seam (docs/spec/sched.md §5, docs/inflight/in-progress/workplan-crosscore.md
 // M9 and P1).
 //
-// **This interface is the only channel between cores.** Workplan guideline
-// 1 states it as an invariant - no shared engine state, no atomics outside
-// ring indices - and the seam is what makes that checkable rather than
-// aspirational: engine code holds a `RingTransport&` and has no other way
-// to reach a peer.
+// **This interface is the only channel for a *message* between cores, and
+// that is now a narrower claim than the one this comment used to make.**
+// It said "no shared engine state, no atomics outside ring indices", which
+// AR0-2 retired: state may be shared where a subsystem's spec declares it
+// and says what serializes it, and `docs/rules/rules.md` §3 is the index -
+// the WAL stream, the wake flag, the data file's capacity, the visibility
+// window, the page frame's latch word, and M2's lock table. What the seam
+// still guarantees is that no engine path *sends* to a peer except through
+// here: code holds a `RingTransport&` and has no other way to address one.
+// A shared structure is reached by declaring it, never by routing round
+// this. **Addressing a peer is not the same claim and this comment used to
+// make it**: `WakeRegistry::Kick(core)` names a peer core with no transport
+// in hand (`txn/lock_table.cpp`, `server/expeditor.cpp`), and a kick
+// carries no message, which is exactly why it needs no channel.
 //
 // It exists in two implementations for a reason M9 calls in-scope for v1
 // rather than a later luxury: **without a simulated transport every

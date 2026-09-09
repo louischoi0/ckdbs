@@ -23,7 +23,11 @@
 //
 // Concurrency: callers holding a live tuple in a buffer-pool frame must
 // update the Keystone word with a single atomic uint64_t CAS (rules.md
-// #3) so the three fields never tear across a concurrent reader. This
+// #3) so the three fields never tear across a concurrent reader. **The
+// lock byte is not part of that and is not used**: AO-R3 decided the lock
+// family holds no persisted bit, so the byte stays zero and a row's
+// exclusive tenancy is the header's `trx_id` stamp plus the in-memory
+// table (`docs/spec/txn.md` §5). This
 // header only provides the pure encode/decode math; the atomic exchange
 // itself happens at the call site, once a frame/page abstraction exists
 // to hold it.

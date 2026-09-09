@@ -169,8 +169,10 @@ Proposal: a **window above a floor**, not a table over all history.
   raised past its transaction, only when its `commit_lsn` is below every
   live snapshot — which is what `ReadHorizon()` already bounds (AN-Q4).
 
-**This is `rules.md` §3's fourth declared-shared structure, and §3 says the
-fourth "should be argued for rather than noticed later".** The argument:
+**This is a new row in `rules.md` §3's declared-shared table, and §3 says
+every later row "should be argued for rather than noticed later".** (It
+said "the fourth" until AO-S8: four documents claimed that ordinal for four
+different structures, and §3 assigns none.) The argument:
 written by the log core alone at the commit append, which is already
 serialized by the stream latch; read without a lock by every core, the
 window being append-mostly and the floor a single atomic that only rises;
@@ -320,7 +322,7 @@ header's AR0 §5 exemption argued from AN-Q3's class rather than from a
 class that rule does not have; "four sentences in two specs" corrected to
 five sites across four; AN-Q6 citing both `:101` and `:125`; the AE
 citation marked as untracked; AN-Q1 arguing itself as `rules.md` §3's
-fourth declared-shared structure; and the shared-transaction-id fence,
+a declared-shared structure (AO-S8: not "the fourth" — §3 assigns no ordinal); and the shared-transaction-id fence,
 stated three times, cut to one. AN-D8 folded into AN-D4's last paragraph.
 
 Not applied: the review's suggestion to open a stub M2 work order and put

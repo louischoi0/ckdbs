@@ -590,8 +590,10 @@ TEST_F(ForeignKeyCheckTest, ATransactionSeesItsOwnParent) {
     EXPECT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
 }
 
-// F3: an in-flight writer is *seen* and refused immediately, retryably. No
-// waiting - there is nothing to wait on under a cooperative core.
+// F3: an in-flight writer is *seen* and answered `kBusy`, retryably. It was
+// "no waiting - there is nothing to wait on under a cooperative core" until
+// AO-S3 made that answer a wait at the dispatcher; this cell is the check's
+// own verdict, which is unchanged, and not the statement's.
 TEST_F(ForeignKeyCheckTest, AParentWrittenByAnotherLiveTransactionIsBusy) {
     Session writer;
     ASSERT_EQ(Run(writer, "BEGIN").substr(0, 5), "BEGIN");

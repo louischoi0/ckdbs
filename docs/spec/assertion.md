@@ -30,8 +30,12 @@ KDS resolves both problems by construction rather than by generality:
 - Concurrency is handled by a **reservation protocol executed on the
   relation's owner core** (AS4). Because group state is owned by exactly one
   core and mutated only inside its cooperative event loop, admission is
-  atomic without latches. There is no waiting, no retry storm, and no
-  deadlock; failure is immediate and deterministic.
+  atomic without latches. **The admission is; its refusal is not** — since
+  AO-S6e-c a rejection caused by a reservation whose transaction is still
+  in flight **waits** for that decide instead of failing (§6.2), on the
+  lock family's own channel, so it is in the wait-for graph and a cycle of
+  two reservations is refused naming deadlock. No retry storm and no
+  livelock; the failure, when it comes, is deterministic.
 
 Everything outside the supported class is a truthful refusal, in line with
 the engine-wide contract: fewer features, exactly specified, fast and
@@ -46,7 +50,7 @@ correct.
 | AS1 | v1 predicate class: group cardinality (`COUNT(*)`) and group sum (`SUM(col)`) constraints over a single `GROUP BY` column list. General `NOT EXISTS` / subquery predicates: refused. |
 | AS2 | KDS-restricted syntax (`CREATE ASSERTION ... ON rel GROUP BY (...) CHECK ...`), not the SQL-92 free-form `CHECK (search condition)`. The grammar itself encodes the supported class; create-time validation is maximized. |
 | AS3 | Statement-time checking only (fail-fast). `DEFERRABLE` is reserved in the grammar and rejected as `Unsupported`. |
-| AS4 | Reservation protocol combined with owner-core group-key serialization. No latches, no waiting, no deadlock. |
+| AS4 | Reservation protocol combined with owner-core group-key serialization. No latches — still true, the state being core-local. **"No waiting, no deadlock" is struck** (`ar0-architecture-revision.md:416-419` struck AS4 with D8; AO-S6e-c built the wait): a false rejection waits for the reserver's decide, and two transactions each holding a reservation the other needs are a real cycle the detector ends. |
 | AS5 | No separate counter store. The Bound Cabin is the single structure: entries plus a per-group running aggregate maintained in the group directory header. Checks are computed against the Cabin in real time on the write path. |
 | AS6 | Bound Cabin is a **logged, headered authority class** (same durability tier as the var-heap (V3) and unique indexes (U5)). Prerequisite: the Cabin class split defined in §5. |
 | AS6a | Where assertion replay starts: a **per-checkpoint snapshot of the group headers** (`{group_id, key, count, sum}`), folded forward with `ASSERT_*` records **from the last checkpoint** — never from the cabin's birth, which would make RTO a function of the assertion's lifetime and make WAL retention a correctness setting. Every entry carries its `group_id` (§5.1) so the header→entry linkage is rebuilt from the cabin's own pages instead of persisted. Narrows AS5's "not a separate store" to "not a separate authority". Full statement: §7. |
@@ -412,7 +416,10 @@ one-net-per-statement rule.
 
 Reservations are orthogonal to tuple visibility: they constrain admission,
 not reads. Undo integration (step 5) is mandatory for correctness. Row
-locking (Keystone lock byte) is not used by this protocol.
+locking (Keystone lock byte) is not used by this protocol — and since AO-R3
+the byte is not used by anything: the lock family holds no persisted bit,
+the tuple `X` being the header's `trx_id` stamp. What this protocol does
+use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
 
 ---
 

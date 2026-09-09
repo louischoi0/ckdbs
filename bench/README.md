@@ -59,6 +59,31 @@ inside a measurement stage measures the driver. `bench/docs/` stays closed
 until there is a v3 driver whose behaviour is not already documented in the
 tool's own `--help`.
 
+## Every cell carries its unit — since 2026-09-09
+
+The operator's working rule of 2026-09-09: **in a results document's matrix,
+the unit belongs in the cell** — `437 µs`, `15,414 tps`, `3 ns` — and not
+only in the column heading.
+
+The reason is what a table is for. A results file is read years after the
+run, in fragments, and quoted one row at a time into a work order or a
+spec; a cell lifted out of a table whose heading carried the unit is a bare
+number, and a bare number in a durability discussion has been read as
+milliseconds when it was microseconds. A heading is not carried by the
+sentence that quotes the row.
+
+Where a column is genuinely unitless — a count, a ratio, an error tally —
+the cell says so the same way: `0 errors`, `1.3 %`, `4 cells`.
+
+**It applies to every results file written after this rule was recorded,
+and earlier files stay as they are** — the last one before it is
+`results-ao-s7-c3-v2.7.0-304-g5e94dc8.md`, whose run matrix carries its
+units in the headings. The boundary is this rule's own commit and not a
+date, because a date is ambiguous on the day it is written and this rule
+was written on a day that already had a results file in it. Rewriting them would restate numbers nobody re-measured,
+which is the one thing this directory's rules exist to prevent; a reader who
+meets an older table reads its heading, as that table's own commit intended.
+
 ## What a v3 number is measured on — BTREE only, since 2026-09-08
 
 The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`):

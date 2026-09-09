@@ -234,14 +234,21 @@ AM-S1's; the window latch is taken with the WAL latch released
 is stated in the lock manager's subsystem header per `rules.md` §3.
 
 **The tuple lock has one home and two paths, and the order above is
-about the wait.** The Keystone lock byte (`docs/spec/txn.md:401-402`) is
-the **fast path**: a writer takes the tuple by CAS on the byte under the
-page latch, which is where the byte is. On conflict — the byte already
-carries a live transaction — the writer **releases the latch**, registers
-the tuple in D2(a)'s table and parks there (D13); the holder's decide
-clears the byte and wakes the table's queue. So no wait ever happens
-under a latch, the table carries only contended tuples, and an
-uncontended write touches no table entry for its tuple. The relation's
+about the wait.** **Amended 2026-09-09 (AO-S8): the byte is not the fast path and carries
+nothing.** *( AO-R3 decided no persisted lock bit — the operator's
+mark of 2026-09-03 — so the Keystone lock byte stays zero and the fast
+path is the header's `trx_id` stamp, which a writer already reads for
+first-updater-wins. The two-path shape below is what R2 proposed; the
+shape built is the stamp plus an in-memory table, and the paragraph is
+kept rather than rewritten because M2's rulings are read against what they
+declined.)* As proposed: the Keystone lock byte is the **fast path** — a
+writer takes the tuple by CAS on the byte under the page latch, which is
+where the byte is. On conflict — the byte already carries a live
+transaction — the writer **releases the latch**, registers the tuple in
+D2(a)'s table and parks there (D13); the holder's decide clears the byte
+and wakes the table's queue. So no wait ever happens under a latch, the
+table carries only contended tuples, and an uncontended write touches no
+table entry for its tuple. The relation's
 `IX` and `IS` are the table's, always (R3).
 
 **AR2-R3 — Intention modes, and why.** `[design]` A relation-level `X`
@@ -653,7 +660,11 @@ added at AR2-A's request.
 - `docs/spec/txn.md:401-402` "No lock manager, no waiting, no deadlock
   detection, and the Keystone lock byte stays unused" — the whole
   sentence is amended at M2, not only its last clause: the byte becomes
-  the tuple lock's fast path (R2).
+  the tuple lock's fast path (R2). **Amended 2026-09-09 (AO-S8): the last
+  clause is the one that survives.** AO-R3 decided no persisted lock bit,
+  so the byte stays unused and stays zero; what M2 changed is the first
+  three. The `:401-402` citation is stale as well — §5 is at `:550`, and
+  AO-S8 corrected the sentence there.
 - `src/storage/device_page_store.cpp:804-817` `MayWrite`'s lease/grant arm
   — refuses exactly the local write §3's `INSERT` row takes; kept through
   M1 by AM-R2 "as long as AM-R1 holds", and retired with AM-R1 at M2.

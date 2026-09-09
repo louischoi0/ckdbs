@@ -262,9 +262,10 @@ public:
         // The level a session starts at, and therefore the level an
         // autocommit statement runs at. **READ COMMITTED is the default**,
         // and the reason is specific to this engine rather than convention:
-        // under first-updater-wins with no waiting, REPEATABLE READ holds
-        // one read view for a whole transaction and so converts more
-        // concurrent writes into retryable aborts. This is the server rung
+        // under first-updater-wins, REPEATABLE READ holds one read view
+        // for a whole transaction and so converts more concurrent writes
+        // into retryable aborts - and since M2 it also waits for fewer of
+        // them (`docs/spec/txn.md` section 5). This is the server rung
         // of the same three-level chain `durability` uses - server, then
         // `SET ISOLATION LEVEL` per session, then `BEGIN ISOLATION LEVEL`
         // per transaction.

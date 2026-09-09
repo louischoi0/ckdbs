@@ -90,8 +90,7 @@ first — so a statement that resolves a relation without reading rows
 (`DESCRIBE`, `SHOW TABLES`) resolves under its own view, never the
 previous statement's.
 
-**`READ COMMITTED` is the default.** Rationale: under first-updater-wins with little
-waiting (§5), `REPEATABLE READ` holds one read view for the whole transaction and
+**`READ COMMITTED` is the default.** Rationale: under first-updater-wins (§5), `REPEATABLE READ` holds one read view for the whole transaction and
 therefore converts more concurrent writes into retryable aborts; `READ COMMITTED`
 re-snapshots per statement and conflicts strictly less. This differs from
 MySQL/InnoDB, whose undo-chain shape this engine otherwise follows (`wal.md` §2),
@@ -100,9 +99,12 @@ per session (`SET ISOLATION LEVEL`), and per transaction (`BEGIN ISOLATION
 LEVEL ...`) — the same three-level precedence chain `durability` already uses.
 
 `SERIALIZABLE` is out of scope and is **not** `[OPEN]`: it needs predicate
-locking or SSI read-tracking, neither of which fits a design with no lock
-manager and no row-level read tracking. (§4.1's reader registration is not
-that: it records which *snapshots* exist, never which rows they read.)
+locking or SSI read-tracking, and this engine has neither. **It does have a
+lock manager** since M2 — the lock family of §5, with units, modes, a
+wait-for graph and a deadlock detector — so the reason `SERIALIZABLE` is out
+is the *read* side and only that: nothing tracks which rows a reader read.
+(§4.1's reader registration is not that: it records which *snapshots* exist,
+never which rows they read.)
 
 ## 2. MVCC version identity
 
@@ -548,7 +550,9 @@ callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
 ## 5. Write conflicts — first-updater-wins
 
 A conflict is detected from the tuple header alone, and the Keystone lock byte
-stays unused. **The header is no longer the only source of one**
+stays unused — **the lock family holds no bit on the page** (AO-R3: no
+persisted lock bit, no page bit, no superblock field; a crash releases every
+lock because the loser is rolled back at mount). **The header is no longer the only source of one**
 (AO-S6c-b): a transaction may hold a *unit* rather than a row - a range
 declared by a predicate-covering write (AO-0 item 14) - and the header of a
 row inside that range names whoever wrote it last, which says nothing about
@@ -653,6 +657,40 @@ view was minted and is refused first-updater-wins - the correct
 That is PostgreSQL's shape, and it is the intended one: what the wait buys
 is the case where the holder never touches the row, which is every fence
 declared over a window wider than what it wrote.
+
+**The table itself, and what serializes it** — `rules.md` §3's row, moved
+here at AO-S8 because §3's own rule is that a declared-shared structure is
+declared in the spec that owns the subsystem, and this is that spec:
+
+> The **lock table** is the lock family's partitioned table, **one for the
+> instance** — built by the `Expeditor` for every core count, borrowed by
+> every peer's transaction manager, and taken by every dispatcher. It is
+> `64 × cores` partitions keyed by `(rel_oid, unit kind, lo)`, so a
+> relation's entry and its tuples hash apart. Each partition carries a
+> `base/latch.hpp` latch, **null at `cores = 1`**. One thing is read
+> *without* that latch and it is not a field of the entry: a **striped
+> `S`/`X`-fence counter per relation**, an atomic array beside the
+> partitions, which is what lets a writer ask "is any fence over this
+> relation" without scanning. An entry's holders and waiters are vectors
+> and are read under the latch.
+>
+> **The order.** A partition latch is taken with no page latch held, with
+> no other partition latch held (one partition per operation), never under
+> the WAL latch or the window latch, and **released before any park** — a
+> statement parks on a decide, and a partition held across that park would
+> be held against the very core that would end it.
+>
+> **Stated, not enforced**, and the distinction is `rules.md` §3's own
+> ("a stated order that nothing checks is a comment"): `lock_table.hpp`
+> says only the second of the four is structurally true, and the thing
+> that would check the fourth — a suspend audit that trips on a park with
+> a span held — was AO-S2's and was not delivered. It holds in the tree
+> today because every guard in `src/txn/lock_table.cpp` is function-scoped
+> and the file contains no `co_await`.
+>
+> Nothing of it is persisted (AO-R3): no WAL record type, no page bit, no
+> superblock field. A crash releases every lock because the loser is rolled
+> back at mount.
 
 The engine reports `StatusCode::kTxnConflict`, which maps to the
 wire contract `wire::ErrorCategory::kTxnConflict` with **`retryable = 1`**

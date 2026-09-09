@@ -22,11 +22,16 @@
 //
 // ---- What it does not have ------------------------------------------------
 //
-// **No lock manager, no waiting, no deadlock detection**, and the Keystone
-// lock byte stays unused. A write conflict is detected from the tuple
-// header alone and the loser is aborted retryably. That is stricter than
-// PostgreSQL's READ COMMITTED, which re-reads; it is a deliberate
-// simplification, and the whole reason there is nothing to wait on.
+// **This paragraph said "no lock manager, no waiting, no deadlock
+// detection" until M2, and all three are now false.** There is a lock
+// family (`txn/lock_table.hpp`), a writer meeting an undecided holder
+// waits for its decide rather than being refused, and a waiter that would
+// close a cycle is refused naming deadlock. What is unchanged: the write
+// conflict itself is still decided from the tuple header alone
+// (first-updater-wins, `docs/spec/txn.md` §5), the loser is still aborted
+// retryably where no wait can get past the refusal, and the **Keystone
+// lock byte stays unused** — AO-R3 keeps the family entirely in memory.
+// Stricter than PostgreSQL's READ COMMITTED, which re-reads.
 //
 // **No SnapshotTooOld.** RegisterReader/ReadHorizon
 // (docs/workplan-reader-registration.md) record which snapshots exist so a
@@ -67,15 +72,25 @@
 // cooperative tasks on one core, which is what makes first-updater-wins
 // checkable without a latch: nothing suspends between reading a tuple's
 // header and overwriting it.
+//
+// **That premise is narrower since M2, and `lock_table.hpp` names this
+// comment when it says so.** A writer meeting an undecided holder now
+// parks, so the *statement* suspends. What stayed true is the span: the
+// park happens in `DispatchAsync` with no page span held, so the header is
+// still read and overwritten inside one uninterrupted stretch, which is
+// all the check needs.
 
 namespace kds::txn {
 
 enum class IsolationLevel : std::uint8_t {
     // Default. A read view per **statement**: a statement sees everything
-    // committed before it began. Chosen over REPEATABLE READ because under
-    // first-updater-wins with no waiting, holding one view for a whole
-    // transaction converts more concurrent writes into retryable aborts
-    // (section 1). Matches PostgreSQL and Oracle, differs from InnoDB.
+    // committed before it began. Chosen over REPEATABLE READ because
+    // holding one view for a whole transaction converts more concurrent
+    // writes into retryable aborts (section 1) - and, since M2, narrows
+    // what a write may wait for as well, a repeatable-read waiter being
+    // excluded against the writer of the row it wants. The clause "with no
+    // waiting" stood here until AO-S8 and is no longer true of the engine.
+    // Matches PostgreSQL and Oracle, differs from InnoDB.
     kReadCommitted = 1,
     // A read view per **transaction**, taken at BEGIN.
     kRepeatableRead = 2,

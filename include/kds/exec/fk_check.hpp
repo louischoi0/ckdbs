@@ -70,9 +70,13 @@ enum class FkVerdict : std::uint8_t {
     // Re-running the statement will violate it again: kFkViolation.
     kViolation,
     // Another transaction is writing the row the check depends on, and the
-    // answer depends on how it ends. F3: refuse now, retryably, rather than
-    // wait - there is nothing to wait on under a cooperative single-writer
-    // core. Reported as kTxnConflict.
+    // answer depends on how it ends. F3 as written: refuse now, retryably,
+    // rather than wait, there being nothing to wait on under a cooperative
+    // single-writer core. **AO-S3 made that ground false and the verdict a
+    // wait** - the caller parks on the writer's decide and asks again, which
+    // the paragraph fourteen lines down already says. This enum value is
+    // still the answer this function gives; what the caller does with it
+    // changed. Reported as kTxnConflict.
     kBusy,
 };
 

@@ -29,8 +29,11 @@
 //
 // ---- Why this is not a lock --------------------------------------------
 //
-// It never blocks and nothing ever waits on it: F3 forbids waiting outright
-// ("blocking is not expressible on a cooperative single-writer core"), and
+// It never blocks and nothing ever waits on it. The ground for that has
+// changed and the conclusion has not: F3 forbade waiting outright
+// ("blocking is not expressible on a cooperative single-writer core") until
+// AO-S3, and what keeps an *intent* out of the wait graph now is that it
+// holds no rows. And
 // an intent is read exactly once, by a check that immediately answers. Two
 // consequences follow and both are wanted: there is no deadlock to detect,
 // because there is no wait-for edge; and a transaction holding intents is

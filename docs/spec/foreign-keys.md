@@ -22,11 +22,17 @@ Decisions:
 - **F2 — Actions: RESTRICT / NO ACTION only.** The grammar is
   `REFERENCES <parent>` with no action clause; CASCADE and SET NULL are
   not accepted.
-- **F3 — Fail-fast, no waiting.** A constraint check that meets a
-  conflicting *in-flight* writer returns an error immediately (client
-  retries). Blocking is not expressible on a cooperative single-writer
-  core, and the deterministic-error semantic is the one unique checks
-  use. The busy verdict is `FkVerdict::kBusy` → `Status::TxnConflict`,
+- **F3 — the check fails fast; the statement waits.** A constraint check
+  that meets a conflicting *in-flight* writer returns `kBusy` immediately
+  — the check itself never blocks, running as it does inside a write
+  path with no suspension point. **What the statement does with that
+  answer changed at AO-S3**: it parks on the writer's decide and runs
+  again, on the same core (AO-S3) or on the parent's (AO-S5(b)), instead
+  of handing the wait to the client's retry loop. F3's original ground,
+  *"blocking is not expressible on a cooperative single-writer core"*, was
+  true of the engine that had no lock family and is not true of this one;
+  what survives is the deterministic-error semantic, which is the one
+  unique checks use, and the code the client eventually sees. The busy verdict is `FkVerdict::kBusy` → `Status::TxnConflict`,
   wire-spelled `ERR TXN_CONFLICT retryable=1` — **one retryable code
   wide**, no separate busy code. A violation is `kFkViolation`,
   `ERR FK_VIOLATION retryable=0`. Retry-versus-wrong stays
@@ -411,8 +417,10 @@ walk child_rel
 
 - First visible child → `kFkViolation` (RESTRICT). In-flight child
   insert encountered → busy (`TxnConflict`, F3) — the in-place row with
-  a foreign `trx_id` *is* the lock record; no lock manager exists or
-  is needed. A violation costs a prefix; only a pass costs the relation.
+  a foreign `trx_id` *is* the lock record this check reads. **Not because
+  no lock manager exists** — there has been one since M2 — but because a row being
+  written already carries its writer, and a check that asked the table
+  would ask it about a row the header has already answered for. A violation costs a prefix; only a pass costs the relation.
 - Cost: a full child walk per deleted parent until a Cabin covers the
   fk column. The fix is declared: `CREATE CABIN ON child(fk_col)` — whose
   **verified empty set is the authoritative "no children"** RESTRICT
@@ -459,10 +467,11 @@ implementation is the failure mode to refuse in review.
 
 ## 5. What is deliberately absent
 
-- No lock manager, no wait queues, no deadlock detector **for the
-  reverse probe's own answer** (a `DELETE` meeting a child row being
-  written is still answered `busy`; AO-S6's units are where the delete
-  side's waits belong) — F3 plus in-place `trx_id` makes the uncommitted
+- The lock family is **not consulted for the reverse probe's own answer**
+  (a `DELETE` meeting a child row being written is still answered `busy`;
+  D9(a)'s `S` fence is M3's, and AO-R14 says so). The engine has wait
+  queues and a deadlock detector since M2 — this bullet is about which
+  answer this check takes, not about what exists — F3 plus in-place `trx_id` makes the uncommitted
   row itself the conflict signal, and run-to-completion removes the
   check-to-write race that gap locks exist to close elsewhere. **The
   forward check waits, on either core**: a same-core parent being written

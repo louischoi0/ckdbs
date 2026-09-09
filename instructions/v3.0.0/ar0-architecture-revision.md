@@ -367,8 +367,10 @@ the shape that section had a week ago: a justification comment for **any**
 lock, in the subsystem header *and* in the owning spec; and a partitioned
 lock table read by every core is a **new row in §3's declared-shared
 table**, whose rule is that "Adding a row is a spec change first and a code
-change second" and that "the fourth should be argued for rather than
-noticed later". D2's work order owes that argument — what serializes the
+change second" and that every later row "should be argued for rather than
+noticed later". (**"The fourth" was this document's word and it was wrong**
+— four documents each claimed the ordinal for a different structure, and
+`rules.md` §3 assigns none: corrected at AO-S8.) D2's work order owes that argument — what serializes the
 table and which spec declares it — before the code, exactly as AN-Q1 owes
 it for the commit-order window.
 
