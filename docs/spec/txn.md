@@ -632,7 +632,9 @@ level: **can the re-run answer differently once this holder decides?**
   either way.
 - **Yes, for the foreign-key forward check.** Its `check_view` is minted
   at the check rather than at `BEGIN` — a constraint reads latest state
-  (§4.4) — so the level does not enter: the holder's commit makes the
+  (`foreign-keys.md` §4, which is where that rule lives; §4.4 below is
+  where a view is *applied*, not where this one is minted) — so the level
+  does not enter: the holder's commit makes the
   parent visible to the re-run, and its abort makes the answer a terminal
   `FkViolation` instead of a retryable conflict. The cross-owner half of
   the same check parks without asking the level at all, so this is also

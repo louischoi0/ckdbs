@@ -870,7 +870,7 @@ now stated as the guard rather than as an ordering.
 
 ### Cells
 
-Nine, every one mutation-checked, and the mutation named at the cell.
+Ten, every one mutation-checked, and the mutation named at the cell.
 
 1. `FailedCommitTest.AnAutocommitWriteWhoseCommitFailsReleasesEverythingItHeld`
    - `kStrict` plus `MemoryLogDevice::FailNextSync`, which is the fixture
@@ -914,7 +914,11 @@ Nine, every one mutation-checked, and the mutation named at the cell.
    its walk runs on the resume. Refused, and its transaction poisoned.
    **Mutation**: `UPDATED 2` and `COMMIT`, for three rows written.
 
-The suite ran green on the tree that carries them.
+The suite ran **3359/3359 green in 166.66 s at `v2.7.0-300-g142431e`**,
+the tree that landed, with the pre-push gate running it again there; and
+3359/3359 in 173.17 s after the third review's cuts, which change no test.
+The count is 10 above the 3349 the tree carried at `7e26a65`, which is this
+sub-stage's cells and nothing else.
 **Overhead not measured**, deliberately and for every S6 row's reason: the
 three fixes touch failure and resume arms rather than the per-row acquire,
 and AO-S7 is where the numbers are named before they are run.

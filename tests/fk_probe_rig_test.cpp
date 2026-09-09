@@ -92,12 +92,17 @@ struct ChildWriter {
     DispatchOutcome begin_out;
     DispatchOutcome out;
     DispatchOutcome commit_out;
+    DispatchOutcome after_out;
     std::function<bool()> go_pred;
     std::atomic<bool> go{false};
     std::atomic<bool> inserted{false};
     std::atomic<bool> done{false};
     bool in_txn = false;
     std::string statement = "INSERT INTO c VALUES (7)";
+    // One more statement after the `COMMIT`, when a cell asks for one. A
+    // poisoned `COMMIT` refuses **without** rolling back, so a cell that
+    // wants to show what ROLLBACK undoes has to issue it.
+    std::string after;
 };
 
 sched::Coro WriteChild(CommandDispatcher& d, ChildWriter& c) {
@@ -107,6 +112,7 @@ sched::Coro WriteChild(CommandDispatcher& d, ChildWriter& c) {
     co_await d.DispatchAsync(c.statement, &c.session, &c.out);
     c.inserted.store(true, std::memory_order_release);
     if (c.in_txn) co_await d.DispatchAsync("COMMIT", &c.session, &c.commit_out);
+    if (!c.after.empty()) co_await d.DispatchAsync(c.after, &c.session, &c.after_out);
     c.done.store(true, std::memory_order_release);
     co_return Status::OK();
 }
@@ -292,6 +298,10 @@ struct FkRig {
         parent.statement = "UPDATE c SET pid = 7 WHERE id > 1 AND id < 3";
         child.in_txn = true;
         child.statement = "UPDATE c SET pid = 8 WHERE pid = 7";
+        child.after = "ROLLBACK";
+        // Read back through the holder, after its own decide: the victim's
+        // session is the one that must not be believed here.
+        parent.after = "SELECT * FROM c";
         rig->core(1).scheduler().Submit(sched::MakeCoroTask(
             sched::SchedulingGroup::kForeground, SeedRows(rig->core(1).dispatcher(), seeder)));
         rig->core(1).scheduler().Submit(sched::MakeCoroTask(
@@ -628,6 +638,14 @@ TEST(FkProbeRigTest, AResumedWriteThatHasAlreadyWrittenRowsIsRefusedRatherThanPa
         << "the resumed write parked mid-walk instead of being refused";
     EXPECT_EQ(StatusFromErrorReply(r.child.out.response).code(), StatusCode::kTxnConflict)
         << r.child.out.response;
+    // **Named row 2, which is what makes this the *middle* of the walk**
+    // rather than a refusal before it: row 1 sorts first, matches the same
+    // predicate, and is written before the walk can reach row 2 at all. A
+    // cell asserting only the code would pass for a statement refused
+    // having written nothing, which is the case this one is not about.
+    EXPECT_NE(r.child.out.response.find("id=2"), std::string::npos)
+        << "the refusal did not name the held row, so the walk may not have reached it: "
+        << r.child.out.response;
 
     // And the refusal is a failed statement inside an explicit transaction,
     // so the rows it did write stay and the client must ROLLBACK - §6's
@@ -638,11 +656,21 @@ TEST(FkProbeRigTest, AResumedWriteThatHasAlreadyWrittenRowsIsRefusedRatherThanPa
     EXPECT_NE(r.child.commit_out.response.find("aborted"), std::string::npos)
         << "the failed statement did not poison its transaction: "
         << r.child.commit_out.response;
+    EXPECT_EQ(r.child.after_out.response.rfind("ROLLBACK", 0), 0u)
+        << "a poisoned COMMIT refuses without unwinding, so the ROLLBACK is what ends it: "
+        << r.child.after_out.response;
 
+    // And what the ROLLBACK undid is the row the refused statement had
+    // already written - which is the other half of "refused, not parked":
+    // a statement that parked would have gone on to write the rest.
     r.parent.may_end.store(true, std::memory_order_release);
-    EXPECT_TRUE(KickUntil(*r.rig, 1, [&] { return r.parent.ended.load(std::memory_order_acquire); },
+    ASSERT_TRUE(KickUntil(*r.rig, 1,
+                          [&] { return r.parent.after_done.load(std::memory_order_acquire); },
                           4000ms))
-        << r.parent.end_out.response;
+        << r.parent.end_out.response << " / " << r.parent.after_out.response;
+    EXPECT_EQ(r.parent.end_out.response.rfind("COMMIT", 0), 0u) << r.parent.end_out.response;
+    EXPECT_EQ(r.parent.after_out.response.find(",8"), std::string::npos)
+        << "the victim's write survived its ROLLBACK: " << r.parent.after_out.response;
 }
 
 }  // namespace

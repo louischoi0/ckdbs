@@ -1115,8 +1115,21 @@ private:
     // `statement_deadline_ns` is in-out and zero means "not taken yet":
     // the fault net bounds the *statement*, so a second entry inherits the
     // first one's deadline instead of starting a fresh one.
+    //
+    // `resumed` is `resumed_from_fk_probe_` for the re-run this function
+    // makes, and it is **threaded rather than defaulted** so that the one
+    // caller that could otherwise get it wrong has to say so. The re-run
+    // from the probe arm dispatches a statement that has a crossing foreign
+    // key; if it could park mid-walk, the turn after it would re-run the
+    // whole statement, raise a fresh probe before the walk and discard the
+    // cursor - the defect `resumed_from_fk_probe_` exists to prevent, one
+    // frame deeper. It cannot today, because both verbs resolve every
+    // foreign parent before the first row is written, so such a re-run
+    // always returns a probe and never reaches the walk. That is an
+    // invariant of two other functions, which is exactly the kind a default
+    // argument turns into an accident.
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
-                                sched::MonoTimeNs* statement_deadline_ns);
+                                sched::MonoTimeNs* statement_deadline_ns, bool resumed);
 
     // `cur` is the row's own writer, from the tuple header, and decides the
     // **MVCC verdict** (first-updater-wins, `txn.md` §5) - a writer this
@@ -2608,7 +2621,7 @@ private:
         // `resumed` is `resumed_from_fk_probe_`, carried here because the
         // two windows are the same window at every site: the allowance and
         // what the statement inside it is are set and restored together.
-        MayParkScope(CommandDispatcher& owner, bool allowed, bool resumed = false) noexcept
+        MayParkScope(CommandDispatcher& owner, bool allowed, bool resumed) noexcept
             : owner_(owner),
               saved_(owner.may_park_),
               saved_resumed_(owner.resumed_from_fk_probe_) {

@@ -247,7 +247,8 @@ constexpr bool kWritePathEnforcesAssertions = true;
 
 sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* session,
                                                DispatchOutcome* out,
-                                               sched::MonoTimeNs* statement_deadline_ns) {
+                                               sched::MonoTimeNs* statement_deadline_ns,
+                                               bool resumed) {
     // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
     //
     // The ratified answer to D5's `[OPEN]`: a writer of a row held by a
@@ -387,7 +388,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // direction is the safe one - a re-run would wait for
             // durability that a decide no longer waits for, never the
             // reverse - which is why this is a comment and not a fix.
-            const MayParkScope parking(*this, true);
+            const MayParkScope parking(*this, /*allowed=*/true, /*resumed=*/resumed);
             *out = DispatchAndStage(line, session);
         }
         // However the wait ended - granted, victim, or the net - this
@@ -491,7 +492,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // them. AO-S6d added a third `may_park_` window, inside a loop and
         // beside a `co_await`, which is that day arriving; the guard makes
         // the property structural rather than reviewed.
-        const MayParkScope parking(*this, true);
+        const MayParkScope parking(*this, /*allowed=*/true, /*resumed=*/false);
         const CommitAckScope stamped(*this, commit_ack);
         *out = DispatchAndStage(line, session);
     }
@@ -508,7 +509,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // callers for the reason the function states.
     sched::MonoTimeNs statement_deadline_ns = 0;
     if (out->write_block.has_value()) {
-        co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns);
+        co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns,
+                                 /*resumed=*/false);
     }
 
     if (out->pending_fk_probe.has_value() && fk_probes_ != nullptr) {
@@ -623,7 +625,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // probe it raises is collected by the next turn of this same
             // loop - which is why this is here and not after it.
             if (out->write_block.has_value()) {
-                co_await AwaitWriteBlock(probe.line, session, out, &statement_deadline_ns);
+                co_await AwaitWriteBlock(probe.line, session, out, &statement_deadline_ns,
+                                         /*resumed=*/true);
                 // **What the earlier rounds answered does not survive a
                 // whole re-run.** A verdict is "as of the view the probe
                 // was answered under", and the point of the wait is that
@@ -4475,23 +4478,12 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // *when* the check runs, never what protects the row afterwards
         // (AO-R14).
         if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0) {
-            // **`kCapable`, and the reason is one line up in this file.**
-            // The first draft called this futile on the ground that a
-            // repeatable-read child's check view is minted at `BEGIN`;
-            // `CheckView` says the opposite in its own first sentence -
-            // "**Minted here, not taken from the statement.** A constraint
-            // check reads latest state" - and every caller takes it from
-            // there, whatever the level. So a commit makes the parent
-            // visible to the re-run and the child passes, an abort makes it
-            // a terminal `FkViolation` instead of the retryable
-            // `TxnConflict` that sends a client into a loop, and the wait
-            // pays off in both arms.
-            //
-            // It also makes the two sides of the same check agree: the
-            // cross-core probe parks on the parent's core with no isolation
-            // test at all (`fk_probe_service.cpp`), so excluding the level
-            // here answered one statement differently depending on which
-            // core its parent lived on.
+            // **`kCapable`, and the reason is one function up in this
+            // file**: `CheckView` mints a view of *now* at every call and
+            // at every isolation level, so this verdict is not one the
+            // waiter's own view decides. `txn.md` §5's list carries the
+            // rest, including why the cross-core half of this same check
+            // has always parked without asking the level.
             NoteBlockingWriter(waiter, busy_trx, pk, RepeatableReadWait::kCapable);
         }
 
@@ -10828,13 +10820,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // started with. Resuming buys something only once there are rows
         // that cannot be re-applied, which is exactly this test.
         //
-        // **And a probe's resume never takes the second arm**
-        // (`resumed_from_fk_probe_`, whose declaration states the failure
-        // it prevents): the cursor a mid-walk park leaves on the session
-        // does not survive the fresh probe the wait's re-run raises, so a
-        // resume that has written rows is answered with its conflict, which
-        // is exactly what it was answered with before the resume could park
-        // at all.
+        // **And a probe's resume never takes the second arm**;
+        // `resumed_from_fk_probe_`'s declaration states why.
         if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_ ||
             resumed_from_fk_probe_) {
             return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
