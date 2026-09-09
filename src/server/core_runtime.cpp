@@ -663,7 +663,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         config_.budget,
         // And this core's Cabin store (AK-S2): a stage on a relation this
         // core owns serves from the same sets the dispatcher does.
-        cabin_store_ ? &*cabin_store_ : nullptr);
+        cabin_store_ ? &*cabin_store_ : nullptr,
+        // And the instance's lock table, so a producer declares the relation
+        // it streams (AT-S1).
+        locks_);
     // All six kinds, in `remote_step_service.hpp`'s one home - including
     // the kStepBatch/kStepEof fan-out to both endpoints, which is the rule
     // that must not be written twice.

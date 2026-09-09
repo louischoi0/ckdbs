@@ -2044,8 +2044,9 @@ std::uint64_t OidIn(const std::string& insert_reply) {
 }
 
 TEST_F(LockDeadlockTest, AReadDeclaresItsPositionAndGivesItBack) {
-    // AR2 §3's `SELECT` row: the borrow is **the statement's**. Taken by
-    // the walk (`step_vm.cpp`'s seam) and released when the statement ends,
+    // AR2 §3's `SELECT` row: the borrow is **the statement's**. Taken at
+    // the bind since AT-S1 (`step_compiler.cpp`'s seam), re-reported into
+    // by the walk, and released when the statement ends,
     // which is what `EntryCount` reads here - a read that kept its position
     // would leave the relation entry standing and a later `DROP TABLE`
     // would wait for a reader that finished long ago.
@@ -2247,6 +2248,89 @@ TEST_F(LockDeadlockTest, ADropWhoseWaitReachesTheFaultNetPoisonsItsTransaction) 
         << "the transaction committed after a statement of it failed: " << commit;
 
     locks_->Release(reader_id, reader);
+}
+
+// ---- AT-S1: the declaration moves to the bind ---------------------------
+//
+// AT-R1 (`instructions/v3.0.0/workorder-at-m3-uniformity.md`). Until this
+// stage a statement declared its relation from the **outermost walk**, at
+// `step_vm.cpp`'s `index == 0` guard - so a join's inner relation, a
+// subquery's relation and a write's own relation were resolved and executed
+// against with no `IS` held, and a DDL's `X` was granted over them. The
+// declaration is now made by the compiler at the bind, between the name and
+// the schema, which is what closes the window `ar0-5-amendment-uniformity.md`
+// §8 names: a DDL cannot commit and release between this statement reading a
+// layout and holding a position over it.
+//
+// `read_borrows()` counts **granted** asks, one per relation per statement,
+// which is what these cells read. The defence is one-directional and
+// `read_borrow.hpp` says why: a refused ask is read on, and
+// `ARefusedReadBorrowLeavesTheReaderReadingOn` below already pins that.
+// A remote step's half is `RemoteStepServiceTest`'s.
+
+TEST_F(LockDeadlockTest, AJoinDeclaresItsInnerRelationAtTheBind) {
+    // Two relations bound, two declarations. Before AT-S1 this was one:
+    // `step_vm.cpp:1960`'s guard reports only for `index == 0`, so the
+    // inner side of a walked join declared nothing at all and its schema
+    // was read under no borrow.
+    ASSERT_EQ(Local("CREATE TABLE jo (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE ji (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO jo VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO ji VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+
+    const std::uint64_t before = dispatcher_->read_borrows();
+    const std::string rows = Local("SELECT jo.v, ji.v FROM jo JOIN ji ON jo.id = ji.id");
+    ASSERT_NE(rows.rfind("ERR", 0), 0u) << rows;
+    EXPECT_EQ(dispatcher_->read_borrows(), before + 2)
+        << "the inner relation of a join was bound without being declared";
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "a statement-scoped borrow outlived its statement";
+}
+
+TEST_F(LockDeadlockTest, ASubqueryRelationIsDeclaredAtItsOwnBind) {
+    // The nested block binds through the same loop
+    // (`step_compiler.cpp`'s "the one site that covers FROM, every JOIN and
+    // every subquery block"), so the declaration reaches it without the
+    // compiler knowing anything about locks.
+    ASSERT_EQ(Local("CREATE TABLE so (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE si (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO so VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO si VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+
+    const std::uint64_t before = dispatcher_->read_borrows();
+    const std::string rows = Local("SELECT v FROM so WHERE id IN (SELECT id FROM si)");
+    ASSERT_NE(rows.rfind("ERR", 0), 0u) << rows;
+    EXPECT_EQ(dispatcher_->read_borrows(), before + 2)
+        << "a subquery's relation was resolved under no borrow";
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+TEST_F(LockDeadlockTest, AnInsertDeclaresItsRelationAtResolveToo) {
+    // The third write verb, which the first draft of this stage missed: an
+    // INSERT resolves its relation's layout exactly as the others do, and
+    // its own borrows are taken rows later.
+    ASSERT_EQ(Local("CREATE TABLE ins (id int64, v int64)").rfind("CREATED", 0), 0u);
+
+    const std::uint64_t before = dispatcher_->read_borrows();
+    ASSERT_EQ(Local("INSERT INTO ins VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(dispatcher_->read_borrows(), before + 1)
+        << "an INSERT resolved its relation under no borrow";
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "the insert's read borrow outlived its statement";
+}
+
+TEST_F(LockDeadlockTest, AWriteDeclaresItsRelationAtResolveToo) {
+    // A write resolves a schema exactly as a read does and carries the same
+    // window - its own `IX` is taken well after the compile. The
+    // declaration is an `IS`, which is compatible with that `IX`, so it
+    // costs the writer nothing and gives the compile a `SELECT`'s
+    // protection.
+    ASSERT_EQ(Local("CREATE TABLE wr (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO wr VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+
+    const std::uint64_t before = dispatcher_->read_borrows();
+    ASSERT_EQ(Local("UPDATE wr SET v = 2 WHERE id = 1").rfind("UPDATED", 0), 0u);
+    EXPECT_EQ(dispatcher_->read_borrows(), before + 1)
+        << "an UPDATE resolved its relation under no borrow";
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "the write's read borrow outlived its statement";
 }
 
 TEST_F(LockDeadlockTest, ADropThatWouldCloseACycleIsTheVictimRatherThanWaiting) {

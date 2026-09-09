@@ -102,6 +102,17 @@ pages stay allocated and the oid is never reissued). So the guarantee is
 "a positioned reader is not overtaken", never "no reader sees the drop
 before it commits".
 
+**Since AT-S1 the borrow is taken at the bind, not at the first page**
+(`workorder-at-m3-uniformity.md` AT-R1), and it widens what a drop waits
+for: a relation that is a join's inner side, a subquery's relation, the
+target of an `INSERT`/`UPDATE`/`DELETE`, or the relation a remote step is
+streaming on another core, holds the `IS` for the whole statement - from
+the bind, or on a remote stage from its own resolve, to the end - where only
+a scan's outermost walk held it before. Under a
+continuous stream of such statements a drop reaches the lock family's 11 s
+net and is refused where it used to succeed, which is the sentence above
+with a larger population of readers behind it.
+
 **And it is not only readers.** A relation `X` is refused by the `IX`
 every writer of the relation holds, so a drop also waits for a transaction
 that has written a row of it - until that transaction decides, since a

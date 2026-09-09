@@ -293,13 +293,14 @@ struct ExecStats {
 // stops being maintained is *wrong* rather than slow, and a config key that
 // can produce a wrong answer is not a config key.
 // **Where the statement is, told to whoever is holding its position**
-// (AO-S6e-b; AO-R12 and AR2-R14, the read borrow). The outermost walk calls
-// this once before its first page and again at every page boundary - the one
-// place it holds no pin and no span - naming the relation and the key
-// interval it is positioned in. The executor knows nothing about locks: the
-// implementation is the dispatcher's, and what it does with the interval
-// (an `IS` at the slice, with the relation by the intention rule) is
-// `command_dispatcher.cpp`'s and the census's business.
+// (AO-S6e-b; AO-R12 and AR2-R14, the read borrow). Two callers: the
+// compiler, once per relation it binds, with the whole id space (AT-S1);
+// and the outermost walk, once before its first page and again at every
+// page boundary - the one place it holds no pin and no span - naming the
+// relation and the key interval it is positioned in. The executor knows
+// nothing about locks: the implementation is `read_borrow.hpp`'s, and what
+// it does with the interval (an `IS` at the slice, with the relation by
+// the intention rule) is that file's and the census's business.
 //
 // **`[0, kIdSpaceEnd)` is the whole relation** and is what the first call
 // carries: before the first page a walk is positioned nowhere in particular,

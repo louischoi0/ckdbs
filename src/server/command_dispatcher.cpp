@@ -1,4 +1,5 @@
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/read_borrow.hpp"
 
 #include "kds/txn/lock_table.hpp"
 
@@ -7511,6 +7512,8 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
         return {ErrorReply(s), false, 0, s};
     }
 
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
         return {ErrorReply(access.status()), false, 0, access.status()};
@@ -9370,108 +9373,6 @@ namespace {
 // raw newline byte (docs/spec/client-manual.md section 2). The plan printer
 // produces ordinary newlines because the same text goes to a test's
 // assertion unescaped; the escaping belongs here, at the wire.
-// ---- The read borrow (AO-S6e-b; AO-R12, AR2-R14, AR2 §3's `SELECT` row) --
-//
-// What a positioned read declares, and the whole of what it declares: `IS`
-// on the relation it is walking and `IS` on the slice it has reached, held
-// for **the statement** and released when this object dies. Nothing about
-// visibility passes through here - the snapshot decides what a reader sees,
-// as it always has (AN-S2) - and nothing about permission: this is a
-// position, published so that an operation which changes where a key lives
-// can wait for the reader rather than run out from under it. In M2 the one
-// such operation is DDL's relation `X` (AO-R12: no mover exists), which
-// meets this at the relation entry by the intention rule.
-//
-// **A read borrow never refuses a read and never makes one wait.** A
-// refused ask leaves the reader holding nothing and reading on, which is
-// sound because the reader needs no protection to be correct: `drop-table.md`
-// DT1 leaves its pages allocated and its oid never reissued, and the
-// re-`Bind` after a park turns a dropped relation into a clean error
-// (`step_vm.cpp`). Making a read wait for a writer would buy the reader
-// nothing and cost it a wait MVCC exists to avoid - and it is what keeps a
-// reader out of the wait-for graph entirely, which is in turn why a DDL
-// waiting for one cannot be in a cycle through it (AO-S6e-b's section).
-//
-// The cap is not special-cased for the same reason: `TryAcquire` refuses at
-// `max_locks_per_txn` and the reader carries on. It cannot be reached
-// anyway - the ledger holds one relation and one slice, three entries for
-// the instant a move overlaps.
-class ReadBorrow final : public exec::PositionSink {
-public:
-    // `holder` is 0 where there is no table, and then this is inert: the
-    // read path constructs one unconditionally so the call sites carry no
-    // branch of their own.
-    ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken)
-        : locks_(holder != 0 ? locks : nullptr), holder_(holder), taken_(taken) {}
-    ReadBorrow(const ReadBorrow&) = delete;
-    ReadBorrow& operator=(const ReadBorrow&) = delete;
-    ~ReadBorrow() {
-        if (locks_ != nullptr) locks_->Release(holder_, holdings_);
-    }
-
-    void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) override {
-        if (locks_ == nullptr) return;
-        // The intention above the slice, and the unit a `DROP TABLE`
-        // meets. **Asked once per relation, whatever the answer**: the
-        // record is of the ask and not of the grant, because a reader that
-        // was refused - a DDL holds the relation `X` - would otherwise
-        // re-ask at every page boundary, taking a partition latch per page
-        // for the length of a walk that has already decided to run without
-        // a position.
-        if (rel != rel_) {
-            const bool took = Take(txn::LockKey::Relation(rel), txn::LockMode::kIntentionShared);
-            rel_ = rel;
-            refused_ = !took;
-            if (took && taken_ != nullptr) ++*taken_;
-            // The slice belonged to the relation being left. Unreachable
-            // today - only the outermost walk reports, and it walks one
-            // relation - so this is what makes that a property of the code
-            // rather than of the caller: a slice kept across the change
-            // would be a position declared in a relation this reader is no
-            // longer in, and on the refused arm it would be held for the
-            // rest of the statement.
-            if (slice_.has_value()) {
-                locks_->ReleaseOne(holder_, *slice_, txn::LockMode::kIntentionShared, holdings_);
-                slice_.reset();
-            }
-        }
-        // No unit without the intention above it (`lock_table.hpp`): a
-        // slice borrowed under a relation entry this holder has no `IS` on
-        // is invisible to a relation-level ask.
-        if (refused_) return;
-        // The whole id space is the relation, which is already held. The
-        // same collapse `DeclaredWriteBorrow` makes from the write side, and
-        // it is what AR2-R14's "the range when it is between pages" comes to
-        // with insert spreading off: one range, the whole relation.
-        if (lo == 0 && hi == catalog::kIdSpaceEnd) return;
-
-        const txn::LockKey slice = txn::LockKey::Slice(rel, lo, hi);
-        if (slice_.has_value() && *slice_ == slice) return;
-        // **Taken before the previous one is let go**, so the position is
-        // never unheld between two pages - which is the one instant a mover
-        // could pass through if the order were reversed.
-        if (!Take(slice, txn::LockMode::kIntentionShared)) return;
-        if (slice_.has_value()) {
-            locks_->ReleaseOne(holder_, *slice_, txn::LockMode::kIntentionShared, holdings_);
-        }
-        slice_ = slice;
-    }
-
-private:
-    bool Take(const txn::LockKey& key, txn::LockMode mode) {
-        auto took = locks_->TryAcquire(holder_, key, mode, holdings_);
-        return took.ok() && took.value();
-    }
-
-    txn::LockTable* locks_ = nullptr;
-    std::uint64_t holder_ = 0;
-    std::uint64_t* taken_ = nullptr;
-    txn::LockHoldings holdings_;
-    catalog::Oid rel_ = 0;
-    bool refused_ = false;
-    std::optional<txn::LockKey> slice_;
-};
-
 void AppendEscaped(std::ostringstream& os, const std::string& text) {
     for (char c : text) {
         if (c == '\n') {
@@ -9500,7 +9401,8 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 DispatchOutcome CommandDispatcher::RunAggregated(
     ResultSink& sink, TextResultSink& text_sink, const exec::StepChain& chain,
     exec::TrailCollector* trail, const exec::TrailReplay* replay,
-    const std::optional<stats::InstanceKey>& instance, const txn::Snapshot& snapshot) {
+    const std::optional<stats::InstanceKey>& instance, const txn::Snapshot& snapshot,
+    exec::PositionSink& borrow) {
     if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names, aggregate_limits_);
         !s.ok()) {
         return {ErrorReply(s), false, 0, s};
@@ -9518,7 +9420,6 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // non-ok status ends the walk and propagates out of Execute. That is
     // the same path a decode error already takes.
     exec_stats_.steps.clear();
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -9569,7 +9470,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                                               exec::TrailCollector* trail,
                                               const exec::TrailReplay* replay,
                                               const std::optional<stats::InstanceKey>& instance,
-                                              const txn::Snapshot& snapshot) {
+                                              const txn::Snapshot& snapshot,
+                                              exec::PositionSink& borrow) {
     exec::ExecStats stats;
     std::uint64_t rows = 0;
 
@@ -9612,7 +9514,6 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     exec::EmissionQuota quota(chain);
     sorter_.Reset(chain, sort_max_rows_);
     std::string analyze_scratch;
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -9816,8 +9717,14 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // predicate is evaluated - was settled by the compiler and is sitting
     // in the chain. What is left is formatting.
     const std::optional<txn::ReadView> resolve_view = ViewFor(session);
-    auto chain =
-        exec::Compile(catalog_, stmt, resolve_view.has_value() ? &*resolve_view : nullptr);
+    // Opened before the compile, which declares into it at every bind
+    // (`step_compiler.hpp`'s `declare`; AT-R1). Lives to the end of the
+    // statement, which is the end of this function - a statement that
+    // ships a read returns `pending` before its remote walk runs, and the
+    // executing core takes its own (`remote_step_service.cpp`).
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
+    auto chain = exec::Compile(catalog_, stmt,
+                               resolve_view.has_value() ? &*resolve_view : nullptr, &borrow);
     if (!chain.ok()) {
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
@@ -10205,7 +10112,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // parse, same compile, same executor - and a diagnostic that skipped
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
-    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value().snap);
+    if (analyze) {
+        return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value().snap, borrow);
+    }
 
     // ---- AG1: the fold wraps the sink, and nothing else moves -----------
     //
@@ -10217,7 +10126,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // list of things that were remembered.
     if (compiled.aggregated()) {
         return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, instance,
-                             snapshot.value().snap);
+                             snapshot.value().snap, borrow);
     }
 
     // ---- V09: the emission quota wraps the sink, and nothing else moves --
@@ -10290,7 +10199,6 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         if (!s.ok() && encode_error.ok()) encode_error = std::move(s);
     };
 
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -10652,6 +10560,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         return {ErrorReply(s), false, 0, s};
     }
 
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
         return {ErrorReply(access.status()), false, 0, access.status()};
@@ -10700,7 +10610,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // The WHERE clause compiles to the same resolved predicates a chain
     // step carries, and is evaluated by the same evaluator (V16). UPDATE
     // reads one relation, so the frame has one step.
-    auto predicates = exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where);
+    auto predicates =
+        exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where, /*view=*/nullptr, &borrow);
     if (!predicates.ok()) {
         return {ErrorReply(predicates.status()), false, 0, predicates.status()};
     }
@@ -11823,8 +11734,7 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(const WriteScope& 
 
 std::uint64_t CommandDispatcher::NextReadHolder() noexcept {
     if (locks_ == nullptr) return 0;
-    return txn::kReadHolderBit | (static_cast<std::uint64_t>(core_id_) << 32) |
-           ++read_borrow_seq_;
+    return ReadHolderId(core_id_, ++read_borrow_seq_, /*remote=*/false);
 }
 
 StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
@@ -12430,6 +12340,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
     const catalog::TableAccess& ta = *access.value();
@@ -12459,7 +12371,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
     // The same WHERE compilation UPDATE uses, so a DELETE's predicate means
     // exactly what the SELECT that found the rows meant.
-    auto predicates = exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where);
+    auto predicates =
+        exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where, /*view=*/nullptr, &borrow);
     if (!predicates.ok()) return {ErrorReply(predicates.status()), false, 0, predicates.status()};
     const std::vector<const catalog::Schema*> schemas = {&ta.schema};
     exec::ChainFrame frame;

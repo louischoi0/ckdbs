@@ -13,6 +13,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/wire/row_codec.hpp"
 
@@ -69,6 +70,12 @@ protected:
         // the 8; one row per batch (target 1) makes 8 rows > 4 credits,
         // deterministically.
         InsertRows(8, /*qty_step=*/10);
+        // The instance's table, for the producer's borrow (AT-S1). One core:
+        // every ask here is made from this thread, and a latch would guard
+        // nothing.
+        auto locks = txn::LockTable::Create(/*core_count=*/1);
+        ASSERT_TRUE(locks.ok()) << locks.status().message();
+        locks_ = std::move(locks.value());
         MakeServer(/*submit=*/{});
 
         // **The suspension audit, over the pipeline's own park points.**
@@ -156,7 +163,8 @@ protected:
                 sent_.push_back(Sent{dst, kind, std::move(payload)});
                 return Status::OK();
             }},
-            nullptr, /*batch_target_bytes=*/1, std::move(submit));
+            nullptr, /*batch_target_bytes=*/1, std::move(submit), /*txns=*/nullptr,
+            exec::Budget(), /*cabins=*/nullptr, locks_.get());
     }
 
     void UseStreamingServer() {
@@ -182,6 +190,7 @@ protected:
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;
     catalog::Oid oid_ = 0;
+    std::unique_ptr<txn::LockTable> locks_;
     std::optional<RemoteStepServer> server_;
     std::vector<Sent> sent_;
     std::vector<std::unique_ptr<sched::Task>> tasks_;
@@ -221,6 +230,50 @@ TEST_F(RemoteStepServiceTest, AScanStreamsBatchesUnderCreditAndEofLast) {
     auto decoded = wire::DecodeRowBatch(rows, /*field_count=*/2);
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
     ASSERT_GE(decoded.value().size(), 1u);
+}
+
+// ---- AT-S1: the executing core declares what it executes --------------
+
+TEST_F(RemoteStepServiceTest, AParkedProducerHoldsItsRelationAndLetsGoAtEof) {
+    // The coordinator's borrow dies at its `pending` return, before the
+    // remote walk runs (`command_dispatcher.cpp`'s `HandleSelect`); so the
+    // relation `IS` a remote step holds is this server's own, taken in
+    // `OnStepOpen` before its schema read and moved into the producer's
+    // frame. On the **streaming** server the producer parks mid-walk on
+    // credit with that frame live, which is the instant a DDL's `X` must be
+    // refused; the reactorless server walks to its end inside `OnStepOpen`
+    // and parks only the sending, so there the borrow is rightly gone by
+    // the time anything else can ask.
+    InsertRows(392);
+    UseStreamingServer();
+
+    const std::uint64_t before = server_->read_borrows();
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    EXPECT_EQ(server_->read_borrows(), before + 1) << "the open declared nothing";
+    Pump();
+    ASSERT_EQ(tasks_.size(), 1u) << "the producer must park, not finish";
+    ASSERT_EQ(server_->open_pipelines(), 1u);
+
+    txn::LockHoldings ddl;
+    auto refused = locks_->TryAcquire(/*txn=*/4242, txn::LockKey::Relation(oid_),
+                                      txn::LockMode::kExclusive, ddl);
+    ASSERT_TRUE(refused.ok()) << refused.status().message();
+    EXPECT_FALSE(refused.value()) << "a DROP's X was granted over a parked remote walk";
+
+    for (int round = 0; round < 500 && server_->open_pipelines() > 0; ++round) {
+        GrantCredits(4);
+        Pump();
+    }
+    ASSERT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+    EXPECT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "the producer's borrow outlived its walk";
+
+    auto granted = locks_->TryAcquire(/*txn=*/4242, txn::LockKey::Relation(oid_),
+                                      txn::LockMode::kExclusive, ddl);
+    ASSERT_TRUE(granted.ok());
+    EXPECT_TRUE(granted.value());
+    locks_->Release(4242, ddl);
 }
 
 TEST_F(RemoteStepServiceTest, AFilteredScanAppliesTheResidualRemotely) {
@@ -972,6 +1025,39 @@ TEST_F(ConsumingStageTest, AConsumingStageForwardsItsUpstreamOpenThenJoinsPerInp
     EXPECT_EQ(server_->open_pipelines(), 0u);
     EXPECT_TRUE(tasks_.empty());
     ASSERT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
+}
+
+TEST_F(ConsumingStageTest, AConsumingStagesBorrowIsContinuousFromItsOpen) {
+    // AT-S1's second review: the open resolved the schema under one borrow
+    // and the consumer's first resume took another, a reactor turn later -
+    // a `DROP TABLE` fitted in the gap. The borrow is handed down now, so
+    // before the consumer has run once the relation `X` is already refused,
+    // and one holder id covers the stage from its resolve to its end.
+    UseStreamingServer();
+    const std::uint64_t before = server_->read_borrows();
+    OpenConsuming();
+    ASSERT_EQ(server_->open_pipelines(), 1u);
+    EXPECT_EQ(server_->read_borrows(), before + 1) << "the open declared nothing";
+
+    // Not pumped: the consumer has not run. The X must already be refused.
+    txn::LockHoldings ddl;
+    auto refused = locks_->TryAcquire(/*txn=*/4242, txn::LockKey::Relation(oid_),
+                                      txn::LockMode::kExclusive, ddl);
+    ASSERT_TRUE(refused.ok()) << refused.status().message();
+    EXPECT_FALSE(refused.value()) << "the borrow was dropped between the open and the consumer";
+
+    Pump();
+    ASSERT_EQ(server_->open_pipelines(), 1u);
+    EXPECT_EQ(server_->read_borrows(), before + 1) << "the consumer declared under a second id";
+
+    StepEofPayload cancel{PipelineTag{7, 0, 1}};
+    std::vector<std::byte> bytes;
+    EncodePipelinePayload(cancel, bytes);
+    server_->OnStepCancel(bytes);
+    Pump();
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "the consumer's borrow outlived its cancel";
 }
 
 TEST_F(ConsumingStageTest, ACancelReachesAParkedConsumerAndItsUpstreamHearsIt) {

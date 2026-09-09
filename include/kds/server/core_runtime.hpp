@@ -568,6 +568,18 @@ private:
     // discipline Expeditor's members follow: the reactor holds the io
     // backend, the WAL manager holds the log device, and the dispatcher
     // holds references into everything below it.
+    // **Declared above the scheduler, so it outlives every frame that
+    // releases into it** - `expeditor.hpp`'s rule for its own table. Since
+    // AT-S1 a parked producer's or consumer's borrow (`read_borrow.hpp`)
+    // releases in its destructor, which runs when the scheduler drops the
+    // frame at teardown; with the table declared below the scheduler that
+    // release would reach a freed table. Unreachable today - an owned table
+    // exists only at one core, where no transport and so no producer exists
+    // - and the order is what keeps it that way rather than a coincidence.
+    // The pointer is the table this core uses, owned or borrowed (AO-S5).
+    std::unique_ptr<txn::LockTable> owned_locks_;
+    txn::LockTable* locks_ = nullptr;
+
     std::unique_ptr<sched::IoBackend> io_backend_;
     std::optional<sched::Scheduler> scheduler_;
     // **No `log_device_`** (AM-S4(d)): the device is core 0's and this core
@@ -693,9 +705,6 @@ private:
     // where it can be recorded, on the owner at enrolment
     // (`shipped_statement_executor.hpp`), and lifts the rule. The FK probe
     // park registers none and waits on nothing yet; AO-S5(b) owes both.
-    std::unique_ptr<txn::LockTable> owned_locks_;
-    txn::LockTable* locks_ = nullptr;
-
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
 

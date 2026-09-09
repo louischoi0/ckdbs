@@ -1895,7 +1895,9 @@ Status Expeditor::Start() {
             exec::Budget(config_.max_rows_touched),
             // And core 0's Cabin store (AK-S2), as a peer's step server
             // takes its own (`core_runtime.cpp`).
-            cabin_store_ ? &*cabin_store_ : nullptr);
+            cabin_store_ ? &*cabin_store_ : nullptr,
+            // And the lock table, as a peer's does (AT-S1).
+            locks_.get());
         // All six kinds, in `remote_step_service.hpp`'s one home. Core 0's
         // wiring and a peer's became identical when RR2 gave every core a
         // client, and the fan-out rule the block below used to state twice

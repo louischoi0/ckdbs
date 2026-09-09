@@ -12,8 +12,10 @@
 // codec owns which parser that means - which is what keeps the value a
 // predicate compares and the value a write keys on identical by
 // construction rather than by two call sites agreeing.
+#include "kds/catalog/range_directory.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
 #include "kds/storage/index/index_page.hpp"  // kIndexPkWidth - the sort-key suffix
 
 namespace kds::exec {
@@ -1297,15 +1299,15 @@ std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
-                                 bool inner_build);
+                                 bool inner_build, PositionSink* declare);
 
 }  // namespace
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
-                            const txn::ReadView* view) {
+                            const txn::ReadView* view, PositionSink* declare) {
     std::uint32_t next_step_id = 0;
     return CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
-                        view, /*inner_build=*/true);
+                        view, /*inner_build=*/true, declare);
 }
 
 Status CompileAssignments(const catalog::TableAccess& access,
@@ -1342,7 +1344,7 @@ Status CompileAssignments(const catalog::TableAccess& access,
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
                             const std::vector<parser::Condition>& where,
-                            const txn::ReadView* view) {
+                            const txn::ReadView* view, PositionSink* declare) {
     Scope scope;
     scope.relations.push_back(BoundRelation{std::string(binding), &access});
 
@@ -1370,7 +1372,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             // its own writes between outer rows are what would invalidate a
             // map the first row built (join-inner-build.md §4).
             auto inner = CompileBlock(catalog, *cond.subquery, &scope, next_step_id, /*depth=*/1,
-                                      view, /*inner_build=*/false);
+                                      view, /*inner_build=*/false, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
 
@@ -1457,7 +1459,7 @@ namespace {
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
-                                 bool inner_build) {
+                                 bool inner_build, PositionSink* declare) {
     // The execute-time half of spec I15 R3: recursion is bounded at both
     // ends. The parser caps nesting too, but a chain can also be built by
     // something other than a parse, and a bound that only one producer
@@ -1478,6 +1480,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     for (const parser::RelationRef* rel : refs) {
         auto oid = catalog.FindTableOidByName(rel->table_name, view);
         if (!oid.ok()) return oid.status();
+        // AT-R1: the declaration, between the name and the schema
+        // (`step_compiler.hpp` on `declare`). The whole id space, because a
+        // bind is a claim on the relation and not on any part of it; the
+        // walk narrows it to a slice later through this same sink.
+        if (declare != nullptr) {
+            declare->Position(oid.value(), 0, catalog::kIdSpaceEnd);
+        }
         // AF-T3, and this is the one site that covers FROM, every JOIN and
         // every subquery block - they all bind through this loop.
         if (Status s = catalog.CheckRelationQualifier(rel->schema, rel->table_name, oid.value(),
@@ -1567,7 +1576,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             // `up == 1` rather than a resolution failure.
             auto inner =
                 CompileBlock(catalog, *cond.subquery, &scope, next_step_id, depth + 1, view,
-                             sub_inner_build);
+                             sub_inner_build, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
 

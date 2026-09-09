@@ -2027,7 +2027,13 @@ private:
             // a bound on what it has yet to read; there the relation
             // reported above is the whole declaration. Since SUS-1 every
             // relation created is a btree.
-            if (position_ != nullptr && index == 0 && is_btree) {
+            // `parent_ == nullptr` since AT-S1: a consuming stage's inner
+            // walk is `index == 0` on its own core and would otherwise
+            // re-take a slice per input row - two partition-latch ops per
+            // page per row, over-declaring a position the relation `IS`
+            // above already covers. The M2 rule stands: a nested walk
+            // declares no slice.
+            if (position_ != nullptr && index == 0 && parent_ == nullptr && is_btree) {
                 position_->Position(live_access->oid, walk_page_min_key, catalog::kIdSpaceEnd);
             }
 

@@ -424,7 +424,8 @@ the operator without breaking an argument.
 | stage | state |
 |---|---|
 | AT-S0 | **landed 2026-09-09** on `m3-at` — this document and `index.md`'s row. No code, no spec edit, no test; the suite was not executed and no pass is claimed. Overhead not measured. **Reviewed after landing** and corrected in the same branch: AT-8 |
-| AT-S1 … AT-S13 | not started; each gated on the operator's word |
+| AT-S1 | **built 2026-09-09** on `m3-at`. The compiler declares every relation it binds into the statement's read borrow, between the name and the schema (`exec::Compile`/`CompileWhere` take a `PositionSink`; `read_borrow.hpp` is the borrow's home now); the three write verbs declare at resolve; a remote-step producer takes its own `IS` in its frame, because the coordinator's borrow dies at its `pending` return before the remote walk runs. Cells: a join declares both relations, a subquery declares at its bind, `INSERT`/`UPDATE` declare at resolve, a parked producer refuses a DDL's `X` and grants it after EOF. Three mutants killed (the compiler's line, the dispatcher's write-path line, the producer's). **Its review corrected the stage's own claim**: the bind's ask is a non-blocking `TryAcquire`, so a refused ask leaves the DDL-wins direction to DT1, catalog MVCC and catalog-only DDL - AT-7 item 10, AT-0 item 10 - and found two gaps the first draft had, `INSERT` and the remote step, both closed in the same change; `drop-table.md` DT7 now states the widened wait surface. **A second review found the fixes' own defects**: two minters in one holder-id space on one core (the dispatcher's and the step server's counters both fed `ReadHolderId(core, seq)` - latent only because no dispatcher borrow spans a suspension; bit 62 now names the minter), the consuming stage dropping its `IS` for a reactor turn between the open and its first resume (the borrow is handed down now, one holder id per stage, a cell pins it), and the owning spec - `txn.md` §5 - still stating the pre-AT-S1 contract with one bullet that denied what this stage built; rewritten, with `CLAUDE.md`'s row. **A third review verified the fixes** and found what lagged them: the borrow's owning comment on the dispatcher's sequence still argued the pre-D1 way; `CoreRuntime` declared its owned lock table below the scheduler, so a parked frame's release at teardown would have reached a freed table - unreachable today, fixed by declaration order; `RunConsumer` re-declared a step the open had already declared; and a consuming stage's inner walk, `index == 0` on its own core, re-took a slice per input row - the M2 rule that a nested walk declares no slice is restored with a `parent_` gate. **Stated omission**: the foreign-key check family - an `INSERT`'s or `UPDATE`'s parent, a `DELETE`'s children, the probe server's relation - declares nothing, because those checks are not steps; the following letter's, with D9(a). **Suite 3385/3385 in 281.90 s** on the tree committed, the baseline's 3379 plus six. Overhead not measured |
+| AT-S2 … AT-S13 | not started; each gated on the operator's word |
 
 ---
 
@@ -441,6 +442,7 @@ the operator without breaking an argument.
 | 7 | **`in_doubt_ceiling_ms`** (AO-0 item 7): refused at startup naming its successor, or kept inert until M3 re-scopes it to the fault net | user-visible | **AO-R8's own plan**: re-scope and rename the key to the net, and refuse the old spelling at the known-key check naming its successor. Deleting it would leave the net with no config key at all, against `CLAUDE.md`'s rule to re-scope rather than re-name |
 | 8 | **Per-core listeners with TLS or SCRAM** (AT-3 F, AT-R12). The refusal's stated reason — the credential store and TLS context live on core 0's stack — is an ownership residue | networking | AT-S8 removes it if the credential state moves to `Expeditor` with everything else; if it is larger than that, AT-S8's row names it and it becomes its own item |
 | 9 | **The Cabin store's topology.** AR1 §11 offers two shapes — one store, or one partitioned so every write to a key reaches the same partition — and fixes neither, saying *"the store's topology is M3's"* (AT-3 G) | design | **one store, partitioned by `expr_id`**: the partition is what keeps a peer's observation off a mutex the owner holds, and `expr_id` is AR1's own named prefix. Raised as an item rather than taken as a ruling because AT-1 sends AR1's AQ/AR to a following letter, and this is the one AR1 decision AT cannot avoid |
+| 10 | **Should a bind's `IS` wait for an in-flight DDL?** AT-S1's ask is non-blocking (AT-7 item 10). A waiting ask would close the DDL-wins direction with the lock rather than with DT1 + MVCC + catalog-only DDL, at the price of putting readers into the wait-for graph - AO-S6e-b kept them out so a DDL waiting for a reader can never cycle, and a reader holding `IS` on A while waiting for B's `X` against a DDL holding B and waiting for A's readers is a cycle no detector sees, ended only by the 11 s net | quiet-wrong class, design | **keep it non-blocking.** The three facts hold today and every DDL the engine has is catalog-only; the day a DDL moves data is the day this item reopens, and `read_borrow.hpp` names that condition. Taken as CLA's proposal on the operator's word of 2026-09-09 that CLA's proposals stand |
 
 ---
 
@@ -485,6 +487,18 @@ consequence; the evidence is in AT-3.
    socket is in the tree behind `peer_listeners`, and what is missing is the
    credential store's home and the fallback handoff the mark obliges AU-S5
    to list (AT-3 F, AT-R12).
+10. **AR0-5 §8 overstates what the lock alone gives.** *"DDL's `X` cannot be
+    granted while it is held, so a stale parse cannot be executed"* is true
+    of a reader that holds the `IS` - the reader-wins direction, which AT-S1
+    now extends to every bound relation. A reader arriving while the DDL
+    holds `X` is **refused and reads on**, because a read borrow never
+    refuses a read and never waits (AO-S6e-b, ratified). What makes that
+    reader's answer right is DT1 (pages stay, oids are never reissued),
+    catalog MVCC (the DDL's rows are invisible to its view) and the absence
+    of data-moving DDL (`alter.md`) - three facts about the engine, not the
+    lock. AT-R3's "the lock is the argument" is therefore one direction's
+    argument, and `read_borrow.hpp` says so. Found by AT-S1's review; the
+    alternative - a bind that waits for the DDL - is AT-0 item 10.
 
 ---
 

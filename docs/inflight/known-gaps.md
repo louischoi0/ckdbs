@@ -336,6 +336,28 @@ statement about an engine that no longer exists; re-verify or strike it.
   `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-0 item 26, which
   is **undecided**, and `ar0-5-amendment-uniformity.md` §7 and §8.
 
+  **Closed at AT-S1 on `m3-at`** for every shape above: the compiler
+  declares each relation it binds (`step_compiler.cpp`), the three write
+  verbs declare at resolve, and a remote-step producer takes its own `IS`
+  in its frame (`remote_step_service.cpp`). **What stays open is the
+  direction, and it is a correction to AR0-5 §8 rather than a gap**: the
+  ask is a non-blocking `TryAcquire`, so a reader arriving while a DDL holds
+  `X` is refused and reads on - sound by DT1, catalog MVCC and catalog-only
+  DDL, not by the lock (`read_borrow.hpp`; `workorder-at-m3-uniformity.md`
+  AT-7 item 10, AT-0 item 10).
+
+- **`CompileWhere` resolves an UPDATE's or DELETE's subquery relations
+  under no view.** Verified 2026-09-09 on `m3-at` at `4b06051` by AT-S1's
+  review: `UpdateInner` and `DeleteInner` resolve their own relation under
+  the session's view (DT3c) and then call `exec::CompileWhere` with
+  `view = nullptr`, so `UPDATE t SET v = 1 WHERE id IN (SELECT id FROM u)`
+  resolves a `u` the session cannot see - a relation another transaction
+  created and has not committed. Pre-existing; AT-S1 takes an `IS` on that
+  relation, which changes nothing about the visibility. The fix is one
+  argument at each site and changes a refusal for a shape that works today,
+  so it is recorded rather than applied. Owner: `docs/spec/ddl-transactional.md`
+  DT3c.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own

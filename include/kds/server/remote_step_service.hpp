@@ -23,6 +23,7 @@
 #include "kds/txn/visibility.hpp"
 
 namespace kds::txn {
+class LockTable;
 class TransactionManager;
 }
 
@@ -63,6 +64,8 @@ class RingTransport;
 // thread - no locks, like everything else on a core (rules.md #3).
 
 namespace kds::server {
+
+class ReadBorrow;  // read_borrow.hpp; the .cpp includes it
 
 // The STEP_OPEN envelope: the head, an optional upstream-edge section
 // (P4d-4b), then the step descriptor (step_descriptor.hpp) as the
@@ -269,7 +272,8 @@ public:
                      std::size_t batch_target_bytes = kStepBatchTargetBytes,
                      SubmitFn submit = {}, txn::TransactionManager* txns = nullptr,
                      exec::Budget budget = exec::Budget(),
-                     stats::CabinStore* cabins = nullptr) noexcept
+                     stats::CabinStore* cabins = nullptr,
+                     txn::LockTable* locks = nullptr) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
@@ -288,7 +292,8 @@ public:
           submit_(std::move(submit)),
           txns_(txns),
           budget_(budget),
-          cabins_(cabins) {}
+          cabins_(cabins),
+          locks_(locks) {}
 
     // The kStepOpen handler: decode, validate the single-step class,
     // execute, queue, drain. A failure at any point answers STEP_ERROR to
@@ -368,6 +373,10 @@ public:
         for (const Pipeline& pipe : pipelines_) n += pipe.batches.size();
         return n;
     }
+
+    // Relations a producer declared and was granted (AT-S1) - the
+    // dispatcher's `read_borrows()`, for the executing core's half.
+    std::uint64_t read_borrows() const noexcept { return read_borrows_; }
 
 private:
     struct Pipeline {
@@ -498,9 +507,13 @@ private:
     // re-derivation needs this core's indexes and cabin mask, and the
     // schema is one field of the thing that carries them. One parameter
     // fewer, not one more.
+    // `borrow` as on `RunProducer` below: the `IS` `OnStepOpen` took before
+    // its schema read, carried into the consumer's frame so the grant is
+    // continuous from the resolve to the end of the stage.
     void OpenConsumingStage(const StepOpenHead& head, std::span<const StepOpenUpstream> ups,
                             std::span<const StepOutputColumn> output, exec::Step step,
-                            const catalog::TableAccess& access);
+                            const catalog::TableAccess& access,
+                            std::unique_ptr<ReadBorrow> borrow);
 
     // The streaming producer (P4d-4a): one coroutine per open pipeline,
     // owning the writer and the executor run. It re-finds its Pipeline by
@@ -509,8 +522,11 @@ private:
     // remote read already solved the same way. `output` narrows the row
     // it seals to the spec's local columns (P4d-4b-3); empty keeps the
     // whole row.
+    // `borrow` is the relation `IS` `OnStepOpen` took before its schema
+    // read (AT-S1), moved into this frame so it outlives the open.
     sched::Coro RunProducer(PipelineTag tag, exec::StepChain chain,
-                            std::vector<std::uint16_t> output);
+                            std::vector<std::uint16_t> output,
+                            std::unique_ptr<ReadBorrow> borrow);
 
     // The consuming stage (P4d-4b-2): parks until input arrives, decodes
     // each upstream row into a one-slot outer frame, runs the local step
@@ -520,7 +536,7 @@ private:
     // per consumed batch. Same re-find-by-tag discipline as RunProducer.
     sched::Coro RunConsumer(PipelineTag tag, exec::StepChain chain,
                             catalog::Schema input_schema, std::vector<StepOutputColumn> output,
-                            catalog::Schema output_schema);
+                            catalog::Schema output_schema, std::unique_ptr<ReadBorrow> borrow);
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
@@ -553,6 +569,17 @@ private:
     // `CabinScopeCovers`) is what keeps it honest on a relation that is not
     // wholly this core's.
     stats::CabinStore* cabins_;
+    // **The executing core declares what it executes** (AT-S1). The
+    // coordinator's borrow is a stack object of `HandleSelect`, which
+    // returns `pending` before this producer runs - so a remote walk held
+    // nothing, and a `DROP TABLE` on the session core was granted its `X`
+    // over a relation another core was mid-way through streaming. A
+    // producer now takes the relation `IS` in its own frame, before the
+    // schema read, and holds it across every park until the walk ends. Null
+    // where there is no table, and then nothing is declared.
+    txn::LockTable* locks_;
+    std::uint32_t read_borrow_seq_ = 0;  // `ReadHolderId`'s 32-bit field
+    std::uint64_t read_borrows_ = 0;
     std::vector<Pipeline> pipelines_;
 };
 

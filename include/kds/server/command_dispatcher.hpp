@@ -1924,10 +1924,14 @@ private:
     // It takes no statement text: the `pattern_id` it prints comes from
     // `instance`, which the caller got from the parse. It used to re-lex
     // `sql` to recompute a number it had already been handed.
+    //
+    // `borrow` is the statement's read borrow, taken at the bind by
+    // `HandleSelect` (AT-R1) rather than constructed here: a borrow made at
+    // execution would be made after the compile it exists to protect.
     DispatchOutcome RunAnalyze(const exec::StepChain& chain, exec::TrailCollector* trail,
                                const exec::TrailReplay* replay,
                                const std::optional<stats::InstanceKey>& instance,
-                               const txn::Snapshot& snapshot);
+                               const txn::Snapshot& snapshot, exec::PositionSink& borrow);
 
 public:
     // AG11's caps, from `aggregate_max_groups` / `aggregate_max_distinct`.
@@ -2125,13 +2129,14 @@ public:
     // statements the cap ended rather than ledgers it silently shortened.
     std::uint64_t borrow_cap_stops() const noexcept { return borrow_cap_stops_; }
 
-    // **Read statements that took a position** (AO-S6e-b): one per
-    // statement whose walk was granted the relation `IS` the read borrow is
-    // made of. Not a wire counter and not a `SHOW META` block - it is what
+    // **Relations declared** (AO-S6e-b; at the bind since AT-S1): one per
+    // relation per statement that was granted the relation `IS` the read
+    // borrow is made of - a join counts two, and a write counts its own
+    // relation. Not a wire counter and not a `SHOW META` block - it is what
     // a cell reads to say the borrow was taken at all, since a local read
     // is synchronous and nothing else can observe it while it runs. A
-    // statement refused the relation reads on and is not counted, which is
-    // the distinction that matters: this counts positions declared, not
+    // relation refused is read on and not counted, which is the
+    // distinction that matters: this counts declarations granted, not
     // reads performed.
     std::uint64_t read_borrows() const noexcept { return read_borrows_; }
     // Which table this dispatcher records its edges in, so an assembly cell
@@ -2267,11 +2272,12 @@ private:
     // nothing else was installed, and is what the reply is taken from.
     // Two references to one thing on the newline path, because a sink that
     // is somebody else's has no reply to give back.
+    // `borrow` as on `RunAnalyze` above (AT-R1).
     DispatchOutcome RunAggregated(ResultSink& sink, TextResultSink& text_sink,
                                   const exec::StepChain& chain, exec::TrailCollector* trail,
                                   const exec::TrailReplay* replay,
                                   const std::optional<stats::InstanceKey>& instance,
-                                  const txn::Snapshot& snapshot);
+                                  const txn::Snapshot& snapshot, exec::PositionSink& borrow);
 
     // **The success-path recording point.** Three collectors observe the
     // same moment - a completed execution - and they are called from one
@@ -2985,13 +2991,11 @@ private:
     // the borrow cap's refusal counter; the accessor above states its contract.
     std::uint64_t borrow_cap_stops_ = 0;
 
-    // **The read borrow's holder ids** (AO-S6e-b). One per read statement
-    // that walks, from a space of its own (`txn::kReadHolderBit`) because a
-    // statement-scoped borrow has no transaction to hold under. Sequential
-    // per core, so two reads running on one reactor are two holders and one
-    // ending does not release the other's position. It wraps, and a wrap
-    // could only collide with a borrow still held four billion read
-    // statements later on the same core.
+    // This minter's sequence for `ReadHolderId` (`read_borrow.hpp`, which
+    // is the one home of the layout and of why two minters on a core need
+    // telling apart). One per statement that declares - every read, every
+    // write - since AT-S1. It wraps, and a wrap could only collide with a
+    // borrow still held four billion statements later on the same core.
     std::uint32_t read_borrow_seq_ = 0;
     std::uint64_t NextReadHolder() noexcept;
     std::uint64_t read_borrows_ = 0;

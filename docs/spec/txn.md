@@ -677,20 +677,31 @@ is the case where the holder never touches the row, which is every fence
 declared over a window wider than what it wrote.
 
 **What a read borrows, and what that borrow is for** (AO-S6e-b; AR2 §3's
-`SELECT` row, AO-R12). A statement that walks a relation declares **where
-it is**: `IS` on the relation, and `IS` on the slice it has reached, moved
-at every page boundary. The scope is **the statement**, not the
-transaction, so two `SELECT`s in one transaction declare a position twice
-and hold none between them.
+`SELECT` row, AO-R12; **at the bind since AT-S1**, AT-R1). A statement
+declares **every relation it binds** — `IS` on the relation, asked by the
+compiler between the name and the schema, for the `FROM`, every `JOIN`,
+every subquery block, and a write's own relation — and its outermost walk
+declares **where it is**, `IS` on the slice it has reached, moved at every
+page boundary. The scope is **the statement**, not the transaction, so two
+`SELECT`s in one transaction declare twice and hold nothing between them.
+A stage executing on another core declares for itself in its own frame,
+because the session core's borrow ends when its statement returns
+`pending` (`remote_step_service.cpp`).
 
 - **It is a position, never a permission.** Visibility is the snapshot's
   and nothing here changes it. A borrow the table refuses leaves the reader
   holding nothing and reading on: a read is never refused and never waits
   for a borrow, because it needs none to be correct - a dropped relation's
   pages stay allocated and its oid is never reissued (`drop-table.md` DT1),
-  and the re-`Bind` after a park turns one into a clean error. It is also
-  what keeps a reader out of the wait-for graph: a reader never waits, so
-  it is always a sink, and a chain that reaches one ends there.
+  every catalog row is an MVCC version the reader's view filters, and no
+  DDL moves data (`alter.md`), so a plan compiled while a DDL's `X` stood
+  reads a snapshot-consistent past. **What the bind-time ask therefore
+  gives is one-directional**: a reader that was *granted* the `IS` is not
+  overtaken - no DDL takes the `X` until the statement ends - and a reader
+  *refused* it is right for the three reasons above, not for the lock's
+  (`read_borrow.hpp`; `workorder-at-m3-uniformity.md` AT-7 item 10). It is
+  also what keeps a reader out of the wait-for graph: a reader never waits,
+  so it is always a sink, and a chain that reaches one ends there.
 - **Its one consumer in M2 is DDL's relation `X`** — `DROP TABLE`
   (`drop-table.md` DT7). AO-R12 puts the read borrow there for a *mover*,
   and no mover exists (`physical-optimizer.md` is shadow-only), so what a
@@ -722,17 +733,21 @@ and hold none between them.
   in key order, so it declares the relation and no slice.
 - **The holder is not a transaction.** An autocommit `SELECT` has no
   transaction, so a read borrow holds under an id from a space of its own
-  (bit 63, which no 48-bit trx id reaches). A refusal naming one says "a
-  positioned reader".
-- **What takes none**, stated so it is not read as covered: a nested step's
-  walk (the per-page cost would be the page count times the outer
-  cardinality), a point, index or Cabin read **on the path that serves it**,
-  and the fan-in producer that serves a remote step. A shipped *statement*
-  takes one, because it is dispatched on its owner like any other.
-  The qualifier is load-bearing and was added at M2's close: each of the
-  three falls through to the walk when its own path cannot answer — a heap
-  point read, an index probe with no usable index, a Cabin miss — and a
-  fallback at `index == 0` declares like any other walk.
+  (bit 63, which no 48-bit trx id reaches; bit 62 tells the dispatcher's
+  holders from the remote-step server's on the same core, `read_borrow.hpp`).
+  A refusal naming one says "a positioned reader".
+- **What declares the relation and no slice**: a nested step's walk (the
+  per-page cost would be the page count times the outer cardinality), a
+  point, index or Cabin read on the path that serves it, and a write. Each
+  is bound, so each holds the relation `IS`; the slice is the outermost
+  walk's alone, and each of the three reads falls through to that walk when
+  its own path cannot answer. **What takes none: the foreign-key check
+  family** - an `INSERT`'s or `UPDATE`'s parent, a `DELETE`'s children, and
+  the relation an `FkProbeServer` resolves on the answering core - because
+  those checks are helpers beside the executor and not steps
+  (`fk_check.hpp`: "`exec::Compile()` is SELECT-only"), so none of them
+  passes the compiler seam AT-S1 threaded. The following letter's, with
+  D9(a), whose `S` fence is the borrow that path needs.
 
 **The table itself, and what serializes it** — `rules.md` §3's row, moved
 here at AO-S8 because §3's own rule is that a declared-shared structure is

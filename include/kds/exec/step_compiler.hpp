@@ -43,8 +43,28 @@ namespace kds::exec {
 // as "unknown relation" rather than compiled against something that does
 // not exist for this reader. Null is "see everything", which is every
 // caller outside a session and the fast path while no DDL is in flight.
+//
+// `declare` is the statement's read borrow, and this is the one home of
+// why it is a compile-time parameter rather than something the caller does
+// after the chain comes back (AT-R1, `workorder-at-m3-uniformity.md`). A
+// statement that resolves a relation and *then* declares it leaves a
+// window: a DDL committing inside it releases its relation `X` before the
+// reader ever asks for `IS`. Declaring **at** the bind, before the schema
+// is read, means the ask meets the `X` if one stands - and once the ask is
+// granted, no DDL can take the `X` until the statement ends, which is what
+// protects the schema this compile reads and the plan it builds. The ask
+// is non-blocking and a refusal is not an error: a read borrow never
+// refuses a read (`read_borrow.hpp` states what makes that sound, and what
+// the defence therefore is and is not). It is `PositionSink` and not a
+// new interface because a bind's declaration is exactly a position over
+// the whole id space - the relation - which is what that sink's
+// whole-space case already means. Null is "declare nothing", which is
+// every caller that is not executing a client's statement.
+class PositionSink;
+
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
-                            const txn::ReadView* view = nullptr);
+                            const txn::ReadView* view = nullptr,
+                            PositionSink* declare = nullptr);
 
 // Compiles a single-relation WHERE clause - what UPDATE and, later,
 // DELETE have instead of a chain.
@@ -70,10 +90,15 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 // UPDATE ever runs through a chain.
 // `view` as on `Compile` above: it reaches the subqueries this lowers,
 // which resolve relations of their own.
+// `declare` as on `Compile` above, and for the same reason: `access` is
+// already resolved by the caller, but the subqueries this lowers bind
+// relations of their own, and a write statement's *read* of another
+// relation is a read like any other (AT-R1).
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
                             const std::vector<parser::Condition>& where,
-                            const txn::ReadView* view = nullptr);
+                            const txn::ReadView* view = nullptr,
+                            PositionSink* declare = nullptr);
 
 // Resolve an UPDATE's SET list against the relation, before any storage is
 // touched (keystoneid-invariant.md K-M3).

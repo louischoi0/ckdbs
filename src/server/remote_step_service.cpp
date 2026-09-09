@@ -1,4 +1,5 @@
 #include "kds/server/remote_step_service.hpp"
+#include "kds/server/read_borrow.hpp"
 
 #include <cstring>
 #include <limits>
@@ -347,6 +348,25 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
         return;
     }
 
+    // **The executing core declares what it executes** (AT-S1;
+    // `read_borrow.hpp`). The coordinator's borrow is a stack object of
+    // `HandleSelect`, which returns `pending` before this runs - so a remote
+    // walk held nothing, and a `DROP TABLE` on the session core was granted
+    // its `X` over a relation another core was streaming. Taken here, before
+    // this server's own schema read, and handed to whichever arm executes:
+    // the streaming producer's frame, the consuming stage's, or this
+    // function's for the collect-then-stream fallback, which runs the walk
+    // to its end below. **On the wire's oid, before it is validated**: a
+    // malformed open takes an `IS` on an arbitrary oid for the instructions
+    // until the resolve below fails it, which is nothing; declaring after
+    // the resolve would reopen the window AT-R1 closes, and `crosscore.md`
+    // §5 has this core trust the descriptor rather than re-resolve.
+    auto borrow = std::make_unique<ReadBorrow>(
+        locks_,
+        locks_ != nullptr ? ReadHolderId(core_id_, ++read_borrow_seq_, /*remote=*/true) : 0,
+        &read_borrows_);
+    borrow->Position(step.value().rel_oid, 0, catalog::kIdSpaceEnd);
+
     auto access = catalog_.InitTableAccess(step.value().rel_oid);
     if (!access.ok()) {
         SendError(head.tag, session, access.status());
@@ -356,7 +376,7 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
 
     if (!env.upstreams.empty()) {
         OpenConsumingStage(head, env.upstreams, env.output, std::move(step.value()),
-                           *access.value());
+                           *access.value(), std::move(borrow));
         return;
     }
 
@@ -436,7 +456,7 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
         pipelines_.push_back(std::move(pipe));
         submit_(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
                                     RunProducer(head.tag, std::move(chain),
-                                                std::move(out_cols))));
+                                                std::move(out_cols), std::move(borrow))));
         return;
     }
 
@@ -469,7 +489,8 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
-        cabins_, &snapshot.value().snap);
+        cabins_, &snapshot.value().snap, /*indexes=*/true, /*parent=*/nullptr,
+        borrow.get());
     if (!ran.ok()) {
         SendError(head.tag, session, ran);
         return;
@@ -484,7 +505,8 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head,
                                           std::span<const StepOpenUpstream> ups,
                                           std::span<const StepOutputColumn> output,
                                           exec::Step step,
-                                          const catalog::TableAccess& access) {
+                                          const catalog::TableAccess& access,
+                                           std::unique_ptr<ReadBorrow> borrow) {
     const catalog::Schema& schema = access.schema;
     const std::uint32_t session = head.tag.session_core;
     if (!submit_) {
@@ -651,7 +673,7 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head,
         sched::SchedulingGroup::kForeground,
         RunConsumer(head.tag, std::move(chain), std::move(input_schema),
                     std::vector<StepOutputColumn>(output.begin(), output.end()),
-                    std::move(output_schema))));
+                    std::move(output_schema), std::move(borrow))));
 
     // The chained open, last (fact 1): this stage's state exists, so the
     // upstream may start the moment it opens. A forward that cannot be
@@ -669,13 +691,19 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head,
 sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain,
                                           catalog::Schema input_schema,
                                           std::vector<StepOutputColumn> output,
-                                          catalog::Schema output_schema) {
+                                          catalog::Schema output_schema,
+                                          std::unique_ptr<ReadBorrow> borrow) {
     // The outer frame (fact 4): one slot, the upstream row, refreshed per
     // input row. The inner chain's (up=1) references read through it
     // exactly as a correlated sub-chain reads its outer row.
     exec::ChainFrame outer;
     const std::vector<const catalog::Schema*> outer_schemas{&input_schema};
     outer.Open(outer_schemas, nullptr);
+
+    // `borrow` is the `IS` `OnStepOpen` took before its schema read, alive
+    // in this frame to the end of the stage (AT-S1) - so the grant is
+    // continuous from the resolve on, with no reactor turn between. The
+    // chain is that one step, already declared; nothing to add here.
 
     // One view for every input row this stage joins against: a re-mint
     // per row would let the same statement's later rows see writes its
@@ -904,7 +932,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                 exec::Budget(bounded ? limit - used : exec::kUnlimitedRowTouchBudget),
                 /*trail=*/nullptr, /*replay=*/nullptr,
                 cabins_, &snapshot.value().snap, /*indexes=*/true, &output_ok,
-                /*parent=*/&outer);
+                /*parent=*/&outer, borrow.get());
             if (!ran.ok()) {
                 fail(ran);
                 co_return ran;
@@ -1026,7 +1054,8 @@ void RemoteStepServer::Seal(Pipeline& pipe, wire::RowBatchWriter& writer) {
 }
 
 sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain,
-                                          std::vector<std::uint16_t> output) {
+                                          std::vector<std::uint16_t> output,
+                                          std::unique_ptr<ReadBorrow> borrow) {
 
     // Copied into this frame, not borrowed: a park can cross a catalog
     // invalidation (`kCatalogInvalidate` is broadcast by *any* DDL and its
@@ -1037,6 +1066,11 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
     // copy also fixes what the batch *means*: §5 says a remote step
     // trusts the descriptor and does not re-resolve, and a copy is
     // exactly a view that cannot re-resolve.
+    // `borrow` was taken by `OnStepOpen` before its schema read and lives
+    // in this frame now, across every park, until the walk ends (AT-S1). It
+    // is also the walk's position sink, so a remote walk declares its slice
+    // at every page boundary as a local one does.
+
     catalog::Schema schema;
     {
         auto access = catalog_.InitTableAccess(chain.steps[0].rel_oid);
@@ -1093,7 +1127,8 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
-        cabins_, &snapshot.value().snap, /*indexes=*/true, &gate);
+        cabins_, &snapshot.value().snap, /*indexes=*/true, &gate, /*parent=*/nullptr,
+        borrow.get());
 
     Pipeline* pipe = Find(tag);
     if (pipe == nullptr) co_return Status::OK();  // torn down mid-run; nothing to say
