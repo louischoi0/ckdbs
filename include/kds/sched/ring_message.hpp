@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -59,9 +60,12 @@ enum class RingMessageKind : std::uint16_t {
     // ---- System services (workplan P1, owned by P5/P6) ------------------
     // Not sent yet either.
     kAnchorWrite = 16,        // -> core 0: publish a WAL checkpoint anchor
-    kExtentLease = 17,        // unhandled since AW-S1b (see kRelationFaultGrant)
+    // 17 was kExtentLease, struck at AT-S2b: the page-id lease refill went
+    // with the per-core pool at AW-S1b. **The value is not reused.**
     kTrxIdLease = 18,         // -> core 0: request a transaction-id block
-    kCatalogInvalidate = 19,  // core 0 -> all: DDL happened, drop caches
+    // 19 was kCatalogInvalidate, struck at AT-S2b: a peer asks the schema
+    // version word at its task boundaries (AT-S2a, `catalog.hpp`) and is no
+    // longer told. **The value is not reused.**
 
     // core 0 -> all: stop your reactor.
     //
@@ -78,16 +82,14 @@ enum class RingMessageKind : std::uint16_t {
     // number a stale peer might still send must not come to mean something
     // else, and the gap is the record that it was spent.
 
-    // **Nothing sends or handles 17, 21, 23 or 24 since AW-S1b.** They were
-    // the page-id lease refill and CC7's three relation grants: fault
-    // rights over a relation's page range, write rights over its exact
-    // creation pages, and an owner's request to have both re-delivered.
-    // Every one of them answered "can this core reach that page" for a
-    // frame table one core owned; one table serves every core now. The
-    // enumerators stay - `IsKnownRingMessageKind` still names them, so a
-    // stale peer's message is dropped rather than read as something else -
-    // and AU-R5 is what strikes them.
-    kRelationFaultGrant = 21,
+    // 21, 23 and 24 were CC7's three relation grants - fault rights over a
+    // relation's page range, write rights over its exact creation pages,
+    // and an owner's request to have both re-delivered - struck at AT-S2b.
+    // Every one answered "can this core reach that page" for a frame table
+    // one core owned; one table serves every core since AM-S2 step 3 and
+    // nothing sent or handled them after AW-S1b. **The values are not
+    // reused**: a struck kind arriving from a stale peer is unknown, and an
+    // unknown kind is dropped rather than read as something else.
 
     // peer <-> core 0: a block of Keystone row ids for one relation
     // (workplan-crosscore.md P5's shape; catalog/row_id_lease.hpp). The
@@ -96,10 +98,6 @@ enum class RingMessageKind : std::uint16_t {
     // page-id lease's arrangement. A zero-count grant means the relation's
     // id space is exhausted; the requester fails honestly, never waits.
     kRowIdLease = 22,
-
-    kRelationWriteGrant = 23,
-
-    kRelationGrantRequest = 24,
 
     // core 0 <-> owner core: a peer-owned relation's CREATE INDEX, built
     // by the owner (workplan-peer-writer.md §7c, PW1c-6b;
@@ -257,47 +255,53 @@ enum class RingMessageKind : std::uint16_t {
     kFkReverseProbeReply = 44,
 };
 
+// **Every kind this build sends or handles, and the number AR0-6's D25
+// freezes** (`raft-marks-2026-09-05.md` §3, written at AT-S2b). AU-R4's rule
+// is that a kind is only ever struck, never renumbered and never reused, so
+// the count moves only downward and only here: strike the enumerator, drop
+// it from this list, and lower the assert in the same change. A kind that
+// is enumerated but absent from this list is a defect this assert does not
+// catch by itself; `RingMessageKindName`'s switch is the second census.
+inline constexpr std::array<RingMessageKind, 29> kRingMessageKinds = {
+    RingMessageKind::kStepOpen,
+    RingMessageKind::kStepBatch,
+    RingMessageKind::kStepEof,
+    RingMessageKind::kStepCredit,
+    RingMessageKind::kStepCancel,
+    RingMessageKind::kStepError,
+    RingMessageKind::kAnchorWrite,
+    RingMessageKind::kTrxIdLease,
+    RingMessageKind::kRowIdLease,
+    RingMessageKind::kIndexBuildRequest,
+    RingMessageKind::kIndexBuildReply,
+    RingMessageKind::kIndexBuildDone,
+    RingMessageKind::kShippedStatementRequest,
+    RingMessageKind::kShippedStatementReply,
+    RingMessageKind::kAssertionBuildRequest,
+    RingMessageKind::kAssertionBuildReply,
+    RingMessageKind::kAssertionBuildDone,
+    RingMessageKind::kTxnPrepareRequest,
+    RingMessageKind::kTxnPrepareReply,
+    RingMessageKind::kTxnDecideRequest,
+    RingMessageKind::kTxnDecideReply,
+    RingMessageKind::kTxnResolveRequest,
+    RingMessageKind::kTxnResolveReply,
+    RingMessageKind::kAccessStatsBatch,
+    RingMessageKind::kShippedRowDesc,
+    RingMessageKind::kFkProbeRequest,
+    RingMessageKind::kFkProbeReply,
+    RingMessageKind::kFkReverseProbeRequest,
+    RingMessageKind::kFkReverseProbeReply,
+};
+static_assert(kRingMessageKinds.size() == 29,
+              "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
+              "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck)");
+
 // Whether `kind` names something this build knows. Callers use it in place
 // of a raw cast, for the reason the enum's 0 exists.
 constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
-    switch (static_cast<RingMessageKind>(kind)) {
-        case RingMessageKind::kStepOpen:
-        case RingMessageKind::kStepBatch:
-        case RingMessageKind::kStepEof:
-        case RingMessageKind::kStepCredit:
-        case RingMessageKind::kStepCancel:
-        case RingMessageKind::kStepError:
-        case RingMessageKind::kAnchorWrite:
-        case RingMessageKind::kExtentLease:
-        case RingMessageKind::kTrxIdLease:
-        case RingMessageKind::kCatalogInvalidate:
-        case RingMessageKind::kRelationFaultGrant:
-        case RingMessageKind::kRowIdLease:
-        case RingMessageKind::kRelationWriteGrant:
-        case RingMessageKind::kRelationGrantRequest:
-        case RingMessageKind::kIndexBuildRequest:
-        case RingMessageKind::kIndexBuildReply:
-        case RingMessageKind::kIndexBuildDone:
-        case RingMessageKind::kShippedStatementRequest:
-        case RingMessageKind::kShippedStatementReply:
-        case RingMessageKind::kAssertionBuildRequest:
-        case RingMessageKind::kAssertionBuildReply:
-        case RingMessageKind::kAssertionBuildDone:
-        case RingMessageKind::kTxnPrepareRequest:
-        case RingMessageKind::kTxnPrepareReply:
-        case RingMessageKind::kTxnDecideRequest:
-        case RingMessageKind::kTxnDecideReply:
-        case RingMessageKind::kTxnResolveRequest:
-        case RingMessageKind::kTxnResolveReply:
-        case RingMessageKind::kAccessStatsBatch:
-        case RingMessageKind::kFkProbeRequest:
-        case RingMessageKind::kFkProbeReply:
-        case RingMessageKind::kFkReverseProbeRequest:
-        case RingMessageKind::kFkReverseProbeReply:
-        case RingMessageKind::kShippedRowDesc:
-            return true;
-        case RingMessageKind::kUnset:
-            return false;
+    for (const RingMessageKind known : kRingMessageKinds) {
+        if (static_cast<std::uint16_t>(known) == kind) return true;
     }
     return false;
 }
