@@ -465,6 +465,88 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     co_return Status::OK();
 }
 
+sched::Coro CommandDispatcher::AwaitIndexWindow(std::string_view line, Session* session,
+                                                DispatchOutcome* out,
+                                                sched::MonoTimeNs* statement_deadline_ns) {
+    // ---- AO-S6e-a: census row 4's refusal, converted --------------------
+    //
+    // The window is the owner's own, and so is its close. `OnDone` shuts it
+    // and *then* drops the catalog cache - and the handler runs **inside a
+    // task**, not inside the drain: `Scheduler` submits a `FunctionTask`
+    // and says so at the site ("The handler runs inside a task, not here").
+    // What the property needs is only that the task runs to completion
+    // before another is polled, which it does, and that `InvalidateCatalog`
+    // takes no suspension point, which it does not. So a park that ends on
+    // `!Covers(oid)` cannot have observed the close without the drop, and
+    // the re-run writes into an index this core knows about.
+    //
+    // That ordering is the whole reason AO-S6e-a is a window and not the
+    // relation `X` census row 4 names. A lock released on core 0 at the
+    // DDL's decide is a write to a shared table, seen here before either
+    // ring message is drained, and the writer it admits writes a row into
+    // nobody's index.
+    //
+    // `pending_index_builds_` is non-null by construction: `index_window`
+    // is set only under the gate's own non-null test and the pointer is
+    // assigned once at startup. Not re-tested here, on the copy-out's own
+    // argument - a guard on a state that cannot occur reads as evidence
+    // that it can.
+    const catalog::Oid oid = *out->index_window;
+    out->index_window.reset();
+    // **Bounded, and bounded once for the statement** (the AO-S6e-a
+    // review's C1, C2 and C4). Three things the first build got wrong by
+    // taking no deadline at all:
+    //
+    // - A shipped write runs here while its **arrival** core counts down
+    //   `kShippedStatementDeadlineNs`. A park that outlived it answered the
+    //   client `UnknownOutcome` for a row this core then committed.
+    //   `kIndexWindowWaitNs` is half that number and derived from it, so
+    //   the refusal is on its way back before the count runs out.
+    // - The loop above may enter this more than once, and a per-entry
+    //   ceiling makes the *statement's* stall the ceiling times the number
+    //   of windows. `AwaitWriteBlock` states the same rule four hundred
+    //   lines up: bounded once, not once per blocker.
+    // - The window's own expiry is not a bound this can lean on. It runs
+    //   from a timer armed only where `wal_drain_interval_ns > 0`
+    //   (`core_runtime.cpp`), which is not the default, so with a lost
+    //   `done` and no tick nothing would ever have ended the park.
+    if (*statement_deadline_ns == 0) {
+        *statement_deadline_ns = NowNs() + static_cast<sched::MonoTimeNs>(kIndexWindowWaitNs);
+    }
+    const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
+    const std::function<bool()> closed = [this, oid, deadline_ns] {
+        return !pending_index_builds_->Covers(oid) || NowNs() >= deadline_ns;
+    };
+    co_await sched::WaitUntil{&closed};
+    if (pending_index_builds_->Covers(oid)) {
+        // **The refusal, after all, and it is the one already in `out`.**
+        // The gate returned it before this park was ever opened, which is
+        // what made the statement write nothing; a build slower than the
+        // ceiling is answered exactly as it was before AO-S6e-a, retryably
+        // and naming `PW1c-6b`. Nothing is rendered here, because rendering
+        // it twice is how two spellings of one refusal begin.
+        if (logging(LogLevel::kWarn)) {
+            log_->Warn("index", "core " + std::to_string(core_id_) +
+                                    " refused a write of relation oid " + std::to_string(oid) +
+                                    " after waiting " +
+                                    std::to_string(kIndexWindowWaitNs / 1'000'000'000) +
+                                    " s for its index-build window to close");
+        }
+        co_return Status::OK();
+    }
+    if (logging(LogLevel::kDebug)) {
+        log_->Debug("index", "core " + std::to_string(core_id_) + " held a write of relation oid " +
+                                 std::to_string(oid) +
+                                 " until its index-build window closed, and is running it again");
+    }
+    // The re-run is a whole statement, which is exactly what the refusal
+    // bought: the gate runs before any row work, so nothing of this
+    // statement is on the page to be written twice.
+    const MayParkScope parking(*this, /*allowed=*/true, /*resumed=*/false);
+    *out = DispatchAndStage(line, session);
+    co_return Status::OK();
+}
+
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
                                              DispatchOutcome* out, CommitAck commit_ack) {
     // Today this never suspends: every statement runs on the core that owns
@@ -508,9 +590,26 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // **The deadline is the statement's** and is threaded through both
     // callers for the reason the function states.
     sched::MonoTimeNs statement_deadline_ns = 0;
-    if (out->write_block.has_value()) {
-        co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns,
-                                 /*resumed=*/false);
+    sched::MonoTimeNs index_window_deadline_ns = 0;
+    // **One loop over both waits, not two arms** (the AO-S6e-a review's
+    // C3). Each wait's re-run is a whole fresh statement and can meet what
+    // the other waits for: an index-window re-run can meet a held row, and
+    // a write-block re-run can meet a window that opened while it waited.
+    // Two sequential arms answer the second of those with a refusal the
+    // first would have waited out - which is item 16's defect, on a new
+    // pair. Both waits are deadline-bounded and both clear their own field
+    // on every exit, so the loop ends when neither is set.
+    for (;;) {
+        if (out->index_window.has_value()) {
+            co_await AwaitIndexWindow(line, session, out, &index_window_deadline_ns);
+            continue;
+        }
+        if (out->write_block.has_value()) {
+            co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns,
+                                     /*resumed=*/false);
+            continue;
+        }
+        break;
     }
 
     if (out->pending_fk_probe.has_value() && fk_probes_ != nullptr) {
@@ -624,6 +723,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // 16). The re-run inside is a fresh whole statement, so a
             // probe it raises is collected by the next turn of this same
             // loop - which is why this is here and not after it.
+            // AO-S6e-a's, beside item 16's and for its reason: a resume
+            // meets everything a first dispatch can, an open index-build
+            // window included, and a field set on a returned outcome that
+            // nobody consumes is how a leak begins.
+            if (out->index_window.has_value()) {
+                co_await AwaitIndexWindow(probe.line, session, out, &index_window_deadline_ns);
+            }
             if (out->write_block.has_value()) {
                 co_await AwaitWriteBlock(probe.line, session, out, &statement_deadline_ns,
                                          /*resumed=*/true);
@@ -1099,6 +1205,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     pending_commit_lsn_ = wal::kNoLsn;
     blocking_writer_ = 0;
     blocked_pk_ = 0;
+    index_window_wait_ = 0;
     last_refusal_ = Status::OK();
     last_refusal_detail_ = wire::kNoDetail;
     statement_trail_mark_ = 0;
@@ -1168,6 +1275,16 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     if (!last_refusal_.ok() && outcome.status.ok()) outcome.status = last_refusal_;
     outcome.resource_detail = std::exchange(last_refusal_detail_, wire::kNoDetail);
     last_refusal_ = Status::OK();
+    // AO-S6e-a's, on the same terms as the blocker above. **The exclusion
+    // is the gate's own return, not the forks' placement** - the first
+    // draft said both forks were upstream of it and only the *ship* fork
+    // is; the foreign-key probe's is below the affinity gate at all three
+    // sites. What makes the fields mutually exclusive is that the gate
+    // returns its refusal immediately, so a statement that set this one
+    // reached neither fork. Stated rather than guarded, and now stated
+    // correctly, because the guard was declined on the strength of it.
+    if (index_window_wait_ != 0) outcome.index_window = index_window_wait_;
+    index_window_wait_ = 0;
     blocking_writer_ = 0;
     blocked_pk_ = 0;
 
@@ -6557,6 +6674,18 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // index. Retryable - `done` closes it. Before the shape gate,
         // because the relation *looks* funded until the commit lands.
         if (pending_index_builds_ != nullptr && pending_index_builds_->Covers(access.oid)) {
+            // **AO-S6e-a: the refusal becomes a wait**, census row 4's
+            // outcome. Recorded here and acted on in `DispatchAsync`, for
+            // `NoteBlockingWriter`'s reason and under its one condition:
+            // this runs inside a write path with no reactor beneath it, and
+            // a synchronous `Dispatch()` has nowhere to park, so without
+            // `may_park_` the refusal below is still the honest answer.
+            //
+            // The refusal is returned either way. It is what makes the
+            // statement write nothing, which is what makes the re-run
+            // correct - the same division `CheckWriteConflictBlocking` uses
+            // and for the same reason.
+            if (may_park_) index_window_wait_ = access.oid;
             return IndexBuildPending(core_id_, relation);
         }
         // The btree arm lifted 2026-08-24 (PW2-4): a root move writes the
@@ -11633,6 +11762,17 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
         blocking_writer_ = 0;
         blocked_pk_ = 0;
+    }
+    // **And AO-S6e-a's window, on the same test and for the same reason.**
+    // The affinity gate runs before any row work on a *fresh* dispatch, so
+    // this is normally vacuous - but a statement resumed from a mid-walk
+    // park re-enters it with rows already written, and waiting there would
+    // end in a re-run of a statement whose transaction this failure has
+    // just poisoned: a non-retryable "transaction is aborted" where the
+    // client used to get the retryable refusal. Worse, from a wait.
+    if (index_window_wait_ != 0 &&
+        (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
+        index_window_wait_ = 0;
     }
 
     if (!scope.owned) {

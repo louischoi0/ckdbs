@@ -484,7 +484,9 @@ forbids for a stage's lifetime.
 | AO-S6c-c (part) | **Built 2026-09-08** on `ao-s6c-lock-is-the-wait` from `01cbb67`, and it closes the AO-S6c-b review's C2: **a range fence now stops an `INSERT` into its window.** Both insert paths took a borrow at S6c-a and discarded the answer, so a declared unit guarded its holder against writers of rows that *exist* and not against rows that *appear* - which is the one thing a range fence is for. An insert has no conflict check of its own to convert (the row does not exist, so there is no header to judge), so this is a park added outright rather than a source swapped: `BorrowOrWait` records the holder through `NoteBlockingWriter` and returns the refusal, and `DispatchAsync`'s existing loop turns it into a wait and a re-run. **Two defects the cell found in CLA's own first draft, before any review saw it.** (1) *A named key's re-run was not idempotent*: a park re-runs the whole statement, and the first attempt's `AdmitExplicitRowId` had already advanced the relation's high-water mark past the key the statement names - so on a heap relation, whose ids must ascend, the re-run was refused `OutOfRange` for the very key it had waited for. (2) *A cap refusal was read as a conflict*: `SwallowBorrowCap` still turns `ResourceExhausted` into `granted == false`, so that bool has two causes, and without `blocker != 0` an insert past the cap was refused as though transaction 0 held its row - three `LockCapOfOneTest` cells caught it. **And the fix for (1) was itself a regression, which the review caught.** Moving the borrow ahead of `AdmitExplicitRowId` also moved it ahead of the **only validation a caller-named key ever gets** - `TableAccess` carries no `next_id` by design, so nothing upstream can refuse an illegal key. An insert that could never succeed then waited out a fence, burned ledger entries, and inside an explicit transaction could be aborted as a deadlock victim for a statement with no future - AR2-R10's shape exactly, reintroduced by an ordering chosen for a different and correct reason. There is only one point where both orderings hold at once, so `AdmitExplicitRowId` gained a **`before_mark` hook**: it runs after every refusal is decided and before any of the three writes, and its non-OK return aborts the admit with nothing changed. The rule stays in the catalog rather than being copied into the dispatcher, and a held row and an illegal key reach the client by the same path. **Three more the review named and CLA took**: the fill's "the wait costs nothing already done" was false - `AllocateRowIdRange` has burned the block by then, and the sentence now says so as the single-id path already did; a range refusal told the client that `lo` was held when the conflicting descendant may be any key in the window, and it now renders `rows id=[lo, hi)`; and the two park blocks became one `BorrowOrWait`, which also recovers the carried `Status` the lambda form had dropped, with the dead `rows != 0` guard removed. **One carried** (the review's C2): a statement resumed from an FK probe can leave an explicit transaction told `ERR` and still committable, because `DispatchAsync`'s write-block arm runs before the probe arm and the probe's resume can set the blocker for the first time. Pre-existing since AO-S3 for `UPDATE`/`DELETE`; what this sub-stage did was make it reachable from `INSERT`. The structural fix is one wait arm covering a probe-resumed outcome, and it is its own stage. **Four cells and four kills.** A fence-blocked insert waits and completes at the holder's decide; an illegal key is refused **without** waiting (reinstating the borrow-before-admit ordering fails exactly this one); the sorted fill waits on a fence over the block it carves; and S6c-a's three cap cells still pin the cap arm. **Suites, all three on this exact tree**: plain 3348/3348, armed (`KDS_TEST_PAGE_LATCH=1`) 3348/3348, armed + `KDS_TEST_FRAME_BUDGET=8` 3348/3348 - three more than S6c-b's 3345. Overhead not measured. **What is left of S6c-c**: the cap propagates (`SwallowBorrowCap` goes and `kLockCap` gets the setter it has never had, which needs a field on `DispatchOutcome` because a `Status` carries no wire detail); and a REPEATABLE READ session still cannot wait on a fence, because `NoteBlockingWriter` excludes every RR waiter for a reason that is about the row's *writer* and says nothing about a holder that wrote no row |
 | AO-S6c-c (cap) | **Built 2026-09-08** on `ao-s6c-lock-is-the-wait` from `79d2fd7`: **the borrow cap refuses instead of truncating, and `kLockCap` gets the setter it has never had.** The operator's decision of 2026-09-08 to swallow it carried a condition - *while the borrow is advisory* - and that condition lapsed: S6c-b made a refused borrow refuse the write and S6c-c made a fence stop an insert, so a truncated ledger is rows with no fence over them and no wait behind them. AO-0 item 1's mark said refusal was the end state; this is it. A `Status` carries no wire detail, so `DispatchOutcome` carries one. **The demotion goes with it.** Falling back to per-row when the declared unit was refused restored a ledger that would otherwise have recorded nothing; with the lock as the wait it is strictly worse - a demoted statement writes the rows that do not conflict and then parks on one that does, which AO-S3b's re-runnability rule turns into a refusal, where waiting on the coarse unit parks having written nothing and re-runs cleanly. **And that surfaced a user-visible semantic change against a ratified spec sentence, put to the operator and marked "accept and fix the spec".** A coarse-declaring autocommit write now waits and then **succeeds** under a fresh view, where `txn.md` §5's first-updater-wins refused it - AR2-A §1's refusal-into-wait, delivered. §5 now records it with its three bounds (an explicit transaction keeps its view; a predicate naming no pk window still takes the per-row path and can park mid-walk; the wait is the ordinary one the detector governs), the three `TXN_CONFLICT` message shapes, and the cap as the family's one non-retryable member. **The review made CLA add the half the question had not named**: a `WHERE`-less write declares the *relation* in `X`, which is incompatible with every other writer's `IX` - a table-level serialization point on the commonest bulk shape, and one that can now join a deadlock cycle. That is in §5 too. **The read-only review found two defects that would have made this unlandable, both this sub-stage's own.** (B1) `InsertOneRow` answers a rendered string and leaves `status` OK, so the cap's refusal reached a KWP client as `InvalidArgument` - `kErrorSpellings` cannot recover `ResourceExhausted` from a line - **carrying `kLockCap` anyway**. Details are per category, so the client was handed a code that means nothing in the invalid-argument namespace: worse than no detail, on the path likeliest to reach the cap. The dispatcher carries the **`Status`** now, installed only over an OK one. (B2) `ExecuteInsert` is a public seam - `KwpLoadServer` drives it on the same dispatcher a session uses - that never reaches the copy-out, so the setter outran the clearer and a load chunk's cap refusal could label the next unrelated statement. Cleared at both ends now, as `blocking_writer_` already was and for the same reason. **Two coverage findings, both taken.** (B3) CLA's own `v >= 0` rewrite had emptied `ADeadlockBetweenTwoMidWalkParks...` of its subject: both walkers started at row 1, so the second met the first's rows immediately and wrote nothing, leaving `RowsWith(4) == 0` vacuous. The anchors' values carve the two walks apart now, and a second assertion proves B genuinely wrote before it was refused. (B4) the cap cells observed a rendered string, which is exactly why B1 was invisible to a green suite; they observe `status.code()` and `resource_detail`, and a new cell pins a declared unit the cap refuses - the behaviour that replaced the deleted demotion cell. **Six documents were saying something the engine had stopped doing**, `kds.conf.sample` among them - it described the swallow as current to an operator - along with "no lock to wait on" in two manuals and two specs, and a `SwallowBorrowCap` doc block orphaned above the member that replaced it. **Simplifications taken**: one ten-line comment had been pasted six times and became one fact on the fixture it is about; the declared-borrow argument was written twice and the DELETE site already pointed at the UPDATE site. **Suites, all three on this exact tree**: plain 3349/3349, armed (`KDS_TEST_PAGE_LATCH=1`) 3349/3349, armed + `KDS_TEST_FRAME_BUDGET=8` 3349/3349. Overhead not measured. **What is left of AO-S6**: a REPEATABLE READ session still cannot wait on a fence - `NoteBlockingWriter` excludes every RR waiter for a reason that is about the row's *writer* and says nothing about a holder that wrote no row; the FK-probe resume can leave an explicit transaction told `ERR` and still committable (pre-existing since AO-S3, reachable from `INSERT` since S6c-c); B3's leak; C3's cross-unit wake and C4's mutual-refusal bias, both needed only to move the park from polling to a slot; and the S6 row's DDL and `IS` units |
 | AO-S6d | **Built 2026-09-09** on `ao-s6d-carried-defects` from `7e26a65`: the three defects S6c-b and S6c-c made reachable, closed before a fourth unit opens on top of them. **(1) B3, AO-0 item 15**: `EndWrite`'s autocommit arm returned on a failed `enforcer_.CommitTxn` or a failed `txn_->Commit` without unwinding anything, and since `Commit` fails only *before* `PublishCommit` the transaction stayed active - `Release` refuses to free an active one, so it sat in `live_` for the life of the process holding the floor, the in-flight count and, since S6c-a, **its borrows**, which turned every later writer of one of its rows into a fault-net defect report. `AbortOwnedScope` is the arm `CommitLocal` has taken since the DT9 review, applied to all three of `EndWrite`'s owned exits; the client's answer stays the commit's own failure. A commit record that reached the platter under a failed sync is followed by the compensations and by `TXN_ABORT`, and `analysis.cpp`'s `note_txn` lets `kAborted` overwrite `kWinner`, so the mount reproduces the outcome the client was told. **(2) AO-0 item 16**: the write-block wait ran before the foreign-key probe arm and never after it, so a statement resumed from a probe was refused where the same statement dispatched directly would have waited - and the premise the sub-stage was drafted on turned out to be **wrong in CLA's favour**: `may_park_` was false around the resume, so no blocker was recorded there at all and the `[quiet-wrong]` half was unreachable rather than live. It becomes reachable the moment the resume may park, so the two halves land together: `may_park_` around the resume, and the wait - extracted verbatim into `AwaitWriteBlock` - called over the resumed outcome. Verified by mutation: keeping `may_park_` and dropping the wait produces `ERR TXN_CONFLICT` for the `INSERT` and `COMMIT` for the `COMMIT` on the same transaction. The fault net is now taken once per **statement** rather than once per entry, and verdicts held from earlier rounds are dropped after a wait, because the wait's re-run is a whole statement and a held verdict is as of the view the wait exists to leave behind. **(3) AO-0 item 17**: `NoteBlockingWriter` takes a `RepeatableReadWait`, and the exclusion is asked per wait rather than per level - *can the re-run answer differently once this holder decides?* The row's own writer is `kFutile` and stays excluded; a holder of a coarser unit that wrote no version of the key is `kCapable`; and so is **every `INSERT`**, whatever refused it, because an insert's verdict is not a function of the waiter's view at all - a named key's uniqueness is a physical descent (`btree.cpp:648`, `heap_chain.cpp:117`) and an issued key comes from the relation's sequence. A site that cannot tell keeps the exclusion: a refused *declared* unit knows who refused it and not what they hold. **CLA's first build got this wrong** and a cell caught it before the review did - the role was derived from the unit **asked for** rather than from what refused it, so a repeatable-read `INSERT` stopped by a range fence was labelled "the row's writer" and refused at once. The unit asked for settles nothing in either direction. **Ten cells**, six in `txn_2pc_protocol_test.cpp` (a new `FailedCommitTest` under `kStrict` with `FailNextSync` - the fixture for a failing WAL commit that did not exist before this sub-stage - three repeatable-read cells and the forward check's) and four on the rig in `fk_probe_rig_test.cpp`; every one of them mutation-checked, the mutation named at the cell. **Overhead not measured** (AO-S7's, per every S6 row). **The second `critics-developer` pass found two more, both of them this change's own.** *B1, and it is the one that produced a wrong answer*: `may_park_` on the resume made a **mid-walk** park reachable there for the first time, and a mid-walk park cannot survive a probe round - the wait's re-run is a whole statement that re-resolves every parent, so it raises a fresh probe before it reaches the walk, `AbandonWriteForShipping` keeps the rows inside an explicit transaction, and the cursor is gone. Measured on the rig: the victim answers `UPDATED 2` and then `COMMIT` for a transaction that wrote three rows. Closed by `resumed_from_fk_probe_`, which withholds the mid-walk park on a resume and falls back to the refusal a resume got before AO-S6d; the whole-statement wait - item 16's actual deliverable - is untouched. *B2*: `ResolveForeignKeyParents` was labelled `kFutile` on the ground that a repeatable-read check view is minted at `BEGIN`, and `CheckView` says the opposite in its own first sentence - a constraint reads latest state, at every level. It is `kCapable`, which also makes the same-core half agree with the cross-core probe, which parks without asking the level at all. **Cell 3 of §(b) as drafted is not what was built**: a resume carrying a second probe *and* a blocker needs two overlapping exclusive fences on one relation, which the table cannot grant, so what pins the copy-out guard instead is that every rig cell's wait re-runs the statement, raises a fresh probe, and answers `INSERTED` - which it could only do if that second round was collected rather than discarded. |
-| AO-S6e, AO-S7..S8 | not started |
+| AO-S6e | **Opened 2026-09-09** on `ao-s6e-units` at `68fae89`: the stage document only - the survey of the four units, the split into S6e-a..d, the AO-S6 row's five cells mapped onto them, and AO-0 items 18-21. **No code**, and the suite not executed and not claimed. Every sub-stage is gated on one of the four items, which is why the document opens the stage rather than a first sub-stage doing it. **Revised the same day** after a `critics-developer` pass over the draft: the survey's load-bearing finding held, two of its claims about what S6a..S6c already wired were false and re-size (a) and (c), item 19's `[quiet-wrong]` justification was refuted three ways and its grounds are withdrawn, and item 20 loses its motivation with them - both go back to the operator. AO-S6e-a is **blocked** on a finding of CLA's own that the ratified item 18 does not reach: the owner's window close, its catalog-cache drop and its next admitted write are one ordered event on the owner's reactor (`core_runtime.cpp:685-687`), and a relation `X` released on core 0 at the decide does not reproduce it. The survey's finding that held: **no transaction spans a cross-core `CREATE INDEX`** - `BeginForeignIndexBuild` refuses inside an explicit transaction and runs outside `InDdlStatement`, phase 2 opens a scope of its own - so census row 4's "`CREATE INDEX` holds relation `X`" has nothing to hold it, and item 18 is what to do about that |
+| AO-S6e-a | **Built 2026-09-09** on `ao-s6e-units` from `68fae89`: census row 4's **outcome** with none of its mechanism. A write on the owner that meets an open index-build window used to be refused `TxnConflict`; on a served connection it now parks on `!Covers(oid)` and runs the statement whole when the window closes, and the refusal survives only on the synchronous path that has no reactor to park on - `write_block`'s division exactly. **The relation `X` census row 4 names is not built**, and the reason is the stage document's §"AO-S6e-a is blocked": `OnDone` closes the window and *then* drops the catalog cache, in one handler, before the next task is polled, so the park cannot observe the close without the drop - while a lock released on core 0 at the DDL's decide is seen on the owner before either ring message is drained and would admit the unindexed write the window exists to prevent. The sub-stage came out **S, not L**: one member, one outcome field, one arm, one cell. `ddl-transactional.md` §5e and `crosscore.md` carry the behaviour. **The park is bounded by `kIndexWindowWaitNs`**, half `kShippedStatementDeadlineNs` and asserted against it, taken once for the statement and falling back to the gate's own refusal - the review's C1, C2 and C4 in one constant - and the two waits run in **one loop** rather than two arms (C3), with the foreign-key probe arm calling it beside item 16's (C5). One cell, mutation-checked (drop the record and the write is refused `PW1c-6b` while the window is open), and it now also asserts the row is **in the index** afterwards, which is the only reason the window exists; its control is the pre-existing `ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublishedByCore0`, whose synchronous refusal is unchanged. **One gap stated rather than closed**: the wait is invisible to `SHOW META` - an operator who saw an error line now sees a stall - and a counter is client-visible surface. **Overhead not measured** |
+| AO-S6e-b..d, AO-S7..S8 | not started; (b) is deferred to AO-S7 with items 19 and 20 |
 
 ---
 
@@ -511,6 +513,10 @@ rule. Every item names the ruling it moves.
 | 15 | **B3's arm: abort, or release the borrows and keep the leak.** failure atomicity; user-visible in the second writer's wait | **Ruled 2026-09-09 as CLA proposed: abort**, the arm above it verbatim, and the statement reports the commit's failure. Built in AO-S6d, and widened by one arm the draft did not name: `enforcer_.CommitTxn`'s failure leaked the same way and now unwinds too. |
 | 16 | **The probe-resumed outcome is offered the write-block wait.** pre-existing since AO-S3; `[quiet-wrong]` inside an explicit transaction | **Ruled 2026-09-09 as CLA proposed**, and built in AO-S6d - but not as one loop over both arms. The wait became a function called from both, which is the same fix with the probe arm's own rounds loop doing the looping. The draft's claim that the resume could set a blocker "for the first time" was **wrong at `7e26a65`**: `may_park_` was false there, so the `[quiet-wrong]` was one line away rather than live. Both halves landed together and the mutation that separates them was run. |
 | 17 | **REPEATABLE READ waits on a holder that is not the row's writer, and may then be refused first-updater-wins if that holder wrote the row.** user-visible; `txn.md` §5 gains a sentence | **Ruled 2026-09-09 by the operator: adopted** (*"#17 RR fence first-updater-wins 채택"*). Built as the question *can the re-run answer differently*, asked per wait: `blocker != cur` at the row level, every `INSERT` (whose verdict does not go through the view at all), and nothing else - a refused *declared* unit cannot tell a fence from a writer and keeps the exclusion. `txn.md` §5 records all four arms and the wait-then-refuse ending. |
+| 18 | **What holds the relation `X` across a cross-core `CREATE INDEX`**, given that no transaction spans the build | design; user-visible in two deadlines, not one — `kIndexBuildReplyDeadlineNs` 60 s bounds the asker and the 180 s window ceiling bounds a peer writer, and a lock-wait fault net is 11 s | **Ratified 2026-09-09 as proposed: one transaction across both phases.** Its premise was confirmed by the AO-S6e review. Two things the proposal understated, both recorded at AO-S6e §survey: `InDdlStatement` is a synchronous template and splitting it around the park is most of the sub-stage, and a peer's `CREATE INDEX` ships to core 0, so the transaction is open across **two** round trips. **And AO-S6e-a is blocked on a finding this ruling does not reach** — the owner's window close, its catalog-cache drop and its next admitted write are one ordered event, which a lock released on core 0 does not reproduce |
+| 19 | **The `IS`'s granularity, and so its cost on every read** | **was** `[quiet-wrong]`; **now** a cost question with no correctness argument behind it | **Ratified 2026-09-09 as proposed (per page, per AO-R12) — and the grounds are withdrawn the same day.** CLA argued the cheap reading was wrong across cores; AO-R12 itself says the mover does not exist, `drop-table.md` DT1 leaves an unparked reader reading correct rows, and `step_vm.cpp:1996-2009` already turns a dropped relation into a clean error. CLA now proposes **deferring 19 to AO-S7**, where the number is, rather than paying a per-page acquire on the hottest path for a hazard with no agent. **Back with the operator** |
+| 20 | **What the `DROP TABLE` wait promises** | spec | **Ratified 2026-09-09 as proposed**, and it loses its motivation with item 19's: given DT1 and the post-park re-bind, a positioned reader already gets correct rows and a clean error, so CLA cannot state what the wait buys. **Back with the operator**, with the honest position that (b)'s cell may be unmotivated |
+| 21 | **The assertion's bounded false rejection becomes a wait** | user-visible; spec rewrite | **Ratified 2026-09-09 as proposed**, and narrower than CLA put it: AS4's striking is already AR0's (`ar0-architecture-revision.md:416-419` — struck by whichever work order lands D8), and the rewrite is **three** of `assertion.md` §6.2's four properties plus §6.1's core-locality, not two. The ruling stands; the scope is corrected |
 | 14 | **The unit a bulk write borrows. Marked 2026-09-08** as CLA proposed it and built in AO-S6b: a `WHERE`-less write declares the relation, a range-shaped predicate declares its window, everything else stays per-row. Two things the mark's own reasoning did not reach and the build had to settle - a one-key window stays **per-row**, because a fence there raises the relation's counter and puts every other writer of it on the all-partition probe; and two declared windows must meet **each other**, or the declaration is weaker in detection than the per-row borrow it replaces (the AO-S6b row's C1) | design; user-visible; **settled** | AR2 §3's table gives `UPDATE`/`DELETE` the **tuple** with `IX` on the relation, so a write borrows one entry per row and the cap binds at `max_locks_per_txn - relations` rows - 65,535 at the default, against `max_rows_touched`'s 100,000,000. **Escalating at the cap is already forbidden**: the mark of 2026-09-08 §1 item 4 refuses widening a transaction's tuple borrows into a relation `X`, because that turns one transaction's refusal into a wait other transactions pay for without a record of why, `[quiet-wrong]` on their side. **Choosing a coarse unit up front is a different thing and is not forbidden** - §3 already gives the relation to DDL and range split, the changed key interval to a mover, and the whole child relation to an FK reverse check with no covering structure, which AR2 calls "a refusal-class fact rather than a performance one". So the question is whether a `WHERE`-less `DELETE FROM t`, or a write whose predicate covers a range, declares its unit as the relation or the range rather than accumulating tuples. **Why it is S6b's and not S6a's**: S6a swallows the cap because an advisory ledger must not fail a statement, so nothing forces the answer today; **S6b makes the lock the wait, where a truncated ledger is an incorrect one and the cap must propagate** - and a bulk write then either declares a coarse unit or is refused. CLA proposes: extend §3 with a row for a predicate-covering write, taking the **relation** `X` for a `WHERE`-less delete and the **range** `X` where the predicate is range-shaped, decided at compile from the predicate rather than at run time from a count - which keeps it a declaration and not an escalation. It is user-visible either way: a coarse borrow blocks concurrent writers the fine one admitted, and the cap refuses statements that complete today |
 
 ---
@@ -944,3 +950,301 @@ cross-unit wake and C4's mutual-refusal bias are still not here: both exist
 only to move the park from polling `IsInFlight` to a lock slot, and whether
 that move is worth making is a number AO-S7 has not produced.
 
+---
+
+## AO-S6e — S6's units: the relation lock, the read borrow, the slice fence
+
+Drafted 2026-09-09 on `ao-s6e-units` at `68fae89`, which is `origin/main`.
+**Revised the same day**, before any code, after a `critics-developer` pass
+over the draft refuted two of its claims and CLA's own reading of
+`core_runtime.cpp` blocked its first sub-stage. What that pass found is
+kept here rather than quietly fixed: a plan is cited by everything built
+from it, so a claim it got wrong is worth as much on the record as one it
+got right.
+
+**Status: drafted; AO-S6e-a built, AO-S6e-b deferred.** AO-0 items 18–21 were ratified
+2026-09-09 (*"18-21 전부 제안대로 채택"*), and two of them were ratified on
+reasons that did not survive the review — §"What the review took back"
+says which, and those two go back to the operator. AO-S6e-a is blocked on
+a separate finding of its own.
+
+### The survey, at `68fae89`
+
+**1. `IndexBuildPending` — census row 4.** `src/server/core_affinity.cpp:40`
+builds the refusal and `command_dispatcher.cpp:6560` calls it, under the
+`Covers` guard at `:6559`, inside `CheckWriteAffinity`'s peer arm. **Census
+row 4's own citations are stale** and are corrected here rather than
+followed: it names `core_affinity.cpp:65-74` and `command_dispatcher.cpp:6306`,
+neither of which is the site any more.
+
+The window is memory-resident on the owner (`core_runtime.hpp:648`), opened
+and closed by the index-build service, and expired at
+`kIndexBuildPendingCeilingNs` = 180 s (`index_build_service.hpp:157`).
+**It has two consumers besides the write gate**, and retiring it retires
+both: `index_build_service.cpp:131` refuses a *second* concurrent build of
+the same relation through the same `Covers`, and
+`include/kds/exec/range_eligible.hpp:60` names `PendingIndexBuilds::Covers`
+as one of the two admission windows RD5 owes a close on. Neither is a cell
+the AO-S6 row enumerates; both are work any retirement inherits.
+
+**And no transaction spans a cross-core `CREATE INDEX`.**
+`BeginForeignIndexBuild` (`command_dispatcher.cpp:3145-3186`) refuses inside
+an explicit transaction at `:3153`, is called at `:3020` **before** any
+`InDdlStatement`, and returns `pending_index_build`; phase 2,
+`FinishIndexBuild` (`:3188`), opens an `InDdlStatement` of its own at
+`:3230`. Holders are keyed by `std::uint64_t txn` (`lock_table.hpp:527`,
+`:693`) over one table for the instance (`:116`). So census row 4's
+"`CREATE INDEX` holds relation `X`" has nothing to hold it. That is item
+18, and it is the one load-bearing claim of this document the review
+confirmed outright.
+
+**2. What the lock family already takes, correctly stated.** The draft said
+S6a..S6c "wired only `IX` at the relation and `X` beneath it". That is
+false twice over at `68fae89`:
+
+- `command_dispatcher.cpp:11350-11354` takes a **relation-unit borrow in
+  `kExclusive`**, so a `WHERE`-less `DELETE FROM t` already holds relation
+  `X`. What AO-S6e-a needs is not the mode, it is a holder whose lifetime
+  covers a build.
+- `command_dispatcher.cpp:11462` and `:7560` take `LockKey::Range(...)` in
+  `X`, and `lock_table.cpp:23-26` defines a fence as "a range- **or
+  slice**-unit borrow in `S` or `X`", `LockKey::IsFenceUnit()`
+  (`lock_table.hpp:372`) treating the two alike. **The engine already takes
+  a fence**, with AO-R3's counter and `FenceCoversKey` live since S6b.
+
+What is genuinely absent is narrower: **no `IS` anywhere** — `kIntentionShared`
+appears only in the table's own name switch — and **no slice-unit borrow**,
+and no `S` mode on any unit. That is what (b) and (c) add, and it re-sizes
+both.
+
+**3. The read borrow's seam, and it is two seams.**
+`src/exec/step_vm.cpp:1985` is the page **boundary**, reached at every step
+index; `:1994` is the **park**, guarded by `resume_gate_ != nullptr &&
+index == 0`, so only the outermost walk reaches it. AO-R12's per-page
+reading puts the `IS` at the first; the cheap reading puts it at the
+second. They are not one line range and the draft cited them as one.
+Unsurveyed and also positioned reads that never reach either:
+`RunPointStep`, `RunIndexStep`, `RunCabinStep`, `ServeFromCabin`.
+
+**And a mechanism that already covers the cell (b) exists for.**
+`step_vm.cpp:1996-2009`: after a park the runner re-`Bind`s, because any
+DDL anywhere clears the whole `TableAccess` cache, and "a relation dropped
+while we were parked surfaces here as a clean error instead of a read
+through freed memory". So a positioned peer reader meeting a `DROP TABLE`
+already gets a bounded, clean outcome with no `IS` at all.
+
+**4. `DROP TABLE`.** `command_dispatcher.cpp:3523`, under `InDdlStatement`
+at `:3525`, on core 0 (the peer-DDL gate is `:1514-1558`), RESTRICT against
+foreign keys and assertions, then `Catalog::DropTable`. It waits for
+nothing. Its pages **orphan** — `drop-table.md:8-19`, "they stay allocated
+and unreachable — leaked space" — and the oid is never reissued, so no page
+is reused under a reader. `ddl-transactional.md:121` makes the drop atomic
+and deliberately **not** isolated, and `:135` says its readers "are not
+wrong about the rows — the data pages are untouched — they are early about
+the schema".
+
+**5. `DROP INDEX`, which the draft put in the split with no survey line.**
+It is the harder half of (a), not the easier: there is no owner-side window
+to convert, and `command_dispatcher.cpp:3034-3070` documents a live hole —
+`BumpVersion` broadcasts at the delete-mark, *before* the commit, and DT9's
+in-flight predicate is core-local, so a peer owner stops maintaining the
+index before `COMMIT` and a `ROLLBACK` restores it missing every row
+written meanwhile. Inside a transaction that is refused by name; autocommit
+is "left admitted" with the window open. A relation `X` here has to address
+that hole or meet it mid-build.
+
+**6. The assertion's admission protocol.** `assertion.md` §6.2 lists four
+properties; the two the draft quoted are verbatim (`:336-345`). The draft
+then said the false rejection becoming a wait changes two of them. It
+changes **three**: `:338-339`'s "**Deterministic failure.** The loser of a
+race **fails immediately**" is falsified by any wait, and only its trailing
+"no retry storm and no livelock" survives. And §6.1 (`:274-277`) states "No
+latches, no atomic CAS loops, no cross-core sharing. … the entire protocol
+is core-local", which waiting through the instance-wide, mutex-partitioned
+table (`lock_table.hpp:117-137`) breaks as well. The build's own refusal is
+separate and stays: `assertion_build.cpp:208` (the draft said `:203`, which
+is inside the comment above it).
+
+### The split, re-sized
+
+| # | sub-stage | gated on | size |
+|---|---|---|---|
+| AO-S6e-a | The index-build window's refusal becomes a wait (census row 4's outcome, none of its mechanism) | **built 2026-09-09** | S, not L |
+| AO-S6e-b | `IS` and the slice unit on the positioned read path, and the `DROP TABLE` wait | **deferred to AO-S7 with items 19 and 20** | L |
+| AO-S6e-c | The slice fence in `S`, and the assertion false rejection becoming a wait | item 21, **partly already ruled by AR0** | M |
+| AO-S6e-d | The row, and the spec edits these make | — | S |
+
+(a) was sized M on the belief that the relation `X` was new machinery. It
+is not — the mode is already taken — but splitting `InDdlStatement`
+(`command_dispatcher.cpp:8538-8545`, a synchronous template:
+`BeginWrite` → `body(scope)` → `FinishDdlStatement`) around the park at
+`:1038`, so a live `WriteScope` rides `PendingIndexBuild`, is most of the
+work, and `DROP INDEX` brings its own hole. L.
+
+(c) was sized on "the engine taking a fence", which it already does. What
+is left is the slice **unit** and the `S` **mode**, plus a spec rewrite.
+Still M, for the rewrite rather than the code.
+
+### The cells the AO-S6 row names, mapped
+
+- *`CREATE INDEX` waits for an open writer and proceeds after its commit* —
+  (a).
+- *A writer arriving during the build waits* — (a).
+- *An assertion's bounded false rejection admits after the reserver aborts*
+  — (c).
+- *`DROP TABLE` waits for a positioned reader on a peer* — (b).
+- *A slice fence survives a leaf division* — (c). `lock_table_test.cpp:330`
+  pins the table-level half already (`ASliceIsFoundAfterThePageItCameFrom`
+  `ChangesItsBounds`, the quoted "identity is the bounds and nothing else"
+  at `:345`); what (c) adds is a slice borrow taken by the engine.
+
+### AO-S6e-a was blocked, and item 18's ruling is not what unblocked it
+
+**CLA's own finding, 2026-09-09, reading the paths item 18's ruling names.**
+The ruling is sound about the coordinator. What it does not reach is why
+`IndexBuildPending` exists, and the wiring site says so in its own words
+(`core_runtime.cpp:685-687`):
+
+> `done(committed)` drops the catalog cache so the published index is seen
+> by the first admitted write.
+
+`IndexBuildServer::OnDone` (`index_build_service.cpp:243-256`) closes the
+window and then calls `on_committed_`, which `CoreRuntime` binds to
+`InvalidateCatalog()`. **The window's close, the owner's catalog-cache drop
+and the admission of the next write are one ordered event on the owner's
+own reactor.** A relation `X` held by core 0's transaction releases at that
+transaction's decide — a write to a shared-memory table, visible to the
+peer immediately and before it has drained either the `kIndexBuildDone`
+message or the `kCatalogInvalidate` broadcast. So a writer woken by the
+lock can be admitted with a catalog cache that does not yet carry the
+index, and writes a row into nobody's index: the defect the window exists
+to prevent (`index_build_service.hpp:40`), reintroduced by the mechanism
+meant to replace it.
+
+Census row 4's fate is therefore **half a fate**. The lock converts the
+refusal into a wait, which is what AR2-A §1 measures; it does not order the
+wake against the owner's publication, and that ordering is the whole of
+what the window buys.
+
+**The obvious repair collides with a deferred item.** Holding the `X` under
+a non-transaction "build" holder released by the owner in `OnDone` puts the
+release where the ordering is correct by construction — but
+`DispatchAsync`'s wait predicate is `!txn_->IsInFlight(block.trx_id)`, so a
+holder that is not a transaction is never in flight, the wait ends on its
+first poll, and the woken writer is refused again. Waiting on a **lock
+slot** instead is C3, deferred until AO-S7 prices it.
+
+Three ways out, and CLA proposes the third:
+
+1. **C3 first**, pulled ahead of AO-S7.
+2. **A transaction on the owner** spanning the build, so the holder is a
+   transaction and its decide is the owner's own event. The owner builds
+   under `system` tasks and has none.
+3. **Keep the window and convert its refusal to a wait without a lock**:
+   the peer writer parks on `!pending_index_builds_->Covers(oid)` instead
+   of being refused. Census row 4's *outcome* with none of its mechanism,
+   no new unit, and a wait predicate of the shape this file already has
+   eleven of. The cost is that the relation `X` does not arrive at S6e-a,
+   and the AO-S6 row's first two cells are met by the window rather than by
+   the lock.
+
+**(3) was taken, and AO-S6e-a is built on it** (2026-09-09, the operator's
+word *"CLA 제안을 따르고 이후 작업 수행"*). **Its first build was not safe and a
+`critics-developer` pass said so**, which is recorded below rather than
+quietly fixed: the park took no deadline at all, and on the shipped path -
+which is the main population, `ShippedStatementExecutor` running every
+shipped statement through `DispatchAsync` - it could outlive the arrival
+core's `kShippedStatementDeadlineNs` by up to 170 s and commit a row the
+client had been told `UnknownOutcome` about. Three more with it: the
+statement's *total* park was unbounded because the loop re-entered per
+window; the window's own expiry, which the bound leaned on, runs from a
+timer armed only where `wal_drain_interval_ns > 0`, which is not the
+default; and the new arm sat *after* the write-block arm, so a re-run
+that met a held row was refused where a first dispatch would have waited
+- item 16's defect on a new pair. **`kIndexWindowWaitNs` closes the first
+three**, derived as half `kShippedStatementDeadlineNs` with the relation
+asserted at its declaration and taken once for the statement, falling
+back to the refusal the gate already produced; **one loop over both
+waits closes the fourth**, and the foreign-key probe arm gained the same
+call beside item 16's. The sub-stage came out **S, not
+L**: the whole of it is one member, one outcome field, one arm and one
+cell, because the ordering that made a lock wrong here is the same
+ordering that makes the window's own predicate sufficient. What did not
+arrive is stated as a fact rather than deferred quietly — **the relation
+`X` is not in the engine's DDL path**, census row 4 is met by a window, and
+the AO-S6 row's first two cells are met by it too.
+
+The strengthened form of the argument, which the build confirmed at the
+site: `IndexBuildServer::OnDone` calls `pending_.Close` and *then*
+`on_committed_`, inside one handler that runs to completion in the drain
+before the next task is polled. So the park cannot observe the close
+without the cache drop. That is not a property a lock could be given
+without C3.
+
+### What the review took back
+
+Two of the four ratified items were ratified on CLA's reasoning, and the
+reasoning is gone. The rulings are the operator's; these are the grounds
+they were given, withdrawn.
+
+**Item 19's `[quiet-wrong]` is withdrawn.** CLA argued a per-page `IS`
+because the cheap reading "is wrong across cores: a reader that never parks
+still runs on its own reactor while core 0's DDL runs on another, so 'no
+park, no lock' leaves exactly the reader the mover must wait for
+unprotected." Three refutations, and CLA accepts all three:
+
+- **AO-R12, the ruling it defends, says the mover does not exist**
+  (`:405`: "no mover exists, so … the M2 consumer is DDL's relation `X`").
+  The argument invokes an agent the ruling says is absent.
+- **DT1**: pages stay allocated and unreachable and the oid is never
+  reissued, so an unparked reader reads correct rows.
+- **`step_vm.cpp:1996-2009`** already re-binds after a park and surfaces a
+  dropped relation as a clean error.
+
+So the cheap reading is not `[quiet-wrong]` for anything on this stage's
+list, and the per-page reading is a **cost question with no correctness
+argument behind it** — on the hottest path in the engine, priced by a
+stage that has not run. What CLA now proposes: **defer item 19 to AO-S7**
+and take the cheap reading, or none at all, until there is a number and a
+consumer.
+
+**Item 20 loses its motivation with it.** CLA proposed the `DROP TABLE`
+wait as narrowing §5a for one shape. Given DT1 and the re-bind, what that
+shape gets today is correct rows and a clean error. **What the wait buys
+has to be stated before it is built**, and CLA cannot state it: the honest
+position is that (b)'s cell may be unmotivated, and that saying so is
+better than building it and discovering it.
+
+**Item 21 is narrower than CLA put it, and part of it was never open.**
+`ar0-architecture-revision.md:416-419` already rules that AS4 "is struck by
+whichever work order lands D8", so AS4's striking is AR0's, not this
+item's. What is open is the rewrite, and it is **three** §6.2 properties
+plus §6.1's core-locality, not two — §"survey 6" above.
+
+**Item 18 stands.** Its premise is confirmed. Its *class* was understated:
+`kIndexBuildReplyDeadlineNs` is 60 s (`index_build_service.hpp:156`) and
+bounds the **asker**, while the 180 s ceiling bounds the **peer writer**
+when no `done` arrives, so the user-visible change is two facts (60 s → 11 s
+and 180 s → 11 s), not one. And "a DDL transaction open across a ring round
+trip" understates the shape: a peer's `CREATE INDEX` ships to core 0
+(`command_dispatcher.cpp:1514-1558`), so it would be open across **two**.
+
+### What AO-S6e does not do, stated so it is not read as forgotten
+
+**The AO-S6 row's fourth unit, "the range key", is not in this stage** —
+the draft dropped it silently and this line is the correction. It is census
+row 10's "the range's id block is R5's borrow and its refill is a ring ask
+— a message wait, not a lock wait", whose fate that row already records as
+**kept**. Nothing in S6e-a..d touches it.
+
+C3's cross-unit wake and C4's mutual-refusal bias, still — and C3 is now
+load-bearing for (a), which is finding enough to note here rather than only
+above. D9(a)'s `S` fence stays M3's (AO-R14). `MayWrite`'s grant arm and
+`RelationWriteRightsPending` are AO-S5's. And no measurement: this stage's
+rows will say "overhead not measured" until S7.
+
+**One citation this document does not inherit.** The `IS`-at-the-slice
+ruling is **AO-R12**. `:443` calls it "(R14)", `:942` calls it "R13's
+gate", and R12's own body says "R13's M2 consumer"; R13 is "M2 logs nothing
+and changes no format" and has no gate. Three spellings for one ruling,
+corrected here and left for AO-S8 to fix at the other two sites.

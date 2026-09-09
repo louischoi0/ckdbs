@@ -560,6 +560,40 @@ struct DispatchOutcome {
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
+    // **AO-S6e-a: the relation whose index build this write is waiting
+    // out**, or `nullopt`. The one refusal in the affinity gate that a
+    // re-run can get past on its own: an index of this relation is being
+    // built here, or built and not yet published by core 0's commit, and a
+    // row written now would be in nobody's index
+    // (`index_build_service.hpp`). The window closes twice over - at the
+    // `done` core 0 sends, and at `kIndexBuildPendingCeilingNs` if none
+    // arrives - so the wait needs no deadline of its own and no second
+    // name for one.
+    //
+    // **A window and not a lock**, which is what AO-S6e's own §"AO-S6e-a is
+    // blocked" argues for at length: the window's close, the owner's
+    // catalog-cache drop and the admission of the next write are one
+    // ordered event on this reactor (`core_runtime.cpp`'s
+    // `done(committed)` seam), and a relation `X` released on core 0 at its
+    // decide would let a writer in before this core had drained either
+    // message. Census row 4's *outcome* - the refusal becomes a wait - with
+    // none of its mechanism.
+    //
+    // Set only under `may_park_`, for `write_block`'s reason: the two
+    // non-parking seams - the synchronous `Dispatch()` and `ExecuteInsert`,
+    // which the KWP load path drives - have no reactor to park on, and
+    // their honest answer is the retryable refusal itself. The gate runs
+    // before any row work on a fresh dispatch, so a statement that reaches
+    // it has written nothing; `EndWrite` drops it on the one path where
+    // that is false, a resume from a mid-walk park.
+    //
+    // **The wait is invisible to `SHOW META`**, and that is a gap rather
+    // than a decision: an operator who used to see an error line now sees a
+    // stall with no counter behind it. `index_build_windows` reports the
+    // windows and not the writers held by them. A counter is client-visible
+    // surface, so it is not added in passing.
+    std::optional<catalog::Oid> index_window = std::nullopt;
+
     // **AO-S3b: the walk stopped inside the statement and the scope is
     // still open.** `write_block` says which row and which holder; this
     // says the statement is *resumable* rather than re-runnable, which is
@@ -1130,6 +1164,29 @@ private:
     // argument turns into an accident.
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
                                 sched::MonoTimeNs* statement_deadline_ns, bool resumed);
+
+    // **AO-S6e-a: the index-build window's wait.** Parks until the window
+    // over `out->index_window` closes and then re-runs `line` whole, or
+    // until `kIndexWindowWaitNs` runs out, in which case the refusal the
+    // gate already put in `out` stands. `statement_deadline_ns` is in-out
+    // and zero means "not taken yet", so a statement that meets two windows
+    // stalls once rather than once per window.
+    //
+    // **Why the window's own close is what makes the re-run correct**, and
+    // why this is not the relation `X` M2's census names: the owner's
+    // `OnDone` closes the window and *then* drops the catalog cache, in one
+    // handler task that runs to completion before the next task is polled,
+    // so a park ending on the close cannot have missed the drop. A lock
+    // released by core 0 at the DDL's decide is a write to a table both
+    // cores share, seen here before either ring message is drained - it
+    // would admit exactly the unindexed write the window exists to prevent.
+    // One exception, pre-existing and not this row's:
+    // `CoreRuntime::InvalidateCatalog` returns before dropping the cache if
+    // its `EvictClean` fails, which a retry met the same way.
+    //
+    // On return `out->index_window` is empty, whichever way it ended.
+    sched::Coro AwaitIndexWindow(std::string_view line, Session* session, DispatchOutcome* out,
+                                 sched::MonoTimeNs* statement_deadline_ns);
 
     // `cur` is the row's own writer, from the tuple header, and decides the
     // **MVCC verdict** (first-updater-wins, `txn.md` §5) - a writer this
@@ -2805,6 +2862,16 @@ private:
     // re-running it is a repeat or a second application.
     std::uint64_t blocking_writer_ = 0;
     std::uint64_t blocked_pk_ = 0;
+
+    // **AO-S6e-a**, on `blocking_writer_`'s terms exactly: the relation
+    // whose open index-build window refused this statement, read back out
+    // by `DispatchAndStage` into `DispatchOutcome::index_window`. A member
+    // rather than a threaded parameter because `CheckWriteAffinity`
+    // answers a `Status` and the three write paths between it and the
+    // outcome would each grow a parameter for one oid; one statement runs
+    // at a time per core, so there is no second value to confuse it with.
+    // Zero means none - `kInvalidOid` is not a spelling this file uses.
+    catalog::Oid index_window_wait_ = 0;
     std::size_t statement_trail_mark_ = 0;
 
     // D5's ceiling for this core, `InDoubtCeilingNs()`'s storage.

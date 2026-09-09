@@ -158,10 +158,16 @@ Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb);
 
 // The refusal a write gets on the owner of a relation whose index is being
 // built there, or built and not yet published by core 0's commit
-// (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-2). Retryable: the window
-// closes when core 0 says `done`, and the retry then writes - and it must
-// close, because a row written inside it would be in nobody's index
+// (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-2). It
+// must close, because a row written inside it would be in nobody's index
 // (index_build_service.hpp says why).
+//
+// **Since AO-S6e-a a served write does not see this**: it parks until the
+// window closes and then runs, and this refusal is what the two seams that
+// cannot park - the synchronous `Dispatch()` and `ExecuteInsert`, which
+// the KWP load path drives - still answer, and what a park that outlives
+// `kIndexWindowWaitNs` falls back to. Retryable on all three, and the
+// retry then writes.
 Status IndexBuildPending(std::uint32_t this_core, std::string_view relation);
 
 // The index builds a core is running or has built and not yet heard `done`

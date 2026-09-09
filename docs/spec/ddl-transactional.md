@@ -363,7 +363,8 @@ commit-record *append* and its durability makes the DDL a recovery loser —
 the row is retired and the owner's `kNoTxnId` tree, redone regardless, is
 an orphan. Atomic across the crash, because orphaned is not published.
 
-**Isolated.** From the request's arrival until `done`, the owner **refuses
+**Isolated** (and since AO-S6e-a the owner's refusal below is a *wait* on
+a served connection; the paragraph after the two gaps states it). From the request's arrival until `done`, the owner **refuses
 writes to the relation** (a retryable `TXN_CONFLICT`): a row written while
 the index is being built would be indexed by nobody, since the owner's
 catalog shows no index until core 0's commit invalidates its cache. And
@@ -372,6 +373,44 @@ is stamped with core 0's transaction and filtered by every reader's view
 until it commits, and the owner's cache holds no index until
 `done(committed)` (or the catalog-invalidation broadcast) drops it. So no
 session reads a partial index and no write slips past unindexed.
+
+**The window is a wait, not a refusal** (AO-S6e-a,
+`instructions/v3.0.0/workorder-ao-m2-lock-family.md`). A write on the owner
+that meets an open window used to be refused `TxnConflict` and told to
+retry; on a served connection it now **parks until the window closes and
+then runs**. The refusal survives on the two seams that cannot park — the
+synchronous `Dispatch` and `ExecuteInsert`, which the KWP load path drives,
+neither with a reactor beneath it — which is the same division every other
+wait in this family makes.
+
+**The park is bounded by `kIndexWindowWaitNs` and not by the window**, and
+the bound is derived rather than chosen: a shipped write runs on the owner
+while its *arrival* core counts down `kShippedStatementDeadlineNs`, and a
+park outliving that count would answer the client `UnknownOutcome` for a
+row the owner then commits. The constant is half that number, with the
+relation asserted where it is declared. A build that finishes inside it
+converts a refusal into a wait; a longer one is refused exactly as before,
+retryably and at once. The bound is the *statement's*, taken once, so a
+statement that meets two windows stalls once rather than twice.
+
+**And the window's close is why this is not the relation lock M2's census
+proposed.** `IndexBuildServer::OnDone` closes the window and *then* drops
+the catalog cache; the handler runs inside a task, and a task runs to
+completion before another is polled, so a wait that ends on the close
+cannot have missed the drop and the write it admits writes into an index
+this core knows. A lock released by core 0 at the DDL's decide is a write
+to a table shared by both cores, seen on the owner before either ring
+message is drained: it would admit exactly the unindexed write the window
+exists to prevent. (One pre-existing exception, unchanged by this row:
+`InvalidateCatalog` returns before dropping the cache if its page eviction
+fails, which a client's retry met the same way.)
+
+**What the wait is not visible in.** `SHOW META` reports
+`index_build_windows` — the windows, not the writers parked behind them —
+and the cross-core write counters exclude this refusal by decision
+(`crosscore.md` §6). So an operator who used to see an error line now sees
+a stall with no counter behind it. A counter is client-visible surface and
+is not added in passing; the gap is stated rather than closed.
 
 **Two gaps a single-core `CREATE INDEX` does not have**, neither a
 correctness defect today:
@@ -382,7 +421,11 @@ correctness defect today:
   exceeds the deadline, so the owner never releases while core 0 is still
   waiting — but nothing bounds the commit leg, so if the window expires
   before a late commit lands, writes are admitted that the published
-  index would miss. Unreachable in practice at these timeouts.
+  index would miss. Unreachable in practice at these timeouts. **The wait
+  above inherits this bound and does not widen it**: a parked write is
+  released by the same expiry that used to end the refusal, so the ceiling
+  bounds one statement's park exactly as it bounded one statement's
+  window.
 - **`SHOW INDEXES` on core 0** for a peer-owned relation reads the
   build-time root from the `sys.indexes` row — a foreign `InitTableAccess`
   does not read the owner's anchor — which a maintenance split can move, so

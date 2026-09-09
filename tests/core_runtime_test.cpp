@@ -4300,6 +4300,86 @@ TEST_F(CoreRuntimeTest, ADdlInsideAnExplicitTransactionIsStillRefusedOnAPeer) {
     EXPECT_TRUE(session.failed()) << "the refusal did not poison the transaction";
 }
 
+TEST_F(CoreRuntimeTest, APeerWriteMeetingAnOpenIndexBuildWindowWaitsInsteadOfBeingRefused) {
+    // AO-S6e-a, census row 4's outcome: the owner's write gate refused a
+    // writer while an index of its relation was being built, and now it
+    // waits and runs. `ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAnd`
+    // `PublishedByCore0`, **below**, keeps the other half - a *synchronous*
+    // `Dispatch` has no reactor to park on and is still refused by name,
+    // which is `write_block`'s division and this one's for its reason.
+    //
+    // **Why this stayed a window and did not become the relation `X`
+    // census row 4 names.** `IndexBuildServer::OnDone` closes the window
+    // and then calls `on_committed_`, which the runtime binds to
+    // `InvalidateCatalog()`, both inside one handler that runs to
+    // completion in the drain before the next task is polled. So a park
+    // that ends on `!Covers(oid)` cannot observe the close without the
+    // cache drop, and the re-run below writes into an index this core knows
+    // about. A relation `X` released on core 0 at the DDL's decide is a
+    // write to a shared table, seen here before either ring message is
+    // drained - the writer it admits writes a row into nobody's index,
+    // which is the defect the window exists to prevent.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "s6ea_ix");
+
+    DispatchOutcome ddl_out;
+    auto ddl = rig.Start("CREATE INDEX s6ea ON s6ea_ix (v)", ddl_out);
+
+    // `writer_session` before `writer`, deliberately: members and locals die
+    // in reverse declaration order and the coroutine holds a pointer to the
+    // session across every park it takes - `ForeignIndexRig`'s own
+    // member-ordering comment, one scope down.
+    Session writer_session;
+    DispatchOutcome write_out;
+    std::unique_ptr<sched::CoroTask> writer;
+    int rounds = 0;
+    while (ddl->Poll() != sched::PollResult::kDone) {
+        rig.Pump();
+        if (writer == nullptr && rig.peer->pending_index_builds().Covers(rig.oid)) {
+            // The served path, unlike the cell above's: it may park.
+            writer = rig.StartOnPeer("INSERT INTO s6ea_ix VALUES (40)", write_out,
+                                     &writer_session);
+        }
+        // **The mutation**: drop `may_park_`'s record in the affinity gate,
+        // or the arm in `DispatchAsync`, and the write answers
+        // `TXN_CONFLICT ... PW1c-6b` here instead of staying parked.
+        if (writer != nullptr && rig.peer->pending_index_builds().Covers(rig.oid)) {
+            ASSERT_NE(writer->Poll(), sched::PollResult::kDone)
+                << "the peer's write was refused instead of waiting out the window: "
+                << write_out.response;
+        }
+        ASSERT_LT(++rounds, 256) << "the DDL did not finish: " << ddl_out.response;
+    }
+    ASSERT_NE(writer, nullptr) << "the owner never opened a window";
+    ASSERT_EQ(ddl_out.response.rfind("CREATED INDEX", 0), 0u) << ddl_out.response;
+
+    // `done(committed)` closes the window and drops the cache; the parked
+    // write's next poll finds the window gone and runs the statement whole.
+    int more = 0;
+    while (writer->Poll() != sched::PollResult::kDone) {
+        rig.Pump();
+        ASSERT_LT(++more, 256) << "the write never resumed: " << write_out.response;
+    }
+    EXPECT_EQ(write_out.response.rfind("INSERTED", 0), 0u) << write_out.response;
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty());
+
+    // **And the row is in the index**, which is the only reason the window
+    // exists and the one thing a cell that stopped at `INSERTED` would not
+    // have shown: the wait ends on the window's close, the close is
+    // followed by the catalog-cache drop in the same handler, and the
+    // re-run therefore maintained the index it would otherwise have
+    // missed. A re-run admitted before the drop writes the row and no
+    // entry, and this is where that shows.
+    const std::string plan =
+        rig.peer->dispatcher().Dispatch("ANALYZE SELECT * FROM s6ea_ix WHERE v = 40").response;
+    ASSERT_NE(plan.find("IndexProbe"), std::string::npos)
+        << "the owner is not reading through the index, so this proves nothing: " << plan;
+    const std::string sel =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM s6ea_ix WHERE v = 40").response;
+    EXPECT_NE(sel.find(",40"), std::string::npos)
+        << "the write that waited out the window left no index entry behind it: " << sel;
+}
+
 TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublishedByCore0) {
     // PW1c-6b-3's happy path through HandleIndex itself: core 0's statement
     // parks on the owner's build, the owner refuses the relation's writes

@@ -434,7 +434,10 @@ every rule below reads with "relation" for "range".
   AW-S1b struck the grants it waited on — is excluded **by decision**: the
   write is not cross-core, it is this core's own write waiting on a build
   window, and counting it would inflate the cross-core evidence with cases
-  it does not address.
+  it does not address. Since AO-S6e-a the survivor of that pair is a
+  **wait** on a served connection rather than a refusal
+  (`ddl-transactional.md` §5e), so what the counter excludes there is
+  smaller still: only the synchronous path's refusal remains to exclude.
 - Write-coupled auxiliary placement is §6a's. On a one-range relation
   unique indexes, Cabin, Waystone pages, and the var-heap live on the
   relation's owner core, always. Read-only join partners may live anywhere.

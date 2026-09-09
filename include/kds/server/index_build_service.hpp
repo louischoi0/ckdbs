@@ -15,6 +15,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/core_affinity.hpp"
+#include "kds/server/statement_ship_service.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/manager.hpp"
 
@@ -37,7 +38,8 @@
 // ---- The refusal window --------------------------------------------------
 //
 // From the request's arrival until `done`, **writes to that relation on
-// the owner are refused retryably** (`IndexBuildPending`,
+// the owner **wait** for it since AO-S6e-a, and are refused retryably where
+// nothing can park (`IndexBuildPending`,
 // core_affinity.hpp). The owner's catalog shows no index until core 0's
 // commit reaches it, so a row written in the window would be indexed by
 // nobody - and an index missing a row is a wrong answer with a right
@@ -155,6 +157,35 @@ static_assert(sizeof(IndexBuildDonePayload) == 16);
 
 inline constexpr sched::MonoTimeNs kIndexBuildReplyDeadlineNs = 60ull * 1'000'000'000ull;
 inline constexpr sched::MonoTimeNs kIndexBuildPendingCeilingNs = 180ull * 1'000'000'000ull;
+
+// **How long a write stalls on an open window before it is refused after
+// all** (AO-S6e-a). Since that row the owner's gate parks a served write
+// instead of refusing it, and the park needs a ceiling of its own: the
+// window's is 180 s, which is the *window's* life and not a writer's
+// patience, and a statement stalled that long is worse than the refusal it
+// replaced.
+//
+// **Derived rather than chosen**, and the assert below is the whole
+// argument: a shipped write runs on this core while its **arrival** core
+// counts down `kShippedStatementDeadlineNs`, and a park that outlives that
+// count gets the client `UnknownOutcome` for a statement that then commits
+// here anyway - a row landing under an answer that said it might not have.
+// `txn_2pc_service.hpp` states the same rule for the in-doubt ceiling, in
+// the same words and against the same number. Half of it, so the refusal
+// is on its way back well before the arrival core gives up rather than
+// racing it.
+//
+// A build that finishes inside this converts a refusal into a wait, which
+// is what AR2-A §1 measures; a longer one is refused exactly as it was
+// before AO-S6e-a, retryably and at once.
+inline constexpr sched::MonoTimeNs kIndexWindowWaitNs = kShippedStatementDeadlineNs / 2;
+static_assert(kIndexWindowWaitNs < kShippedStatementDeadlineNs,
+              "a write parked on an index-build window must be refused before the arrival core "
+              "of a shipped write presumes that write lost, or the client is told "
+              "UNKNOWN_OUTCOME about a row the owner then commits");
+static_assert(kIndexWindowWaitNs < kIndexBuildPendingCeilingNs,
+              "the writer's stall is bounded by its own ceiling and never by the window's, "
+              "which is the window's life and not a client's patience");
 static_assert(kIndexBuildPendingCeilingNs > kIndexBuildReplyDeadlineNs,
               "the owner must outwait core 0's reply deadline: a window released before core 0 "
               "gives up admits rows the published index would miss (the commit leg past the "
