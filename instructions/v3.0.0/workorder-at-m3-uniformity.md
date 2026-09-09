@@ -2,30 +2,24 @@
 
 Written 2026-09-09 on `m3-at` at `df8cc5f` (`v2.7.0-309-gdf8cc5f`; no v3
 tag exists, AR0-M6). AT-3 below is a source read at that commit, and it is
-not a copy of `ar0-5-amendment-uniformity.md` §4 — six of that list's
+not a copy of `ar0-5-amendment-uniformity.md` §4 — four of that list's M3
 entries no longer describe the tree (AT-7), which is the same failure mode
 AR0-5-V found in itself and the reason this order re-reads rather than
-inherits.
+inherits. **AT-3 was then reviewed against the tree in turn, and three of
+its own corrections were wrong** (AT-8); they are fixed above the line and
+recorded below it, because a survey that corrects a draft is not thereby
+exempt from being checked.
 
 **Status: AT-S0 lands now; no code stage starts before the operator's
 word.** M2 closed on 2026-09-09 (`workorder-ao-m2-lock-family.md` AO-8) and
 its closing section states the absence this document fills: *"AR0 §8 step 6
-is M3, renamed 'Uniformity' and lettered AT. **No work order exists for
-it**."*
+is M3, renamed 'Uniformity' and lettered AT by `ar0-5-amendment-uniformity.md`
+(D22). No work order exists for it."*
 
-**Three decisions were taken by the operator in plan mode on 2026-09-09**
-and are recorded where they land:
-
-1. **Scope** — AT is *Uniformity and the ring's tail*: AR0-5 §4's M3 list,
-   §7's order, D17–D22, E8, E13, and AU-S5/S6, which
-   `workorder-au-ring-retirement.md` already places inside AT. D7's Cabin
-   invariant, D9(a)'s `S` fence, AR2's E3/E5/E10 and AR1's AQ/AR go to a
-   following letter (AT-1, AT-0 item 6).
-2. **2PC retires inside AT**, as its late stages, with AO-R8's fault net
-   11 s → 1 s in the same order (AT-R6, AT-S6).
-3. **The relation `IS` is taken at resolve time** — AR0-5 §2.1's first
-   alternative, which that section obliges AT to pick between rather than
-   inherit (AT-R1, AT-S1).
+**Three operator decisions of 2026-09-09**, taken in plan mode and recorded
+where they land: the **scope split** (AT-1, AT-0 item 6), **2PC inside AT**
+(AT-R6), and the **relation `IS` at resolve time** (AT-R1). The reasoning
+for each is in the section that carries it, not here.
 
 ---
 
@@ -46,7 +40,7 @@ per-core caches, and the writer thread AL-S1a/S1b already built.
 **The axis.** M2's was refusal → wait. AT's is **asymmetry → primitive**:
 every place the engine today answers differently depending on which core
 asks, or refuses because a structure's owner is elsewhere, is either
-retired with the ownership that justified it or given a lock. AT-3 B is the
+retired with the ownership that justified it or given a lock. AT-3 is the
 census. AT is not evaluated on throughput; AT-S13 measures what M2 handed
 on and claims nothing else.
 
@@ -57,8 +51,8 @@ on and claims nothing else.
   "Uniformity". Both definitions were live until the operator's answer of
   2026-09-09 split them. D7 with D1(b)'s gap locking, D9(a)'s `S` fence
   with the `FkPendingDeleteTable` asymmetry AO-8 re-pointed, AR2's E3, E5
-  and E10, and AR1's AQ/AR are **the following letter's cargo**, named here
-  so the exclusion is a handoff and not a gap (AT-0 item 6).
+  and E10, and AR1's AQ/AR are **the following letter's cargo** — AT-0
+  item 6 is the handoff.
 - **Not the lock family.** M2 built it; AT is its first large consumer, and
   the one that makes the relation `IS` load-bearing for a *result* rather
   than for a wait.
@@ -68,7 +62,7 @@ on and claims nothing else.
 **What lands now.** This document and `index.md`'s row. No code, no spec
 edit, no test. Three things are deliberately not landed with it, each a
 decision rather than an omission: `docs/spec/catalog.md`, which AR0-5 §2.1
-cites and which does not exist (AT-7 C) — it is created by AT-S2, the stage
+cites and which does not exist (AT-3 I) — it is created by AT-S2, the stage
 whose rule it carries; `rules.md` §3's declared-shared row for the catalog,
 which lands with AT-S3; and `CLAUDE.md`'s milestone rows, which the
 maintenance rule flips when a decision *lands*.
@@ -82,22 +76,22 @@ maintenance rule flips when a decision *lands*.
 | D3 (log appender) | **answered in practice, against the proposal** — AL-R1 built every-core-appends under one latch with a single writer thread (`known-gaps.md`, "Decisions the revision has not taken") | AR0-5 §2.3 strikes "log core = core 0" as a sentence with no mechanism. Nothing for AT to build |
 | D4 (free map / superblock rule) | struck by AR0-5 §2.2 | **AT-S4, AT-S5**: the free map is a shared frame under its page latch; page 0's ceilings advance by CAS |
 | D10 (affinity weight) | provisional 0 | unchanged; after D18 it is the only place affinity is read |
-| D11 (`sys.range_affinity`) | AR0-M5: the R5 mover is retired; the relation **does not exist and stays absent** | nothing to build; AT-S9 states it |
+| D11 (`sys.range_affinity`) | AR0-M5: the R5 mover is retired; the relation **does not exist and stays absent** | nothing to build, and nothing to state — AT touches no part of it |
 | D14 (format migration) | pending | AT has **its own format event** (D17, AT-R7) and it is not AM-S4's |
-| D17 | **marked 2026-09-05**: columns dropped at M3 on AT's own event; a pre-M3 value ignored on read | **AT-S9**; `rows.hpp:978`'s `static_assert` moves there |
-| D18 | **marked**: affinity kept as a statistic and optimizer hint, D10 weight 0 until AS-E; placement NS10 deleted | **AT-S9**; and AT-0 item 4, because a weight-0 hint leaves the remote-step protocol with a consumer that never fires |
-| D19 | **marked**: every core listens (`SO_REUSEPORT`); a session lives where it was accepted; no handoff | **AT-S8**, and smaller than the mark assumes — the mechanism is in the tree behind `peer_listeners` (AT-3 F) |
+| D17 | **marked 2026-09-05**: columns dropped at M3 on AT's own event; a pre-M3 value ignored on read | **AT-S9**; the layout anchors AT-R7 names move there. **D17 and E8 disagree** and D17 wins (AT-7 item 6) |
+| D18 | **marked**: affinity kept as a statistic and optimizer hint, D10 weight 0 until AS-E; placement NS10 deleted. The mark also obliges *"`physical-optimizer.md` keeps its consumer"* | **AT-S9** and **AT-S12**, which carries that spec; and AT-0 item 4, because a weight-0 hint leaves the remote-step protocol with a consumer that never fires |
+| D19 | **marked**: every core listens (`SO_REUSEPORT`); a session lives where it was accepted; no handoff — **and, on a platform without it, core 0 accepts and hands off, a fallback whose handoff is "a ring consumer AU-S5 must list, not one it may strike"** | **AT-S8** for the listener, **AT-S10** for the fallback's kind (AT-R12). Smaller than the mark assumes on the socket and larger on the fallback (AT-3 F) |
 | D20 | **marked as constants carried, not decided**: 4,096 for trx-id and row-id caches, one extent | **AT-S4**; any change from them needs a measurement |
 | D21 | **marked**: schema word in `Expeditor`, memory only, bumped **before** the DDL's relation `X` releases | **AT-S2**; AR0-5 §8's read-order hazard is AT-S1's cell |
 | D22 | **marked**: M3 is "Uniformity", letter **AT** | this document; `index.md`'s row |
-| D25 (AR0-6) | kind enum frozen by `static_assert`, count **34** since AU-S3 | AT-3 C: **four of the 34 are already dead** and are struck, not converted |
+| D25 (AR0-6) | count **34** since AU-S3 — and the `static_assert` freezing it **is a mark's obligation, not a fact of the tree**: `ring_message.hpp` carries two asserts, both on `MessageHeader`'s layout | AT-3 C: four of the 34 have no engine user. **AT-R10 writes the assert AU-R4 owes, at 30** |
 | E7 (execution default) | measurement-gated; C1/C2 measured, **C3 answered that its shape does not exist** (AO-S7) | AT-R5 settles the *correctness* half — routing is not a correctness condition. The default is AT-0 item 2 and AT-S13's cell |
-| E8 (NS10's verb) | user-visible | **AT-S9**, and the verb goes with the policy rather than surviving it |
+| E8 (NS10's verb) | user-visible: *"selects the core that owns" → "declares the affinity of"*, **take it** | **AT-S9** takes the verb. E8's companion clause — `owner_core` "keeps its bytes" — is dead, D17 having dropped the columns (AT-7 item 6) |
 | E9 (`core_count` pinning) | **withdrawn by the operator 2026-09-08** — it argued from two dead premises | AT-S9 decides the count's fate with the rest of core specialization, which is what the withdrawal hands it |
 | E13 (catalog rows borrowable) | OPEN, M3 | **AT-S3**; AR0-5 §3 already reads it as closed-yes and AT builds it |
 | E1, E4, E11, E12 | ratified (AR2-A) | built in M2; AT changes none of them |
-| E3, E5, E10 | M3 | **not here** — the following letter's, per the scope answer |
-| AO-R8 (the fault net) | 11 s while 2PC is in the tree, 1 s once M3 retires it | **AT-S6** is the stage that earns the change |
+| E3, E5, E10 | M3 | not here — AT-0 item 6 |
+| AO-R8 (the fault net) | 11 s while 2PC is in the tree, 1 s once M3 retires it, **the key re-scoped and renamed rather than deleted** | **AT-S6** is the stage that earns both (AT-0 item 7) |
 | AO-R14 (guard in M2, route in M3) | the split | **AT-S5** is the route half |
 
 ---
@@ -106,22 +100,28 @@ maintenance rule flips when a decision *lands*.
 
 ### A. What AR0-5's retire list names that is already gone
 
-`ar0-5-amendment-uniformity.md` §4's M3 list was written at `410377e`, one
-day before `workorder-aw-m1-close.md` AW-S1b (`af86026`) deleted eight
-files. At `df8cc5f`:
+`ar0-5-amendment-uniformity.md` §4 was written at `410377e` (2026-09-04);
+`workorder-aw-m1-close.md` AW-S1b (`af86026`, 2026-09-07) then deleted eight
+files. Four of §4's **M3** entries no longer describe the tree:
 
 | named for retirement at M3 | state at `df8cc5f` |
 |---|---|
 | `LeasedIdSource`, `ExtentRefill`, `MaybeRefillLease`, the extent spent-lease `TxnConflict` | **gone.** `include/kds/storage/extent_lease.{hpp,cpp}` and `include/kds/server/extent_lease_service.{hpp,cpp}` are not in the tree |
-| `MayFault`, `GrantFaultPages`, `GrantWritePages`, `RelationGrantDemand`, `MaybeRequestRelationGrants` | **gone**; `MayFault` and `RelationWriteRightsPending` survive as one prose mention each, in comments |
 | `MayWrite`'s "remaining arms — the lease arm and the system-range arm" | **one arm.** See B |
-| the `(M5)` comment census, "twelve sites" | **eight**, in five files: `include/kds/catalog/core_placement.hpp`, `include/kds/server/range_alloc.hpp`, `include/kds/server/core_runtime.hpp`, `src/server/expeditor.cpp`, `src/server/core_runtime.cpp` |
-| `core_runtime.hpp` asymmetries 1–3 | asymmetry **2 has already been rewritten** by AW-S1b — it now reads "allocation reaches the one free map, under the structure latch … it came from a per-core extent lease until AW-S1b". AT strikes 1 and 3 and edits one sentence, not three asymmetries |
+| the `(M5)` comment census, "twelve sites" | **eight** under `grep -rn '(M5)' include/ src/`, which is §3's own stated command, in five files: `include/kds/catalog/core_placement.hpp`, `include/kds/server/range_alloc.hpp`, `include/kds/server/core_runtime.hpp`, `src/server/expeditor.cpp`, `src/server/core_runtime.cpp`. **The command is narrower than the rule**: `tests/mount_recovery_test.cpp:221` carries a ninth, `src/server/core_runtime.cpp:1284` an unparenthesised tenth, and bare-`M5` ownership claims survive in nine more files. AT-S12's grep is written to the rule, not to §3's command |
+| `core_runtime.hpp` asymmetries 1–3 | asymmetry **2 has already been rewritten** by AW-S1b — `include/kds/server/core_runtime.hpp:67-69` now reads "allocation reaches the one free map, under the structure latch … it came from a per-core extent lease until AW-S1b". AT strikes 1 and 3 and edits one sentence, not three asymmetries |
 
 Three lease families were named; **two remain** (trx ids, row ids). This is
 the single largest correction to AT's size and it is downward.
 
-### B. `MayWrite` is one arm and one call site
+**§4's other stale entries are not M3's.** `MayFault`, `GrantFaultPages`,
+`GrantWritePages`, `RelationGrantDemand` and `MaybeRequestRelationGrants`
+are also gone, and they sit under §4's **M1 (AM)** and **M2 (AO-S5)**
+headings — retired on schedule, by the milestone that owned them. They are
+recorded here so a reader of §4 is not surprised, not as a correction to
+AT's list.
+
+### B. `MayWrite` is one arm and one engine call site
 
 `src/storage/device_page_store.cpp:980` declares it; the whole predicate is
 `src/storage/device_page_store.cpp:1015`:
@@ -133,32 +133,41 @@ return true;
 
 The lease arm, the write-grant bitmap and the stamp claim went at AW-S1b;
 AW-a collapsed the two boundary members into one and made the surviving arm
-ask `CurrentCore()`. It has **one caller**, the store's own `mark_dirty`
-gate at `src/storage/device_page_store.cpp:738`; the four external callers
-AW-a's text names are gone. `Session::MayWriteOn`
-(`include/kds/server/session.hpp:343`, called at
+ask `CurrentCore()`. The function's own comment carries how it got here.
+
+**What AT-S5 has to touch is wider than the one predicate**, and the count
+matters because AR0-5 §3 re-points the AO-S5 cell at *"no `MayWrite` call
+site exists"*: one engine call, the store's own `mark_dirty` gate at
+`:738`; a **base virtual** at `include/kds/storage/page_store.hpp:403`
+defaulting to `true`, overridden at
+`include/kds/storage/device_page_store.hpp:445`; and **17 call sites in
+tests**, among them `tests/device_page_store_test.cpp:589-603` and
+`tests/core_runtime_test.cpp:525-533`, `:1185`, `:3209`, `:3367`, `:3462`,
+`:3779`. `Session::MayWriteOn` (`include/kds/server/session.hpp:343`, called
 `src/server/command_dispatcher.cpp:6846`) is a different predicate — the
 session's core check — and is **not** retired by this row.
 
-So AT-S5's deletion is small. What it costs is not: the arm is the last
-enforcement that only core 0 writes the superblock, the free map and the
-catalog pages, and AT-R11 states what replaces it.
-
-### C. Four ring kinds are already dead
+### C. Four ring kinds have no engine user
 
 `include/kds/sched/ring_message.hpp`'s enum carries 34 kinds beside
-`kUnset` (D25's count). **Four have no producer and no handler** outside
-the enum and `spsc_ring.cpp`'s name table: `kExtentLease` (17),
+`kUnset` (D25's count). **Four have no engine producer and no engine
+handler**, their consumers having gone at AW-S1b: `kExtentLease` (17),
 `kRelationFaultGrant` (21), `kRelationWriteGrant` (23),
-`kRelationGrantRequest` (24) — AW-S1b removed their consumers and AU-R4's
-freeze meant nobody struck them. **30 kinds are live**, not the 31
-`workorder-au-ring-retirement.md`'s AU-S5 row assumes.
+`kRelationGrantRequest` (24). **`kExtentLease` is not unused, though**:
+`tests/coro_test.cpp` uses it as its stand-in kind for a whole
+`TrySend`/`WaitFor`/reply round trip, registering handlers at `:263` and
+`:281` and sending at `:269` and `:296`. Striking it is therefore a test
+edit as well as an enum edit, and AT-R10 says so; the other three are
+enum-and-name-table only. `IsKnownRingMessageKind`
+(`ring_message.hpp:262-298`) names all 34, so every strike touches it too.
 
-Grouped by what retires them:
+**30 kinds have an engine user**, not the 31
+`workorder-au-ring-retirement.md`'s AU-S5 row assumes. Grouped by what
+retires them:
 
 | group | kinds | retired by |
 |---|---|---|
-| already dead | 4 (above) | **AT-S0's successor**, struck on sight (AT-R10) |
+| no engine user | 4 (above) | **AT-S2**, the first stage that opens `ring_message.hpp` (AT-R10) |
 | catalog broadcast | `kCatalogInvalidate` | AT-S2 |
 | allocators | `kTrxIdLease`, `kRowIdLease` | AT-S4 |
 | shipped statements | `kShippedStatementRequest/Reply`, `kShippedRowDesc` | AT-S5 (writes); reads per AT-0 item 4 |
@@ -169,11 +178,14 @@ Grouped by what retires them:
 | checkpoint | `kAnchorWrite` | AT-S8 |
 | remote steps | `kStep{Open,Batch,Eof,Credit,Cancel,Error}` | **undecided** — AT-0 item 4 |
 
-That last row is why AU-S6 may not be reachable inside AT: the transport
+Two things follow. **AU-S6 may not be reachable inside AT**: the transport
 cannot be deleted while one protocol still uses it, and whether the
-remote-step protocol survives is a decision, not a consequence.
+remote-step protocol survives is a decision, not a consequence. And **D19's
+fallback adds a kind rather than removing one** — the mark obliges AU-S5 to
+*list* the handoff, not strike it — so AT-S10 acquires a consumer on the
+platforms that need it (AT-R12).
 
-### D. The catalog has two invalidation paths and they disagree by design
+### D. The catalog has two invalidation paths, and the version counter has no engine reader
 
 - `Catalog::InvalidateFromPeer()` (`src/catalog/catalog.cpp:951`), the
   `kCatalogInvalidate` handler and the only invalidation a peer ever
@@ -181,20 +193,24 @@ remote-step protocol survives is a decision, not a consequence.
   counter**, deliberately — the counter is per-instance and means nothing
   across cores.
 - `Catalog::InvalidateAfterCompensation()` (`src/catalog/catalog.cpp:847`),
-  called from `CommandDispatcher::EndDdlScope`
-  (`src/server/command_dispatcher.cpp:9054`) on **either ending** of any
-  transaction that wrote catalog rows, **does** bump it, because the rows
-  really changed on this instance.
+  called from `EndDdlScopeById` (`src/server/command_dispatcher.cpp:9054`;
+  the wrapper is at `:8994`) on **either ending** of any transaction that
+  wrote catalog rows, calls `BumpVersion`.
 
-The broadcast reaches peers through
-`CoreRuntime::InvalidateCatalog()` (`src/server/core_runtime.cpp:922`,
-declared `include/kds/server/core_runtime.hpp:437`), published at
+The broadcast reaches peers through `CoreRuntime::InvalidateCatalog()`
+(`src/server/core_runtime.cpp:922`, declared
+`include/kds/server/core_runtime.hpp:437`), published at
 `src/server/expeditor.cpp:1274`.
 
-**AT-S2's word replaces both.** That is why AT-R2 requires it to be a
-*generation* counter that every invalidation path bumps: today's counter is
-not one, and a cache validated against it is correct on core 0 and wrong on
-every peer.
+**`catalog_version()` has no engine reader.** The accessor
+(`include/kds/catalog/catalog.hpp:1296`) is read only by tests, and
+`include/kds/catalog/range_directory.hpp:36-47` states the rule that keeps
+it that way: a resolved range set is a plan-time value, re-resolved after
+any park, *"never re-validated with `catalog_version()`"* — because of the
+peer non-bump. So AT-S2 inherits **no consumer to preserve**, which makes
+the stage smaller than AR0-5 §2.1 implies; what it must not do is give the
+new word the old one's shape. AT-R2 states that as a requirement rather
+than as a repair.
 
 ### E. The `IS` gap, and where the resolve happens
 
@@ -202,15 +218,15 @@ every peer.
 is declared only by a statement's outermost walk. `src/exec/step_vm.cpp:1960`
 and `:2030` guard the position report on `index == 0`, so a nested walk — a
 join's inner relation — declares nothing; and
-`src/server/remote_step_service.cpp` passes no `PositionSink` at any of its
-three execution sites (`:458`, `:886`, `:1080`).
+`src/server/remote_step_service.cpp` mentions `PositionSink` nowhere, at any
+of its three execution sites (`:458`, `:886`, `:1080`).
 
 The resolve AT-R1 must precede is `Catalog::InitTableAccess(Oid)`
 (`include/kds/catalog/catalog.hpp:684`), whose result is the
 reference-stable `const TableAccess*` a statement holds for its own
 duration (`include/kds/catalog/catalog_cache.hpp:98-102`).
 
-### F. D19 is half built
+### F. D19's socket is built; its fallback is not
 
 `TcpServer::Listen(port, reuse_port)` sets `SO_REUSEPORT`
 (`src/server/tcp_server.cpp:36`, `:44-51`), a peer's listener already opens
@@ -219,18 +235,25 @@ config flag, `peer_listeners`, defaulting off
 (`include/kds/server/expeditor.hpp:173`; the listener opened at
 `src/server/expeditor.cpp:1534`).
 
-**The blocker is not the socket.** `CheckPeerListenerConfig`
+**Two things are not built.** `CheckPeerListenerConfig`
 (`src/server/expeditor.cpp:127-145`) refuses `peer_listeners = on` combined
-with TLS or SCRAM because *"the credential state is core-local"* — which is
-itself an ownership residue, and therefore AT's to remove rather than to
-inherit (AT-0 item 8).
+with TLS or SCRAM, because *"the credential store and TLS context live on
+core 0's stack"* (`:129-136`) — itself an ownership residue. And the mark's
+**fallback** — core 0 accepts and hands off, on a platform without
+`SO_REUSEPORT` — has no handoff path at all; it is a kind AT-S10 must add.
 
-### G. Two Cabin stores
+### G. Two Cabin stores, and AR1 does not choose between the shapes
 
 `std::optional<stats::CabinStore>` is a member of **both**
 `include/kds/server/core_runtime.hpp:629` and
-`include/kds/server/expeditor.hpp:779`. AT-S7's "one instance store
-partitioned by `expr_id`" (AR1 §11) is a real unification, not a move.
+`include/kds/server/expeditor.hpp:779`.
+
+**AR1 §11 leaves the topology to M3 and says so**
+(`ar1-architecture-revision-cabin-function.md:359-368`): the witness must
+reach *"one store, **or** a store partitioned so that every write to a given
+key reaches the same partition. `expr_id` is the natural partition prefix
+and AR1 fixes nothing further; the store's topology is M3's."* So AT-S7
+chooses between two shapes rather than implementing one — AT-0 item 9.
 
 ### H. What is left of the leases
 
@@ -269,10 +292,11 @@ unchanged and keeps its own scope.
 **AT-R2 — The schema version word is a generation counter every
 invalidation path bumps.** D21 as marked: one `std::atomic<uint64_t>` on
 `Expeditor`, memory-resident (every cache is empty at mount), bumped
-**before** the DDL's relation `X` is released. It replaces both of AT-3 D's
-paths, and the peer path bumps nothing today — so "keep the existing
-counter" is not available to AT-S2, and a cache validated against a
-non-bumping path is the failure this ruling exists to prevent.
+**before** the DDL's relation `X` is released. The requirement is stated
+against today's counter, which has the opposite property: `InvalidateFromPeer`
+bumps nothing, which is why `range_directory.hpp:36-47` forbids validating
+against it (AT-3 D). AT-S2 inherits no consumer, so the rule is a
+constraint on what it builds, not a migration.
 
 **AT-R3 — Correctness never rests on the word.** The lock is the argument,
 the word is the fast path, and they are written in that order. AT-S1's cell
@@ -299,14 +323,19 @@ has no participant on another core, so the coordinator/participant protocol
 loses its traffic rather than its callers — AR0 §4.5 already says *"2PC no
 longer exists inside a single node."* AO-R8's fault net falls **11 s → 1 s**
 in the same stage, which is the only place that change has its stated
-precondition, and AO-0 item 7 (`in_doubt_ceiling_ms`, inert since AO-S3) is
-settled there rather than carried again.
+precondition.
 
-**AT-R7 — AT has its own format event.** D17 as marked: `sys.tables.owner_core`
-(`include/kds/catalog/rows.hpp:104`) and `sys.ranges.owner_core` (`:955`)
-are dropped, `rows.hpp:978`'s `static_assert` moves with the layout, and a
-pre-AT volume's value is **ignored on read** — no mount refusal. It is not
-AM-S4's event, which is the page-header stamp.
+**AT-R7 — AT has its own format event, and it moves four layout anchors.**
+D17 as marked: `sys.tables.owner_core` (`include/kds/catalog/rows.hpp:104`)
+and `sys.ranges.owner_core` (`:955`) are dropped, and a pre-AT volume's
+value is **ignored on read** — no mount refusal. It is not AM-S4's event,
+which is the page-header stamp. **The mark names one anchor and there are
+more**: `rows.hpp:978`'s `static_assert` on `kOwnerCoreOffset` and `:980`'s
+`kOnDiskSize == 32` (which becomes 28), `kEntryPageOffset` (`:967-969`), and
+on the `sys.tables` side `kOwnerCoreOffset` (`:145`) with the
+`kKeyOrderOffset` derived from it (`:146`). **`SysTableRow` carries no offset
+`static_assert` at all**, so the check that would catch a mistake is absent
+on that half; AT-S9 adds one rather than working without it.
 
 **AT-R8 — Every retired refusal is struck from AO-3's census with the
 mechanism that replaces it, not deleted.** AR0-5 §5 names this method as one
@@ -317,10 +346,15 @@ premises expire.
 a plain increment at `cores = 1`. A stage that cannot state this for its own
 mechanism has not finished.
 
-**AT-R10 — A dead kind is struck, never reused.** AU-R4's freeze. AT-3 C's
-four already-dead kinds are struck by the first stage that opens
-`ring_message.hpp`, with the `static_assert` count moving 34 → 30, rather
-than being left for AU-S5 to "replace" — there is nothing to replace.
+**AT-R10 — A dead kind is struck, never reused, and the freeze is written
+at the number the strike leaves.** AU-R4's rule. AT-3 C's four kinds are
+struck by AT-S2, the first stage that opens `ring_message.hpp`, together
+with their `IsKnownRingMessageKind` entries and — for `kExtentLease` alone —
+`tests/coro_test.cpp:263`, `:269`, `:281` and `:296`, which must move to a
+surviving kind first. **The `static_assert` D25 obliges does not exist yet**
+(`ring_message.hpp` has two, both on `MessageHeader`'s layout), so AT-S2
+writes it at **30** rather than renumbering a 34 that was never written
+down. AU-S0 owed it; AT pays it where the number changes.
 
 **AT-R11 — What stays special about system pages is two things, neither an
 authority.** Their frames are pinned, and page 0's address with the fixed
@@ -332,11 +366,14 @@ crosses the threshold. **A stage that deletes the arm without naming its
 replacement in the same change is not done** — this is the one place AT can
 turn a refusal into corruption rather than into a wait.
 
-**AT-R12 — The listener is the marked D19 and its blocker is AT's.**
-`peer_listeners` becomes the arrangement rather than an option; the
-TLS/SCRAM pairing refusal it carries today is an ownership residue (AT-3 F),
-and AT either removes it or states in AT-S8's row why it is a networking
-item and whose it becomes.
+**AT-R12 — D19 is taken whole, fallback included.** `peer_listeners`
+becomes the arrangement rather than an option (AT-S8), and the TLS/SCRAM
+pairing refusal is removed with the core-local credential store it names or
+handed on by name in AT-S8's row. **The mark's second half is an obligation
+on the ring, not on the listener**: on a platform without `SO_REUSEPORT`,
+core 0 accepts and hands off, and that handoff is *"a ring consumer AU-S5
+must list, not one it may strike"* — so AT-S10 builds it and AT-S11's count
+must reach 0 with it counted, not by ignoring it.
 
 **AT-R13 — The stage order is AR0-5 §7's, and the reason is stated.** The
 defence (S1) before the word (S2), because §8's quiet-wrong surface opens at
@@ -362,18 +399,18 @@ AO-S6 did.
 | stage | what it is | cells | size | gate |
 |---|---|---|---|---|
 | **AT-S0** | This document; `index.md`'s row. No code, no spec edit, no test | — | S | — |
-| **AT-S1** | **The relation `IS` at resolve time** (AT-R1). The borrow is taken at the dispatcher's resolve, before `InitTableAccess`, and released at statement end; the nested-walk and remote-step sites of AT-3 E are covered by construction rather than by widening the position report | AR0-5 §8's **inverted case**: the word deliberately not bumped, the DDL still blocked. A nested join's inner relation blocks a `DROP TABLE`. A remote step blocks one. `cores = 1` unchanged | M | word |
-| **AT-S2** | **The schema version word** (D21, AT-R2). `Expeditor` holds it; DDL bumps before releasing `X`; relation resolution compares one relaxed load and re-parses on mismatch. Retires `kCatalogInvalidate`, `InvalidateCatalog()`, `InvalidateFromPeer()` and crosscore.md §5's retryable table-not-found clause. Creates `docs/spec/catalog.md` or names the spec that takes AR0-5 §2.1's order (AT-3 I) | a peer resolves a post-DDL schema with no broadcast. A rollback and a commit both bump (AT-3 D's two paths). The retryable not-found is unreachable — call-site grep | M | S1 |
+| **AT-S1** | **The relation `IS` at resolve time** (AT-R1). The borrow is taken at the bind, before the schema is read, and released at statement end; the nested-walk and remote-step sites of AT-3 E are covered by construction rather than by widening the position report | AR0-5 §8's **inverted case**: the word deliberately not bumped, the DDL still blocked. A nested join's inner relation blocks a `DROP TABLE`. A remote step blocks one. `cores = 1` unchanged | M | word |
+| **AT-S2** | **The schema version word** (D21, AT-R2). `Expeditor` holds it; DDL bumps before releasing `X`; relation resolution compares one relaxed load and re-parses on mismatch. Retires `kCatalogInvalidate`, `InvalidateCatalog()`, `InvalidateFromPeer()` and the retryable table-not-found clause — which lives at `include/kds/server/core_runtime.hpp:64-67`, **not** in `crosscore.md` §5 (AT-7 item 7). Strikes AT-3 C's four kinds and writes D25's `static_assert` at 30 (AT-R10). Creates `docs/spec/catalog.md` or names the spec that takes AR0-5 §2.1's order | a peer resolves a post-DDL schema with no broadcast. A rollback and a commit both bump (AT-3 D's two paths). The retryable not-found is unreachable — call-site grep. `tests/coro_test.cpp` passes on its new kind | M | S1 |
 | **AT-S3** | **Catalog rows borrowable** (E13). Tuple `X` on the `sys.tables` row, so a named-pk `INSERT` **waits** instead of shipping; AR2 R5 struck. `rules.md` §3's declared-shared row for the catalog lands here | two named-pk inserts to one relation from two cores: one waits, neither refuses. `next_id`'s bump still logs and replays (keystone invariant) | M | S2 |
 | **AT-S4** | **Shared allocators, per-core caches** (§2.2, D20, AT-R4). Trx ids and row ids to one `fetch_add` each with a cached block; `TrxIdLease`, `TrxIdRefill`, `MaybeRefillTrxIds`, `RowIdLeaseTable`, `RowIdRefill`, `MaybeRefillRowIds`, both service files and both spent `TxnConflict`s retire. AN-R13 kept and re-worded | the two spent refusals are unreachable — call-site grep. Ids stay unique across cores under load. An idle core's floor still burns (AN-R13's own cell, re-pointed) | M | S0 |
-| **AT-S5** | **The route** (R12, AT-R5). A write runs where the session is; `ShipStatement`'s write arms retire with the FK probes, the index build and the assertion build; `MayWrite`'s last arm goes **with its replacement named in the same change** (AT-R11) | a cross-relation write mix from every core, byte-identical results to today. A peer writes a catalog page and the free map. The FK forward check meets a parent being written on another core and waits — AO-S5(b)'s cell, re-pointed at a local wait | **L** | S3, S4 |
-| **AT-S6** | **The cross-owner transaction and 2PC retired** (AT-R6). `txn_2pc_service.hpp` and the participant protocol go; `cross-owner-txn.md` is rewritten or struck; AO-R8's net **11 s → 1 s**; AO-0 item 7 settled | an undecided prepare cannot be constructed. Recovery's undecided-prepare arm is unreachable — the mount scan's own cell states what replaced it. The net's new value is the only clock-ended exit | **L** | S5 |
-| **AT-S7** | **Statistics and Cabin local.** `AccessBatch` fold-and-flush becomes a local write under lock (CC13), `kAccessStatsBatch` struck; the two `CabinStore`s (AT-3 G) become one instance store partitioned by `expr_id`; `cabin.md` §4b's scope rule struck; Waystone's peer-recording default lifted | `SHOW ACCESS` totals match the pre-change engine for the same workload. A peer's Cabin observation is banked and served. The contract suites for waystone and cabin stay byte-identical across configurations | M | S5 |
-| **AT-S8** | **Checkpoint and the listener.** `RemoteCheckpointAnchor` retires; `Checkpoint()` becomes an instance task under an at-most-one-running flag; `kAnchorWrite` struck. D19 as marked and as AT-R12 scopes it: `peer_listeners` becomes the arrangement, and its TLS/SCRAM refusal is removed or handed on by name | two cores cannot run a checkpoint at once. A session accepted on any core runs to completion there. TLS with per-core listeners, or the row says whose it is | M | S5 |
-| **AT-S9** | **Placement and `owner_core`** (D17, D18, E8, E9's withdrawal). AT's format event drops both columns and moves `rows.hpp:978`'s `static_assert`; `core_placement.hpp` and `PlacementPolicy` retire; NS10's verb becomes "declares the affinity of"; `core_count`'s pinning is decided with the rest of core specialization | a pre-AT volume mounts and its `owner_core` values are ignored — no refusal. `ns.table` still resolves; namespaces still exist as names | M | S5–S8 |
-| **AT-S10** | **AU-S5**, one sub-stage per surviving group of AT-3 C's table: the replacement carries the traffic and the kind's handler is unreachable | per group: a call-site grep, and the group's own behaviour cell | **L** | S9 |
-| **AT-S11** | **AU-S6**: count reaches 0; `RingTransport`, `RealRingTransport`, `SimRingTransport`, `ring_message.hpp`, phase 3, the N² preallocation, `AttachTransport` and the two transport tests removed | the suite; the golden log CRC unchanged; `SHOW META` loses its ring counters and `client-manual.md` says so | M | S10, **AT-0 item 4** |
-| **AT-S12** | **The prose sweep.** CC11 and CC13 in `crosscore.md`; the eight `(M5)` comments; `core_runtime.hpp`'s asymmetries 1 and 3 and asymmetry 2's sentence; `Expeditor`'s "core 0 owns the superblock, the free map, the catalog pages and the listener"; `namespace.md`, `sched.md` §5, `rules.md` §3, `page.md` §6, `CLAUDE.md`'s rows | done-conditions written as greps, and **checked as greps** — AO-S8's two done-conditions were grep conditions that did not hold on the first pass | M | S11 |
+| **AT-S5** | **The route** (R12, AT-R5). A write runs where the session is; `ShipStatement`'s write arms retire with the FK probes, the index build and the assertion build; `MayWrite`'s last arm goes **with its replacement named in the same change** (AT-R11), taking the base virtual, the override and AT-3 B's 17 test sites with it | a cross-relation write mix from every core, byte-identical results to today. A peer writes a catalog page and the free map. The FK forward check meets a parent being written on another core and waits — AO-S5(b)'s cell, re-pointed at a local wait | **L** | S3, S4 |
+| **AT-S6** | **The cross-owner transaction and 2PC retired** (AT-R6). `txn_2pc_service.hpp` and the participant protocol go; `cross-owner-txn.md` is rewritten or struck; AO-R8's net **11 s → 1 s**, and `in_doubt_ceiling_ms` is **re-scoped and renamed** to the net rather than deleted, the old spelling refused at `expeditor.cpp`'s known-key check naming its successor (AT-0 item 7) | an undecided prepare cannot be constructed. Recovery's undecided-prepare arm is unreachable — the mount scan's own cell states what replaced it. The old key name is refused at startup with its successor named | **L** | S5 |
+| **AT-S7** | **Statistics and Cabin local.** `AccessBatch` fold-and-flush becomes a local write under lock (CC13), `kAccessStatsBatch` struck; the two `CabinStore`s (AT-3 G) become one store under whichever of AR1 §11's two shapes AT-0 item 9 names; `cabin.md` §4b's scope rule struck; Waystone's peer-recording default lifted | `SHOW ACCESS` totals match the pre-change engine for the same workload. A peer's Cabin observation is banked and served. The contract suites for waystone and cabin stay byte-identical across configurations | M | S5 |
+| **AT-S8** | **Checkpoint and the listener.** `RemoteCheckpointAnchor` retires; `Checkpoint()` becomes an instance task under an at-most-one-running flag; `kAnchorWrite` struck. D19's listener half as AT-R12 scopes it: `peer_listeners` becomes the arrangement, and its TLS/SCRAM refusal is removed with the core-local credential store or handed on by name | two cores cannot run a checkpoint at once. A session accepted on any core runs to completion there. TLS with per-core listeners, or the row says whose it is | M | S5 |
+| **AT-S9** | **Placement and `owner_core`** (D17, D18, E8's verb, E9's withdrawal). AT's format event drops both columns and moves AT-R7's four anchors, adding the `SysTableRow` assert that is missing; `core_placement.hpp` and `PlacementPolicy` retire; NS10's verb becomes "declares the affinity of"; `core_count`'s pinning is decided with the rest of core specialization | a pre-AT volume mounts and its `owner_core` values are ignored — no refusal. `ns.table` still resolves; namespaces still exist as names | M | S5–S8 |
+| **AT-S10** | **AU-S5**, one sub-stage per surviving group of AT-3 C's table, **plus D19's fallback handoff**, which the mark obliges this stage to list rather than strike (AT-R12) | per group: a call-site grep, and the group's own behaviour cell | **L** | S9 |
+| **AT-S11** | **AU-S6**: count reaches 0; `RingTransport`, `RealRingTransport`, `SimRingTransport`, `ring_message.hpp`, phase 3, the N² preallocation, `AttachTransport` and the two transport tests removed; **G1's sentence** (`ar0-architecture-revision.md:45`, as AR0-6 revised it) rewritten with them | the suite; the golden log CRC unchanged; `SHOW META` loses its ring counters and `client-manual.md` says so | M | S10, **AT-0 item 4** |
+| **AT-S12** | **The prose sweep.** CC11 and CC13 in `crosscore.md`; **`physical-optimizer.md`, which D18's mark names**; the `(M5)` comments **to the rule and not to §3's command** — `tests/` and the bare-`M5` claims of AT-3 A included; `core_runtime.hpp`'s asymmetries 1 and 3 and asymmetry 2's sentence; `Expeditor`'s "core 0 owns the superblock, the free map, the catalog pages and the listener"; `namespace.md`, `sched.md` §5, `rules.md` §3, `page.md` §6, `CLAUDE.md`'s rows | done-conditions written as greps, and **checked as greps** — AO-S8's two done-conditions were grep conditions that did not hold on the first pass, and a grep scoped to `include/ src/` is how this one would repeat that | M | S11 |
 | **AT-S13** | **The prices.** E7's cell, which AO-S7 handed on because C3's shape did not exist on an engine that serialised writes per core — it exists once AT-S5 lands. The `cores = 1` A/B. `ck-tester`, `build-release`, BTREE-only per the 2026-09-08 mark, `git describe` on every number | `bench/v3.0.0/`, one results file, with p0 and p25, a wait breakdown and a delta against this engine's own previous number | M | S5 |
 
 **Order, and why it is not negotiable at three points** (AT-R13): S1 before
@@ -386,7 +423,7 @@ the operator without breaking an argument.
 
 | stage | state |
 |---|---|
-| AT-S0 | **landed 2026-09-09** on `m3-at` — this document and `index.md`'s row. No code, no spec edit, no test; the suite was not executed and no pass is claimed. Overhead not measured |
+| AT-S0 | **landed 2026-09-09** on `m3-at` — this document and `index.md`'s row. No code, no spec edit, no test; the suite was not executed and no pass is claimed. Overhead not measured. **Reviewed after landing** and corrected in the same branch: AT-8 |
 | AT-S1 … AT-S13 | not started; each gated on the operator's word |
 
 ---
@@ -395,44 +432,111 @@ the operator without breaking an argument.
 
 | # | item | class | CLA proposal |
 |---|---|---|---|
-| 1 | **AR0-5's body.** It is still a DRAFT; `raft-marks-2026-09-05.md` §2 marks §6's D17–D22 and says so explicitly — *"this marks its §6 items, not the amendment"*. AT is built on the body | procedural | ratify it, or AT proceeds against it as a governing draft the way AO proceeded against AR2. AT-3 A is the one correction the body needs either way |
+| 1 | **AR0-5's body.** It is still a DRAFT; `raft-marks-2026-09-05.md` §2 marks §6's D17–D22 and says so explicitly — *"this marks its §6 items, not the amendment"*. AT is built on the body | procedural | ratify it, or AT proceeds against it as a governing draft the way AO proceeded against AR2. AT-3 A and AT-7 are the corrections the body needs either way |
 | 2 | **E7's default** now that AT-R5 settles the correctness half | measurement-gated | read it off AT-S13, not off AO-S7's C3, which measured an engine where the shape did not exist |
 | 3 | **The borrow cap's unit.** `raft-marks-2026-09-08.md` §1 left it per *local* transaction "until AT's uniformity work asks the question again". With no participants there is one `Transaction` per transaction, so the cap silently narrows | constant, user-visible | state the narrowing in AT-S6's row and keep 65,536; it stops being one-cap-per-participant because there are no participants |
 | 4 | **Does the remote-step protocol survive AT?** D18 keeps affinity as a weight-0 hint, so `kStep*` retains a consumer that never fires. **AU-S6 cannot reach count 0 while it lives** | design | keep it, converted by AT-S10 to shared state plus a kick (AR0-6-R1), and let AT-S11 delete the *transport* rather than the feature. If instead it is struck, say so before AT-S10 sizes its sub-stages |
 | 5 | **AO-0's carried items 9, 22, 25 and 27** — the FK split's M2 half awaiting confirmation, the bound-assertion wait's own bound, `DROP TABLE` refused because readers keep arriving, and the intention-mode-on-an-interval rule that shipped with no ruling to point at | mixed | 9 confirms with D9(a) in the following letter; 22 and 25 move with it; **27 is AT's**, because AT-S1 widens what holds an `IS` and 27 is the rule that decides what such a borrow fences |
 | 6 | **The following letter** for D7 with D1(b)'s gap locking, D9(a)'s `S` fence with `FkPendingDeleteTable`, E3, E5, E10 and AR1's AQ/AR | naming | one letter, opened after AT-S5 lands, since D9(a)'s fence and D7's gate both assume a write that no longer ships |
-| 7 | **`in_doubt_ceiling_ms`'s manner of death** (AO-0 item 7): refused at startup naming its successor, or dropped silently with the 2PC it configured | user-visible | refuse at startup naming `kLockWaitFaultNetNs`; a config key that silently stops meaning anything is the failure the rule against second names exists to prevent |
-| 8 | **Per-core listeners with TLS or SCRAM** (AT-3 F, AT-R12). The refusal's stated reason — credential state is core-local — is an ownership residue | networking | AT-S8 removes it if the credential state moves to `Expeditor` with everything else; if it is larger than that, AT-S8's row names it and it becomes its own item |
+| 7 | **`in_doubt_ceiling_ms`** (AO-0 item 7): refused at startup naming its successor, or kept inert until M3 re-scopes it to the fault net | user-visible | **AO-R8's own plan**: re-scope and rename the key to the net, and refuse the old spelling at the known-key check naming its successor. Deleting it would leave the net with no config key at all, against `CLAUDE.md`'s rule to re-scope rather than re-name |
+| 8 | **Per-core listeners with TLS or SCRAM** (AT-3 F, AT-R12). The refusal's stated reason — the credential store and TLS context live on core 0's stack — is an ownership residue | networking | AT-S8 removes it if the credential state moves to `Expeditor` with everything else; if it is larger than that, AT-S8's row names it and it becomes its own item |
+| 9 | **The Cabin store's topology.** AR1 §11 offers two shapes — one store, or one partitioned so every write to a key reaches the same partition — and fixes neither, saying *"the store's topology is M3's"* (AT-3 G) | design | **one store, partitioned by `expr_id`**: the partition is what keeps a peer's observation off a mutex the owner holds, and `expr_id` is AR1's own named prefix. Raised as an item rather than taken as a ruling because AT-1 sends AR1's AQ/AR to a following letter, and this is the one AR1 decision AT cannot avoid |
 
 ---
 
 ## AT-7 — Where the governing text and the tree disagree
 
 Recorded at `df8cc5f`, in the form AO-7 established, because every one of
-these would otherwise be inherited as an instruction.
+these would otherwise be inherited as an instruction. Each states the
+consequence; the evidence is in AT-3.
 
-1. **`ar0-5-amendment-uniformity.md` §4's M3 list names five things that
-   left the tree at AW-S1b** (`af86026`) and one that has already been
-   rewritten (AT-3 A). The extent-lease family is gone entirely, so AT
-   retires **two** lease families, not three.
-2. **"`MayWrite`'s remaining arms — the lease arm and the system-range
-   arm"** is one arm and one call site (AT-3 B). The lease arm went with the
-   arrangement it described.
-3. **AR0-5 §2.1 requires a rule to be written in `docs/spec/catalog.md`,
-   which does not exist** (AT-3 I). AT-S2 creates it or names its home; this
-   order does neither, deliberately.
-4. **The `(M5)` census is eight sites, not twelve** (AT-3 A). AR0-5-V had
-   already corrected the count from five to twelve; it drifted the other way
-   when AW-S1b deleted four of the files.
+1. **AR0-5 §4's M3 list is stale in four entries** (AT-3 A). The
+   extent-lease family is gone, so AT retires **two** lease families, not
+   three. §4's `MayFault` and grant entries are *not* in this class — they
+   are its M1 and M2 lists, retired on schedule.
+2. **"`MayWrite`'s remaining arms" is one arm** (AT-3 B) — and one *engine*
+   call site beside a base virtual, an override and 17 test sites, which is
+   what AR0-5 §3's re-pointed AO-S5 cell has to cover.
+3. **AR0-5 §2.1 requires a rule in `docs/spec/catalog.md`, which does not
+   exist** (AT-3 I). AT-S2 creates it or names its home.
+4. **The `(M5)` census is eight sites under §3's own command and more under
+   §3's own rule** (AT-3 A). AR0-5-V had corrected the count from five to
+   twelve; `af86026` then deleted three of those sites with two files and
+   edited a fourth away in a file that survives, which is 12 → 8.
 5. **`workorder-au-ring-retirement.md`'s AU-S5 row says "the remaining
-   31"**; 30 are live and four are dead-but-unstruck (AT-3 C). AU-R4's
-   freeze is why they are still enumerated, and AT-R10 strikes them.
-6. **AR0 §8 step 6 and AR0-5's D22 define M3 differently** — "Cabin
+   31"**; 30 have an engine user and four are dead-but-unstruck, one of them
+   with a live *test* producer (AT-3 C).
+6. **AR2's E8 and AR0-5's D17 disagree, and D17 wins.** E8 says
+   `owner_core` "keeps its bytes and changes its meaning to affinity"
+   (`ar2-architecture-revision-borrow-model.md:525-527`, `:627`); D17's mark
+   of 2026-09-05 drops the columns. E9's withdrawal text already concedes it
+   in passing. AT-S9 takes E8's **verb** and D17's **bytes**.
+7. **`crosscore.md` §5 carries no "retryable table-not-found clause".** The
+   clause AR0-5 §2.1 retires is `include/kds/server/core_runtime.hpp:64-67`'s;
+   §5's own closing bullet is a different rule — a stale oid on a *remote
+   step* surfaces as `STEP_ERROR` — whose fate is coupled to AT-0 item 4.
+   AT-S2 is pointed at the header, not at the spec.
+8. **AR0 §8 step 6 and AR0-5's D22 define M3 differently** — "Cabin
    invariant removal (D7), Assertion, FK (D9)" against "Uniformity". Both
    were live until the operator's answer of 2026-09-09. AR0 §8 step 6 is not
    amended by this order; it is *split*, and AT-0 item 6 carries the other
    half.
-7. **`raft-marks-2026-09-05.md`'s D19 assumes the listener is unbuilt**; the
-   mechanism is in the tree behind `peer_listeners` and the real blocker is
-   the credential state (AT-3 F). The mark is not wrong about what it wants,
-   only about what it costs.
+9. **`raft-marks-2026-09-05.md`'s D19 assumes the listener is unbuilt**; the
+   socket is in the tree behind `peer_listeners`, and what is missing is the
+   credential store's home and the fallback handoff the mark obliges AU-S5
+   to list (AT-3 F, AT-R12).
+
+---
+
+## AT-8 — What the review of AT-S0 found
+
+A `critics-developer` pass over this document, run against the tree at
+`4e6ab7c` on `m3-at`, checked every `path:line` and every claim in AT-3.
+**Eleven of the fourteen it was asked to verify were exact to the line, the
+stage list covers AR0-5 §4's M3 list completely, and AT-3 C's grouping table
+is exhaustive** — 4 + 1 + 2 + 3 + 4 + 6 + 6 + 1 + 1 + 6 = 34, every live
+kind in exactly one group. What it found is recorded here rather than
+silently fixed, because AT-3's whole claim is that it re-read rather than
+inherited, and a survey making that claim has to show its own corrections.
+
+**Three of the seven corrections AT-3 advertised were themselves wrong.**
+
+1. **`kExtentLease` is not unused.** `tests/coro_test.cpp` produces and
+   handles it at four lines. The first draft told AT-S2 to strike four kinds
+   "on sight", which would not have compiled. AT-3 C and AT-R10 now carry
+   the test edit.
+2. **The `static_assert` freezing the kind count does not exist.** The draft
+   read D25's *obligation* as a fact of the tree and told a stage to move a
+   number "34 → 30" that is written nowhere. AT-R10 now writes it at 30.
+3. **AT-7's cause for the `(M5)` drift was false** — 12 → 8 is three sites
+   deleted with two files and a fourth edited away in a file that survives,
+   not "four files deleted". This is the failure AR0-5-V recorded about
+   itself (*"gave a false cause for two rows"*) repeated in form, which is
+   why it is written out rather than quietly corrected.
+
+**Six further defects, each fixed above**: the interval between `410377e`
+and `af86026` is three days, not one; two of §4's stale entries were counted
+against the M3 list and belong to M1 and M2, which is why the headline is now
+four rather than six; `MayWrite`'s call-site count omitted the base virtual
+and 17 test sites; `catalog_version()` has no engine reader at all, so AT-S2
+inherits nothing to preserve and AT-R2 is a constraint rather than a repair;
+AT-0 item 7 offered a straw alternative and contradicted AO-R8, which rules
+the key **re-scoped and renamed**; and AT-R7 named one layout anchor where
+the format event moves four and adds one that is missing.
+
+**Four omissions**: D19's fallback handoff, which the mark obliges AU-S5 to
+*list* and AT had nowhere (AT-R12, AT-S10); `physical-optimizer.md`, the one
+document D18's mark names, absent from AT-S12; G1's sentence, dropped from
+AT-S11's copy of AU-S6's list; and AR1 §11's topology choice, which AT-S7
+was making silently and is now AT-0 item 9.
+
+**Two inexact quotations** are corrected: the header's elision of AO-8 now
+carries the clause it dropped, and AT-3 F quotes
+`src/server/expeditor.cpp:129-136` as it reads.
+
+**The trims it proposed were taken**, and they are why this document is
+shorter than the draft: `index.md`'s row reproduced five of this order's
+sections and now points at them; the scope split was stated four times and
+is now stated twice, in AT-1 and AT-0 item 6; the header's decision block
+re-argued three rulings and is now a provenance line; and AT-7 restated
+AT-3 rather than stating its consequence.
