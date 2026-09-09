@@ -475,9 +475,10 @@ static_assert(CatalogRootsAreDistinctAndBelowOverflow(),
 // Its callers were the flush that preceded the catalog broadcast and a
 // peer's eviction of its stale copy; both went at AT-S2, when one pool and
 // a schema word made them moves of bytes nobody re-read. What remains is
-// the fixtures' flush of unlogged catalog pages, which needs "all of them"
-// and tolerates an id that is not resident (`FlushPages` skips a page it
-// has no frame for). So the range is named in full
+// a fixture's flush for a second store opened over the device (the writes
+// themselves are WAL-logged, `ddl-transactional.md` §7), which needs "all
+// of them" and tolerates an id that is not resident (`FlushPages` skips a
+// page it has no frame for). So the range is named in full
 // rather than tracked: an exact set would have to be discovered by walking
 // every chain, and a walk that happens on the invalidation path is a walk
 // that can fail there.

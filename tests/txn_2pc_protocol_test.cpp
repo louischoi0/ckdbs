@@ -2283,7 +2283,17 @@ TEST_F(LockDeadlockTest, TwoTransactionsNamedKeysIntoOneRelationDoNotWaitOnItsCa
     // And the ledger holds `a`'s two borrows on the user relation - the
     // relation `IX` and row 7's `X` (AO-S6a) - and nothing keyed on the
     // catalog relation, which is the third entry a row `X` would have added.
+    // Probed, not only counted: an `X` on the catalog relation is granted
+    // at once, which it could not be if anything stood there.
     EXPECT_EQ(locks_->EntryCount(), 2u) << "a borrow stands on something other than a's relation and row";
+    txn::LockHoldings probe;
+    auto free = locks_->TryAcquire(/*txn=*/4242, txn::LockKey::Relation(catalog::kSysTablesTable),
+                                   txn::LockMode::kExclusive, probe);
+    ASSERT_TRUE(free.ok());
+    EXPECT_TRUE(free.value()) << "something holds the catalog relation while a's key is admitted";
+    locks_->Release(4242, probe);
+    // This fixture is one core over an in-memory store, where no page latch
+    // is armed: it proves the ledger claim and nothing about the latch.
     ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
     EXPECT_EQ(locks_->EntryCount(), 0u);
 }

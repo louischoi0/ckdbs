@@ -89,10 +89,8 @@ isolation is at stake. Each statement takes its view boundary once
 (`EnsureStatementBoundary`), so two resolutions in one statement never
 disagree.
 
-`Catalog::catalog_version()` is not a sound freshness guard — a peer's
-cache is dropped by the schema version word's `Revalidate()` (AT-S2,
-`catalog.md` CT1), which never advances that counter — and nothing here
-leans on it.
+`Catalog::catalog_version()` is not a sound freshness guard (`catalog.md`
+CT1 says why), and nothing here leans on it.
 
 ## 5. What is in scope
 

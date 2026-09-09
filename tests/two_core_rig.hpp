@@ -286,7 +286,7 @@ private:
         }
         // Placement. The DDL choke point needs no wiring since AT-S2: both
         // cores' catalogs share `schema_word_` through their configs, and
-        // the peer revalidates at its next cached read.
+        // the peer revalidates at its next task boundary.
         core0.catalog().SetPlacementPolicy(options_.placement);
         // The peer's first transaction-id block, carved from the one
         // sequence - which persists page 0 through core 0's runtime - so

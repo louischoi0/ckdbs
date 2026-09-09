@@ -426,8 +426,9 @@ def txn_ddl_pass(sides, meter, ops, tag):
     the catalog cache when a transaction that wrote catalog rows resolves,
     and as of DT9's follow-up it does so on **both** endings rather than on
     rollback alone - so a commit that used to pay nothing now pays one
-    `BumpVersion`: a cache clear plus the `on_invalidate_` hook, which
-    flushes the catalog pages and broadcasts `kCatalogInvalidate`.
+    `BumpVersion`: a cache clear plus, since AT-S2, one bump of the
+    instance's schema version word (it flushed the catalog pages and
+    broadcast `kCatalogInvalidate` when this was written).
 
     The three arms are separate because only one of them can carry the cost:
     `txn-begin` and `txn-create` are the control, `txn-commit` is the arm.

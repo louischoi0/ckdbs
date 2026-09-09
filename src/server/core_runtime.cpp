@@ -583,10 +583,8 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // write rights over its exact creation pages, because a peer's own
     // frame table could reach neither without being told. One frame table
     // serves every core now, so both questions the grants answered have no
-    // asker. `kRelationFaultGrant`, `kRelationWriteGrant` and
-    // `kRelationGrantRequest` stay in `ring_message.hpp` unhandled until
-    // AU-R5 strikes them, so a stale peer's message is dropped rather than
-    // read as something else.
+    // asker. Their kinds were struck at AT-S2b; a stale peer's message on a
+    // struck number finds no handler in the scheduler's map and is dropped.
 
     // The row-id lease's receive side (P5's shape), peers only: core 0
     // owns the sequence pages and never leases from itself - and in

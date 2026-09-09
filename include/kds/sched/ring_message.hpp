@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -67,16 +66,6 @@ enum class RingMessageKind : std::uint16_t {
     // version word at its task boundaries (AT-S2a, `catalog.hpp`) and is no
     // longer told. **The value is not reused.**
 
-    // core 0 -> all: stop your reactor.
-    //
-    // Not one of the four system kinds P1 enumerated, and added by P2
-    // because the fan-out needs a way to stop a peer. It is a *message*
-    // rather than a call to that reactor's Stop() because `stopped_` is a
-    // plain bool owned by its own thread: writing it from another thread is
-    // a data race, and making it atomic would put an atomic outside the ring
-    // indices, against workplan guideline 1. The seam is the only channel a
-    // core may use to reach another, and shutdown is not an exception to
-    // that - it is the case that proves it.
     // 20 was kShutdown, struck at AU-S3: stopping a reactor is an atomic
     // flag plus a kick, not a message. **The value is not reused** - a
     // number a stale peer might still send must not come to mean something
@@ -255,56 +244,78 @@ enum class RingMessageKind : std::uint16_t {
     kFkReverseProbeReply = 44,
 };
 
-// **Every kind this build sends or handles, and the number AR0-6's D25
-// freezes** (`raft-marks-2026-09-05.md` §3, written at AT-S2b). AU-R4's rule
-// is that a kind is only ever struck, never renumbered and never reused, so
-// the count moves only downward and only here: strike the enumerator, drop
-// it from this list, and lower the assert in the same change. A kind that
-// is enumerated but absent from this list is a defect this assert does not
-// catch by itself; `RingMessageKindName`'s switch is the second census.
-inline constexpr std::array<RingMessageKind, 29> kRingMessageKinds = {
-    RingMessageKind::kStepOpen,
-    RingMessageKind::kStepBatch,
-    RingMessageKind::kStepEof,
-    RingMessageKind::kStepCredit,
-    RingMessageKind::kStepCancel,
-    RingMessageKind::kStepError,
-    RingMessageKind::kAnchorWrite,
-    RingMessageKind::kTrxIdLease,
-    RingMessageKind::kRowIdLease,
-    RingMessageKind::kIndexBuildRequest,
-    RingMessageKind::kIndexBuildReply,
-    RingMessageKind::kIndexBuildDone,
-    RingMessageKind::kShippedStatementRequest,
-    RingMessageKind::kShippedStatementReply,
-    RingMessageKind::kAssertionBuildRequest,
-    RingMessageKind::kAssertionBuildReply,
-    RingMessageKind::kAssertionBuildDone,
-    RingMessageKind::kTxnPrepareRequest,
-    RingMessageKind::kTxnPrepareReply,
-    RingMessageKind::kTxnDecideRequest,
-    RingMessageKind::kTxnDecideReply,
-    RingMessageKind::kTxnResolveRequest,
-    RingMessageKind::kTxnResolveReply,
-    RingMessageKind::kAccessStatsBatch,
-    RingMessageKind::kShippedRowDesc,
-    RingMessageKind::kFkProbeRequest,
-    RingMessageKind::kFkProbeReply,
-    RingMessageKind::kFkReverseProbeRequest,
-    RingMessageKind::kFkReverseProbeReply,
-};
-static_assert(kRingMessageKinds.size() == 29,
+// **The census of every kind this build sends or handles, and the number
+// AR0-6's D25 freezes** (`raft-marks-2026-09-05.md` §3; written at AT-S2b,
+// and given this form by its review). The switch has **no `default`**, so
+// under `-Wall` a new enumerator warns here until its case is added; and
+// the count below is derived from the switch at compile time, so once the
+// case is added the freeze **fails** until the frozen number is moved on
+// purpose. AU-R4's rule is that a kind is only ever struck, never
+// renumbered and never reused, so the number moves only downward and only
+// here: strike the enumerator, drop its case, lower the assert in the same
+// change. (An earlier form kept a hand-written `std::array<…, 29>` beside
+// the switch; its explicit size let a dropped entry pad to `kUnset`, which
+// made the freeze assert restate its own template argument and made
+// `kUnset` a "known" kind - the review of AT-S2b is why it is a switch.)
+constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
+    switch (kind) {
+        case RingMessageKind::kStepOpen:
+        case RingMessageKind::kStepBatch:
+        case RingMessageKind::kStepEof:
+        case RingMessageKind::kStepCredit:
+        case RingMessageKind::kStepCancel:
+        case RingMessageKind::kStepError:
+        case RingMessageKind::kAnchorWrite:
+        case RingMessageKind::kTrxIdLease:
+        case RingMessageKind::kRowIdLease:
+        case RingMessageKind::kIndexBuildRequest:
+        case RingMessageKind::kIndexBuildReply:
+        case RingMessageKind::kIndexBuildDone:
+        case RingMessageKind::kShippedStatementRequest:
+        case RingMessageKind::kShippedStatementReply:
+        case RingMessageKind::kAssertionBuildRequest:
+        case RingMessageKind::kAssertionBuildReply:
+        case RingMessageKind::kAssertionBuildDone:
+        case RingMessageKind::kTxnPrepareRequest:
+        case RingMessageKind::kTxnPrepareReply:
+        case RingMessageKind::kTxnDecideRequest:
+        case RingMessageKind::kTxnDecideReply:
+        case RingMessageKind::kTxnResolveRequest:
+        case RingMessageKind::kTxnResolveReply:
+        case RingMessageKind::kAccessStatsBatch:
+        case RingMessageKind::kShippedRowDesc:
+        case RingMessageKind::kFkProbeRequest:
+        case RingMessageKind::kFkProbeReply:
+        case RingMessageKind::kFkReverseProbeRequest:
+        case RingMessageKind::kFkReverseProbeReply:
+            return true;
+        case RingMessageKind::kUnset:
+            return false;
+    }
+    return false;  // a value no enumerator names: a struck kind from a stale peer
+}
+
+// The wire's form: callers hold a `uint16_t` off a `MessageHeader`, and use
+// this in place of a raw cast, for the reason the enum's 0 exists.
+constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
+    return IsKnownRingMessageKind(static_cast<RingMessageKind>(kind));
+}
+
+// The number the switch above knows, computed from it. Every 16-bit value,
+// because the wire field is 16 bits and a bound tied to the highest
+// enumerator would be a second number to keep in step; 65,536 steps of a
+// switch is far inside the constant-evaluation budget of the compilers
+// this builds with.
+constexpr std::size_t CountKnownRingMessageKinds() noexcept {
+    std::size_t n = 0;
+    for (std::uint32_t v = 0; v <= 0xFFFFu; ++v) {
+        if (IsKnownRingMessageKind(static_cast<std::uint16_t>(v))) ++n;
+    }
+    return n;
+}
+static_assert(CountKnownRingMessageKinds() == 29,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
               "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck)");
-
-// Whether `kind` names something this build knows. Callers use it in place
-// of a raw cast, for the reason the enum's 0 exists.
-constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
-    for (const RingMessageKind known : kRingMessageKinds) {
-        if (static_cast<std::uint16_t>(known) == kind) return true;
-    }
-    return false;
-}
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

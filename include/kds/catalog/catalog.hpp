@@ -234,35 +234,24 @@ public:
     // and handed to every core's catalog; `BumpVersion()` - the single DDL
     // choke point - advances it, and `Revalidate()` below drops this
     // cache when it has moved. That replaces the `kCatalogInvalidate`
-    // broadcast: a peer no longer waits to be told, it asks. **A generation
-    // counter every invalidation bumps** (AT-R2): the local
-    // `catalog_version_` is not one - a peer's drop never advanced it -
-    // which is why the word is a second thing and not that counter shared.
-    // Neither `AllocateRowId()` nor `RegisterPattern()` bumps it: an id or
-    // a pattern is not a cached fact. Null is a catalog with no instance
-    // around it (a fixture, bootstrap), which revalidates nothing.
+    // broadcast: a peer no longer waits to be told, it asks. **Bumped by
+    // every invalidation that can stale another core's memo** (AT-R2):
+    // this core's `catalog_version_` is not - a peer's drop never advanced
+    // it - which is why the word is a second thing and not that counter
+    // shared (`catalog.md` CT1 owns that rule). Neither `AllocateRowId()`
+    // nor `RegisterPattern()` bumps it: an id or a pattern is not a cached
+    // fact. Null is a catalog with no instance around it (a fixture,
+    // bootstrap), which revalidates nothing.
     //
     // **Correctness never rests on the word** (AT-R3): it saves a re-parse.
     // The relation `IS` a statement holds from its bind is what a DDL's `X`
     // waits for; `read_borrow.hpp` states the defence and its direction.
     void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
 
-    // **Asked at a task boundary and nowhere inside one.** One acquire load
-    // of the word; on a mismatch the cache is dropped and the value
-    // adopted. It is the caller's - `DispatchAndStage`'s head, a ring
-    // handler's, a system task's - and never a cached read's, because a
-    // drop frees every `const TableAccess*` a running statement holds
-    // (`catalog_cache.hpp`: the entries are reference-stable *until the
-    // next drop*), and a drop inside a statement is a read through freed
-    // memory. The broadcast this replaced ran as a task and so dropped only
-    // between tasks; this keeps that boundary by construction. A task that
-    // reads the catalog without asking first serves a memo at most one
-    // DDL stale, which is what a peer served while a broadcast was in
-    // flight - stale, never wrong (DT1, catalog MVCC). **A drop of the memo
-    // is enough only because one frame table serves every core** (AM-S2
-    // step 3): the re-read finds the bytes core 0 wrote. On a per-core pool
-    // it would re-read the same stale frame and conclude the same nothing,
-    // which is why the broadcast's handler evicted frames as well.
+    // **Asked at a task boundary and nowhere inside one**: a drop frees
+    // every `const TableAccess*` a running statement holds. `catalog.md`
+    // CT2-CT4 carry the rule, the nine sites, what an unasking task serves
+    // and why a drop of the memo is enough.
     void Revalidate();
 
     // Called at the end of a CreateTable whose owner is **not** the system
@@ -773,6 +762,16 @@ public:
     // buys one at the price of the other: borrow first and an illegal key
     // waits on a lock before being told it was never legal; admit first and
     // the wait cannot be re-run.
+    //
+    // **And it runs inside the page span, so it must not park.** The mark's
+    // read-modify-write is atomic within a core only because nothing
+    // suspends between the read and the write - the page latch is
+    // re-entrant for the owning core and serialises cores, not tasks
+    // (`page.md` §6). A hook that parked would let a second admission read
+    // the old mark and the first write it back lower: an id that is already
+    // a tuple's identity is then issued (invariant 11). `BorrowOrWait`
+    // records a blocker and returns; the park is `DispatchAsync`'s, outside
+    // this span - which is the shape every hook passed here must keep.
     Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
                               const std::function<Status()>& before_mark = {});
 
@@ -1468,11 +1467,8 @@ private:
     std::uint64_t catalog_version_ = 0;
 
     // The word and the value this cache was built at (`SetSchemaWord`,
-    // `Revalidate()`). `BumpWord()` runs at every DDL write and adopts the
-    // new value **only if this cache was current** - so a writer whose
-    // cache `BumpVersion()` just dropped, or whose entry the flip site
-    // keeps on purpose, is not dropped again by its own bump, while a bump
-    // it never saw from another core still stands until the next boundary.
+    // `Revalidate()`). `BumpWord()` runs at every DDL write; its adopt-only-
+    // if-current rule is stated where it is decided, in `catalog.cpp`.
     void BumpWord();
     std::atomic<std::uint64_t>* schema_word_ = nullptr;
     std::uint64_t cache_built_at_ = 0;

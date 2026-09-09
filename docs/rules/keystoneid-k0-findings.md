@@ -112,7 +112,7 @@ next, taken from a reserved range of low page ids
 so the instance's ceiling is roughly 7,800 column rows. The range is
 reserved rather than unbounded because "every catalog page" has to be
 nameable — the flush that preceded the catalog broadcast needed it, and a
-fixture's flush of the unlogged pages still does — and a bounded range can
+fixture's flush for a second store over the device still does — and a bounded range can
 be named where an arbitrary set of general-supply ids cannot. (It was also
 because a catalog page above the first user page was one a peer could not
 fault at all — `DevicePageStore::MayFault`, which went with the fault grants

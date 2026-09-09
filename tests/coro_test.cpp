@@ -269,7 +269,7 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
                             reply.src_core = 1;
                             reply.dst_core = h.src_core;
                             reply.request_id = h.request_id;
-                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kIndexBuildRequest);
+                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kIndexBuildReply);
                             const std::uint64_t granted = 4096;
                             std::byte bytes[sizeof(granted)];
                             std::memcpy(bytes, &granted, sizeof(granted));
@@ -281,7 +281,7 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
     // Core 0: routes the reply into the waiting request's state.
     ASSERT_TRUE(core0
                     .RegisterMessageHandler(
-                        RingMessageKind::kIndexBuildRequest,
+                        RingMessageKind::kIndexBuildReply,
                         [&request](const MessageHeader&, std::span<const std::byte> payload) {
                             std::memcpy(&request.answer, payload.data(), sizeof(request.answer));
                             request.replied = true;

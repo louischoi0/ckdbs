@@ -113,9 +113,8 @@ step error). Two rules beyond CC9's cell:
   bumps the schema version word as DDL does (`catalog.md` CT2). **A
   resolved range is never cached across a suspension**: a peer's cache is
   dropped by the word's `Revalidate()` at a task boundary, which never
-  advances `catalog_version()` — that counter is per-instance — so a range
-  fact guarded by that counter would
-  be wrong on every peer.
+  advances `catalog_version()` — that counter is one core's (`catalog.md`
+  CT1) — so a range fact guarded by it would be wrong on every peer.
 - **The fast-path invariant binds here hardest**: a one-range relation
   on its owner core must add zero instructions over the single-core code
   (CC1, §2).
