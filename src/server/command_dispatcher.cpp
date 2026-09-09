@@ -245,36 +245,9 @@ Status StatusFromErrorReply(std::string_view reply) {
 // true this constant is.
 constexpr bool kWritePathEnforcesAssertions = true;
 
-sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
-                                             DispatchOutcome* out, CommitAck commit_ack) {
-    // Today this never suspends: every statement runs on the core that owns
-    // its relations, or is refused (core_affinity.hpp). The coroutine is
-    // here so that when a step *can* reach another core, the suspension
-    // point goes inside the executor and nothing above it changes.
-    //
-    // That it never suspends is also what makes this change verifiable: the
-    // whole suite has to behave exactly as it did, because nothing about
-    // when a reply is produced has moved yet.
-    // **The statement may park from here**, which is the whole difference
-    // between this entry point and `Dispatch()` - and the condition
-    // statement shipping is admitted under (SS2). Set and cleared around
-    // the synchronous half, which takes no suspension point, so it never
-    // spans a park and never describes another statement.
-    may_park_ = true;
-    {
-        // **RAII, unlike `may_park_` above, and the asymmetry is the point.**
-        // A leaked `may_park_` grants a parking allowance; a leaked
-        // `commit_ack_` silently drops a client's durability wait. The
-        // window below provably takes no suspension point - `DispatchAndStage`
-        // is not a coroutine, and nothing in this file pumps a scheduler or a
-        // ring - so a hand-placed pair would be correct today and silently
-        // wrong the day an early `co_return` or a `co_await` appears between
-        // them. The guard makes the property structural rather than reviewed.
-        const CommitAckScope stamped(*this, commit_ack);
-        *out = DispatchAndStage(line, session);
-    }
-    may_park_ = false;
-
+sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* session,
+                                               DispatchOutcome* out,
+                                               sched::MonoTimeNs* statement_deadline_ns) {
     // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
     //
     // The ratified answer to D5's `[OPEN]`: a writer of a row held by a
@@ -315,8 +288,17 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // the refusal it replaced (AR2-R10). Now the wait ends when the
         // holder decides, and this bound fires only when something is
         // broken - logged as a fault below, never as a busy answer.
-        const sched::MonoTimeNs deadline_ns =
-            NowNs() + static_cast<sched::MonoTimeNs>(txn::kLockWaitFaultNetNs);
+        //
+        // **Taken once for the statement, not once per entry into this
+        // function** (AO-S6d, item 16). A foreign-key probe's resume can
+        // open a wait of its own, and a deadline re-taken there would make
+        // "bounded once" a property of an arm rather than of the statement
+        // - a shape whose total is the net times the number of rounds.
+        if (*statement_deadline_ns == 0) {
+            *statement_deadline_ns =
+                NowNs() + static_cast<sched::MonoTimeNs>(txn::kLockWaitFaultNetNs);
+        }
+        const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
         // **The waiter's identity for the wait-for graph** (AO-S4a). Only
         // an explicit transaction can be in a cycle: an autocommit
         // statement holds nothing when it parks, so nothing can be waiting
@@ -398,9 +380,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // direction is the safe one - a re-run would wait for
             // durability that a decide no longer waits for, never the
             // reverse - which is why this is a comment and not a fix.
-            may_park_ = true;
+            const MayParkScope parking(*this, true);
             *out = DispatchAndStage(line, session);
-            may_park_ = false;
         }
         // However the wait ended - granted, victim, or the net - this
         // transaction is no longer waiting for anything, and an edge left
@@ -473,6 +454,55 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                     "undetected or a holder is stuck - not that the row was busy"));
         }
     }
+    co_return Status::OK();
+}
+
+sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
+                                             DispatchOutcome* out, CommitAck commit_ack) {
+    // Today this never suspends: every statement runs on the core that owns
+    // its relations, or is refused (core_affinity.hpp). The coroutine is
+    // here so that when a step *can* reach another core, the suspension
+    // point goes inside the executor and nothing above it changes.
+    //
+    // That it never suspends is also what makes this change verifiable: the
+    // whole suite has to behave exactly as it did, because nothing about
+    // when a reply is produced has moved yet.
+    // **The statement may park from here**, which is the whole difference
+    // between this entry point and `Dispatch()` - and the condition
+    // statement shipping is admitted under (SS2). Set and cleared around
+    // the synchronous half, which takes no suspension point, so it never
+    // spans a park and never describes another statement.
+    {
+        // **Both guards RAII since AO-S6d, and the argument this comment
+        // used to make about only one of them is why.** A leaked
+        // `may_park_` grants a parking allowance; a leaked `commit_ack_`
+        // silently drops a client's durability wait. The window below
+        // provably takes no suspension point - `DispatchAndStage` is not a
+        // coroutine, and nothing in this file pumps a scheduler or a ring -
+        // so a hand-placed pair would be correct today and silently wrong
+        // the day an early `co_return` or a `co_await` appears between
+        // them. AO-S6d added a third `may_park_` window, inside a loop and
+        // beside a `co_await`, which is that day arriving; the guard makes
+        // the property structural rather than reviewed.
+        const MayParkScope parking(*this, true);
+        const CommitAckScope stamped(*this, commit_ack);
+        *out = DispatchAndStage(line, session);
+    }
+
+    // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
+    //
+    // `AwaitWriteBlock` is the whole of it, and it is a function since
+    // AO-S6d because it has two callers: here, over what the statement's
+    // own dispatch produced, and the foreign-key probe arm below, over what
+    // its resume produced. The frame is allocated only where there is
+    // something to wait for.
+    //
+    // **The deadline is the statement's** and is threaded through both
+    // callers for the reason the function states.
+    sched::MonoTimeNs statement_deadline_ns = 0;
+    if (out->write_block.has_value()) {
+        co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns);
+    }
 
     if (out->pending_fk_probe.has_value() && fk_probes_ != nullptr) {
         // **The one park that resumes by re-entering the statement.**
@@ -493,6 +523,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // the loop ends when a resume has nothing left to ask - which is why
         // it needs no bound: every round retires at least one question from
         // a finite set.
+        //
+        // **A round that waited retires nothing, and the bound is then the
+        // wait's** (AO-S6d, item 16). The write-block wait's re-run is a
+        // whole fresh statement, so the verdicts held so far are dropped
+        // and the next round asks everything again - monotone progress does
+        // not hold across it. What does: a round can only wait while
+        // `statement_deadline_ns` is still in the future, and once it is
+        // not `AwaitWriteBlock` refuses on its first turn and empties
+        // `write_block`, after which the copy-out's mutual exclusion leaves
+        // no probe and this loop breaks. The statement's ceiling is
+        // therefore one fault net plus the round it is in, and each round
+        // inside that net still asks a finite set.
         //
         // **The answers live in this frame across the park**, not on the
         // dispatcher: a member filled before a `co_await` would be read as
@@ -555,10 +597,36 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             resumed_fk_verdicts_ = held_forward;
             resumed_fk_reverse_verdicts_ = held_reverse;
             if (probe.reverse) resumed_fk_rows_ = probe.rows;
-            *out = DispatchAndStage(probe.line, session);
+            // **The resume may park, and until AO-S6d it could not.**
+            // `may_park_` is the allowance every wait in this file is
+            // recorded under, and it was set around the statement's own
+            // dispatch and around the write-block re-run but not here - so
+            // a resumed statement meeting a held row recorded no blocker
+            // and took the plain refusal, which is precisely the refusal
+            // AR2-A §1's first axis measures this milestone by removing.
+            {
+                const MayParkScope parking(*this, true);
+                *out = DispatchAndStage(probe.line, session);
+            }
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
             resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
             resumed_fk_rows_.reset();
+            // **And the wait the allowance above makes recordable** (item
+            // 16). The re-run inside is a fresh whole statement, so a
+            // probe it raises is collected by the next turn of this same
+            // loop - which is why this is here and not after it.
+            if (out->write_block.has_value()) {
+                co_await AwaitWriteBlock(probe.line, session, out, &statement_deadline_ns);
+                // **What the earlier rounds answered does not survive a
+                // whole re-run.** A verdict is "as of the view the probe
+                // was answered under", and the point of the wait is that
+                // the holder has since decided - so applying a held `pass`
+                // to the re-run would answer from the view the wait exists
+                // to leave behind. The re-run re-resolves every parent and
+                // asks again for whatever it still cannot answer locally.
+                held_forward = exec::FkParentVerdicts{};
+                held_reverse = exec::FkParentVerdicts{};
+            }
             if (!out->pending_fk_probe.has_value()) break;
             probe = std::move(*out->pending_fk_probe);
             out->pending_fk_probe.reset();
@@ -1067,13 +1135,15 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // where the statement is not re-runnable, so a value here means "this
     // statement wrote nothing and a wait could get it past".
     //
-    // **Never beside a probe or a ship.** `DispatchAsync` runs the
-    // write-block wait before either of those arms, and its re-run is a
-    // fresh `DispatchAndStage` - so a statement carrying both would have
-    // its parked probe discarded and a second one sent, leaving the first
-    // reply for a request nobody waits on and its reference intents held
-    // to the end of the session. The resume re-resolves the forward check
-    // anyway, so a busy parent is seen again and waited on then.
+    // **Never beside a probe or a ship**, and this is the guard rather
+    // than an ordering. A write-block wait re-runs the whole statement, so
+    // an outcome carrying both would have its parked probe discarded and a
+    // second one sent, leaving the first reply for a request nobody waits
+    // on and its reference intents held to the end of the session. What
+    // the wait is owed instead is the outcome of the round *after* the
+    // probe settles, which is where the probe arm takes it (AO-S6d, item
+    // 16); the resume re-resolves the forward check anyway, so a busy
+    // parent is seen again and waited on there.
     if (blocking_writer_ != 0 && !outcome.pending_fk_probe.has_value() &&
         !outcome.pending_shipped.has_value()) {
         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
@@ -4398,7 +4468,12 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // *when* the check runs, never what protects the row afterwards
         // (AO-R14).
         if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0) {
-            NoteBlockingWriter(waiter, busy_trx, pk);
+            // `kFutile` for a repeatable-read child: the holder wrote the
+            // parent row's pending version, `check_view` is the
+            // transaction's own and is not re-minted, so a commit leaves
+            // the parent as invisible to the re-run as it is now and the
+            // violation is the answer either way.
+            NoteBlockingWriter(waiter, busy_trx, pk, RepeatableReadWait::kFutile);
         }
 
         // Recorded **per resolution, not per row**, which is the mechanism
@@ -7465,9 +7540,14 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // path states, and `sys.tables.next_id` being a mark on what has been
     // *placed* is what allows it. `rows` is provably nonzero: the range
     // allocation refuses a count of zero and returned above.
+    // `kCapable`: this is an `INSERT`, and an insert's verdict is not a
+    // function of the waiter's read view - the ids are carved from the
+    // relation's own sequence and the rows do not exist yet - so a
+    // repeatable-read run of it may wait like any other.
     if (std::optional<Status> held = BorrowOrWait(
-            scope, txn::LockKey::Range(ta.oid, first.value(),
-                                       first.value() + stmt.rows.size()))) {
+            scope,
+            txn::LockKey::Range(ta.oid, first.value(), first.value() + stmt.rows.size()),
+            RepeatableReadWait::kCapable)) {
         return {ErrorReply(*held), false, 0, *held};
     }
 
@@ -7743,7 +7823,8 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                 oid, supplied_id,
                 [&]() -> Status {
                     if (std::optional<Status> held =
-                            BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, supplied_id))) {
+                            BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, supplied_id),
+                                         RepeatableReadWait::kCapable)) {
                         return *held;
                     }
                     return Status::OK();
@@ -7763,7 +7844,8 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         }
         row_id = issued.value();
         if (std::optional<Status> held =
-                BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, row_id))) {
+                BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, row_id),
+                             RepeatableReadWait::kCapable)) {
             return ErrorReply(*held);
         }
     }
@@ -10248,7 +10330,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // unit parks having written nothing and re-runs cleanly.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
-        if (std::optional<Status> held = BorrowOrWait(scope, *declared)) {
+        // `kFutile`: a declared unit is refused by whoever conflicts with
+        // it, and the table reports who and not what they hold - so a
+        // holder that already wrote a row this walk will reach cannot be
+        // told from a fence that wrote nothing, and a repeatable-read
+        // statement keeps the exclusion rather than guessing. The row-level
+        // arm below is where the two *are* distinguishable, because there
+        // the header names the row's own writer.
+        if (std::optional<Status> held =
+                BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile)) {
             return {ErrorReply(*held), false, 0, *held};
         }
     }
@@ -11167,7 +11257,7 @@ void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session
 }
 
 void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx,
-                                           std::uint64_t pk) {
+                                           std::uint64_t pk, RepeatableReadWait rerun) {
     if (!may_park_ || clock_ == nullptr || txn_ == nullptr) return;
     if (!txn_->IsInFlight(trx)) return;
     // The two guards the declaration argues for. A null `waiter` is
@@ -11187,9 +11277,23 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
         // exclusion is conservative rather than exact: a holder that
         // *aborts* restores the row's prior writer id and the same view
         // would then admit the write. Waiting only for the abort arm is a
-        // narrower promise than this stage set out to make, so the level is
-        // excluded whole and AO-S3b is where the finer answer belongs.
-        if (waiter->isolation() == txn::IsolationLevel::kRepeatableRead) return;
+        // narrower promise than this stage set out to make, so the level
+        // stays excluded here.
+        //
+        // **And here is the whole of it now** (AO-S6d, item 17). Every
+        // sentence above is about a holder that wrote the row; a holder of
+        // a unit that wrote no version of it commits nothing this view
+        // needs to see, so the re-run answers the ordinary MVCC question
+        // and the wait pays off in either arm. The one case that made this
+        // a decision rather than a correction: the holder may write the row
+        // during the wait, and the re-run then meets a header naming it and
+        // is refused first-updater-wins - the correct repeatable-read
+        // outcome, reached after a wait rather than instead of one, which is
+        // PostgreSQL's shape and the operator's ruling of 2026-09-09.
+        if (waiter->isolation() == txn::IsolationLevel::kRepeatableRead &&
+            rerun == RepeatableReadWait::kFutile) {
+            return;
+        }
     }
     blocking_writer_ = trx;
     blocked_pk_ = pk;
@@ -11349,7 +11453,8 @@ Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
 }
 
 std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
-                                                      const txn::LockKey& unit) {
+                                                      const txn::LockKey& unit,
+                                                      RepeatableReadWait rerun) {
     std::uint64_t blocker = 0;
     auto took = BorrowChain(scope, unit, &blocker);
     if (!took.ok()) return took.status();
@@ -11367,7 +11472,12 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     // uses and carries the same conditions - it records nothing outside
     // `DispatchAsync`'s `may_park_`, so a synchronous dispatch still gets
     // the plain refusal rather than a park nothing would resume.
-    NoteBlockingWriter(scope.txn, blocker, unit.lo);
+    //
+    // **`rerun` comes from the caller and not from `unit`** (AO-S6d,
+    // item 17). The unit asked for says nothing about who refused it: an
+    // `INSERT` asks for a tuple and a range fence is what stops it, and a
+    // declared range can be stopped by a tuple holder that wrote the row.
+    NoteBlockingWriter(scope.txn, blocker, unit.lo, rerun);
     if (unit.unit == txn::LockUnit::kTuple) return HeldByHolder(unit.lo, blocker);
     return Status::TxnConflict("rows id=[" + std::to_string(unit.lo) + ", " +
                                std::to_string(unit.hi) + ") are held by transaction " +
@@ -11447,8 +11557,18 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     // this row's own recording from a leftover on the same member by
     // comparing against it - and what they must compare against is the
     // holder that was recorded, not the half of it the table supplied.
+    //
+    // **And the role is read before the fallback overwrites it**
+    // (AO-S6d, item 17): a blocker the table named that is not `cur` is a
+    // holder of a unit over this key which has written no version of it,
+    // and that is the one case a repeatable-read waiter may wait on. Where
+    // the table named nobody the blocker *becomes* `cur`, which is the
+    // row's own writer and the case the exclusion still covers.
+    const RepeatableReadWait rerun = (blocker != 0 && blocker != cur)
+                                         ? RepeatableReadWait::kCapable
+                                         : RepeatableReadWait::kFutile;
     if (blocker == 0) blocker = cur;
-    NoteBlockingWriter(scope.txn, blocker, pk);
+    NoteBlockingWriter(scope.txn, blocker, pk, rerun);
     return verdict;
 }
 
@@ -11532,26 +11652,42 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     // statement's intents need releasing exactly as a committed one's do.
     session.set_last_txn_id(scope.txn->id());
     if (!result.ok()) {
-        if (Status s = enforcer_.AbortTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
-            return s;
-        }
-        Status aborted = txn_->Abort(*scope.txn, RowLocatorForRollback());
-        txn_->Release(*scope.txn);
-        scope.txn = nullptr;
-        return aborted;
+        return AbortOwnedScope(scope, /*reported=*/Status::OK());
     }
 
     // Flags before the commit record (§6.2 step 4's piggyback): if the
     // commit then fails, the abort arm removes the entries whatever their
     // flags say, so clearing early is recoverable in both directions.
+    //
+    // **Both failures below unwind** (AO-S6d, item 15), through
+    // `AbortOwnedScope`, whose declaration carries the argument and what
+    // the old `return` cost. Both are states `Abort` is defined for:
+    // `CommitTxn` here only clears assertion entries, and
+    // `TransactionManager::Commit` fails only ahead of its `PublishCommit`,
+    // so neither has published anything a rollback would take back.
+    //
+    // **One thing the unwind cannot reach on this first arm**, stated here
+    // rather than implied by the call below it:
+    // `AssertionEnforcer::CommitTxn` takes the reservation list out of
+    // `pending_` before anything that can fail (`assertion_check.cpp`
+    // says why), so a failure part-way through leaves nothing for
+    // `AbortTxn` to find and the reservations it had not yet settled are
+    // neither committed nor unapplied. The Bound Cabin then counts a
+    // contribution whose row this unwind has just compensated. That is
+    // **fail-closed** - an aggregate too high refuses writes it could
+    // admit, it never admits one it should refuse - and it is not a
+    // regression: before AO-S6d the row leaked too, inside a transaction
+    // that stayed in flight for ever and was therefore invisible to every
+    // reader, so the count was already describing rows nobody could see.
+    // Closing it means changing what a failed settle leaves behind, which
+    // is the enforcer's decision and not this arm's:
+    // `docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`.
     if (Status s = enforcer_.CommitTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
-        return s;
+        return AbortOwnedScope(scope, s);
     }
     auto committed = txn_->Commit(*scope.txn, effective_durability_);
     if (!committed.ok()) {
-        txn_->Release(*scope.txn);
-        scope.txn = nullptr;
-        return committed.status();
+        return AbortOwnedScope(scope, committed.status());
     }
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
         !wal_->IsDurable(committed.value())) {
@@ -11560,6 +11696,43 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     txn_->Release(*scope.txn);
     scope.txn = nullptr;
     return Status::OK();
+}
+
+Status CommandDispatcher::AbortOwnedScope(WriteScope& scope, const Status& reported) {
+    const std::uint64_t id = scope.txn->id();
+
+    // **The enforcer's failure no longer skips the transaction's own
+    // unwind** (AO-S6d): it used to return here. The two are independent in
+    // the direction that matters - assertion entries this core could not
+    // settle say nothing about whether the trail can be compensated.
+    //
+    // **A no-op on one of the three callers**, worth saying at the call
+    // rather than leaving to be discovered: after a failed
+    // `enforcer_.CommitTxn` there is no pending list left to unapply, and
+    // `EndWrite`'s comment at that arm states what that leaves behind.
+    // Called unconditionally anyway, because on the other two it is the
+    // whole of the assertion unwind and a test on which caller it is would
+    // be the branch that goes wrong.
+    Status unwound = enforcer_.AbortTxn(page_store_, wal_, id);
+    if (Status s = txn_->Abort(*scope.txn, RowLocatorForRollback()); unwound.ok()) {
+        unwound = s;
+    }
+    txn_->Release(*scope.txn);
+    scope.txn = nullptr;
+
+    // **The statement's answer is the failure it was called with**, not
+    // the compensation's: a client told "the abort's record could not be
+    // appended" would be reading about the recovery from its problem
+    // instead of the problem. What the unwind could not finish is the
+    // mount's undo phase to complete (`recovery_undo.hpp`), so it is
+    // logged here and nowhere claimed to have succeeded.
+    if (reported.ok()) return unwound;
+    if (!unwound.ok() && logging(LogLevel::kWarn)) {
+        log_->Warn("txn", "transaction " + std::to_string(id) +
+                              " could not commit and its unwind did not complete either: " +
+                              unwound.message());
+    }
+    return reported;
 }
 
 std::uint64_t CommandDispatcher::WriterId(const WriteScope& scope) {
@@ -11812,7 +11985,15 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
-        if (std::optional<Status> held = BorrowOrWait(scope, *declared)) {
+        // `kFutile`: a declared unit is refused by whoever conflicts with
+        // it, and the table reports who and not what they hold - so a
+        // holder that already wrote a row this walk will reach cannot be
+        // told from a fence that wrote nothing, and a repeatable-read
+        // statement keeps the exclusion rather than guessing. The row-level
+        // arm below is where the two *are* distinguishable, because there
+        // the header names the row's own writer.
+        if (std::optional<Status> held =
+                BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile)) {
             return {ErrorReply(*held), false, 0, *held};
         }
     }

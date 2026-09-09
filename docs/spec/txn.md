@@ -610,6 +610,40 @@ above is what decides. And the wait is the ordinary one: it ends at the
 holder's decide, it is an edge in the wait-for graph, and it is refused
 rather than entered where it would close a cycle.
 
+**What `REPEATABLE READ` waits for** (AO-S6d, AO-0 item 17, the operator's
+ruling of 2026-09-09). The question is asked per wait rather than per
+level: **can the re-run answer differently once this holder decides?**
+
+- **No, where the blocker wrote the row's current version.** A commit makes
+  that version invisible to a view minted at `BEGIN` for the rest of the
+  transaction, so the re-run is refused on the ground it was refused on the
+  first time and the wait could only ever pay off on the abort arm. The
+  level stays excluded, which is what it always was.
+- **Yes, where the blocker holds a coarser unit over the key and has
+  written no version of it** - the fence of the paragraphs above. Its
+  commit changes what this view admits only for rows it wrote, and the row
+  in hand was written by somebody the view has already judged.
+- **Yes, for an `INSERT`,** whatever the blocker is. An insert's verdict is
+  not a function of the waiter's read view at all: a caller-named key's
+  uniqueness is proved by a physical descent onto the one page that may
+  hold it, and an issued key comes from the relation's own sequence. So the
+  wait ends in a row written, or in `AlreadyExists` for a key the holder
+  took - and `AlreadyExists` is not retryable, which is the honest answer
+  either way.
+- **No, where the site cannot tell.** A statement that declared a coarse
+  unit and had it refused knows *who* refused it and not *what* they hold,
+  so a holder that already wrote a row the walk will reach is
+  indistinguishable from a fence that wrote nothing. The exclusion stands
+  there rather than guessing.
+
+A holder is free to write the row while the waiter is parked. The re-run
+then meets a header naming a transaction that committed after the waiter's
+view was minted and is refused first-updater-wins - the correct
+`REPEATABLE READ` answer, reached after a wait rather than instead of one.
+That is PostgreSQL's shape, and it is the intended one: what the wait buys
+is the case where the holder never touches the row, which is every fence
+declared over a window wider than what it wrote.
+
 The engine reports `StatusCode::kTxnConflict`, which maps to the
 wire contract `wire::ErrorCategory::kTxnConflict` with **`retryable = 1`**
 (`protocol.md` §11: "financial client libraries build retry loops on this bit, so
@@ -666,6 +700,33 @@ autocommit the abort is automatic, so behaviour is statement-atomic there. This
 deviates from SQL's statement atomicity, which needs savepoints or a
 statement-level trail high-water mark — a non-goal that the trail's shape
 supports additively.
+
+**A commit that fails aborts, on both paths** (AO-S6d, AO-0 item 15). The
+commit of an autocommit statement and the `COMMIT` of an explicit
+transaction can both fail — the assertion entries could not be cleared, or
+the commit record could not be written — and `TransactionManager::Commit`
+fails only *before* it publishes, so the transaction is still active and
+its trail intact. `Abort` is the operation defined for that state and both
+paths now take it: the compensations run, the borrows and the transaction
+are released, and the client's answer is the commit's own failure rather
+than the unwind's. Reporting the failure without unwinding leaves a
+transaction that is active for the life of the process — counted in flight
+by every later snapshot, and, since every writer takes a borrow, holding
+tenancies that make every later writer of its rows wait out the lock-wait
+fault net.
+
+A commit record that reached the platter under a failed sync is followed in
+the log by the compensations and by `TXN_ABORT`, and analysis reads that as
+aborted rather than as a winner (`wal.md` §12) — `kAborted` overwrites
+`kWinner`, only `kPrepared` may not be overwritten. **What that does not
+cover is a crash inside the unwind**: `TXN_ABORT` is appended without a
+durability wait, so a stream whose `TXN_COMMIT` bytes reached the device
+while the compensations and the abort record did not replays the
+transaction as a winner and redoes writes its client was told had failed.
+The truthful code for a strict commit whose sync failed is
+`UnknownOutcome` rather than the device's own error, and it is not what the
+engine returns; the gap is the durability layer's and is stated here rather
+than left to be inferred from "aborts".
 
 ## 7. Catalog and DDL
 

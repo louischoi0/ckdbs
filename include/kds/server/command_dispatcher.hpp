@@ -981,6 +981,28 @@ private:
     Status EndWrite(Session& session, WriteScope& scope, const Status& result,
                     bool statement_ends = true);
 
+    // **The one way an owned scope ends without committing** (AO-S6d,
+    // AO-0 item 15). Three arms of `EndWrite` reach it: the statement
+    // failed, its assertion entries could not be cleared, or its commit
+    // record could not be written - and until this existed the last two
+    // returned without unwinding anything at all.
+    //
+    // What that cost is not a tidiness: `TransactionManager::Commit` fails
+    // only *before* `PublishCommit`, so the transaction is still active,
+    // and `Release` refuses to free an active one. The object stayed in
+    // `live_` for the life of the process, `MintView` counted it in flight
+    // for every later view, and - since AO-S6c-a gave every writer a
+    // borrow - its tenancies were never released either, so every later
+    // writer of a row it touched parked until the fault net and was told a
+    // defect report. `Abort` is exactly the operation defined for a
+    // still-active transaction, and it releases both.
+    //
+    // `reported` is what the client is owed: the commit's own failure
+    // where there was one, so the answer names what actually went wrong
+    // rather than the compensation that followed it. `Status::OK()` means
+    // the caller has no answer of its own and wants the unwind's.
+    Status AbortOwnedScope(WriteScope& scope, const Status& reported);
+
     // The trx_id a write stamps: the scope's transaction, or
     // kBootstrapXid when there is no manager.
     static std::uint64_t WriterId(const WriteScope& scope);
@@ -1021,11 +1043,41 @@ private:
     // only when the holder rolls back is a narrower promise than the one
     // this stage makes for every other level, and offering it silently
     // would be the convenient answer rather than the true one.
+    //
+    // **That exclusion is now asked per wait rather than per level**
+    // (AO-S6d, AO-0 item 17). Everything above is an argument about a
+    // holder that wrote *this row*, and since AO-S6c-b that is no longer
+    // the only kind of blocker: one may hold a coarser unit over the key
+    // and have written no version of it - a range fence, or the relation
+    // unit a `WHERE`-less write declares - and its commit changes what a
+    // repeatable-read view admits only for rows it wrote. There is a
+    // second kind too: a statement whose verdict does not go through the
+    // view at all, which is every `INSERT`, since a caller-named key's
+    // uniqueness is proved by a **physical** descent (`btree.cpp`'s leaf
+    // scan, `heap_chain.cpp`'s tail scan) and an issued one by the mark.
+    // `RepeatableReadWait` is that question, answered at each recording
+    // site because only the site knows.
+    //
     // `waiter` is the transaction the statement runs in, or null in
     // autocommit before one is opened - which is the safest case of all,
     // since a transaction that does not exist holds nothing and re-mints
     // its view by construction.
-    void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t pk);
+    enum class RepeatableReadWait {
+        // The re-run answers what it answered before: the blocker wrote
+        // this row's current version, so a commit is invisible to a view
+        // minted at `BEGIN` and the refusal is the one already owed. Also
+        // the answer wherever the site cannot tell - the table reports
+        // *who* refused a borrow and not *what* they hold, so a statement
+        // that declared a coarse unit and was refused keeps the exclusion
+        // rather than guessing.
+        kFutile,
+        // The re-run may answer differently: the blocker wrote no version
+        // of this key, or the statement's verdict is not a function of the
+        // waiter's view.
+        kCapable,
+    };
+    void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t pk,
+                            RepeatableReadWait rerun);
 
     // Ends a parked write with `refused`, on every channel a client reads.
     // Both endings a park can have - the deadlock victim and the fault net
@@ -1037,6 +1089,28 @@ private:
     // KWP is the default port, so a refusal that sets only the rendered
     // line reaches the debug arm and nobody else.
     void RefuseParkedWrite(DispatchOutcome& out, Session& session, const Status& refused);
+
+    // **The write-block wait, and the two places a statement can meet one**
+    // (AO-S6d, AO-0 item 16). Parks until `out->write_block`'s holder
+    // decides and then re-runs `line` whole, ending at a grant, at the
+    // deadlock verdict, or at the fault net - and on every one of those
+    // `out->write_block` is empty on return, which is what makes a
+    // caller's test of it *after* the call mean "the re-run opened a new
+    // wait" rather than "the old one is still up".
+    //
+    // It is a function because the foreign-key probe arm calls it too.
+    // `DispatchAsync` ran this wait before that arm and never after it, so
+    // a statement that parked on a foreign parent and met a held row on
+    // its resume was refused where the same statement dispatched directly
+    // would have waited - and, inside an explicit transaction, refused
+    // carrying the poison `EndWrite` withholds for a wait still to come,
+    // which is a client told `ERR` over a transaction that then commits.
+    //
+    // `statement_deadline_ns` is in-out and zero means "not taken yet":
+    // the fault net bounds the *statement*, so a second entry inherits the
+    // first one's deadline instead of starting a fresh one.
+    sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
+                                sched::MonoTimeNs* statement_deadline_ns);
 
     // `cur` is the row's own writer, from the tuple header, and decides the
     // **MVCC verdict** (first-updater-wins, `txn.md` §5) - a writer this
@@ -1090,7 +1164,13 @@ private:
     // row: a run that borrowed `[lo, hi)` and was refused must not tell the
     // client that `lo` is held, since the descendant that conflicted may be
     // any key in the window.
-    std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit);
+    //
+    // `rerun` is `NoteBlockingWriter`'s question and is the caller's to
+    // answer, because the unit asked for does not settle it: an `INSERT`
+    // asks for a tuple and may be refused by a fence, and a declared range
+    // may be refused by a tuple holder that wrote the row.
+    std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit,
+                                       RepeatableReadWait rerun);
 
     // Is `cond` a non-negative integer literal compared against `access`'s
     // primary key, and if so which id? The shared half of the test
@@ -2478,6 +2558,31 @@ private:
     // per core (sched.md §3), which is what makes a member the right place
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
+
+    // **The allowance, taken and given back structurally** (AO-S6d).
+    // `CommitAckScope`'s shape, and the argument for it is the one the
+    // `DispatchAsync` site already makes about a hand-placed pair: it is
+    // correct today and silently wrong the day a `co_await` or an early
+    // `co_return` appears between the two lines. There are three of them
+    // now - the statement's own dispatch, the write-block re-run and the
+    // probe arm's resume - and the third sits inside a loop next to a
+    // suspension point, which is exactly the shape the argument names.
+    // Restores rather than clears, so the three cannot come to disagree
+    // about what "off" was.
+    class MayParkScope {
+    public:
+        MayParkScope(CommandDispatcher& owner, bool allowed) noexcept
+            : owner_(owner), saved_(owner.may_park_) {
+            owner_.may_park_ = allowed;
+        }
+        ~MayParkScope() { owner_.may_park_ = saved_; }
+        MayParkScope(const MayParkScope&) = delete;
+        MayParkScope& operator=(const MayParkScope&) = delete;
+
+    private:
+        CommandDispatcher& owner_;
+        bool saved_;
+    };
     // Where the statement now in flight owes a D2 commit's acknowledgement
     // (see `CommitAck`). A member for `may_park_`'s reason; unlike it, the
     // stamp is scoped, because leaking this one drops a durability wait

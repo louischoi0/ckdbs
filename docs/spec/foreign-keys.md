@@ -217,6 +217,24 @@ answered by a process that has lost the enrolment. A window in which
 the coordinator can still commit is a defect, not a documented
 limitation.
 
+**The resume is a statement like any other, waits included** (AO-S6d,
+AO-0 item 16). What comes back from a probe is a fresh whole dispatch, and
+it can meet everything a first dispatch can - a row an undecided
+transaction holds, a range fence over the key it is about to write. Until
+AO-S6d it could not *wait* for any of them: the write-block wait ran before
+this arm and never after it, so a statement that parked on a foreign parent
+was refused where the same statement dispatched directly would have parked,
+and inside an explicit transaction it was refused carrying the poison
+`EndWrite` withholds for a wait still to come - a client told `ERR` over a
+transaction that then commits. The wait now runs over the resumed outcome
+on the same terms as over the first one, and its re-run is a whole
+statement, so the probe it raises is a **new round** of this same loop:
+verdicts held from the rounds before it are dropped, because a verdict is
+"as of the view the probe was answered under" and the point of the wait is
+that the holder has since decided. The lock-wait fault net is taken once
+for the statement rather than once per arm, so a statement that waits, then
+probes, then waits again still ends inside one net.
+
 The peer-writer funding gate (`CheckWriteAffinity`) does not refuse a
 write for carrying a foreign key; the cross-owner check is what
 validates it.

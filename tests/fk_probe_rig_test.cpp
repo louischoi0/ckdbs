@@ -28,9 +28,14 @@ namespace {
 
 using namespace std::chrono_literals;
 
-// Core 0's session: opens a transaction, inserts the parent row, holds it
-// until told how to end - and, when a cell asks for one, runs one more
+// A session that opens a transaction, runs one statement, holds what it
+// took until told how to end - and, when a cell asks for one, runs one more
 // statement straight after (C2 reads the parent row's fate through it).
+//
+// **Two things are held this way** and the only difference is the
+// statement: core 0's parent `INSERT`, and - since AO-S6d - core 1's range
+// fence over the child relation, declared by a `DELETE` whose second
+// conjunct matches nothing so that the unit is taken and no row is written.
 struct ParentWriter {
     Session session;
     DispatchOutcome begin_out;
@@ -42,13 +47,14 @@ struct ParentWriter {
     std::atomic<bool> may_end{false};
     std::atomic<bool> ended{false};
     std::atomic<bool> after_done{false};
+    std::string statement = "INSERT INTO p VALUES (7, 0)";
     std::string ending = "COMMIT";
     std::string after;
 };
 
 sched::Coro WriteParent(CommandDispatcher& d, ParentWriter& p) {
     co_await d.DispatchAsync("BEGIN", &p.session, &p.begin_out);
-    co_await d.DispatchAsync("INSERT INTO p VALUES (7, 0)", &p.session, &p.insert_out);
+    co_await d.DispatchAsync(p.statement, &p.session, &p.insert_out);
     p.holding.store(true, std::memory_order_release);
     p.end_pred = [&p] { return p.may_end.load(std::memory_order_acquire); };
     co_await sched::WaitUntil{&p.end_pred};
@@ -61,20 +67,34 @@ sched::Coro WriteParent(CommandDispatcher& d, ParentWriter& p) {
     co_return Status::OK();
 }
 
-// Core 1's session: an autocommit child insert referencing that parent,
-// started only once the parent is held.
+// Core 1's session: a child insert referencing that parent, started only
+// once the parent is held. Autocommit by default; `in_txn` wraps it in
+// `BEGIN`/`COMMIT`, which is where item 16's defect is `[quiet-wrong]`
+// rather than a missing wait - a blocker recorded on a resume is what tells
+// `EndWrite` to withhold the poison a failed statement owes, so a resume
+// that records one and is never re-run leaves the client told `ERR` over a
+// transaction that then commits. `inserted` is the insert's own end and
+// `done` the session's, which is the whole reason that cell can tell the
+// two apart.
 struct ChildWriter {
     Session session;
+    DispatchOutcome begin_out;
     DispatchOutcome out;
+    DispatchOutcome commit_out;
     std::function<bool()> go_pred;
     std::atomic<bool> go{false};
+    std::atomic<bool> inserted{false};
     std::atomic<bool> done{false};
+    bool in_txn = false;
 };
 
 sched::Coro WriteChild(CommandDispatcher& d, ChildWriter& c) {
     c.go_pred = [&c] { return c.go.load(std::memory_order_acquire); };
     co_await sched::WaitUntil{&c.go_pred};
+    if (c.in_txn) co_await d.DispatchAsync("BEGIN", &c.session, &c.begin_out);
     co_await d.DispatchAsync("INSERT INTO c VALUES (7)", &c.session, &c.out);
+    c.inserted.store(true, std::memory_order_release);
+    if (c.in_txn) co_await d.DispatchAsync("COMMIT", &c.session, &c.commit_out);
     c.done.store(true, std::memory_order_release);
     co_return Status::OK();
 }
@@ -189,6 +209,31 @@ struct FkRig {
         rig->core(1).scheduler().Submit(sched::MakeCoroTask(
             sched::SchedulingGroup::kForeground, WriteChild(rig->core(1).dispatcher(), child)));
         rig->Start();
+    }
+
+    // AO-S6d's shape: the parent **committed** on core 0 before anything
+    // runs, so the probe passes and the only thing the child's resume can
+    // meet is the fence; the fence and the child both on core 1, the fence
+    // taken first. `parent` holds the fence here rather than a parent row -
+    // the struct is the same session-plus-atomics and only the statement
+    // differs, which its own comment says.
+    Status SubmitFenced(const char* ending, bool in_txn = false) {
+        if (Status s = Expect("insert parent",
+                              rig->core(0).dispatcher().Dispatch("INSERT INTO p VALUES (7, 0)")
+                                  .response,
+                              "INSERTED");
+            !s.ok()) {
+            return s;
+        }
+        parent.statement = "DELETE FROM c WHERE id > 0 AND pid = 999";
+        parent.ending = ending;
+        child.in_txn = in_txn;
+        rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground, WriteParent(rig->core(1).dispatcher(), parent)));
+        rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground, WriteChild(rig->core(1).dispatcher(), child)));
+        rig->Start();
+        return Status::OK();
     }
 
     // C1's shape: one session on core 1 does everything.
@@ -360,6 +405,113 @@ TEST(FkProbeRigTest, ADecideThatArrivesDuringAParkAbandonsItAndStrandsNoIntent) 
     EXPECT_EQ(r.parent.after_out.response.rfind("DELETED 1", 0), 0u) << r.parent.after_out.response;
     EXPECT_EQ(r.core0_probes().probe_wait_expiries(), 0u)
         << "the park ran to its deadline rather than ending at the decide";
+}
+
+// ---- AO-S6d item 16: the wait a probe's resume may now make ------------
+//
+// `DispatchAsync` ran the write-block wait before the probe arm and never
+// after it, so a statement that parked on a foreign parent and then met a
+// held row on its resume was refused where the same statement dispatched
+// directly would have waited. Inside an explicit transaction that refusal
+// carried the poison `EndWrite` withholds for a wait still to come, which
+// is a client told `ERR` over a transaction that then commits. All three
+// cells begin from a parent that is already **committed**, so the probe
+// passes and the only thing the resume can meet is the fence.
+
+// The two decides, which differ by one word: a fence holder that commits
+// and one that rolls back both release a window inside which they wrote
+// nothing, so the child's re-run meets the state it would have met had the
+// fence never existed. That is the point of waiting on a holder that is not
+// the row's writer at all.
+//
+// **The mutation**, for both: return the resumed outcome past the wait -
+// drop either `MayParkScope` around the resume or the `AwaitWriteBlock`
+// after it - and the child is refused `TxnConflict` while the fence is
+// still up, so the cell fails at "refused instead of waiting".
+void AChildResumedFromItsProbeWaitsOutAFence(const char* ending) {
+    FkRig r({});
+    ASSERT_NE(r.rig, nullptr);
+    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
+    if (Status submitted = r.SubmitFenced(ending); !submitted.ok()) FAIL() << submitted.message();
+
+    ASSERT_TRUE(
+        KickUntil(*r.rig, 1, [&] { return r.parent.holding.load(std::memory_order_acquire); }))
+        << "the fence was never taken: " << r.parent.insert_out.response;
+    ASSERT_EQ(r.parent.insert_out.response, "DELETED 0")
+        << "the fencing statement must declare a window and write nothing in it: "
+        << r.parent.insert_out.response;
+
+    // The child ships its probe to core 0, which answers at once; the
+    // resume then meets the fence.
+    r.child.go.store(true, std::memory_order_release);
+    EXPECT_FALSE(KickUntil(*r.rig, 1,
+                           [&] { return r.child.done.load(std::memory_order_acquire); }, 800ms))
+        << "the resumed child was refused instead of waiting on the fence: "
+        << r.child.out.response;
+
+    // The wait ends where every wait in this family ends - at the holder's
+    // decide - and the re-run raises a **second** probe, which the arm
+    // below the wait has to collect: a child that answers `INSERTED` is a
+    // child whose second round was waited for rather than discarded.
+    r.parent.may_end.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.parent.ended.load(std::memory_order_acquire); },
+                          3000ms))
+        << r.parent.end_out.response;
+    EXPECT_EQ(r.parent.end_out.response.rfind(ending, 0), 0u) << r.parent.end_out.response;
+    EXPECT_TRUE(KickUntil(*r.rig, 1, [&] { return r.child.done.load(std::memory_order_acquire); },
+                          4000ms))
+        << "the child never resumed after the fence was released";
+    EXPECT_EQ(r.child.out.response.rfind("INSERTED", 0), 0u) << r.child.out.response;
+}
+
+TEST(FkProbeRigTest, AChildResumedFromItsProbeWaitsOutAFenceOnItsOwnCore) {
+    AChildResumedFromItsProbeWaitsOutAFence("COMMIT");
+}
+
+TEST(FkProbeRigTest, AChildResumedFromItsProbeAlsoWaitsOutAFenceThatRollsBack) {
+    AChildResumedFromItsProbeWaitsOutAFence("ROLLBACK");
+}
+
+TEST(FkProbeRigTest, AResumedChildInsideATransactionWaitsRatherThanBeingToldErrAndCommitting) {
+    // Item 16's `[quiet-wrong]` shape. **The mutation**: keep `may_park_`
+    // around the resume and drop the `AwaitWriteBlock` after it. The
+    // blocker is then recorded, `EndWrite` withholds the poison for a wait
+    // that never happens, and the pair below reads `ERR TXN_CONFLICT` for
+    // the INSERT and `COMMIT` for the COMMIT - a transaction told it failed
+    // and committed anyway, which is the failure atomicity txn.md §6
+    // states. The tick is on because this transaction's COMMIT prepares
+    // across cores and a prepare parks on its own device sync.
+    FkRig r(Ticking());
+    ASSERT_NE(r.rig, nullptr);
+    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
+    if (Status submitted = r.SubmitFenced("COMMIT", /*in_txn=*/true); !submitted.ok()) {
+        FAIL() << submitted.message();
+    }
+
+    ASSERT_TRUE(
+        KickUntil(*r.rig, 1, [&] { return r.parent.holding.load(std::memory_order_acquire); }))
+        << r.parent.insert_out.response;
+    ASSERT_EQ(r.parent.insert_out.response, "DELETED 0") << r.parent.insert_out.response;
+
+    r.child.go.store(true, std::memory_order_release);
+    EXPECT_FALSE(KickUntil(*r.rig, 1,
+                           [&] { return r.child.inserted.load(std::memory_order_acquire); },
+                           800ms))
+        << "the resumed child was answered instead of waiting: " << r.child.out.response;
+
+    r.parent.may_end.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.parent.ended.load(std::memory_order_acquire); },
+                          3000ms))
+        << r.parent.end_out.response;
+    ASSERT_TRUE(KickUntil(*r.rig, 1,
+                          [&] { return r.child.done.load(std::memory_order_acquire); },
+                          5000ms))
+        << "the transaction never finished: insert=[" << r.child.out.response
+        << "] commit=[" << r.child.commit_out.response << "]";
+    EXPECT_EQ(r.child.out.response.rfind("INSERTED", 0), 0u)
+        << r.child.out.response;
+    EXPECT_EQ(r.child.commit_out.response.rfind("COMMIT", 0), 0u)
+        << r.child.commit_out.response;
 }
 
 }  // namespace

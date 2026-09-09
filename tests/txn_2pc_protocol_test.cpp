@@ -2377,6 +2377,222 @@ TEST_F(LockDeadlockTest, WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe) {
         << "and it is an ordinary conflict, not a deadlock report: " << wa.out->response;
 }
 
+// ---- AO-S6d item 17: the repeatable-read wait, made exact ---------------
+//
+// `ARepeatableReadWriterIsRefusedRatherThanOfferedANarrowerWait` above is
+// the case that stands: the blocker there is the row's own writer, and a
+// commit makes the row invisible to the waiter's view for the rest of its
+// transaction, so the wait could only ever pay off on the abort arm. These
+// two are the case that does not - a holder of a *unit* over the key that
+// has written no version of it. Its commit changes what this view admits
+// only for rows it wrote, and the row in hand was written by somebody the
+// view has already judged.
+
+TEST_F(LockDeadlockTest, ARepeatableReadWriterWaitsOnAFenceHolderThatWroteNoRow) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+
+    Session rr;
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &rr)
+                  .response.rfind("ERR", 0),
+              std::string::npos)
+        << "the level must be settable for this cell to mean anything";
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &rr).response.rfind("BEGIN", 0), 0u);
+
+    // A holds `[2, 100)` and writes nothing inside it, so row 5's header
+    // still names the committed inserter - a version this view can see.
+    Session a;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 1 AND id < 100 AND v = 99",
+                                    &a)
+                  .response,
+              "UPDATED 0");
+
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 5", rr);
+    Pump();
+    ASSERT_FALSE(*w.done) << "the repeatable-read writer was refused instead of waiting on a "
+                             "holder that wrote no version of its row: "
+                          << w.out->response;
+
+    // **The mutation**: restore the whole-level exclusion in
+    // `NoteBlockingWriter` and this is refused at once, with the assertion
+    // above failing rather than the one below.
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the wait never ended";
+    EXPECT_EQ(w.out->response, "UPDATED 1") << w.out->response;
+    // Read back through the waiter's own commit: it is an explicit
+    // transaction, so until it decides its write is nobody else's to see.
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &rr).response.rfind("COMMIT", 0), 0u);
+    EXPECT_NE(Rows().find(",3"), std::string::npos) << Rows();
+}
+
+TEST_F(LockDeadlockTest, ARepeatableReadWaiterIsStillRefusedIfTheFenceHolderWritesTheRow) {
+    // The half the operator ruled on (2026-09-09, AO-0 item 17): the wait
+    // is offered on what the holder has done *so far*, and a holder is free
+    // to write the row afterwards. The re-run then meets a header naming a
+    // transaction that committed after this view was minted, and is refused
+    // first-updater-wins - the correct repeatable-read answer, reached
+    // after a wait rather than instead of one. What this pins is that the
+    // wait did not widen what the level admits.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+
+    Session rr;
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &rr)
+                  .response.rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &rr).response.rfind("BEGIN", 0), 0u);
+
+    Session a;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 1 AND id < 100 AND v = 99",
+                                    &a)
+                  .response,
+              "UPDATED 0");
+
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 5", rr);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+
+    // Now A writes the row the waiter wants - its own fence does not block
+    // it - and commits.
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 5", &a).response,
+              "UPDATED 1");
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the wait never ended";
+    EXPECT_EQ(StatusFromErrorReply(w.out->response).code(), StatusCode::kTxnConflict)
+        << w.out->response;
+    EXPECT_NE(Rows().find(",9"), std::string::npos)
+        << "the holder's value is what stands: " << Rows();
+}
+
+TEST_F(LockDeadlockTest, ARepeatableReadInsertThatWaitsOnAFenceStillCannotDuplicateAKey) {
+    // The boundary the lift has to be checked against, because it is the
+    // one shape where "the view cannot see the holder's commit" would be a
+    // wrong *answer* rather than a refusal: an INSERT of a caller-named key
+    // that waits on a fence whose holder then inserts that very key.
+    //
+    // It is safe, and not by luck. The uniqueness proof is **physical** -
+    // `btree.cpp`'s descent scans the one leaf that may hold the key and
+    // `heap_chain.cpp`'s scans the tail page, neither of them through a
+    // read view - so a version this repeatable-read session cannot see is
+    // still a key it cannot take. The refusal is `AlreadyExists`, which is
+    // not retryable and says so.
+    ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (10, 0)").rfind("INSERTED", 0), 0u);
+
+    Session rr;
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &rr)
+                  .response.rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &rr).response.rfind("BEGIN", 0), 0u);
+
+    Session a;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("DELETE FROM tb WHERE id > 1 AND id < 100 AND v = 999", &a)
+                  .response,
+              "DELETED 0");
+
+    Started w = Start("INSERT INTO tb VALUES (50, 1)", rr);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+
+    // The holder takes the key the waiter wants - its own fence does not
+    // block it - and commits.
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO tb VALUES (50, 2)", &a)
+                  .response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the wait never ended";
+    EXPECT_NE(w.out->response.find("duplicate primary key"), std::string::npos)
+        << "a repeatable-read insert wrote a key its own view could not see: "
+        << w.out->response;
+}
+
+// ---- AO-S6d item 15: a failed commit unwinds instead of leaking ---------
+//
+// `CommitLocal` has aborted on a failed commit since the DT9 review, and
+// says at the site why merely reporting it is not enough. `EndWrite`'s
+// autocommit arm did not, and the two are the same transaction state: a
+// commit fails only *before* `PublishCommit`, so the transaction is still
+// active and `Release` refuses to free an active one. What the leak cost
+// stopped being memory at AO-S6c-a, which gave every writer a borrow: the
+// leaked transaction's tenancies were never released either, so every
+// later writer of a row it touched waited out the fault net and was told a
+// defect report.
+
+class FailedCommitTest : public LockDeadlockTest {
+protected:
+    // **Strict, because it is the class whose commit record is synced
+    // inside `WalManager::Commit`.** Under `kGroup` the commit stages and
+    // the sync happens at a later drain, where its failure is nobody's
+    // statement; `FailNextSync` under `kStrict` fails the one call
+    // `TransactionManager::Commit` can fail on, which is this arm.
+    wal::DurabilityClass Durability() const override { return wal::DurabilityClass::kStrict; }
+};
+
+TEST_F(FailedCommitTest, AnAutocommitWriteWhoseCommitFailsReleasesEverythingItHeld) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    const std::size_t held_before = locks_->EntryCount();
+
+    log_device_->FailNextSync(Status::IoError("injected"));
+    const DispatchOutcome out = dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id = 5");
+    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u)
+        << "the injected sync failure did not reach the statement: " << out.response;
+    EXPECT_NE(out.response.find("injected"), std::string::npos) << out.response;
+
+    // The three things the leak was: a transaction still in flight, its
+    // borrows still held, and its rows still written.
+    EXPECT_EQ(txns_->ActiveCount(), 0u)
+        << "the transaction whose commit failed is still active";
+    EXPECT_EQ(locks_->EntryCount(), held_before)
+        << "the failed commit left its borrows in the table";
+    EXPECT_NE(Rows().find(",0"), std::string::npos)
+        << "the write the commit never made durable was not compensated: " << Rows();
+
+    // **The mutation**: reinstate the release-only arm and this second
+    // writer parks on a holder nothing will ever decide, reaching the
+    // 11-second fault net and failing here rather than below.
+    Session b;
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 5", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "a later writer of the row is waiting on a transaction that no "
+                             "longer exists: " << wb.out->response;
+    EXPECT_EQ(wb.out->response, "UPDATED 1") << wb.out->response;
+}
+
+TEST_F(FailedCommitTest, AFailedStatementInsideATransactionStillPoisonsAndStillHolds) {
+    // The other arm of `EndWrite`, pinned so the fix above is seen not to
+    // widen: inside an explicit transaction a failed statement does **not**
+    // unwind. Failure atomicity is per transaction (txn.md §6), so the rows
+    // already written stay, the borrows stay with them, and the client must
+    // ROLLBACK.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+    const std::size_t held_before = locks_->EntryCount();
+
+    Session a;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 5", &a).response,
+              "UPDATED 1");
+    // A key below the relation's high-water mark: refused, on a heap
+    // relation, after the write scope is open.
+    const DispatchOutcome refused = dispatcher_->Dispatch("INSERT INTO t VALUES (5, 9)", &a);
+    ASSERT_EQ(refused.response.rfind("ERR ", 0), 0u) << refused.response;
+
+    EXPECT_GT(locks_->EntryCount(), held_before)
+        << "the poisoned transaction gave its borrows back before ROLLBACK";
+    EXPECT_EQ(dispatcher_->Dispatch("SELECT * FROM t", &a).response.rfind("ERR ", 0), 0u)
+        << "the session was not poisoned";
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &a).response.rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(locks_->EntryCount(), held_before);
+    EXPECT_NE(Rows().find(",0"), std::string::npos) << Rows();
+}
+
 // ---- AO-S3b: the mid-statement wait --------------------------------------
 //
 // Everything above waits *between* statements: the statement that meets a
