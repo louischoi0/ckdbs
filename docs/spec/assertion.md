@@ -274,7 +274,22 @@ with identical group-column lists have two.
 All Bound Cabin state for a relation lives on that relation's **owner
 core** and is mutated only within its cooperative event loop. No latches, no
 atomic CAS loops, no cross-core sharing. v1 assertions are single-relation
-(AS8), so the entire protocol is core-local. On a multi-core instance:
+(AS8), so the entire protocol is core-local.
+
+**One thing crossed that line at AO-S6e-c**, and it is worth naming here
+rather than leaving to §6.2: a refused admission may now **wait** for the
+transaction whose reservation refused it, and that wait is recorded in the
+instance's lock table so the wait-for graph can see it. The *state* is
+still core-local and still latch-free — nothing about the directory, the
+groups or the entries is shared — and what is shared is the edge, because
+two transactions can each hold a reservation the other's admission needs
+and a cycle of that shape is real. AR2 D8's `S`/`X` fence over the group's
+slice is **not** what does this and is not built: on this engine the check
+and the reserve run inline in one statement with nothing between them on a
+cooperative core, and the relation's writes run only on its owner, so a
+fence there would guard an interleaving that cannot occur.
+
+On a multi-core instance:
 
 - **`CREATE ASSERTION` on a relation another core owns is built by that
   core.** Core 0 keeps §3.1's checks, the id and the `sys.assertions` row;
@@ -331,17 +346,67 @@ On a checked write (per §4.2), executed inline in the writing statement:
    and subtract their deltas from the group headers. Emit the compensating
    WAL records.
 
-Properties:
+Properties. **Three of these were rewritten at AO-S6e-c** (census row 11,
+`instructions/v3.0.0/workorder-ao-m2-lock-family.md`), which turned the
+last one from an accepted outcome into a wait; what each said before is
+kept beside what it says now, because a property list is cited and a
+silent replacement would leave the citations pointing at the wrong claim.
 
-- **No waiting / no deadlock.** Admission is a pure core-local computation;
-  contenders are serialized by the event loop, never blocked.
-- **Deterministic failure.** The loser of a race fails immediately with a
-  truthful error; there is no retry storm and no livelock.
-- **No false admissions.** Reservations are counted in the aggregate from the
-  moment of admission.
-- **Bounded false rejections.** A statement can be rejected due to a
-  reservation of a transaction that later aborts. This is accepted and
-  documented (identical in spirit to unique-index insertion behavior).
+- **No waiting inside the check; a wait after it.** Admission itself is
+  still a pure core-local computation and contenders are still serialized
+  by the event loop. What changed is what happens *after* a refusal:
+  where the aggregate that refused includes a reservation of a transaction
+  still in flight, the statement waits for that decide rather than
+  failing. It was *"never blocked"*.
+- **Deterministic failure, no retry storm, no livelock.** The half that
+  survives. It was also *"the loser of a race fails **immediately**"*, and
+  that is now false by construction: the loser of a race against an
+  undecided reservation waits for it. The failure it eventually gets is
+  still deterministic and still truthful.
+- **No false admissions.** Unchanged. Reservations are counted in the
+  aggregate from the moment of admission.
+- **A false rejection is a wait, not an outcome — under four conditions,
+  and all four are ordinary.** A statement refused because of a reservation
+  belonging to a transaction that later aborts waits for the decide and is
+  admitted when the reservation goes; when the reservation **commits**, the
+  refusal was true and is delivered then. It was *"bounded false rejections
+  … accepted and documented (identical in spirit to unique-index insertion
+  behavior)"*, and the analogy went with it — a unique index has nothing to
+  wait for.
+
+  The conditions, stated here because this is the bullet that gets cited:
+  the statement must be on a path that can **park** (the synchronous
+  `Dispatch` and the KWP load path's `ExecuteInsert` still refuse at once);
+  it must have **written nothing yet**, so a bulk `INSERT` past its first
+  row and an `UPDATE` past its first written row are refused rather than
+  waited — which is the common case for a bulk statement, not an edge; an
+  `UPDATE` that has already **reserved** for an earlier assertion on the
+  same relation is refused too, because its reservations are invisible to
+  the re-runnability test and a re-run would count them twice; and the wait
+  ends at the lock family's fault net like any other.
+
+The wait is the lock family's, not a mechanism of this protocol's own: it
+is recorded where every other wait in M2 is, so it is bounded by the same
+fault net, refused where it would close a cycle in the same wait-for
+graph, and offered only on a path that can park — the synchronous
+`Dispatch` still answers the violation at once, which is what
+`AssertionEnforceTest`'s own cell pins. The contended resource is a
+**group** and not a row, so a refusal that names a waiter names the
+assertion and never a key, on both arms: an `INSERT`'s id is not issued at
+admission time (the admission runs first so that a refused row burns
+nothing), and an `UPDATE`'s row is the one *being written* rather than the
+one being waited for — the holder of a group reservation may never have
+touched it.
+
+**And reaching the fault net means something different here.** For a row it
+is a defect report (AO-R8): a wait ends at the holder's decide, so the
+clock ending it means a deadlock went undetected or a holder is stuck. A
+group is held for a transaction's length and every writer touching one
+account serialises on it, so the net is reached by ordinary contention. The
+refusal says so rather than sending an operator after a stuck holder.
+Whether a group wait should carry a shorter bound of its own is open —
+AO-0 item 22, deferred to AO-S7 because it interacts with AO-R8's
+one-net-per-statement rule.
 
 ### 6.3 Interaction with MVCC
 

@@ -2593,6 +2593,211 @@ TEST_F(FailedCommitTest, AFailedStatementInsideATransactionStillPoisonsAndStillH
     EXPECT_NE(Rows().find(",0"), std::string::npos) << Rows();
 }
 
+// ---- AO-S6e-c: the bounded false rejection becomes a wait ---------------
+//
+// `assertion.md` §6.2 listed four properties of the admission protocol and
+// accepted a **bounded false rejection** as one of them: "a statement can
+// be rejected due to a reservation of a transaction that later aborts".
+// The owner of that reservation is knowable, so census row 11 turns the
+// rejection into a wait for its decide. What the wait rides is the channel
+// every other wait in this family uses, which is what gives it the wait-for
+// graph - two transactions can each hold a reservation the other's
+// admission needs, and that cycle is real.
+
+TEST_F(LockDeadlockTest, AnAssertionsFalseRejectionWaitsAndIsAdmittedWhenTheReserverAborts) {
+    ASSERT_EQ(Local("CREATE TABLE trades (id int64, account int64, qty int64) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 100")
+                  .rfind("CREATED", 0),
+              0u);
+
+    // The reserver takes 60 of the 100 and holds it undecided.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO trades VALUES (7, 60)", &holder)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    // 50 more would be 110. The aggregate that refuses is 60 of somebody
+    // else's reservation, so the refusal is one a decide can undo.
+    //
+    // **The mutation**: drop the `NoteBlockingWriter` at the admission
+    // site and this is `ERR ASSERTION_VIOLATION` here instead - which is
+    // what `AssertionEnforceTest`'s own cell still asserts on the
+    // synchronous path, where nothing can park.
+    Session rival;
+    Started w = Start("INSERT INTO trades VALUES (7, 50)", rival);
+    Pump();
+    ASSERT_FALSE(*w.done) << "the false rejection was answered instead of waited: "
+                          << w.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the wait never ended";
+    EXPECT_EQ(w.out->response.rfind("INSERTED", 0), 0u) << w.out->response;
+}
+
+TEST_F(LockDeadlockTest, AnAssertionsRejectionIsFinalWhenTheReserverCommits) {
+    // The other decide, and the reason the wait is worth having: the same
+    // statement gets two different *correct* answers depending on how the
+    // reservation ends, and only one of them is the violation. A wait that
+    // ended in the violation either way would be a stall bought for
+    // nothing.
+    ASSERT_EQ(Local("CREATE TABLE trades (id int64, account int64, qty int64) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 100")
+                  .rfind("CREATED", 0),
+              0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO trades VALUES (7, 60)", &holder)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Session rival;
+    Started w = Start("INSERT INTO trades VALUES (7, 50)", rival);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the wait never ended";
+    EXPECT_NE(w.out->response.find("ASSERTION_VIOLATION"), std::string::npos)
+        << "the reservation became the group's real weight, so the refusal is now true: "
+        << w.out->response;
+}
+
+TEST_F(LockDeadlockTest, AnAssertionRejectionWithNothingReservedIsRefusedAtOnce) {
+    // The third answer, and the one that says the wait is not unconditional:
+    // where the aggregate that refuses is **settled**, no decide can change
+    // it and `ReserverOn` names nobody, so the violation is delivered now.
+    ASSERT_EQ(Local("CREATE TABLE trades (id int64, account int64, qty int64) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 100")
+                  .rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("INSERT INTO trades VALUES (7, 60)").rfind("INSERTED", 0), 0u);
+
+    Session rival;
+    Started w = Start("INSERT INTO trades VALUES (7, 50)", rival);
+    Pump();
+    ASSERT_TRUE(*w.done) << "a refusal nothing can undo was waited on anyway";
+    EXPECT_NE(w.out->response.find("ASSERTION_VIOLATION"), std::string::npos) << w.out->response;
+}
+
+TEST_F(LockDeadlockTest, AnUpdateThatHasAlreadyReservedIsRefusedRatherThanWaited) {
+    // **The review's B1, and the cell that would have caught it.**
+    // `AdmitAndReserveUpdate` is per *assertion* and not atomic across
+    // them: when the second refuses, the first is already applied to its
+    // cabin and appended to its chain. A wait re-runs the whole statement,
+    // and the first assertion is reserved a second time - permanently,
+    // because a reservation never enters the transaction's trail, so
+    // `EndWrite`'s re-runnability test cannot see it and both entries are
+    // `kAssertReserve` records a rebuild reproduces.
+    //
+    // So a call that has reserved hands back no reserver, and the statement
+    // gets the violation it always gave. **The mutation**: drop
+    // `reserved_any`, and the `UPDATE` below waits instead of answering -
+    // and after the holder rolls back, `wide`'s aggregate is 30 too high
+    // for the life of the relation.
+    ASSERT_EQ(Local("CREATE TABLE trades (id int64, account int64, qty int64) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+    // `wide` is asked first (creation order) and admits the +30; `tight`
+    // is asked second and refuses it. The two bounds are 10 apart so that
+    // `wide`'s aggregate is observable *below* `tight`'s ceiling - with a
+    // far-apart pair, `tight` shadows `wide` and a double count in `wide`
+    // could not be seen at all.
+    ASSERT_EQ(Local("CREATE ASSERTION wide ON trades GROUP BY (account) CHECK SUM(qty) <= 100")
+                  .rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("CREATE ASSERTION tight ON trades GROUP BY (account) CHECK SUM(qty) <= 90")
+                  .rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("INSERT INTO trades VALUES (7, 10)").rfind("INSERTED", 0), 0u);
+
+    // A reservation of 60 that has not decided: both groups read 70.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO trades VALUES (7, 60)", &holder)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    // 10 -> 40 is +30: `wide` admits it and **reserves**, `tight` refuses.
+    Session rival;
+    Started w = Start("UPDATE trades SET qty = 40 WHERE id = 1", rival);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the update waited after it had already reserved: " << w.out->response;
+    EXPECT_NE(w.out->response.find("ASSERTION_VIOLATION"), std::string::npos) << w.out->response;
+
+    // And the refusal left `wide` where it was. The holder rolls back, so
+    // account 7's only weight is the committed 10 - the update was refused,
+    // so row 1 is still qty 10. 65 more is 75: inside `tight`'s 90 and
+    // inside `wide`'s 100. Had the refused attempt's `wide` reservation
+    // been counted a second time, `wide` would read 40 and refuse this.
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    const std::string probe = Local("INSERT INTO trades VALUES (7, 65)");
+    EXPECT_EQ(probe.rfind("INSERTED", 0), 0u)
+        << "`wide` counted the refused attempt's reservation a second time: " << probe;
+}
+
+TEST_F(LockDeadlockTest, TwoTransactionsWaitingOnEachOthersReservationAreADeadlockAndOneIsTheVictim) {
+    // **The claim the whole sub-stage rests on**, and it had no cell:
+    // riding the family's channel is what gives an assertion wait the
+    // wait-for graph, and the reason that matters is that two transactions
+    // can each hold a reservation the other's admission needs. That cycle
+    // is real, and AO-S4a's detector is what ends it.
+    ASSERT_EQ(Local("CREATE TABLE trades (id int64, account int64, qty int64) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 100")
+                  .rfind("CREATED", 0),
+              0u);
+
+    // Each takes 60 of a different account's 100, so neither refuses the
+    // other yet - and each holds rows, which is what makes an edge *out* of
+    // a holder possible at all.
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO trades VALUES (7, 60)", &a)
+                  .response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO trades VALUES (8, 60)", &b)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    // A now wants B's account and B wants A's: each is refused by the
+    // other's undecided 60, and each waits for it.
+    Started wa = Start("INSERT INTO trades VALUES (8, 50)", a);
+    Pump();
+    ASSERT_FALSE(*wa.done) << "A did not wait on B's reservation: " << wa.out->response;
+
+    Started wb = Start("INSERT INTO trades VALUES (7, 50)", b);
+    Pump();
+    // **The mutation**: take the lock table away and neither edge is
+    // recorded - both stall to the fault net and both are refused as defect
+    // reports, which is the hang AO-R7 exists to convert into a verdict.
+    ASSERT_TRUE(*wb.done) << "the waiter that closed the cycle was not refused";
+    EXPECT_NE(wb.out->response.find("deadlock"), std::string::npos)
+        << "the cycle was ended by something other than the detector: " << wb.out->response;
+    EXPECT_EQ(StatusFromErrorReply(wb.out->response).code(), StatusCode::kTxnConflict)
+        << wb.out->response;
+
+    // The victim is the waiter that closed it; the survivor's wait ends
+    // when that transaction rolls back, which is the contract every other
+    // failed statement inside a transaction has.
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &b).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wa.done) << "A never resumed after its holder rolled back";
+    EXPECT_EQ(wa.out->response.rfind("INSERTED", 0), 0u) << wa.out->response;
+}
+
 // ---- AO-S3b: the mid-statement wait --------------------------------------
 //
 // Everything above waits *between* statements: the statement that meets a

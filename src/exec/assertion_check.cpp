@@ -145,8 +145,39 @@ void AssertionEnforcer::Evict(std::uint64_t assertion_id) {
     // below - the same rule replay's skip has, and for the same reason.
 }
 
+std::uint64_t AssertionEnforcer::ReserverOn(std::uint64_t assertion_id, const std::string& key,
+                                           std::uint64_t exclude_txn) const {
+    for (const auto& [txn_id, reservations] : pending_) {
+        if (txn_id == exclude_txn) continue;  // its own reservations are its own
+        // **The candidate's *net* on this group, not any arrival on it.**
+        // The first draft skipped departures and took the first arrival,
+        // on the reasoning that a departure lowered the aggregate and so
+        // refused nobody. True of a departure alone - and `UPDATE` never
+        // writes one alone: `AdmitAndReserveUpdate` always writes the pair,
+        // so a transaction that *lowered* the group by 49 was still found
+        // by its +1 arrival. Waiting for that one is worse than useless in
+        // both arms - its abort makes the group larger - and the futile
+        // wait puts a live edge in the wait-for graph, where it can make
+        // the innocent holder a deadlock victim.
+        //
+        // A positive net is not a proof that this transaction's decide
+        // admits the waiter; several reservers may each have to go, and the
+        // re-run meets the next one. It is a proof that its abort moves the
+        // group in the direction the waiter needs, which is what the wait
+        // is for.
+        std::int64_t net = 0;
+        for (const Reservation& r : reservations) {
+            if (r.assertion_id != assertion_id || r.key != key) continue;
+            net += r.departure ? -r.value : r.value;
+        }
+        if (net > 0) return txn_id;
+    }
+    return 0;
+}
+
 Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
-                                      std::span<const parser::AstValue> values) {
+                                      std::span<const parser::AstValue> values,
+                                      std::uint64_t writer_txn, std::uint64_t* reserver) {
     auto on = by_oid_.find(oid);
     if (on == by_oid_.end()) return Status::OK();
     for (const std::uint64_t id : on->second) {
@@ -157,6 +188,7 @@ Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
         if (!admitted.ok()) return admitted.status();
         if (!admitted.value().admitted) {
             ++a.counters.violations;
+            if (reserver != nullptr) *reserver = ReserverOn(a.assertion_id, key, writer_txn);
             return Refuse(a, values, 1);
         }
     }
@@ -231,9 +263,31 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
                                                 std::span<const parser::AstValue> old_row,
                                                 std::span<const parser::AstValue> new_row,
                                                 std::uint64_t pk, PageId row_page,
-                                                std::uint16_t row_slot) {
+                                                std::uint16_t row_slot,
+                                                std::uint64_t* reserver) {
     auto on = by_oid_.find(oid);
     if (on == by_oid_.end()) return Status::OK();
+    // **Once this call has reserved, its refusal is not waitable** (the
+    // AO-S6e-c review's B1). This loop is per *assertion* and is not atomic
+    // across them: assertion #1's departure and arrival are applied to its
+    // cabin and appended to its chain before assertion #2 is even asked. A
+    // refusal used to poison the transaction and the mandatory `ROLLBACK`
+    // unapplied them; a wait re-runs the whole statement instead, and
+    // assertion #1 is reserved a **second** time.
+    //
+    // `EndWrite`'s re-runnability test cannot see it: that test reads the
+    // transaction's *trail*, and a reservation never enters the trail -
+    // only heap and var-heap mutations do. So a statement that moved a
+    // Bound Cabin and wrote no row reads as "wrote nothing" and is judged
+    // re-runnable when it is not, and the double count is durable: both
+    // entries are `kAssertReserve` records, `header == Σ(entries)` still
+    // holds, and a rebuild reproduces the wrong aggregate after a mount.
+    //
+    // Withheld here rather than taught to `EndWrite`, which would need the
+    // enforcer's pending count marked at every statement boundary: this is
+    // the one call that reserves before it can refuse, and the honest
+    // answer for it is the violation it always gave.
+    bool reserved_any = false;
     for (const std::uint64_t id : on->second) {
         LiveAssertion& a = live_.at(id);
         const std::string old_key = KeyFor(a, old_row, 0);
@@ -257,6 +311,9 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
                 if (!admitted.ok()) return admitted.status();
                 if (!admitted.value().admitted) {
                     ++a.counters.violations;
+                    if (reserver != nullptr && !reserved_any) {
+                        *reserver = ReserverOn(a.assertion_id, new_key, txn_id);
+                    }
                     return Refuse(a, new_row, 0);
                 }
             }
@@ -269,6 +326,9 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
             if (!admitted.ok()) return admitted.status();
             if (!admitted.value().admitted) {
                 ++a.counters.violations;
+                if (reserver != nullptr && !reserved_any) {
+                    *reserver = ReserverOn(a.assertion_id, new_key, txn_id);
+                }
                 return Refuse(a, new_row, 0);
             }
         }
@@ -286,6 +346,7 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
             !s.ok()) {
             return s;
         }
+        reserved_any = true;
     }
     return Status::OK();
 }

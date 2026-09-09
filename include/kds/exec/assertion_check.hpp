@@ -171,7 +171,13 @@ public:
     // INSERT's admission, pure - run before the row id is allocated, FK's
     // ordering, so a refusal burns nothing. `values` are the statement's
     // VALUES list: columns after the pk, so schema position p is values[p-1].
-    Status AdmitInsert(catalog::Oid oid, std::span<const parser::AstValue> values);
+    //
+    // `reserver`, when given, is filled on a refusal with a transaction
+    // whose reservation is part of what refused it - `ReserverOn`'s answer,
+    // and the caller's cue to wait rather than fail (AO-S6e-c). Left at 0
+    // when the refusing aggregate is settled.
+    Status AdmitInsert(catalog::Oid oid, std::span<const parser::AstValue> values,
+                       std::uint64_t writer_txn = 0, std::uint64_t* reserver = nullptr);
 
     // INSERT's reservation, after placement: the arrival entry, the delta,
     // the ASSERT_RESERVE record. The admission already passed and nothing
@@ -187,7 +193,27 @@ public:
                                  std::uint64_t txn_id, catalog::Oid oid,
                                  std::span<const parser::AstValue> old_row,
                                  std::span<const parser::AstValue> new_row, std::uint64_t pk,
-                                 PageId row_page, std::uint16_t row_slot);
+                                 PageId row_page, std::uint16_t row_slot,
+                                 std::uint64_t* reserver = nullptr);
+
+    // **Who to wait for when an admission is refused** (AO-S6e-c, census
+    // row 11). §6.2 calls a rejection caused by a reservation whose
+    // transaction later aborts a **bounded false rejection** and accepts
+    // it; this is what turns it into a wait instead. Answers a transaction
+    // holding a reservation on `(assertion_id, key)` other than
+    // `exclude_txn`, or 0 when the aggregate that refused is settled - in
+    // which case the refusal is true and no wait could change it.
+    //
+    // Any one of them, not all: the caller waits for that decide and asks
+    // again, and a second reserver is met on the re-run. Whether it is
+    // still in flight is the caller's question, not this one's - the
+    // enforcer holds no transaction manager, and `NoteBlockingWriter` tests
+    // it anyway.
+    //
+    // The scan is over this core's pending reservations, on the refusal
+    // path only: an admitted write never asks.
+    std::uint64_t ReserverOn(std::uint64_t assertion_id, const std::string& key,
+                             std::uint64_t exclude_txn) const;
 
     // DELETE's per-row departure: check-free (AS11), maintenance only.
     Status ReserveDelete(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id,

@@ -288,6 +288,17 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     // wait for; what this one additionally guards is the statement's
     // deadline, which is taken below and would otherwise start running for
     // a caller that had nothing to wait on.
+    // **What the waiter is held by, in words** (AO-S6e-c). A pk of 0 is not
+    // a row: `kFirstRowId` is 1, so zero is a sentinel no key collides
+    // with, and it is what an assertion's admission records - the resource
+    // contended there is a *group*, and on the `INSERT` path the id is not
+    // issued at admission time. Written once and called three times, the
+    // third being the Debug line that printed "row id=0" until the review
+    // counted the sites.
+    const auto held_name = [](std::uint64_t pk) {
+        return pk != 0 ? "row id=" + std::to_string(pk)
+                       : std::string("a bound assertion's group");
+    };
     if (out->write_block.has_value() && txn_ != nullptr && clock_ != nullptr) {
         // **The bound is a fault net, not a ceiling** (AO-R8). Before AO-S3
         // this was `in_doubt_ceiling_ns_`, 200 ms, and reaching it was an
@@ -374,9 +385,9 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             co_await sched::WaitUntil{&decided};
             if (txn_->IsInFlight(block.trx_id)) break;  // the net, not the decision
             if (logging(LogLevel::kDebug)) {
-                log_->Debug("lock", "core " + std::to_string(core_id_) +
-                                        " held a write of row id=" + std::to_string(block.pk) +
-                                        " until transaction " + std::to_string(block.trx_id) +
+                log_->Debug("lock", "core " + std::to_string(core_id_) + " held a write of " +
+                                        held_name(block.pk) + " until transaction " +
+                                        std::to_string(block.trx_id) +
                                         " decided, and is running it again");
             }
             // **The re-run is deliberately not re-stamped**, so it
@@ -422,6 +433,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // what makes the outcome deterministic rather than a race
             // between two transactions to notice.
             const DispatchOutcome::WriteBlock block = *out->write_block;
+            const std::string held = held_name(block.pk);
             // **What is aborted is the statement; the transaction is
             // poisoned and still holds its rows.** Saying "the other
             // proceeds" without saying when would be the convenient
@@ -430,8 +442,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // other failed statement inside a transaction has (PostgreSQL
             // holds locks to transaction end too).
             RefuseParkedWrite(*out, waiting_session,
-                              DeadlockVictim("row id=" + std::to_string(block.pk) +
-                                             ", held by transaction " +
+                              DeadlockVictim(held + ", held by transaction " +
                                              std::to_string(block.trx_id)));
         }
         if (out->write_block.has_value()) {
@@ -451,15 +462,39 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // message: it names the net, so an operator meeting it looks
             // for the fault instead of concluding the row was busy.
             const DispatchOutcome::WriteBlock block = *out->write_block;
+            const std::string held = held_name(block.pk);
+            // **And what reaching it means is not the same sentence for a
+            // group** (the AO-S6e-c review's B3). For a *row* the net is a
+            // defect report, and AO-R8's wording says so. A bound
+            // assertion's group is far coarser - every writer touching one
+            // account serialises on it - so a holder that keeps one for
+            // longer than the net is ordinary contention, and a re-run that
+            // meets a *new* reserver each turn spends the statement's one
+            // deadline on honest churn with nobody stuck at all. Telling
+            // that operator to look for a stuck holder would be the
+            // convenient sentence rather than the true one.
+            //
+            // **What this does not decide**: whether a group wait should
+            // carry a shorter bound of its own. That interacts with AO-R8's
+            // one-net-per-statement rule and is AO-S7's, beside the prices;
+            // AO-0 item 22 records it.
+            const std::string why =
+                block.pk != 0
+                    ? std::string(
+                          "A wait ends when the holder decides, so reaching the net means a "
+                          "deadlock went undetected or a holder is stuck - not that the row "
+                          "was busy")
+                    : std::string(
+                          "A bound assertion's group is held for a transaction's length, so "
+                          "reaching the net here means the group is contended rather than that "
+                          "anything is stuck - retry, or narrow the assertion's grouping");
             RefuseParkedWrite(
                 *out, waiting_session,
                 Status::TxnConflict(
-                    "row id=" + std::to_string(block.pk) + " is held by transaction " +
+                    held + " is held by transaction " +
                     std::to_string(block.trx_id) + ", which has not decided after " +
                     std::to_string(txn::kLockWaitFaultNetNs / 1'000'000'000) +
-                    " s; the write hit the lock-wait fault net and was refused. A wait ends "
-                    "when the holder decides, so reaching the net means a deadlock went "
-                    "undetected or a holder is stuck - not that the row was busy"));
+                    " s; the write hit the lock-wait fault net and was refused. " + why));
         }
     }
     co_return Status::OK();
@@ -7927,7 +7962,32 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // cooperative core, so the answer holds - and in a bulk statement this
     // row's admission sees every earlier row's reservation, which is the
     // intra-statement accumulation BI2 exists to keep.
-    if (Status s = enforcer_.AdmitInsert(oid, body); !s.ok()) {
+    //
+    // **And a rejection a reservation caused is a wait** (AO-S6e-c, census
+    // row 11). `assertion.md` §6.2 called this a *bounded false rejection*
+    // and accepted it: a statement refused because of a delta belonging to
+    // a transaction that later aborts. The delta's owner is knowable -
+    // `ReserverOn` names one - so the statement waits for that decide and
+    // asks again, on exactly the channel every other wait in this family
+    // uses. Its abort releases the delta and the re-run is admitted; its
+    // commit makes the refusal true, and the re-run says so.
+    //
+    // **The wait-for graph is what makes this safe rather than clever**:
+    // two transactions can each hold a reservation the other's admission
+    // needs, and that cycle is a real one - `NoteBlockingWriter` records
+    // the edge and AO-S4a refuses the waiter that would close it.
+    //
+    // `kCapable` without qualification: an admission reads the **live**
+    // aggregate, never the waiter's read view, so the level does not enter.
+    // The pk is 0 because there is none - this check runs before the id is
+    // issued, deliberately, so a refused row burns nothing - and 0 is not a
+    // key any row can have (`kFirstRowId`), which is what lets the wait's
+    // messages say so rather than name row zero.
+    std::uint64_t reserver = 0;
+    if (Status s = enforcer_.AdmitInsert(oid, body, WriterId(scope), &reserver); !s.ok()) {
+        if (reserver != 0) {
+            NoteBlockingWriter(scope.txn, reserver, /*pk=*/0, RepeatableReadWait::kCapable);
+        }
         return ErrorReply(s);
     }
 
@@ -10680,10 +10740,24 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // every other write failure, because "open and usable" cannot be
         // promised once a multi-row statement has partly happened.
         if (enforcer_.AnyOn(ta.oid)) {
+            std::uint64_t reserver = 0;
             if (Status s = enforcer_.AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
                                                            ta.oid, previous, row.value(),
-                                                           id.value(), page_id, slot);
+                                                           id.value(), page_id, slot, &reserver);
                 !s.ok()) {
+                // AO-S6e-c, and the INSERT site states the argument. The pk
+                // *is* known here, so the wait names the row it is for.
+                // **`pk = 0` here too** (the review's B4). The first draft
+                // passed the row's id because it had one, and the message
+                // then read "row id=N is held by transaction M" about a
+                // holder that may never have touched row N - it holds a
+                // *group* reservation. The `INSERT` arm went to the length
+                // of a sentinel to avoid exactly that sentence, and
+                // `assertion.md` §6.2 states the rule for both arms.
+                if (reserver != 0) {
+                    NoteBlockingWriter(scope.txn, reserver, /*pk=*/0,
+                                       RepeatableReadWait::kCapable);
+                }
                 return s;
             }
         }
