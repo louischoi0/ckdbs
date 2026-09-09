@@ -63,7 +63,7 @@ A writer's own cache is not dropped by its own bump: `BumpWord` records
 the new value as what the cache was built at — **only if the cache was
 current**. A cache that is behind the word and bumps it does not adopt,
 so a change it never revalidated against still drops at its next
-boundary; otherwise a peer's own write, once one exists (AT-S3), would
+boundary; otherwise a peer's own write, once one exists (AT-S5), would
 swallow another core's DDL and serve a stale schema for good.
 
 ## CT3 — What a task that asks nothing serves
@@ -90,9 +90,18 @@ still flushes; the engine does not.
 
 Two things, neither an authority (AR0-5 §2, AT-R11): their frames are
 pinned, and page 0's address with the fixed catalog page numbers is
-bootstrap layout. Until AT-S3 the pages have one writer, core 0, and
+bootstrap layout. Until AT-S5 the pages have one writer, core 0, and
 `Revalidate()` is a no-op there — the single writer's `cache_built_at_`
 always tracks the word — so every effective drop the word makes today is
-a peer's. AT-S3 makes a `sys.tables` row borrowable at the tuple unit and
-AT-S5 lets any core write the pages; nothing in this file changes for
-either, which is the point of writing it before them.
+a peer's. AT-S5 lets any core write the pages; nothing in this file
+changes for it, which is the point of writing it before it.
+
+**A catalog row is not a lock unit** (AT-S3, E13 answered no). A named
+key's admission writes the relation's `sys.tables` row - the mark, or the
+key-order flip - outside the caller's transaction and in place under the
+page latch (`heap-and-tuple.md` §4.1: both writes outlive a rollback). A
+tuple `X` on that row would serialise every named-key `INSERT` into a
+relation for the length of each transaction and protect nothing the latch
+does not; what a peer waits on to stop shipping the admission is the page
+write itself, which is `MayWrite`'s arm and AT-S5's. `rules.md` §3 declares
+the pages, not the rows.

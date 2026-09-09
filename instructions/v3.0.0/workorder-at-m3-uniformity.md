@@ -379,9 +379,12 @@ must reach 0 with it counted, not by ignoring it.
 defence (S1) before the word (S2), because §8's quiet-wrong surface opens at
 S2 and its only guard is S1. The word before the catalog borrow (S3),
 because E13 makes `sys.tables` a relation like any other and the cache must
-already be sound. The borrow before the route (S5), because a named-pk
-`INSERT` must have something to wait on before it stops shipping. The route
-before everything that dies with it (S6–S9).
+already be sound. ~~The borrow before the route (S5), because a named-pk
+`INSERT` must have something to wait on before it stops shipping.~~ **Struck
+at AT-S3**: the admission waits on the page latch it already takes, not on a
+row borrow, so S5 needs S2 only - and S4 needs S5, since its persist half is a
+page-0 write the arm S5 retires still forbids (AT-7 items 11, 12). The route before
+everything that dies with it (S6–S9).
 
 **AT-R14 — No stage claims an overhead number it did not measure.** The
 interleaved A/B is suspended by operator decision; a landed stage carries
@@ -413,8 +416,8 @@ AO-S6 did.
 | **AT-S12** | **The prose sweep.** CC11 and CC13 in `crosscore.md`; **`physical-optimizer.md`, which D18's mark names**; the `(M5)` comments **to the rule and not to §3's command** — `tests/` and the bare-`M5` claims of AT-3 A included; `core_runtime.hpp`'s asymmetries 1 and 3 and asymmetry 2's sentence; `Expeditor`'s "core 0 owns the superblock, the free map, the catalog pages and the listener"; `namespace.md`, `sched.md` §5, `rules.md` §3, `page.md` §6, `CLAUDE.md`'s rows | done-conditions written as greps, and **checked as greps** — AO-S8's two done-conditions were grep conditions that did not hold on the first pass, and a grep scoped to `include/ src/` is how this one would repeat that | M | S11 |
 | **AT-S13** | **The prices.** E7's cell, which AO-S7 handed on because C3's shape did not exist on an engine that serialised writes per core — it exists once AT-S5 lands. The `cores = 1` A/B. `ck-tester`, `build-release`, BTREE-only per the 2026-09-08 mark, `git describe` on every number | `bench/v3.0.0/`, one results file, with p0 and p25, a wait breakdown and a delta against this engine's own previous number | M | S5 |
 
-**Order, and why it is not negotiable at three points** (AT-R13): S1 before
-S2; S3 before S5; S5 before S6–S9. Everything else may be resequenced by
+**Order, and why it is not negotiable at two points** (AT-R13, as AT-S3
+corrected it): S1 before S2; S5 before S6–S9. Everything else may be resequenced by
 the operator without breaking an argument.
 
 ---
@@ -428,7 +431,9 @@ the operator without breaking an argument.
 | AT-S2a | **built 2026-09-09** on `m3-at`: the schema version word. `Expeditor` owns one atomic; every core's catalog reads it; `BumpVersion()` bumps it at the catalog write, before the DDL's `X` is released (D21). **Its review found the first draft revalidating at every cached read, which frees a live `TableAccess*` inside a peer's statement on any core-0 DDL** - a join's second bind, an FK loop, a `SHOW` - where the broadcast it replaced dropped only between tasks. Fixed as AT-S2's own row states: revalidate once, at the task boundary, never inside a read - `DispatchAndStage`'s head, five named handlers (`OnStepOpen`, the two FK probe requests, the two build requests), the two `system` ticks (the refill, the Cabin optimizer) and the refill's completion; and `BumpWord` adopts a bump only when the cache was current, so a bump from another core is never swallowed - latent until AT-S3 lets a peer write, as is every drop the change makes: **`Revalidate()` is a no-op on core 0 today**, the single writer, whose `cache_built_at_` always tracks. **A second review found the same class once more** - `kwp_load_server.cpp` held a `Schema&` across the `Dispatch("BEGIN")` that now drops - fixed by copying out before the boundary, and `Dispatch`'s declaration now carries the contract. Retired: the hook, the broadcast, `InvalidateCatalog()` and its three remaining callers, both build services' `on_committed` seams, eighteen fixture calls. **A third review found the fixes correct** and what lagged them - five comments and declarations stating the opposite of the code beside them, a cell that would have crashed where it should fail, test-local word atomics outliving their pointers, the Cabin tick asking above its own off-gate - each fixed; and it named the premise the memo-only drop rests on, one frame table for every core, which `Revalidate()`'s declaration now states. `InvalidateFromPeer` → `DropCache`, kept for the two post-redo drops alone. **Re-scoped**: the four dead kinds, `kCatalogInvalidate`'s enumerator and D25's `static_assert` are AT-S2b's; `docs/spec/catalog.md` and the spec mentions are AT-S2c's. Nine cells; three mutants - `Revalidate` a no-op kills the reader and peer cells, `DispatchAndStage`'s boundary removed kills the rename cell (whose first draft used `CREATE TABLE`, which no memo ever holds, and survived), and `BumpWord`'s guard made unconditional kills the behind-cache cell. **Suite 3393/3393 in 292.45 s** on the tree committed, AT-S1's 3385 plus eight. Overhead not measured |
 | AT-S2b | **built 2026-09-09** on `m3-at`: the strikes. `kExtentLease` (17), `kRelationFaultGrant` (21), `kRelationWriteGrant` (23), `kRelationGrantRequest` (24) - dead since AW-S1b - and `kCatalogInvalidate` (19), whose last producer and handler went at AT-S2a, are struck from the enum, from `IsKnownRingMessageKind` and from the name table, each value left as the record that it was spent (AU-R4, the form AU-S3 set for 20). **D25's freeze is written**: `kRingMessageKinds`, the one list of every kind this build sends or handles, and a `static_assert` on its size at **29** - not the 30 AT-R10 named, because AT-R10 counted the four and this stage strikes the fifth with them. `IsKnownRingMessageKind` searches that list rather than restating it. `tests/coro_test.cpp`'s stand-in kind is `kIndexBuildRequest`. **Suite 3393/3393 in 286.02 s**, AT-S2a's count. **Review owed**: the `critics-developer` pass was terminated by an API rate limit before it reported, and is re-run when the limit resets; landed on the operator's word to commit and push, with the gap named. Overhead not measured |
 | AT-S2c | **built 2026-09-09** on `m3-at`: the prose. `docs/spec/catalog.md` opened, on AR0-5 §2.1's instruction, with the lock-then-word order as CT1, the bump-at-the-write / ask-at-the-boundary rule as CT2, what an unasking task serves as CT3, the one-pool premise as CT4 and what stays special about the pages as CT5. The six spec mentions of the broadcast rewritten - `ddl-transactional.md` (three), `crosscore.md` CC9 and §3, `alter.md` AL5, `drop-table.md` DT5, `keystoneid-k0-findings.md` - and `CLAUDE.md`'s Transactional DDL row names the file. No code. **Review owed**: not run under the session's API limit; run when it resets, landed on the operator's word to commit and push |
-| AT-S3 … AT-S13 | not started; each gated on the operator's word |
+| AT-S3 | **built 2026-09-09** on `m3-at`, and it built no unit: **E13 is answered no.** A named key's admission writes the relation's `sys.tables` row outside the caller's transaction, in place under the page latch (`heap-and-tuple.md` §4.1), so a tuple `X` on the row has no contender the latch does not serialise, and a transaction-length one would serialise every named-key `INSERT` into a relation for nothing - AO-S6e's shape, found by reading the write. What a peer waits on to stop shipping is the page write, `MayWrite`'s arm, AT-S5's. Landed: the declared-shared row for the catalog pages in `rules.md` §3, `catalog.md` CT5's paragraph, one cell pinning that two open transactions' named keys into one relation admit without waiting on each other and leave no catalog-row entry in the ledger. **AT-R13's "the borrow before the route" is corrected** (AT-7 item 11): S3 gates nothing, and S5 may follow S2 directly. `keystone` unchanged: `next_id`'s bump logs and replays as before. **Suite 3394/3394 in 284.05 s.** **Review owed**: not run under the session's API limit; run when it resets, landed on the operator's word to go ahead with S3 once the push landed. Overhead not measured |
+| AT-S4 | **resequenced after AT-S5** (2026-09-09, on the survey below; AT-7 item 12), not started. The shared allocator's *issue* half is a `fetch_add` any core can make, but its *persist* half is a page-0 write - `TrxIdSequence::Carve` makes the raised ceiling durable before it returns a block, and `Catalog::AllocateRowId` bumps `sys.tables.next_id` in place - and `MayWrite`'s last arm forbids that write to every core but 0 until S5 retires it. An S4 built before S5 would keep the persist on core 0 behind a new pre-raise protocol, which is the lease under another name; AR0-5 §2.2's "advance by CAS from whichever task crosses the threshold" assumes S5. The two lease families and their spent refusals stay until then; the peer's first `INSERT` per relation stays retryable exactly as today |
+| AT-S5 … AT-S13 | not started; each gated on the operator's word |
 
 ---
 
@@ -490,6 +495,27 @@ consequence; the evidence is in AT-3.
    socket is in the tree behind `peer_listeners`, and what is missing is the
    credential store's home and the fallback handoff the mark obliges AU-S5
    to list (AT-3 F, AT-R12).
+12. **AR0-5 §7's order puts the shared allocators (S4) before the route
+    (S5), and the tree says the reverse.** A shared allocator has two
+    halves: the issue, a `fetch_add` any core can make, and the persist -
+    `TrxIdSequence::Carve` raising page 0's ceiling durably before it
+    returns a block, `AllocateRowId` bumping `sys.tables.next_id` in place.
+    The persist is a system-page write, which `MayWrite`'s last arm
+    (`device_page_store.cpp`) refuses to every core but 0 until S5 retires
+    the arm with the route. §2.2's "page 0's persisted ceilings advance by
+    CAS from whichever task crosses the threshold" is true only after S5.
+    So S4 follows S5; AT-R13 allows the resequencing, and this is its
+    reason.
+11. **AR0-5 §3's "R5 struck: tuple `X` on the `sys.tables` row, uniformly"
+    and AR2 E13's question both assume the row is a transactional unit.**
+    It is not: the admission's catalog write is an unversioned in-place
+    overwrite under the page latch, outside the caller's transaction
+    (`heap-and-tuple.md` §4.1). What is uniform is the latch, which every
+    core already takes, and what a peer waits on to stop shipping is the
+    page write - `MayWrite`'s last arm, AT-S5's. AT-S3 built no unit and
+    says so (AO-S6e's precedent); AT-R13's "the borrow before the route"
+    ordering dissolves with it - S5 needs S2, S4 and nothing else. AR2 R5's
+    third paragraph stays true until S5 retires the ship.
 10. **AR0-5 §8 overstates what the lock alone gives.** *"DDL's `X` cannot be
     granted while it is held, so a stale parse cannot be executed"* is true
     of a reader that holds the `IS` - the reader-wins direction, which AT-S1

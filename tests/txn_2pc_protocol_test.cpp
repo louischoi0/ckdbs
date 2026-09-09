@@ -2250,6 +2250,44 @@ TEST_F(LockDeadlockTest, ADropWhoseWaitReachesTheFaultNetPoisonsItsTransaction) 
     locks_->Release(reader_id, reader);
 }
 
+// ---- AT-S3: the sys.tables row has no contender the page latch does not serialise --
+//
+// E13 asked whether the relation's `sys.tables` row becomes borrowable at
+// the tuple unit - `X` on the row - so a named-key `INSERT` waits instead
+// of shipping. The answer is no, and this cell pins why. Admitting a named
+// key writes the row's mark or flips its key order **outside the caller's
+// transaction** (`wal::kNoTxnId`; `heap-and-tuple.md` §4.1: "both writes
+// outlive a rollback"), under the page latch - a monotone in-place
+// overwrite, not a row version. A transaction-length `X` on that row would
+// serialise every named-key insert into a relation for the length of each
+// transaction, and protect nothing the latch does not. What a peer waits
+// on to stop shipping is the page write itself, which is `MayWrite`'s last
+// arm and AT-S5's.
+
+TEST_F(LockDeadlockTest, TwoTransactionsNamedKeysIntoOneRelationDoNotWaitOnItsCatalogRow) {
+    ASSERT_EQ(Local("CREATE TABLE nk (id int64, v int64)").rfind("CREATED", 0), 0u);
+
+    Session a;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO nk VALUES (7, 1)", &a).response.rfind("INSERTED", 0),
+              0u);
+    // `a` holds its user row's `X` and has moved the relation's mark. A
+    // second transaction naming another key admits at once: the only thing
+    // it shares with `a` is the catalog row, and nothing borrows that.
+    Session b;
+    Started second = Start("INSERT INTO nk VALUES (8, 1)", b);
+    Pump();
+    ASSERT_TRUE(*second.done) << "a named key waited on another transaction's catalog-row write";
+    EXPECT_EQ(second.out->response.rfind("INSERTED", 0), 0u) << second.out->response;
+
+    // And the ledger holds `a`'s two borrows on the user relation - the
+    // relation `IX` and row 7's `X` (AO-S6a) - and nothing keyed on the
+    // catalog relation, which is the third entry a row `X` would have added.
+    EXPECT_EQ(locks_->EntryCount(), 2u) << "a borrow stands on something other than a's relation and row";
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
 // ---- AT-S1: the declaration moves to the bind ---------------------------
 //
 // AT-R1 (`instructions/v3.0.0/workorder-at-m3-uniformity.md`). Until this
