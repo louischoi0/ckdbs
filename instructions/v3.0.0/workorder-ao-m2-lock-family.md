@@ -99,14 +99,14 @@ still true; `base/latch.hpp`'s includers are `wal/stream.hpp` and
 | 1 | first-updater-wins, `src/txn/manager.cpp:136-155` (the refusal at `:153`) | `TxnConflict` | core-local: every writer of a relation runs on its owner under AM-R1; two sessions on one core conflict at `cores = 1` | **wait** for the holder's decide, then re-check | S3 (statements that wrote nothing), S3b (mid-statement) |
 | 2 | the in-doubt block, `src/server/command_dispatcher.cpp:284-363`; recorded at `:939-944`; the choice at `:10633` (`may_park_ && clock_ != nullptr && txn_->IsInDoubt(cur)`) | a **wait that ends by clock** at `in_doubt_ceiling_ms`, then `TxnConflict` (`:346-352`) | core-local | subsumed by #1: an in-doubt holder is a holder that decides late; the clock-end is exactly what R10 forbids and goes | S3 |
 | 3 | FK forward busy: `include/kds/txn/visibility.hpp:143` → `src/exec/fk_check.cpp:24-25` → `src/server/command_dispatcher.cpp:4625-4630`; the probe's own busy at `src/server/fk_probe_service.cpp:118-121` | `TxnConflict` | a same-core parent: core-local; a shipped probe: cross-core | **wait** for the writer's decide, then re-check — the wait half of F3. D9(a)'s `S` fence is M3's | S3 (same core), S5 (the probe handler parks) |
-| 4 | `IndexBuildPending`, `src/server/core_affinity.cpp:65-74`, caller `src/server/command_dispatcher.cpp:6306` | `TxnConflict` | cross-core: the catalog half on core 0, the build on the owner | **wait** on the relation lock: `CREATE INDEX` holds relation `X`, a writer's `IX` waits | S5, then S6 |
+| 4 | `IndexBuildPending`, `src/server/core_affinity.cpp:40`, caller `src/server/command_dispatcher.cpp:6560` under the `Covers` guard at `:6559` (this row said `core_affinity.cpp:65-74` and `:6306` until AO-S6e-d; both had moved) | `TxnConflict` | cross-core: the catalog half on core 0, the build on the owner | **wait — and not on the relation lock this row proposed.** Built at AO-S6e-a as a park on the owner's own window (`!Covers(oid)`), bounded by `kIndexWindowWaitNs` and falling back to this refusal. The lock cannot serve here: the window's close, the owner's catalog-cache drop and its next admitted write are one ordered event on the owner's reactor, and an `X` released by core 0 at its decide is seen before either ring message is drained | S5, then **S6e-a** |
 | 5 | `RelationWriteRightsPending`, `src/server/core_affinity.cpp:52-63`, caller `command_dispatcher.cpp:6484`; `MayWrite`'s lease/grant arm, `src/storage/device_page_store.cpp:479-488` (the `TxnConflict` branch) and `:804-817` | `TxnConflict` | cross-core: a grant from core 0 | **retired**, not waited: AR2 §8 retires the grant arm "with AM-R1" at M2 — read as *alongside* it, the routing staying (AO-1). What replaces a page's write-right is the page latch and the shared pool (M1); M2 retires the refusal and its grant demand (AO-R14) | S5 |
 | 6 | `CrossCoreWriteRefused`, `src/server/core_affinity.cpp:19-31`, callers `command_dispatcher.cpp:6257`, `:6277`; counted by `CrossCoreWriteCounters` (`include/kds/server/core_affinity.hpp:65-83`, "the residue") | `TxnConflict` | cross-core | **not M2's**: the residue is a statement spanning two owners (M3, AR2 §5.7) and a write inside an explicit transaction, which already ships and enrols (`include/kds/server/command_dispatcher.hpp:2560-2573`). Execution locality is R12, M3's; M2 builds the borrow that makes it legal | M3 |
 | 7 | `CrossCoreReadNotImplemented`, `core_affinity.cpp:33-50`, caller `command_dispatcher.cpp:6914` | `NotImplemented` | cross-core | **not M2's**: local reads are M1's and AN-S2's; the read shapes are AR2 §5.7's | M3 |
 | 8 | `PeerDdlRefused`, `core_affinity.cpp:109-114`, caller `command_dispatcher.cpp:1330` | `Unsupported` | cross-core | **kept**: DDL ships to core 0 (CC13, R12) | — |
 | 9 | `MayWrite`'s system-range arm, `device_page_store.cpp:480-488` (the `InvalidArgument` return at `:488`) and `:811` | `InvalidArgument` | cross-core | **kept** until E13 (M3) | — |
 | 10 | the three spent leases: `src/storage/extent_lease.cpp:139`, `include/kds/catalog/row_id_lease.hpp:114`, `include/kds/txn/trx_id_lease.hpp:65` — all `TxnConflict` since `include/kds/base/status.hpp:145-155` | `TxnConflict` | cross-core: a refill from core 0 | **kept**: allocator authority, retained by AR0-4. The range's id block is R5's borrow and its refill is a ring ask — a message wait, not a lock wait. C2's "6–7 refused `INSERT`s per 10,000 while a range opens" is **not** this class — every logged line is #6's `CrossCoreWriteRefused` (`bench/v3.0.0/results-ar2-c2-spreading-v2.7.0-178-g92cb654.md:252-266`), and AR2 §9 item 1 files it under E13 (M3) | — |
-| 11 | assertion admission: no busy answer at all — `docs/spec/assertion.md:308-320`, `:324-332`; the "bounded false rejection" (`:330-332`, `status.hpp:90-99`) refuses `AssertionViolation`; the build refuses `TxnConflict` on an in-flight writer (`assertion.md:456`, `src/exec/assertion_build.cpp:203`) | `AssertionViolation` / `TxnConflict` | core-local (AS4) | the false rejection becomes a **wait** on the reserving transaction under D8's slice fence (`S` while checking, `X` when changing the group's state); AS4 struck | S6 |
+| 11 | assertion admission: no busy answer at all — `docs/spec/assertion.md:308-320`, `:324-332`; the "bounded false rejection" (`:330-332`, `status.hpp:90-99`) refuses `AssertionViolation`; the build refuses `TxnConflict` on an in-flight writer (`assertion.md:456`, `src/exec/assertion_build.cpp:208`, which this row cited as `:203` until AO-S6e-d) | `AssertionViolation` / `TxnConflict` | core-local (AS4) | the false rejection becomes a **wait** on the reserving transaction — built at AO-S6e-c, on the family's own channel so the wait-for graph sees the edge. **D8's slice fence is not built and is not owed**: the check and the reserve run inline in one statement with nothing between them on a cooperative core, the enforcer is per-core, and a relation's writes run only on its owner, so an `S`/`X` fence over the group would guard an interleaving that cannot occur. AS4's striking is `ar0-architecture-revision.md:416-419`'s, not this row's. **The row's other refusal is untouched**: `CREATE ASSERTION`'s own `TxnConflict` on an in-flight writer stands, and is not this stage's - a build that counted an in-flight row and lost the abort would overstate the group for ever | S6, **admission built at S6e-c; the build's refusal kept** |
 | 12 | the multi-owner statement refusals: `include/kds/server/command_dispatcher.hpp:2602-2606`, `docs/spec/crosscore.md:369-394`, the split gates `include/kds/exec/range_eligible.hpp:83-91` | `NotImplemented` / `TxnConflict` | cross-core | **M3's** (AR2 §5.7, gate by gate) | M3 |
 | 13 | **new, and kept**: R4's cap (E2); the deadlock victim — a new *reason* on `TxnConflict`, R1 aborts the waiter, no new code | `ResourceExhausted`; `TxnConflict` | — | AO-R10, AO-R7 | S1, S4a |
 
@@ -440,7 +440,7 @@ branch, stop.
 | AO-S4a | **D12, same core**: edges in the table; the detector task (core 0, `system`, 100 ms); the victim's abort; the net as a logged fault | a 2-cycle between two sessions on one core: one aborted `TxnConflict` naming deadlock within one cadence, the other proceeds; a 3-cycle; with the detector disabled in the cell, the net fires at 1 s and the log line is asserted | M |
 | AO-S5 | **Cross core**: the table across reactors, the wake and the victim notification as **write-then-kick** (AR0-6-R1 — `kLockWake`/`kLockAbort` are never built, since AU-R4 forbids adding a kind and `WakerTable::Kick` landed at AU-S1), `MayWrite`'s grant arm and `RelationWriteRightsPending` retired; **a deterministic two-`CoreRuntime` rig over a `SimWakerTable`, first** (`SimWaker` until AV-R1's mark of 2026-09-07; the seam is the table) (finding L; `SimRingTransport` was the pre-AR0-6 plan). Gate: AM-S1 (latch order), AM-S2 (shared pool), AN-S2 (view) | a waiter on core 1 woken by a decide on core 0 while core 1's reactor sleeps (`sched_wakes_received` moves); with every kick delayed to the sim waker's maximum the waiter still proceeds; at the store, `MayWrite` admits a page its lease/grant arm refused at `9e5068c`, under the lock — owner routing still in force (AO-1), so the cell is the store's, not dispatch's | L |
 | AO-S4b | **D12, cross core**: core 0's detector over edges from every core; a victim on a peer aborted by message | a 2-cycle across two cores resolved within one cadence | M |
-| AO-S6 | **The units**: relation `X` for DDL (`IndexBuildPending` → wait), D8's slice fence (AS4 struck), `IS` at the slice (R14) with R13's gate, the range key | `CREATE INDEX` waits for an open writer and proceeds after its commit; a writer arriving during the build waits; an assertion's bounded false rejection admits after the reserver aborts; `DROP TABLE` waits for a positioned reader on a peer; a slice fence survives a leaf division | L |
+| AO-S6 | **The units** as proposed: relation `X` for DDL (`IndexBuildPending` → wait), D8's slice fence (AS4 struck), `IS` at the slice (**AO-R12** — this row said "(R14)" and §AO-S6e said "R13's gate"; R13 is "M2 logs nothing and changes no format" and has no gate, corrected at AO-S6e-d), the range key. **What landed, across S6a..S6e**: the tuple and range units decide rather than record, and two refusals became waits — and **none of the three units this row names was built**, each for a reason its sub-stage states rather than a gap. The range key was never this stage's; census row 10 keeps it | `CREATE INDEX` waits for an open writer and proceeds after its commit; a writer arriving during the build waits; an assertion's bounded false rejection admits after the reserver aborts; `DROP TABLE` waits for a positioned reader on a peer; a slice fence survives a leaf division | L |
 | AO-S7 | **C3** (AR2 §9 step 5) under `bench/README.md`'s five rules, and the price of R3's relation-level key | one results file per cell under `bench/v3.0.0/`, `git describe --tags` in each; E7's default and E12's price read from them, not decided | M |
 | AO-S8 | **Prose**: `txn.md` §1 (AR0-M1's four texts) and §5; `heap-and-tuple.md:95`; `assertion.md` AS4/§6; `foreign-keys.md` F3 and §5's first bullet; `sched.md` §9-2; `rules.md`'s row loses its "not built" parenthetical and moves to `txn.md` §5, and the four documents that still say "the fourth row" are corrected (`ar0-architecture-revision.md:370`, `workorder-an-read-view.md:84`, `ratification-an-commit-order.md:168-169`, `workorder-am-m1-shared-pool.md:66,226`); `ring_transport.hpp:16-19`; `include/kds/txn/manager.hpp:22-28`; `keystone.hpp:23-29`; AR2-R2's "CAS on the byte"; `client-manual.md`, `server.md:100`; `CLAUDE.md`'s Transactions row | no spec says "no lock manager"; every lock in the reactor is in §9-2's list | M |
 
@@ -487,7 +487,8 @@ forbids for a stage's lifetime.
 | AO-S6e | **Opened 2026-09-09** on `ao-s6e-units` at `68fae89`: the stage document only - the survey of the four units, the split into S6e-a..d, the AO-S6 row's five cells mapped onto them, and AO-0 items 18-21. **No code**, and the suite not executed and not claimed. Every sub-stage is gated on one of the four items, which is why the document opens the stage rather than a first sub-stage doing it. **Revised the same day** after a `critics-developer` pass over the draft: the survey's load-bearing finding held, two of its claims about what S6a..S6c already wired were false and re-size (a) and (c), item 19's `[quiet-wrong]` justification was refuted three ways and its grounds are withdrawn, and item 20 loses its motivation with them - both go back to the operator. AO-S6e-a is **blocked** on a finding of CLA's own that the ratified item 18 does not reach: the owner's window close, its catalog-cache drop and its next admitted write are one ordered event on the owner's reactor (`core_runtime.cpp:685-687`), and a relation `X` released on core 0 at the decide does not reproduce it. The survey's finding that held: **no transaction spans a cross-core `CREATE INDEX`** - `BeginForeignIndexBuild` refuses inside an explicit transaction and runs outside `InDdlStatement`, phase 2 opens a scope of its own - so census row 4's "`CREATE INDEX` holds relation `X`" has nothing to hold it, and item 18 is what to do about that |
 | AO-S6e-a | **Built 2026-09-09** on `ao-s6e-units` from `68fae89`: census row 4's **outcome** with none of its mechanism. A write on the owner that meets an open index-build window used to be refused `TxnConflict`; on a served connection it now parks on `!Covers(oid)` and runs the statement whole when the window closes, and the refusal survives only on the synchronous path that has no reactor to park on - `write_block`'s division exactly. **The relation `X` census row 4 names is not built**, and the reason is the stage document's §"AO-S6e-a is blocked": `OnDone` closes the window and *then* drops the catalog cache, in one handler, before the next task is polled, so the park cannot observe the close without the drop - while a lock released on core 0 at the DDL's decide is seen on the owner before either ring message is drained and would admit the unindexed write the window exists to prevent. The sub-stage came out **S, not L**: one member, one outcome field, one arm, one cell. `ddl-transactional.md` §5e and `crosscore.md` carry the behaviour. **The park is bounded by `kIndexWindowWaitNs`**, half `kShippedStatementDeadlineNs` and asserted against it, taken once for the statement and falling back to the gate's own refusal - the review's C1, C2 and C4 in one constant - and the two waits run in **one loop** rather than two arms (C3), with the foreign-key probe arm calling it beside item 16's (C5). One cell, mutation-checked (drop the record and the write is refused `PW1c-6b` while the window is open), and it now also asserts the row is **in the index** afterwards, which is the only reason the window exists; its control is the pre-existing `ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublishedByCore0`, whose synchronous refusal is unchanged. **One gap stated rather than closed**: the wait is invisible to `SHOW META` - an operator who saw an error line now sees a stall - and a counter is client-visible surface. **Overhead not measured** |
 | AO-S6e-c | **Built 2026-09-09** on `ao-s6e-units` from `4efe0e7`, census row 11: a refused admission now **waits** for the transaction whose reservation refused it. `AssertionEnforcer::ReserverOn` names one from `pending_` - arrivals only, a departure having lowered the aggregate and so refused nobody, and never the writer's own - and the two admitting entry points hand it back on a refusal; the dispatcher records it through `NoteBlockingWriter`, so the wait rides the family's channel and gets the wait-for graph with it. **The graph is why that matters rather than being tidy**: two transactions can each hold a reservation the other's admission needs, and AO-S4a refuses the waiter that would close it. `kCapable` unqualified - an admission reads the live aggregate and never the waiter's view. **The `S`/`X` slice fence census row 11 names is not built**, and the reason is the one item 19 was withdrawn for: it has no contender. The check and the reserve run inline in one statement with nothing between them on a cooperative core - `InsertOneRow`'s own comment says so - the enforcer is a dispatcher member and so per-core, and a relation's writes run only on its owner. **A pk of 0 is the sentinel** for "the contended thing is not a row": `kFirstRowId` is 1, the `INSERT` path has no id at admission time by design, and the two wait refusals name the assertion's group instead of row zero. `assertion.md` §6.1 and §6.2 rewritten - three of the four properties, each keeping what it said before beside what it says now. **The `critics-developer` pass found two defects this change made, and they are closed here.** *B1*: `AdmitAndReserveUpdate` is per-assertion and not atomic across them, so a refusal by the second leaves the first already applied to its cabin and its chain - and `EndWrite`'s re-runnability test reads the transaction's **trail**, which a reservation never enters, so the statement read as re-runnable and the re-run counted the first assertion twice, durably (both entries are `kAssertReserve`, `header == Σ(entries)` still holds, a rebuild reproduces it). A call that has reserved now hands back no reserver and gives the violation it always gave. *B2*: `ReserverOn` skipped departures and took any arrival, but an `UPDATE` always writes the pair - so a transaction that *lowered* the group by 49 was found by its +1 and waited on, futilely in both arms and with a live edge that could make the innocent holder a deadlock victim; it nets the candidate's contributions now and names one only when the net is positive. Three more: the `UPDATE` arm named a row its holder may never have touched (`pk = 0` there too), the Debug line still printed `row id=0`, and the fault net told an operator to look for a stuck holder on what is ordinary group contention (AO-0 item 22 records what that leaves open). **Five cells**, mutation-checked - the two the review asked for are the `UPDATE`-arm cell, which is what would have caught B1, and the two-transaction reservation cycle, which pins the claim the sub-stage rests on; the control is `AssertionEnforceTest`'s own synchronous cell, which still gets the violation at once and is unchanged. Suite **3365/3365 green in 166.22 s**. **Overhead not measured** |
-| AO-S6e-b, AO-S6e-d, AO-S7..S8 | not started; (b) is deferred to AO-S7 with items 19 and 20 |
+| AO-S6e-d | **Built 2026-09-09** on `ao-s6e-units` from `9b1dad3`, and it is prose only. Census row 4's two citations were stale and its fate half-wrong (the wait landed, the relation lock did not); row 11's `assertion_build.cpp:203` was inside a comment, its fate put the conversion under a fence that turned out to have no contender, and its *other* refusal - `CREATE ASSERTION`'s own - is untouched and was not said to be. The AO-S6 row named four units and **none of the three that were this stage's was built**; the fourth was never its own. The `IS` ruling was cited three ways - "(R14)", "R13's gate", and R12's own "R13's M2 consumer" - and R13 has no gate; all three now say **AO-R12**. AO-S6e-c gained the section the sizing table was already pointing at. **The close**: the stage delivered two waits and no new unit, and its three reasons are one reason - every unit it was asked to add had no contender, or one the unit could not have served. That question goes to AO-S7 beside the prices. No code; the suite not executed for this row and not claimed |
+| AO-S6e-b, AO-S7..S8 | not started; (b) is deferred to AO-S7 with items 19 and 20 |
 
 ---
 
@@ -946,7 +947,8 @@ read from the other side.
 
 The AO-S6 row's units, unchanged: relation `X` for DDL
 (`IndexBuildPending` → wait), D8's slice fence and `IS` at the slice under
-R13's gate, the `DROP TABLE` wait on a positioned peer reader. It inherits
+**AO-R12**'s gate (this said R13's, which has none — AO-S6e-d), the
+`DROP TABLE` wait on a positioned peer reader. It inherits
 nothing carried, which is the point of ordering them this way. C3's
 cross-unit wake and C4's mutual-refusal bias are still not here: both exist
 only to move the park from polling `IsInFlight` to a lock slot, and whether
@@ -964,7 +966,7 @@ kept here rather than quietly fixed: a plan is cited by everything built
 from it, so a claim it got wrong is worth as much on the record as one it
 got right.
 
-**Status: drafted; AO-S6e-a built, AO-S6e-b deferred.** AO-0 items 18–21 were ratified
+**Status: closed 2026-09-09 at AO-S6e-d.** AO-S6e-a and AO-S6e-c built, AO-S6e-b deferred. AO-0 items 18–21 were ratified
 2026-09-09 (*"18-21 전부 제안대로 채택"*), and two of them were ratified on
 reasons that did not survive the review — §"What the review took back"
 says which, and those two go back to the operator. AO-S6e-a is blocked on
@@ -1183,6 +1185,45 @@ before the next task is polled. So the park cannot observe the close
 without the cache drop. That is not a property a lock could be given
 without C3.
 
+### AO-S6e-c, and where the fence went
+
+`AO-S6e-a` has a section above because it was **blocked** and the block
+needed arguing. `AO-S6e-c` was not blocked, and its section exists for the
+opposite reason: the sizing table says the slice fence "is not built, and
+the sub-stage says why", and a row in a table is not where a reader looks
+for a why.
+
+**The wait was built; the fence was not, and is not owed.** Census row 11
+put the false rejection's conversion *"under D8's slice fence (`S` while
+checking, `X` when changing the group's state)"*. The conversion landed on
+the lock family's own wait channel instead, which is what gives it the
+wait-for graph — and the graph is load-bearing here in a way it is not for
+the other units, because two transactions can each hold a reservation the
+other's admission needs and that cycle is real.
+
+The fence has no contender, and this is the third time this stage reached
+that sentence:
+
+- The check and the reserve run **inline in one statement** with nothing
+  between them on a cooperative core. `InsertOneRow`'s own comment says so
+  where the two calls sit: *"nothing runs between the two on a cooperative
+  core, so the answer holds"*. `AdmitAndReserveUpdate` does both inside one
+  synchronous call.
+- The enforcer is a `CommandDispatcher` member, so **one per core**, and
+  the affinity gate keeps a relation's writes on the core that holds its
+  live cabin.
+- There is no fourth path: the sorted fill is gated on
+  `!enforcer_.AnyOn(oid)`, and `ExecuteInsert` shares `InsertOneRow`.
+
+So an `S`/`X` fence over the group would serialise against an interleaving
+that cannot occur. What the sub-stage's review *did* find is that the
+absence of a fence is not the same as the absence of an ordering
+obligation: `AdmitAndReserveUpdate` reserves for one assertion before it
+can refuse for the next, and the transaction's trail — which is what
+`EndWrite` reads to decide whether a statement is re-runnable — cannot see
+a reservation. That is a real ordering fact, and it is closed by refusing
+rather than waiting once anything has been reserved, not by a lock.
+
 ### What the review took back
 
 Two of the four ratified items were ratified on CLA's reasoning, and the
@@ -1230,6 +1271,37 @@ when no `done` arrives, so the user-visible change is two facts (60 s → 11 s
 and 180 s → 11 s), not one. And "a DDL transaction open across a ring round
 trip" understates the shape: a peer's `CREATE INDEX` ships to core 0
 (`command_dispatcher.cpp:1514-1558`), so it would be open across **two**.
+
+### AO-S6e's close
+
+**The stage delivered two waits and no new unit**, and that sentence is the
+whole of it. `IS` is still taken nowhere, there is still no slice-unit
+borrow and no `S` mode on any unit, which is exactly what the survey found
+absent when the stage opened.
+
+The three reasons turned out to be one reason. Every unit this stage was
+asked to add had **no contender, or a contender the unit could not have
+served**:
+
+- The relation `X` for `CREATE INDEX` had a contender — a peer writer — and
+  could not serve it: the ordering the window has, close-then-invalidate on
+  the owner's own reactor, is not a property a lock released on core 0 can
+  be given without C3. AO-S6e-a took the wait and left the lock.
+- The `IS` at the slice was argued for a **mover**, and AO-R12 says in its
+  own text that no mover exists; the reader it would protect already gets
+  correct rows (DT1) and a clean error (the post-park re-bind). Deferred to
+  AO-S7 with items 19 and 20, where a number can decide it.
+- The slice fence for the assertion check had no interleaving to fence: the
+  check and the reserve run inline in one statement with nothing between
+  them on a cooperative core, and the site's own comment says so. AO-S6e-c
+  took the wait and left the fence.
+
+What that leaves for AO-S7 is not only the price of what was built. It is
+the question this stage kept meeting from three directions: **which of
+AR2's units has a contender on this engine at all**, now that ownership
+routing puts one writer on a relation and the reactor serialises what runs
+on a core. C3 is on that list too, since it is what a lock would need
+before it could hold anything across a round trip.
 
 ### What AO-S6e does not do, stated so it is not read as forgotten
 
