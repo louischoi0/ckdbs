@@ -8,7 +8,15 @@ their later lines by one. Written against
 `instructions/v3.0.0/ar2-architecture-revision-borrow-model.md` (AR2) and
 the operator's ratification `raft-ar2-A.md` (AR2-A).
 
-**Status: AO-S0 lands now; no code stage starts before the operator's
+**Status: CLOSED 2026-09-09. Every stage AO-S0..AO-S8 is done and AR0's
+M2 is complete** — §AO-8 is the close, and it is where a reader should start:
+what M2 delivered, what it measured, what it carries forward and what it
+opens. The stage rows in AO-6 are the detail, and AO-0's table is where the
+three items AO-S6e raised and nobody decided still sit.
+
+*(The line below is what this header said until the close, kept because a
+work order records what was true when it was ordered.)* **Status: AO-S0
+lands now; no code stage starts before the operator's
 word.** AR2-A §6 (`raft-ar2-A.md:97-102`) starts no prototype, and AR2-A §1
 (`:20-21`) opens M2 when M1 (AM) and AN-S2 close. At `9e5068c` AM-S1..S6 are
 not started (`workorder-am-m1-shared-pool.md:235`) and AN-S2 is gated on
@@ -488,7 +496,7 @@ forbids for a stage's lifetime.
 | AO-S6e-a | **Built 2026-09-09** on `ao-s6e-units` from `68fae89`: census row 4's **outcome** with none of its mechanism. A write on the owner that meets an open index-build window used to be refused `TxnConflict`; on a served connection it now parks on `!Covers(oid)` and runs the statement whole when the window closes, and the refusal survives only on the synchronous path that has no reactor to park on - `write_block`'s division exactly. **The relation `X` census row 4 names is not built**, and the reason is the stage document's §"AO-S6e-a is blocked": `OnDone` closes the window and *then* drops the catalog cache, in one handler, before the next task is polled, so the park cannot observe the close without the drop - while a lock released on core 0 at the DDL's decide is seen on the owner before either ring message is drained and would admit the unindexed write the window exists to prevent. The sub-stage came out **S, not L**: one member, one outcome field, one arm, one cell. `ddl-transactional.md` §5e and `crosscore.md` carry the behaviour. **The park is bounded by `kIndexWindowWaitNs`**, half `kShippedStatementDeadlineNs` and asserted against it, taken once for the statement and falling back to the gate's own refusal - the review's C1, C2 and C4 in one constant - and the two waits run in **one loop** rather than two arms (C3), with the foreign-key probe arm calling it beside item 16's (C5). One cell, mutation-checked (drop the record and the write is refused `PW1c-6b` while the window is open), and it now also asserts the row is **in the index** afterwards, which is the only reason the window exists; its control is the pre-existing `ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublishedByCore0`, whose synchronous refusal is unchanged. **One gap stated rather than closed**: the wait is invisible to `SHOW META` - an operator who saw an error line now sees a stall - and a counter is client-visible surface. **Overhead not measured** |
 | AO-S6e-c | **Built 2026-09-09** on `ao-s6e-units` from `4efe0e7`, census row 11: a refused admission now **waits** for the transaction whose reservation refused it. `AssertionEnforcer::ReserverOn` names one from `pending_` - arrivals only, a departure having lowered the aggregate and so refused nobody, and never the writer's own - and the two admitting entry points hand it back on a refusal; the dispatcher records it through `NoteBlockingWriter`, so the wait rides the family's channel and gets the wait-for graph with it. **The graph is why that matters rather than being tidy**: two transactions can each hold a reservation the other's admission needs, and AO-S4a refuses the waiter that would close it. `kCapable` unqualified - an admission reads the live aggregate and never the waiter's view. **The `S`/`X` slice fence census row 11 names is not built**, and the reason is the one item 19 was withdrawn for: it has no contender. The check and the reserve run inline in one statement with nothing between them on a cooperative core - `InsertOneRow`'s own comment says so - the enforcer is a dispatcher member and so per-core, and a relation's writes run only on its owner. **A pk of 0 is the sentinel** for "the contended thing is not a row": `kFirstRowId` is 1, the `INSERT` path has no id at admission time by design, and the two wait refusals name the assertion's group instead of row zero. `assertion.md` §6.1 and §6.2 rewritten - three of the four properties, each keeping what it said before beside what it says now. **The `critics-developer` pass found two defects this change made, and they are closed here.** *B1*: `AdmitAndReserveUpdate` is per-assertion and not atomic across them, so a refusal by the second leaves the first already applied to its cabin and its chain - and `EndWrite`'s re-runnability test reads the transaction's **trail**, which a reservation never enters, so the statement read as re-runnable and the re-run counted the first assertion twice, durably (both entries are `kAssertReserve`, `header == Σ(entries)` still holds, a rebuild reproduces it). A call that has reserved now hands back no reserver and gives the violation it always gave. *B2*: `ReserverOn` skipped departures and took any arrival, but an `UPDATE` always writes the pair - so a transaction that *lowered* the group by 49 was found by its +1 and waited on, futilely in both arms and with a live edge that could make the innocent holder a deadlock victim; it nets the candidate's contributions now and names one only when the net is positive. Three more: the `UPDATE` arm named a row its holder may never have touched (`pk = 0` there too), the Debug line still printed `row id=0`, and the fault net told an operator to look for a stuck holder on what is ordinary group contention (AO-0 item 22 records what that leaves open). **Five cells**, mutation-checked - the two the review asked for are the `UPDATE`-arm cell, which is what would have caught B1, and the two-transaction reservation cycle, which pins the claim the sub-stage rests on; the control is `AssertionEnforceTest`'s own synchronous cell, which still gets the violation at once and is unchanged. Suite **3365/3365 green in 166.22 s**. **Overhead not measured** |
 | AO-S6e-d | **Built 2026-09-09** on `ao-s6e-units` from `9b1dad3`, and it is prose only. Census row 4's two citations were stale and its fate half-wrong (the wait landed, the relation lock did not); row 11's `assertion_build.cpp:203` was inside a comment, its fate put the conversion under a fence that turned out to have no contender, and its *other* refusal - `CREATE ASSERTION`'s own - is untouched and was not said to be. The AO-S6 row named four units and **none of the three that were this stage's was built**; the fourth was never its own. The `IS` ruling was cited three ways - "(R14)", "R13's gate", and R12's own "R13's M2 consumer" - and R13 has no gate; all three now say **AO-R12**. AO-S6e-c gained the section the sizing table was already pointing at. **The close**: the stage delivered two waits and no new unit, and its three reasons are one reason - every unit it was asked to add had no contender, or one the unit could not have served. That question goes to AO-S7 beside the prices. No code; the suite not executed for this row and not claimed |
-| AO-S7 | **Opened 2026-09-09** on `ao-s7-prices` at `5e94dc8`: the order only, and deliberately so - `raft-marks-2026-09-08.md` §4 obliges the spin's switch condition to be written **before** S7 runs rather than read off its result, so §AO-S7 carries it and waits for the mark. **Nothing measured.** Three survey findings shape it: the CLAUDE.md suspension is the per-step *gate* and does not reach a stage whose deliverable is results files (AM-S6, AN-S5 and AR2 C1/C2 all ran under it); **no driver serves C3's contended arm** - `multicore_benchmark.py` measures non-interfering relations and says parity is the honest expectation - so one must be written, which `bench/README.md` warns about (item 23); and **item 19's number cannot be measured on the engine at all**, nothing taking an `IS`, so it is a decomposition or a build-then-revert (item 24). Items 20 and 22 are carried here but are not measurements, and the order says so rather than leaving them to be looked for among the files. Five cells named, all under `bench/README.md`'s five rules. **Items 23, 24 and the mark ratified the same day, and the cells ran**: one results file at `bench/v3.0.0/results-ao-s7-c3-v2.7.0-304-g5e94dc8.md`, four raw summaries archived, a new driver `tools/lock_contention_benchmark.py` proved against its controls before it priced anything. **C3's shape does not exist on this engine** - the owner core serialises before the tuple lock is reached, so hot minus disjoint is +3.3/+1.0/-1.4 µs across three runs, each inside its floor, with zero refusals at 8 and 32 sessions. The spin is not tried, the partition sweep is not run and the file says why, the cap stops being provisional, and E7 is **not** decided because there is no win or loss to read off. Two unasked findings: `group` durability is 82-85% of an update, so the marked cell cannot answer its own question; and the no-family binary exited at startup on its first build, `locks_->SetWakeRegistry` being unguarded. E12's price is an extrapolation and is labelled one. The suite not executed for this row and not claimed |
+| AO-S7 | **Opened 2026-09-09** on `ao-s7-prices` at `5e94dc8`: the order only, and deliberately so - `raft-marks-2026-09-08.md` §4 obliges the spin's switch condition to be written **before** S7 runs rather than read off its result, so §AO-S7 carries it and waits for the mark. **Nothing measured.** Three survey findings shape it: the CLAUDE.md suspension is the per-step *gate* and does not reach a stage whose deliverable is results files (AM-S6, AN-S5 and AR2 C1/C2 all ran under it); **no driver serves C3's contended arm** - `multicore_benchmark.py` measures non-interfering relations and says parity is the honest expectation - so one must be written, which `bench/README.md` warns about (item 23); and **item 19's number cannot be measured on the engine at all**, nothing taking an `IS`, so it is a decomposition or a build-then-revert (item 24). Items 20 and 22 are carried here but are not measurements, and the order says so rather than leaving them to be looked for among the files. Five cells named, all under `bench/README.md`'s five rules. **Items 23, 24 and the mark ratified the same day, and the cells ran**: one results file at `bench/v3.0.0/results-ao-s7-c3-v2.7.0-304-g5e94dc8.md`, four raw summaries archived, a new driver `tools/lock_contention_benchmark.py` proved against its controls before it priced anything. **C3's shape does not exist on this engine** - the owner core serialises before the tuple lock is reached, so hot minus disjoint is +3.3/+1.0/-1.4 µs across three runs, at or just above their own floors rather than inside them (the phrasing corrected at AO-8, the conclusion unchanged), with zero refusals at 8 and 32 sessions. The spin is not tried, the partition sweep is not run and the file says why, the cap stops being provisional, and E7 is **not** decided because there is no win or loss to read off. Two unasked findings: `group` durability is 82-85% of an update, so the marked cell cannot answer its own question; and the no-family binary exited at startup on its first build, `locks_->SetWakeRegistry` being unguarded. E12's price is an extrapolation and is labelled one. The suite not executed for this row and not claimed |
 | AO-S8 | **Built 2026-09-09** on `ao-s8-prose` from `5ccd7b7`, prose only. Both done-conditions met and checked by grep: **no spec says "no lock manager"** (the two hits left are the corrections quoting what they replaced, which is this tree's style), and **every lock in the reactor is in `sched.md` §9-2's list** - the lock table's partition latch joined it with its order, including the one a reader should not have to derive, *released before any park*. `rules.md` §3's row **moved to `txn.md` §5**, which is §3's own rule about where a declared-shared structure is declared. **The Keystone lock byte is no longer called a lock** anywhere: `wal.md` §2 said "row locking is the Keystone lock byte", `assertion.md`, `txn.md` §5 and `keystone.hpp` each said it stays unused without saying that AO-R3 made that permanent. `ring_transport.hpp`'s "no shared engine state, no atomics outside ring indices" is narrowed to what the seam still guarantees - no engine path *sends* to a peer except through it - AR0-2 having retired the rest. `manager.hpp`'s "no lock manager, no waiting, no deadlock detection" is corrected in place. AR2-R2's "CAS on the byte" is amended rather than rewritten: the byte is not the fast path and carries nothing, and M2's rulings are read against what they declined. **Three of the row's citations were stale and one was dead** - `heap-and-tuple.md:95` is var-heap prose, the four "fourth row" sites are at other lines than the row names (and a fifth, `workorder-aw-m1-close.md:209`, was not listed), and **`docs/spec/server.md` does not exist**; `in_doubt_ceiling_ms` is already correct in `cross-owner-txn.md` §440. **The `critics-developer` pass found neither done-condition met**, and both are met now: §9-2's list was **three locks short of the tree** - the lock table's own `wait_latch_`, the frame-table structure latch, the free-map latch and the data file's growth lock - and `rules.md`'s parallel list was short in the other direction, the two no longer even matching; the authoritative `heap-and-tuple.md` still called the Keystone flags byte an Oracle-style lock byte at two sites, which is the cost of the stage having declared that file's citation stale and stopped instead of grepping for the claim; `assertion.md`'s summary and AS4 were named in the plan and skipped; the `rules.md` row said it had moved and had not; and `txn.md` §5 **invented two atomics that do not exist** - `Entry` has no counters, and the only atomic read without the partition latch is the striped fence counter beside them. Six more sites carried the retired "no waiting" premise, one of them 48 lines below a paragraph this stage rewrote, and F3 itself still read "Fail-fast, no waiting". The order that was moved into an **invariants** section had its *stated, not enforced* caveat restored, `rules.md` §3's own words being that a stated order nothing checks is a comment. Suite 3365/3365 green in 168.80 s. **Overhead not measured** |
 | AO-S6e-b | **Built 2026-09-09** on `ao-s6e-b-read-borrow` from `e291493`, on the operator's word reopening the stage: **the engine's first read borrow, and the first wait a statement takes on the lock table's own slot.** A positioned read declares where it is - `IS` on the relation it walks, `IS` on the slice it has reached, moved at every page boundary, held for the **statement** (AR2 §3's `SELECT` row) - through a new one-method seam, `exec::PositionSink`, so the executor knows nothing about locks. `DROP TABLE` takes the relation `X` before its first catalog write and, meeting a reader, **waits** and runs again whole. **Five things the build had to decide that the ruling did not reach**, each argued in §"AO-S6e-b, and the five things R14 could not say": (1) the wait cannot be the write path's - `IsInFlight` is per-core and a read borrow on a peer reads as decided from the first poll, so a `TryAcquire` that registers a **wake** (a slot, no queue position) is what a statement parks on, and `DropWake` is the caller's because the statement is torn down and re-run under a new id between the ask and the grant; (2) the wait-for edge is owed for **one** waiter and not the other, which the sub-stage's own first draft got wrong: against a reader no cycle is possible - a read borrow never waits, so a reader is always a sink - and an autocommit drop holds nothing while it waits, its transaction unwound before the park; but a relation `X` is refused by a **writer's** `IX` too, so a drop inside a transaction that holds rows waits for a writer that may be waiting on a row it holds, and that wait registers its edge and takes AO-R7's victim rule. The same case forced the second rule: `EndWrite`'s poison is withheld while the wait is possible, or the re-run answers "transaction is aborted" where the client used to get its relation dropped; (3) the slice interval is **`[min_key(page), kIdSpaceEnd)`**, not R14's `[min_key, next.min_key)`, whose upper bound is a page the walk has not read - and a forward walk's future is the tail anyway, so R14's interval would under-declare the keys a resumed walk is about to visit; (4) **an intention mode on an interval unit neither fences nor is fenced** - `ConflictingOverlap` skips them, mirroring the rule `FenceCoversKey` has applied from the other side since AO-S6b - so item 14's declared range does not wait for a reader and a reader does not wait for it (AO-0 item 27); (5) a read borrow **never refuses a read and never makes one wait**, since DT1 and the post-park re-`Bind` leave an unborrowed reader correct - which is also what makes (2) true. The holder id is not a transaction's (`txn::kReadHolderBit`), because an autocommit `SELECT` has none. **Cells**: two in `exec_chain_test` (the walk reports once before its first page, then once per boundary with `lo` rising; a heap walk reports the relation and no slice), three in `lock_table_test` (the intention rule in both orders with the tuple side unchanged, the wake registration's lifetime and its withdrawal, a wake blocking nobody), eight in `txn_2pc_protocol_test` (a read declares and gives back; the drop waits and re-runs; the synchronous drop names a positioned reader; a read is not refused by a DDL holding the relation; a whole-relation write is not held up by a positioned reader; a drop inside a transaction waits and leaves it committable; a drop that would close a cycle is the victim and the survivor proceeds on its ROLLBACK; a drop whose wait reaches the fault net poisons its transaction), and **the row's own cell on the two-core rig** - `read_borrow_rig_test.cpp`, the drop on core 0 parking on a position held on core 1 and proceeding when it is released, 10/10 on repeat. Mutation-checked six ways: the intention skip, the DDL's borrow, the walk's first report, the wake registration, the whole-relation write's unit, and the fault net's poison - each kills the cell that rests on it, and the last reproduces the review's B2 verbatim (`rows id=[0, 0) are held by a positioned reader`) while the writer-side cell passes under both, which is the claim that the unit change is writer-neutral. **The `critics-developer` pass found the rule built in the wrong place, and that is the one finding the cells could not have reached**: point (4) is written in `ConflictingOverlap`, and a `WHERE`-less write never goes through it - `DeclaredWriteBorrow` collapsed it onto the **relation** unit (AO-S6b's optimization), where `IS` against `X` is a refusal decided by the entry itself. A positioned reader would have refused `DELETE FROM t`, and refused rather than waited, naming a transaction that never existed. Latent on this engine - a local read is synchronous and a peer's runs on the owner, so the two never overlap - and live with the first read that can park holding a position. **Fixed as a statement about what a unit means**: the relation unit is the relation as an *object*, which is what DDL claims and what a reader declares an `IS` on, and a write's claim is over *keys* - so a `WHERE`-less write declares `[0, kIdSpaceEnd)` as a range, which changes nothing against writers and costs the fence counter a range-shaped write already raises. The pass also found a reader refused the relation `IS` re-asking under a partition latch **per page**, and an arm in the foreign-key probe path that covered nothing and would have leaked a registration; both taken. Its largest proposal - delete the slice half, since nothing reads it - is **declined and recorded**: the slice is what the operator ratified per page and reopened the stage for. **A defect in a fixture, found by the first cell that needed a multi-leaf relation**: `exec_chain_test`'s `Insert` never adopted a root split, so past the first leaf it kept handing `BtreeInsert` a full leaf as the root and built a **descending** sibling chain - the shape `btree.cpp`'s append path calls unsurvivable (H9). Fixed there; the engine's own path has adopted the new root since PW2-4. `drop-table.md` gains DT7, `ddl-transactional.md` §5a is narrowed for one shape and keeps its title, `txn.md` §5 carries what a read borrows, and `manual/sql/sql.md`'s `DROP TABLE` entry says what a client sees. **Overhead not measured**; AO-S7's decomposition is the only number, and it is an upper bound |
 | AO-S6e-b - suites | **Landed as `b24588c`** on `main`, pushed on the operator's word with the pre-push hook skipped. **The run still executing at the push returned on the same tree**: 3379/3379 in 242.87 s, fourteen more than AO-S8's 3365, which are this sub-stage's cells. The run before it - the same tree without the fault net's poison, its cell and the prose - was 3378/3378 in 254.03 s. **The commit message states that number and was written before the run returned**; this row is written after it, which is the difference between the two and the reason the row exists. Overhead not measured |
@@ -502,8 +510,8 @@ rule. Every item names the ruling it moves.
 
 | # | item | class | CLA proposal / state |
 |---|---|---|---|
-| 1 | E2: the cap's value and its refusal's detail code | constant; user-visible | 65,536; `ResourceExhausted` with a new append-only detail (AO-R10). **Marked 2026-09-08** (`raft-marks-2026-09-08.md` §1): 65,536 as `kds.max_locks_per_txn`, `[provisional]` until AO-S7 names it; `ResourceExhausted`, non-retryable, never escalated; per local `Transaction` until AT asks again |
-| 2 | The partition count | constant | 64 × cores, re-measured in S7 (AO-R2) |
+| 1 | E2: the cap's value and its refusal's detail code | constant; user-visible | 65,536; `ResourceExhausted` with a new append-only detail (AO-R10). **Marked 2026-09-08** (`raft-marks-2026-09-08.md` §1): 65,536 as `kds.max_locks_per_txn`, `[provisional]` until AO-S7 names it; `ResourceExhausted`, non-retryable, never escalated; per local `Transaction` until AT asks again. **Closed at AO-S7**: nothing approached the cap and the shapes that reach it are bulk statements rather than contention, so 65,536 stands and the `[provisional]` is spent |
+| 2 | The partition count | constant | 64 × cores, re-measured in S7 (AO-R2). **Not re-measured, and AO-S7 says why rather than leaving it undone**: a sweep looks for the count at which collisions cost something, and C3 established that two cores are never in the table at once on one relation. The count stands unswept |
 | 3 | The fault net and the detector cadence | constant | the net `kTxnPhaseDeadlineNs + 1 s` while 2PC is in the tree and 1 s after (finding J), aborting the waiter; the cadence 100 ms; both `constexpr` in M2, the knob merge at M3 (AO-R7, AO-R8) |
 | 4 | The Keystone byte | persisted format | **decided 2026-09-03: no persisted bit** (AO-R3); the masked-image arm declined |
 | 5 | The subsystem's name | spec | `lock` (AO-R1); `borrow` is the alternative. **Marked 2026-09-08** (`raft-marks-2026-09-08.md` §2): `lock` for the transaction-scoped family and its table, `borrow` for AR2's tenancy over either family, `latch` for the critical-section family; no rename |
@@ -511,9 +519,9 @@ rule. Every item names the ruling it moves.
 | 7 | The in-doubt block's clock-end goes | user-visible | **Done at AO-S3, and it went further than this row expected**: `in_doubt_ceiling_ms` has no reader left at all, so it is inert rather than re-scoped. `server.md:100` and `cross-owner-txn.md`'s two rows now say so. The open question is its fate — refuse it at startup naming its successor, or keep it inert until M3 re-scopes it to the fault net (AO-R8's plan). CLA kept it inert so a configuration carrying it still mounts |
 | 8 | D1's RU is not in this order | spec | confirm, or name the order that carries it (AO-2) |
 | 9 | The FK split: F3's wait half in M2 (S3), D9(a)'s fence in M3 | spec | confirm (AO-R14) |
-| 10 | The `rules.md` §3 row's "declared in" names this work order, not a spec, until AO-S8 moves it — a new class of row against `rules.md:24`'s "the declaration lives in the owning spec" | spec | accept the interim, with the move written into the row |
-| 11 | The partition latch: `base/latch.hpp`'s `std::mutex` (AO-R2's S1 default) against D2(a)'s own words "spinlocks (atomics)" (`ar0-architecture-revision.md:87`), which AR0-M2 left undecided | design; measurement-gated | mutex first, a spin primitive only if S7's numbers ask for it. **Marked 2026-09-08** (`raft-marks-2026-09-08.md` §4): mutex first, amending AR0 D2(a); the switch condition is written into AO-S7's order before it runs - the partition latch's share of a contended update's wall time against the same cell's cross-core wake cost |
-| 12 | The deadlock victim's `TxnConflict` message | user-visible (wire-contract text, `src/txn/manager.cpp:153`'s own rule) | one new message naming "deadlock", the code and its retryable bit unchanged (AO-R7) |
+| 10 | The `rules.md` §3 row's "declared in" names this work order, not a spec, until AO-S8 moves it — a new class of row against `rules.md:24`'s "the declaration lives in the owning spec" | spec | accept the interim, with the move written into the row. **Done at AO-S8**: the row moved to `txn.md` §5, so `rules.md:24`'s "the declaration lives in the owning spec" holds again and the interim class is empty |
+| 11 | The partition latch: `base/latch.hpp`'s `std::mutex` (AO-R2's S1 default) against D2(a)'s own words "spinlocks (atomics)" (`ar0-architecture-revision.md:87`), which AR0-M2 left undecided | design; measurement-gated | mutex first, a spin primitive only if S7's numbers ask for it. **Marked 2026-09-08** (`raft-marks-2026-09-08.md` §4): mutex first, amending AR0 D2(a); the switch condition is written into AO-S7's order before it runs - the partition latch's share of a contended update's wall time against the same cell's cross-core wake cost. **Answered at AO-S7 and closed**: the whole family's share is under 3% against a ~46% threshold, so the spin is not tried, the mutex stands and AR0 D2(a) stays amended |
+| 12 | The deadlock victim's `TxnConflict` message | user-visible (wire-contract text, `src/txn/manager.cpp:153`'s own rule) | one new message naming "deadlock", the code and its retryable bit unchanged (AO-R7). **Built**: `DeadlockVictim` at `src/server/command_dispatcher.cpp:220`, still `TxnConflict`, used by the dispatcher, the shipped-statement executor and the FK probe service. The item's own `src/txn/manager.cpp:153` citation has drifted off the rule it named |
 | 13 | **AO-S3b's prerequisites** — withdrawn as an operator item, kept as a row so the withdrawal is on the record. It was raised as a read-view decision blocking the stage; the review refuted the premise (AO-6's S3b row), and what remains is buildable work with nothing to decide: an autocommit waiter's identity in the wait-for graph, a re-minted `check_view` on resume, and the coroutine hoist. **The one thing that would come back here** is a proposal to make the *commit* arm succeed rather than refuse — `txn.md` §5 decides that today, deliberately and in favour of refusing, so reopening it is the operator's and nobody else's | spec (settled; listed as withdrawn) | none needed. CLA's earlier proposal of a three-arm choice rested on a false premise and is withdrawn |
 | 15 | **B3's arm: abort, or release the borrows and keep the leak.** failure atomicity; user-visible in the second writer's wait | **Ruled 2026-09-09 as CLA proposed: abort**, the arm above it verbatim, and the statement reports the commit's failure. Built in AO-S6d, and widened by one arm the draft did not name: `enforcer_.CommitTxn`'s failure leaked the same way and now unwinds too. |
 | 16 | **The probe-resumed outcome is offered the write-block wait.** pre-existing since AO-S3; `[quiet-wrong]` inside an explicit transaction | **Ruled 2026-09-09 as CLA proposed**, and built in AO-S6d - but not as one loop over both arms. The wait became a function called from both, which is the same fix with the probe arm's own rounds loop doing the looping. The draft's claim that the resume could set a blocker "for the first time" was **wrong at `7e26a65`**: `may_park_` was false there, so the `[quiet-wrong]` was one line away rather than live. Both halves landed together and the mutation that separates them was run. |
@@ -1737,8 +1745,13 @@ summaries under `archive/ao-s7-c3-v2.7.0-304-g5e94dc8/`.
 **C3's answer is that its shape does not exist on this engine.** Every write
 to a relation runs on that relation's owner core and the reactor serialises
 what runs on a core, so two writers never hold the table at once. hot minus
-disjoint is +3.3, +1.0 and −1.4 µs across three runs, each inside its own
-noise floor, with **zero refusals** at 8 and at 32 sessions. The tuple lock
+disjoint is +3.3, +1.0 and −1.4 µs across three runs — no consistent sign,
+and at or just above the lock arm's own floors of 1.0, 0.6 and 1.0 µs
+rather than inside them, which is why the results file argues from the
+family's ≤3% share of a statement and not from the floors — with **zero
+refusals** at 8 and at 32 sessions. *(This sentence read "each inside its
+own noise floor" until M2's close checked it against the file's own table;
+§AO-8 records the correction.)* The tuple lock
 is taken and released and never fought over.
 
 Three things that follow, and one that does not:
@@ -1780,3 +1793,160 @@ any AO-S6 row: those rows say "overhead not measured" and stay saying it,
 because this stage prices the family rather than re-gating the changes that
 built it.
 
+
+---
+
+## AO-8 — M2 closed, 2026-09-09
+
+**AR0 M2 is complete.** Every stage AO-S0 through AO-S8 has landed on
+`main`, and so have the two rows the operator's reopening added after S8
+(AO-S6e-b and its suite row). Written on `ao-m2-close` from `cf3d0d0`, the
+commit AO-S6e-b's suite row was written at. AO-5's order runs S0 → S1 → S2
+→ S3 → S4a → S3b → S5 → S4b → S6 → S7 → S8 and AO-6 carries a status row
+for every one of them, S6 through its sub-stages S6a..S6e-d rather than
+under its own number.
+
+### What M2 delivered
+
+When this order was written the engine had no lock manager and four specs
+said so. In the order the stages built it:
+
+| | what it is | where it lives |
+|---|---|---|
+| The **lock table** (AO-S1) | four units, four modes as `constexpr` tables, `64 × cores` partitions with a null `Latch*` at one core, AO-R3's fence counter in place of the declined Keystone lock bit, and the cap as the one refusal the model adds | `include/kds/txn/lock_table.hpp`, `docs/spec/txn.md` §5 |
+| The **wait** (AO-S2, AO-S3, AO-S3b) | a refused borrow hands back a slot, the waiter parks on it and re-asks on every wake; a writer meeting an undecided holder waits instead of being refused; the in-doubt block's 200 ms clock-end becomes an 11 s fault net logged as a fault; a mid-statement `UPDATE`/`DELETE` parks at a no-span boundary | `docs/spec/txn.md` §5 |
+| The **deadlock detector** (AO-S4a, AO-S4b) | edges in the table and detection **at the registration that closes the cycle** — AO-R7's 100 ms cadence on core 0's `system` group is not built, and both stages state the departure — the closer's statement refused naming deadlock, its transaction poisoned until it rolls back | `docs/spec/txn.md` §5 |
+| **Across cores** (AO-S5, AO-S5(b), with AU-S2) | one table for the instance; the wake as write-then-kick with no new ring kind, and a cross-core deadlock refusal riding the reply rather than the `kLockAbort` notification AO-S5's cell named; the foreign-key probe parked on the parent's core until the writer decides | `docs/spec/foreign-keys.md`, `docs/spec/crosscore.md` |
+| The **units** (AO-S6a..AO-S6e-d) | every writer takes its borrow; a `WHERE`-less write declares the relation and a range-shaped predicate declares its window; a range fence stops an `INSERT` into it; the cap refuses `ResourceExhausted` rather than truncating; two refusals became waits — the index-build window (S6e-a) and the assertion's bounded false rejection (S6e-c) — and `DROP TABLE` took a wait it never had (S6e-b), where it used to retire the relation under a positioned reader or an open writer | `docs/spec/txn.md` §5, `docs/spec/drop-table.md` DT7, `docs/spec/assertion.md` §6.2 |
+| The **read borrow** (AO-S6e-b) | the engine's first `IS`: a positioned read declares the relation it walks and the slice it has reached, moved at every page boundary and held for the statement, through `exec::PositionSink` so the executor knows nothing about locks | `docs/spec/drop-table.md` DT7 |
+| The **prices** (AO-S7) | see below | `bench/v3.0.0/results-ao-s7-c3-v2.7.0-304-g5e94dc8.md` |
+| The **prose** (AO-S8) | no spec says "no lock manager"; every lock in the reactor is in `sched.md` §9-2's list with its order; the `rules.md` §3 row moved to `txn.md` §5 | six specs |
+
+**The census is the contract.** AO-3's thirteen rows are each turned into a
+wait, retired, or kept, and `ar0-5-amendment-uniformity.md` §5 names that
+method as one of the things M3 does not change.
+
+### What it measured, and the honest shape of that
+
+**C3's answer is that its shape does not exist on this engine.** Every write
+to a relation runs on that relation's owner core and the reactor serialises
+what runs on a core, so two writers never hold the table at once: hot minus
+disjoint is +3.3, +1.0 and −1.4 µs across three runs — no consistent sign,
+and at or just above the lock arm's own floors of 1.0, 0.6 and 1.0 µs
+rather than inside them, so the file's argument is the family's ≤3% share
+of a statement and not the floors — with zero refusals at 8 and at 32
+sessions. The tuple lock is taken and released and never fought over.
+**Three documents said the deltas were inside their floors and this close
+corrected all three**: AO-S7's section above, AO-6's AO-S7 row and
+`index.md`'s AO row. The conclusion is the file's and is unchanged; the
+justification was not.
+
+Three AO-0 items closed on that number rather than on an argument: the **spin
+is not tried** (item 11 — the family's whole share is under 3% against a
+~46% threshold, so the mutex stands and AR0 D2(a) stays amended); the **cap
+stops being `[provisional]`** at 65,536 (item 1); and the **partition sweep is
+not run**, the file saying why rather than leaving it undone (item 2 — a
+sweep looks for the count at which collisions cost something, and collisions
+need two cores in the table at once on one relation). Item 12's **deadlock
+message** closes beside them and not on the number: it is in the tree,
+`DeadlockVictim` at `src/server/command_dispatcher.cpp:220`.
+
+**What the measurement could not do.** E7 was to be read off C3 and there is
+no tuple-granularity win or loss to read; it needs a different cell and
+naming it is M3's. E12's per-page `IS` price is item 24's ratified
+decomposition — ≲ 3 µs × pages, under 1% of a point read — and is labelled an
+extrapolation, because nothing in the engine took an `IS` when it was taken.
+The marked `group` durability arm is 82–85% of an update, so the marked cell
+could not answer its own question and the numbers above are the `relaxed`
+arm's. AM-S6's noise floor bounds the rest: at eight cores on this host
+nothing below roughly 50% is visible. **No AO-S6 row carries an overhead
+number and none claims one.**
+
+### What M2 carries forward — not closed by this close
+
+1. **Three AO-0 items raised at AO-S6e and not decided**: 22 (whether a wait
+   on a bound assertion's group carries a bound shorter than the 11 s net),
+   25 (whether `DROP TABLE` may be refused because readers keep arriving) and
+   26 (which reads declare a position). The code ships the state each row
+   records — item 26's proposal, to wire the fan-in producer, is not built —
+   and the items stay in AO-0's table. **Item 27 belongs beside them**: it
+   shipped at AO-S6e-b as CLA states it with no ruling to point at, which is
+   a decision the build took rather than the operator.
+
+2. **Item 26 is load-bearing for AT, and this close raises that rather than
+   AO-S6e.** `ar0-5-amendment-uniformity.md` §8 makes the relation `IS` the whole
+   defence of the one quiet-wrong surface M3 opens — a statement executing against
+   a stale schema — and §7 sequences M3's schema word on that `IS` being *"already
+   in from AO-S6"*. The `IS` M2 built covers a statement's outermost walk and no
+   other read, so where none is held DDL's `X` is granted and the defence does not
+   hold. The sites, the shapes that declare nothing and AT's first cell are in
+   `docs/inflight/known-gaps.md` under `## Locks`.
+
+3. **The knob merge is M3's** (AO-R7, AO-R8): the fault net and the detector
+   cadence stay `constexpr` (item 3), and `in_doubt_ceiling_ms` is inert with
+   no reader left rather than re-scoped, so its fate — refused at startup naming
+   its successor, or kept until the net takes its name — is open (item 7).
+
+4. **Two confirmations M2 never got**: D1's READ UNCOMMITTED is in no order
+   (item 8), and the FK split — F3's wait half in M2, D9(a)'s `S` fence in M3 —
+   has AO-R14 and no word (item 9).
+
+5. **No unit has an `S` mode**, and AO-S6e's close states the reason it kept
+   meeting from three directions: every unit that stage was asked to add had no
+   contender, or a contender the unit could not have served. **Which of AR2's
+   units has a contender on this engine at all** is the question M2 ends with
+   unanswered, and C3 belongs on that list because it is what a lock would need
+   before it could hold anything across a round trip.
+
+6. **A wake registration outlives a coroutine destroyed at the park** — one
+   entry per abandoned drop, memory and never a wrong answer. The RAII fix
+   segfaulted at AO-S4a because the table is instance-scoped and a destructor
+   running during teardown reaches it after its owner is gone; nothing about
+   that has changed, and the wait-for edge carries the same residue for the
+   same reason.
+
+7. **`docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`**
+   — found by AO-S6d's `critics-developer` pass, not fixed, because what a
+   failed settle leaves behind is a decision the assertion subsystem owns.
+
+8. **The foreign-key asymmetry this order was named the owner of and did not
+   take.** No M2 stage touched `FkPendingDeleteTable`, so `known-gaps.md`'s
+   Foreign keys entry pointed its delete-side waits at a closed stage. Re-pointed
+   by this close: it goes with D9(a) into M3, or takes its own letter.
+
+### What closing M2 opens
+
+AR0 §8 step 6 is M3, **renamed "Uniformity" and lettered AT** by
+`ar0-5-amendment-uniformity.md` (D22). **No work order exists for it**, which
+makes it an absence rather than pending work. What is already written down for
+whoever opens it:
+
+- AR0-5 §4's M3 list and §7's order — schema word, catalog rows borrowable
+  (E13), shared allocators with caches, leases retired, statistics and Cabin
+  local, placement and `owner_core` (D17/D18), prose — with AR1's AQ/AR and the
+  Cabin store unification riding its tail;
+- AR0's **D7**, the one item AR0 marks `[quiet-wrong]` that the operator has
+  not marked: Cabin invariant removal, which AR0 proposes to take in the same
+  change as D1(b)'s gap locking rather than alone;
+- **D9(a)'s `S` fence** (AO-R14), AR2's **E3, E5, E8, E10 and E13**, and the
+  **E7** AO-S7 handed on;
+- **AU-S5 and AU-S6**, the last of the ring's retirement, which
+  `workorder-au-ring-retirement.md` already places inside AT;
+- AR0-5's own **D17–D22**, marked 2026-09-05.
+
+M4 (AR0 §8 step 7) is untouched by this close.
+
+### What this close does not do
+
+It runs no measurement and claims none. **The suite ran and is green** —
+3379/3379 in 281.09 s on `ao-m2-close`, the same cell count as AO-S6e-b's
+run, which is what a change touching no source should produce. Overhead not
+measured. It changes prose only, in this
+order, `index.md`, `known-gaps.md`, `CLAUDE.md`'s two milestone rows,
+`rules.md` §3's lock-table row (whose "lock work finished at AO-S7" predated
+AO-S6e-b) and one qualifier in `txn.md` §5: a point, index or Cabin read
+declares nothing **on the path that serves it**, and the review of this close
+found that each falls through to the walk — and therefore declares — when its
+own path cannot answer. It decides none of AO-0's open items — a close that ruled on
+what it was closing would be deciding the operator's list. And it opens no
+stage: AT is unwritten and stays unwritten until the operator orders it.

@@ -726,9 +726,13 @@ and hold none between them.
   positioned reader".
 - **What takes none**, stated so it is not read as covered: a nested step's
   walk (the per-page cost would be the page count times the outer
-  cardinality), a point, index or Cabin read, and the fan-in producer that
-  serves a remote step. A shipped *statement* takes one, because it is
-  dispatched on its owner like any other.
+  cardinality), a point, index or Cabin read **on the path that serves it**,
+  and the fan-in producer that serves a remote step. A shipped *statement*
+  takes one, because it is dispatched on its owner like any other.
+  The qualifier is load-bearing and was added at M2's close: each of the
+  three falls through to the walk when its own path cannot answer — a heap
+  point read, an index probe with no usable index, a Cabin miss — and a
+  fallback at `index == 0` declares like any other walk.
 
 **The table itself, and what serializes it** — `rules.md` §3's row, moved
 here at AO-S8 because §3's own rule is that a declared-shared structure is

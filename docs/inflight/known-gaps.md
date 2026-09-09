@@ -263,9 +263,13 @@ statement about an engine that no longer exists; re-verify or strike it.
   left between one core and two. The fix is an own-aware pre-gate, which
   needs the coordinator's identity in the registration, or the probe
   running the pre-gate after the visibility read for a writer view. Owner:
-  `docs/spec/foreign-keys.md` §5, which states the asymmetry;
-  `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-S6's units are
-  where the delete side's waits belong.
+  `docs/spec/foreign-keys.md` §5, which states the asymmetry.
+  **Re-pointed 2026-09-09 at M2's close** on `ao-m2-close` at `cf3d0d0`
+  (`instructions/v3.0.0/workorder-ao-m2-lock-family.md` §AO-8): this entry
+  sent the delete side's waits to "AO-S6's units", and AO-S6a through
+  AO-S6e-d touched no part of `FkPendingDeleteTable`, so M2 closed without
+  it and the pointer named a closed stage. It belongs with D9(a) in M3 (AT)
+  or takes its own letter; **no stage owns it today.**
 
 ## Multi-core state, continued
 
@@ -292,6 +296,46 @@ statement about an engine that no longer exists; re-verify or strike it.
   resting on the two dead grounds. Owner: `ar0-5-amendment-uniformity.md`
   (AT), with the one-line message fix owed by whoever touches it first.
 
+## Locks
+
+- **The relation `IS` covers a statement's outermost walk and nothing else,
+  and AT's quiet-wrong defence is sequenced as though it covered every
+  read.** Verified 2026-09-09 on `ao-m2-close` at `cf3d0d0` by reading the
+  sites: `src/exec/step_vm.cpp:1960` and `:2030` guard the position report on
+  `index == 0`, and `src/server/remote_step_service.cpp` passes no
+  `PositionSink` at any of its three execution sites (`:458`, `:886`, `:1080`).
+  So a nested step's walk — a join's inner relation — and every remote step
+  declare no position and hold no relation `IS`.
+
+  **A point, index or Cabin read declares nothing only where its own path
+  serves it**, which is narrower than `txn.md` §5 and AO-S6e-b's list both
+  say and is corrected in the spec with this entry: each falls through to
+  `RunWalkStep` carrying the same `index` (`step_vm.cpp:615` for a heap point
+  read, `:1210`, `:1223` and `:1233` for an index probe with no usable index,
+  `:760`, `:776` and `:812` for a Cabin miss), and a fallback at `index == 0`
+  reports like any other walk.
+
+  **Why this reaches past `DROP TABLE`.**
+  `instructions/v3.0.0/ar0-5-amendment-uniformity.md` §7 sequences M3's
+  schema word on *"the relation `IS`/`X` already in from AO-S6"*, and its §8
+  makes that `IS` the whole defence of the one quiet-wrong surface M3 opens:
+  *"DDL's `X` cannot be granted while it is held, so a stale parse cannot be
+  executed, only rejected at the version check."* Where no `IS` is held the
+  `X` **is** granted, so the defence holds on the shape that declares and on
+  no other. AT's first cell — the schema word deliberately not bumped,
+  asserting that the lock alone still blocks the DDL — is written against
+  the same assumption and would pass only on that shape.
+
+  `docs/spec/drop-table.md` DT7 carries the same conditionality in the
+  narrower form it is visible in, and does not say which readers are
+  positioned.
+
+  **Not a defect in AO-S6e-b**, whose own "what it does not do" list states
+  every one of these omissions; a gap between what M2 built and what AT is
+  sequenced against. Owner:
+  `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-0 item 26, which
+  is **undecided**, and `ar0-5-amendment-uniformity.md` §7 and §8.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own
@@ -307,11 +351,15 @@ statement about an engine that no longer exists; re-verify or strike it.
   proposal, and shipped at the cutover. It is not awaiting the word; it is
   awaiting someone noticing it was answered.
 
-  The remaining twelve are CLA's proposals awaiting the word, and **three**
-  are marked `[quiet-wrong]` by AR0 itself — D7, D8, D9 — meaning a wrong
-  choice converts a refusal into a wrong answer rather than an error. D1
-  carries no such tag; its proposal argues *about* a quiet-wrong surface
-  (write skew under SI) without AR0 classing the item as one.
+  The remaining twelve are CLA's proposals awaiting the word. **Three are
+  marked `[quiet-wrong]` by AR0 itself — D7, D8, D9 — and only D7 is still
+  unmarked by the operator**: AR0-M3 marks D8 and AR0-M4 marks D9, so the
+  quiet-wrong item M3 opens against is D7 alone. *(Swept 2026-09-09 on
+  `ao-m2-close` at `cf3d0d0` at M2's close, which needed the same count; this
+  paragraph read "three are marked … meaning a wrong choice converts a refusal
+  into a wrong answer" and did not reach AR0-M.)* D1 carries no such tag; its
+  proposal argues *about* a quiet-wrong surface (write skew under SI) without
+  AR0 classing the item as one.
 
 - **AR0 §6's prerequisite is answered on paper and not re-measured.** §6
   requires RW-C1 attribution — what the unattributed reactor wall clock
