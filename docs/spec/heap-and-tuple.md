@@ -190,7 +190,7 @@ The supplied pk must be an **integer literal** — the gate runs before anything
 
 **Row-id leases work on every relation.** `AllocateRowIdRange` refuses nothing for a key reason, which is what lets a peer core take the omitted-pk arity on any relation it owns. The one consequence: a carve spends its block from the mark's point of view before those ids are placed, so a *named* key landing inside a live carve meets the leased id when the peer places it. On a heap relation that cannot happen — a named key must be at or above the mark, which the carve has already moved past its own block. On a btree relation the descent reports it as the duplicate it is, `AlreadyExists`, to whichever of the two lands second.
 
-**A peer core refuses a named key, per row.** Admitting one writes the relation's `sys.tables` row — the mark, or the `key_order` flip — and that page is the system core's. The refusal is in `InsertOneRow`, beside the admission it is about. A peer may write any relation it owns on the omitted arity, drawing from its own id lease and writing no catalog page at all.
+**Every core admits a named key since AT-S5.** Admitting one writes the relation's `sys.tables` row — the mark, or the `key_order` flip — which was the system core's page until then and a peer refused per row; it is every core's now, written under the page latch with no task parking inside the span (`catalog.md` CT5). The omitted arity still draws from the core's id lease until AT-S4 replaces the leases.
 
 **The pk is not updatable** (K2). `exec::CompileAssignments` refuses a pk `UPDATE` at compile time as `Unsupported` with the column's byte, regardless of provenance. Naming a key at insert and changing one afterwards are unrelated permissions; only the first is granted.
 

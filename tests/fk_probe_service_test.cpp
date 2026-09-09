@@ -272,27 +272,7 @@ TEST_F(FkProbeTest, ADecideReleasesTheIntentAndNothingElseDoes) {
     EXPECT_EQ(server_->ReleaseIntents(/*coordinator_core=*/1, /*session_id=*/42), 0u);
 }
 
-TEST_F(FkProbeTest, AParentThisCoreDoesNotOwnIsRefusedRatherThanAnswered) {
-    InstallServer(/*core_id=*/0);
-
-    const catalog::Oid elsewhere = MakeRelationOffCore0("elsewhere");
-    ASSERT_NE(elsewhere, 0u);
-
-    ASSERT_TRUE(client_
-                    ->Request(/*owner_core=*/0, /*request_id=*/11, /*session_id=*/42,
-                              /*transaction_id=*/9, GroupOf({{elsewhere, 1}}))
-                    .ok());
-    Pump();
-
-    const FkProbeOutcome* out = client_->Find(11);
-    ASSERT_NE(out, nullptr);
-    ASSERT_TRUE(out->arrived);
-    EXPECT_FALSE(out->status.ok()) << "a core that owns nothing answered about a parent";
-    // Retryable, because the owner moving is not the statement being wrong.
-    EXPECT_EQ(out->status.code(), StatusCode::kTxnConflict) << out->status.message();
-    EXPECT_TRUE(out->verdicts.empty());
-    EXPECT_EQ(intents_.live_rows(), 0u);
-}
+// `AParentThisCoreDoesNotOwnIsRefusedRatherThanAnswered` stood here until AT-S5: it pinned the probe server's fail-closed owner test, which went with the route - an owner is a statistic, and the server answers from the same pages every core reads.
 
 TEST_F(FkProbeTest, AGroupPastTheCapRefusesAndOpensNoWaiter) {
     exec::FkParentVerdicts::ForeignGroup big;
@@ -397,13 +377,10 @@ TEST_F(FkProbeTest, AReverseCheckOverAChildAnotherCoreOwnsRefuses) {
     auto outcome = exec::CheckNoChildReferences(store_, *access.value(), /*child_column_no=*/1,
                                                 /*parent_pk=*/1, txn::ReadView::Everything(),
                                                 options, &budget);
-    EXPECT_FALSE(outcome.ok())
-        << "a reverse check walked a child relation this core does not own";
-    // `NotImplemented`, by the two-code rule: the architecture admits this
-    // - the fan-out is specified - and nobody built the sender.
-    EXPECT_EQ(outcome.status().code(), StatusCode::kNotImplemented) << outcome.status().message();
-    EXPECT_NE(outcome.status().message().find("owned by core"), std::string::npos)
-        << outcome.status().message();
+    // Until AT-S5 a reverse check refused a child relation this core did
+    // not own, `NotImplemented`. It walks it now: every core reads and
+    // writes every page, and the child's rows are one pool's.
+    EXPECT_TRUE(outcome.ok()) << outcome.status().message();
 }
 
 // ---- AJ-T1: the pending-delete set's consult ------------------------------
@@ -537,38 +514,7 @@ TEST_F(FkProbeTest, AClearedPendingDeleteLetsTheNextProbePass) {
     EXPECT_EQ(intents_.live_rows(), 1u);
 }
 
-TEST_F(FkProbeTest, TheOwnershipReCheckStillWinsOverAPendingDelete) {
-    // Ordering, pinned from outside. A pending delete must not turn the
-    // "not this core's relation" refusal into a busy verdict: busy tells
-    // the child to retry, and retrying a relation this core does not own is
-    // a condition that never clears here. The refusal has to survive.
-    //
-    // A server built as some other core could not reply at all - the
-    // transport has only the two cores this rig wires - so the relation is
-    // what moves, not the server.
-    InstallServer(/*core_id=*/0);
-    const catalog::Oid elsewhere = MakeRelationOffCore0("elsewhere_pending");
-    ASSERT_NE(elsewhere, 0u);
-
-    // A registration on the very row the probe names. It must change
-    // nothing: this core has no business answering about that relation at
-    // all, however much it believes it is deleting one of its rows.
-    pending_deletes_.Add(elsewhere, /*parent_pk=*/1, /*session_id=*/7);
-
-    ASSERT_TRUE(client_
-                    ->Request(/*owner_core=*/0, /*request_id=*/15, /*session_id=*/42,
-                              /*transaction_id=*/9, GroupOf({{elsewhere, 1}}))
-                    .ok());
-    Pump();
-
-    const FkProbeOutcome* out = client_->Find(15);
-    ASSERT_NE(out, nullptr);
-    ASSERT_TRUE(out->arrived);
-    EXPECT_FALSE(out->status.ok()) << "a probe answered from a relation this core does not own";
-    EXPECT_EQ(out->status.code(), StatusCode::kTxnConflict) << out->status.message();
-    EXPECT_TRUE(out->verdicts.empty()) << "a busy verdict displaced the ownership refusal";
-    EXPECT_EQ(pending_deletes_.stats().refusals, 0u);
-}
+// `TheOwnershipReCheckStillWinsOverAPendingDelete` stood here until AT-S5: it pinned the same owner re-check ranking above a pending delete; there is no re-check, and the pending-delete consult stands on its own.
 
 // ---- AJ-T2: the reverse pair ---------------------------------------------
 //

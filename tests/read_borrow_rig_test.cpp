@@ -89,6 +89,48 @@ sched::Coro DropWhenHeld(CommandDispatcher& d, Dropper& x) {
     co_return Status::OK();
 }
 
+// ---- AT-S5: a write runs where the session is ---------------------------
+
+TEST(ReadBorrowRigTest, APeerCreatesARelationAndCoreZeroResolvesItAtItsBoundary) {
+    // The catalog pages had one writer until AT-S5. A `CREATE TABLE` on
+    // core 1 writes them now, under the page latch, and core 0's next
+    // statement resolves the relation through the schema word (AT-S2).
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    Session on_peer;
+    const std::string created =
+        rig->core(1).dispatcher().Dispatch("CREATE TABLE made_on_one (id int64, v int64) BTREE",
+                                           &on_peer).response;
+    ASSERT_EQ(created.rfind("CREATED", 0), 0u) << created;
+    Session on_zero;
+    const std::string described =
+        rig->core(0).dispatcher().Dispatch("DESCRIBE made_on_one", &on_zero).response;
+    EXPECT_NE(described.rfind("ERR", 0), 0u) << described;
+}
+
+TEST(ReadBorrowRigTest, ANamedKeyAdmitsOnAPeer) {
+    // A peer refused a named key until AT-S5, because admitting one writes
+    // the relation's `sys.tables` row. It admits it now under the page
+    // latch, and the mark it advances is the one every core reads.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE nk_peer (id int64, v int64) BTREE").response.rfind("CRE", 0),
+              0u);
+    Session on_peer;
+    const std::string written =
+        rig->core(1).dispatcher().Dispatch("INSERT INTO nk_peer VALUES (7, 1)", &on_peer).response;
+    EXPECT_EQ(written.rfind("INSERTED", 0), 0u) << written;
+    auto oid = rig->core(0).catalog().FindTableOidByName("nk_peer");
+    ASSERT_TRUE(oid.ok());
+    rig->core(0).catalog().Revalidate();
+    auto row = rig->core(0).catalog().GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    EXPECT_GE(row.value().next_id, 8u) << "the peer's admission did not move the shared mark";
+}
+
 TEST(ReadBorrowRigTest, ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer) {
     TwoCoreRig::Options options;
     auto opened = TwoCoreRig::Open(options);

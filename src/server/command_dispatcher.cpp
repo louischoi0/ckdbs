@@ -1808,56 +1808,14 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // it is what makes §5d's purge-gate soundness argument enforced
     // rather than assumed (see the gate).
     //
-    // Keyed on `catalog_read_only_` (see its declaration) and deliberately
-    // not on `core_id_`, and on exactly the token the routing below reads,
-    // so the two cannot disagree about what a verb is.
-    if (catalog_read_only_ &&
-        (IEquals(cmd, "CREATE") || IEquals(cmd, "ALTER") || IEquals(cmd, "DROP"))) {
-        // Inside an explicit transaction this poisons, like every other
-        // write-capability refusal - CrossCoreWriteRefused fires inside a
-        // WriteScope and poisons, and two refusals of the same shape must
-        // not disagree about the transaction's fate (txn.md section 10-8's
-        // posture). Decided at the PW4 review, before PW5's listeners make
-        // the path reachable.
-        // **CR5/CB4: a route, where one can be made.** `MayShip`'s four
-        // conditions are exactly this row's admission test and are reused
-        // rather than restated - the ship client exists, this path can
-        // park, the statement is autocommit (CB5), and the session has not
-        // already shipped. A DDL inside an explicit transaction therefore
-        // falls through to the refusal below and poisons, as it always did:
-        // enrolling core 0 as a participant would put a core into the
-        // prepare phase for relations `known-gaps.md` still records as
-        // non-transactional, which is a worse failure than a refusal the
-        // client can see.
-        //
-        // `kSysTablesTable` is the oid because a DDL names an object this
-        // core may not be able to resolve, and the field is **routing and
-        // logging only**: the owner's dedup record keys on
-        // `(requester, session_id, sequence)`, and the SS3 review retracted
-        // the cross-check against the relation the text resolves to
-        // (`statement_ship_service.hpp`). So two `CREATE`s from one session
-        // are distinct by their sequence, not by an oid neither of them has.
-        if (MayShip(session)) {
-            DispatchOutcome shipped = ShipStatement(line, catalog::kSysTablesTable,
-                                                    catalog::kSystemCore, "sys.tables", session);
-            // **This core used to drop its own cache when the answer came**
-            // (CB6): the invalidation broadcast was a task nothing ordered
-            // against the reply to this ship, so the DDL's own session
-            // could be told its committed `CREATE TABLE` did not exist.
-            // Since AT-S2 there is no broadcast: core 0's write bumped the
-            // schema word before it answered, and this core's next cached
-            // read revalidates. The paragraph stays because the race it
-            // describes is the reason the word is bumped at the *write*
-            // and not at the decide - CR5's own session, which would
-            // otherwise be told its committed `CREATE TABLE` does not
-            // exist by the very core it typed it on. The word moved before
-            // the answer, so the next statement's boundary is sufficient.
-            if (shipped.pending_shipped.has_value()) shipped.pending_shipped->ddl = true;
-            return shipped;
-        }
-        session.Poison();
-        return {ErrorReply(PeerDdlRefused(core_id_, cmd)), false};
-    }
+    // **A DDL runs where the session is** (AT-S5, AT-R5). Until this stage
+    // a peer refused `CREATE`/`ALTER`/`DROP` (`PeerDdlRefused`), or shipped
+    // the statement to core 0 where a route could be made (CR5/CB4),
+    // because the catalog pages had one writer. They have none: every core
+    // writes them under the page latch, the DDL's own relation `X` (AO)
+    // keeps a statement from being overtaken, and the schema word (AT-S2)
+    // carries the change to every other core's memo. The ship's dedup
+    // record and `pending_shipped->ddl` went with it.
     // The PW1c interim DML guard stood here from 2026-08-24 until PW1c-5
     // removed it the same day. What replaced it, so its removal is not a
     // hole: `CheckWriteAffinity`'s shape gate refuses the still-unsound
@@ -6822,33 +6780,19 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         if (!owner.ok()) return owner.status();
         target_core = owner.value();
     }
-    // A write to a range this core does not own cannot be done here at
-    // all - the pages are not this core's to fault, let alone to modify.
+    // **A write to a range this core does not own is done here** (AT-S5).
+    // The refusal that stood here answered a frame table one core owned;
+    // one table serves every core (AM-S2 step 3), the row's tuple `X` and
+    // the relation `IX` are the instance's (AO-S5), and the transaction is
+    // this core's by construction since nothing ships. `target_core` is
+    // read for the counter, which is what D18 keeps of ownership.
     if (target_core != core_id_) {
         cross_core_writes_.Record(session.home_bound() ? session.home_core() : core_id_,
                                   target_core, access.oid);
-        return CrossCoreWriteRefused(session.home_bound() ? session.home_core() : core_id_,
-                                     target_core, relation);
     }
-    // Owned here, but the transaction may already be committed to another
-    // core. That is the CC3 restriction proper, and it survives the
-    // pipeline: it is what keeps one transaction's writes in one WAL stream.
-    //
-    // **Unreachable on any path this engine has, and R6-8's CP3 is where
-    // that was established rather than assumed.** `BindHomeCore` is called
-    // from exactly one site - the end of this function, after the arm above
-    // has returned for every relation this core does not own - so a bound
-    // `home_core_` is always `core_id_`, and reaching this line needs it to
-    // be something else. It was equally unreachable before R6-8: what that
-    // row changes is which writes get *here* at all, not what this arm
-    // tests. Kept as the guard it reads as, because the cost is one
-    // comparison and the thing it would catch is a transaction's writes
-    // splitting across two streams; recorded so a later reader does not
-    // take its existence as evidence that the case occurs.
-    if (!session.MayWriteOn(target_core)) {
-        cross_core_writes_.Record(session.home_core(), target_core, access.oid);
-        return CrossCoreWriteRefused(session.home_core(), target_core, relation);
-    }
+    // The CC3 arm - a transaction bound to another core's stream - stood
+    // here and was unreachable by R6-8's CP3; at AT-S5 a transaction has no
+    // other core to be bound to, and the arm is gone with the route.
     // PW1c-5's shape gate, a **whitelist**: on a peer, a write is admitted
     // only where the PW1c-4 grants and this core's own extent lease make it
     // sound - any relation, clustered either way (the btree arm lifted at
@@ -6869,7 +6813,9 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     // the one arm left is `CannotEnforce`'s. None poisons the session; the
     // backstop below every admitted shape is the store's every-build
     // MayWrite (device_page_store.cpp).
-    if (catalog_read_only_) {
+    {
+        // **On every core since AT-S5**, where this block ran on peers alone
+        // as PW1c-5's shape gate; what survives in it survives everywhere.
         // PW1c-6b-2's window (index_build_service.hpp): an index of this
         // relation is being built here, or built and not yet published by
         // core 0's commit, and a row written now would be in nobody's
@@ -6991,7 +6937,9 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // refusal it produced, `RelationWriteRightsPending`, went with it:
         // no path reaches it.
     }
-    session.BindHomeCore(target_core);
+    // The session's home is the core its writes run on - this one, since
+    // AT-S5 - and it is read for the cross-core counter's "from" alone.
+    session.BindHomeCore(core_id_);
     return Status::OK();
 }
 
@@ -7664,10 +7612,8 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // The destination is the **range's** owner since R4/IS3, which on every
     // relation that has no directory is `owner_core` and the statement this
     // fork always sent.
-    if (!line.empty() && target_core != core_id_ &&
-        (MayShip(*scope.session) || MayEnrolShip(*scope.session))) {
-        return ShipStatement(line, ta->oid, target_core, stmt.table_name, *scope.session);
-    }
+    // The fork shipped a write to the range's owner until AT-S5; a write
+    // runs where the session is, and `target_core` is a statistic (D18).
 
     // Before anything is written: a relation this core does not own, or a
     // transaction already bound to another core, is refused retryably
@@ -7784,7 +7730,7 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
     // allocates through the lease and works. Ineligibility, not a
     // refusal: the first form refused the statement whole, which was
     // false of what the per-row path could do.
-    return !catalog_read_only_ && ta.clustered_type == catalog::ClusteredType::kHeap &&
+    return ta.clustered_type == catalog::ClusteredType::kHeap &&
            ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
            !enforcer_.AnyOn(oid);
 }
@@ -8173,13 +8119,10 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         // that page is the system core's. A row that omits its pk writes no
         // catalog page at all: AllocateRowId below draws from this core's
         // lease, which is why the omitted arity needs no gate.
-        if (catalog_read_only_) {
-            return ErrorReply(Status::NotImplemented(
-                "a caller-supplied primary key cannot be written on core " +
-                std::to_string(core_id_) +
-                ": admitting one writes the relation's catalog row, the system core's page "
-                "(workplan-peer-writer.md §7a) - omit the key and this core issues one"));
-        }
+        // A peer refused a named key here until AT-S5 - admitting one
+        // writes the relation's `sys.tables` row, which was the system
+        // core's page. It is every core's now, under the page latch and
+        // the no-park rule `AdmitExplicitRowId`'s hook states.
         // **The borrow rides inside the admit** (AO-S6c-c), which is the
         // only place both orderings can hold at once: after the key has
         // been judged legal - this call is the sole validation a named key
@@ -8411,15 +8354,12 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
 
 Status CommandDispatcher::CheckRangePlacement(const catalog::TableAccess& access,
                                               std::uint64_t id) const {
+    // The backstop refused a row whose range another core "owned" until
+    // AT-S5 - "the insert was routed to the wrong core". A range's owner is
+    // a statistic (D18) and the write runs here; what remains is the
+    // resolve, so an id outside every range is still a caller's error.
     auto range_owner = access.RangeOwnerFor(id);
     if (!range_owner.ok()) return range_owner.status();
-    if (range_owner.value() != core_id_) {
-        return Status::TxnConflict(
-            "row id " + std::to_string(id) + " of relation oid " + std::to_string(access.oid) +
-            " falls in a range owned by core " + std::to_string(range_owner.value()) +
-            ", not core " + std::to_string(core_id_) +
-            "; the insert was routed to the wrong core");
-    }
     return Status::OK();
 }
 
@@ -8710,24 +8650,14 @@ Status CommandDispatcher::VisitRelation(
                 // never going to touch.
                 auto touched = catalog::ResolveRanges(access.ranges, span);
                 if (!touched.ok()) return touched.status();
-                // **Refused, never partial - so every range is checked
-                // before any is walked.** This visitor is UPDATE's and
-                // DELETE's, not only a scan's, so a refusal raised in the
-                // middle of the walking loop would leave the ranges before
-                // it already written. A walk that skipped a foreign range
-                // would return fewer rows and say nothing, which is the
-                // class RD6 exists to close.
-                for (const catalog::RangeTarget& range : touched.value()) {
-                    if (range.owner_core != core_id_) {
-                        return Status::NotImplemented(
-                            "relation oid " + std::to_string(access.oid) +
-                            " has a range at lo " + std::to_string(range.lo) +
-                            " owned by core " + std::to_string(range.owner_core) +
-                            ", which core " + std::to_string(core_id_) +
-                            " cannot read locally; a scan across owners is the remote-step "
-                            "pipeline's (docs/spec/crosscore.md §2a)");
-                    }
-                }
+                // **Every range's chain is walked here** (AT-S5). The refusal
+                // that stood here - a range another core owned, "which this
+                // core cannot read locally" - was true of a per-core pool and
+                // false since one frame table serves every core (AM-S2 step
+                // 3); it kept a walk from skipping a foreign range silently,
+                // and walking every range keeps that property better than
+                // refusing did. A read's *placement* is a different fork
+                // (`CheckReadAffinity`, D18) and is not decided here.
                 std::vector<PageId> heads;
                 heads.reserve(touched.value().size());
                 for (const catalog::RangeTarget& range : touched.value()) {
@@ -9042,11 +8972,10 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
         // deleter was live on core 0. Since AN-S2 the sweep judges every
         // mark by the instance's floor and horizon
         // (`ResolvedForEveryReader`), so a peer's sweep would be sound;
-        // what still makes this core-0-only is that the catalog's pages sit in
-        // the system range and peers take no DDL - **enforced at dispatch
-        // since PW4** (PeerDdlRefused) - and the gate stays so that a new
-        // dispatch path forgetting the guard runs no sweep from a core the
-        // catalog's writers do not expect (spec §5d).
+        // since AT-S5 every core writes the catalog and takes DDL, so this
+        // is a **placement**, not an authority: one core sweeps so two do
+        // not walk the same chains at once, and core 0 is the one because
+        // it is always present (spec §5d).
         if (core_id_ == catalog::kSystemCore) {
             auto purged = catalog_.PurgeSettledDeleteMarks();
             if (purged.ok()) {
@@ -10585,10 +10514,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     auto target = WriteTargetCore(ta, stmt.where, &target_id);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
-    if (target.value() != core_id_ && !AnySubqueryPredicate(stmt.where) &&
-        (MayShip(*scope.session) || MayEnrolShip(*scope.session))) {
-        return ShipStatement(line, ta.oid, target.value(), stmt.table_name, *scope.session);
-    }
+    // The fork shipped this write to the range's owner until AT-S5.
 
     // Before anything is written: a relation this core does not own, or a
     // transaction already bound to another core, is refused retryably
@@ -12358,10 +12284,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     auto target = WriteTargetCore(ta, stmt.where, &target_id);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
-    if (target.value() != core_id_ && !AnySubqueryPredicate(stmt.where) &&
-        (MayShip(*scope.session) || MayEnrolShip(*scope.session))) {
-        return ShipStatement(line, ta.oid, target.value(), stmt.table_name, *scope.session);
-    }
+    // The fork shipped this write to the range's owner until AT-S5.
 
     // Before anything is marked: same rule as INSERT and UPDATE
     // (crosscore.md CC3). A delete-mark is a write.

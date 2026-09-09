@@ -139,52 +139,39 @@ TEST_F(RangeChainTest, APostSplitInsertLandsInTheRangeItsIdNames) {
 // written, R4/IS3), so it is where the placement check is reachable and
 // where it is pinned. The refusal is by name, at the id, and not the
 // store's `MayWrite` naming a page number after the fact.
-TEST_F(RangeChainTest, AnInsertWhoseIdFallsInAnotherCoresRangeIsRefusedByName) {
+TEST_F(RangeChainTest, AnInsertWhoseIdFallsInAnotherCoresRangeIsWrittenHere) {
+    // Until AT-S5 this insert was refused by name, retryable, because the
+    // range was another core's to write. A range's owner is a statistic
+    // now (D18); the write runs where the session is, and lands.
     Run("INSERT INTO t VALUES (1)");
     Run("INSERT INTO t VALUES (2)");
     SplitAt(kBoundary, /*owner_core=*/2);
 
-    const std::string refused =
+    const std::string written =
         Run("INSERT INTO t VALUES (" + std::to_string(kBoundary) + ", 7)");
-    EXPECT_EQ(refused.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << refused;
-    EXPECT_NE(refused.find("owned by core 2"), std::string::npos) << refused;
+    EXPECT_EQ(written.rfind("INSERTED", 0), 0u) << written;
 
     auto ranges = RangesOfTable();
     ASSERT_EQ(ranges.size(), 2u);
-    // Nothing was written into the range core 2 owns, and the lower range
-    // still holds exactly the rows it held before the refusal.
-    EXPECT_TRUE(IdsInChain(ranges[1].entry_page).empty())
-        << "a row was placed in a chain this core does not own";
+    // The row went into the range core 2 "owns", from this core.
+    EXPECT_EQ(IdsInChain(ranges[1].entry_page).size(), 1u)
+        << "the named key was not placed in its range's chain";
     EXPECT_EQ(IdsInChain(ranges[0].entry_page).size(), 2u);
 
-    // **And the refusal cost the mark**, which is worth pinning rather than
-    // discovering: `AdmitExplicitRowId` moved `next_id` past the named key
-    // before the placement check ran, so the next *omitted* key is above
-    // the boundary too. K3 calls a burnt id free, so this is a burn and not
-    // a leak.
-    //
-    // What that next statement now meets is the **routing** refusal, not
-    // the placement one, and the difference is the whole of R4/IS3: this
-    // core reads the id it is about to issue, finds core 2 owns its range,
-    // and declines to run the statement here at all. On a real instance it
-    // would ship there; this fixture has one core and no ship client, so
-    // the honest answer is the cross-core refusal. What must never appear
-    // again is "the insert was routed to the wrong core", which is the
-    // placement backstop firing because the routing above it did not.
+    // And the next omitted key, which the mark's advance put above the
+    // boundary too, lands in that range as well: no routing, no backstop.
     const std::string after = Run("INSERT INTO t VALUES (3)");
-    EXPECT_EQ(after.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << after;
-    EXPECT_EQ(after.find("routed to the wrong core"), std::string::npos)
-        << "the placement backstop answered a statement the router should have: " << after;
+    EXPECT_EQ(after.rfind("INSERTED", 0), 0u) << after;
+    EXPECT_EQ(IdsInChain(ranges[1].entry_page).size(), 2u);
 }
 
 // ---- R4/IS4: a predicate-shaped write goes to its range's owner ---------
 //
-// Arming spreading costs something and this is where it is pinned rather
-// than discovered: on a relation whose ranges have different owners, a
-// write that names a primary key still runs (it touches one range), and a
-// write that names none is **refused by name** until multi-range
-// transactions exist. Both answers are given before a page is written.
-TEST_F(RangeChainTest, APkNamedWriteRunsOnItsRangesOwnerAndAnUnnamedOneIsRefused) {
+// On a relation whose ranges have different "owners", a write that names a
+// primary key runs here whichever range it touches (AT-S5: the owner is a
+// statistic), and a write that names none is still **refused by name** -
+// it could touch every range, and multi-range transactions do not exist.
+TEST_F(RangeChainTest, APkNamedWriteRunsHereAndAnUnnamedOneIsStillRefused) {
     Run("INSERT INTO t VALUES (1)");
     Run("INSERT INTO t VALUES (2)");
     SplitAt(kBoundary, /*owner_core=*/2);
@@ -196,12 +183,12 @@ TEST_F(RangeChainTest, APkNamedWriteRunsOnItsRangesOwnerAndAnUnnamedOneIsRefused
     const std::string deleted = Run("DELETE FROM t WHERE id = 2");
     EXPECT_EQ(deleted, "DELETED 1") << deleted;
 
-    // A pk in core 2's range: refused as the cross-core write it is,
-    // retryably, and never answered "0 rows" - which is what a walk that
-    // silently skipped the foreign range would have said.
+    // A pk in core 2's range: written here since AT-S5, and never answered
+    // "0 rows" - the walk reaches the range whichever core "owns" it.
+    Run("INSERT INTO t VALUES (" + std::to_string(kBoundary) + ", 0)");
     const std::string foreign =
         Run("UPDATE t SET v = 9 WHERE id = " + std::to_string(kBoundary));
-    EXPECT_EQ(foreign.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << foreign;
+    EXPECT_EQ(foreign, "UPDATED 1") << foreign;
 
     // No pk at all: the statement could touch every range, so it spans two
     // owners and is refused naming R6. **Not** retryable - retrying changes

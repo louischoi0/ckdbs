@@ -717,29 +717,10 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // lost to a restart) and a page whose next mount refuses with the
     // rule-5 stamp mismatch. Refused-retryably beats detected-later.
     // Dirtying a system page would make a peer the second writer of a
-    // single-writer page; two messages below because MayWrite refuses for
-    // two reasons, and the not-from-this-lease one is the common case.
-    // Near-zero cost: one id compare and one `CurrentCore()` read, on the
-    // frame-load path and never per row.
-    //
-    // **One reason and one code since AW-S1b**, where there were two. The
-    // second was "a grant has not arrived *yet*" - a relation published
-    // moments ago, an extent grant still on the ring, rights lost to a
-    // restart and re-requested by the drain tick - and it answered
-    // `TxnConflict` so a driver could retry on the classification rather
-    // than on the message (H4, 2026-08-29; RB6's first attempt retried on
-    // any `ERR` and manufactured real duplicate rows). There are no grants,
-    // so `!MayWrite` now implies the system range, which has one writer for
-    // the life of the instance: a peer asking for it is wrong now and wrong
-    // on every retry, and `InvalidArgument` is what `IsRetryable` does not
-    // admit. **The retryable arm was not deleted for tidiness** - it was
-    // unreachable, and leaving it would have been a code path promising a
-    // retry that changes nothing.
-    if (mark_dirty && !MayWrite(page_id)) {
-        return Status::InvalidArgument(
-            "DevicePageStore: core " + std::to_string(CurrentCore()) + " may not write page " +
-            std::to_string(page_id) + "; the system range has one writer, the system core");
-    }
+    // The write gate that stood here - `mark_dirty && !MayWrite(page_id)`,
+    // `InvalidArgument` to a peer dirtying a system page - went at AT-S5
+    // with the arm it enforced; `MayWrite` says what serialises the page
+    // instead.
 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
@@ -977,42 +958,20 @@ bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
     return PageIsAllZero(*bytes);
 }
 
-bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
-    // Read-only for a peer, deliberately: one writer per catalog page is
-    // what makes a peer's stale view a retryable "not found" rather than a
-    // torn read. The system check stays first: a write grant names
-    // relation creation pages, never a system page, and keeping the order
-    // makes that a structural fact rather than a convention.
-    //
-    // **Asked of the running core, and it had stopped being asked at all.**
-    // This function opened with `if (lease_ == nullptr) return true`, which
-    // read "core 0, which may write anything" while a lease was the thing
-    // that made a store a peer's. AM-S2 step 3 ended that: a peer borrows
-    // core 0's store, and the lease was only ever installed on an owned one -
-    // so **every** core reached this predicate with a null lease, took the
-    // early return, and was told it may write anything, system pages
-    // included. Nothing caught it because the *other* half of the same
-    // defect hid it: `system_page_limit_` was a second member that one
-    // installer set and the other did not, so on a shared store it read 0
-    // and the arm below could not have fired from any call site even with
-    // the early return gone. The store's own write gate (`ResidentBytes`'
-    // `mark_dirty && !MayWrite`) and the four callers outside this class
-    // therefore each got an unconditional yes.
-    //
-    // The lease cannot be the key any more, and `CurrentCore()` is the one
-    // that survives sharing: it answers "who am I", which is the question,
-    // where a member id would answer "whose store is this"
-    // (`base/current_core.hpp` makes the same argument for the latch word).
-    // For a leased store this is the identical answer - such a store is a
-    // peer's by construction and its core is never 0 - so the behaviour that
-    // changes is exactly the one that was wrong.
-    // **A shared store is every core's**, so only the asker can say. The
-    // three arms that stood below this one - the lease, the write-grant
-    // bitmap and the stamp claim - answered for a store one core owned;
-    // AW-S1b removed the arrangement they described, and which core may
-    // write a *user* page is the Expeditor's routing decision rather than
-    // this layer's.
-    if (page_id < first_evictable_page_id_) return CurrentCore() == 0;
+bool DevicePageStore::MayWrite(PageId) const noexcept {
+    // **Every core writes every page** (AT-S5; `crosscore.md` CC11 as
+    // rewritten, `catalog.md` CT5). The arm that stood here - the system
+    // range writable by core 0 alone - was the last enforcement of the rule
+    // AR0-5 retired: one writer as the serialisation mechanism for the
+    // superblock, the free map and the catalog pages. What serialises each
+    // now is named where it is written: the page latch across cores and
+    // the no-park-under-a-span rule within one for a catalog row's bytes
+    // (`catalog.hpp`, `AdmitExplicitRowId`'s hook); the map's own
+    // `map_latch_` for allocation (AM-S3); the schema word for every core's
+    // memo (AT-S2); and page 0's ceiling, which AT-S4 advances by CAS from
+    // whichever task crosses it - until then `TrxIdSequence::Carve` runs on
+    // core 0 alone by the lease's routing, not by this predicate. The seam
+    // stays and answers yes; `ResidentBytes` no longer asks.
     return true;
 }
 

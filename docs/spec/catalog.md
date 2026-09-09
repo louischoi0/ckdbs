@@ -100,11 +100,12 @@ the engine does not.
 
 Two things, neither an authority (AR0-5 §2, AT-R11): their frames are
 pinned, and page 0's address with the fixed catalog page numbers is
-bootstrap layout. Until AT-S5 the pages have one writer, core 0, and
-`Revalidate()` is a no-op there — the single writer's `cache_built_at_`
-always tracks the word — so every effective drop the word makes today is
-a peer's. AT-S5 lets any core write the pages; nothing in this file
-changes for it, which is the point of writing it before it.
+bootstrap layout. Until AT-S5 the pages had one writer, core 0, and
+`Revalidate()` was a no-op there — the single writer's `cache_built_at_`
+always tracked the word. Every core writes them since AT-S5, so every
+core's cache can now be behind the word and `BumpWord`'s adopt-only-if-
+current rule (CT2) is live on every core rather than latent; nothing else
+in this file changed for it, which was the point of writing it first.
 
 **A catalog row is not a lock unit** (AT-S3, E13 answered no). A named
 key's admission writes the relation's `sys.tables` row - the mark, or the
@@ -120,7 +121,6 @@ no-park rule and nothing else. The flip is the one catalog write whose
 `ORDER BY <pk>` and answers out of order — and staleness is what the word
 fixed at AT-S2: the flip bumps it. A transaction-length `X` would
 serialise every named-key `INSERT` into a relation for the length of each
-transaction and protect nothing. A peer refuses a named key today
-(`catalog_read_only_`); what would let it admit one locally is the page
-write, `MayWrite`'s arm and AT-S5's. `rules.md` §3 declares the pages, not
-the rows.
+transaction and protect nothing. A peer refused a named key until AT-S5
+(`catalog_read_only_`); it admits one now, the page write being every
+core's. `rules.md` §3 declares the pages, not the rows.

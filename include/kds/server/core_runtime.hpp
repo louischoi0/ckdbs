@@ -59,13 +59,11 @@
 // Three asymmetries against core 0 are deliberate and are the whole of P6's
 // soundness:
 //
-//   1. **The catalog is read-only here.** The catalog's fixed pages have one
-//      writer, core 0 (M5). A peer faults them read-only - the page store
-//      enforces it (`MayWrite`) - and since AT-S2 its cache revalidates
-//      against the instance's schema version word at each task boundary,
-//      so a DDL's rows are seen by the next statement with nothing sent. The
-//      broadcast that stood here, and the retryable "table not found" a
-//      peer answered until it arrived, are gone.
+//   1. **The catalog was read-only here until AT-S5.** Its fixed pages had
+//      one writer, core 0, enforced by the store's `MayWrite`; a peer
+//      faulted them read-only and shipped or refused every DDL. Every core
+//      writes them now under the page latch, the DDL's relation `X` and the
+//      schema word (`catalog.md` CT5), and this asymmetry is history.
 //   2. **Allocation reaches the one free map**, under the structure latch.
 //      It came from a per-core extent lease until AW-S1b, because a store a
 //      core did not own could not reach that map at all.

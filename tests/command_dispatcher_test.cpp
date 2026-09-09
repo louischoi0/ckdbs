@@ -168,23 +168,24 @@ TEST_F(CommandDispatcherTest, ShowMetaReportsNoCrossCoreWriteRefusalsOnAQuietCor
         << "no keys, no detail token: " << out.response;
 }
 
-TEST_F(CommandDispatcherTest, ARefusedCrossCoreWriteIsCountedAndPrintedByKey) {
-    // Core 0 creates the relation, so it is owned by core 0.
+TEST_F(CommandDispatcherTest, ACrossCoreWriteIsCountedAndPrintedByKeyAndRuns) {
+    // Core 0 creates the relation, so its owner_core says 0 - a statistic
+    // since AT-S5, which the counter below reads and nothing else does.
     CommandDispatcher owner(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(owner.Dispatch("CREATE TABLE acct (id int64, name varchar)")
                   .response.substr(0, 7),
               "CREATED");
 
-    // A dispatcher running as core 1 may not write it (CC3).
+    // A dispatcher running as core 1 writes it (AT-S5), and the write is
+    // counted under the key the placement decision will be made from.
     CommandDispatcher peer(boot_->superblock, boot_->catalog, store_, nullptr, nullptr,
                            nullptr, wal::DurabilityClass::kGroup, exec::Budget(),
                            /*recorder=*/nullptr, /*replay_enabled=*/false,
                            /*access_statistics=*/true, /*cabins=*/nullptr,
                            /*txn=*/nullptr, txn::IsolationLevel::kReadCommitted,
                            /*core_id=*/1);
-    auto refused = peer.Dispatch("INSERT INTO acct VALUES ('alice')");
-    ASSERT_NE(refused.response.find("bound to core"), std::string::npos)
-        << refused.response;
+    auto written = peer.Dispatch("INSERT INTO acct VALUES ('alice')");
+    ASSERT_EQ(written.response.rfind("INSERTED", 0), 0u) << written.response;
 
     auto meta = peer.Dispatch("SHOW META");
     EXPECT_NE(meta.response.find("cross_core_write_refusals=1"), std::string::npos)
@@ -203,12 +204,11 @@ TEST_F(CommandDispatcherTest, ARefusedCrossCoreWriteIsCountedAndPrintedByKey) {
     EXPECT_EQ(detail.rfind("cross_core_write_refusal_detail=1>0:", 0), 0u) << detail;
     EXPECT_EQ(detail.substr(detail.size() - 2), "=1") << detail;
 
-    // A second refusal of the same shape is the same key, counted twice -
+    // A second write of the same shape is the same key, counted twice -
     // not a second key. The distinction is the whole point of a keyed
-    // counter: "one relation refused twice" and "two relations refused
-    // once" are different evidence for 2PC.
-    ASSERT_NE(peer.Dispatch("INSERT INTO acct VALUES ('bob')").response.find("bound to core"),
-              std::string::npos);
+    // counter: "one relation written cross-core twice" and "two relations
+    // once" are different evidence for placement.
+    ASSERT_EQ(peer.Dispatch("INSERT INTO acct VALUES ('bob')").response.rfind("INSERTED", 0), 0u);
     auto meta2 = peer.Dispatch("SHOW META");
     EXPECT_NE(meta2.response.find("cross_core_write_refusals=2"), std::string::npos)
         << meta2.response;

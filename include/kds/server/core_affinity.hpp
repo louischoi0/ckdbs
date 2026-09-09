@@ -114,14 +114,6 @@ private:
     RefusalCounters<Key> counts_;
 };
 
-// The refusal a cross-core **write** gets.
-//
-// Retryable, and shaped like the first-updater-wins abort `docs/spec/txn.md`
-// already defines, because it is the same thing from the client's side: the
-// transaction cannot proceed and re-running it may work. A client that
-// already retries on `TXN_CONFLICT` needs no new code.
-Status CrossCoreWriteRefused(std::uint32_t home_core, std::uint32_t target_core,
-                             std::string_view relation);
 
 // The refusal a **read** spanning cores gets when the step pipeline cannot
 // take it (R4-R/RS0). The pipeline itself is built and lives on every core
@@ -135,26 +127,6 @@ Status CrossCoreWriteRefused(std::uint32_t home_core, std::uint32_t target_core,
 Status CrossCoreReadNotImplemented(std::uint32_t this_core, std::uint32_t target_core,
                                 std::string_view relation);
 
-// The refusal every DDL verb gets on a non-system core
-// (docs/inflight/in-progress/workplan-peer-writer.md PW4).
-//
-// A peer's catalog is read-only by construction (M5: the catalog pages
-// have one writer, core 0), so a CREATE/ALTER/DROP dispatched there has no
-// sound outcome. Since PW1c-5 the store's MayWrite is enforced for leased
-// stores in **every** build, so an unguarded DDL would no longer corrupt -
-// it would die mid-handler naming a page id. This refusal still earns its
-// place for what that failure is not: it fires before any handler runs,
-// names DDL and where DDL lives rather than a page, and leaves no
-// half-executed handler state behind it.
-//
-// `Unsupported` and not retryable, like the read refusal: retrying on the
-// same connection changes nothing. The message says where DDL does run,
-// because the operator's next question is always the same one.
-//
-// This refusal is also load-bearing for §5d: the delete-mark purge's
-// soundness argument assumes a peer takes no DDL, and this is what
-// enforces it (command_dispatcher.cpp's purge gate cites it).
-Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb);
 
 // The refusal a write gets on the owner of a relation whose index is being
 // built there, or built and not yet published by core 0's commit

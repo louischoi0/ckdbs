@@ -401,33 +401,7 @@ TEST(FkProbeRigTest, AChildWaitingOnAParentThatRollsBackAcrossCoresIsAViolation)
     EXPECT_EQ(refused.code(), StatusCode::kFkViolation) << r.child.out.response;
 }
 
-// C1. The parent row core 0 is asked about was written by the requester's
-// own participant there, so the probe's check view carries that
-// participant as its writer and the row is the transaction's own pending
-// image: pass at once, no park. **The mutation**: mint the view with no
-// writer and the probe parks on the participant, which decides only at
-// the `COMMIT` this statement stands ahead of - the child's insert then
-// takes the whole 5 s deadline and is refused `TxnConflict`, and this cell
-// fails at "the child waited on its own participant".
-TEST(FkProbeRigTest, ATransactionWritingItsOwnParentAcrossCoresPassesItsChildWithoutAPark) {
-    FkRig r(Ticking());
-    ASSERT_NE(r.rig, nullptr);
-    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
-    r.SubmitOwn();
-    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.own.child_done.load(std::memory_order_acquire); },
-                          3000ms))
-        << "the child waited on its own participant: " << r.own.child_out.response;
-    EXPECT_EQ(r.own.parent_out.response.rfind("INSERTED", 0), 0u) << r.own.parent_out.response;
-    EXPECT_EQ(r.own.child_out.response.rfind("INSERTED", 0), 0u) << r.own.child_out.response;
-    EXPECT_EQ(r.core0_probes().probe_waits(), 0u)
-        << "the probe parked on the requester's own participant";
-
-    r.own.may_end.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.own.ended.load(std::memory_order_acquire); },
-                          4000ms))
-        << "COMMIT did not return: [" << r.own.end_out.response << "]";
-    EXPECT_EQ(r.own.end_out.response.rfind("COMMIT", 0), 0u) << r.own.end_out.response;
-}
+// `ATransactionWritingItsOwnParentAcrossCoresPassesItsChildWithoutAPark` stood here until AT-S5: it pinned a transaction that shipped its parent INSERT to the parent's owner and probed it from the child's core; a write runs where the session is since AT-S5, so the parent is the transaction's own on one core and the check reads it locally.
 
 // C2. The park's deadline is stamped at the drain and the child's at the
 // send, so a probe drained late parks past the child's waiter. The child

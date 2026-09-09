@@ -590,12 +590,12 @@ TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore)
     EXPECT_TRUE(store->MayWrite(user_page));
 
     {
-        // A peer on the same store. One writer per catalog page is the
-        // property; a user page stays writable because routing to the
-        // relation's owner is what gates that, not this predicate.
+        // A peer on the same store writes the system range too (AT-S5):
+        // one writer per catalog page was the property until then, and the
+        // page latch is what serialises the bytes now.
         const CurrentCoreGuard as_peer(3);
-        EXPECT_FALSE(store->MayWrite(system_page))
-            << "a peer was admitted to the system range on a shared store";
+        EXPECT_TRUE(store->MayWrite(system_page))
+            << "a peer was refused the system range after AT-S5 retired the arm";
         EXPECT_TRUE(store->MayWrite(user_page));
     }
 
@@ -603,19 +603,13 @@ TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore)
     EXPECT_TRUE(store->MayWrite(system_page));
 }
 
-TEST(DevicePageStoreOwnershipTest, ASharedStoreRefusesAPeersSystemWriteAndNotItsUserWrite) {
-    // The cell above pins the *predicate*; this one pins what the predicate
-    // is for. `MayWrite` has one live caller outside this class since
-    // AW-S1b, and the one that stands between a peer and a torn catalog
-    // page was always inside it -
-    // `ResidentBytes`' `mark_dirty && !MayWrite(...)` gate - and the null
-    // lease made that gate pass too. So the shared store gets the refusal
-    // cell the leased store already has
-    // (`AMissingGrantIsRetryableAndASystemPageIsNot`), with the same two
-    // readings of the same two page ids.
-    //
-    // **Mutation**: restore `if (lease_ == nullptr) return true;` above the
-    // system check and the system write is admitted.
+TEST(DevicePageStoreOwnershipTest, ASharedStoreAdmitsAPeersSystemWriteAsItsUserWrite) {
+    // Until AT-S5 this cell pinned `ResidentBytes`' `mark_dirty &&
+    // !MayWrite(...)` gate refusing a peer a system page, `InvalidArgument`
+    // and never retryable. The gate is gone with the arm it enforced: every
+    // core dirties every page, and what keeps a catalog page from tearing
+    // is the page latch across cores (`catalog.md` CT5). Same two page ids,
+    // the opposite reading of the first.
     auto device = MakeDevice(64, 0);
     {
         // Core 0's half: the pages have to exist, or the refusal below
@@ -638,19 +632,14 @@ TEST(DevicePageStoreOwnershipTest, ASharedStoreRefusesAPeersSystemWriteAndNotIts
     store->SetResidentLimit(128);
 
     const CurrentCoreGuard as_peer(3);
-    // Wrong now and wrong on every retry: the system range has one writer
-    // for the life of the instance, so the code is the non-retryable one.
-    auto refused = store->Get(4);
-    ASSERT_FALSE(refused.ok()) << "a peer dirtied a system page on the shared pool";
-    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument)
-        << refused.status().message();
-    EXPECT_FALSE(refused.status().retryable());
+    auto system = store->Get(4);
+    ASSERT_TRUE(system.ok()) << "a peer was refused a system page on the shared pool: "
+                             << system.status().message();
 
-    // And nothing more: a shared pool exists so that every core writes the
-    // user pages through it. Routing to the relation's owner is what gates
-    // that, not this predicate.
-    auto admitted = store->Get(130);
-    EXPECT_TRUE(admitted.ok()) << admitted.status().message();
+    // And the user page, as it always was: a shared pool exists so that
+    // every core writes every page through it.
+    auto user = store->Get(130);
+    EXPECT_TRUE(user.ok()) << user.status().message();
 }
 
 TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {

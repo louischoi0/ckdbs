@@ -116,13 +116,9 @@ void FkProbeServer::Answer(std::uint32_t requester, std::uint64_t request_id,
         // race - and answering from a relation this core does not own would
         // be the same wrong answer the whole order exists to prevent, just
         // one hop further along.
-        if (parent.value()->owner_core != core_id_) {
-            Reply(requester, request_id, request.session_id, verdicts,
-                  Status::TxnConflict("relation oid " + std::to_string(parent_oid) +
-                                      " is not owned by core " + std::to_string(core_id_) +
-                                      " any more; re-resolve and retry"));
-            return;
-        }
+        // The fail-closed owner test that stood here went at AT-S5: an
+        // owner is a statistic, and a request from a pre-S5 peer still
+        // gets a true answer from this core's read of the same pages.
 
         // **A row this core is about to delete is answered busy, ahead of
         // reading whether it exists** (AJ-T1, AJ-R3(a)). It does exist —
@@ -330,13 +326,9 @@ void FkProbeServer::AnswerReverse(std::uint32_t requester, std::uint64_t request
         // stale. Answering "no children" from a relation this core does not
         // own is precisely the dangling reference the fan-out exists to
         // prevent, one hop further along.
-        if (child.value()->owner_core != core_id_) {
-            ReverseReply(requester, request_id, request.session_id, verdicts,
-                         Status::TxnConflict("relation oid " + std::to_string(child_oid) +
-                                             " is not owned by core " + std::to_string(core_id_) +
-                                             " any more; re-resolve and retry"));
-            return;
-        }
+        // The fail-closed owner test that stood here went at AT-S5: an
+        // owner is a statistic, and a request from a pre-S5 peer still
+        // gets a true answer from this core's read of the same pages.
 
         // The check this core already runs for its own parents, with its
         // own `core_id` as the scope the answer is good for. A child whose

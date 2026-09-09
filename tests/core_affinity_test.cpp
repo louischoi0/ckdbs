@@ -65,17 +65,9 @@ TEST(SessionHomeCoreTest, TheBindingBelongsToTheTransactionNotTheConnection) {
 
 // ---- The refusals themselves -------------------------------------------
 
-TEST(CoreAffinityTest, AWriteRefusalIsRetryableAndNamesBothCores) {
-    // kTxnConflict, not a new code: from the client's side this is the same
-    // situation first-updater-wins produces - it cannot proceed, and a
-    // retry may work - so a client that already handles TXN_CONFLICT needs
-    // no new code.
-    Status s = CrossCoreWriteRefused(/*home=*/1, /*target=*/2, "accounts");
-    EXPECT_EQ(s.code(), StatusCode::kTxnConflict);
-    EXPECT_NE(s.message().find("core 1"), std::string::npos) << s.message();
-    EXPECT_NE(s.message().find("core 2"), std::string::npos) << s.message();
-    EXPECT_NE(s.message().find("accounts"), std::string::npos) << s.message();
-}
+// `AWriteRefusalIsRetryableAndNamesBothCores` stood here until AT-S5: the
+// refusal it pinned, `CrossCoreWriteRefused`, went with the route - a write
+// runs where the session is, and no core refuses another's relation.
 
 TEST(CoreAffinityTest, AReadRefusalIsNotRetryable) {
     // Retrying changes nothing, and telling a client to retry a statement

@@ -468,7 +468,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // Asymmetry 1 made enforceable at dispatch (PW4) - the argument is at
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {
-        runtime->dispatcher_->SetCatalogReadOnly(true);
+        // `SetCatalogReadOnly(true)` stood here until AT-S5: a peer's
+        // dispatcher refused DDL and named keys, took no sorted fill, and
+        // shipped or refused every write to a relation it did not own -
+        // because the catalog pages had one writer. They have none
+        // (`DevicePageStore::MayWrite` names what serialises them).
         // CR7: a peer records its access shapes into a local batch and
         // flushes them to core 0 on the tick. Before this it recorded
         // nothing at all - the dispatcher above is constructed with
@@ -1100,7 +1104,8 @@ void CoreRuntime::MaybeRefillRowIds() {
                 // statement resolves against the directory rather than
                 // the tick after - which is what R4/IS3's routing needs,
                 // since until this core sees its own range it keeps
-                // shipping the INSERT away.
+                // shipping the INSERT away - which since AT-S5 it does
+                // not; the revalidation stays for the directory's sake.
                 //
                 // This completion is a task boundary and the next thing it
                 // reads is the range core 0 just opened, whose `sys.ranges`

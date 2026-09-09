@@ -157,65 +157,7 @@ struct DeadlockRig {
     std::unique_ptr<TwoCoreRig> rig;
 };
 
-TEST(DeadlockRigTest, ATwoCoreCycleThroughShippedStatementsRefusesTheCloserAndItReachesTheClient) {
-    DeadlockRig r({});
-    ASSERT_NE(r.rig, nullptr);
-    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
-    r.Submit();
-
-    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.a.local_done.load(std::memory_order_acquire); }))
-        << r.a.local_out.response;
-    ASSERT_TRUE(KickUntil(*r.rig, 0, [&] { return r.b.local_done.load(std::memory_order_acquire); }))
-        << r.b.local_out.response;
-    ASSERT_EQ(r.a.local_out.response.rfind("UPDATED", 0), 0u) << r.a.local_out.response;
-    ASSERT_EQ(r.b.local_out.response.rfind("UPDATED", 0), 0u) << r.b.local_out.response;
-
-    // A ships first and parks on core 0's row, which B holds: no cycle yet.
-    r.a.go.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] {
-        return r.rig->core(1).statement_ship() != nullptr &&
-               r.rig->core(1).statement_ship()->shipped() >= 1;
-    })) << "A never shipped";
-    ASSERT_TRUE(Within(2000ms, [&] { return r.rig->locks().WaitEdgeCount() >= 2; }))
-        << "the coordinator's edge and the participant's park were not both recorded";
-    EXPECT_FALSE(r.a.remote_done.load(std::memory_order_acquire))
-        << "A's shipped update returned while B held the row: " << r.a.remote_out.response;
-
-    // B ships: its participant on core 1 meets A's row, and that
-    // registration closes the cycle. Well inside the 11 s fault net, which
-    // is the only other thing that could end this.
-    r.b.go.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*r.rig, 0,
-                          [&] { return r.b.remote_done.load(std::memory_order_acquire); },
-                          6000ms))
-        << "the cycle was not detected; only the fault net would end it";
-    const Status victim = StatusFromErrorReply(r.b.remote_out.response);
-    EXPECT_EQ(victim.code(), StatusCode::kTxnConflict) << r.b.remote_out.response;
-    EXPECT_TRUE(victim.retryable());
-    EXPECT_NE(r.b.remote_out.response.find("deadlock"), std::string::npos)
-        << r.b.remote_out.response;
-    // The carried status, which is what a KWP client reads (`c168acb`).
-    EXPECT_NE(r.b.remote_out.status.message().find("deadlock"), std::string::npos)
-        << r.b.remote_out.status.message();
-    EXPECT_FALSE(r.a.remote_done.load(std::memory_order_acquire))
-        << "the survivor proceeded before the victim released";
-
-    // The victim rolls back; the survivor's shipped update proceeds.
-    r.b.may_end.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*r.rig, 0, [&] { return r.b.ended.load(std::memory_order_acquire); }))
-        << r.b.end_out.response;
-    EXPECT_EQ(r.b.end_out.response.rfind("ROLLBACK", 0), 0u) << r.b.end_out.response;
-    EXPECT_TRUE(KickUntil(*r.rig, 1, [&] { return r.a.remote_done.load(std::memory_order_acquire); },
-                          4000ms))
-        << "the survivor never proceeded after the victim rolled back";
-    EXPECT_EQ(r.a.remote_out.response.rfind("UPDATED", 0), 0u) << r.a.remote_out.response;
-
-    r.a.may_end.store(true, std::memory_order_release);
-    EXPECT_TRUE(KickUntil(*r.rig, 1, [&] { return r.a.ended.load(std::memory_order_acquire); }));
-    EXPECT_EQ(r.a.end_out.response.rfind("ROLLBACK", 0), 0u) << r.a.end_out.response;
-    EXPECT_TRUE(Within(2000ms, [&] { return r.rig->locks().WaitEdgeCount() == 0; }))
-        << "every wait ended, so no edge should be left behind";
-}
+// `ATwoCoreCycleThroughShippedStatementsRefusesTheCloserAndItReachesTheClient` stood here until AT-S5: a cycle through two shipped statements needs two shipped writes, and a write runs where the session is since AT-S5; a two-core cycle through the lock table alone is `LockWakeRig`'s.
 
 }  // namespace
 }  // namespace kds::server

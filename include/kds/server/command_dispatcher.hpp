@@ -1972,7 +1972,6 @@ public:
     // `catalog_read_only_`). Called by CoreRuntime::Open for every
     // non-system core, before the first statement can arrive; a
     // dispatcher never told behaves exactly as it did before PW4.
-    void SetCatalogReadOnly(bool read_only) noexcept { catalog_read_only_ = read_only; }
 
     // Where CheckWriteAffinity records that a relation this core owns has
     // no write rights here (PW1c-7, core_affinity.hpp). Installed by
@@ -2612,17 +2611,6 @@ private:
     SuperBlock& superblock_;
     catalog::Catalog& catalog_;
     storage::PageStore& page_store_;
-    // Whether this dispatcher's catalog is another core's to write
-    // (CoreRuntime asymmetry 1: catalog pages have one writer, core 0).
-    // Set by CoreRuntime for every non-system core; false everywhere else,
-    // including the P4e equivalence harness's stand-in dispatchers, which
-    // call themselves core 1 over a writable store precisely because no
-    // peer writer exists yet. Gates the PW4 DDL refusal (PeerDdlRefused),
-    // CheckWriteAffinity's PW1c-5 shape gate, and the multi-row VALUES
-    // refusal - so the name is narrower than the flag: it reads "this
-    // core writes no page the system core allocated", the catalog being
-    // the first such page.
-    bool catalog_read_only_ = false;
     // PW1c-7's demand sink; null on core 0 and on hook-less fixtures.
     // PW1c-6b-2's window; null on the same cores.
     const PendingIndexBuilds* pending_index_builds_ = nullptr;
