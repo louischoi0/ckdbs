@@ -488,7 +488,8 @@ forbids for a stage's lifetime.
 | AO-S6e-a | **Built 2026-09-09** on `ao-s6e-units` from `68fae89`: census row 4's **outcome** with none of its mechanism. A write on the owner that meets an open index-build window used to be refused `TxnConflict`; on a served connection it now parks on `!Covers(oid)` and runs the statement whole when the window closes, and the refusal survives only on the synchronous path that has no reactor to park on - `write_block`'s division exactly. **The relation `X` census row 4 names is not built**, and the reason is the stage document's §"AO-S6e-a is blocked": `OnDone` closes the window and *then* drops the catalog cache, in one handler, before the next task is polled, so the park cannot observe the close without the drop - while a lock released on core 0 at the DDL's decide is seen on the owner before either ring message is drained and would admit the unindexed write the window exists to prevent. The sub-stage came out **S, not L**: one member, one outcome field, one arm, one cell. `ddl-transactional.md` §5e and `crosscore.md` carry the behaviour. **The park is bounded by `kIndexWindowWaitNs`**, half `kShippedStatementDeadlineNs` and asserted against it, taken once for the statement and falling back to the gate's own refusal - the review's C1, C2 and C4 in one constant - and the two waits run in **one loop** rather than two arms (C3), with the foreign-key probe arm calling it beside item 16's (C5). One cell, mutation-checked (drop the record and the write is refused `PW1c-6b` while the window is open), and it now also asserts the row is **in the index** afterwards, which is the only reason the window exists; its control is the pre-existing `ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublishedByCore0`, whose synchronous refusal is unchanged. **One gap stated rather than closed**: the wait is invisible to `SHOW META` - an operator who saw an error line now sees a stall - and a counter is client-visible surface. **Overhead not measured** |
 | AO-S6e-c | **Built 2026-09-09** on `ao-s6e-units` from `4efe0e7`, census row 11: a refused admission now **waits** for the transaction whose reservation refused it. `AssertionEnforcer::ReserverOn` names one from `pending_` - arrivals only, a departure having lowered the aggregate and so refused nobody, and never the writer's own - and the two admitting entry points hand it back on a refusal; the dispatcher records it through `NoteBlockingWriter`, so the wait rides the family's channel and gets the wait-for graph with it. **The graph is why that matters rather than being tidy**: two transactions can each hold a reservation the other's admission needs, and AO-S4a refuses the waiter that would close it. `kCapable` unqualified - an admission reads the live aggregate and never the waiter's view. **The `S`/`X` slice fence census row 11 names is not built**, and the reason is the one item 19 was withdrawn for: it has no contender. The check and the reserve run inline in one statement with nothing between them on a cooperative core - `InsertOneRow`'s own comment says so - the enforcer is a dispatcher member and so per-core, and a relation's writes run only on its owner. **A pk of 0 is the sentinel** for "the contended thing is not a row": `kFirstRowId` is 1, the `INSERT` path has no id at admission time by design, and the two wait refusals name the assertion's group instead of row zero. `assertion.md` §6.1 and §6.2 rewritten - three of the four properties, each keeping what it said before beside what it says now. **The `critics-developer` pass found two defects this change made, and they are closed here.** *B1*: `AdmitAndReserveUpdate` is per-assertion and not atomic across them, so a refusal by the second leaves the first already applied to its cabin and its chain - and `EndWrite`'s re-runnability test reads the transaction's **trail**, which a reservation never enters, so the statement read as re-runnable and the re-run counted the first assertion twice, durably (both entries are `kAssertReserve`, `header == Σ(entries)` still holds, a rebuild reproduces it). A call that has reserved now hands back no reserver and gives the violation it always gave. *B2*: `ReserverOn` skipped departures and took any arrival, but an `UPDATE` always writes the pair - so a transaction that *lowered* the group by 49 was found by its +1 and waited on, futilely in both arms and with a live edge that could make the innocent holder a deadlock victim; it nets the candidate's contributions now and names one only when the net is positive. Three more: the `UPDATE` arm named a row its holder may never have touched (`pk = 0` there too), the Debug line still printed `row id=0`, and the fault net told an operator to look for a stuck holder on what is ordinary group contention (AO-0 item 22 records what that leaves open). **Five cells**, mutation-checked - the two the review asked for are the `UPDATE`-arm cell, which is what would have caught B1, and the two-transaction reservation cycle, which pins the claim the sub-stage rests on; the control is `AssertionEnforceTest`'s own synchronous cell, which still gets the violation at once and is unchanged. Suite **3365/3365 green in 166.22 s**. **Overhead not measured** |
 | AO-S6e-d | **Built 2026-09-09** on `ao-s6e-units` from `9b1dad3`, and it is prose only. Census row 4's two citations were stale and its fate half-wrong (the wait landed, the relation lock did not); row 11's `assertion_build.cpp:203` was inside a comment, its fate put the conversion under a fence that turned out to have no contender, and its *other* refusal - `CREATE ASSERTION`'s own - is untouched and was not said to be. The AO-S6 row named four units and **none of the three that were this stage's was built**; the fourth was never its own. The `IS` ruling was cited three ways - "(R14)", "R13's gate", and R12's own "R13's M2 consumer" - and R13 has no gate; all three now say **AO-R12**. AO-S6e-c gained the section the sizing table was already pointing at. **The close**: the stage delivered two waits and no new unit, and its three reasons are one reason - every unit it was asked to add had no contender, or one the unit could not have served. That question goes to AO-S7 beside the prices. No code; the suite not executed for this row and not claimed |
-| AO-S6e-b, AO-S7..S8 | not started; (b) is deferred to AO-S7 with items 19 and 20 |
+| AO-S7 | **Opened 2026-09-09** on `ao-s7-prices` at `5e94dc8`: the order only, and deliberately so - `raft-marks-2026-09-08.md` §4 obliges the spin's switch condition to be written **before** S7 runs rather than read off its result, so §AO-S7 carries it and waits for the mark. **Nothing measured.** Three survey findings shape it: the CLAUDE.md suspension is the per-step *gate* and does not reach a stage whose deliverable is results files (AM-S6, AN-S5 and AR2 C1/C2 all ran under it); **no driver serves C3's contended arm** - `multicore_benchmark.py` measures non-interfering relations and says parity is the honest expectation - so one must be written, which `bench/README.md` warns about (item 23); and **item 19's number cannot be measured on the engine at all**, nothing taking an `IS`, so it is a decomposition or a build-then-revert (item 24). Items 20 and 22 are carried here but are not measurements, and the order says so rather than leaving them to be looked for among the files. Five cells named, all under `bench/README.md`'s five rules. **Items 23, 24 and the mark ratified the same day, and the cells ran**: one results file at `bench/v3.0.0/results-ao-s7-c3-v2.7.0-304-g5e94dc8.md`, four raw summaries archived, a new driver `tools/lock_contention_benchmark.py` proved against its controls before it priced anything. **C3's shape does not exist on this engine** - the owner core serialises before the tuple lock is reached, so hot minus disjoint is +3.3/+1.0/-1.4 µs across three runs, each inside its floor, with zero refusals at 8 and 32 sessions. The spin is not tried, the partition sweep is not run and the file says why, the cap stops being provisional, and E7 is **not** decided because there is no win or loss to read off. Two unasked findings: `group` durability is 82-85% of an update, so the marked cell cannot answer its own question; and the no-family binary exited at startup on its first build, `locks_->SetWakeRegistry` being unguarded. E12's price is an extrapolation and is labelled one. The suite not executed for this row and not claimed |
+| AO-S6e-b, AO-S8 | not started; (b) is deferred to AO-S7 with items 19 and 20 |
 
 ---
 
@@ -1322,3 +1323,191 @@ ruling is **AO-R12**. `:443` calls it "(R14)", `:942` calls it "R13's
 gate", and R12's own body says "R13's M2 consumer"; R13 is "M2 logs nothing
 and changes no format" and has no gate. Three spellings for one ruling,
 corrected here and left for AO-S8 to fix at the other two sites.
+
+---
+
+## AO-S7 — the prices, and the order written before the run
+
+Opened 2026-09-09 on `ao-s7-prices` at `5e94dc8`, which is `origin/main`.
+Every `path:line` is a read at that commit. **Nothing has been measured
+yet, and this section is deliberately the whole of the stage until the
+operator marks §"What must be marked before a cell runs" below** —
+`raft-marks-2026-09-08.md` §4 obliges exactly that: *"The switch condition
+is written before S7 runs, not read off its result."*
+
+### What AO-S7 owes
+
+The stage row is "C3 (AR2 §9 step 5) under `bench/README.md`'s five rules,
+and the price of R3's relation-level key". Five stages have since deferred
+work here, so the list is longer than the row:
+
+| owed | from | what it is |
+|---|---|---|
+| **C3, both arms** | AR2 §9 step 5 | many sessions across cores updating **one row** under the tuple lock, and the same sessions on **disjoint rows** so the relation-level `IX` key is priced alone (R3) |
+| **E7's default** | AR2 §7, "C3 pending" | local-unless-routed or routed-unless-local, for the verbs C1/C2 did not settle |
+| **E12's price** | AR2 §7, "its price is C3's to report, not to decide" | what the read borrow costs |
+| **The partition count** | AO-R2 | 64 × cores, "re-measured in S7" |
+| **The cap's value** | AO-0 item 1 | 65,536, `[provisional]` "until AO-S7 names it" |
+| **The partition latch** | AO-0 item 11 / raft-marks §4 | mutex, with a spin tried only if S7's numbers ask |
+| **C3's cross-unit wake, C4's mutual-refusal bias** | AO-S6d, AO-S6e | the poll's cost against the lock slot's — the move from `IsInFlight` polling to a slot |
+| **Item 19** | AO-S6e | what a per-page `IS` costs a read |
+| **Item 20** | AO-S6e | what the `DROP TABLE` wait buys |
+| **Item 22** | AO-S6e-c | whether a group wait carries a bound of its own |
+| **"Which unit has a contender"** | AO-S6e's close | the question three sub-stages met from three directions |
+
+### The survey, at `5e94dc8`
+
+**1. `bench/` is live and the five rules are in force.** `bench/v3.0.0/`
+holds twelve results files; `bench/README.md` carries the rules and the
+BTREE-only mark (AS-Q6, 2026-09-08). This host: 8 CPUs, `/` and `/tmp` both
+`/dev/root` ext4, load 0.11 at the survey. **The two-CPU figure some notes
+carry is not this box** — rule 4's obligation (record `/proc/loadavg` and
+the competing-build `pgrep` per cell) is what actually binds, and it binds
+whatever the core count.
+
+**2. The suspension does not reach this stage.** CLAUDE.md suspends *"the
+interleaved A/B overhead measurement (`ck-tester`, `build-release`)"* as the
+**per-step gate** every AO-S6 row says "overhead not measured" against.
+AO-S7 is not that gate; it is a stage whose deliverable *is* results files,
+and AM-S6, AN-S5 and AR2 C1/C2 have all run under the suspension. Stated
+because the two are one sentence apart and reading them as one would stop
+this stage before it opened.
+
+**3. No driver serves C3's contended arm, and that is the stage's first
+problem.** `tools/multicore_benchmark.py` measures N **non-interfering**
+relations — one connection per relation, and its own docstring calls parity
+the honest expectation. C3 wants the opposite: many sessions on **one
+relation**, contended on one row and then spread over disjoint rows.
+Nothing in `tools/` does that. The nearest harness in discipline is
+`tools/catalog_read_ab_benchmark.py`, which is where the shape a C3 driver
+needs is already written down — interleaving rather than sequence, a noise
+floor taken from inside the run, and a control that cannot reach the code
+under test.
+
+And `bench/README.md` is explicit that this is not a free choice: *"The
+drivers themselves are unmodified `tools/` scripts — a driver change inside
+a measurement stage measures the driver."* A **new** driver is not a driver
+*change*, but the first run of an unproven one is the hazard that sentence
+exists for. AO-0 item 23.
+
+**4. Item 19's number cannot be taken by measuring the engine**, because
+the thing it prices is not in the engine: nothing takes an `IS`, and
+AO-S6e-b deferred building one here. So item 19 is either a build-then-
+measure (a throwaway `IS` on the read path, priced and reverted) or a
+**decomposition**: the cost of one `LockTable` acquire+release, which is
+measurable on its own, times the pages a positioned read walks, which
+`SHOW ACCESS` already reports. The second gives an upper bound without
+building anything and cannot be wrong in the expensive direction. AO-0
+item 24.
+
+**5. Items 20 and 22 are not measurements at all.** Item 20 asks what the
+`DROP TABLE` wait *buys*, and AO-S6e's review established that a positioned
+reader already gets correct rows (DT1) and a clean error (the post-park
+re-bind) — so the honest answer is a sentence, not a number, and it may be
+"nothing". Item 22 asks whether a group wait carries its own bound; that is
+a design choice against AO-R8's one-net-per-statement rule. Both are
+carried here because AO-S6e deferred them here, and both are listed so they
+are not looked for among the results files.
+
+### The cells
+
+Every one under `bench/README.md`'s five rules, `build-release` rebuilt at
+the measured commit, a copied and hashed binary, a named block device, a
+chosen port, and `/proc/loadavg` plus the competing-build `pgrep` written
+into the file per cell.
+
+| # | cell | arm | what it answers |
+|---|---|---|---|
+| 1 | **C3-contended** | N sessions across `cores = 8`, all updating one row of one relation, `group` durability | what the tuple lock costs under real contention, and what a waiter's park costs against the refusal it replaced |
+| 2 | **C3-disjoint** | the same N sessions, disjoint rows of the same relation | **R3's price alone**: every writer takes the relation `IX` whether or not two of them ever meet on a tuple |
+| 3 | **C3-baseline** | the same N sessions, `locks_ == nullptr` | the engine without the family, so cells 1 and 2 have something to be a delta against |
+| 4 | **partition sweep** | cell 2 at 16, 64 and 256 × cores | AO-R2's count, re-measured rather than re-asserted |
+| 5 | **latch share** | cell 1's `SHOW META` accounting | raft-marks §4's quantity, and the input to the spin's switch condition |
+
+Cells 1–3 interleave block by block inside one process, alternating which
+arm goes first, on `catalog_read_ab_benchmark.py`'s argument: two sequential
+runs of any driver on this box disagree with themselves by more than the
+effect being measured.
+
+### What must be marked before a cell runs
+
+**raft-marks-2026-09-08 §4 item 2 requires it**, and this is where it lands.
+CLA proposes it verbatim as that mark wrote it, plus what the mark left to
+this order:
+
+- **the cell**: C3's contended arm — N sessions across `cores = 8` updating
+  one row, `group` durability, `build-release`, interleaved with the same
+  cell on the uncontended arm;
+- **the quantity**: the partition latch's share of the update's wall time,
+  read from the `SHOW META` accounting AO-S1 added — **and if nothing
+  attributes to the latch, the attribution is added there first and the
+  cell re-run**, which is work this stage owns rather than a reason to skip
+  the number;
+- **the threshold**: a spin primitive is tried **only if** that share
+  exceeds the same cell's cross-core wake cost — C1's ~46% of a statement's
+  wall time with the hop (AL-S8's figure). Below it the latch is not the
+  bottleneck and a spin buys nothing measurable;
+- **the comparison, if tried**: mutex against spin on the same host,
+  interleaved, both arms in the file, and the spin adopted only on a delta
+  both repeats agree on.
+
+### AO-0 items 23 and 24
+
+| # | item | class | CLA's proposal |
+|---|---|---|---|
+| 23 | **C3 needs a driver `tools/` does not have**, and `bench/README.md` warns that a driver written inside a measurement stage is a driver being measured | design; measurement-gated | **write it, and prove it before it prices anything**: the new driver's first run is cells 1–3 against `locks_ == nullptr`, where the expected answer is known — no family, no lock cost — so a driver that reports a difference there is reporting itself. Only after that does it price the engine. The alternative is to widen `multicore_benchmark.py`, which `bench/README.md` forbids more clearly than it forbids a new file |
+| 24 | **How item 19's `IS` price is taken**, given that nothing in the engine takes an `IS` | measurement method | **decompose**: one `LockTable` acquire+release, measured alone, times the pages a positioned read walks, from `SHOW ACCESS`. An upper bound that cannot be wrong in the expensive direction and builds nothing. The alternative — wire a throwaway `IS`, price it, revert — measures the real thing and puts an unreviewed borrow on the read path for the length of a run |
+
+### What AO-S7 measured, 2026-09-09
+
+Items 23, 24 and the mark were ratified as proposed the same day, and the
+cells ran on `ao-s7-prices` at `v2.7.0-304-g5e94dc8`. One results file:
+`bench/v3.0.0/results-ao-s7-c3-v2.7.0-304-g5e94dc8.md`, with the four raw
+summaries under `archive/ao-s7-c3-v2.7.0-304-g5e94dc8/`.
+
+**C3's answer is that its shape does not exist on this engine.** Every write
+to a relation runs on that relation's owner core and the reactor serialises
+what runs on a core, so two writers never hold the table at once. hot minus
+disjoint is +3.3, +1.0 and −1.4 µs across three runs, each inside its own
+noise floor, with **zero refusals** at 8 and at 32 sessions. The tuple lock
+is taken and released and never fought over.
+
+Three things that follow, and one that does not:
+
+- **The spin is not tried.** The mark's threshold was the partition latch's
+  share exceeding the cross-core wake cost (~46%). The whole family's share
+  is under 3%. The mutex stands and AR0 D2(a) stays amended.
+- **The partition sweep is not run**, and the file says why rather than
+  leaving it undone: a sweep looks for the count at which collisions cost
+  something, and collisions need two cores in the table at once on one
+  relation — which is the thing these runs establish does not happen.
+- **The cap stops being `[provisional]`** at 65,536: nothing approached it,
+  and the shapes that reach it are bulk statements rather than contention.
+- **E7 is not decided**, and C3 was to decide it. Its answer is that there
+  is no tuple-granularity win or loss to read off. E7 needs a different
+  cell and naming it is M3's.
+
+**Two findings the run produced that the order did not ask for.** Under the
+marked `group` durability the commit is **82–85% of an update** (2880 µs
+against 437 µs relaxed), so the marked cell cannot answer its own question
+and the numbers above are the `relaxed` arm's. And the no-family binary
+**exited at startup on its first build**: `locks_->SetWakeRegistry` is
+unguarded, so nothing in the tree had ever run an `Expeditor` without a
+table outside a fixture.
+
+**E12's price is an extrapolation and is labelled one.** Item 24's ratified
+decomposition bounds one table operation at ≲ 3 µs, so a per-page `IS`
+costs ≲ 3 µs × pages — under 1% of a point read, linear in pages on a scan.
+Nothing in the engine takes an `IS`, so this is the only number here that
+was not measured directly.
+
+### What AO-S7 does not do
+
+It does not decide E7 or E12 — AR2 §7 says both are *read from* C3, and a
+stage that decided them would be deciding what it was asked to measure. It
+does not lift AO-S6e-b: items 19 and 20 come here for their numbers, and
+the unit itself is M3's or a later stage's. And it produces no number for
+any AO-S6 row: those rows say "overhead not measured" and stay saying it,
+because this stage prices the family rather than re-gating the changes that
+built it.
+
