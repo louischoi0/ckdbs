@@ -63,9 +63,9 @@ mis-attribute; `SHOW ACCESS` may list them and honesty costs a row).
 
 A catalog write like all DDL: WAL-logged and durable
 (`ddl-transactional.md` §7), `BumpVersion()` once at the end (a dropped
-name is read by resolution itself — no in-place exception), peers
-invalidated through the `kCatalogInvalidate` path. `sys.*` relations are
-refused, ALTER's AL7 verbatim.
+name is read by resolution itself — no in-place exception), every other
+core re-reading at its next boundary through the schema version word
+(`catalog.md` CT2). `sys.*` relations are refused, ALTER's AL7 verbatim.
 
 In autocommit the drop **retires** its dependent rows. Inside an explicit
 transaction it **delete-marks** them instead and records the

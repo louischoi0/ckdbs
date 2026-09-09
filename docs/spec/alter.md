@@ -87,8 +87,8 @@ statement stamped with an older `catalog_version` drops or revalidates.
 The in-place-update exceptions (`SetPatternWaystoneRoot`,
 `SetPatternOrigin`) do not apply: their argument was "read by nothing
 else", and a name is read by *resolution itself*. Cross-core, the
-flush + `kCatalogInvalidate` broadcast carries the bump; this spec adds no
-new coherency mechanism.
+schema version word carries the bump and every other core's next boundary
+re-reads (`catalog.md` CT2); this spec adds no new coherency mechanism.
 
 ## 6. AL6 — Logged and durable, not undone by ROLLBACK
 

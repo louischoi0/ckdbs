@@ -89,9 +89,10 @@ isolation is at stake. Each statement takes its view boundary once
 (`EnsureStatementBoundary`), so two resolutions in one statement never
 disagree.
 
-`Catalog::catalog_version()` is not a sound freshness guard —
-`InvalidateFromPeer()` clears the cache without bumping it, deliberately —
-and nothing here leans on it.
+`Catalog::catalog_version()` is not a sound freshness guard — a peer's
+cache is dropped by the schema version word's `Revalidate()` (AT-S2,
+`catalog.md` CT1), which never advances that counter — and nothing here
+leans on it.
 
 ## 5. What is in scope
 
@@ -339,9 +340,9 @@ before, so it is logged and the reply stands.
 
 **No version bump, deliberately.** Every retired row was already gone to
 every reader — that is what the horizon proves — so no cached answer
-changes, and a bump would broadcast `kCatalogInvalidate` to peers and
-stale this instance's bound statements for nothing. A crash mid-sweep
-leaves the state it started from.
+changes, and a bump would move the schema word for every core and stale
+this instance's bound statements for nothing. A crash mid-sweep leaves
+the state it started from.
 
 **Observability.** `SHOW META` prints `catalog_marks_purged` — this
 mount's own retirements — beside the recovery report's
@@ -412,9 +413,10 @@ cannot have missed the drop and the write it admits writes into an index
 this core knows. A lock released by core 0 at the DDL's decide is a write
 to a table shared by both cores, seen on the owner before either ring
 message is drained: it would admit exactly the unindexed write the window
-exists to prevent. (One pre-existing exception, unchanged by this row:
-`InvalidateCatalog` returns before dropping the cache if its page eviction
-fails, which a client's retry met the same way.)
+exists to prevent. (The exception this row once carried — a peer's cache
+drop that returned early when its page eviction failed — went with the
+eviction at AT-S2; the re-run's boundary asks the schema word, `catalog.md`
+CT2.)
 
 **What the wait is not visible in.** `SHOW META` reports
 `index_build_windows` — the windows, not the writers parked behind them —

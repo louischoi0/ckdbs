@@ -110,8 +110,9 @@ next, taken from a reserved range of low page ids
 (`kCatalogOverflowFirst`..`kCatalogOverflowLimit`,
 `include/kds/catalog/well_known.hpp`). A page holds 68 `sys.columns` rows,
 so the instance's ceiling is roughly 7,800 column rows. The range is
-reserved rather than unbounded because the flush that precedes
-`kCatalogInvalidate` has to name every catalog page, and a bounded range can
+reserved rather than unbounded because "every catalog page" has to be
+nameable — the flush that preceded the catalog broadcast needed it, and a
+fixture's flush of the unlogged pages still does — and a bounded range can
 be named where an arbitrary set of general-supply ids cannot. (It was also
 because a catalog page above the first user page was one a peer could not
 fault at all — `DevicePageStore::MayFault`, which went with the fault grants
