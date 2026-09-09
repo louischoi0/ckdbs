@@ -292,12 +292,30 @@ struct ExecStats {
 // There is deliberately no switch for index **maintenance**. An index that
 // stops being maintained is *wrong* rather than slow, and a config key that
 // can produce a wrong answer is not a config key.
+// **Where the statement is, told to whoever is holding its position**
+// (AO-S6e-b; AO-R12 and AR2-R14, the read borrow). The outermost walk calls
+// this once before its first page and again at every page boundary - the one
+// place it holds no pin and no span - naming the relation and the key
+// interval it is positioned in. The executor knows nothing about locks: the
+// implementation is the dispatcher's, and what it does with the interval
+// (an `IS` at the slice, with the relation by the intention rule) is
+// `command_dispatcher.cpp`'s and the census's business.
+//
+// **`[0, kIdSpaceEnd)` is the whole relation** and is what the first call
+// carries: before the first page a walk is positioned nowhere in particular,
+// which is the same statement as "anywhere in it".
+class PositionSink {
+public:
+    virtual ~PositionSink() = default;
+    virtual void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) = 0;
+};
+
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
                const txn::Snapshot* snapshot = nullptr, bool indexes = true,
-               const ChainFrame* parent = nullptr);
+               const ChainFrame* parent = nullptr, PositionSink* position = nullptr);
 
 // The suspendable form (workplan-crosscore.md P4d-4a): identical
 // semantics and identical arguments, returned as a `sched::Coro` the
@@ -330,7 +348,7 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
                          const txn::Snapshot* snapshot = nullptr, bool indexes = true,
                          const std::function<bool()>* resume_gate = nullptr,
-                         const ChainFrame* parent = nullptr);
+                         const ChainFrame* parent = nullptr, PositionSink* position = nullptr);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

@@ -594,6 +594,27 @@ struct DispatchOutcome {
     // surface, so it is not added in passing.
     std::optional<catalog::Oid> index_window = std::nullopt;
 
+    // **AO-S6e-b: the unit this statement asked for and did not get**, or
+    // nullopt. `DROP TABLE`'s relation `X` against a positioned reader's
+    // `IS` is the one asker; the wait is on the table's own slot and not on
+    // the holder's decide, because the holder may be a **read borrow on
+    // another core** and `TransactionManager::IsInFlight` is per-core - it
+    // would answer "not in flight" for a reader that is very much reading,
+    // and the write-block loop's predicate would spin instead of waiting.
+    //
+    // The slot is what a release flips (`lock_table.hpp`, AU-S2's
+    // write-then-kick), and `holder` is carried for the refusal's text
+    // rather than for the graph: no edge is drawn for this wait, and
+    // AO-S6e-b's section argues why one is not owed - a read borrow never
+    // waits, so it is always a sink, and the asker holds nothing while it
+    // waits because its DDL transaction was unwound before the park.
+    struct LockWait {
+        txn::LockKey key;
+        std::uint64_t holder = 0;
+        std::shared_ptr<txn::LockWaitSlot> slot;
+    };
+    std::optional<LockWait> lock_wait = std::nullopt;
+
     // **AO-S3b: the walk stopped inside the statement and the scope is
     // still open.** `write_block` says which row and which holder; this
     // says the statement is *resumable* rather than re-runnable, which is
@@ -1188,6 +1209,23 @@ private:
     sched::Coro AwaitIndexWindow(std::string_view line, Session* session, DispatchOutcome* out,
                                  sched::MonoTimeNs* statement_deadline_ns);
 
+    // **AO-S6e-b: the statement waits for the unit it was refused, then
+    // runs again whole.** `AwaitIndexWindow`'s shape, with the table's slot
+    // in place of the window's predicate - so it costs one atomic load per
+    // reactor iteration and never a partition latch on the poll path - and
+    // with the same statement deadline as the write-block wait, because
+    // both are the lock family's fault net and a second bound would be a
+    // second name for one quantity.
+    //
+    // The registration is dropped before the re-run, whichever way the wait
+    // ended: the re-run asks under a new transaction id, so the record left
+    // by this one is addressable only by its slot.
+    //
+    // On return `out->lock_wait` is empty unless the re-run asked again,
+    // which the loop that calls this is what handles.
+    sched::Coro AwaitRelationLock(std::string_view line, Session* session, DispatchOutcome* out,
+                                  sched::MonoTimeNs* statement_deadline_ns);
+
     // `cur` is the row's own writer, from the tuple header, and decides the
     // **MVCC verdict** (first-updater-wins, `txn.md` §5) - a writer this
     // view cannot see refuses the write whether or not anybody holds a
@@ -1333,6 +1371,17 @@ private:
     // reached by no caller today: both write sites test `scope.txn`
     // themselves before calling, so the bootstrap-xid path never arrives
     // here at all. Kept as the guard for the callers AO-S6c adds.
+    // **The DDL's relation `X`** (AO-S6e-b; AR2 §3's DDL row). Empty when
+    // it was taken - and it is taken for the DDL transaction, so its decide
+    // is what releases it. A conflict answers the refusal and, where there
+    // is a reactor to park on, leaves `lock_wait_` set so `DispatchAsync`
+    // waits for the holder to release and runs the statement again.
+    //
+    // One caller, `DROP TABLE`: AR2 §3's DDL row names `CREATE`, `ALTER`
+    // and `CREATE INDEX` too, and none of them takes this - the drop is the
+    // only one whose census fate AO-S6e owed.
+    std::optional<Status> BorrowRelationForDdl(const WriteScope& scope, catalog::Oid oid);
+
     StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
                                std::uint64_t* blocker = nullptr);
 
@@ -2075,6 +2124,16 @@ public:
     // now, not a truncation: AO-S6c-c stopped swallowing it, so this counts
     // statements the cap ended rather than ledgers it silently shortened.
     std::uint64_t borrow_cap_stops() const noexcept { return borrow_cap_stops_; }
+
+    // **Read statements that took a position** (AO-S6e-b): one per
+    // statement whose walk was granted the relation `IS` the read borrow is
+    // made of. Not a wire counter and not a `SHOW META` block - it is what
+    // a cell reads to say the borrow was taken at all, since a local read
+    // is synchronous and nothing else can observe it while it runs. A
+    // statement refused the relation reads on and is not counted, which is
+    // the distinction that matters: this counts positions declared, not
+    // reads performed.
+    std::uint64_t read_borrows() const noexcept { return read_borrows_; }
     // Which table this dispatcher records its edges in, so an assembly cell
     // can name it (AO-S4b).
     const txn::LockTable* locks() const noexcept { return locks_; }
@@ -2872,6 +2931,12 @@ private:
     // at a time per core, so there is no second value to confuse it with.
     // Zero means none - `kInvalidOid` is not a spelling this file uses.
     catalog::Oid index_window_wait_ = 0;
+    // The same shape for AO-S6e-b's lock wait: set where the borrow is
+    // refused, read back out by `DispatchAndStage` into
+    // `DispatchOutcome::lock_wait`. It carries a `shared_ptr`, so the slot
+    // outlives the DDL transaction whose ask registered it - which it must,
+    // because that transaction is unwound before the park it is for.
+    std::optional<DispatchOutcome::LockWait> lock_wait_ = std::nullopt;
     std::size_t statement_trail_mark_ = 0;
 
     // D5's ceiling for this core, `InDoubtCeilingNs()`'s storage.
@@ -2919,6 +2984,17 @@ private:
 
     // the borrow cap's refusal counter; the accessor above states its contract.
     std::uint64_t borrow_cap_stops_ = 0;
+
+    // **The read borrow's holder ids** (AO-S6e-b). One per read statement
+    // that walks, from a space of its own (`txn::kReadHolderBit`) because a
+    // statement-scoped borrow has no transaction to hold under. Sequential
+    // per core, so two reads running on one reactor are two holders and one
+    // ending does not release the other's position. It wraps, and a wrap
+    // could only collide with a borrow still held four billion read
+    // statements later on the same core.
+    std::uint32_t read_borrow_seq_ = 0;
+    std::uint64_t NextReadHolder() noexcept;
+    std::uint64_t read_borrows_ = 0;
 
     // **The refusal the borrow cap raised on this statement, and the wire
     // detail that goes with it.** Carried as a member for

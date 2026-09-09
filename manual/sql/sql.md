@@ -230,7 +230,7 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
 - `SHOW FKEYS` lists declarations. CASCADE / SET NULL do not exist (FK-M6,
   out of v1 by decision F2).
 
-### DROP TABLE (built 2026-08-10, DT1-DT6 / DT01-DT05)
+### DROP TABLE (built 2026-08-10, DT1-DT7 / DT01-DT05)
 
 ```sql
 DROP TABLE <name>
@@ -243,6 +243,16 @@ pages **orphan** (heap chain, var-heap, index pages): no space is
 reclaimed, deliberately, until the free-map-reuse and reader-horizon
 decisions land.
 
+- **It waits for a statement already reading or writing the relation**
+  (2026-09-09). A scan that is already walking finishes against a live
+  schema instead of failing part way, and an open transaction that has
+  written a row of the relation is waited for until it commits or rolls
+  back. Two things follow for a client: a `DROP TABLE` can now sit for a
+  while, and one that waits more than 11 seconds is refused with a
+  retryable conflict rather than dropping the table - so a drop issued
+  against a busy relation may need retrying. A read that *starts* after the
+  drop has begun is not waited for and still sees the drop early, which is
+  the "not isolated" entry below, unchanged.
 - **RESTRICT, named**: a foreign key referencing the relation as parent
   blocks (declared-level — an empty child still blocks; drop the child
   first), and so does an assertion on it (drop it first).
@@ -784,7 +794,9 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   `INSERT`, `UPDATE`, `DELETE`, `DESCRIBE`, `SHOW TABLES` or
   `SHOW INDEXES`.
 - **`DROP TABLE` rolls back, but is *not* isolated**: other sessions see
-  it before it commits (see its own entry).
+  it before it commits (see its own entry). Since 2026-09-09 it does wait
+  for a statement already reading the relation, and for an open writer of
+  it - a narrower promise than isolation, and its own entry says so.
 - **`DROP INDEX` is transactional too** (2026-08-18): inside an explicit
   transaction it is rolled back, and it is isolated — index maintenance
   keeps writing entries for an index whose drop has not committed, so a

@@ -70,6 +70,15 @@ std::string_view Trim(std::string_view s) {
     return s;
 }
 
+// Who a waiter is held by, in words (AO-S6e-b). A read borrow holds under
+// an id from a space of its own (`txn::kReadHolderBit`), so rendering it as
+// "transaction 9223372036854775809" would send an operator looking for a
+// transaction that does not exist and never did.
+std::string HolderName(std::uint64_t holder) {
+    return txn::IsReadHolder(holder) ? std::string("a positioned reader")
+                                     : "transaction " + std::to_string(holder);
+}
+
 bool IEquals(std::string_view a, std::string_view b) {
     return a.size() == b.size() &&
            std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
@@ -582,6 +591,127 @@ sched::Coro CommandDispatcher::AwaitIndexWindow(std::string_view line, Session* 
     co_return Status::OK();
 }
 
+sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session* session,
+                                                 DispatchOutcome* out,
+                                                 sched::MonoTimeNs* statement_deadline_ns) {
+    // ---- AO-S6e-b: DDL waits for a positioned reader ---------------------
+    //
+    // The ask was made inside the DDL body, before its first catalog write,
+    // and the body returned its refusal - so nothing of this statement is
+    // on a page and the re-run below is a whole fresh statement.
+    //
+    // **What it still holds depends on whose transaction it is**, and the
+    // edge below turns on exactly that: an autocommit drop's transaction
+    // was unwound by `InDdlStatement` before this ran, so it holds nothing
+    // and can be no half of a cycle; inside an explicit transaction it
+    // holds everything that transaction has written, and `EndWrite`
+    // deliberately withheld the poison so this wait could happen at all.
+    //
+    // **What is waited on is the slot, not the holder's decide.** Every
+    // other wait in this file polls `IsInFlight`, which is this core's live
+    // set; the holder here is a read borrow that may be running on any
+    // core, and on a peer that predicate is false from the first poll - a
+    // re-run per reactor iteration for the length of the reader's
+    // statement. The slot is flipped by the release itself, from whichever
+    // core releases, and the kick that follows it is AU-S2's.
+    // `locks_` and the slot are non-null by construction: this field is
+    // set only where a `TryAcquire` asked for a wake and got one, which
+    // needs both. Not re-tested, on `AwaitIndexWindow`'s own argument - a
+    // guard on a state that cannot occur reads as evidence that it can.
+    const DispatchOutcome::LockWait wait = *out->lock_wait;
+    out->lock_wait.reset();
+
+    // Bounded once for the statement, by the lock family's own fault net -
+    // the same bound and the same variable as the write-block wait, because
+    // a statement that waits for a row and then for a relation has waited
+    // once (AO-S6d, item 16).
+    if (*statement_deadline_ns == 0) {
+        *statement_deadline_ns = NowNs() + static_cast<sched::MonoTimeNs>(txn::kLockWaitFaultNetNs);
+    }
+    const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
+
+    // **The edge, for the one waiter here that can be half of a cycle.**
+    // An autocommit DDL holds nothing while it waits - `InDdlStatement`
+    // unwound its transaction before this ran - so it registers none, which
+    // is the write-block loop's own rule for the same reason. **Inside an
+    // explicit transaction it holds everything the transaction has
+    // written**, and the holder it waits for need not be a reader: a
+    // relation `X` is refused by the `IX` of any writer of that relation,
+    // and that writer can be waiting for a row this transaction holds. So
+    // the edge is drawn, and a registration that would close a cycle makes
+    // this statement the victim (AO-R7) rather than a wait the fault net
+    // ends eleven seconds later.
+    Session& waiting_session = session != nullptr ? *session : autocommit_session_;
+    const std::uint64_t waiter_id = waiting_session.transaction() != nullptr
+                                        ? waiting_session.transaction()->id()
+                                        : 0;
+    const std::shared_ptr<txn::LockWaitSlot> slot = wait.slot;
+    // **Only against a holder that is a transaction**: a read borrow's id
+    // is not one, it never decides, and it never waits - so an edge to it
+    // is an entry the walk can only ever pass through on its way to
+    // nothing. The graph holds transactions, which is what its contract
+    // says.
+    if (waiter_id != 0 && !txn::IsReadHolder(wait.holder) &&
+        locks_->NoteWaitFor(waiter_id, wait.holder)) {
+        locks_->DropWake(wait.key, slot);
+        locks_->ClearWaitFor(waiter_id);
+        RefuseParkedWrite(*out, waiting_session,
+                          DeadlockVictim(std::string(txn::LockUnitName(wait.key.unit)) + " oid " +
+                                         std::to_string(wait.key.rel_oid) + ", held by " +
+                                         HolderName(wait.holder)));
+        co_return Status::OK();
+    }
+
+    const std::function<bool()> freed = [this, slot, deadline_ns] {
+        return txn::LockWaitReady(slot) || NowNs() >= deadline_ns;
+    };
+    co_await sched::WaitUntil{&freed};
+    if (waiter_id != 0) locks_->ClearWaitFor(waiter_id);
+    // Dropped however the wait ended. A registration left behind outlives
+    // the statement that made it and would keep its entry alive with a
+    // waiter nobody flips a second time - and the re-run cannot reclaim it,
+    // because it asks under a new id and this record is addressable only by
+    // its slot.
+    locks_->DropWake(wait.key, slot);
+
+    if (!txn::LockWaitReady(slot)) {
+        // **The net fired, and that is a defect report** (AO-R8): the
+        // refusal already in `out` is the one the ask produced, rendered
+        // once, at the site that knew what it asked for.
+        if (logging(LogLevel::kWarn)) {
+            log_->Warn("lock", "core " + std::to_string(core_id_) + " refused a statement after " +
+                                   std::to_string(txn::kLockWaitFaultNetNs / 1'000'000'000) +
+                                   " s waiting for " + txn::LockUnitName(wait.key.unit) + " oid " +
+                                   std::to_string(wait.key.rel_oid) + ", held by " +
+                                   HolderName(wait.holder));
+        }
+        // **The poison `EndWrite` withheld for the sake of this wait**, and
+        // this is the one exit that has to restore it. The victim arm gets
+        // it from `RefuseParkedWrite`; a re-run's own failure gets it from
+        // `EndWrite`, `lock_wait_` being empty by then. Here the wait ended
+        // in the refusal the ask produced and nothing else runs, so without
+        // this the transaction whose statement failed stays usable and
+        // commits - which is §6's failure atomicity broken by a wait that
+        // was supposed to be invisible when it worked.
+        if (waiting_session.in_explicit_txn()) waiting_session.Poison();
+        co_return Status::OK();
+    }
+    if (logging(LogLevel::kDebug)) {
+        log_->Debug("lock", "core " + std::to_string(core_id_) + " held a statement until " +
+                                HolderName(wait.holder) + " released " +
+                                txn::LockUnitName(wait.key.unit) + " oid " +
+                                std::to_string(wait.key.rel_oid) + ", and is running it again");
+    }
+    // **A wake is not a grant** (`lock_table.hpp`): the unit may have been
+    // taken again between the flip and this line - by another reader, which
+    // never waits and so never queues behind this asker. The re-run asks
+    // again and parks again if it must, and the statement's one deadline is
+    // what bounds the sequence rather than each turn of it.
+    const MayParkScope parking(*this, /*allowed=*/true, /*resumed=*/false);
+    *out = DispatchAndStage(line, session);
+    co_return Status::OK();
+}
+
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
                                              DispatchOutcome* out, CommitAck commit_ack) {
     // Today this never suspends: every statement runs on the core that owns
@@ -642,6 +772,15 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         if (out->write_block.has_value()) {
             co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns,
                                      /*resumed=*/false);
+            continue;
+        }
+        // AO-S6e-b's, the third of the same shape and in the same loop for
+        // C3's reason: this wait's re-run is a whole `DROP TABLE`, which can
+        // meet a row conflict or an index window of its own, and a second
+        // reader can take the relation between the flip and the re-ask - so
+        // the loop is what re-parks it, under the one statement deadline.
+        if (out->lock_wait.has_value()) {
+            co_await AwaitRelationLock(line, session, out, &statement_deadline_ns);
             continue;
         }
         break;
@@ -1241,6 +1380,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     blocking_writer_ = 0;
     blocked_pk_ = 0;
     index_window_wait_ = 0;
+    lock_wait_.reset();
     last_refusal_ = Status::OK();
     last_refusal_detail_ = wire::kNoDetail;
     statement_trail_mark_ = 0;
@@ -1320,6 +1460,11 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // correctly, because the guard was declined on the strength of it.
     if (index_window_wait_ != 0) outcome.index_window = index_window_wait_;
     index_window_wait_ = 0;
+    // AO-S6e-b's, on the same terms and mutually exclusive with both for
+    // the same reason: the borrow is asked for inside a DDL body, which a
+    // statement that met the affinity gate or a row conflict never reaches.
+    if (lock_wait_.has_value()) outcome.lock_wait = std::move(lock_wait_);
+    lock_wait_.reset();
     blocking_writer_ = 0;
     blocked_pk_ = 0;
 
@@ -3730,6 +3875,26 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             return {"ERR assertion '" + restricting.value().front().name +
                         "' is declared on this relation; DROP ASSERTION first",
                     false};
+        }
+
+        // ---- AO-S6e-b: the relation `X`, and what waits for what --------
+        //
+        // Taken **after** the RESTRICT checks and before the first catalog
+        // write: a drop refused for a foreign key or an assertion is
+        // refused whether or not anybody is reading, and waiting first
+        // would make a client wait to be told something the catalog knew
+        // at once.
+        //
+        // What this buys is stated in `drop-table.md` DT8 rather than
+        // implied here: a reader **already positioned** in the relation
+        // finishes its statement against a live schema instead of meeting
+        // the post-park re-bind's clean error. It does not make the drop
+        // isolated - a read that starts after this grant takes no borrow
+        // and reads on under DT1, which is `ddl-transactional.md` §5a
+        // unchanged.
+        if (std::optional<Status> held = BorrowRelationForDdl(scope, oid.value());
+            held.has_value()) {
+            return {ErrorReply(*held), false, 0, *held};
         }
 
         std::vector<std::uint64_t> dropped_cabins;
@@ -9205,6 +9370,108 @@ namespace {
 // raw newline byte (docs/spec/client-manual.md section 2). The plan printer
 // produces ordinary newlines because the same text goes to a test's
 // assertion unescaped; the escaping belongs here, at the wire.
+// ---- The read borrow (AO-S6e-b; AO-R12, AR2-R14, AR2 §3's `SELECT` row) --
+//
+// What a positioned read declares, and the whole of what it declares: `IS`
+// on the relation it is walking and `IS` on the slice it has reached, held
+// for **the statement** and released when this object dies. Nothing about
+// visibility passes through here - the snapshot decides what a reader sees,
+// as it always has (AN-S2) - and nothing about permission: this is a
+// position, published so that an operation which changes where a key lives
+// can wait for the reader rather than run out from under it. In M2 the one
+// such operation is DDL's relation `X` (AO-R12: no mover exists), which
+// meets this at the relation entry by the intention rule.
+//
+// **A read borrow never refuses a read and never makes one wait.** A
+// refused ask leaves the reader holding nothing and reading on, which is
+// sound because the reader needs no protection to be correct: `drop-table.md`
+// DT1 leaves its pages allocated and its oid never reissued, and the
+// re-`Bind` after a park turns a dropped relation into a clean error
+// (`step_vm.cpp`). Making a read wait for a writer would buy the reader
+// nothing and cost it a wait MVCC exists to avoid - and it is what keeps a
+// reader out of the wait-for graph entirely, which is in turn why a DDL
+// waiting for one cannot be in a cycle through it (AO-S6e-b's section).
+//
+// The cap is not special-cased for the same reason: `TryAcquire` refuses at
+// `max_locks_per_txn` and the reader carries on. It cannot be reached
+// anyway - the ledger holds one relation and one slice, three entries for
+// the instant a move overlaps.
+class ReadBorrow final : public exec::PositionSink {
+public:
+    // `holder` is 0 where there is no table, and then this is inert: the
+    // read path constructs one unconditionally so the call sites carry no
+    // branch of their own.
+    ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken)
+        : locks_(holder != 0 ? locks : nullptr), holder_(holder), taken_(taken) {}
+    ReadBorrow(const ReadBorrow&) = delete;
+    ReadBorrow& operator=(const ReadBorrow&) = delete;
+    ~ReadBorrow() {
+        if (locks_ != nullptr) locks_->Release(holder_, holdings_);
+    }
+
+    void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) override {
+        if (locks_ == nullptr) return;
+        // The intention above the slice, and the unit a `DROP TABLE`
+        // meets. **Asked once per relation, whatever the answer**: the
+        // record is of the ask and not of the grant, because a reader that
+        // was refused - a DDL holds the relation `X` - would otherwise
+        // re-ask at every page boundary, taking a partition latch per page
+        // for the length of a walk that has already decided to run without
+        // a position.
+        if (rel != rel_) {
+            const bool took = Take(txn::LockKey::Relation(rel), txn::LockMode::kIntentionShared);
+            rel_ = rel;
+            refused_ = !took;
+            if (took && taken_ != nullptr) ++*taken_;
+            // The slice belonged to the relation being left. Unreachable
+            // today - only the outermost walk reports, and it walks one
+            // relation - so this is what makes that a property of the code
+            // rather than of the caller: a slice kept across the change
+            // would be a position declared in a relation this reader is no
+            // longer in, and on the refused arm it would be held for the
+            // rest of the statement.
+            if (slice_.has_value()) {
+                locks_->ReleaseOne(holder_, *slice_, txn::LockMode::kIntentionShared, holdings_);
+                slice_.reset();
+            }
+        }
+        // No unit without the intention above it (`lock_table.hpp`): a
+        // slice borrowed under a relation entry this holder has no `IS` on
+        // is invisible to a relation-level ask.
+        if (refused_) return;
+        // The whole id space is the relation, which is already held. The
+        // same collapse `DeclaredWriteBorrow` makes from the write side, and
+        // it is what AR2-R14's "the range when it is between pages" comes to
+        // with insert spreading off: one range, the whole relation.
+        if (lo == 0 && hi == catalog::kIdSpaceEnd) return;
+
+        const txn::LockKey slice = txn::LockKey::Slice(rel, lo, hi);
+        if (slice_.has_value() && *slice_ == slice) return;
+        // **Taken before the previous one is let go**, so the position is
+        // never unheld between two pages - which is the one instant a mover
+        // could pass through if the order were reversed.
+        if (!Take(slice, txn::LockMode::kIntentionShared)) return;
+        if (slice_.has_value()) {
+            locks_->ReleaseOne(holder_, *slice_, txn::LockMode::kIntentionShared, holdings_);
+        }
+        slice_ = slice;
+    }
+
+private:
+    bool Take(const txn::LockKey& key, txn::LockMode mode) {
+        auto took = locks_->TryAcquire(holder_, key, mode, holdings_);
+        return took.ok() && took.value();
+    }
+
+    txn::LockTable* locks_ = nullptr;
+    std::uint64_t holder_ = 0;
+    std::uint64_t* taken_ = nullptr;
+    txn::LockHoldings holdings_;
+    catalog::Oid rel_ = 0;
+    bool refused_ = false;
+    std::optional<txn::LockKey> slice_;
+};
+
 void AppendEscaped(std::ostringstream& os, const std::string& text) {
     for (char c : text) {
         if (c == '\n') {
@@ -9251,13 +9518,15 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // non-ok status ends the walk and propagates out of Execute. That is
     // the same path a decode error already takes.
     exec_stats_.steps.clear();
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
             if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
-        &exec_stats_, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
+        &exec_stats_, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
+        /*parent=*/nullptr, &borrow);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
         // path has it: a statement that stopped part way through touched
@@ -9343,6 +9612,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     exec::EmissionQuota quota(chain);
     sorter_.Reset(chain, sort_max_rows_);
     std::string analyze_scratch;
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -9368,7 +9638,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                        ? storage::VisitControl::kStop
                        : storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
+        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
+        /*parent=*/nullptr, &borrow);
     if (!ran.ok()) {
         return {ErrorReply(ran), false, 0, ran};
     }
@@ -10019,6 +10290,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         if (!s.ok() && encode_error.ok()) encode_error = std::move(s);
     };
 
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -10047,7 +10319,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                        ? storage::VisitControl::kStop
                        : storage::VisitControl::kContinue;
         },
-        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value().snap, indexes_enabled_);
+        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value().snap,
+        indexes_enabled_, /*parent=*/nullptr, &borrow);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -11517,6 +11790,43 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     blocked_pk_ = pk;
 }
 
+std::optional<Status> CommandDispatcher::BorrowRelationForDdl(const WriteScope& scope,
+                                                              catalog::Oid oid) {
+    if (locks_ == nullptr || scope.txn == nullptr) return std::nullopt;
+
+    // AR2 §3's DDL row: **the relation, `X`, for the DDL transaction**. Its
+    // one consumer in M2 is the read borrow beneath it (AO-R12): a
+    // positioned reader holds the same entry in `IS`, and the intention
+    // rule is where the two meet - which is also why no unit below this one
+    // is looked at, and why a reader that has not reached this relation
+    // yet, or that reads a different one, costs this nothing.
+    const txn::LockKey unit = txn::LockKey::Relation(oid);
+    std::uint64_t blocker = 0;
+    std::shared_ptr<txn::LockWaitSlot> wake;
+    // A wake is registered only where there is a reactor to park on - the
+    // same condition every other wait in this file records under. Without
+    // it the honest answer is the refusal itself, which is what a
+    // synchronous `Dispatch()` has always had.
+    auto took = locks_->TryAcquire(scope.txn->id(), unit, txn::LockMode::kExclusive,
+                                   scope.txn->borrows(), &blocker,
+                                   may_park_ ? &wake : nullptr);
+    if (!took.ok()) return took.status();
+    if (took.value()) return std::nullopt;
+    if (wake != nullptr) lock_wait_ = DispatchOutcome::LockWait{unit, blocker, std::move(wake)};
+    // Retryable, and it says who rather than what to do: a client that
+    // reached this over the synchronous path has the same recourse it has
+    // for any conflict, and one that reached it over `DispatchAsync` never
+    // sees it - the wait above swallows it and runs the statement again.
+    return Status::TxnConflict("relation oid " + std::to_string(oid) + " is held by " +
+                               HolderName(blocker));
+}
+
+std::uint64_t CommandDispatcher::NextReadHolder() noexcept {
+    if (locks_ == nullptr) return 0;
+    return txn::kReadHolderBit | (static_cast<std::uint64_t>(core_id_) << 32) |
+           ++read_borrow_seq_;
+}
+
 StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
                                              const txn::LockKey& unit,
                                              std::uint64_t* blocker) {
@@ -11550,6 +11860,14 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     };  // `Status`, not `StatusOr<bool>`: the cap has no granted arm to report.
 
     // A relation unit is outermost and takes no intention above it.
+    //
+    // **No caller reaches this since AO-S6e-b** - a `WHERE`-less write
+    // declares the whole id space as a range now, and the DDL borrow asks
+    // the table directly because it needs a wake registration. It stays
+    // because it is not dead code but a *rule*: without it a relation unit
+    // handed to this function would take an `IX` above itself on its own
+    // key, which the table grants (a transaction never conflicts with
+    // itself) and which would leave the ask meaning nothing.
     if (unit.unit == txn::LockUnit::kRelation) {
         auto rel = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
         if (!rel.ok()) return refused(rel.status());
@@ -11576,8 +11894,20 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     if (locks_ == nullptr || access.schema.columns.empty()) return std::nullopt;
 
     // No predicate at all: the statement touches every row of the
-    // relation, so the relation is what it declares.
-    if (where.empty()) return txn::LockKey::Relation(access.oid);
+    // relation, so **the whole id space** is what it declares.
+    //
+    // The relation *unit* is deliberately not what it takes, and the
+    // distinction is the one AO-S6e-b had to draw: the relation unit means
+    // the relation as an **object** - its existence and its schema, which
+    // is what DDL claims and what a positioned reader declares an `IS` on -
+    // while a write's claim is over **keys**. Collapsing a `WHERE`-less
+    // write onto the relation entry was cheaper (one entry, no fence
+    // counter) and made it conflict with a reader's `IS` there, by the
+    // intention rule, for rows MVCC already answers that reader from its
+    // snapshot. A range over the whole space says the same thing about
+    // keys and meets other writers exactly where every other declared
+    // window does.
+    if (where.empty()) return txn::LockKey::Range(access.oid, 0, catalog::kIdSpaceEnd);
 
     // Otherwise, the pk window the conjuncts name - if they name one.
     //
@@ -11655,19 +11985,20 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     // to keep them out of. The commonest OLTP write there is must not pay
     // that, and it is `WHERE id = k`.
     if (hi - lo <= 1) return std::nullopt;
-    // **A window that is the whole id space is the relation**, which is
-    // both cheaper and stronger: one entry instead of two, no fence
-    // counter raised, and a real `X` at the relation entry rather than an
-    // interval that has to be scanned for. `WHERE id >= 0` is the same
-    // statement as no `WHERE` at all and must borrow the same way.
-    if (lo == 0 && hi == catalog::kIdSpaceEnd) return txn::LockKey::Relation(access.oid);
-
+    // `WHERE id >= 0` is the same statement as no `WHERE` at all and
+    // borrows the same way - which since AO-S6e-b is the whole id space as
+    // a range rather than the relation entry, for the reason the no-`WHERE`
+    // branch above states.
     return txn::LockKey::Range(access.oid, lo, hi);
 }
 
 Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
-    return Status::TxnConflict("row id=" + std::to_string(pk) + " is held by transaction " +
-                               std::to_string(holder));
+    // `HolderName`, because a holder is not always a transaction since
+    // AO-S6e-b: a read borrow holds under an id of its own, and an operator
+    // sent after "transaction 9223372036854775809" is being sent after
+    // something that never existed.
+    return Status::TxnConflict("row id=" + std::to_string(pk) + " is held by " +
+                               HolderName(holder));
 }
 
 std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
@@ -11698,8 +12029,7 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     NoteBlockingWriter(scope.txn, blocker, unit.lo, rerun);
     if (unit.unit == txn::LockUnit::kTuple) return HeldByHolder(unit.lo, blocker);
     return Status::TxnConflict("rows id=[" + std::to_string(unit.lo) + ", " +
-                               std::to_string(unit.hi) + ") are held by transaction " +
-                               std::to_string(blocker));
+                               std::to_string(unit.hi) + ") are held by " + HolderName(blocker));
 }
 
 Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
@@ -11848,6 +12178,18 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
         index_window_wait_ = 0;
     }
+    // **And AO-S6e-b's lock wait, on the same test and with one more
+    // thing to undo.** The borrow is asked for before the DDL's first
+    // catalog write, so a statement that reaches here having written
+    // something did not reach the ask - but the test is the shape all three
+    // waits share and stating it once per wait is what keeps them one rule.
+    // The registration goes with the wait: dropped here, it cannot outlive
+    // a statement that will not be re-run.
+    if (lock_wait_.has_value() &&
+        (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
+        if (locks_ != nullptr) locks_->DropWake(lock_wait_->key, lock_wait_->slot);
+        lock_wait_.reset();
+    }
 
     if (!scope.owned) {
         // Inside an explicit transaction. A failure does **not** unwind:
@@ -11868,7 +12210,15 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // yet: `DispatchAsync` either re-runs the statement or answers the
         // named refusal, and *that* refusal poisons like any other, at the
         // end of the wait.
-        if (!result.ok() && blocking_writer_ == 0) session.Poison();
+        // **A refused borrow is the second such failure** (AO-S6e-b). A
+        // `DROP TABLE` inside a transaction that meets a positioned reader
+        // has written nothing and asked for nothing else; poisoning it
+        // would turn the wait `DispatchAsync` is about to take into a
+        // forced ROLLBACK, and the re-run would answer "transaction is
+        // aborted" - non-retryable - where the client used to get a
+        // relation dropped. The refusal that ends the wait poisons like any
+        // other, because by then `lock_wait_` is empty.
+        if (!result.ok() && blocking_writer_ == 0 && !lock_wait_.has_value()) session.Poison();
         return Status::OK();
     }
 

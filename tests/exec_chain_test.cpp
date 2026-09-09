@@ -89,6 +89,24 @@ protected:
             auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
                                              payload.value(), /*trx_id=*/1, access.value()->oid);
             ASSERT_TRUE(placed.ok()) << placed.status().message();
+            // **The root moves when the tree grows a level**, and until
+            // AO-S6e-b's cell needed a multi-leaf relation nothing here
+            // insisted on it: this helper kept handing `BtreeInsert` the
+            // old root, which after the first split is a full *leaf*. Every
+            // later insert then appended a leaf and spliced it in front of
+            // that one, building a chain that descends - the exact shape
+            // `btree.cpp`'s append path calls unsurvivable (H9) - and a
+            // scan of a relation this fixture filled read its rows out of
+            // key order. The dispatcher has adopted the new root since
+            // PW2-4 (`command_dispatcher.cpp`, `UpdateRelationDescPage`);
+            // this is that line, and it is what makes a fixture-built
+            // relation the same shape as a served one.
+            if (placed.value().new_root != kInvalidPageId) {
+                ASSERT_TRUE(boot_->catalog
+                                .UpdateRelationDescPage(oid.value(), placed.value().new_root,
+                                                        access.value()->anchor_page_id)
+                                .ok());
+            }
         } else {
             auto placed = heap::ChainInsert(store_, access.value()->desc_page_id, id.value(),
                                             payload.value(), /*trx_id=*/1, access.value()->oid);
@@ -469,6 +487,121 @@ TEST(ExecSuspendAuditTest, TheExecutorReportsALivePinAsUnsafeToSuspendUnder) {
     // Uninstall before the store dies: the audit's pointer is
     // thread-local and would otherwise dangle into the next test.
     exec::UninstallSuspendAudit();
+}
+
+// ---- AO-S6e-b: the read borrow's seam -------------------------------------
+
+// Collects what the walk says about where it is, so a cell can read the
+// sequence rather than a side effect of it.
+class RecordingPosition final : public PositionSink {
+public:
+    struct At {
+        catalog::Oid rel;
+        std::uint64_t lo;
+        std::uint64_t hi;
+    };
+    void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) override {
+        at.push_back(At{rel, lo, hi});
+    }
+    std::vector<At> at;
+};
+
+TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
+    // AO-R12 and AR2-R14, as AO-S6e-b built them. Two claims, and the
+    // second is the one the sub-stage argued for rather than inherited:
+    //
+    //   1. the **first** report is the whole id space, made before the
+    //      first page - so a relation of one page, which never reaches a
+    //      boundary, still declares a position;
+    //   2. every later report raises `lo` and leaves `hi` at the end of the
+    //      id space. R14 names `[min_key, next.min_key)`, which a walk
+    //      cannot know at page entry - the upper bound is a page it has not
+    //      read - and which would under-declare the keys a resumed walk is
+    //      about to visit. What the walk knows exactly is how far it has
+    //      got, and everything ahead of that is what it will still read.
+    Create("CREATE TABLE b (id int64, v int64)");
+    for (int i = 0; i < 600; ++i) Insert("b", {Int(i)});
+
+    RecordingPosition seen;
+    const StepChain chain = CompileSql("SELECT id FROM b");
+    std::size_t rows = 0;
+    Status ran = Execute(
+        boot_->catalog, store_, chain,
+        [&](const ChainFrame&) -> StatusOr<storage::VisitControl> {
+            ++rows;
+            return storage::VisitControl::kContinue;
+        },
+        /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
+        /*snapshot=*/nullptr, /*indexes=*/true, /*parent=*/nullptr, &seen);
+    ASSERT_TRUE(ran.ok()) << ran.message();
+    ASSERT_EQ(rows, 600u);
+
+    ASSERT_FALSE(seen.at.empty());
+    EXPECT_EQ(seen.at.front().lo, 0u);
+    EXPECT_EQ(seen.at.front().hi, catalog::kIdSpaceEnd)
+        << "before its first page a walk is positioned anywhere in the relation";
+    ASSERT_GT(seen.at.size(), 2u) << "600 rows must span several pages, or this cell tests one";
+
+    // Non-decreasing, and the first boundary is where it may repeat: the
+    // leftmost leaf's `min_key` is 0, which is what the report before the
+    // walk already said. Everything after it rises, and the last report is
+    // strictly past the first - a position that never moved would satisfy
+    // "non-decreasing" and nothing else here.
+    std::uint64_t previous = 0;
+    for (std::size_t i = 1; i < seen.at.size(); ++i) {
+        EXPECT_EQ(seen.at[i].rel, seen.at.front().rel);
+        EXPECT_EQ(seen.at[i].hi, catalog::kIdSpaceEnd);
+        EXPECT_GE(seen.at[i].lo, previous) << "the position only moves forward, at report " << i;
+        previous = seen.at[i].lo;
+    }
+    EXPECT_GT(seen.at.back().lo, seen.at.front().lo) << "the position never left the first page";
+
+    // Claim 1 on its own, where nothing else can stand in for it: a
+    // relation of one page reaches no boundary, so the report before the
+    // walk is the only one it will ever make - and without it such a
+    // relation would declare nothing and a `DROP TABLE` would have nothing
+    // to wait for.
+    Create("CREATE TABLE one (id int64, v int64)");
+    Insert("one", {Int(1)});
+    RecordingPosition small;
+    const StepChain single = CompileSql("SELECT id FROM one");
+    Status ran_one = Execute(
+        boot_->catalog, store_, single,
+        [&](const ChainFrame&) -> StatusOr<storage::VisitControl> {
+            return storage::VisitControl::kContinue;
+        },
+        /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
+        /*snapshot=*/nullptr, /*indexes=*/true, /*parent=*/nullptr, &small);
+    ASSERT_TRUE(ran_one.ok()) << ran_one.message();
+    ASSERT_EQ(small.at.size(), 1u) << "a one-page walk declares its position exactly once";
+    EXPECT_EQ(small.at.front().lo, 0u);
+    EXPECT_EQ(small.at.front().hi, catalog::kIdSpaceEnd);
+}
+
+TEST_F(ExecChainTest, AHeapWalkDeclaresTheRelationAndNoSlice) {
+    // The other half of the same ruling, and the reason it is not an
+    // omission: a heap chain is not walked in key order - RD6 walks a chain
+    // per range, and invariant 4 leaves a page's tuples unordered - so
+    // `min_key` of the page a heap walk is on bounds nothing about what it
+    // has left to read. Declaring a slice from it would name an interval
+    // the walk is not in.
+    Create("CREATE TABLE h (id int64, v int64) HEAP");
+    for (int i = 0; i < 600; ++i) Insert("h", {Int(i)});
+
+    RecordingPosition seen;
+    const StepChain chain = CompileSql("SELECT id FROM h");
+    Status ran = Execute(
+        boot_->catalog, store_, chain,
+        [&](const ChainFrame&) -> StatusOr<storage::VisitControl> {
+            return storage::VisitControl::kContinue;
+        },
+        /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
+        /*snapshot=*/nullptr, /*indexes=*/true, /*parent=*/nullptr, &seen);
+    ASSERT_TRUE(ran.ok()) << ran.message();
+
+    ASSERT_EQ(seen.at.size(), 1u) << "a heap walk reports once, before its first page";
+    EXPECT_EQ(seen.at.front().lo, 0u);
+    EXPECT_EQ(seen.at.front().hi, catalog::kIdSpaceEnd);
 }
 
 }  // namespace kds::exec

@@ -440,7 +440,7 @@ branch, stop.
 | AO-S4a | **D12, same core**: edges in the table; the detector task (core 0, `system`, 100 ms); the victim's abort; the net as a logged fault | a 2-cycle between two sessions on one core: one aborted `TxnConflict` naming deadlock within one cadence, the other proceeds; a 3-cycle; with the detector disabled in the cell, the net fires at 1 s and the log line is asserted | M |
 | AO-S5 | **Cross core**: the table across reactors, the wake and the victim notification as **write-then-kick** (AR0-6-R1 — `kLockWake`/`kLockAbort` are never built, since AU-R4 forbids adding a kind and `WakerTable::Kick` landed at AU-S1), `MayWrite`'s grant arm and `RelationWriteRightsPending` retired; **a deterministic two-`CoreRuntime` rig over a `SimWakerTable`, first** (`SimWaker` until AV-R1's mark of 2026-09-07; the seam is the table) (finding L; `SimRingTransport` was the pre-AR0-6 plan). Gate: AM-S1 (latch order), AM-S2 (shared pool), AN-S2 (view) | a waiter on core 1 woken by a decide on core 0 while core 1's reactor sleeps (`sched_wakes_received` moves); with every kick delayed to the sim waker's maximum the waiter still proceeds; at the store, `MayWrite` admits a page its lease/grant arm refused at `9e5068c`, under the lock — owner routing still in force (AO-1), so the cell is the store's, not dispatch's | L |
 | AO-S4b | **D12, cross core**: core 0's detector over edges from every core; a victim on a peer aborted by message | a 2-cycle across two cores resolved within one cadence | M |
-| AO-S6 | **The units** as proposed: relation `X` for DDL (`IndexBuildPending` → wait), D8's slice fence (AS4 struck), `IS` at the slice (**AO-R12** — this row said "(R14)" and §AO-S6e said "R13's gate"; R13 is "M2 logs nothing and changes no format" and has no gate, corrected at AO-S6e-d), the range key. **What landed, across S6a..S6e**: the tuple and range units decide rather than record, and two refusals became waits — and **none of the three units this row names was built**, each for a reason its sub-stage states rather than a gap. The range key was never this stage's; census row 10 keeps it | `CREATE INDEX` waits for an open writer and proceeds after its commit; a writer arriving during the build waits; an assertion's bounded false rejection admits after the reserver aborts; `DROP TABLE` waits for a positioned reader on a peer; a slice fence survives a leaf division | L |
+| AO-S6 | **The units** as proposed: relation `X` for DDL (`IndexBuildPending` → wait), D8's slice fence (AS4 struck), `IS` at the slice (**AO-R12** — this row said "(R14)" and §AO-S6e said "R13's gate"; R13 is "M2 logs nothing and changes no format" and has no gate, corrected at AO-S6e-d), the range key. **What landed, across S6a..S6e**: the tuple and range units decide rather than record, and two refusals became waits. **One of the three units this row names was built and two were not**: the `IS` - at the relation and at the slice, on the positioned read path - landed at AO-S6e-b with the `DROP TABLE` wait it exists for, while the relation `X` for `CREATE INDEX` and D8's slice fence were each declined for a reason their sub-stage states rather than a gap. The range key was never this stage's; census row 10 keeps it | `CREATE INDEX` waits for an open writer and proceeds after its commit; a writer arriving during the build waits; an assertion's bounded false rejection admits after the reserver aborts; `DROP TABLE` waits for a positioned reader on a peer; a slice fence survives a leaf division | L |
 | AO-S7 | **C3** (AR2 §9 step 5) under `bench/README.md`'s five rules, and the price of R3's relation-level key | one results file per cell under `bench/v3.0.0/`, `git describe --tags` in each; E7's default and E12's price read from them, not decided | M |
 | AO-S8 | **Prose**: `txn.md` §1 (AR0-M1's four texts) and §5; `heap-and-tuple.md:95`; `assertion.md` AS4/§6; `foreign-keys.md` F3 and §5's first bullet; `sched.md` §9-2; `rules.md`'s row loses its "not built" parenthetical and moves to `txn.md` §5, and the four documents that still say "the fourth row" are corrected (`ar0-architecture-revision.md:370`, `workorder-an-read-view.md:84`, `ratification-an-commit-order.md:168-169`, `workorder-am-m1-shared-pool.md:66,226`); `ring_transport.hpp:16-19`; `include/kds/txn/manager.hpp:22-28`; `keystone.hpp:23-29`; AR2-R2's "CAS on the byte"; `client-manual.md`, `server.md:100`; `CLAUDE.md`'s Transactions row | no spec says "no lock manager"; every lock in the reactor is in §9-2's list | M |
 
@@ -490,7 +490,7 @@ forbids for a stage's lifetime.
 | AO-S6e-d | **Built 2026-09-09** on `ao-s6e-units` from `9b1dad3`, and it is prose only. Census row 4's two citations were stale and its fate half-wrong (the wait landed, the relation lock did not); row 11's `assertion_build.cpp:203` was inside a comment, its fate put the conversion under a fence that turned out to have no contender, and its *other* refusal - `CREATE ASSERTION`'s own - is untouched and was not said to be. The AO-S6 row named four units and **none of the three that were this stage's was built**; the fourth was never its own. The `IS` ruling was cited three ways - "(R14)", "R13's gate", and R12's own "R13's M2 consumer" - and R13 has no gate; all three now say **AO-R12**. AO-S6e-c gained the section the sizing table was already pointing at. **The close**: the stage delivered two waits and no new unit, and its three reasons are one reason - every unit it was asked to add had no contender, or one the unit could not have served. That question goes to AO-S7 beside the prices. No code; the suite not executed for this row and not claimed |
 | AO-S7 | **Opened 2026-09-09** on `ao-s7-prices` at `5e94dc8`: the order only, and deliberately so - `raft-marks-2026-09-08.md` §4 obliges the spin's switch condition to be written **before** S7 runs rather than read off its result, so §AO-S7 carries it and waits for the mark. **Nothing measured.** Three survey findings shape it: the CLAUDE.md suspension is the per-step *gate* and does not reach a stage whose deliverable is results files (AM-S6, AN-S5 and AR2 C1/C2 all ran under it); **no driver serves C3's contended arm** - `multicore_benchmark.py` measures non-interfering relations and says parity is the honest expectation - so one must be written, which `bench/README.md` warns about (item 23); and **item 19's number cannot be measured on the engine at all**, nothing taking an `IS`, so it is a decomposition or a build-then-revert (item 24). Items 20 and 22 are carried here but are not measurements, and the order says so rather than leaving them to be looked for among the files. Five cells named, all under `bench/README.md`'s five rules. **Items 23, 24 and the mark ratified the same day, and the cells ran**: one results file at `bench/v3.0.0/results-ao-s7-c3-v2.7.0-304-g5e94dc8.md`, four raw summaries archived, a new driver `tools/lock_contention_benchmark.py` proved against its controls before it priced anything. **C3's shape does not exist on this engine** - the owner core serialises before the tuple lock is reached, so hot minus disjoint is +3.3/+1.0/-1.4 µs across three runs, each inside its floor, with zero refusals at 8 and 32 sessions. The spin is not tried, the partition sweep is not run and the file says why, the cap stops being provisional, and E7 is **not** decided because there is no win or loss to read off. Two unasked findings: `group` durability is 82-85% of an update, so the marked cell cannot answer its own question; and the no-family binary exited at startup on its first build, `locks_->SetWakeRegistry` being unguarded. E12's price is an extrapolation and is labelled one. The suite not executed for this row and not claimed |
 | AO-S8 | **Built 2026-09-09** on `ao-s8-prose` from `5ccd7b7`, prose only. Both done-conditions met and checked by grep: **no spec says "no lock manager"** (the two hits left are the corrections quoting what they replaced, which is this tree's style), and **every lock in the reactor is in `sched.md` §9-2's list** - the lock table's partition latch joined it with its order, including the one a reader should not have to derive, *released before any park*. `rules.md` §3's row **moved to `txn.md` §5**, which is §3's own rule about where a declared-shared structure is declared. **The Keystone lock byte is no longer called a lock** anywhere: `wal.md` §2 said "row locking is the Keystone lock byte", `assertion.md`, `txn.md` §5 and `keystone.hpp` each said it stays unused without saying that AO-R3 made that permanent. `ring_transport.hpp`'s "no shared engine state, no atomics outside ring indices" is narrowed to what the seam still guarantees - no engine path *sends* to a peer except through it - AR0-2 having retired the rest. `manager.hpp`'s "no lock manager, no waiting, no deadlock detection" is corrected in place. AR2-R2's "CAS on the byte" is amended rather than rewritten: the byte is not the fast path and carries nothing, and M2's rulings are read against what they declined. **Three of the row's citations were stale and one was dead** - `heap-and-tuple.md:95` is var-heap prose, the four "fourth row" sites are at other lines than the row names (and a fifth, `workorder-aw-m1-close.md:209`, was not listed), and **`docs/spec/server.md` does not exist**; `in_doubt_ceiling_ms` is already correct in `cross-owner-txn.md` §440. **The `critics-developer` pass found neither done-condition met**, and both are met now: §9-2's list was **three locks short of the tree** - the lock table's own `wait_latch_`, the frame-table structure latch, the free-map latch and the data file's growth lock - and `rules.md`'s parallel list was short in the other direction, the two no longer even matching; the authoritative `heap-and-tuple.md` still called the Keystone flags byte an Oracle-style lock byte at two sites, which is the cost of the stage having declared that file's citation stale and stopped instead of grepping for the claim; `assertion.md`'s summary and AS4 were named in the plan and skipped; the `rules.md` row said it had moved and had not; and `txn.md` §5 **invented two atomics that do not exist** - `Entry` has no counters, and the only atomic read without the partition latch is the striped fence counter beside them. Six more sites carried the retired "no waiting" premise, one of them 48 lines below a paragraph this stage rewrote, and F3 itself still read "Fail-fast, no waiting". The order that was moved into an **invariants** section had its *stated, not enforced* caveat restored, `rules.md` §3's own words being that a stated order nothing checks is a comment. Suite 3365/3365 green in 168.80 s. **Overhead not measured** |
-| AO-S6e-b | not started; deferred to AO-S7 with items 19 and 20 |
+| AO-S6e-b | **Built 2026-09-09** on `ao-s6e-b-read-borrow` from `e291493`, on the operator's word reopening the stage: **the engine's first read borrow, and the first wait a statement takes on the lock table's own slot.** A positioned read declares where it is - `IS` on the relation it walks, `IS` on the slice it has reached, moved at every page boundary, held for the **statement** (AR2 §3's `SELECT` row) - through a new one-method seam, `exec::PositionSink`, so the executor knows nothing about locks. `DROP TABLE` takes the relation `X` before its first catalog write and, meeting a reader, **waits** and runs again whole. **Five things the build had to decide that the ruling did not reach**, each argued in §"AO-S6e-b, and the five things R14 could not say": (1) the wait cannot be the write path's - `IsInFlight` is per-core and a read borrow on a peer reads as decided from the first poll, so a `TryAcquire` that registers a **wake** (a slot, no queue position) is what a statement parks on, and `DropWake` is the caller's because the statement is torn down and re-run under a new id between the ask and the grant; (2) the wait-for edge is owed for **one** waiter and not the other, which the sub-stage's own first draft got wrong: against a reader no cycle is possible - a read borrow never waits, so a reader is always a sink - and an autocommit drop holds nothing while it waits, its transaction unwound before the park; but a relation `X` is refused by a **writer's** `IX` too, so a drop inside a transaction that holds rows waits for a writer that may be waiting on a row it holds, and that wait registers its edge and takes AO-R7's victim rule. The same case forced the second rule: `EndWrite`'s poison is withheld while the wait is possible, or the re-run answers "transaction is aborted" where the client used to get its relation dropped; (3) the slice interval is **`[min_key(page), kIdSpaceEnd)`**, not R14's `[min_key, next.min_key)`, whose upper bound is a page the walk has not read - and a forward walk's future is the tail anyway, so R14's interval would under-declare the keys a resumed walk is about to visit; (4) **an intention mode on an interval unit neither fences nor is fenced** - `ConflictingOverlap` skips them, mirroring the rule `FenceCoversKey` has applied from the other side since AO-S6b - so item 14's declared range does not wait for a reader and a reader does not wait for it (AO-0 item 27); (5) a read borrow **never refuses a read and never makes one wait**, since DT1 and the post-park re-`Bind` leave an unborrowed reader correct - which is also what makes (2) true. The holder id is not a transaction's (`txn::kReadHolderBit`), because an autocommit `SELECT` has none. **Cells**: two in `exec_chain_test` (the walk reports once before its first page, then once per boundary with `lo` rising; a heap walk reports the relation and no slice), three in `lock_table_test` (the intention rule in both orders with the tuple side unchanged, the wake registration's lifetime and its withdrawal, a wake blocking nobody), eight in `txn_2pc_protocol_test` (a read declares and gives back; the drop waits and re-runs; the synchronous drop names a positioned reader; a read is not refused by a DDL holding the relation; a whole-relation write is not held up by a positioned reader; a drop inside a transaction waits and leaves it committable; a drop that would close a cycle is the victim and the survivor proceeds on its ROLLBACK; a drop whose wait reaches the fault net poisons its transaction), and **the row's own cell on the two-core rig** - `read_borrow_rig_test.cpp`, the drop on core 0 parking on a position held on core 1 and proceeding when it is released, 10/10 on repeat. Mutation-checked six ways: the intention skip, the DDL's borrow, the walk's first report, the wake registration, the whole-relation write's unit, and the fault net's poison - each kills the cell that rests on it, and the last reproduces the review's B2 verbatim (`rows id=[0, 0) are held by a positioned reader`) while the writer-side cell passes under both, which is the claim that the unit change is writer-neutral. **The `critics-developer` pass found the rule built in the wrong place, and that is the one finding the cells could not have reached**: point (4) is written in `ConflictingOverlap`, and a `WHERE`-less write never goes through it - `DeclaredWriteBorrow` collapsed it onto the **relation** unit (AO-S6b's optimization), where `IS` against `X` is a refusal decided by the entry itself. A positioned reader would have refused `DELETE FROM t`, and refused rather than waited, naming a transaction that never existed. Latent on this engine - a local read is synchronous and a peer's runs on the owner, so the two never overlap - and live with the first read that can park holding a position. **Fixed as a statement about what a unit means**: the relation unit is the relation as an *object*, which is what DDL claims and what a reader declares an `IS` on, and a write's claim is over *keys* - so a `WHERE`-less write declares `[0, kIdSpaceEnd)` as a range, which changes nothing against writers and costs the fence counter a range-shaped write already raises. The pass also found a reader refused the relation `IS` re-asking under a partition latch **per page**, and an arm in the foreign-key probe path that covered nothing and would have leaked a registration; both taken. Its largest proposal - delete the slice half, since nothing reads it - is **declined and recorded**: the slice is what the operator ratified per page and reopened the stage for. **A defect in a fixture, found by the first cell that needed a multi-leaf relation**: `exec_chain_test`'s `Insert` never adopted a root split, so past the first leaf it kept handing `BtreeInsert` a full leaf as the root and built a **descending** sibling chain - the shape `btree.cpp`'s append path calls unsurvivable (H9). Fixed there; the engine's own path has adopted the new root since PW2-4. `drop-table.md` gains DT7, `ddl-transactional.md` §5a is narrowed for one shape and keeps its title, `txn.md` §5 carries what a read borrows, and `manual/sql/sql.md`'s `DROP TABLE` entry says what a client sees. **Overhead not measured**; AO-S7's decomposition is the only number, and it is an upper bound |
 
 ---
 
@@ -518,9 +518,12 @@ rule. Every item names the ruling it moves.
 | 16 | **The probe-resumed outcome is offered the write-block wait.** pre-existing since AO-S3; `[quiet-wrong]` inside an explicit transaction | **Ruled 2026-09-09 as CLA proposed**, and built in AO-S6d - but not as one loop over both arms. The wait became a function called from both, which is the same fix with the probe arm's own rounds loop doing the looping. The draft's claim that the resume could set a blocker "for the first time" was **wrong at `7e26a65`**: `may_park_` was false there, so the `[quiet-wrong]` was one line away rather than live. Both halves landed together and the mutation that separates them was run. |
 | 17 | **REPEATABLE READ waits on a holder that is not the row's writer, and may then be refused first-updater-wins if that holder wrote the row.** user-visible; `txn.md` §5 gains a sentence | **Ruled 2026-09-09 by the operator: adopted** (*"#17 RR fence first-updater-wins 채택"*). Built as the question *can the re-run answer differently*, asked per wait: `blocker != cur` at the row level, every `INSERT` (whose verdict does not go through the view at all), and nothing else - a refused *declared* unit cannot tell a fence from a writer and keeps the exclusion. `txn.md` §5 records all four arms and the wait-then-refuse ending. |
 | 22 | **Whether a wait on a bound assertion's group carries a bound of its own**, shorter than the lock-wait fault net | design; user-visible in what a contended group answers | **Raised 2026-09-09 at AO-S6e-c, not decided.** The net was written for a *row*, where reaching it is a defect report (AO-R8); a group is held for a transaction's length and every writer touching one account serialises on it, so the net is reached by ordinary contention. AO-S6e-c made the refusal say so rather than send an operator after a stuck holder, and left the bound alone - a second bound interacts with AO-R8's one-net-per-statement rule, which is AO-S7's to price |
+| 25 | **Whether `DROP TABLE` may be refused because readers keep arriving** | user-visible; a statement that used to succeed can now fail | **Raised 2026-09-09 at AO-S6e-b, not decided.** The drop waits on the relation's slot and re-asks when it is flipped, but readers do not queue behind it: a second reader takes the relation between the release and the re-ask, and under a steady stream the drop reaches the 11 s fault net and is refused `TxnConflict`, retryable. CLA proposes **leaving it**, and states what the alternative costs: fairness means an acquire that refuses a compatible request because somebody is waiting, which is a new refusal-shaped behaviour for *readers* on the hottest path, taken to spare a statement an operator issues by hand. The honest middle - a drop that, having waited once, takes the relation ahead of arriving readers - is the same thing with one more state |
+| 26 | **Which reads declare a position** | design; user-visible in what a `DROP TABLE` waits for | **Raised 2026-09-09 at AO-S6e-b, not decided.** Built: the outermost walk of a statement dispatched on its owner, shipped statements included. Not built: a nested step's walk (per-page times the outer cardinality), a point, index or Cabin read (neither seam), and `RemoteStepServer`'s fan-in producer (no lock table). The last is the one that makes DT7's promise conditional on which path a peer's read took. CLA proposes wiring **the fan-in producer** and leaving the other three, on the ground that it is the only one where a real positioned reader exists and is missed; the nested walk waits on item 19's price being re-taken against a join rather than a scan |
+| 27 | **An intention mode on an interval unit neither fences nor is fenced** | design; user-visible in whether a bulk write waits for a reader | **Built 2026-09-09 at AO-S6e-b as CLA states it, and it is the one thing that sub-stage decided without a ruling to point at.** `FenceCoversKey` has skipped intention modes since AO-S6b; `ConflictingOverlap` did not, and nothing held one until the read borrow, so the two could not be seen to disagree. Under raw compatibility item 14's declared range would wait for every reader positioned in it and every such reader for it. CLA's ground: the read borrow exists so an operation that changes *where a key lives* can wait for a reader (AR2 §3's move row, AO-R12), and a bulk write changes no key's assignment - MVCC answers its concurrent reader from the snapshot. What still stops a write inside a fence is every non-intention unit: a tuple `X`, another declared fence. **The rule also decided a unit**, because the review found it written where the traffic is not: a `WHERE`-less write collapsed onto the relation entry, where an intention holder is a conflict by the entry's own test - so the collapse is gone and such a write declares `[0, kIdSpaceEnd)`. That carries the second half of the ruling being asked for: **the relation unit means the relation as an object, and a write's claim is over keys**. **If the operator rules the other way**, the change is one `continue` and one collapse restored, and the cost is that a scan and a `WHERE`-less write on one relation serialise |
 | 18 | **What holds the relation `X` across a cross-core `CREATE INDEX`**, given that no transaction spans the build | design; user-visible in two deadlines, not one — `kIndexBuildReplyDeadlineNs` 60 s bounds the asker and the 180 s window ceiling bounds a peer writer, and a lock-wait fault net is 11 s | **Ratified 2026-09-09 as proposed: one transaction across both phases.** Its premise was confirmed by the AO-S6e review. Two things the proposal understated, both recorded at AO-S6e §survey: `InDdlStatement` is a synchronous template and splitting it around the park is most of the sub-stage, and a peer's `CREATE INDEX` ships to core 0, so the transaction is open across **two** round trips. **And AO-S6e-a is blocked on a finding this ruling does not reach** — the owner's window close, its catalog-cache drop and its next admitted write are one ordered event, which a lock released on core 0 does not reproduce |
-| 19 | **The `IS`'s granularity, and so its cost on every read** | **was** `[quiet-wrong]`; **now** a cost question with no correctness argument behind it | **Ratified 2026-09-09 as proposed (per page, per AO-R12) — and the grounds are withdrawn the same day.** CLA argued the cheap reading was wrong across cores; AO-R12 itself says the mover does not exist, `drop-table.md` DT1 leaves an unparked reader reading correct rows, and `step_vm.cpp:1996-2009` already turns a dropped relation into a clean error. CLA now proposes **deferring 19 to AO-S7**, where the number is, rather than paying a per-page acquire on the hottest path for a hazard with no agent. **Back with the operator** |
-| 20 | **What the `DROP TABLE` wait promises** | spec | **Ratified 2026-09-09 as proposed**, and it loses its motivation with item 19's: given DT1 and the post-park re-bind, a positioned reader already gets correct rows and a clean error, so CLA cannot state what the wait buys. **Back with the operator**, with the honest position that (b)'s cell may be unmotivated |
+| 19 | **The `IS`'s granularity, and so its cost on every read** | **was** `[quiet-wrong]`; **now** a cost question with no correctness argument behind it | **Ratified 2026-09-09 as proposed (per page, per AO-R12) — and the grounds are withdrawn the same day.** CLA argued the cheap reading was wrong across cores; AO-R12 itself says the mover does not exist, `drop-table.md` DT1 leaves an unparked reader reading correct rows, and `step_vm.cpp:1996-2009` already turns a dropped relation into a clean error. CLA proposed **deferring 19 to AO-S7**, where the number is, rather than paying a per-page acquire on the hottest path for a hazard with no agent. **Deferred, priced, and then built**: AO-S7's ratified decomposition bounds one table operation at ≲ 3 µs, so a per-page `IS` is that times the pages - under 1% of a point read, linear on a scan, an extrapolation and labelled one - and the operator reopened the stage on it (*"go ahead for AO-S6e-b"*). Built per page at AO-S6e-b with **one deviation from R14 the ruling could not have anticipated**: the interval is `[min_key(page), kIdSpaceEnd)`, because `[min_key, next.min_key)` names a page the walk has not read and a forward walk's future is the tail anyway (§"AO-S6e-b" point 3) |
+| 20 | **What the `DROP TABLE` wait promises** | spec | **Ratified 2026-09-09 as proposed**, and it lost its motivation with item 19's: given DT1 and the post-park re-bind, a positioned reader already gets correct rows and a clean error, so CLA could not state what the wait buys and said so. **Built 2026-09-09 on the operator's word, and the promise is now stated in one sentence** (`drop-table.md` DT7): a reader that was *already walking* finishes its statement against a live schema instead of meeting the re-`Bind`'s clean error. That is narrower than isolation and DT5 is unchanged - a read that starts after the drop's grant takes no borrow and sees the drop like any other outsider - and it is bought at the price item 25 records |
 | 21 | **The assertion's bounded false rejection becomes a wait** | user-visible; spec rewrite | **Ratified 2026-09-09 as proposed**, and narrower than CLA put it: AS4's striking is already AR0's (`ar0-architecture-revision.md:416-419` — struck by whichever work order lands D8), and the rewrite is **three** of `assertion.md` §6.2's four properties plus §6.1's core-locality, not two. The ruling stands; the scope is corrected |
 | 14 | **The unit a bulk write borrows. Marked 2026-09-08** as CLA proposed it and built in AO-S6b: a `WHERE`-less write declares the relation, a range-shaped predicate declares its window, everything else stays per-row. Two things the mark's own reasoning did not reach and the build had to settle - a one-key window stays **per-row**, because a fence there raises the relation's counter and puts every other writer of it on the all-partition probe; and two declared windows must meet **each other**, or the declaration is weaker in detection than the per-row borrow it replaces (the AO-S6b row's C1) | design; user-visible; **settled** | AR2 §3's table gives `UPDATE`/`DELETE` the **tuple** with `IX` on the relation, so a write borrows one entry per row and the cap binds at `max_locks_per_txn - relations` rows - 65,535 at the default, against `max_rows_touched`'s 100,000,000. **Escalating at the cap is already forbidden**: the mark of 2026-09-08 §1 item 4 refuses widening a transaction's tuple borrows into a relation `X`, because that turns one transaction's refusal into a wait other transactions pay for without a record of why, `[quiet-wrong]` on their side. **Choosing a coarse unit up front is a different thing and is not forbidden** - §3 already gives the relation to DDL and range split, the changed key interval to a mover, and the whole child relation to an FK reverse check with no covering structure, which AR2 calls "a refusal-class fact rather than a performance one". So the question is whether a `WHERE`-less `DELETE FROM t`, or a write whose predicate covers a range, declares its unit as the relation or the range rather than accumulating tuples. **Why it is S6b's and not S6a's**: S6a swallows the cap because an advisory ledger must not fail a statement, so nothing forces the answer today; **S6b makes the lock the wait, where a truncated ledger is an incorrect one and the cap must propagate** - and a bulk write then either declares a coarse unit or is refused. CLA proposes: extend §3 with a row for a predicate-covering write, taking the **relation** `X` for a `WHERE`-less delete and the **range** `X` where the predicate is range-shaped, decided at compile from the predicate rather than at run time from a count - which keeps it a declaration and not an escalation. It is user-visible either way: a coarse borrow blocks concurrent writers the fine one admitted, and the cap refuses statements that complete today |
 
@@ -968,7 +971,11 @@ kept here rather than quietly fixed: a plan is cited by everything built
 from it, so a claim it got wrong is worth as much on the record as one it
 got right.
 
-**Status: closed 2026-09-09 at AO-S6e-d.** AO-S6e-a and AO-S6e-c built, AO-S6e-b deferred. AO-0 items 18–21 were ratified
+**Status: closed 2026-09-09 at AO-S6e-d, and reopened the same day for
+AO-S6e-b on the operator's word** (*"go ahead for AO-S6e-b"*), AO-S7 having
+returned the number item 19 was deferred for. AO-S6e-a and AO-S6e-c built
+first; the close below is the one AO-S6e-d wrote and is amended where
+(b) changed it. AO-0 items 18–21 were ratified
 2026-09-09 (*"18-21 전부 제안대로 채택"*), and two of them were ratified on
 reasons that did not survive the review — §"What the review took back"
 says which, and those two go back to the operator. AO-S6e-a is blocked on
@@ -1076,7 +1083,7 @@ is inside the comment above it).
 | # | sub-stage | gated on | size |
 |---|---|---|---|
 | AO-S6e-a | The index-build window's refusal becomes a wait (census row 4's outcome, none of its mechanism) | **built 2026-09-09** | S, not L |
-| AO-S6e-b | `IS` and the slice unit on the positioned read path, and the `DROP TABLE` wait | **deferred to AO-S7 with items 19 and 20** | L |
+| AO-S6e-b | `IS` and the slice unit on the positioned read path, and the `DROP TABLE` wait | **built 2026-09-09**, on the operator's word after AO-S7 returned the number item 19 was deferred for | L |
 | AO-S6e-c | The assertion false rejection becomes a wait; **the slice fence is not built, and the sub-stage says why** | **built 2026-09-09** | S, not M |
 | AO-S6e-d | The row, and the spec edits these make | — | S |
 
@@ -1274,12 +1281,268 @@ and 180 s → 11 s), not one. And "a DDL transaction open across a ring round
 trip" understates the shape: a peer's `CREATE INDEX` ships to core 0
 (`command_dispatcher.cpp:1514-1558`), so it would be open across **two**.
 
+### AO-S6e-b, and the five things R14 could not say
+
+**Built 2026-09-09 on the operator's word**, after AO-S7 returned the
+number item 19 had been deferred for. AR2-R14 is the operator's own text
+and it settles the *unit*: `IS` at the slice a positioned statement is
+walking, with the relation by the intention rule, for the statement's
+duration. What it does not settle is what a DDL waits *on* when the reader
+is on another core, whether that wait needs an edge, how a walk knows the
+slice it is in, what a *writer* owes a reader's position, and whether a
+read that cannot have its borrow may read anyway. All five had to be
+answered to build it, so each is written out here rather than left in a
+commit message.
+
+**1. The wait is on the table's slot, because `IsInFlight` is per-core.**
+Every other wait in the dispatcher polls
+`TransactionManager::IsInFlight(holder)`, which walks *this core's* live
+set (`manager.hpp` says so, and AO-S5(b) already had to ship a probe's park
+to the holder's core because of it). A read borrow is held by a statement
+that runs on the relation's owner, and DDL runs on core 0 (CC13) - so for
+the shape this sub-stage exists for, the holder is always somewhere else,
+and the write path's predicate answers "not in flight" from the first poll.
+A wait built on it is a re-dispatch per reactor iteration for the length of
+the reader's statement: not a hang, and not a wait either.
+
+So `TryAcquire` gained a **wake registration** - the queueing ask's waiter
+record, minus the queue position - and `AwaitRelationLock` parks on its
+slot. Three consequences the shape forces:
+
+- **The registration must be written under the latch that saw the
+  conflict.** Registering after the refusal returns races the holder's
+  release: the release wakes what is queued, finds nothing, and the
+  registration that lands afterwards is a slot nobody will flip again. The
+  only exit would be the 11 s fault net.
+- **It must not be a queue position.** `Release` withdraws what
+  `holdings.waiting_` names, and the DDL's transaction is unwound by
+  `InDdlStatement` *before* the park - so a queue position would be
+  withdrawn by its own asker, flipping its slot, and the wait would become
+  a spin at reactor speed. `holdings.waiting_` is therefore set by the
+  queueing ask alone.
+- **The caller withdraws it**, `DropWake`, by the slot's identity: the
+  statement that registered it is gone and the re-run asks under a new
+  transaction id, so there is no id to address it by.
+
+**2. The edge is owed for one waiter and not the other, and the first
+draft of this section had it wrong.** `lock_table.hpp` records the
+obligation AO-S6 inherited - "a transaction will hold rows under this graph
+while waiting on a queue it cannot see". Against a *reader* the wait cannot
+be in a cycle: a read borrow never waits, so a reader is always a sink and
+a chain that reaches one ends there, and an **autocommit** drop holds
+nothing while it waits because `InDdlStatement` unwound its transaction
+before the park.
+
+**Neither of those covers the case the borrow model actually creates.** A
+relation `X` is refused by the `IX` of every writer of the relation, not
+only by a reader's `IS` - so `DROP TABLE` inside a transaction that has
+written rows waits for a *writer*, which can itself be waiting on a row
+this transaction holds. That is a cycle, and nothing but the 11 s fault net
+would have ended it. So the wait registers `waiter -> holder` exactly where
+the waiter is an explicit transaction, and a registration that closes a
+cycle makes this statement the victim (AO-R7) - the write-block loop's own
+rule, reached here by the same reasoning it states. The cell is
+`ADropThatWouldCloseACycleIsTheVictimRatherThanWaiting`.
+
+**And a second thing the explicit-transaction case forced**: `EndWrite`
+poisons a transaction whose statement failed, and a poisoned transaction
+answers the re-run "transaction is aborted", non-retryable - worse than the
+refusal the wait replaced, and from a wait. The poison is withheld while
+`lock_wait_` is set, which is `blocking_writer_`'s rule applied to the
+second failure a wait can get past. What bounds the wait is the fault net,
+shared with the write-block wait so a statement that waits twice still
+waits once (item 16's rule).
+
+**3. The slice interval is a lower bound on the position, not R14's
+`[min_key, next.min_key)`.** That interval is **not computable at page
+entry**: its upper bound is the min_key of a page the walk has not read
+yet, and reading ahead for it costs a pin per page for a bound nothing
+consumes. What the walk knows exactly is how far it has got, so what it
+declares is `[min_key(page), kIdSpaceEnd)` - and that is the honest
+declaration rather than a cheaper one, because a forward walk will still
+read *everything* ahead of its position: R14's narrower interval would
+leave unclaimed exactly the keys a resumed walk is about to visit. The
+`min_key` itself costs nothing new - the visitor already detects the page
+transition for `pages_fetched` and the header is in cache. **Btree only**:
+a heap chain is not walked in key order (RD6 walks a chain per range,
+invariant 4 leaves a page's tuples unordered), so there the relation is the
+whole declaration, and SUS-1 makes every relation created since a btree.
+
+**4. An intention mode on an interval unit neither fences nor is fenced.**
+This is the one thing built here that no ruling covers, and it is AO-0 item
+27. `FenceCoversKey` has skipped intention modes from the tuple's side
+since AO-S6b - "an intention mode on a range key is not one and fences
+nothing" - while `ConflictingOverlap`, the fence-taker's own scan, applied
+raw compatibility. Nothing held an intention mode on an interval unit, so
+the two sides could not be seen to disagree. A reader's slice `IS` is the
+first, and raw compatibility would have made **item 14's declared range
+wait for every reader positioned in it**: a `DELETE FROM t WHERE id < 50`
+parked behind a scan, and a scan parked behind the delete, in whichever
+order they arrived.
+
+That is not what the read borrow is for. AR2 §3 puts it there so a **move**
+can wait for a positioned reader, and AO-R12 says in its own text that no
+mover exists - so the M2 consumer is DDL's relation `X`, which meets a
+reader at the relation entry by the intention rule and never needs this
+scan. A bulk write changes no key's assignment; it writes row versions, and
+MVCC answers a concurrent reader from its snapshot. So the scan skips
+intention holders, symmetrically with the probe on the other side, and what
+still stops a write inside a fence is every unit that is not an intention -
+a tuple `X`, another declared fence. The suite is the check that nothing
+else leaned on the raw reading: nothing did, because nothing held one.
+
+**5. A read borrow never refuses a read and never makes one wait**, which
+is what makes (2) true and is a decision rather than an implementation
+detail. A reader needs no borrow to be correct: DT1 leaves the pages
+allocated and the oid never reissued, and the post-park re-`Bind` turns a
+dropped relation into a clean error. So a refused ask leaves the reader
+holding nothing and reading on. The cost is that the promise is
+order-dependent and DT7 says so in those words: a positioned reader is not
+overtaken; a reader that starts after the grant is not protected and was
+never wrong.
+
+### What the AO-S6e-b review found, and what it did not get
+
+A `critics-developer` pass over the change, forbidden to build or edit.
+**Two defects, and the first one CLA had already found and fixed before the
+report arrived** - the edge and the poison rule of point 2 above, which the
+review reached by the same route (an explicit transaction's drop parks
+holding everything its earlier statements wrote, and the blocker is
+usually a *writer*, not a reader). Taken as it stated it in one respect the
+build had not: the edge is registered only against a holder that **is** a
+transaction, because a read borrow's id never decides and never waits, so
+an edge to one is an entry the walk passes through on its way to nothing.
+
+**The defect that mattered was the second, and it is the rule built in the
+wrong place.** Point 4 above says an intention mode on an interval unit
+neither fences nor is fenced, and `ConflictingOverlap` is where it was
+written - but a `WHERE`-less write does not go through `ConflictingOverlap`
+at all. `DeclaredWriteBorrow` collapsed it onto the **relation** unit
+(AO-S6b's own optimization: one entry, no fence counter), where the
+conflict is decided by the entry's compatibility test and `IS` against `X`
+is a refusal. So a positioned reader would have refused `DELETE FROM t` -
+refused rather than waited, since a read borrow's holder is not a
+transaction and `NoteBlockingWriter` drops a blocker that is not in flight
+- and the message would have read `rows id=[0, 0) are held by transaction
+9223372036854775809`, a relation unit rendered as a row range and a holder
+rendered as a transaction that never existed.
+
+**Latent, and the review said so**: a local read is synchronous and a
+peer's read runs on the owner, so a reader and a whole-relation writer of
+one relation never overlap on this engine today. It goes live with the
+first read that can park while holding a position - which is the fan-in
+producer of the same list below.
+
+The fix takes the reviewer's first option, and it is a statement about what
+a unit **means** rather than a special case: **the relation unit is the
+relation as an object** - its existence and its schema, which is what DDL
+claims and what a reader declares an `IS` on - **and a write's claim is
+over keys**. So a `WHERE`-less write declares `[0, kIdSpaceEnd)` as a
+range. Against writers nothing changes (a key is inside the interval, so
+the overlap scan finds what the relation entry used to, and a concurrent
+DDL meets the `IX` above the range); against readers it is what the rule
+already said. The cost is the one AO-S6b's collapse avoided: the relation's
+fence counter rises for the length of the write, so a concurrent writer
+pays the probe - which is what a range-shaped bulk write has always cost.
+`txn.md` §5 carries both halves.
+
+**Two more taken**: a reader refused the relation `IS` re-asked at every
+page boundary - a partition latch per page for a walk that has already
+decided to run without a position - so the record is now of the ask and not
+of the grant; and the foreign-key probe arm's call is deleted rather than
+looped, because `DROP TABLE` raises no probe and a statement resumed from
+one cannot be a drop, so the arm covered nothing and would have leaked a
+registration the day it did.
+
+**One declined, and it is the largest thing the review proposed.** S1 asks
+for the slice half to be deleted: nothing reads a slice unit, each boundary
+pays a `TryAcquire` and a `ReleaseOne` for it, and the interval is
+degenerate at `[min_key, kIdSpaceEnd)`. Every fact in that is true. It is
+declined because the slice is **the deliverable**: AR2-R14 is the
+operator's own text, item 19 was ratified *per page* and reopened on
+AO-S7's number for that reading, and the consumer AR2 §5.4 names -
+`physical-optimizer.md` §6's first gate, which needs a positioned reader to
+be checkable at all - is the reason the unit exists rather than an
+afterthought. Deleting it would be CLA scaling down what the operator
+asked for. **What the review is owed instead is the record**: the slice is
+unexercised in M2, its price is per page, and one cut removes it if the
+operator wants it deferred to the mover. S2 (delete the seam) and S4 (a
+guard that cannot fire) follow from S1 and from the house rule
+respectively; S4 is taken, S2 falls with S1. S3 is taken - the DDL borrow's
+`verb` parameter had one caller and one value.
+
+**A second pass over the fixes found one more, and it was the sub-stage's
+own.** `EndWrite` withholds the poison a failed statement owes an explicit
+transaction while the wait is still possible - and of the wait's three
+exits only two restored it. The victim's comes from `RefuseParkedWrite`
+and a failing re-run's from `EndWrite` itself (`lock_wait_` being empty by
+then), but the **fault net** logged its defect report and returned: an
+eleven-second `DROP TABLE` refusal inside `BEGIN` left the transaction
+usable and committing. §6's failure atomicity, broken by a wait that is
+supposed to be invisible when it works. Two lines, and a cell that advances
+the manual clock past the net and asserts the `COMMIT` is refused -
+mutation-checked, because the arm had no cell at all, which is why the gap
+survived the first pass. The same pass confirmed hunk by hunk that the
+whole-relation write's change of unit preserves every writer conflict it
+had (it walks all five), that the edge is cleared on every exit and
+`DropWake` cannot run twice, and that `refused_`'s state machine is exact;
+two residues it flagged as unreachable are closed anyway, because the
+reasoning that makes them unreachable is longer than the code that removes
+them - the slice is released when the reported relation changes, and
+`BorrowChain`'s relation arm, which has had no caller since the unit
+changed, says in place why it is a rule rather than dead code.
+
+### What AO-S6e-b does not do
+
+- **A nested step's walk declares nothing.** The report is guarded on
+  `index == 0`, beside the resume gate and for the same reason: an inner
+  walk runs once per outer row, so a per-page borrow there is the page
+  count times the outer cardinality. A `DROP TABLE` of a join's inner
+  relation therefore waits for nobody.
+- **Neither does a point, index or Cabin read**, which reach neither seam
+  (§survey 3 listed them as unsurveyed and they still are).
+- **Nor the fan-in producer.** A shipped *statement* runs through the
+  owner's dispatcher and takes its borrow like any other read, but
+  `RemoteStepServer`'s `ExecuteAsync` - the two-step join's remote stage -
+  has no lock table and takes none. It is the one shape where "a positioned
+  reader on a peer" is a reader this stage does not see, and wiring it is a
+  constructor parameter and a holder-id source rather than a decision.
+- **A wake registration outlives a coroutine destroyed *at* the park** -
+  a session dropped mid-wait - because the statement that would withdraw it
+  is gone and its transaction went before that. One entry per abandoned
+  drop, holding a waiter nobody will flip again: memory, never an answer,
+  and a later release flips a dead slot harmlessly. **An RAII guard is the
+  obvious fix and is deliberately not taken**: AO-S4a tried exactly that
+  for the wait-for edge and it segfaulted, because the table is
+  instance-scoped and a destructor running during teardown reaches it after
+  its owner is gone. The edge carries the same residue for the same reason
+  and is documented in the same words.
+- **A slice move costs three partition-latch operations, not two**: the
+  take, the release, and `ReleaseHeld`'s second acquisition to wake a queue
+  that a reader's slice never has. Skipping the wake where the entry had no
+  waiters is one branch in the release path every writer shares, which is
+  AO-S7's to price rather than this stage's to guess at.
+- **The wait is invisible to `SHOW META`**, exactly as AO-S6e-a's is: an
+  operator sees a stall where the drop used to be instantaneous.
+  `read_borrows()` counts positions declared and is test surface, not a
+  wire counter.
+- **A `DROP TABLE` can now be refused where it used to succeed**, after 11
+  s under a stream of readers: readers do not queue behind a waiting DDL,
+  so a second reader may take the relation between the release this one was
+  woken for and its next ask. AO-0 item 25.
+- **`CREATE INDEX`, `DROP INDEX` and `ALTER` take no relation `X`.** AR2
+  §3's DDL row names them all; only the drop is built here, because it is
+  the only one whose census fate this stage owed. `CREATE INDEX`'s is
+  AO-S6e-a's window and `DROP INDEX` carries the hole §survey 5 names.
+
 ### AO-S6e's close
 
-**The stage delivered two waits and no new unit**, and that sentence is the
-whole of it. `IS` is still taken nowhere, there is still no slice-unit
-borrow and no `S` mode on any unit, which is exactly what the survey found
-absent when the stage opened.
+**The stage delivered two waits and no new unit**, and that sentence was
+the whole of it until the operator reopened it for (b) the same day.
+**With AO-S6e-b it is two waits and one unit**: `IS` is taken - at the
+relation and at the slice - and a third wait, the drop's, is the first a
+statement takes on the table's own slot. There is still no `S` mode on any
+unit, which of what the survey found absent is what remains absent.
 
 The three reasons turned out to be one reason. Every unit this stage was
 asked to add had **no contender, or a contender the unit could not have
@@ -1292,7 +1555,11 @@ served**:
 - The `IS` at the slice was argued for a **mover**, and AO-R12 says in its
   own text that no mover exists; the reader it would protect already gets
   correct rows (DT1) and a clean error (the post-park re-bind). Deferred to
-  AO-S7 with items 19 and 20, where a number can decide it.
+  AO-S7 with items 19 and 20, where a number can decide it. **AO-S7
+  returned the number - a per-page `IS` at ≲ 3 µs times the pages, an
+  extrapolation and labelled one - and the operator reopened the stage;
+  AO-S6e-b built it against the consumer that does exist, DDL's relation
+  `X`, and left the reader unprotected against the mover that does not.**
 - The slice fence for the assertion check had no interleaving to fence: the
   check and the reserve run inline in one statement with nothing between
   them on a cooperative core, and the site's own comment says so. AO-S6e-c

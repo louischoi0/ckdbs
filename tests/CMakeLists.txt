@@ -11,6 +11,7 @@ add_executable(kds_tests
     lock_wake_rig_test.cpp
     deadlock_rig_test.cpp
     fk_probe_rig_test.cpp
+    read_borrow_rig_test.cpp
     current_core_test.cpp
     alloc_race_test.cpp
     free_map_race_test.cpp

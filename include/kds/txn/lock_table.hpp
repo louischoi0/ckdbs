@@ -393,6 +393,26 @@ inline constexpr std::size_t kMaxLocksPerTxnDefault = 65536;
 // AO-R2's partition count, per core. `[constant]`, re-measured in AO-S7.
 inline constexpr std::size_t kLockPartitionsPerCore = 64;
 
+// **The read borrow holds under an identity that is not a transaction's**
+// (AO-S6e-b). AR2 §3's `SELECT` row scopes the read borrow to *the
+// statement*, and a `SELECT` outside an explicit transaction has no
+// transaction at all - `AutocommitSnapshot` mints a view owned by nobody -
+// so there is no id to hold under and no `LockHoldings` to record in. The
+// dispatcher mints one per read statement with this bit set.
+//
+// Free by construction: a trx id is 48 bits (`heap::kMaxTrxId`, invariant
+// 12's `trx_id:48`), so nothing this table is handed as a transaction can
+// collide with it. The table itself never reads the bit - a holder is an
+// opaque id to it - and the two places that do are the refusal a waiter
+// renders (a reader is not "transaction N") and the wait-for graph, which
+// never sees one: a read borrow takes what is free and proceeds otherwise,
+// so a reader is never the waiting half of an edge.
+inline constexpr std::uint64_t kReadHolderBit = std::uint64_t{1} << 63;
+
+inline constexpr bool IsReadHolder(std::uint64_t holder) noexcept {
+    return (holder & kReadHolderBit) != 0;
+}
+
 // **The fault net, and it is never the normal end of a wait** (AO-R8,
 // AR2-R10 as amended by AR2-A). A wait ends when the holder decides. This
 // bound exists only for a fault - a detector that missed a cycle, or a
@@ -548,8 +568,43 @@ public:
     // so a transaction blocked by a range fence had nothing to name and no
     // wait to take. Untouched on a grant, and untouched by the cap's
     // refusal, which is not a conflict and names nobody.
+    //
+    // **`wake`, when given, receives a slot to park on** (AO-S6e-b). The
+    // ask stays non-queueing - no queue position, nothing recorded in
+    // `holdings.waiting_`, and the grant this waiter eventually gets is one
+    // it asks for again - but a registration is left on the entry so the
+    // holder's release flips the slot and kicks the core that asked. It is
+    // what a **statement** waits on when the holder is on another core:
+    // `TransactionManager::IsInFlight` is per-core (`manager.hpp`), so the
+    // predicate every other wait in the dispatcher uses answers "not in
+    // flight" for a holder that is very much in flight on a peer, and a
+    // wait built on it is a spin. Untouched on a grant and by the cap.
+    //
+    // The registration is the caller's to remove - `DropWake` - because the
+    // statement that took it is torn down and re-run between the ask and
+    // the grant, so no scope here outlives it.
     StatusOr<bool> TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
-                              LockHoldings& holdings, std::uint64_t* blocker = nullptr);
+                              LockHoldings& holdings, std::uint64_t* blocker = nullptr,
+                              std::shared_ptr<LockWaitSlot>* wake = nullptr);
+
+    // Releases **one** of `holdings`' borrows, waking whoever was queued on
+    // it, and drops its ledger record so the cap and `Release` see it as
+    // never taken.
+    //
+    // Two callers, and they are the same operation seen from two sides: the
+    // verify below unwinds a grant it just published, and a positioned
+    // reader's borrow **moves** (AO-S6e-b) - it takes the slice it is
+    // entering before letting go of the one it is leaving, so the position
+    // is never unheld between two pages.
+    void ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
+                    LockHoldings& holdings);
+
+    // Removes the wake registration `TryAcquire` handed back, by the slot's
+    // own identity: the waiter it names is not addressable by transaction
+    // id, because a statement's re-run asks under a new one. A slot this
+    // table no longer knows about - the entry went with its last holder -
+    // is not an error and does nothing.
+    void DropWake(const LockKey& key, const std::shared_ptr<LockWaitSlot>& slot);
 
     // Releases every borrow `holdings` records, **wakes everyone queued on
     // the units it let go**, and withdraws its own pending wait, then
@@ -637,6 +692,12 @@ public:
     // than the per-row borrow it replaces, which is the one thing it must
     // not be. A relation-unit holder is still not looked at: it carries the
     // empty interval and is caught at the relation entry.
+    //
+    // **An intention-mode holder is not looked at either** (AO-S6e-b), the
+    // rule `FenceCoversKey` already applies from the other side: a slice
+    // `IS` is a positioned reader's declaration of where it is, not a claim
+    // on the keys, so a fence-taker passes it and the two meet - if they
+    // meet at all - at the relation entry.
     bool ConflictingOverlap(const LockKey& fence, LockMode mode, std::uint64_t txn,
                             std::uint64_t* holder) const;
 
@@ -684,8 +745,16 @@ private:
     // which is a loss of place and, at the back of a busy unit, of
     // liveness. Withdrawing belongs to the queueing ask, because only it
     // replaces what it takes.
+    //
+    // `register_wake` is the third thing it gates, and only for a
+    // non-queueing ask: the waiter record is written and its slot handed
+    // back, while `holdings.waiting_` stays empty. That combination is what
+    // AO-S6e-b's statement wait needs - a wake with no queue position -
+    // and it is why the flag is separate from `queue_on_conflict` rather
+    // than derived from it.
     StatusOr<AcquireResult> AcquireInner(std::uint64_t txn, const LockKey& key, LockMode mode,
-                                         LockHoldings& holdings, bool queue_on_conflict);
+                                         LockHoldings& holdings, bool queue_on_conflict,
+                                         bool register_wake = false);
 
     // One tenancy. Holders and waiters are the same shape, so they are the
     // same type: a waiter is a tenant that has not been admitted.
@@ -737,11 +806,6 @@ private:
     // counter drifts.
     void ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held);
 
-    // Unwinds a grant this call published, after the verify found a
-    // conflict its partition could not see. Drops the `holdings` record
-    // too, so the cap and `Release` see the borrow as never taken.
-    void ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
-                    LockHoldings& holdings);
 
     // The wait-for graph, `waiter -> holder`. One entry per waiting
     // transaction, so it is bounded by the number of live transactions and

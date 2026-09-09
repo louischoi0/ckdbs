@@ -1106,5 +1106,136 @@ TEST(LockTableTest, TwoOverlappingFencesMeetEachOther) {
     EXPECT_TRUE(own.value().granted);
 }
 
+// ---- AO-S6e-b: the read borrow's two table properties ---------------------
+
+TEST(LockTableTest, AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced) {
+    // The read borrow's slice `IS` and a bulk write's declared range `X`
+    // overlap in key space and **do not conflict**, in either order. The
+    // rule is one `FenceCoversKey` has applied from the tuple's side since
+    // AO-S6b ("an intention mode on a range key is not one and fences
+    // nothing"); until a reader took one, no holder had an intention mode
+    // on an interval unit and the two sides could not be seen to disagree.
+    //
+    // Why it is the rule and not raw compatibility: a declared range says
+    // which rows a statement will *write*, and MVCC already answers a
+    // concurrent reader from its snapshot - so making the writer wait for
+    // readers would buy it nothing and cost a bulk write every scan on the
+    // relation. What the read borrow is for is an operation that changes
+    // where a key *lives*, and in M2 that is DDL's relation `X`, which
+    // meets a reader at the relation entry (AO-R12).
+    auto table = MakeTable();
+    LockHoldings reader;
+    LockHoldings writer;
+
+    // The reader first: its slice is published, and the writer's own scan
+    // is what must pass it.
+    ASSERT_TRUE(table->Acquire(1, LockKey::Slice(kRel, 100, 400), LockMode::kIntentionShared,
+                               reader)
+                    .value()
+                    .granted);
+    auto declared = table->Acquire(2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer);
+    ASSERT_TRUE(declared.ok()) << declared.status().message();
+    EXPECT_TRUE(declared.value().granted)
+        << "a declared write range waited for a reader's position, which no writer needs";
+
+    // A reader's slice raises no fence counter either, so a writer taking a
+    // tuple inside it pays no scan and is not refused.
+    EXPECT_EQ(table->RelationFenceCount(kRel), 1u) << "the range X is the only fence here";
+    EXPECT_FALSE(table->FenceCoversKey(kRel, 150, /*txn=*/3))
+        << "a slice IS is not a fence over the keys it spans";
+
+    // And the other order: the writer's fence first, the reader's slice
+    // after. A read borrow is never refused, which is what lets the reader
+    // take what is free and read on regardless.
+    auto table2 = MakeTable();
+    LockHoldings writer2;
+    LockHoldings reader2;
+    ASSERT_TRUE(table2->Acquire(2, LockKey::Range(kRel, 200, 300), LockMode::kExclusive, writer2)
+                    .value()
+                    .granted);
+    auto position = table2->Acquire(1, LockKey::Slice(kRel, 100, 400), LockMode::kIntentionShared,
+                                    reader2);
+    ASSERT_TRUE(position.ok()) << position.status().message();
+    EXPECT_TRUE(position.value().granted) << "a reader waited for a writer's declared range";
+
+    // The tuple side is untouched: a real `X` inside the fence still
+    // conflicts, which is the property AO-S6c-c rests on.
+    LockHoldings inside;
+    auto row = table2->Acquire(3, LockKey::Tuple(kRel, 250), LockMode::kExclusive, inside);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    EXPECT_FALSE(row.value().granted) << "the fence must still stop a write of a key it spans";
+}
+
+TEST(LockTableTest, AWakeRegistrationIsFlippedByTheReleaseAndTakesNoQueuePosition) {
+    // AO-S6e-b's `TryAcquire(..., wake)`. What a **statement** needs when
+    // the holder is on another core: `IsInFlight` is per-core and would
+    // answer "not in flight" for a live reader on a peer, so the wait has
+    // to be on the unit's own slot. What it must *not* take is a queue
+    // position - the asker's transaction is unwound between the ask and the
+    // park, and `Release` withdraws exactly what `waiting_` names.
+    auto table = MakeTable();
+    LockHoldings reader;
+    LockHoldings ddl;
+    const LockKey rel = LockKey::Relation(kRel);
+
+    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, reader).value().granted);
+
+    std::uint64_t blocker = 0;
+    std::shared_ptr<LockWaitSlot> wake;
+    auto refused = table->TryAcquire(2, rel, LockMode::kExclusive, ddl, &blocker, &wake);
+    ASSERT_TRUE(refused.ok()) << refused.status().message();
+    EXPECT_FALSE(refused.value());
+    EXPECT_EQ(blocker, 1u);
+    ASSERT_NE(wake, nullptr);
+    EXPECT_FALSE(LockWaitReady(wake)) << "a registration starts unflipped or the park never parks";
+    EXPECT_FALSE(ddl.waiting_on().has_value())
+        << "a wake is not a queue position: `Release` would withdraw one, and the statement that "
+           "registered this is torn down before the park it is for";
+    EXPECT_TRUE(ddl.empty()) << "a refused ask holds nothing";
+
+    // The DDL transaction is unwound - which is what happens between the
+    // ask and the park - and the registration outlives it.
+    table->Release(2, ddl);
+    EXPECT_FALSE(LockWaitReady(wake)) << "the asker's own unwind must not flip its slot";
+
+    // The holder's release is what flips it.
+    table->Release(1, reader);
+    EXPECT_TRUE(LockWaitReady(wake));
+
+    // And the registration is the caller's to remove. Until it goes the
+    // entry stays alive, holding a waiter nobody will flip again.
+    EXPECT_EQ(table->EntryCount(), 1u);
+    table->DropWake(rel, wake);
+    EXPECT_EQ(table->EntryCount(), 0u);
+
+    // Dropping one the table no longer knows about is not an error.
+    table->DropWake(rel, wake);
+    EXPECT_EQ(table->EntryCount(), 0u);
+}
+
+TEST(LockTableTest, AWakeRegistrationAdmitsNobodyAndBlocksNobody) {
+    // The other half of "a wake is not a grant": the registration is a
+    // wake-up address and nothing else. It admits its own asker to nothing
+    // - the re-run asks again - and it must not stand in another asker's
+    // way, or a statement waiting for a reader would block every other
+    // statement on the relation while it waits.
+    auto table = MakeTable();
+    LockHoldings reader;
+    LockHoldings ddl;
+    LockHoldings other;
+    const LockKey rel = LockKey::Relation(kRel);
+
+    ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, reader).value().granted);
+    std::shared_ptr<LockWaitSlot> wake;
+    ASSERT_FALSE(
+        table->TryAcquire(2, rel, LockMode::kExclusive, ddl, /*blocker=*/nullptr, &wake).value());
+    ASSERT_NE(wake, nullptr);
+
+    auto second_reader = table->Acquire(3, rel, LockMode::kIntentionShared, other);
+    ASSERT_TRUE(second_reader.ok()) << second_reader.status().message();
+    EXPECT_TRUE(second_reader.value().granted)
+        << "a waiting DDL's registration refused a compatible reader";
+}
+
 }  // namespace
 }  // namespace kds::txn

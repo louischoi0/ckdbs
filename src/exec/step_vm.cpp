@@ -266,7 +266,7 @@ public:
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
                 const txn::Snapshot* snapshot, bool indexes,
                 const std::function<bool()>* resume_gate = nullptr,
-                InnerBuildStore* builds = nullptr)
+                InnerBuildStore* builds = nullptr, PositionSink* position = nullptr)
         // Listed in declaration order, which is the order they are actually
         // initialized in - `snapshot_` sits third among the members even
         // though it is eleventh in the parameter list. Every initializer but
@@ -280,7 +280,7 @@ public:
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), sink_(sink),
           depth_(depth), parent_(parent), stats_(stats), budget_(budget), trail_(trail),
           replay_(replay), cabins_(cabins), indexes_(indexes), resume_gate_(resume_gate),
-          builds_(builds != nullptr ? builds : &owned_builds_) {}
+          builds_(builds != nullptr ? builds : &owned_builds_), position_(position) {}
 
     // Sub-chain mode - see `record_through_stops_`'s comment for what it
     // licenses and why only a sub-chain may have it.
@@ -1690,6 +1690,15 @@ private:
         // to search for it - which is the search the trail exists to avoid
         // (workplan P09).
         PageId walk_last_page = kInvalidPageId;
+        // The min_key of the page the visitor is on, for the read borrow
+        // (AO-S6e-b). Taken from the header the visitor already holds, on
+        // the page transition it already detects, so a walk that reports no
+        // position pays one store per page for it. An **empty** page never
+        // calls the visitor and so leaves the previous value standing,
+        // which under-declares the position and never over-declares it -
+        // the safe direction, since the borrow is a lower bound on where
+        // the walk has reached.
+        std::uint64_t walk_page_min_key = 0;
         // The page whose rows have already been emitted whole, in key order.
         // Only used when `emit_in_key_order` is set - see below.
         PageId ordered_page = kInvalidPageId;
@@ -1742,6 +1751,7 @@ private:
                 ++stats_.For(step.step_id).pages_fetched;
                 walk_last_page = page_id;
                 visited_on_page = 0;
+                walk_page_min_key = page.min_key();
             }
 
             // Checked per slot rather than per page because the walk has no
@@ -1939,6 +1949,18 @@ private:
         // whole-chain forms do: a bad head fails inside the fetch, where
         // testing it here would answer a corrupt catalog row with an empty
         // result instead of an error.
+        // ---- The read borrow's first report (AO-S6e-b) -------------------
+        //
+        // Before the first page, and unconditionally: a walk of a
+        // single-page relation never reaches the boundary below, so a
+        // position reported only there would leave the commonest relation
+        // in the engine declaring nothing. The interval is the whole id
+        // space, which is the relation - what the walk is positioned in
+        // before it is positioned anywhere.
+        if (position_ != nullptr && index == 0) {
+            position_->Position(access.oid, 0, catalog::kIdSpaceEnd);
+        }
+
         const PageId walk_origin = cur;
         for (std::uint32_t pages = 0;; ++pages) {
             if (Status s = storage::CheckPageWalkBudget(pages, walk_origin, "relation walk");
@@ -1982,6 +2004,32 @@ private:
                 co_return Status::OK();
             }
             cur = next.value();
+
+            // ---- The read borrow moves with the position (AO-S6e-b) ------
+            //
+            // Here and not at page entry, which is what AR2-R14's
+            // `[min_key, next.min_key)` would need: the upper bound is the
+            // *next* page's min_key, and a walk that has not read that page
+            // does not know it. Reading ahead for it would be a pin per
+            // page bought for a bound nothing consumes.
+            //
+            // So the interval declared is `[min_key(page), kIdSpaceEnd)` -
+            // **a lower bound on where the walk has reached**, and the
+            // honest one for a forward walk: everything ahead of the
+            // position is what the walk will still read, so everything
+            // ahead is what a move would have to wait for. R14's narrower
+            // interval would under-declare exactly the keys a resumed walk
+            // is about to visit.
+            //
+            // Btree only. A heap chain is not key-ordered - RD6 walks a
+            // chain per range and invariant 4 leaves a page's tuples
+            // unordered - so `min_key` of the page a heap walk is on is not
+            // a bound on what it has yet to read; there the relation
+            // reported above is the whole declaration. Since SUS-1 every
+            // relation created is a btree.
+            if (position_ != nullptr && index == 0 && is_btree) {
+                position_->Position(live_access->oid, walk_page_min_key, catalog::kIdSpaceEnd);
+            }
 
             // ---- The page boundary: no pin, no span (P4d-3) --------------
             //
@@ -2613,6 +2661,14 @@ private:
     // `owned_builds_` empty and points `builds_` at its parent's.
     InnerBuildStore owned_builds_;
     InnerBuildStore* builds_ = nullptr;
+
+    // The read borrow's seam (AO-S6e-b). Null for every nested runner and
+    // for every caller that holds no position - which is every caller but
+    // the dispatcher's read path. Reported from the outermost walk only,
+    // beside the resume gate and for the same reason: a nested walk runs
+    // once per outer row, so a per-page borrow there is the page cost times
+    // the outer cardinality, and nothing consumes the finer position yet.
+    PositionSink* position_ = nullptr;
 };
 
 // The highest step_id anywhere under `step`/`chain`, sub-chains included.
@@ -2763,7 +2819,8 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         const std::function<bool()>* resume_gate, const ChainFrame* parent) {
+                         const std::function<bool()>* resume_gate, const ChainFrame* parent,
+                         PositionSink* position) {
     if (chain.steps.empty()) {
         co_return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -2788,7 +2845,8 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
     Budget spend = budget.Fresh();
 
     ChainRunner runner(catalog, store, sink, /*depth=*/parent != nullptr ? 1u : 0u, parent,
-                       counters, spend, trail, replay, cabins, snapshot, indexes, resume_gate);
+                       counters, spend, trail, replay, cabins, snapshot, indexes, resume_gate,
+                       /*builds=*/nullptr, position);
     // RD7: the slice this chain covers, which a fan-in's stage was
     // assigned and every other chain leaves whole.
     runner.set_walk_span(chain.walk_span);
@@ -2823,7 +2881,8 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot, bool indexes, const ChainFrame* parent) {
+               const txn::Snapshot* snapshot, bool indexes, const ChainFrame* parent,
+               PositionSink* position) {
     // The synchronous wrapper (P4d-2's staging): with no resume gate
     // nothing beneath can park, so the gated driver completes the
     // coroutine inline and this is bit-identical to the pre-coroutine
@@ -2831,7 +2890,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     // gate to ExecuteAsync and polls the Coro instead.
     return RunToCompletionAtWalkBoundary(ExecuteAsync(catalog, store, chain, sink, stats, budget,
                                                       trail, replay, cabins, snapshot, indexes,
-                                                      /*resume_gate=*/nullptr, parent));
+                                                      /*resume_gate=*/nullptr, parent, position));
 }
 
 }  // namespace kds::exec

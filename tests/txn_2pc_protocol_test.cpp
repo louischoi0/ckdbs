@@ -2033,6 +2033,294 @@ protected:
     }
 };
 
+// ---- AO-S6e-b: the read borrow, and the DDL that waits for one ---------
+
+// The oid an INSERT reports, which is how a cell names a relation the
+// dispatcher created (`drop-table.md` DT2 uses the same handle).
+std::uint64_t OidIn(const std::string& insert_reply) {
+    const auto at = insert_reply.find("oid=");
+    EXPECT_NE(at, std::string::npos) << insert_reply;
+    return at == std::string::npos ? 0 : std::strtoull(insert_reply.c_str() + at + 4, nullptr, 10);
+}
+
+TEST_F(LockDeadlockTest, AReadDeclaresItsPositionAndGivesItBack) {
+    // AR2 §3's `SELECT` row: the borrow is **the statement's**. Taken by
+    // the walk (`step_vm.cpp`'s seam) and released when the statement ends,
+    // which is what `EntryCount` reads here - a read that kept its position
+    // would leave the relation entry standing and a later `DROP TABLE`
+    // would wait for a reader that finished long ago.
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO rb VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+
+    const std::uint64_t before = dispatcher_->read_borrows();
+    const std::string rows = Local("SELECT * FROM rb");
+    EXPECT_NE(rows.rfind("ERR", 0), 0u) << rows;
+    EXPECT_EQ(dispatcher_->read_borrows(), before + 1)
+        << "the walk declared no position at all";
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "a statement-scoped borrow outlived its statement";
+}
+
+TEST_F(LockDeadlockTest, ADropWaitsForAPositionedReaderAndThenRunsAgain) {
+    // The AO-S6 row's cell. The reader's borrow is held here directly
+    // rather than by a running `SELECT`, and that is a property of the
+    // engine rather than of the cell: a local read is synchronous, so a
+    // statement on this core cannot observe another one mid-walk. What the
+    // holder stands for is exactly what a walk takes -
+    // `Relation(oid)` in `IS` under a read holder id - and
+    // `AReadDeclaresItsPositionAndGivesItBack` above is what says a real
+    // read takes it.
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+
+    txn::LockHoldings reader;
+    const std::uint64_t reader_id = txn::kReadHolderBit | 7;
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+
+    Session s;
+    Started drop = Start("DROP TABLE rb", s);
+    Pump();
+    ASSERT_FALSE(*drop.done) << "the drop ran over a positioned reader: " << drop.out->response;
+
+    // And the wait ends where the position does. The re-run is a whole
+    // statement - the drop had written nothing when it was refused - so
+    // what the client gets is the reply the first attempt would have given.
+    locks_->Release(reader_id, reader);
+    Pump();
+    ASSERT_TRUE(*drop.done) << "the drop never resumed after the reader released";
+    EXPECT_EQ(drop.out->response.rfind("DROPPED TABLE rb", 0), 0u) << drop.out->response;
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "the wake registration outlived its wait";
+}
+
+TEST_F(LockDeadlockTest, ADropWithNoReactorToParkOnNamesThePositionedReader) {
+    // The synchronous path has no reactor, so its honest answer is the
+    // refusal itself - the same division `index_window` and `write_block`
+    // draw. What it must not do is name a transaction: the holder is a
+    // statement's read borrow, and an operator sent looking for
+    // "transaction 9223372036854775815" would be looking for something that
+    // never existed.
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+
+    txn::LockHoldings reader;
+    const std::uint64_t reader_id = txn::kReadHolderBit | 7;
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+
+    const std::string refused = Local("DROP TABLE rb");
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("a positioned reader"), std::string::npos) << refused;
+
+    locks_->Release(reader_id, reader);
+    EXPECT_EQ(Local("DROP TABLE rb").rfind("DROPPED TABLE rb", 0), 0u);
+}
+
+TEST_F(LockDeadlockTest, AWholeRelationWriteIsNotHeldUpByAPositionedReader) {
+    // **The rule at the unit where it actually lands** (the AO-S6e-b
+    // review's B2). `ConflictingOverlap` skips intention holders, so a
+    // reader's slice `IS` passes a declared range - but a `WHERE`-less
+    // write used to collapse onto the **relation** unit, where the conflict
+    // is decided by the entry's own compatibility test and `IS` against `X`
+    // is a refusal. So the rule was written on one path and the traffic ran
+    // down another: a scan of the relation would have refused
+    // `DELETE FROM rb`, and refused rather than waited, because a read
+    // borrow's holder is not a transaction and nothing can wait for it.
+    //
+    // Since AO-S6e-b a `WHERE`-less write declares the whole id space as a
+    // range: the relation unit means the relation as an object, which is
+    // what DDL claims, and a write's claim is over keys.
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+
+    txn::LockHoldings reader;
+    const std::uint64_t reader_id = txn::kReadHolderBit | 13;
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+    // And the slice under it, which is the other half of what a walk holds.
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id,
+                              txn::LockKey::Slice(static_cast<catalog::Oid>(oid), 1,
+                                                  catalog::kIdSpaceEnd),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+
+    const std::string deleted = Local("DELETE FROM rb");
+    EXPECT_EQ(deleted.rfind("DELETED", 0), 0u)
+        << "a positioned reader held up a write of every row, which MVCC answers it from its "
+           "snapshot: "
+        << deleted;
+
+    const std::string rows = Local("SELECT * FROM rb");
+    EXPECT_NE(rows.rfind("ERR", 0), 0u) << "the read that follows it is refused: " << rows;
+
+    locks_->Release(reader_id, reader);
+}
+
+TEST_F(LockDeadlockTest, ADropInsideATransactionWaitsWithoutPoisoningIt) {
+    // The shape the autocommit cells do not reach, and the one that would
+    // have made the wait worse than the refusal it replaced: a `DROP TABLE`
+    // inside an explicit transaction (DT5) that meets a reader. `EndWrite`
+    // poisons a transaction whose statement failed - so without the rule
+    // that withholds it while a wait is still possible, the re-run would
+    // answer "transaction is aborted", non-retryable, where the client used
+    // to get its relation dropped. It is `blocking_writer_`'s own rule
+    // applied to the second failure that a wait can get past.
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+
+    txn::LockHoldings reader;
+    const std::uint64_t reader_id = txn::kReadHolderBit | 9;
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+
+    Session s;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
+    Started drop = Start("DROP TABLE rb", s);
+    Pump();
+    ASSERT_FALSE(*drop.done) << "the drop ran over a positioned reader: " << drop.out->response;
+
+    locks_->Release(reader_id, reader);
+    Pump();
+    ASSERT_TRUE(*drop.done) << "the drop never resumed";
+    EXPECT_EQ(drop.out->response.rfind("DROPPED TABLE rb", 0), 0u) << drop.out->response;
+
+    // And the transaction is still a transaction: a poisoned one answers
+    // this with "transaction is aborted".
+    EXPECT_EQ(dispatcher_->Dispatch("COMMIT", &s).response.rfind("COMMIT", 0), 0u);
+}
+
+TEST_F(LockDeadlockTest, ADropWhoseWaitReachesTheFaultNetPoisonsItsTransaction) {
+    // **The exit the second review found untested, and it was wrong.**
+    // `EndWrite` withholds the poison a failed statement owes an explicit
+    // transaction while a wait is still possible - or the re-run would
+    // answer "transaction is aborted" instead of dropping the relation.
+    // Two of the three exits restore it (the victim through
+    // `RefuseParkedWrite`, a failing re-run through `EndWrite` itself, the
+    // field being empty by then); the fault net is the third, and without
+    // it an eleven-second refusal left the transaction usable and
+    // committable - §6's failure atomicity broken by a wait that is
+    // supposed to be invisible when it works.
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+
+    txn::LockHoldings reader;
+    const std::uint64_t reader_id = txn::kReadHolderBit | 21;
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+
+    Session s;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
+    Started drop = Start("DROP TABLE rb", s);
+    Pump();
+    ASSERT_FALSE(*drop.done) << drop.out->response;
+
+    // The holder never releases. The net is the only thing that can end
+    // this, and reaching it is a defect report rather than an outcome
+    // (AO-R8) - which does not make it any less a failed statement.
+    clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+    Pump();
+    ASSERT_TRUE(*drop.done) << "the wait outlived its own fault net";
+    EXPECT_EQ(drop.out->response.rfind("ERR", 0), 0u) << drop.out->response;
+    const std::string commit = dispatcher_->Dispatch("COMMIT", &s).response;
+    EXPECT_EQ(commit.rfind("ERR", 0), 0u)
+        << "the transaction committed after a statement of it failed: " << commit;
+
+    locks_->Release(reader_id, reader);
+}
+
+TEST_F(LockDeadlockTest, ADropThatWouldCloseACycleIsTheVictimRatherThanWaiting) {
+    // The wait's other half, and the reason it draws an edge at all. A
+    // relation `X` is refused by the `IX` of any *writer* of that relation,
+    // not only by a reader's `IS` - so a transaction that holds rows and
+    // then drops a relation somebody else is writing can be one half of a
+    // cycle, and the holder it waits for can be waiting on a row it holds.
+    // An autocommit drop holds nothing and registers nothing; this one
+    // holds a row, so the registration is what refuses it (AO-R7: the
+    // waiter that closes the cycle is the victim).
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO rb VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+
+    // A holds a row of `t`; B holds a row of `rb` - and so `IX` on `rb`.
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id = 5", &a).response, "UPDATED 1");
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE rb SET v = 2 WHERE id = 1", &b).response, "UPDATED 1");
+
+    // B waits for A's row: one edge, `B -> A`.
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*wb.done) << "B did not wait for A: " << wb.out->response;
+
+    // A now drops the relation B holds `IX` on. The edge `A -> B` closes
+    // the cycle, so A's statement is refused naming deadlock instead of
+    // parking on a slot nothing would flip until the fault net.
+    //
+    // On the served path, because that is where a wait exists to be
+    // refused: the synchronous `Dispatch` registers no wake and takes no
+    // edge, and its honest answer is the plain conflict.
+    Started drop = Start("DROP TABLE rb", a);
+    Pump();
+    ASSERT_TRUE(*drop.done) << "the victim parked instead of being refused";
+    EXPECT_NE(drop.out->response.find("deadlock"), std::string::npos) << drop.out->response;
+    EXPECT_EQ(locks_->WaitEdgeCount(), 1u) << "the victim's edge outlived its refusal";
+
+    // The survivor proceeds on A's rollback, which is what the victim's
+    // message tells the client to do.
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &a).response.rfind("ROLL", 0), 0u);
+    Pump();
+    EXPECT_TRUE(*wb.done) << "B never resumed after A rolled back";
+}
+
+TEST_F(LockDeadlockTest, AReadIsNotRefusedByADropThatHoldsTheRelation) {
+    // **A read borrow never refuses a read and never makes one wait.** The
+    // reader needs no protection to be correct - DT1 leaves its pages
+    // allocated and its oid never reissued - so a refused ask leaves it
+    // holding nothing and reading on. It is also what keeps a reader out of
+    // the wait-for graph, which is why a DDL waiting for one cannot be in a
+    // cycle through it.
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    ASSERT_NE(oid, 0u);
+
+    txn::LockHoldings ddl;
+    ASSERT_TRUE(locks_
+                    ->Acquire(4242, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kExclusive, ddl)
+                    .value()
+                    .granted);
+
+    const std::uint64_t before = dispatcher_->read_borrows();
+    const std::string rows = Local("SELECT * FROM rb");
+    EXPECT_NE(rows.rfind("ERR", 0), 0u) << "a read waited for or was refused by a DDL: " << rows;
+    EXPECT_EQ(dispatcher_->read_borrows(), before)
+        << "the ask was refused, so no position was declared - and the read ran anyway";
+    locks_->Release(4242, ddl);
+}
+
 // ---- AO-S6c-b: the lock is what the statement waits for ----------------
 
 TEST_F(LockDeadlockTest, AWriteBlockedByARangeFenceWaitsForItsHolder) {
@@ -2910,8 +3198,10 @@ TEST_F(MidWalkWaitTest, ATenRowUpdateMeetingAHeldRowKeepsWhatItWroteAndWaits) {
 TEST_F(MidWalkWaitTest, ACoarseDeclarationWaitsBeforeItWritesAnythingAndThenSucceeds) {
     // **The behaviour item 14's declared units buy, marked by the operator
     // on 2026-09-08 against `txn.md` §5's ratified refusal.** A `WHERE`-less
-    // write declares the relation and borrows it before the walk, so it
-    // waits having written nothing - and an autocommit statement's re-run
+    // write declares the whole id space - the relation until AO-S6e-b,
+    // which moved the declaration off the relation entry so that a
+    // positioned reader's `IS` there does not refuse it - and borrows it
+    // before the walk, so it waits having written nothing - and an autocommit statement's re-run
     // mints a fresh view, so it succeeds where the same statement used to
     // write six rows, meet the seventh, and be refused `TxnConflict` with
     // those six compensated. That is AR2-A §1's "refusal → wait" delivered,

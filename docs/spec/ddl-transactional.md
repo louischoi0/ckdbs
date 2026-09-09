@@ -138,6 +138,17 @@ resolves it, other sessions see `t` as already gone; if the transaction
 rolls back, `t` comes back. Reads in that window are not wrong about the
 rows — the data pages are untouched — they are early about the schema.
 
+**One shape is narrowed and the rule is not** (AO-S6e-b): since the drop
+takes the relation `X` from the lock family, a reader **already walking**
+the relation holds it in `IS` and the drop waits for that statement to end
+(`drop-table.md` DT7). A positioned reader therefore finishes against a
+live schema instead of meeting its re-`Bind`'s error. Every other reader is
+exactly as this section describes it - a read that starts after the grant
+takes no borrow, because a refused read borrow leaves the reader reading
+on, so it sees the drop before it commits like any other outsider. The
+guarantee is "a positioned reader is not overtaken", which is a narrower
+statement than isolation and is why this section keeps its title.
+
 The general limit under it: **any catalog change that unfiltered readers
 act on cannot be isolated**. A delete-mark is isolable only where every
 reader of that row filters or applies §5b's rule.

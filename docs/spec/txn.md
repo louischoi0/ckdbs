@@ -595,15 +595,33 @@ to PostgreSQL's `READ COMMITTED` than to the rule this section states,
 which is what AR2-A §1 measures M2 by: a refusal converted into a wait.
 
 **The widest case is a write with no `WHERE` at all**, and it is worth
-naming because it is the commonest bulk shape: it declares the *relation*
-and borrows it in `X`, which is incompatible with the `IX` every other
-writer of that relation holds. So `UPDATE t SET v = 1` now waits for any
-transaction holding any row of `t`, and once granted blocks every other
+naming because it is the commonest bulk shape: it declares **the whole id
+space** and borrows it in `X`. So `UPDATE t SET v = 1` waits for any
+transaction holding a key of `t`, and once granted blocks every other
 writer of `t` for the length of its walk. That is a table-level
 serialization point where the per-row path had none, and such a statement
 can join a deadlock cycle where before it could not. It is the price of the
 guarantee the declaration buys — the statement's whole walk sees one state —
 and it is paid only by writes that name no key window.
+
+**The unit it declares is a range and not the relation** (AO-S6e-b), and
+the difference matters in exactly one direction. The relation *unit* means
+the relation as an **object** — its existence and its schema — which is
+what DDL claims and what a positioned reader declares its `IS` on; a
+write's claim is over **keys**. Collapsing a `WHERE`-less write onto the
+relation entry was cheaper (one entry, no fence counter raised) and put it
+against a reader's `IS` there by the intention rule, for rows the reader's
+snapshot already answers. Against *writers* nothing changes: a key of `t`
+is inside `[0, kIdSpaceEnd)`, so the overlap scan finds it where the
+relation entry used to, and a concurrent DDL still meets the `IX` this
+takes above its range. Two consequences are worth stating rather than
+discovering: a transaction holding a bare `IX` and no key at all no longer
+conflicts with it, which is a transaction holding nothing this write
+touches; and the relation's fence counter now rises for the length of the
+write, so a writer of the same relation pays the all-partition probe
+AO-R3's counter gates — the same cost a range-shaped bulk write has always
+had, and paid by the declaring transaction's *own* later single-row writes
+as well, which reach the probe before its `h.txn == txn` test spares them.
 
 Three things bound it, and none of them is a re-read loop. An **explicit
 transaction** keeps its read view across the re-run, so `REPEATABLE READ`
@@ -657,6 +675,60 @@ view was minted and is refused first-updater-wins - the correct
 That is PostgreSQL's shape, and it is the intended one: what the wait buys
 is the case where the holder never touches the row, which is every fence
 declared over a window wider than what it wrote.
+
+**What a read borrows, and what that borrow is for** (AO-S6e-b; AR2 §3's
+`SELECT` row, AO-R12). A statement that walks a relation declares **where
+it is**: `IS` on the relation, and `IS` on the slice it has reached, moved
+at every page boundary. The scope is **the statement**, not the
+transaction, so two `SELECT`s in one transaction declare a position twice
+and hold none between them.
+
+- **It is a position, never a permission.** Visibility is the snapshot's
+  and nothing here changes it. A borrow the table refuses leaves the reader
+  holding nothing and reading on: a read is never refused and never waits
+  for a borrow, because it needs none to be correct - a dropped relation's
+  pages stay allocated and its oid is never reissued (`drop-table.md` DT1),
+  and the re-`Bind` after a park turns one into a clean error. It is also
+  what keeps a reader out of the wait-for graph: a reader never waits, so
+  it is always a sink, and a chain that reaches one ends there.
+- **Its one consumer in M2 is DDL's relation `X`** — `DROP TABLE`
+  (`drop-table.md` DT7). AO-R12 puts the read borrow there for a *mover*,
+  and no mover exists (`physical-optimizer.md` is shadow-only), so what a
+  position is declared to today is the drop that must not overtake it.
+  **That `X` is refused by a writer's `IX` too**, so the drop waits for an
+  open writer of the relation as well - transaction-length, since a write's
+  borrow is the transaction's. A drop **inside a transaction that holds
+  rows** is therefore a waiter that holds something, which is the one waiter
+  here that can close a cycle: it registers a `waiter -> holder` edge and is
+  refused naming deadlock where the registration would close one. An
+  autocommit drop registers none - its transaction is unwound before the
+  park, so it holds nothing - and a reader never waits, so a chain that
+  reaches one ends there. The wait itself is on the table's **slot** rather
+  than on the holder's decide, because `IsInFlight` is one core's live set
+  and a read borrow may be held on another; the slot is flipped by whichever
+  core releases and carried across by AU-S2's kick.
+- **A bulk write's declared unit is not a consumer**, and that is a rule
+  rather than an omission: an intention mode on an interval unit neither
+  fences nor is fenced. A `DELETE FROM t WHERE id < 50` changes no key's
+  assignment - it writes row versions, which MVCC already answers a
+  concurrent reader from its snapshot - so it passes a reader's slice and a
+  reader passes its range. What still stops a write inside a fence is every
+  unit that is not an intention: a tuple `X`, another fence.
+- **The interval is `[min_key(page), kIdSpaceEnd)`** and not AR2-R14's
+  `[min_key, next.min_key)`: the upper bound is a page the walk has not
+  read, and a forward walk's future is the whole tail of the key space
+  anyway, so the narrower interval would under-declare exactly the keys a
+  resumed walk is about to visit. Btree only - a heap chain is not walked
+  in key order, so it declares the relation and no slice.
+- **The holder is not a transaction.** An autocommit `SELECT` has no
+  transaction, so a read borrow holds under an id from a space of its own
+  (bit 63, which no 48-bit trx id reaches). A refusal naming one says "a
+  positioned reader".
+- **What takes none**, stated so it is not read as covered: a nested step's
+  walk (the per-page cost would be the page count times the outer
+  cardinality), a point, index or Cabin read, and the fan-in producer that
+  serves a remote step. A shipped *statement* takes one, because it is
+  dispatched on its owner like any other.
 
 **The table itself, and what serializes it** — `rules.md` §3's row, moved
 here at AO-S8 because §3's own rule is that a declared-shared structure is

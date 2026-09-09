@@ -123,9 +123,12 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
 }
 
 StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
-                                     LockHoldings& holdings, std::uint64_t* blocker) {
-    auto r = AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/false);
+                                     LockHoldings& holdings, std::uint64_t* blocker,
+                                     std::shared_ptr<LockWaitSlot>* wake) {
+    auto r = AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/false,
+                          /*register_wake=*/wake != nullptr);
     if (!r.ok()) return r.status();
+    if (wake != nullptr && !r.value().granted) *wake = r.value().slot;
     // `AcquireInner` has always computed this and this wrapper has always
     // dropped it. Reported only on a refusal: `blocking_txn` is zero on a
     // grant, and writing that out would let a caller read "granted by
@@ -136,7 +139,7 @@ StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, Lock
 
 StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey& key,
                                                 LockMode mode, LockHoldings& holdings,
-                                                bool queue_on_conflict) {
+                                                bool queue_on_conflict, bool register_wake) {
     AcquireResult result;
 
     // **A transaction waits on at most one unit**, which `LockHoldings`
@@ -225,7 +228,14 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     // `blocking_txn` is still reported, because a caller
                     // that declines to wait may still want to say who it
                     // declined to wait for.
-                    if (!queue_on_conflict) return result;
+                    //
+                    // **Unless it asked for a wake** (AO-S6e-b), which is
+                    // the same record without the queue position: written
+                    // here, under the latch that just observed the
+                    // conflict, because a registration made after the
+                    // refusal returned would race the holder's release and
+                    // park on a slot nobody will flip again.
+                    if (!queue_on_conflict && !register_wake) return result;
                     // Queued, and **recorded in `holdings`** so it can be
                     // withdrawn: a transaction is one thread of control, so
                     // it waits on at most one unit and one record suffices.
@@ -277,7 +287,13 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     // will be polled rather than where it first asked.
                     queued->core = CurrentCore();
                     result.slot = queued->slot;
-                    holdings.waiting_ = key;
+                    // **A wake is not a queue position** (AO-S6e-b). Only a
+                    // queueing ask records `waiting_`, because only it is
+                    // withdrawn by `Release` - a wake registration outlives
+                    // the transaction that asked for it, since the
+                    // statement is torn down and re-run under a new id
+                    // before the grant it is waiting for arrives.
+                    if (queue_on_conflict) holdings.waiting_ = key;
                     return result;
                 }
             }
@@ -497,6 +513,29 @@ void LockTable::DequeueWaiter(std::uint64_t txn, const LockKey& key) {
     KickAll(kick);
 }
 
+void LockTable::DropWake(const LockKey& key, const std::shared_ptr<LockWaitSlot>& slot) {
+    if (slot == nullptr) return;
+    Partition& part = PartitionFor(key);
+    LatchGuard guard(part.latch);
+    for (std::size_t i = 0; i < part.entries.size(); ++i) {
+        Entry& e = part.entries[i];
+        if (!(e.key == key)) continue;
+        // By the slot and not by the transaction id: the statement that
+        // registered this has since been torn down, and the one dropping it
+        // is the same statement under a new id. Nothing is flipped on the
+        // way out - unlike `DequeueWaiter`, whose withdrawal has to re-enter
+        // a waiter that is still parked, the caller here has already left
+        // the park it registered for.
+        e.waiters.erase(std::remove_if(e.waiters.begin(), e.waiters.end(),
+                                       [&](const Tenant& w) { return w.slot == slot; }),
+                        e.waiters.end());
+        if (e.holders.empty() && e.waiters.empty()) {
+            part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+        break;
+    }
+}
+
 void LockTable::ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held) {
     bool removed_holder = false;
     {
@@ -626,6 +665,32 @@ bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uin
                 // identity test is needed or would be correct - the key
                 // passed in is the caller's copy, not the table's.
                 if (h.txn == txn) continue;
+                // **An intention mode on an interval unit neither fences
+                // nor is fenced** (AO-S6e-b), which is the rule
+                // `FenceCoversKey` has stated from the other side since
+                // AO-S6b ("an intention mode on a range key is not one and
+                // fences nothing") and which this side did not carry.
+                // Nothing held one until the read borrow, so the two sides
+                // could not disagree; now a positioned reader holds a slice
+                // `IS` and this scan is what a writer's declared range
+                // would meet it with.
+                //
+                // Why the rule and not raw compatibility: the read borrow
+                // declares **where a statement is**, so that an operation
+                // changing a key's unit - a move (R13), DDL's relation `X`
+                // (AO-R12) - can wait for it. A `DELETE FROM t WHERE id <
+                // 50` changes no key's assignment; it writes row versions,
+                // and MVCC already answers a concurrent reader from its
+                // snapshot. Letting it wait for readers would buy the
+                // writer nothing and cost a bulk write every scan on the
+                // relation. What still stops it is every unit that is not
+                // an intention: a tuple `X` inside its window, another
+                // fence over it. The relation entry is where a reader and
+                // DDL meet, by the intention rule.
+                if (h.mode == LockMode::kIntentionShared ||
+                    h.mode == LockMode::kIntentionExclusive) {
+                    continue;
+                }
                 // **The fence's own mode decides**, not a fixed pair: an
                 // `S` fence admits an `S` descendant and refuses an `X`
                 // one, and the compatibility table is the single place
