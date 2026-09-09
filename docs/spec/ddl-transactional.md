@@ -323,16 +323,26 @@ worth measuring, and the core is between resolutions there — so no
 unregistered synchronous view is live, which is the exemption `txn.md`
 §4.1's registration rule leans on. A mark whose deleter has not cleared
 the horizon survives to the next resolution or to §5c at the next mount;
-there is deliberately **no** background cadence. **System core only**, by
-an explicit gate at the call site, and **defence in depth since AN-S2**:
-the predicate is instance-wide now, so a peer's sweep would judge every
-mark by the same floor and horizon; what keeps the sweep on core 0 is that
-the catalog's pages sit in the system range only core 0 may write
-(`DevicePageStore::MayWrite`) and that peers take no DDL
-(`PeerDdlRefused`). Until AN-S2 the gate carried the soundness argument
-itself: `ReadHorizon()` walked one core's readers, so a peer's — no
-transactions, no leases — answered `UINT64_MAX` and would have retired a
-mark whose deleter was live on core 0. A failed sweep is a maintenance
+there is deliberately **no** background cadence. **One core sweeps**, by an
+explicit gate at the call site, and since AT-S5 that is a **placement and
+not an authority**: two cores walking the same chains at once is what it
+prevents, and core 0 is the one because it is always present. Both reasons
+it used to give are gone - the catalog's pages are every core's since
+AT-S5 (`MayWrite`'s arm), and a peer takes DDL since the same stage
+(`PeerDdlRefused`) - and what makes a single sweeper sound is AN-S2: the
+predicate is instance-wide, so any core's sweep judges every mark by the
+same floor and horizon. Until AN-S2 the gate carried the soundness
+argument itself: `ReadHorizon()` walked one core's readers, so a peer's —
+no transactions, no leases — answered `UINT64_MAX` and would have retired
+a mark whose deleter was live on core 0.
+
+**Because one core sweeps, the gate it reads is the instance's**
+(AT-S5b). `pending_marks_` was a counter per `Catalog`, so a peer's `DROP
+TABLE` raised a number the sweeping core never read: its gate returned
+early and the marks waited for the next mount's §5c sweep, while a sweep
+core 0 *did* run retired the peer's marks and left the peer's counter
+overstated. One atomic on `Expeditor`, `fetch_add` at the mark and a delta
+at the resettle; `catalog.md` CT6 carries the counter's own rule. A failed sweep is a maintenance
 failure, not the statement's: the marks it left are exactly as reachable as
 before, so it is logged and the reply stands.
 

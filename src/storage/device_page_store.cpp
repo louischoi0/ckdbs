@@ -1060,21 +1060,17 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(PageId page_id) {
-    // **Placing a page at a *chosen* id is core 0's, and this is the only
-    // thing that says so.** `CreateAt*` consults no other predicate - not
-    // `MayWrite`, which the ordinary mutation path asks - so without this
-    // the store layer would make no statement at all about a claim on the
-    // free map (`crosscore.md` CC11 still makes it). The guard was keyed on
-    // the lease until AW-S1b and is keyed the way `MayWrite` now is: on the
-    // core that is *asking*. Every caller is bootstrap, a fixed system page
-    // or redo's `CreateAt`, all of which are core 0's by M5, so this stays
-    // unreachable rather than restrictive - which is what it is here for.
-    if (page_id < first_evictable_page_id_ && CurrentCore() != 0) {
-        return Status::InvalidArgument(
-            "DevicePageStore: core " + std::to_string(CurrentCore()) +
-            " may not place a page at a chosen id in the system range; the free map's fixed "
-            "structures belong to the system core");
-    }
+    // **No core-0 predicate stands here since AT-S5b** (AT-R11: the
+    // replacement is named where the arm was). What admits exactly one
+    // caller per id is the claim itself, `ClaimNamedIdLocked` under the
+    // structure latch and the map latch below - a property of the claim
+    // and not of the asking core - and every loser gets `AlreadyExists`,
+    // which is the code `AllocateCatalogPage`'s probe loop walks on from.
+    // `catalog.md` CT5 carries why the old arm was wrong;
+    // `free_map_race_test.cpp`'s `OnlyOneCallerEverPlacesAPageAtAChosenId`
+    // pins the claim across eight cores in the user range, and this
+    // class's own `APeerPlacesAPageAtAChosenIdInTheSystemRange` pins the
+    // system half.
     if (page_id >= kMaxPageCount) {
         return Status::OutOfRange("DevicePageStore: page id " + std::to_string(page_id) +
                                   " is beyond the " + std::to_string(kMaxPageCount) +

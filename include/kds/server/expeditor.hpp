@@ -823,6 +823,24 @@ private:
     // DDL used to send. Declared beside the lock table for the same
     // lifetime reason: every catalog that holds a pointer to it is below.
     std::atomic<std::uint64_t> schema_version_{0};
+    // **The instance's object-oid sequence** (AT-S5b; `Catalog::SetOidSequence`).
+    // Zero until the first catalog that needs an oid seeds it from the pages.
+    //
+    // **The declaration order is not what makes these safe.** `database_`
+    // is declared *above* all three words, so core 0's `Catalog` outlives
+    // them; what makes that harmless is that all three are trivially
+    // destructible and `~Catalog` reads none of them. A word whose
+    // destructor did anything would have to move above `database_`.
+    std::atomic<catalog::Oid> oid_sequence_{0};
+    // **The instance's delete-mark counter** (AT-S5b; `Catalog::SetMarkCounter`),
+    // the third word every core's catalog reads from here. Named for the
+    // count and not for `Catalog::pending_marks_`, which is the *local*
+    // fallback this replaces - one name for the two would read as the same
+    // quantity. Three separate pointers rather than one struct: at three
+    // words the struct does not pay for re-opening AT-S2's shipped wiring,
+    // which `catalog.md` CT6 states as the threshold it is, and AT-0
+    // item 11 is where the fourth word decides it.
+    std::atomic<std::uint64_t> delete_mark_count_{0};
 
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;

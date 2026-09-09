@@ -1799,16 +1799,17 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
         return HandleDescribe(rest, session);
     }
-    // A peer takes no DDL (workplan-peer-writer.md PW4). Every target of
-    // these three verbs writes state only the system core may write, so
-    // the whole verb is refused here, before any handler - the argument,
-    // including why nothing below this catches it in a **release** build,
-    // is at `PeerDdlRefused` (core_affinity.hpp). Do not remove this as a
-    // message improvement: it is the only guard once NDEBUG is set, and
-    // it is what makes §5d's purge-gate soundness argument enforced
-    // rather than assumed (see the gate).
-    //
-    // **A DDL runs where the session is** (AT-S5, AT-R5). Until this stage
+    // **A DDL runs where the session is** (AT-S5, AT-R5). What stood here
+    // until then was the refusal and its argument - *"a peer takes no DDL
+    // (PW4); every target of these three verbs writes state only the
+    // system core may write, so the whole verb is refused before any
+    // handler, and it is what makes §5d's purge-gate soundness argument
+    // enforced rather than assumed"*. Both halves are retired: the state
+    // is every core's, and §5d's gate rests on AN-S2's instance-wide
+    // predicate, the sweep's single core being a placement so that two do
+    // not walk the same chains (`ddl-transactional.md` §5d, `catalog.md`
+    // CT6). Written out rather than deleted because the sentence outlived
+    // the guard by one stage. Until this stage
     // a peer refused `CREATE`/`ALTER`/`DROP` (`PeerDdlRefused`), or shipped
     // the statement to core 0 where a route could be made (CR5/CB4),
     // because the catalog pages had one writer. They have none: every core
@@ -1826,10 +1827,12 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // **FK-linked lifted 2026-09-01**, work order AI, once the forward
     // check probed the parent's owner instead of reading it), the
     // multi-row VALUES path refuses on a
-    // peer before touching the catalog page, and the store's `MayWrite`
-    // is enforced for leased stores in **every** build now, not Debug
-    // alone - so an unfunded write is refused retryably instead of
-    // surfacing as a rule-5 stamp mismatch at the next mount.
+    // peer before touching the catalog page. **The store's `MayWrite` is
+    // no part of this any more**: it stood here as the backstop that
+    // refused an unfunded write retryably rather than letting it surface
+    // as a rule-5 stamp mismatch at the next mount, and it returns
+    // unconditional `true` since AT-S5 - there is no funding to check,
+    // and what keeps two cores off one page's bytes is the page latch.
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "CABIN")) {
@@ -2195,9 +2198,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // (home core, target core, relation oid), so a refusal that never
     // resolves a relation cannot appear:
     //
-    //   - **DDL on a peer** is refused by verb before anything is parsed
-    //     (`PeerDdlRefused`, the guard at the top of Dispatch) - not a
-    //     relation-keyed write, and not counted.
+    //   - **DDL on a peer** was the named case until AT-S5: refused by
+    //     verb before anything was parsed (`PeerDdlRefused`), so never a
+    //     relation-keyed write and never counted. There is no such
+    //     refusal now - a peer's DDL is a statement like any other - and
+    //     `crosscore.md` CC10 says so in the same words.
     //   - A statement refused **before resolution** for any other reason -
     //     a parse error, `max_insert_rows`, the multi-row-without-a-
     //     transaction refusal - never reaches the affinity check.
@@ -6684,25 +6689,13 @@ bool VisitRelationSteps(const exec::StepChain& chain, const StepVisitor& fn) {
     return VisitRelationSteps(chain.steps, fn);
 }
 
-// **A write predicate that reaches a second relation** (`Condition::subquery`,
-// parser/ast.hpp). UPDATE and DELETE never compile a chain, so their fork
-// resolves the *target* relation's owner and nothing else - a shipped
-// `UPDATE t SET ... WHERE v IN (SELECT v FROM u)` would have its row set
-// decided on the owner by reading `u`'s pages, which the owner may not own
-// and which a release build does not refuse to fault. Measured: on a
-// two-core rig that statement answered `UPDATED 0` where the row matched.
-//
-// Refused rather than resolved: a subquery naming the *same* relation
-// would be safe to ship, but proving that means resolving every nested
-// SELECT's relations through the catalog on the write path, and what the
-// refusal costs is the affinity answer these statements had before
-// shipping - never a wrong one.
-bool AnySubqueryPredicate(const std::vector<parser::Condition>& where) {
-    for (const parser::Condition& cond : where) {
-        if (cond.has_subquery()) return true;
-    }
-    return false;
-}
+// `AnySubqueryPredicate` stood here until AT-S5b: it kept a write whose
+// `WHERE` named a second relation off the ship, because an `UPDATE t SET
+// ... WHERE v IN (SELECT v FROM u)` decided its row set on the target's
+// owner by reading `u`'s pages - measured on a two-core rig as `UPDATED 0`
+// where the row matched. AT-S5 deleted the write ship, so nothing calls it
+// and there is no wrong answer left for it to prevent: the statement runs
+// where the session is and reads `u` through the pool every core shares.
 
 }  // namespace
 
@@ -7582,7 +7575,6 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // restart leaves a core owning a range with no block and nothing to
     // record the demand that would refill it.
     std::optional<std::uint64_t> target_id;
-    std::uint32_t target_core = ta->owner_core;
     if (pump || route_by_range) {
         target_id = catalog_.PeekRowId(ta->oid);
         if (!target_id.has_value()) {
@@ -7591,9 +7583,15 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
             // `NoteRowIdDemand` is a no-op there either way.
             if (pump) catalog_.NoteRowIdDemand(ta->oid);
         } else if (route_by_range) {
-            auto owner = ta->RangeOwnerFor(*target_id);
-            if (!owner.ok()) return {ErrorReply(owner.status()), false, 0, owner.status()};
-            target_core = owner.value();
+            // **Asked for the refusal, not for the answer** (AT-S5b). The
+            // core this returned was the ship's destination until AT-S5;
+            // nothing reads it now and the compiler said so. The call
+            // stays because it is also what refuses an id that maps to no
+            // range at all, which is a wrong write and not a routing
+            // question.
+            if (auto owner = ta->RangeOwnerFor(*target_id); !owner.ok()) {
+                return {ErrorReply(owner.status()), false, 0, owner.status()};
+            }
         }
     }
 
@@ -10503,9 +10501,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // **The fork** (SS2): `MayShip` states the conditions and why each is
     // one. Here, after the shape resolution and before the affinity check,
     // so every refusal that is not about ownership keeps its spelling and
-    // its wire bit - and a WHERE naming a second relation is refused with
-    // them, since this fork resolves nothing about it
-    // (`AnySubqueryPredicate` says why).
+    // its wire bit. A `WHERE` naming a second relation was refused here
+    // until AT-S5, this fork having resolved nothing about it; the write
+    // runs where the session is now and reads that relation through the
+    // one pool.
     // R4/IS4: the destination is the **range's** owner, and a write that
     // would span several is refused here rather than half-applied by the
     // walk. On every relation without a directory this is `owner_core` and
@@ -12276,9 +12275,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // **The fork** (SS2): `MayShip` states the conditions and why each is
     // one. Here, after the shape resolution and before the affinity check,
     // so every refusal that is not about ownership keeps its spelling and
-    // its wire bit - and a WHERE naming a second relation is refused with
-    // them, since this fork resolves nothing about it
-    // (`AnySubqueryPredicate` says why).
+    // its wire bit. A `WHERE` naming a second relation was refused here
+    // until AT-S5, this fork having resolved nothing about it.
     // R4/IS4, and UPDATE's site states the argument.
     std::optional<std::uint64_t> target_id;
     auto target = WriteTargetCore(ta, stmt.where, &target_id);

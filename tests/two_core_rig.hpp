@@ -244,6 +244,8 @@ private:
             config.visibility = &*visibility_;
             config.locks = locks_.get();
             config.schema_word = &schema_word_;
+            config.oid_sequence = &oid_sequence_;
+            config.mark_counter = &pending_marks_;
             config.wal_drain_interval_ns = options_.wal_drain_interval_ns;
             config.scheduler.max_idle_block_ms = options_.max_idle_block_ms;
             auto core = CoreRuntime::Open(config, *device_, clock_, /*log=*/nullptr);
@@ -311,6 +313,8 @@ private:
     std::optional<sched::SimWakerTable> sim_;
     std::unique_ptr<txn::LockTable> locks_;
     std::atomic<std::uint64_t> schema_word_{0};  // AT-S2: one for both cores
+    std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b: one for both cores
+    std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b: one for both cores
     std::array<std::thread, 2> threads_;
     // Last, so they die first: every runtime borrows everything above.
     std::array<std::unique_ptr<CoreRuntime>, 2> cores_;

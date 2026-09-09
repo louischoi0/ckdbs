@@ -322,6 +322,14 @@ public:
         // it at each task boundary. Null leaves the catalog revalidating
         // nothing, which is a fixture's shape.
         std::atomic<std::uint64_t>* schema_word = nullptr;
+        // **The instance's object-oid sequence** (AT-S5b), borrowed the same
+        // way; null leaves this core's catalog on its own counter, which is
+        // a fixture's shape and never a server's.
+        std::atomic<catalog::Oid>* oid_sequence = nullptr;
+        // **The instance's delete-mark counter** (AT-S5b), borrowed the same
+        // way; the purge runs on one core and this is what lets that core
+        // see a peer's marks.
+        std::atomic<std::uint64_t>* mark_counter = nullptr;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and

@@ -550,7 +550,7 @@ TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesThe
 // serves every core now, so what is left of ownership in this class is the
 // boundary below which only core 0 may write.
 
-TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore) {
+TEST(DevicePageStoreOwnershipTest, APeerWritesTheSystemRangeOnASharedStore) {
     // **The gate that stopped being one, and nothing failed when it did.**
     // `MayWrite` opened with `if (lease_ == nullptr) return true`, which
     // meant "core 0, which may write anything" while only a peer's store
@@ -566,8 +566,14 @@ TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore)
     // probe). `ResidentBytes`' `mark_dirty && !MayWrite` is the live
     // consumer, which is what AM-R2 and AO-R14 keep it for.
     //
-    // **Mutation**: make the system arm `return true` and the peer arm
-    // below answers true.
+    // **The name said `MayNot` until AT-S5b**, which AT-S5 left behind when
+    // it flipped the body: the cell reads the predicate, and the predicate
+    // now admits. Renamed rather than retired, because what it pins - that
+    // `MayWrite` answers the same for every core and every range - is a
+    // claim the engine still makes.
+    //
+    // **Mutation**: restore the system arm's `CurrentCore() == 0` and the
+    // peer arm below answers false.
     auto device = MakeDevice(64, 0);
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
@@ -640,6 +646,53 @@ TEST(DevicePageStoreOwnershipTest, ASharedStoreAdmitsAPeersSystemWriteAsItsUserW
     // every core writes every page through it.
     auto user = store->Get(130);
     EXPECT_TRUE(user.ok()) << user.status().message();
+}
+
+TEST(DevicePageStoreOwnershipTest, APeerPlacesAPageAtAChosenIdInTheSystemRange) {
+    // The third and last of the store's core-0 predicates, retired at
+    // AT-S5b: `CreateAtUnpinned` refused a chosen id below the resident
+    // limit to every core but 0. `MayWrite`'s arm and `ResidentBytes`' gate
+    // went at AT-S5, which is what made this one reachable - a peer's
+    // `CREATE TABLE` runs where the session is, and its catalog chain grows
+    // through `AllocateCatalogPage`'s probe of exactly this range.
+    //
+    // The two readings the retirement owes: a peer *places* the page, and a
+    // second caller for the same id is refused `AlreadyExists` - the claim,
+    // not the core, is what admits one caller. `kAlreadyExists` is also the
+    // one code the catalog's probe loop walks on from, so the second
+    // reading is what keeps a peer's allocation finding a free id rather
+    // than stopping at the first taken one.
+    //
+    // **Single-threaded, and it is the system half that needs a cell at
+    // all.** `free_map_race_test.cpp`'s
+    // `OnlyOneCallerEverPlacesAPageAtAChosenId` races eight cores for the
+    // same ids and pins the claim itself, but its ids are in the *user*
+    // range, so it never reached the arm this retires. The two cells
+    // together are the claim across cores and the claim below the resident
+    // limit; neither is both.
+    //
+    // **Mutation**: restore the arm and the first `CreateAt` below is
+    // refused `InvalidArgument`.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    store->SetResidentLimit(128);
+
+    const CurrentCoreGuard as_peer(3);
+    // `kCatalogOverflowFirst` in the catalog's own numbering: the first id
+    // `AllocateCatalogPage` probes, and the one a peer used to die on.
+    auto placed = store->CreateAt(16);
+    ASSERT_TRUE(placed.ok()) << "a peer was refused a chosen id in the system range: "
+                             << placed.status().message();
+    FormatPage(placed.value().bytes(), PageType::kHeap);
+    placed.value().Release();
+
+    auto again = store->CreateAt(16);
+    ASSERT_FALSE(again.ok()) << "the same id was placed twice";
+    EXPECT_EQ(again.status().code(), StatusCode::kAlreadyExists)
+        << "a taken id must answer AlreadyExists, which is what the catalog's "
+           "probe loop walks on from: "
+        << again.status().message();
 }
 
 TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {

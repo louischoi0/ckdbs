@@ -124,3 +124,73 @@ serialise every named-key `INSERT` into a relation for the length of each
 transaction and protect nothing. A peer refused a named key until AT-S5
 (`catalog_read_only_`); it admits one now, the page write being every
 core's. `rules.md` §3 declares the pages, not the rows.
+
+**Placing a *new* catalog page is every core's too, since AT-S5b.** The
+pages CT5 opens with are the fixed ones; a catalog relation's chain grows
+past them into the reserved overflow range (`kCatalogOverflowFirst` ..
+`kCatalogOverflowLimit`, `include/kds/catalog/well_known.hpp`; the rule that
+a catalog page may be managed past the fixed ones is `crosscore.md` CC12
+CR3), and `AllocateCatalogPage`
+walks that range id by id, taking the first that is free. `CreateAtUnpinned`
+refused a chosen id below the resident limit to every core but 0 until
+AT-S5b - the last core-0 write predicate the store had, written as
+unreachable and made reachable by AT-S5, and in the wrong direction: the
+probe loop treats only `AlreadyExists` as "try the next id", so on a peer
+the *first* probe failed and every catalog chain that had to grow failed
+permanently. What admits exactly one caller per id is the claim itself -
+`ClaimNamedIdLocked` under the structure latch and the map latch, which
+answers every loser `AlreadyExists` - and that is a property of the claim
+and not of the asking core (`page.md` §5). **Two cells between them, and
+neither alone**: `free_map_race_test.cpp`'s
+`OnlyOneCallerEverPlacesAPageAtAChosenId` races eight cores for one id and
+never touched the retired arm, its ids being in the user range;
+`device_page_store_test.cpp`'s
+`APeerPlacesAPageAtAChosenIdInTheSystemRange` reads the system half and is
+single-threaded.
+
+## CT6 — The three words the instance keeps
+
+`Expeditor` owns three atomics and hands each to every core's catalog. They
+arrived one stage apart, and each keeps its own rule in the table below.
+What they share is the shape `CoreRuntime::Config` already carries for the
+lock table and the instance read view - the owner builds it, every core
+borrows a pointer, and a null pointer leaves a bare catalog on its own
+local copy, which is what a fixture and the sim hold.
+
+**Three pointers rather than one struct, and the reason is a threshold and
+not a principle.** The three are identical in lifetime, plumbing, default
+and wiring sites, and they are mirrored in three fixtures, so each new word
+costs about a dozen edits - a struct would collapse those to one. What it
+would also do is re-open AT-S2's shipped schema-word wiring, which is a
+landed stage's declared seam (CT1, CT2), for a saving of two setters and
+two `Config` fields. At three words that does not pay; at four it does, and
+AT-0 item 11 is where the fourth decides it. The argument first written
+here - *"three facts with three owning rules, and a stage that moves one
+should not have to move the other two"* - was refuted by AT-S5b's own
+review and is recorded rather than kept: a struct creates no shared *rule*,
+each field keeping its comment and its owning doc, and removing a field
+from a struct is one deletion rather than three.
+
+| word | what it is | rule |
+|---|---|---|
+| **schema version** | the memo's generation counter | CT1, CT2 (AT-S2a) |
+| **object-oid sequence** | the next oid `CREATE TABLE` and `CREATE NAMESPACE` issue | `catalog.hpp`'s contract at `GenerateUserOid`: every oid lands in `sys.objects` or `sys.columns`, which is what makes the seed recoverable (AT-S5b) |
+| **delete-mark count** | the purge's gate | §5d of `ddl-transactional.md` (AT-S5b) |
+
+**The oid sequence is seeded once, by whichever catalog asks first**, with a
+CAS from zero to `HighestIssuedUserOid() + 1`; zero is the unseeded value
+and no oid can be zero, so one word carries both states. Two cores seeding
+at once agree - one CAS wins and the loser's read is the winner's. A
+per-catalog counter was sound while core 0 alone created objects and issued
+one oid twice the moment a peer ran `CREATE TABLE`: each catalog seeds
+*lazily*, so the first create on each core reads the other's rows and the
+**second** issues from a counter seeded before they existed.
+
+**The mark count is a delta at the sweep, not an assignment.** The purge
+resettles the count to what it saw unsettled; with more than one core
+marking, a plain store would drop a mark another core added while the
+sweep walked. It adds `remaining - before` instead, which leaves a
+concurrent mark counted, can overshoot by a mark the sweep both saw and was
+told about - the direction the gate's own rule already allows, costing one
+sweep that finds less than it expected - and cannot undershoot, which is
+the direction that would strand a mark until the next mount.

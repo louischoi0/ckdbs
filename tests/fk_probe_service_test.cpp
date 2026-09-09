@@ -651,33 +651,13 @@ TEST_F(FkReverseProbeTest, VerdictsArePositionalAcrossOneReverseRound) {
     EXPECT_EQ(out->verdicts[1], exec::FkVerdict::kViolation) << "trade 1 references account 1";
 }
 
-TEST_F(FkReverseProbeTest, AChildThisCoreDoesNotOwnIsRefusedRatherThanAnswered) {
-    // The mirror of the forward's ownership re-check, and the reason it has
-    // to exist: the *deleting* core resolved this owner from its own
-    // catalog, which can be stale. Answering "no children" from a relation
-    // this core cannot see is the dangling reference the fan-out exists to
-    // prevent, one hop further along - and it is the one wrong answer that
-    // would be silent, because "clear" is what lets the DELETE proceed.
-    InstallServer(/*core_id=*/0);
-    InstallReverseHandler();
-    const catalog::Oid elsewhere = MakeRelationOffCore0("elsewhere_child");
-    ASSERT_NE(elsewhere, 0u);
-
-    ASSERT_TRUE(client_
-                    ->RequestReverse(/*owner_core=*/0, /*request_id=*/23, /*session_id=*/42,
-                                     /*transaction_id=*/9,
-                                     ReverseGroupOf({{elsewhere, 1, kAccountIdColumn}}))
-                    .ok());
-    Pump();
-
-    const FkProbeOutcome* out = client_->Find(23);
-    ASSERT_NE(out, nullptr);
-    ASSERT_TRUE(out->arrived);
-    EXPECT_FALSE(out->status.ok()) << "a core that owns nothing answered 'no children'";
-    // Retryable, because the owner moving is not the statement being wrong.
-    EXPECT_EQ(out->status.code(), StatusCode::kTxnConflict) << out->status.message();
-    EXPECT_TRUE(out->verdicts.empty());
-}
+// `AChildThisCoreDoesNotOwnIsRefusedRatherThanAnswered` stood here until
+// AT-S5: it pinned the reverse probe's fail-closed owner test, the mirror of
+// the forward's that went in the same change - an owner is a statistic, and
+// the server walks the same pages every core reads. **What the retirement
+// does not answer is D4**, the Cabin arm's `kPass` from an exhausted per-core
+// set (`docs/inflight/bugs/`), which is a different claim about a different
+// structure and has its own sub-stage.
 
 TEST_F(FkReverseProbeTest, AGroupPastTheCapOpensNoWaiterAndRefuses) {
     InstallServer(/*core_id=*/0);

@@ -806,6 +806,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // on a copy elsewhere staying a copy.
     expeditor->database_->catalog.SetLogger(&*expeditor->logger_);
     expeditor->database_->catalog.SetSchemaWord(&expeditor->schema_version_);  // AT-S2
+    expeditor->database_->catalog.SetOidSequence(&expeditor->oid_sequence_);  // AT-S5b
+    expeditor->database_->catalog.SetMarkCounter(&expeditor->delete_mark_count_);  // AT-S5b
     // The placement rule, before any DDL can run (workplan P6c). At
     // cores = 1 rotate degrades to the creating core by the formula, so no
     // validation couples the two keys.
@@ -1808,6 +1810,8 @@ Status Expeditor::Start() {
             // and core 0's wake one here.
             core_config.locks = locks_.get();
             core_config.schema_word = &schema_version_;
+            core_config.oid_sequence = &oid_sequence_;
+            core_config.mark_counter = &delete_mark_count_;
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

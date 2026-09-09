@@ -29,6 +29,7 @@
 #include <chrono>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -129,6 +130,92 @@ TEST(ReadBorrowRigTest, ANamedKeyAdmitsOnAPeer) {
     auto row = rig->core(0).catalog().GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
     EXPECT_GE(row.value().next_id, 8u) << "the peer's admission did not move the shared mark";
+}
+
+TEST(ReadBorrowRigTest, TwoCoresCreatingRelationsIssueDistinctOids) {
+    // D0, found by AT-S5's review: the object-oid sequence was one in-memory
+    // counter *per catalog*, seeded from the pages on first use and
+    // incremented in memory after that. Sound while core 0 alone created
+    // objects, and two relations with one oid the moment a peer runs
+    // `CREATE TABLE`.
+    //
+    // **The shape matters, and the first draft of this cell had it wrong.**
+    // One create per core does not collide: each catalog seeds *lazily*, so
+    // the second one to run scans the pages the first has already written
+    // and starts above them. What collides is a core's **second** create -
+    // it issues from a counter seeded before the other core's rows existed
+    // and never re-read. So the cell is create-create-create, alternating,
+    // and the third is where the two counters meet.
+    //
+    // **Mutation**: `if (false && oid_sequence_ != nullptr)` in
+    // `GenerateUserOid`, which is the per-catalog counter exactly.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    Session a;
+    Session b;
+    const char* kSql[] = {"CREATE TABLE oid_zero_one (id int64, v int64) BTREE",
+                          "CREATE TABLE oid_one_one (id int64, v int64) BTREE",
+                          "CREATE TABLE oid_zero_two (id int64, v int64) BTREE"};
+    const char* kName[] = {"oid_zero_one", "oid_one_one", "oid_zero_two"};
+    const std::uint32_t kOn[] = {0, 1, 0};
+    for (int n = 0; n < 3; ++n) {
+        Session& s = kOn[n] == 0 ? a : b;
+        const std::string made =
+            rig->core(kOn[n]).dispatcher().Dispatch(kSql[n], &s).response;
+        ASSERT_EQ(made.rfind("CREATED", 0), 0u) << kName[n] << ": " << made;
+    }
+
+    rig->core(0).catalog().Revalidate();
+    std::vector<catalog::Oid> oids;
+    for (const char* name : kName) {
+        auto oid = rig->core(0).catalog().FindTableOidByName(name);
+        ASSERT_TRUE(oid.ok()) << name << ": " << oid.status().message();
+        oids.push_back(oid.value());
+    }
+    // Pairwise, so the message names which two met rather than only that
+    // the set is small.
+    for (std::size_t i = 0; i < oids.size(); ++i) {
+        for (std::size_t j = i + 1; j < oids.size(); ++j) {
+            EXPECT_NE(oids[i], oids[j])
+                << kName[i] << " and " << kName[j] << " were issued one oid (" << oids[i] << ")";
+        }
+    }
+}
+
+TEST(ReadBorrowRigTest, APeersDeleteMarksAreSweptByTheCoreThatSweeps) {
+    // D7, found by AT-S5's review. The purge runs on one core - a placement
+    // since AT-S5, so two cores do not walk the same chains at once - and
+    // its gate was a counter *per catalog*. A peer's `DROP TABLE` raised its
+    // own core's counter, core 0's stayed at zero, its gate returned early
+    // and the marks waited for the next mount. The counter is the
+    // instance's now (`Catalog::SetMarkCounter`).
+    //
+    // **Mutation**: drop `config.mark_counter` from the rig's config and
+    // core 0 purges nothing.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    Session on_peer;
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d1.Dispatch("CREATE TABLE swept (id int64, v int64) BTREE", &on_peer)
+                  .response.rfind("CREATED", 0),
+              0u);
+    const std::string dropped = d1.Dispatch("DROP TABLE swept", &on_peer).response;
+    ASSERT_NE(dropped.rfind("ERR", 0), 0u) << dropped;
+
+    // Core 0's own DDL is what reaches `EndDdlScope`, which is where the
+    // sweep runs. Nothing about this statement touches the peer's rows; it
+    // is the gate that has to see them.
+    Session on_zero;
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE sweeper (id int64, v int64) BTREE", &on_zero)
+                  .response.rfind("CREATED", 0),
+              0u);
+    const std::string meta = d0.Dispatch("SHOW META", &on_zero).response;
+    EXPECT_NE(meta.find("catalog_marks_purged="), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("catalog_marks_purged=0"), std::string::npos)
+        << "core 0's sweep did not see the peer's marks: " << meta;
 }
 
 TEST(ReadBorrowRigTest, ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer) {

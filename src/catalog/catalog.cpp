@@ -808,6 +808,27 @@ StatusOr<Oid> Catalog::HighestIssuedUserOid() {
 }
 
 StatusOr<Oid> Catalog::GenerateUserOid() {
+    if (oid_sequence_ != nullptr) {
+        // **The instance's sequence** (AT-S5b), seeded by whichever catalog
+        // asks first. Zero is the unseeded value and no oid can be zero
+        // (`kUserOidStart`), so the CAS below distinguishes the two without
+        // a second word. Two cores seeding at once agree: one CAS wins, the
+        // loser's fails and falls through to the `fetch_add`, which reads
+        // the winner's value - the scan it did on the way is wasted and
+        // nothing else.
+        if (oid_sequence_->load(std::memory_order_acquire) == 0) {
+            auto highest = HighestIssuedUserOid();
+            if (!highest.ok()) {
+                return highest.status().WithContext(
+                    "cannot issue an object oid without reading back the ones already issued");
+            }
+            Oid expected = 0;
+            oid_sequence_->compare_exchange_strong(expected, highest.value() + 1,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_acquire);
+        }
+        return oid_sequence_->fetch_add(1, std::memory_order_acq_rel);
+    }
     // Recovered once, on first use, then incremented in memory. Lazy rather
     // than done at construction because a `Catalog` is constructed on two
     // paths - `BootstrapDatabase()`'s fresh branch and its existing-database
@@ -932,7 +953,13 @@ StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
     // is live now, and recovery has rolled every loser back.
     auto swept = RetireDeleteMarks([](std::uint64_t) { return true; });
     if (!swept.ok()) return swept;
-    pending_marks_ = 0;  // nothing survives a sweep that admits every deleter
+    // Nothing survives a sweep that admits every deleter. Still the delta
+    // and not a store: subtracting what this sweep saw leaves a mark that
+    // arrived between the read and the add counted, where a store would
+    // drop it. Nothing can, here - this runs before any peer starts - and
+    // there is no second spelling of the resettle for the one caller that
+    // could not race.
+    ResettleMarks(MarkCount(), 0);
     const std::uint64_t retired = swept.value();
 
     if (retired > 0) {
@@ -957,13 +984,14 @@ StatusOr<std::uint64_t> Catalog::PurgeSettledDeleteMarks() {
     // The gate: a sweep is a kWrite fetch of every catalog page - it
     // dirties the whole catalog even when it retires nothing - so it runs
     // only while some mark written this run may still be on a page.
-    if (pending_marks_ == 0) return std::uint64_t{0};
+    const std::uint64_t before = MarkCount();
+    if (before == 0) return std::uint64_t{0};
     std::uint64_t remaining = 0;
     auto swept = RetireDeleteMarks(
         [this](std::uint64_t deleter) { return txn_->ResolvedForEveryReader(deleter); },
         &remaining);
     if (!swept.ok()) return swept;
-    pending_marks_ = remaining;
+    ResettleMarks(before, remaining);
     if (swept.value() > 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("catalog", "purged " + std::to_string(swept.value()) +
                                    " settled delete-marked catalog row(s)");
@@ -2121,7 +2149,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                         !s.ok()) {
                         return s;
                     }
-                    ++pending_marks_;
+                    NoteMark();
                     CatalogRowChange change;
                     change.slot = i;
                     // The identity `Compensate` will re-read before it
@@ -3613,7 +3641,7 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
                     !s.ok()) {
                     return s;
                 }
-                ++pending_marks_;
+                NoteMark();
                 marked.slot = i;
                 marked.oid = index_oid;
                 marked.rel_oid = kSysIndexesTable;

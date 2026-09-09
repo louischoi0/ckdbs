@@ -154,23 +154,10 @@ TEST_F(AffinityDispatchTest, TheLocalCoreIsUnaffected) {
               std::string::npos);
 }
 
-TEST_F(AffinityDispatchTest, AWriteToAnotherCoresRelationIsRefusedRetryably) {
-    CommandDispatcher core0 = DispatcherOn(0);
-    Session setup;
-    ASSERT_EQ(core0.Dispatch("CREATE TABLE t (id INT64, v INT64)", &setup).response.rfind("ERR", 0),
-              std::string::npos);
-
-    // Core 1 owns nothing, so this write is refused - and refused with the
-    // retryable spelling rather than with a page-store fault naming a page
-    // id the client has never heard of.
-    CommandDispatcher core1 = DispatcherOn(1);
-    Session session;
-    const std::string reply = core1.Dispatch("INSERT INTO t VALUES (7)", &session).response;
-    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-    EXPECT_NE(reply.find("core 0"), std::string::npos) << reply;
-    EXPECT_EQ(reply.find("page"), std::string::npos)
-        << "the refusal leaked a storage-layer detail: " << reply;
-}
+// `AWriteToAnotherCoresRelationIsRefusedRetryably` stood here until AT-S5: it
+// pinned the refusal a peer gave a write to a relation it did not own, which
+// went with the route - a write runs where the session is (AT-R5), and
+// `ReadBorrowRigTest.ANamedKeyAdmitsOnAPeer` is what the write does instead.
 
 TEST_F(AffinityDispatchTest, AReadOfAnotherCoresRelationSaysWhatIsMissing) {
     CommandDispatcher core0 = DispatcherOn(0);
@@ -186,19 +173,11 @@ TEST_F(AffinityDispatchTest, AReadOfAnotherCoresRelationSaysWhatIsMissing) {
         << "a cross-core read should name what is missing: " << reply;
 }
 
-TEST_F(AffinityDispatchTest, ADeleteIsAWriteAndIsCheckedAsOne) {
-    CommandDispatcher core0 = DispatcherOn(0);
-    Session setup;
-    ASSERT_EQ(core0.Dispatch("CREATE TABLE t (id INT64, v INT64)", &setup).response.rfind("ERR", 0),
-              std::string::npos);
-    ASSERT_EQ(core0.Dispatch("INSERT INTO t VALUES (7)", &setup).response.rfind("ERR", 0),
-              std::string::npos);
-
-    CommandDispatcher core1 = DispatcherOn(1);
-    Session session;
-    const std::string reply = core1.Dispatch("DELETE FROM t WHERE id = 1", &session).response;
-    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-}
+// `ADeleteIsAWriteAndIsCheckedAsOne` stood here until AT-S5: its whole
+// assertion was that a DELETE reaches the refusal above rather than the read
+// path, and with the refusal gone there is nothing for it to reach. What still
+// separates the two paths is `CheckWriteAffinity`, which a DELETE still calls
+// and which now records the counter D18 keeps.
 
 }  // namespace
 }  // namespace kds::server

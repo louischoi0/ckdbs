@@ -97,6 +97,8 @@ protected:
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         core0_.emplace(std::move(boot.value()));
         core0_->catalog.SetSchemaWord(&schema_word_);
+        core0_->catalog.SetOidSequence(&oid_sequence_);
+        core0_->catalog.SetMarkCounter(&pending_marks_);
 
         ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -172,6 +174,8 @@ protected:
         // would read nonsense.
         c.visibility = &visibility_;
         c.schema_word = &schema_word_;
+        c.oid_sequence = &oid_sequence_;
+        c.mark_counter = &pending_marks_;
         // What `Expeditor` hands a peer on a single-stream volume, and what
         // `CoreRuntime::Open` refuses to proceed without (AM-S0). Null on
         // the per-core arm, where a peer opens its own log.
@@ -252,6 +256,8 @@ protected:
     // core 0's catalog bumps it and every peer's revalidates against it,
     // which is what replaced the broadcast the rigs here used to send.
     std::atomic<std::uint64_t> schema_word_{0};
+    std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b
+    std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b
 };
 
 TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
@@ -3868,6 +3874,14 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // The flush that stood here carried the row to the *device*, for an
     // owner that re-read from there; one pool serves every core now.
     rig.catalog2->SetSchemaWord(&schema_word_);
+    // All three instance words, not the schema one alone: this rig's second
+    // catalog writes the same store, so a private oid counter here is the
+    // duplicate-oid trap AT-S5b closed everywhere else. Unreachable as the
+    // rig stands - one table, created before the wired catalogs issue
+    // anything - and wired because the next cell that adds a table would
+    // not know it had to.
+    rig.catalog2->SetOidSequence(&oid_sequence_);
+    rig.catalog2->SetMarkCounter(&pending_marks_);
     auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema(),
                                          catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();

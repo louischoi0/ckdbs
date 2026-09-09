@@ -339,6 +339,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                               config.core_id);
     runtime->catalog_->SetLogger(log);
     runtime->catalog_->SetSchemaWord(config.schema_word);  // AT-S2
+    runtime->catalog_->SetOidSequence(config.oid_sequence);  // AT-S5b
+    runtime->catalog_->SetMarkCounter(config.mark_counter);  // AT-S5b
     // RV3: a peer may not write a catalog page (P6), so this should never
     // fire - but if a write ever slips through, logged beats silent.
     runtime->catalog_->SetWal(runtime->wal_.get());
@@ -465,8 +467,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // rotating placement, so it too can hold a foreign INSERT that R4/IS1
     // wants to leave a demand behind.
     runtime->dispatcher_->set_range_size_ids(config.range_size_ids);
-    // Asymmetry 1 made enforceable at dispatch (PW4) - the argument is at
-    // PeerDdlRefused (core_affinity.hpp).
+    // Asymmetry 1 was made enforceable at dispatch by PW4 and is history:
+    // the argument lived at `PeerDdlRefused`, which AT-S5 deleted with the
+    // route (`crosscore.md` CC11).
     if (is_peer) {
         // `SetCatalogReadOnly(true)` stood here until AT-S5: a peer's
         // dispatcher refused DDL and named keys, took no sorted fill, and

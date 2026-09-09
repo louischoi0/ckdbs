@@ -248,6 +248,26 @@ public:
     // waits for; `read_borrow.hpp` states the defence and its direction.
     void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
 
+    // **The instance's object-oid sequence** (AT-S5b). `GenerateUserOid()`
+    // was one in-memory counter *per catalog*, recovered once from the
+    // pages - sound while core 0 alone created objects, and two catalogs
+    // issuing the same oid the moment a peer runs `CREATE TABLE` (AT-S5).
+    // One atomic for the instance, owned by `Expeditor` beside the schema
+    // word and handed down the same way: whichever catalog first needs an
+    // oid seeds it by CAS from `HighestIssuedUserOid()`, and every issue
+    // after that is a `fetch_add`. Null keeps the per-catalog counter,
+    // which is what a bare fixture catalog and the sim hold.
+    void SetOidSequence(std::atomic<Oid>* sequence) noexcept { oid_sequence_ = sequence; }
+
+    // **The instance's delete-mark counter** (AT-S5b), the third of the
+    // three words `Expeditor` owns and hands to every core's catalog. It
+    // gates the purge; why the gate has to be the instance's is at
+    // `PurgeSettledDeleteMarks` below, where it is read. Null keeps the
+    // local counter, which is what a bare catalog holds.
+    void SetMarkCounter(std::atomic<std::uint64_t>* counter) noexcept {
+        mark_counter_ = counter;
+    }
+
     // **Asked at a task boundary and nowhere inside one**: a drop frees
     // every `const TableAccess*` a running statement holds. `catalog.md`
     // CT2-CT4 carry the rule, the nine sites, what an unasking task serves
@@ -391,8 +411,13 @@ public:
     // Callable while the listener is bound; no version
     // bump, unlogged like every catalog write; a held-back mark survives
     // to the next call or to the mount sweep. The caller is DDL resolution
-    // (`CommandDispatcher::EndDdlScope`, system core only). The soundness
-    // proof lives once, in `ddl-transactional.md` §5d.
+    // (`CommandDispatcher::EndDdlScope`), on **one** core - a placement
+    // since AT-S5, so that two cores do not walk the same chains at once,
+    // and no longer an authority. Which is why the gate it reads is the
+    // instance's (`SetMarkCounter`, AT-S5b): the sweeping core has to see
+    // a mark another core wrote, or a peer's `DROP` would wait for the
+    // next mount. The soundness proof lives once, in
+    // `ddl-transactional.md` §5d.
     StatusOr<std::uint64_t> PurgeSettledDeleteMarks();
 
     // Registers the fixed namespace/type sys-objects in the in-memory
@@ -1317,6 +1342,41 @@ public:
     const CatalogCache::Stats& cache_stats() const noexcept { return cache_.stats(); }
 
 private:
+    // ---- The delete-mark count, and the one seam it is reached through -
+    //
+    // Two shapes: `mark_counter_` when an instance named one
+    // (`SetMarkCounter`), the local `pending_marks_` for a bare catalog.
+    // Nothing outside these three touches either, which is what keeps the
+    // two from diverging. The word is `acq_rel` because a mark's *row* is
+    // a page write another core reads and the count is what tells that
+    // core to look.
+    std::uint64_t MarkCount() const noexcept {
+        return mark_counter_ != nullptr ? mark_counter_->load(std::memory_order_acquire)
+                                        : pending_marks_;
+    }
+    void NoteMark() noexcept {
+        if (mark_counter_ != nullptr) {
+            mark_counter_->fetch_add(1, std::memory_order_acq_rel);
+        } else {
+            ++pending_marks_;
+        }
+    }
+    // A **delta**, not an assignment, and that is the whole of it: another
+    // core may have marked a row while this sweep walked, and its
+    // `NoteMark` has to survive. `before` is what the count held when the
+    // sweep began and `remaining` what it saw unsettled, so adding the
+    // difference - unsigned, so a smaller `remaining` wraps and adds as
+    // the subtraction it is - leaves a concurrent mark counted.
+    // `catalog.md` CT6 carries which direction of error is allowed and
+    // why.
+    void ResettleMarks(std::uint64_t before, std::uint64_t remaining) noexcept {
+        if (mark_counter_ != nullptr) {
+            mark_counter_->fetch_add(remaining - before, std::memory_order_acq_rel);
+        } else {
+            pending_marks_ = remaining;
+        }
+    }
+
     // The one sweep both delete-mark retirers share: every mark whose
     // deleter `settled` answers true for is retired in place, and the count
     // answered. The mount sweep passes "every deleter"; the in-mount purge
@@ -1324,7 +1384,7 @@ private:
     // floor, or committed at or below every live snapshot (AN-S2), which is
     // the two-branch test the reader's own predicate decides by.
     // `remaining_out`, when given, receives how many marks the sweep saw
-    // and left - what resettles `pending_marks_` after a purge.
+    // and left - what `ResettleMarks` takes after a purge.
     StatusOr<std::uint64_t> RetireDeleteMarks(
         const std::function<bool(std::uint64_t deleter)>& settled,
         std::uint64_t* remaining_out = nullptr);
@@ -1439,12 +1499,18 @@ private:
     // gate that keeps PurgeSettledDeleteMarks() from Get()-dirtying every
     // catalog page after a DDL that marked nothing (found when D2 made
     // every autocommit DDL reach the purge and the sweep's kWrite fetches
-    // turned the whole catalog dirty per statement). Grows on each mark,
-    // resettled to the sweep's remaining count when one runs; a rollback
-    // clears its marks behind the catalog's back, so the counter may
-    // overshoot - costing at most one sweep that finds less than it
-    // expected, never a missed mark.
+    // turned the whole catalog dirty per statement). Grows on each mark and
+    // is resettled by the sweep - a *delta* since AT-S5b, `ResettleMarks`
+    // saying why; a rollback clears its marks behind the catalog's back,
+    // so the counter may overshoot, costing at most one sweep that finds
+    // less than it expected and never a missed mark.
+    //
+    // **This member is the fallback**: `mark_counter_` is where the count
+    // lives when an instance named one (`SetMarkCounter`), and the three
+    // accessors above are the only things that touch either.
     std::uint64_t pending_marks_ = 0;
+    std::atomic<std::uint64_t>* mark_counter_ = nullptr;
+
     RelationPublishHook on_publish_;
     // The engine's default is `kNamespace` (`Expeditor::Config`, AF-T2);
     // a bare Catalog - bootstrap, recovery, a test over a store - keeps
@@ -1457,6 +1523,9 @@ private:
     // this type's range is a legal oid and a sentinel would be one more
     // thing that has to stay outside the range it guards.
     std::optional<Oid> next_user_oid_;
+    // Null unless `SetOidSequence` named the instance's; `next_user_oid_` is
+    // then unused and stays empty.
+    std::atomic<Oid>* oid_sequence_ = nullptr;
 
     // The highest oid `sys.objects` and `sys.columns` carry, or
     // kUserOidStart - 1 if they carry none above it. Reads the pages; called
