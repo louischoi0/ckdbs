@@ -1,9 +1,11 @@
 # `BtreeLookup` hands back a (page, slot) it no longer holds, and every caller re-fetches
 
 **Found** 2026-09-10 by the `critics-developer` pass on AT-S5c
-(`9785af4` on `m3-at`), as its C2. **Not fixed** — the fix is a design
-choice between two shapes, so it is an operator item (`workorder-at-m3-
-uniformity.md` AT-0 item 12) rather than a patch.
+(`9785af4` on `m3-at`), as its C2. **Not fixed.** The fix was a design
+choice between two shapes, so it went to the operator (`workorder-at-m3-
+uniformity.md` AT-0 item 12), and **the operator marked (a) on 2026-09-10**:
+`BtreeLookup` returns the held `PageRef`. Marked, not built - it is its own
+stage and waits for the word to start it.
 
 **Cost: a quiet wrong answer, and in one caller a wrong constraint verdict.**
 A statement answers **zero rows for a row that exists**, and a foreign-key
@@ -58,9 +60,10 @@ its `BtreeLookup` returns before the divide and its re-fetch lands after.
   re-fetch and re-look-up on a mismatch. Cheaper, needs a bound, and leaves the
   contract a hint.
 
-CLA proposes (a): the cost it reinstates is a held pin across the caller's read,
-which is what every other page access in the engine already holds, and (b)
-spreads the invariant across seven sites that must each remember it.
+CLA proposed (a), and **(a) is the operator's mark** (2026-09-10): the cost it
+reinstates is a held pin across the caller's read, which is what every other page
+access in the engine already holds, and (b) spreads the invariant across seven
+sites that must each remember it.
 
 ## The same exposure, and worse, one layer up
 

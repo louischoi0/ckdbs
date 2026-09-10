@@ -114,23 +114,11 @@ enum class RingMessageKind : std::uint16_t {
     kShippedStatementRequest = 28,
     kShippedStatementReply = 29,
 
-    // core 0 <-> owner core: a peer-owned relation's CREATE ASSERTION,
-    // built by the owner (workplan-peer-writer.md §7d, PW1c-6c;
-    // server/assertion_build_service.hpp). The request carries the
-    // declaration verbatim (`server::AssertionBuildRequestPayload`), the
-    // reply the Bound Cabin root the owner built or why not
-    // (`AssertionBuildReplyPayload`, matched to its request by
-    // `request_id`), and `done` the statement's end
-    // (`AssertionBuildDonePayload`), which keeps or evicts the directory
-    // the owner adopted at the end of its build.
-    //
-    // **A `done` leg but no refusal window**, where the index build has
-    // both: the owner adopts inside its build task, so there is no
-    // interval between the last scanned row and the publish in which a
-    // write would have to be held off.
-    kAssertionBuildRequest = 30,
-    kAssertionBuildReply = 31,
-    kAssertionBuildDone = 32,
+    // 30, 31 and 32 were the assertion build's request, reply and done -
+    // a peer-owned relation's CREATE ASSERTION built by its owner (PW1c-6c)
+    // - struck at AT-S5d: the assertion registry is the instance's, so the
+    // build runs where the session is and adopts into the one directory
+    // every core's writes check. **The values are not reused.**
 
     // coordinator <-> participant: a transaction whose writes touch
     // relations owned by two or more cores, committed atomically (R6 of
@@ -273,9 +261,6 @@ constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
         case RingMessageKind::kIndexBuildDone:
         case RingMessageKind::kShippedStatementRequest:
         case RingMessageKind::kShippedStatementReply:
-        case RingMessageKind::kAssertionBuildRequest:
-        case RingMessageKind::kAssertionBuildReply:
-        case RingMessageKind::kAssertionBuildDone:
         case RingMessageKind::kTxnPrepareRequest:
         case RingMessageKind::kTxnPrepareReply:
         case RingMessageKind::kTxnDecideRequest:
@@ -313,9 +298,10 @@ constexpr std::size_t CountKnownRingMessageKinds() noexcept {
     }
     return n;
 }
-static_assert(CountKnownRingMessageKinds() == 29,
+static_assert(CountKnownRingMessageKinds() == 26,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
-              "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck)");
+              "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck), 26 at AT-S5d (30, 31, 32 "
+              "struck)");
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

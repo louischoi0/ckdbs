@@ -454,6 +454,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The wait-for graph and the admission it gates, on every core since
     // AO-S4b - the member's declaration says why that is safe now.
     runtime->dispatcher_->set_locks(runtime->locks_);
+    // And the instance's assertion registry (AT-S5d), on the same terms: one
+    // directory per assertion is what makes a write on this core checked
+    // against the rows every other core admitted. Null leaves the
+    // dispatcher its own, a fixture's shape.
+    runtime->dispatcher_->set_assertions(config.assertions);
     // `SHOW META`'s group-accounting block on this core (sched.md §4). Set
     // on every core, peer or not: the accounting question is about a
     // reactor, and every core runs one. Set on the startup thread, before
@@ -500,19 +505,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                                      &runtime->row_id_refill_.stats);
     }
 
-    // **Assertion enforcement, resumed on this core too** (RC07 per core,
-    // PW1c-6c). Here rather than beside `RecoverCoreAtMount` above for
-    // `Expeditor::Open`'s reason - the registry it refills lives on the
-    // dispatcher, which did not exist yet - and still before the listener
-    // binds, so no statement is accepted against an unenforcing constraint.
-    //
-    // It takes on **the relations this core owns and nothing else**: the
-    // core that writes a relation is the core that appends to its Bound
-    // Cabin, so a peer holds the directories for its own relations and core
-    // 0 holds none of them. That is what this call closes - a peer used to
-    // hold no directory at all, so a write to an assertion-covered relation
-    // it owned was admitted with nothing checking it
-    // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2).
+    // **Assertion enforcement at mount** (RC07). Here rather than beside
+    // `RecoverCoreAtMount` above for `Expeditor::Open`'s reason - the
+    // registry lives on the dispatcher, which did not exist yet - and still
+    // before the listener binds, so no statement is accepted against an
+    // unenforcing constraint.
     //
     // **The self-grant this used to need went with CC7's fault rights**
     // (AW-S1b). `sys.assertions` keeps each declaration's text in a
@@ -525,43 +522,35 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // One frame table serves every core, so a peer reading such a page
     // finds the frame core 0 wrote and needs no right to it.
 
-    // `config.anchor` is this core's own WAL anchor, the one recovery just
-    // scanned from, so the two cannot disagree about which checkpoint is
-    // the base.
-    runtime->recovery_ = ResumeAssertionsAfterRecovery(
-        *runtime->catalog_, *runtime->store_,
-        // **The stream's device.** This core opened none, so there is no
-        // `log_device_` to ask; the stream answers core 0's, which it is
-        // attached to (`core_runtime.hpp`).
-        *runtime->wal_->stream()->device(),
-        /*owner_core=*/config.core_id,
-        // **The stream's core, which is never this core.** The assertions
-        // are this core's to adopt - only their owner can enforce them -
-        // but the log they were recorded in is stream 0's, and the scanner
-        // validates every segment header against the id it is given
-        // (`mount_recovery.hpp` says what each answers). Literal 0 since
-        // AM-S4(d): there is one stream and it is core 0's.
-        /*stream_core=*/0,
-        // **And `redo_start_lsn`, not `checkpoint_lsn`.** The scan must
-        // begin at or before *this* core's own first `ASSERT_SNAPSHOT`,
-        // which is written just after its own `CHECKPOINT_BEGIN`. The
-        // anchor is the fold, and the fold selects on `redo_start_lsn`:
-        // the record it carries belongs to whichever core had the lowest
-        // one, so its `checkpoint_lsn` can sit *past* an idle core's
-        // snapshot. Missing the base is not a slow scan - it is
-        // `NoteUnenforceable` for every assertion that core owns, and the
-        // relation's writes refused for the life of the mount.
-        // `redo_start_lsn` is the field the fold does bound: it is at or
-        // below every core's redo start, which is at or below every core's
-        // own `CHECKPOINT_BEGIN`. Widening the scan is safe - the pass
-        // folds `ASSERT_*` records after whatever base it finds, and
-        // `DedupeEntryLinkage` exists for that overlap - and it is no wider
-        // than the redo pass that just ran.
-        //
-        // The `checkpoint_lsn` arm was the per-core one, where the anchor
-        // was this core's own rather than a fold, and it went at AM-S4(d).
-        config.anchor.redo_start_lsn,
-        runtime->dispatcher_->assertions(), runtime->recovery_, log);
+    // **The assertion resume is the registry's, not the core's** (AT-S5d).
+    // Handed the instance's registry, this core resumes nothing: core 0's
+    // mount filled it before any peer was built, for every relation, and a
+    // second resume would adopt every directory twice. It resumed the
+    // assertions on the relations it owned into its own registry until
+    // then, which is why a peer's `recovery_assertions_*` counted.
+    //
+    // A runtime with a registry of its own - a fixture - resumes into it
+    // exactly as core 0 does, from `redo_start_lsn` rather than
+    // `checkpoint_lsn`: the scan must begin at or before the first
+    // `ASSERT_SNAPSHOT` any core wrote after its own `CHECKPOINT_BEGIN`,
+    // and the anchor's fold bounds only `redo_start_lsn` below every one of
+    // them. Widening the scan is safe - the pass folds `ASSERT_*` records
+    // after whatever base it finds, and `DedupeEntryLinkage` exists for
+    // that overlap.
+    if (config.assertions == nullptr) {
+        runtime->recovery_ = ResumeAssertionsAfterRecovery(
+            *runtime->catalog_, *runtime->store_,
+            // **The stream's device.** This core opened none, so there is
+            // no `log_device_` to ask; the stream answers core 0's, which
+            // it is attached to (`core_runtime.hpp`).
+            *runtime->wal_->stream()->device(),
+            // **The stream's core, which is never this core**: the scanner
+            // validates every segment header against the id it is given.
+            // Literal 0 since AM-S4(d): there is one stream and it is core
+            // 0's.
+            /*stream_core=*/0, config.anchor.redo_start_lsn, runtime->dispatcher_->assertions(),
+            runtime->recovery_, log);
+    }
 
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {
         log->Debug("core", "core " + std::to_string(config.core_id) +
@@ -683,34 +672,6 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
                 sched::RingMessageKind::kIndexBuildDone,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
                     index_builds_->OnDone(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-
-        // The owner's half of a peer-owned relation's CREATE ASSERTION
-        // (PW1c-6c, assertion_build_service.hpp), on the same terms: peers
-        // only, the build a `system` task on this reactor, and the
-        // directory adopted into **this** dispatcher's registry, which is
-        // the core of the change - the cabin is written by whoever writes
-        // the relation. This core's `SHOW ASSERTIONS` resolves the row
-        // core 0 wrote at its next boundary, through the schema word
-        // (AT-S2); `done(committed)` drops nothing.
-        assertion_builds_.emplace(*catalog_, *store_, &*wal_, &*txn_manager_,
-                                  dispatcher_->assertions(), config_.core_id, *scheduler_,
-                                  transport, log_);
-        if (Status s = scheduler_->RegisterMessageHandler(
-                sched::RingMessageKind::kAssertionBuildRequest,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    assertion_builds_->OnRequest(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler_->RegisterMessageHandler(
-                sched::RingMessageKind::kAssertionBuildDone,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    assertion_builds_->OnDone(header, payload);
                 });
             !s.ok()) {
             return s;
@@ -874,14 +835,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     checkpointer_->SetLogger(log_);
     // AS6a's snapshot source, wired on the same terms core 0 wires it.
     //
-    // **A peer's registry holds the assertions on the relations it owns**
-    // since PW1c-6c - its mount resumes them (`CoreRuntime::Open`) and an
-    // owner-built one adopts here at its build - so this writes real group
-    // snapshots, and it must: they are the base this core's *own* next
-    // mount folds its `ASSERT_*` records onto, and no other core's
-    // checkpoint could carry them, because no other core holds the
-    // directory. The wiring predates that and was already right for the
-    // reason RC07 gives; what changed is that it is no longer a no-op.
+    // **The instance's registry since AT-S5d**, so every core's checkpoint
+    // snapshots every assertion, and a mount takes the first snapshot past
+    // its scan start as the base and skips the rest (`assertion_recover.cpp`).
+    // Each is a base only because the registry holds its latch across the
+    // records (`VisitSnapshots`): another core may be reserving into it.
     checkpointer_->SetAssertionSource(&dispatcher_->assertions());
 
     // **The completion checkpoint** (RC08), which core 0 runs at the end of

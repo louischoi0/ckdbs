@@ -77,6 +77,18 @@ Status BoundCabinChainWriter::AdoptChain(storage::PageStore& store, PageId root)
 StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
     storage::PageStore& store, wal::WalManager* wal, const BoundCabinEntry& entry,
     const std::string& key, wal::RecordType type, std::uint64_t txn_id) {
+    auto placed = Place(store, wal, entry);
+    if (!placed.ok()) return placed.status();
+    auto lsn = Log(wal, placed.value(), entry, key, type, txn_id);
+    if (!lsn.ok()) return lsn.status();
+    if (lsn.value() != wal::kNoLsn) {
+        if (Status s = store.StampPageLsn(placed.value().page_id, lsn.value()); !s.ok()) return s;
+    }
+    return std::make_pair(placed.value().page_id, placed.value().index);
+}
+
+StatusOr<BoundCabinChainWriter::Placed> BoundCabinChainWriter::Place(
+    storage::PageStore& store, wal::WalManager* wal, const BoundCabinEntry& entry) {
     if (tail_ == kInvalidPageId) {
         if (Status s = Grow(store, wal); !s.ok()) return s;
     }
@@ -94,26 +106,28 @@ StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
 
     auto index = opened.value().Append(entry);
     if (!index.ok()) return index.status();
+    return Placed{std::move(page.value()), tail_, index.value()};
+}
 
-    if (wal != nullptr) {
-        std::array<std::byte, kEntryBytes> entry_bytes{};
-        if (Status s = storage::cabin::EncodeEntry(entry, entry_bytes); !s.ok()) return s;
-        std::vector<std::byte> payload(wal::kAssertEntryFixedSize + kEntryBytes + key.size());
-        wal::AssertEntryPayload fields{};
-        fields.assertion_id = assertion_id_;
-        fields.index = index.value();
-        // AS6a: the same id the entry bytes carry, so replay binds the group by
-        // id instead of re-deriving one in its own allocation order.
-        fields.group_id = entry.group_id;
-        auto used = wal::EncodeAssertEntry(
-            payload, fields, entry_bytes,
-            std::as_bytes(std::span<const char>(key.data(), key.size())));
-        if (!used.ok()) return used.status();
-        auto rec = wal->Append(wal::RecordSpec{type, txn_id, tail_}, payload);
-        if (!rec.ok()) return rec.status();
-        if (Status s = store.StampPageLsn(tail_, rec.value()); !s.ok()) return s;
-    }
-    return std::make_pair(tail_, index.value());
+StatusOr<wal::Lsn> BoundCabinChainWriter::Log(wal::WalManager* wal, const Placed& placed,
+                                              const BoundCabinEntry& entry,
+                                              const std::string& key, wal::RecordType type,
+                                              std::uint64_t txn_id) const {
+    if (wal == nullptr) return wal::kNoLsn;
+    std::array<std::byte, kEntryBytes> entry_bytes{};
+    if (Status s = storage::cabin::EncodeEntry(entry, entry_bytes); !s.ok()) return s;
+    std::vector<std::byte> payload(wal::kAssertEntryFixedSize + kEntryBytes + key.size());
+    wal::AssertEntryPayload fields{};
+    fields.assertion_id = assertion_id_;
+    fields.index = placed.index;
+    // AS6a: the same id the entry bytes carry, so replay binds the group by
+    // id instead of re-deriving one in its own allocation order.
+    fields.group_id = entry.group_id;
+    auto used = wal::EncodeAssertEntry(
+        payload, fields, entry_bytes,
+        std::as_bytes(std::span<const char>(key.data(), key.size())));
+    if (!used.ok()) return used.status();
+    return wal->Append(wal::RecordSpec{type, txn_id, placed.page_id}, payload);
 }
 
 Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* wal) {

@@ -358,16 +358,18 @@ CREATE ASSERTION <name> ON <table> GROUP BY (<col> [, ...])
   assertion enforces immediately after a restart; `SHOW ASSERTIONS` still
   reports `enforcing=0` for the one whose directory could *not* be rebuilt,
   which is the honest remainder rather than the ordinary case.
-- **On a multi-core instance an assertion is built and enforced by the core
-  that owns its relation** (2026-08-26). Two consequences a client sees:
-  `CREATE ASSERTION` on such a relation is refused **inside an explicit
-  transaction** and must be run in autocommit — the reply says so and names
-  the owner — and its success line carries `built_by_core=<n>`. On any other
-  core `SHOW ASSERTIONS` prints `enforcing=0 enforced_by_core=<n>` for it:
-  that is a statement about which core holds the directory, not about
-  whether the constraint runs. A relation whose assertion its owner *cannot*
-  enforce — a database file written before this change — refuses writes on
-  that core by name until the assertion is dropped and re-created.
+- **On a multi-core instance an assertion is one constraint for the
+  instance.** `CREATE ASSERTION` builds on the core it runs on, and a write
+  arriving on any core is checked against the same aggregate; two sessions
+  on two cores inserting into a group with room for one row get one row
+  and one `ASSERTION_VIOLATION`. `SHOW ASSERTIONS` answers the same from
+  every core. (From 2026-08-26 until this change each core enforced only
+  the relations it owned: the success line carried `built_by_core=<n>` and
+  another core's `SHOW ASSERTIONS` printed `enforced_by_core=<n>`. Both
+  fields are gone.) One limit is stated rather than hidden: a write on
+  another core that runs **during** a `CREATE ASSERTION` on the same
+  relation is not fenced off from the build, so run the create while the
+  relation is quiet.
 
 ### CREATE CABIN / DROP CABIN (built, CB01-CB11)
 

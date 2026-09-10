@@ -158,7 +158,6 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 };
 
 class IndexBuildClient;
-class AssertionBuildClient;
 class StatementShipClient;
 class FkProbeClient;
 class FkIntentTable;
@@ -181,21 +180,6 @@ struct PendingIndexBuild {
     catalog::Catalog::IndexDef def;
     std::string table_name;       // the reply line
     std::string key_column_name;  // the Cabin warning
-};
-
-// A peer-owned relation's `CREATE ASSERTION` between its two phases on core
-// 0 (`docs/inflight/in-progress/workplan-peer-writer.md` §7d, PW1c-6c): the id core 0
-// issued, the declaration it sent, and what phase 2 needs to write the row
-// and answer the client. Carried by value across the park, for
-// `PendingIndexBuild`'s reason.
-struct PendingAssertionBuild {
-    std::uint64_t request_id = 0;
-    std::uint32_t owner_core = 0;
-    std::uint64_t assertion_id = 0;
-    catalog::Oid target_oid = 0;
-    std::string name;
-    std::string table_name;
-    std::string source_text;
 };
 
 // A statement this core sent to the core that owns its relation (SS2,
@@ -493,12 +477,6 @@ struct DispatchOutcome {
     // finishes through `FinishIndexBuild()`; the synchronous `Dispatch()`
     // has no reactor to receive one on and abandons it, telling the owner.
     std::optional<PendingIndexBuild> pending_index_build = std::nullopt;
-
-    // A peer-owned relation's CREATE ASSERTION this statement sent to the
-    // owner to build (PW1c-6c): the reply is not in `response` yet, and the
-    // two paths differ exactly as the index build's do - `DispatchAsync()`
-    // parks, the synchronous `Dispatch()` abandons and tells the owner.
-    std::optional<PendingAssertionBuild> pending_assertion_build = std::nullopt;
 
     // A statement shipped to its owner core (SS2): the reply is not in
     // `response` yet. `DispatchAsync()` parks on the owner's answer under
@@ -1612,29 +1590,16 @@ private:
     //
     // Validates the declaration against the catalog (§3.1), builds the
     // Bound Cabin (AST06), publishes the row and adopts the live directory
-    // into this core's registry, which is what makes the reply's
+    // into the instance's registry, which is what makes the reply's
     // `enforcing=1` true rather than a claim about a row.
     //
-    // **On a relation another core owns the cabin is built there**
-    // (PW1c-6c, the two phases below): every write to the relation appends
-    // to the cabin, and only the owner may write the owner's pages.
-    // No session: assertions are non-transactional DDL (`ddl-transactional.md`
-    // §5), so neither arm has anything to ask it (AK-S1 dropped the last
-    // read, the foreign arm's explicit-transaction refusal).
+    // **Built where the session is, whoever "owns" the relation** (AT-S5d).
+    // The build was the owner's from PW1c-6c until then, shipped to it and
+    // adopted into its registry, because only the owner wrote the relation
+    // and only its registry was asked; the registry is one now and every
+    // core writes. No session: assertions are non-transactional DDL
+    // (`ddl-transactional.md` §5).
     DispatchOutcome HandleAssertion(std::string_view line);
-
-    // The foreign arm's two phases (PW1c-6c, assertion_build_service.hpp).
-    // Phase 1: the checks and the id under `exec::PrepareAssertionDef`, the
-    // declaration sent, the outcome returned pending. Phase 2, once
-    // `AssertionBuildClient::Settled`: the owner's root read, the
-    // `sys.assertions` row published, `done` - or the timeout / the owner's
-    // refusal as the error and `done(aborted)`.
-    //
-    // The live directory is **not** adopted here: it belongs to the core
-    // that will append to it, which adopted it at the end of its own build.
-    DispatchOutcome BeginForeignAssertionBuild(const parser::AssertionStmt& stmt,
-                                               std::uint32_t owner_core);
-    DispatchOutcome FinishAssertionBuild(const PendingAssertionBuild& build);
 
     // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
     // on and its declaration verbatim.
@@ -2036,15 +2001,6 @@ public:
     // on, not production.
     void SetIndexBuilds(IndexBuildClient* client) noexcept { index_builds_ = client; }
 
-    // Arms the foreign arm of CREATE ASSERTION (PW1c-6c,
-    // assertion_build_service.hpp), on the same terms and for the same
-    // reason as `SetIndexBuilds`. Core 0 only; `client` must outlive the
-    // dispatcher. A dispatcher never told refuses the statement by name
-    // rather than building a Bound Cabin in the wrong core's pages.
-    void SetAssertionBuilds(AssertionBuildClient* client) noexcept {
-        assertion_builds_ = client;
-    }
-
     // Arms **statement shipping** (SS2, statement_ship_service.hpp): an
     // autocommit statement whose relation another core owns is carried
     // there and answered back, where without this it is refused
@@ -2230,7 +2186,18 @@ public:
     // handing it to the checkpointer as AS6a's snapshot source. Every other
     // caller reaches assertions through the write paths on this class, which is
     // why this is the only accessor and why it is not const.
-    exec::AssertionEnforcer& assertions() noexcept { return enforcer_; }
+    exec::AssertionEnforcer& assertions() noexcept { return *enforcer_; }
+
+    // **The instance's registry** (AT-S5d, AT-R15), borrowed the way the lock
+    // table is: `Expeditor` owns one for every core and hands it here, so a
+    // write on any core is checked against the one directory each assertion
+    // has. Never called leaves this dispatcher its own, which is a fixture's
+    // shape and a one-core instance's. `enforcer` must outlive the dispatcher,
+    // and the swap happens before the first statement - nothing reserved into
+    // the registry it replaces.
+    void set_assertions(exec::AssertionEnforcer* enforcer) noexcept {
+        enforcer_ = enforcer != nullptr ? enforcer : owned_enforcer_.get();
+    }
 
     // RD5's decline counters, written on the drain tick (CoreRuntime) and
     // printed by `SHOW META`. Non-const because the one writer is not a
@@ -2660,9 +2627,6 @@ private:
     // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
     // stands (see SetIndexBuilds).
     IndexBuildClient* index_builds_ = nullptr;
-    // PW1c-6c's client, core 0's; null on every other core and on a
-    // fixture with no ring (see SetAssertionBuilds).
-    AssertionBuildClient* assertion_builds_ = nullptr;
     // SS2's client, on every core of a multi-core instance; null wherever
     // the cross-core refusal still stands (see SetStatementShip).
     StatementShipClient* statement_ship_ = nullptr;
@@ -2885,12 +2849,15 @@ private:
     // AST06/AST07): CREATE ASSERTION's build moves its LiveAssertion in
     // here, DROP evicts it, the three write paths check and reserve through
     // it, and the commit/abort hooks below settle what a transaction
-    // reserved. Core-local like everything on this dispatcher
-    // (assertion.md §6.1). The entry *pages* are durable; this
-    // registry is the memory-resident half a restart loses until recovery
-    // replays it (AST05's fold) - and SHOW ASSERTIONS derives `enforcing`
-    // from its presence, so the loss reports itself instead of hiding.
-    exec::AssertionEnforcer enforcer_;
+    // reserved. **The instance's since AT-S5d** when `set_assertions` is
+    // handed one, this dispatcher's own otherwise (assertion.md §6.1). The
+    // entry *pages* are durable; this registry is the memory-resident half a
+    // restart loses until recovery replays it (AST05's fold) - and SHOW
+    // ASSERTIONS derives `enforcing` from its presence, so the loss reports
+    // itself instead of hiding.
+    std::unique_ptr<exec::AssertionEnforcer> owned_enforcer_ =
+        std::make_unique<exec::AssertionEnforcer>();
+    exec::AssertionEnforcer* enforcer_ = owned_enforcer_.get();
 
     // The commit a write path staged and did not wait for, read out at the
     // end of DispatchAndStage(). One statement runs at a time on a core, so

@@ -92,12 +92,15 @@ Status Checkpointer::LogAssertionSnapshots() {
     if (assertions_ == nullptr) {
         return Status::OK();  // no assertions on this core: no records, no cost
     }
-    for (const AssertionCabinSnapshot& cabin : assertions_->SnapshotAssertions()) {
-        if (Status s = LogAssertionSnapshot(wal_, cabin); !s.ok()) {
-            return s;
-        }
-    }
-    return Status::OK();
+    return assertions_->VisitSnapshots(
+        [this](const std::vector<AssertionCabinSnapshot>& cabins) -> Status {
+            for (const AssertionCabinSnapshot& cabin : cabins) {
+                if (Status s = LogAssertionSnapshot(wal_, cabin); !s.ok()) {
+                    return s;
+                }
+            }
+            return Status::OK();
+        });
 }
 
 Status Checkpointer::Start() {

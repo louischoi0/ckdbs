@@ -181,13 +181,10 @@ struct MountRecovery {
     std::uint32_t assertions_enforcing = 0;
     std::uint32_t assertions_unrecovered = 0;
 
-    // Declarations this core read and did **not** take on, because the
-    // relation belongs to another core (PW1c-6c): an assertion is enforced
-    // by the core whose writes maintain its Bound Cabin, so on every other
-    // core it is somebody else's, not a failure. Counted separately from
-    // `assertions_unrecovered` for exactly that reason - folding the two
-    // would make a correctly-partitioned instance look half-broken.
-    std::uint32_t assertions_foreign = 0;
+    // `assertions_foreign` stood here until AT-S5d: the declarations a core
+    // read and left to the relation's owner. The registry is the instance's
+    // and core 0's mount resumes every assertion into it, so nothing is
+    // another core's, and a counter nothing can move went with it.
 
     // Nothing to recover: an unwritten log, or one whose whole range the
     // last clean shutdown's checkpoint already covers. The common mount,
@@ -270,43 +267,26 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 // would appear enforcing and enforce nothing. That is why the pass reports per
 // assertion and why this refuses to adopt on anything less than success.
 //
-// ---- Whose assertions these are (PW1c-6c) --------------------------------
+// ---- Whose assertions these are (AT-S5d) ----------------------------------
 //
-// **Only the relations `core_id` owns.** An assertion's Bound Cabin is
-// appended to by every write to its relation, so it is maintained by that
-// relation's owner and by nobody else; a second core holding the same
-// directory would hold a stale copy of a structure it may not write, and
-// would report `enforcing=1` for counts that stopped moving at this mount.
-// Assertions on another core's relations are counted (`assertions_foreign`)
-// and skipped.
+// **Every one the catalog declares, into the one registry `enforcer` is.**
+// The resume took only the relations the calling core owned until AT-S5d,
+// counting the rest foreign, because each core's registry enforced its own
+// relations' writes and nobody else's; the registry is the instance's now
+// and a write on any core checks it, so the resume runs once - at core 0's
+// mount, before any peer is built - and a peer handed the instance's registry
+// does not call this at all (`CoreRuntime::Open`).
 //
-// A relation this core owns whose cabin this core may **not write** is the
-// pre-PW1c-6c file: core 0 built the cabin from core 0's lease. It is not
-// adopted - appending would be refused at the first write, and enforcing
-// from a directory nothing maintains is worse than not enforcing - and it
-// is recorded through `AssertionEnforcer::NoteUnenforceable`, which is what
-// makes the owner's write path refuse by name instead of admitting an
-// unchecked write.
+// A declaration whose cabin cannot be revived is recorded through
+// `AssertionEnforcer::NoteUnenforceable`, which is what makes the write path
+// refuse the relation's writes by name instead of admitting them unchecked.
 //
-// Called after `RecoverCoreAtMount` and before the listener binds. `from_lsn` is
-// the anchor's `checkpoint_lsn`, which is what makes the scan AS6a's "from the
-// last checkpoint".
-//
-// **Two core ids, and they are not the same question** (AR0 M0, AL-R5).
-// `owner_core` is whose *relations* these are - the filter that makes a core
-// adopt its own assertions and count everyone else's as foreign - and it stays
-// the calling core's under every topology, because only the owner can enforce.
-// `stream_core` is whose *log* is being scanned, which the scanner validates
-// every segment header against. Under per-core streams they are one number.
-// Under one stream they are not: a peer's assertions are the peer's, and the
-// log they are recorded in is stream 0's. They were one parameter until AR0 M0,
-// and passing the peer's id as both would refuse the scan on the segment
-// header, mark every one of that peer's assertions unenforceable, and stop its
-// writes to every relation they cover.
+// Called after `RecoverCoreAtMount` and before the listener binds. `from_lsn`
+// is where the scan begins. `stream_core` is whose *log* is scanned, which the
+// scanner validates every segment header against: 0, the one stream's.
 MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
                                            storage::PageStore& store, wal::LogDevice& device,
-                                           std::uint32_t owner_core, std::uint32_t stream_core,
-                                           wal::Lsn from_lsn,
+                                           std::uint32_t stream_core, wal::Lsn from_lsn,
                                            exec::AssertionEnforcer& enforcer,
                                            MountRecovery report, Logger* log);
 

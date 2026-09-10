@@ -97,12 +97,31 @@ public:
 
     // Appends one entry, growing the chain when the tail is full, and logs
     // it as `type` owned by `txn_id` against the page it landed in.
+    // `Place`, then `Log`, then the stamp.
     StatusOr<std::pair<PageId, std::uint16_t>> Append(storage::PageStore& store,
                                                       wal::WalManager* wal,
                                                       const storage::cabin::BoundCabinEntry& entry,
                                                       const std::string& key,
                                                       wal::RecordType type,
                                                       std::uint64_t txn_id);
+
+    // `Append` in its two halves, for a caller that must make the record
+    // atomic with something of its own (AT-S5d: the registry's header change,
+    // under its directory latch). `Place` is the page work - the tail, a
+    // growth, the entry's bytes - and hands back the tail **still held**, so
+    // the page cannot reach the device before `Log`'s record describes it;
+    // the caller logs, then stamps the page with the LSN `Log` returned
+    // (`kNoLsn` without a log) while the handle is alive.
+    struct Placed {
+        storage::PageRef page;
+        PageId page_id = kInvalidPageId;
+        std::uint16_t index = 0;
+    };
+    StatusOr<Placed> Place(storage::PageStore& store, wal::WalManager* wal,
+                           const storage::cabin::BoundCabinEntry& entry);
+    StatusOr<wal::Lsn> Log(wal::WalManager* wal, const Placed& placed,
+                           const storage::cabin::BoundCabinEntry& entry, const std::string& key,
+                           wal::RecordType type, std::uint64_t txn_id) const;
 
 private:
     Status Grow(storage::PageStore& store, wal::WalManager* wal);

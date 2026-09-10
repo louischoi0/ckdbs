@@ -27,10 +27,13 @@ KDS resolves both problems by construction rather than by generality:
 - Incremental state lives in a **Bound Cabin** (AS5/AS6): a pinned,
   full-coverage, logged authority-class variant of the existing Cabin
   structure. Checks are O(1) against a per-group running aggregate.
-- Concurrency is handled by a **reservation protocol executed on the
-  relation's owner core** (AS4). Because group state is owned by exactly one
-  core and mutated only inside its cooperative event loop, admission is
-  atomic without latches. **The admission is; its refusal is not** — since
+- Concurrency is handled by a **reservation protocol over one registry for
+  the instance** (AS4, §6.1). It ran on the relation's owner core, latch-free
+  inside that core's event loop, until AT-S5 made a write run where its
+  session is; since AT-S5d every core checks and reserves into the one
+  registry, under its latch, and an admission **holds** what it admitted so
+  two cores cannot both fit a group that has room for one. **The admission
+  is atomic; its refusal need not be final** — since
   AO-S6e-c a rejection caused by a reservation whose transaction is still
   in flight **waits** for that decide instead of failing (§6.2), on the
   lock family's own channel, so it is in the wait-for graph and a cycle of
@@ -50,7 +53,7 @@ correct.
 | AS1 | v1 predicate class: group cardinality (`COUNT(*)`) and group sum (`SUM(col)`) constraints over a single `GROUP BY` column list. General `NOT EXISTS` / subquery predicates: refused. |
 | AS2 | KDS-restricted syntax (`CREATE ASSERTION ... ON rel GROUP BY (...) CHECK ...`), not the SQL-92 free-form `CHECK (search condition)`. The grammar itself encodes the supported class; create-time validation is maximized. |
 | AS3 | Statement-time checking only (fail-fast). `DEFERRABLE` is reserved in the grammar and rejected as `Unsupported`. |
-| AS4 | Reservation protocol combined with owner-core group-key serialization. No latches — still true, the state being core-local. **"No waiting, no deadlock" is struck** (`ar0-architecture-revision.md:416-419` struck AS4 with D8; AO-S6e-c built the wait): a false rejection waits for the reserver's decide, and two transactions each holding a reservation the other needs are a real cycle the detector ends. |
+| AS4 | Reservation protocol combined with owner-core group-key serialization. **"No latches" is struck at AT-S5d**: the registry is the instance's and every core reserves into it, so its directory is serialized by a latch of its own (§6.1). **"No waiting, no deadlock" is struck** (`ar0-architecture-revision.md:416-419` struck AS4 with D8; AO-S6e-c built the wait): a false rejection waits for the reserver's decide, and two transactions each holding a reservation the other needs are a real cycle the detector ends. |
 | AS5 | No separate counter store. The Bound Cabin is the single structure: entries plus a per-group running aggregate maintained in the group directory header. Checks are computed against the Cabin in real time on the write path. |
 | AS6 | Bound Cabin is a **logged, headered authority class** (same durability tier as the var-heap (V3) and unique indexes (U5)). Prerequisite: the Cabin class split defined in §5. |
 | AS6a | Where assertion replay starts: a **per-checkpoint snapshot of the group headers** (`{group_id, key, count, sum}`), folded forward with `ASSERT_*` records **from the last checkpoint** — never from the cabin's birth, which would make RTO a function of the assertion's lifetime and make WAL retention a correctness setting. Every entry carries its `group_id` (§5.1) so the header→entry linkage is rebuilt from the cabin's own pages instead of persisted. Narrows AS5's "not a separate store" to "not a separate authority". Full statement: §7. |
@@ -157,7 +160,7 @@ in-flight statements that have passed admission (§6).
 | INSERT | Yes | Increases COUNT by 1 / SUM by the inserted value. |
 | UPDATE, group columns unchanged, SUM column unchanged | No | Aggregate is invariant. |
 | UPDATE, SUM column changed (group unchanged) | Only if the delta is positive | Negative delta cannot violate an upper bound. |
-| UPDATE, group columns changed | Yes, on the **destination** group only | Modeled as departure (no check) + arrival (checked). Both aggregate mutations are applied atomically on the owner core. |
+| UPDATE, group columns changed | Yes, on the **destination** group only | Modeled as departure (no check) + arrival (checked). The arrival is held from its check until its record, so no other core's admission sees the group between the two mutations with room it does not have (§6.2). |
 | DELETE | No | Strictly decreasing; cannot violate an upper bound (AS11). |
 
 The check runs inside the writing statement, the same way FK checks do —
@@ -167,7 +170,7 @@ fingerprints are unaffected.
 ### 4.3 Timing and isolation
 
 Checks execute at statement time against the group's current authoritative
-aggregate (committed + reservations) on the owner core. This is intentionally
+aggregate (committed + reservations + holds) in the instance's registry. This is intentionally
 **stricter than snapshot visibility**: a statement may be rejected because of
 a concurrent uncommitted reservation. This is the correct trade for an
 upper-bound admission constraint — it can produce false rejections only in
@@ -271,78 +274,95 @@ with identical group-column lists have two.
 
 ---
 
-## 6. Concurrency: reservation on the owner core (AS4)
+## 6. Concurrency: one registry, reserved into from every core (AS4)
 
 ### 6.1 Ownership
 
-All Bound Cabin state for a relation lives on that relation's **owner
-core** and is mutated only within its cooperative event loop. No latches, no
-atomic CAS loops, no cross-core sharing. v1 assertions are single-relation
-(AS8), so the entire protocol is core-local.
+**All Bound Cabin state lives in one registry for the instance** (AT-S5d,
+`workorder-at-m3-uniformity.md` AT-R15): every assertion's group directory,
+the admissions' holds and each transaction's pending reservations.
+`Expeditor` owns it and hands it to every core, `LockTable`'s idiom; a
+dispatcher built without one builds its own, which is a fixture's shape and
+a one-core instance's.
 
-**One thing crossed that line at AO-S6e-c**, and it is worth naming here
-rather than leaving to §6.2: a refused admission may now **wait** for the
-transaction whose reservation refused it, and that wait is recorded in the
-instance's lock table so the wait-for graph can see it. The *state* is
-still core-local and still latch-free — nothing about the directory, the
-groups or the entries is shared — and what is shared is the edge, because
-two transactions can each hold a reservation the other's admission needs
-and a cycle of that shape is real. AR2 D8's `S`/`X` fence over the group's
-slice is **not** what does this and is not built: on this engine the check
-and the reserve run inline in one statement with nothing between them on a
-cooperative core, and the relation's writes run only on its owner, so a
-fence there would guard an interleaving that cannot occur.
+**It was the owner core's until then**, mutated only within that core's
+cooperative event loop - no latches, no sharing - and that was sound while
+every write to a relation ran on its owner. AT-S5 made a write run where
+its session is, and a write on a core whose registry held no directory for
+the relation was admitted unchecked (D1). The core-local alternative - route
+an asserted relation's writes back to its owner - would restore exactly the
+routing AT-S5 removed, and AT-R15 ruled the shared registry instead.
+
+**What serializes it** (`rules.md` §3's row; `exec/assertion_check.hpp`):
+
+- the **directory latch**, over every map, every directory, the holds and
+  the pending reservations. It **never spans page work**; it **does** span
+  the WAL append that describes a header change, and that pairing is the
+  durability argument - a checkpoint's `ASSERT_SNAPSHOT` is taken and
+  appended under the same latch (§7), so no `ASSERT_*` record can land
+  between the headers a snapshot carries and its own LSN, and the snapshot
+  stays equal to the fold of every record before it;
+- one **chain latch** per assertion, across its cabin chain's appends,
+  which are page work: the chain's tail and growth are one writer's state.
+
+Both are null at `cores = 1`. The order is a relation's page latch (an
+`UPDATE` or `DELETE` reserves from inside its walk), the chain latch, a
+cabin page's latch, the directory latch, the WAL stream latch; it is
+stated and not checked. Commit and abort take the directory latch, release
+it, and only then touch a page.
+
+**The wait AO-S6e-c added rides the lock family**, not this registry: a
+refused admission may **wait** for the transaction whose reservation or
+hold refused it, and the wait is an edge in the instance's wait-for graph,
+because two transactions can each hold a reservation the other's admission
+needs and a cycle of that shape is real. AR2 D8's `S`/`X` fence over the
+group's slice is not built. It was declined because the check and the
+reserve ran inline with nothing between them on one core; they are two
+calls with page work between them now, and what closes that interleaving
+is the admission's **hold** under the directory latch (§6.2), not a lock
+unit.
 
 On a multi-core instance:
 
-- **`CREATE ASSERTION` on a relation another core owns is built by that
-  core.** Core 0 keeps §3.1's checks, the id and the `sys.assertions` row;
-  the owner scans under its own view, allocates the chain, logs
-  `ASSERT_BUILD` and AS6a's base itself, and adopts the directory at the
-  end of its build. No page crosses an owner (`docs/spec/crosscore.md`
-  CC7's owner-builds exception). It allocated from its own extent lease
-  until AW-S1b; it allocates from the instance's free map now, and the
-  reason the owner builds is `Backfill`'s rather than the chain's
-  writability.
-- **The enforcing core is the owning core, at every mount too.** Recovery's
-  assertion resume runs per core and takes on only the relations that core
-  owns; the owner's own checkpoint carries the group snapshots, so the base
-  and the records folded onto it are that owner's.
-- **A core that knows of an assertion it cannot enforce refuses the
-  relation's writes.** Refusing is recoverable; admitting an unchecked write
-  is not. The refusal is the peer write path's (`CheckWriteAffinity`'s peer
-  branch); **on core 0** an unrecoverable assertion on a core-0-owned
-  relation reports `enforcing=0` and admits writes.
-- **The file that made a cabin unenforceable is not one any more** (AW-S1b).
-  A cabin core 0 built for a relation another core owns — every such
-  assertion in a file written before owner-built cabins — used to leave the
-  owner unable to append to the chain, so the mount's assertion resume
-  tested `MayWrite` on the chain root and refused the relation's writes
-  where it answered no. A cabin page is a *user* page and `MayWrite` admits
-  every core above the system range now: the owner appends to the chain core
-  0 built, through the frame table they share, and the assertion enforces.
-  The test is deleted with the machinery it read; what still reaches
-  "cannot enforce" is a revive that failed and a checkpoint whose snapshots
-  do not cover the base, so the bullet above is unchanged in every other
-  respect. The operator's repair — `DROP` then `CREATE` — is no longer
-  required for this case.
+- **`CREATE ASSERTION` is built where its session is** and adopts into the
+  instance's registry. It was built by the relation's owner from PW1c-6c,
+  shipped to it and adopted into its registry; the ship and its three ring
+  kinds went at AT-S5d. **The build is not fenced against a writer on
+  another core** (§8.1), which is
+  `docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`.
+- **Core 0's mount resumes the registry, for every relation**, before any
+  peer is built; a peer handed it resumes nothing. Every core's checkpoint
+  snapshots the whole registry, and a mount takes the first snapshot past
+  its scan start as the base and skips the rest (§7).
+- **An assertion the registry knows of and cannot enforce refuses the
+  relation's writes, on every core.** Refusing is recoverable; admitting an
+  unchecked write is not. What reaches "cannot enforce" is a revive that
+  failed and a checkpoint whose snapshots do not cover the base.
+- **The file that made a cabin unenforceable is not one any more** (AW-S1b):
+  a cabin page is a *user* page and every core writes those, so a chain
+  core 0 built for a relation another core owned is appended to like any
+  other. The operator's repair - `DROP` then `CREATE` - is no longer
+  required for it.
 
-`DROP ASSERTION` is core 0's statement and sends the owner one message to
-forget the directory; a lost one leaves the owner over-enforcing until its
-next mount, which is the fail-closed side of a message with no
-acknowledgement.
+`DROP ASSERTION` evicts from the instance's registry. It sent the owner a
+fire-and-forget message to forget the directory until AT-S5d.
 
 ### 6.2 Protocol
 
 On a checked write (per §4.2), executed inline in the writing statement:
 
 1. Compute the group key from the row; hash into the group directory.
-2. **Admission check:** would `count + Δcount` / `sum + Δsum` exceed the
-   bound? (Checked int64 arithmetic; overflow ⇒ statement error, AG3.)
+2. **Admission check:** would `count + Δcount` / `sum + Δsum`, with every
+   held contribution to the group counted, exceed the bound? (Checked int64
+   arithmetic; overflow ⇒ statement error, AG3.)
    - If yes ⇒ fail the statement with `AssertionViolation`. Nothing was
-     mutated; no cleanup needed.
-3. **Reserve:** apply the delta to the group header and append a Bound Cabin
-   entry with the `RESERVED` flag. Emit the WAL record (§7). Proceed with the
+     mutated or held; no cleanup needed.
+   - If no ⇒ the contribution is **held** (AT-S5d, §6.1): it counts in every
+     later admission, and the statement gives it back on any exit that does
+     not reach step 3.
+3. **Reserve:** append a Bound Cabin entry with the `RESERVED` flag, then -
+   one step under the registry's latch - emit the WAL record (§7), apply the
+   delta to the group header and release the hold. Proceed with the
    heap/index writes of the statement.
 4. **Commit:** clear `RESERVED` on the transaction's entries (piggybacked on
    commit processing; aggregate is already correct).
@@ -356,9 +376,17 @@ last one from an accepted outcome into a wait; what each said before is
 kept beside what it says now, because a property list is cited and a
 silent replacement would leave the citations pointing at the wrong claim.
 
-- **No waiting inside the check; a wait after it.** Admission itself is
-  still a pure core-local computation and contenders are still serialized
-  by the event loop. What changed is what happens *after* a refusal:
+- **No waiting inside the check; a wait after it.** Admission is a
+  computation under the registry's directory latch, and contenders on two
+  cores are serialized by that latch (AT-S5d; they were serialized by one
+  core's event loop until then). **An admitted row's contribution is
+  held** from its admission until its reservation's record is appended:
+  a hold counts in every later admission to the group and in no snapshot,
+  and a statement that fails, or parks and re-runs, between the two gives
+  it back. An `UPDATE` holds its arrival's full contribution, whatever
+  was checked, because its departure is applied first and a group lowered
+  by it with nothing held would read low to another core in between. What
+  changed at AO-S6e-c is what happens *after* a refusal:
   where the aggregate that refused includes a reservation of a transaction
   still in flight, the statement waits for that decide rather than
   failing. It was *"never blocked"*.
@@ -368,7 +396,9 @@ silent replacement would leave the citations pointing at the wrong claim.
   undecided reservation waits for it. The failure it eventually gets is
   still deterministic and still truthful.
 - **No false admissions.** Unchanged. Reservations are counted in the
-  aggregate from the moment of admission.
+  aggregate from the moment of admission - as a hold until their record is
+  appended, since AT-S5d. A negative contribution is held as zero, so a
+  hold never reads as room another core's admission could take.
 - **A false rejection is a wait, not an outcome — under four conditions,
   and all four are ordinary.** A statement refused because of a reservation
   belonging to a transaction that later aborts waits for the decide and is
@@ -453,6 +483,13 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > so the header→entry linkage is rebuilt by scanning the cabin's own
   > pages rather than persisted.
   >
+  > **A snapshot is a base only if it equals the fold of every `ASSERT_*`
+  > record before it.** One core's event loop gave that for free; with every
+  > core reserving into one registry (§6.1, AT-S5d) it is the registry's
+  > directory latch, held across both a header change and the record that
+  > describes it, and across a snapshot and the records that carry it. A
+  > hold is in no snapshot: it becomes header when its record is appended.
+  >
   > **Recovery order.** Ordinary redo restores the entry pages → the
   > snapshot is loaded → the cabin's pages are scanned and bucketed by
   > `group_id`, rebuilding the linkage → `ASSERT_*` records are folded from
@@ -533,26 +570,32 @@ assertion on a relation.
 
 The build runs **synchronously inside the CREATE statement**, not in a
 background scheduling group: the engine has no suspendable statement path
-(`crosscore.md` P4), and the index backfill set the precedent. On a
+(`crosscore.md` P4), and the index backfill set the precedent. On one
 cooperative core this means no write can interleave with the build, so
-§8.1a's membership protocol is met trivially; it remains the correctness
-story for a build that yields. A row written by a transaction still in
+§8.1a's membership protocol is met trivially. **Not on more than one core,
+since AT-S5**: a write runs where its session is, and a write on another
+core that is admitted before the build's directory is adopted, and places
+its row where the build's scan has already passed, is in neither the
+cabin nor the scan. Nothing fences it - the build takes no relation lock -
+and §8.1a's membership protocol, which would, is not built.
+`docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`
+carries it, and `workorder-at-m3-uniformity.md` AT-0 item 13 its shape. A row written by a transaction still in
 flight when the build reads it refuses the CREATE with `TxnConflict`,
 retryably — counting it and losing the abort would overstate the group
 forever, and skipping it and seeing the commit would understate it.
 
-The steps below are three entry points, because on a multi-core instance
-they do not all run on the same core: `PrepareAssertionDef` (validation and
-the id) and the publish are core 0's, the catalog having one writer, and
-**the build is the relation owner's** (§6.1). AS6a's base is logged at the
-end of the *build* rather than after the publish, because the owner cannot
-see core 0's row and must reply before it exists. What that costs is an
-`ASSERT_SNAPSHOT` for an assertion whose publish then fails — a base for a
-cabin no catalog row names, which no mount folds, since a mount folds only
-what `ListAssertions` returns. The single-core path takes the same order.
+The steps below are three entry points - `PrepareAssertionDef`
+(validation and the id), the build, the publish - and since AT-S5d all
+three run where the session is (§6.1); the build was the relation owner's
+until then. AS6a's base is logged at the end of the *build* rather than
+after the publish, the order the owner's build needed because it could
+not see core 0's row and had to reply before it existed. What that costs is
+an `ASSERT_SNAPSHOT` for an assertion whose publish then fails — a base for
+a cabin no catalog row names, which no mount folds, since a mount folds
+only what `ListAssertions` returns.
 
 1. Create-time validation (§3.1).
-2. Full scan of the target relation on its owner core, inside the
+2. Full scan of the target relation where the session is, inside the
    statement.
 3. Build Bound Cabin entries and group aggregates; emit `ASSERT_BUILD` WAL.
 4. If any group violates the bound ⇒ CREATE fails with `AssertionViolation`
@@ -573,10 +616,10 @@ precisely so that no correctness argument may be built on it.
 
 Membership removes the external assumption rather than repairing it.
 Correctness reduces to **check-then-apply atomicity** — classify the row,
-then apply its delta, with nothing in between — and the owner core's
-cooperative event loop provides that: both happen inside one
-uninterruptible step, the same property AS4's admission protocol rests on
-(§6.1). No new mechanism is introduced.
+then apply its delta, with nothing in between. One cooperative core's event
+loop provided it, because both happened inside one uninterruptible step;
+the registry's directory latch is what would provide it across cores
+(§6.1), and the protocol is not built (§8.1).
 
 *What follows from it.*
 

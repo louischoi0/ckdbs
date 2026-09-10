@@ -107,9 +107,9 @@ namespace kds::server {
 
 // KW-D3: 60 seconds on the injected clock.
 //
-// The derivation is the ratification's: this tree already spends 60 s on
-// the two waits whose event is human-or-network-scale
-// (`kIndexBuildReplyDeadlineNs`, `kAssertionBuildReplyDeadlineNs`) against
+// The derivation is the ratification's: this tree spent 60 s on the two
+// waits whose event is human-or-network-scale (`kIndexBuildReplyDeadlineNs`
+// and the assertion build's, which went with its ship at AT-S5d) against
 // 10 s for the machine-scale ones (`kShippedStatementDeadlineNs`,
 // `kTxnPhaseDeadlineNs`). **An idle portal waits on a client**, so it takes
 // the first number, and reusing one rather than inventing a third is the

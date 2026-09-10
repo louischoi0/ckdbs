@@ -196,7 +196,7 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
         }
         if (asserted) {
             LogRangeDecline(log, catalog::kSystemCore, rel_oid, exec::RangeGate::kAssertion,
-                            "durable sys.assertions row, which this core's registry cannot see");
+                            "durable sys.assertions row");
             return kInvalidPageId;
         }
     }

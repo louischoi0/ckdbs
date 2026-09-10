@@ -61,16 +61,65 @@ Status Refuse(const LiveAssertion& a, std::span<const parser::AstValue> values,
 
 }  // namespace
 
-std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotAssertions() const {
+// ---- The latched surface ------------------------------------------------
+//
+// Every accessor takes the directory latch, which is null unarmed; see the
+// header for what it guards and the order it sits in.
+
+bool AssertionEnforcer::empty() const {
+    const LatchGuard guard(latch_.get());
+    return live_.empty();
+}
+
+bool AssertionEnforcer::Holds(std::uint64_t assertion_id) const {
+    const LatchGuard guard(latch_.get());
+    return live_.count(assertion_id) != 0;
+}
+
+bool AssertionEnforcer::AnyOn(catalog::Oid oid) const {
+    const LatchGuard guard(latch_.get());
+    return by_oid_.count(oid) != 0;
+}
+
+bool AssertionEnforcer::CannotEnforce(catalog::Oid oid) const {
+    const LatchGuard guard(latch_.get());
+    return unenforceable_.count(oid) != 0;
+}
+
+std::size_t AssertionEnforcer::unenforceable() const {
+    const LatchGuard guard(latch_.get());
+    return unenforceable_.size();
+}
+
+std::optional<LiveAssertion::Counters> AssertionEnforcer::CountersOf(
+    std::uint64_t assertion_id) const {
+    const LatchGuard guard(latch_.get());
+    auto it = live_.find(assertion_id);
+    if (it == live_.end()) return std::nullopt;
+    return it->second->a.counters;
+}
+
+std::vector<std::shared_ptr<AssertionEnforcer::Live>> AssertionEnforcer::OnLocked(
+    catalog::Oid oid) const {
+    std::vector<std::shared_ptr<Live>> out;
+    auto on = by_oid_.find(oid);
+    if (on == by_oid_.end()) return out;
+    out.reserve(on->second.size());
+    for (const std::uint64_t id : on->second) out.push_back(live_.at(id));
+    return out;
+}
+
+std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotLocked() const {
     // AS6a's base, one record's worth per cabin: headers only, keys owned, and
     // never the entry lists - those are O(all writes, forever) and are rebuilt
-    // at recovery from the entries' own `group_id` instead.
+    // at recovery from the entries' own `group_id` instead. Never a hold
+    // either: a hold is in no header until its record is appended.
     std::vector<wal::AssertionCabinSnapshot> out;
     out.reserve(live_.size());
-    for (const auto& [assertion_id, assertion] : live_) {
+    for (const auto& [assertion_id, live] : live_) {
         wal::AssertionCabinSnapshot cabin;
         cabin.assertion_id = assertion_id;
-        for (const BoundCabin::GroupSnapshot& group : assertion.cabin.SnapshotGroups()) {
+        for (const BoundCabin::GroupSnapshot& group : live->a.cabin.SnapshotGroups()) {
             wal::AssertionSnapshotGroup entry;
             entry.group_id = group.group_id;
             entry.count = group.count;
@@ -90,13 +139,30 @@ std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotAssertions()
     return out;
 }
 
+std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotAssertions() const {
+    const LatchGuard guard(latch_.get());
+    return SnapshotLocked();
+}
+
+Status AssertionEnforcer::VisitSnapshots(const SnapshotVisitor& visit) const {
+    // Held across `visit`, which appends the records: directory latch then
+    // WAL stream latch, the order every reservation takes them in too.
+    const LatchGuard guard(latch_.get());
+    return visit(SnapshotLocked());
+}
+
 void AssertionEnforcer::Adopt(LiveAssertion assertion) {
-    const std::uint64_t id = assertion.assertion_id;
-    const catalog::Oid oid = assertion.target_oid;
-    live_.insert_or_assign(id, std::move(assertion));
+    auto live = std::make_shared<Live>();
+    live->a = std::move(assertion);
+    if (latch_ != nullptr) live->chain_latch = std::make_unique<Latch>();
+    const std::uint64_t id = live->a.assertion_id;
+    const catalog::Oid oid = live->a.target_oid;
+
+    const LatchGuard guard(latch_.get());
+    live_.insert_or_assign(id, std::move(live));
     auto& ids = by_oid_[oid];
     if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
-    // An id that is now enforced is no longer one this core merely knows
+    // An id that is now enforced is no longer one the registry merely knows
     // about, whatever a previous mount concluded. Cleared per id rather
     // than per relation: a relation may carry both, and a write it admits
     // on the strength of this one would still be unchecked against the
@@ -109,7 +175,8 @@ void AssertionEnforcer::Adopt(LiveAssertion assertion) {
 }
 
 void AssertionEnforcer::NoteUnenforceable(catalog::Oid oid, std::uint64_t assertion_id) {
-    // Never for something this core is already enforcing: the two states
+    const LatchGuard guard(latch_.get());
+    // Never for something the registry is already enforcing: the two states
     // are exclusive, and the enforced one is the truthful answer.
     if (live_.count(assertion_id) != 0) return;
     auto& ids = unenforceable_[oid];
@@ -119,13 +186,13 @@ void AssertionEnforcer::NoteUnenforceable(catalog::Oid oid, std::uint64_t assert
 }
 
 void AssertionEnforcer::Evict(std::uint64_t assertion_id) {
+    const LatchGuard guard(latch_.get());
     // The unenforceable record first, and **before the early return**: an
-    // assertion this core could not enforce is exactly the one an operator
-    // drops in order to re-create it (PW1c-6c's repair for a file written
-    // before it), and leaving the record behind would keep refusing the
-    // relation's writes for an assertion that no longer exists. Nothing is
-    // in both maps - `NoteUnenforceable` refuses an id `live_` holds - so
-    // this touches at most one of the two.
+    // assertion that could not be enforced is exactly the one an operator
+    // drops in order to re-create it, and leaving the record behind would
+    // keep refusing the relation's writes for an assertion that no longer
+    // exists. Nothing is in both maps - `NoteUnenforceable` refuses an id
+    // `live_` holds - so this touches at most one of the two.
     for (auto blocked = unenforceable_.begin(); blocked != unenforceable_.end(); ++blocked) {
         auto& ids = blocked->second;
         const auto found = std::find(ids.begin(), ids.end(), assertion_id);
@@ -136,70 +203,171 @@ void AssertionEnforcer::Evict(std::uint64_t assertion_id) {
     }
     auto it = live_.find(assertion_id);
     if (it == live_.end()) return;
-    auto& ids = by_oid_[it->second.target_oid];
+    auto& ids = by_oid_[it->second->a.target_oid];
     ids.erase(std::remove(ids.begin(), ids.end(), assertion_id), ids.end());
-    if (ids.empty()) by_oid_.erase(it->second.target_oid);
+    if (ids.empty()) by_oid_.erase(it->second->a.target_oid);
     live_.erase(it);
-    // Pending reservations against the evicted assertion stay in their
-    // transactions' lists and are skipped at commit/abort by the lookup
-    // below - the same rule replay's skip has, and for the same reason.
+    // Its holds' sums go with it; the records stay until their `Hold`s
+    // release them, which then finds no sum to lower. Pending reservations
+    // stay in their transactions' lists and are skipped at commit/abort by
+    // the lookup below - the same rule replay's skip has, and for the same
+    // reason. A reservation already past `OnLocked` finishes on its own
+    // `shared_ptr`, into a chain nothing names any more.
+    held_.erase(assertion_id);
 }
 
-std::uint64_t AssertionEnforcer::ReserverOn(std::uint64_t assertion_id, const std::string& key,
-                                           std::uint64_t exclude_txn) const {
+// ---- Holds (AT-S5d) -------------------------------------------------------
+
+StatusOr<bool> AssertionEnforcer::FitsLocked(const LiveAssertion& a, const std::string& key,
+                                             std::int64_t check) const {
+    std::int64_t asked = check;
+    if (auto by = held_.find(a.assertion_id); by != held_.end()) {
+        if (auto group = by->second.find(key);
+            group != by->second.end() && __builtin_add_overflow(group->second, check, &asked)) {
+            return Status::OutOfRange("assertion \"" + a.name +
+                                      "\": the held contributions and this row's overflow int64");
+        }
+    }
+    auto admitted = a.cabin.Admit(key, asked);
+    if (!admitted.ok()) return admitted.status();
+    return admitted.value().admitted;
+}
+
+StatusOr<std::uint64_t> AssertionEnforcer::HoldLocked(std::uint64_t txn_id,
+                                                      std::uint64_t assertion_id,
+                                                      const std::string& key, std::int64_t value) {
+    // **Only a positive contribution is counted.** A negative one held would
+    // read as room to another core's admission, and the statement that held
+    // it may still fail and take the room back - a false admission, the one
+    // outcome §6.2 rules out. Its record keeps the signed value, which is
+    // what a waiter's net reads.
+    const std::int64_t counted = std::max<std::int64_t>(value, 0);
+    std::int64_t& sum = held_[assertion_id][key];
+    std::int64_t next = 0;
+    if (__builtin_add_overflow(sum, counted, &next)) {
+        return Status::OutOfRange("assertion id " + std::to_string(assertion_id) +
+                                  ": the held contributions overflow int64");
+    }
+    sum = next;
+    const std::uint64_t serial = ++next_hold_serial_;
+    holds_.emplace(serial, HeldContribution{txn_id, assertion_id, key, value});
+    return serial;
+}
+
+void AssertionEnforcer::ReleaseHoldLocked(std::uint64_t serial) {
+    auto it = holds_.find(serial);
+    if (it == holds_.end()) return;  // converted already, or never taken
+    const HeldContribution& held = it->second;
+    if (auto by = held_.find(held.assertion_id); by != held_.end()) {
+        if (auto group = by->second.find(held.key); group != by->second.end()) {
+            group->second -= std::max<std::int64_t>(held.value, 0);
+            if (group->second == 0) by->second.erase(group);
+        }
+        if (by->second.empty()) held_.erase(by);
+    }
+    holds_.erase(it);
+}
+
+void AssertionEnforcer::Hold::Release() {
+    if (owner_ != nullptr && !items_.empty()) {
+        const LatchGuard guard(owner_->latch_.get());
+        for (const Item& item : items_) owner_->ReleaseHoldLocked(item.serial);
+    }
+    items_.clear();
+}
+
+std::uint64_t AssertionEnforcer::ReserverOnLocked(std::uint64_t assertion_id,
+                                                  const std::string& key,
+                                                  std::uint64_t exclude_txn) const {
+    // **The candidate's *net* on this group, not any arrival on it.** An
+    // `UPDATE` always writes the departure-and-arrival pair, so a
+    // transaction that *lowered* the group by 49 would still be found by
+    // its +1 arrival if arrivals alone were read - and waiting for that one
+    // is worse than useless in both arms: its abort makes the group larger,
+    // and the futile wait puts a live edge in the wait-for graph, where it
+    // can make the innocent holder a deadlock victim.
+    //
+    // A positive net is not a proof that this transaction's decide admits
+    // the waiter; several reservers may each have to go, and the re-run
+    // meets the next one. It is a proof that its abort moves the group in
+    // the direction the waiter needs, which is what the wait is for. A
+    // hold counts as the arrival it is about to become.
+    std::unordered_map<std::uint64_t, std::int64_t> net;
     for (const auto& [txn_id, reservations] : pending_) {
         if (txn_id == exclude_txn) continue;  // its own reservations are its own
-        // **The candidate's *net* on this group, not any arrival on it.**
-        // The first draft skipped departures and took the first arrival,
-        // on the reasoning that a departure lowered the aggregate and so
-        // refused nobody. True of a departure alone - and `UPDATE` never
-        // writes one alone: `AdmitAndReserveUpdate` always writes the pair,
-        // so a transaction that *lowered* the group by 49 was still found
-        // by its +1 arrival. Waiting for that one is worse than useless in
-        // both arms - its abort makes the group larger - and the futile
-        // wait puts a live edge in the wait-for graph, where it can make
-        // the innocent holder a deadlock victim.
-        //
-        // A positive net is not a proof that this transaction's decide
-        // admits the waiter; several reservers may each have to go, and the
-        // re-run meets the next one. It is a proof that its abort moves the
-        // group in the direction the waiter needs, which is what the wait
-        // is for.
-        std::int64_t net = 0;
         for (const Reservation& r : reservations) {
             if (r.assertion_id != assertion_id || r.key != key) continue;
-            net += r.departure ? -r.value : r.value;
+            net[txn_id] += r.departure ? -r.value : r.value;
         }
-        if (net > 0) return txn_id;
+    }
+    for (const auto& [serial, held] : holds_) {
+        if (held.txn_id == exclude_txn || held.assertion_id != assertion_id || held.key != key) {
+            continue;
+        }
+        net[held.txn_id] += held.value;
+    }
+    for (const auto& [txn_id, sum] : net) {
+        if (sum > 0) return txn_id;
     }
     return 0;
 }
 
+// ---- The write path -------------------------------------------------------
+
 Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
                                       std::span<const parser::AstValue> values,
-                                      std::uint64_t writer_txn, std::uint64_t* reserver) {
+                                      std::uint64_t writer_txn, std::uint64_t* reserver,
+                                      Hold* hold) {
+    const LatchGuard guard(latch_.get());
     auto on = by_oid_.find(oid);
     if (on == by_oid_.end()) return Status::OK();
+    // What this call held, given back if a later assertion refuses or
+    // fails: a refused row holds nothing.
+    std::vector<Hold::Item> taken;
+    const auto give_back = [&] {
+        for (const Hold::Item& item : taken) ReleaseHoldLocked(item.serial);
+    };
     for (const std::uint64_t id : on->second) {
-        LiveAssertion& a = live_.at(id);
+        LiveAssertion& a = live_.at(id)->a;
         const std::string key = KeyFor(a, values, /*first_col_pos=*/1);
+        const std::int64_t contribution = ContributionOf(a, values, 1);
         ++a.counters.checks;
-        auto admitted = a.cabin.Admit(key, ContributionOf(a, values, 1));
-        if (!admitted.ok()) return admitted.status();
-        if (!admitted.value().admitted) {
+        auto fits = FitsLocked(a, key, contribution);
+        if (!fits.ok()) {
+            give_back();
+            return fits.status();
+        }
+        if (!fits.value()) {
             ++a.counters.violations;
-            if (reserver != nullptr) *reserver = ReserverOn(a.assertion_id, key, writer_txn);
+            give_back();
+            if (reserver != nullptr) *reserver = ReserverOnLocked(a.assertion_id, key, writer_txn);
             return Refuse(a, values, 1);
         }
+        if (hold == nullptr) continue;
+        auto serial = HoldLocked(writer_txn, a.assertion_id, key, contribution);
+        if (!serial.ok()) {
+            give_back();
+            return serial.status();
+        }
+        taken.push_back(Hold::Item{serial.value(), a.assertion_id});
+    }
+    if (hold != nullptr && !taken.empty()) {
+        hold->owner_ = this;
+        hold->items_.insert(hold->items_.end(), taken.begin(), taken.end());
     }
     return Status::OK();
 }
 
 Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager* wal,
-                                     std::uint64_t txn_id, LiveAssertion& a,
-                                     const std::string& key, bool departure,
-                                     std::int64_t value, std::uint64_t pk, PageId row_page,
-                                     std::uint16_t row_slot) {
+                                     std::uint64_t txn_id, Live& live, const std::string& key,
+                                     bool departure, std::int64_t value, std::uint64_t pk,
+                                     PageId row_page, std::uint16_t row_slot,
+                                     std::uint64_t serial) {
+    LiveAssertion& a = live.a;
+    // The chain is one writer's state: its tail and its growth. Held across
+    // the page work below and nothing else serialises it.
+    const LatchGuard chain(live.chain_latch.get());
+
     BoundCabinEntry entry;
     entry.pk = pk;
     entry.flags = static_cast<std::uint8_t>(kEntryReserved | kEntryHintValid |
@@ -208,52 +376,104 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
     entry.page_epoch = 0;
     entry.slot = row_slot;
     entry.value = value;
-    // AS6a, and the departure case is why this is not `EnsureGroupId`
-    // unconditionally: a departure's group must already exist (the row it
-    // removes was incorporated by build or insert), and creating one here would
-    // create a group to immediately go negative in - which `ApplyDeparture`
-    // answers NotFound for, deliberately.
-    if (departure) {
-        const GroupHeader* header = a.cabin.Find(key);
-        entry.group_id = header != nullptr ? header->group_id : 0;
-    } else {
-        entry.group_id = a.cabin.EnsureGroupId(key);
+    {
+        // AS6a, and the departure case is why this is not `EnsureGroupId`
+        // unconditionally: a departure's group must already exist (the row it
+        // removes was incorporated by build or insert), and creating one here
+        // would create a group to immediately go negative in - which
+        // `ApplyDeparture` answers NotFound for, deliberately.
+        const LatchGuard guard(latch_.get());
+        if (departure) {
+            const GroupHeader* header = a.cabin.Find(key);
+            entry.group_id = header != nullptr ? header->group_id : 0;
+        } else {
+            entry.group_id = a.cabin.EnsureGroupId(key);
+        }
     }
 
-    auto at = a.chain.Append(store, wal, entry, key, wal::RecordType::kAssertReserve, txn_id);
-    if (!at.ok()) return at.status();
-    Status applied = departure
-                         ? a.cabin.ApplyDeparture(key, value, at.value().first, at.value().second)
-                         : a.cabin.Apply(key, value, at.value().first, at.value().second);
-    if (!applied.ok()) return applied;
+    // The page work, under the chain latch alone. The tail comes back held,
+    // so it cannot reach the device before the record below describes it.
+    auto placed = a.chain.Place(store, wal, entry);
+    if (!placed.ok()) return placed.status();
+    const PageId page_id = placed.value().page_id;
+    const std::uint16_t index = placed.value().index;
 
-    Reservation r;
-    r.assertion_id = a.assertion_id;
-    r.key = key;
-    r.departure = departure;
-    r.value = value;
-    r.page = at.value().first;
-    r.index = at.value().second;
-    pending_[txn_id].push_back(std::move(r));
-    ++a.counters.reserved;
+    // The record, the header and the hold's conversion as one step against
+    // a snapshot (the header's paragraph): no page is touched in here.
+    wal::Lsn stamp = wal::kNoLsn;
+    {
+        const LatchGuard guard(latch_.get());
+        auto logged =
+            a.chain.Log(wal, placed.value(), entry, key, wal::RecordType::kAssertReserve, txn_id);
+        if (!logged.ok()) return logged.status();
+        stamp = logged.value();
+        Status applied = departure ? a.cabin.ApplyDeparture(key, value, page_id, index)
+                                   : a.cabin.Apply(key, value, page_id, index);
+        if (!applied.ok()) return applied;
+        if (serial != 0) ReleaseHoldLocked(serial);
+
+        Reservation r;
+        r.assertion_id = a.assertion_id;
+        r.key = key;
+        r.departure = departure;
+        r.value = value;
+        r.page = page_id;
+        r.index = index;
+        pending_[txn_id].push_back(std::move(r));
+        ++a.counters.reserved;
+    }
+    if (stamp != wal::kNoLsn) return store.StampPageLsn(page_id, stamp);
     return Status::OK();
 }
 
 Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManager* wal,
-                                        std::uint64_t txn_id, catalog::Oid oid,
+                                        std::uint64_t txn_id, Hold& hold, catalog::Oid oid,
                                         std::span<const parser::AstValue> values,
                                         std::uint64_t pk, PageId row_page,
                                         std::uint16_t row_slot) {
-    auto on = by_oid_.find(oid);
-    if (on == by_oid_.end()) return Status::OK();
-    for (const std::uint64_t id : on->second) {
-        LiveAssertion& a = live_.at(id);
-        const std::string key = KeyFor(a, values, 1);
-        if (Status s = ReserveOne(store, wal, txn_id, a, key, /*departure=*/false,
-                                  ContributionOf(a, values, 1), pk, row_page, row_slot);
+    struct Work {
+        std::shared_ptr<Live> live;
+        std::string key;
+        std::int64_t value = 0;
+        std::uint64_t serial = 0;
+    };
+    std::vector<Work> work;
+    {
+        const LatchGuard guard(latch_.get());
+        for (std::shared_ptr<Live>& live : OnLocked(oid)) {
+            LiveAssertion& a = live->a;
+            Work w{live, KeyFor(a, values, 1), ContributionOf(a, values, 1), 0};
+            const auto covered =
+                std::find_if(hold.items_.begin(), hold.items_.end(),
+                             [&](const Hold::Item& item) { return item.assertion_id == a.assertion_id; });
+            if (hold.owner_ == this && covered != hold.items_.end()) {
+                w.serial = covered->serial;
+            } else {
+                // Adopted after this row's admission: admitted here, and
+                // held in `hold` so a failure below gives it back too.
+                ++a.counters.checks;
+                auto fits = FitsLocked(a, w.key, w.value);
+                if (!fits.ok()) return fits.status();
+                if (!fits.value()) {
+                    ++a.counters.violations;
+                    return Refuse(a, values, 1);
+                }
+                auto serial = HoldLocked(txn_id, a.assertion_id, w.key, w.value);
+                if (!serial.ok()) return serial.status();
+                w.serial = serial.value();
+                hold.owner_ = this;
+                hold.items_.push_back(Hold::Item{w.serial, a.assertion_id});
+            }
+            work.push_back(std::move(w));
+        }
+    }
+    for (Work& w : work) {
+        if (Status s = ReserveOne(store, wal, txn_id, *w.live, w.key, /*departure=*/false,
+                                  w.value, pk, row_page, row_slot, w.serial);
             !s.ok()) {
             return s;
         }
+        std::erase_if(hold.items_, [&](const Hold::Item& item) { return item.serial == w.serial; });
     }
     return Status::OK();
 }
@@ -265,8 +485,10 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
                                                 std::uint64_t pk, PageId row_page,
                                                 std::uint16_t row_slot,
                                                 std::uint64_t* reserver) {
-    auto on = by_oid_.find(oid);
-    if (on == by_oid_.end()) return Status::OK();
+    const std::vector<std::shared_ptr<Live>> lives = [&] {
+        const LatchGuard guard(latch_.get());
+        return OnLocked(oid);
+    }();
     // **Once this call has reserved, its refusal is not waitable** (the
     // AO-S6e-c review's B1). This loop is per *assertion* and is not atomic
     // across them: assertion #1's departure and arrival are applied to its
@@ -288,64 +510,73 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
     // the one call that reserves before it can refuse, and the honest
     // answer for it is the violation it always gave.
     bool reserved_any = false;
-    for (const std::uint64_t id : on->second) {
-        LiveAssertion& a = live_.at(id);
+    for (const std::shared_ptr<Live>& live : lives) {
+        LiveAssertion& a = live->a;
         const std::string old_key = KeyFor(a, old_row, 0);
         const std::string new_key = KeyFor(a, new_row, 0);
         const std::int64_t old_contrib = ContributionOf(a, old_row, 0);
         const std::int64_t new_contrib = ContributionOf(a, new_row, 0);
+        // §4.2 row 2: the aggregate is invariant - nothing at all.
+        if (old_key == new_key && old_contrib == new_contrib) continue;
 
+        // What is checked. Row 3, same group and only the SUM moved: the
+        // delta, and only if it is positive, because a decrease cannot
+        // violate an upper bound. Row 4, the group moved: the arrival at its
+        // full contribution - leaving one group buys nothing in another.
+        std::optional<std::int64_t> check;
         if (old_key == new_key) {
-            // §4.2 rows 2 and 3: the aggregate is invariant (nothing at
-            // all), or only the SUM moved - checked iff the delta is
-            // positive, because a decrease cannot violate an upper bound.
-            if (old_contrib == new_contrib) continue;
             std::int64_t delta = 0;
             if (__builtin_sub_overflow(new_contrib, old_contrib, &delta)) {
                 return Status::OutOfRange("assertion \"" + a.name +
                                           "\": SUM delta overflows int64");
             }
-            if (delta > 0) {
+            if (delta > 0) check = delta;
+        } else {
+            check = new_contrib;
+        }
+
+        // What is held is the arrival's **full** contribution whatever was
+        // checked. The departure below is applied at its own record, ahead of
+        // the arrival's, and a header lowered by it with nothing held for the
+        // arrival would read low to another core's admission in between -
+        // room this row takes back a moment later. Held in full, the group
+        // reads high by the departing value until the departure lands:
+        // conservative, and never a false admission.
+        Hold hold;
+        {
+            const LatchGuard guard(latch_.get());
+            if (check.has_value()) {
                 ++a.counters.checks;
-                auto admitted = a.cabin.Admit(new_key, delta);
-                if (!admitted.ok()) return admitted.status();
-                if (!admitted.value().admitted) {
+                auto fits = FitsLocked(a, new_key, *check);
+                if (!fits.ok()) return fits.status();
+                if (!fits.value()) {
                     ++a.counters.violations;
                     if (reserver != nullptr && !reserved_any) {
-                        *reserver = ReserverOn(a.assertion_id, new_key, txn_id);
+                        *reserver = ReserverOnLocked(a.assertion_id, new_key, txn_id);
                     }
                     return Refuse(a, new_row, 0);
                 }
             }
-        } else {
-            // §4.2 row 4: departure (no check) + arrival (checked, at its
-            // full contribution - leaving one group buys nothing in
-            // another).
-            ++a.counters.checks;
-            auto admitted = a.cabin.Admit(new_key, new_contrib);
-            if (!admitted.ok()) return admitted.status();
-            if (!admitted.value().admitted) {
-                ++a.counters.violations;
-                if (reserver != nullptr && !reserved_any) {
-                    *reserver = ReserverOn(a.assertion_id, new_key, txn_id);
-                }
-                return Refuse(a, new_row, 0);
-            }
+            auto serial = HoldLocked(txn_id, a.assertion_id, new_key, new_contrib);
+            if (!serial.ok()) return serial.status();
+            hold.owner_ = this;
+            hold.items_.push_back(Hold::Item{serial.value(), a.assertion_id});
         }
 
         // The mutation is uniform whatever the case above decided: the old
-        // contribution leaves, the new one arrives, atomically on this core
-        // - and both halves are entries, so header == Σ(entries) survives.
-        if (Status s = ReserveOne(store, wal, txn_id, a, old_key, /*departure=*/true,
-                                  old_contrib, pk, row_page, row_slot);
+        // contribution leaves, the new one arrives - and both halves are
+        // entries, so header == Σ(entries) survives.
+        if (Status s = ReserveOne(store, wal, txn_id, *live, old_key, /*departure=*/true,
+                                  old_contrib, pk, row_page, row_slot, /*serial=*/0);
             !s.ok()) {
             return s;
         }
-        if (Status s = ReserveOne(store, wal, txn_id, a, new_key, /*departure=*/false,
-                                  new_contrib, pk, row_page, row_slot);
+        if (Status s = ReserveOne(store, wal, txn_id, *live, new_key, /*departure=*/false,
+                                  new_contrib, pk, row_page, row_slot, hold.items_.front().serial);
             !s.ok()) {
             return s;
         }
+        hold.items_.clear();  // converted
         reserved_any = true;
     }
     return Status::OK();
@@ -356,13 +587,14 @@ Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManag
                                         std::span<const parser::AstValue> old_row,
                                         std::uint64_t pk, PageId row_page,
                                         std::uint16_t row_slot) {
-    auto on = by_oid_.find(oid);
-    if (on == by_oid_.end()) return Status::OK();
-    for (const std::uint64_t id : on->second) {
-        LiveAssertion& a = live_.at(id);
-        if (Status s = ReserveOne(store, wal, txn_id, a, KeyFor(a, old_row, 0),
-                                  /*departure=*/true, ContributionOf(a, old_row, 0), pk,
-                                  row_page, row_slot);
+    const std::vector<std::shared_ptr<Live>> lives = [&] {
+        const LatchGuard guard(latch_.get());
+        return OnLocked(oid);
+    }();
+    for (const std::shared_ptr<Live>& live : lives) {
+        if (Status s = ReserveOne(store, wal, txn_id, *live, KeyFor(live->a, old_row, 0),
+                                  /*departure=*/true, ContributionOf(live->a, old_row, 0), pk,
+                                  row_page, row_slot, /*serial=*/0);
             !s.ok()) {
             return s;
         }
@@ -372,27 +604,33 @@ Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManag
 
 Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* wal,
                                     std::uint64_t txn_id) {
-    auto pending = pending_.find(txn_id);
-    if (pending == pending_.end()) return Status::OK();
-
-    // **Taken out of the map before anything can fail**, so a transaction's
-    // reservations are settled exactly once whatever happens below. Every exit
-    // from here is an error return, and leaving the list behind on one means the
-    // *next* transaction under this id settles them a second time - reachable,
-    // because `CommandDispatcher::EndWrite` uses `catalog::kBootstrapXid` for
-    // every statement when there is no transaction manager, so the id is not
-    // unique per transaction there. Double-settling silently moves an aggregate
-    // twice; dropping the remainder of a failed settle leaves it wrong in a way
-    // the returned error already reports. The second is the failure to prefer.
-    const std::vector<Reservation> reservations = std::move(pending->second);
-    pending_.erase(pending);
-
     // Batched per (assertion, page), the physiological unit ASSERT_COMMIT
-    // describes.
+    // describes. Built under the latch, settled outside it: a commit moves
+    // no header, so its records need no atomicity against a snapshot, and
+    // its page work may not run under the directory latch.
     std::map<std::pair<std::uint64_t, PageId>, std::vector<std::uint16_t>> by_page;
-    for (const Reservation& r : reservations) {
-        if (!Holds(r.assertion_id)) continue;  // dropped mid-transaction
-        by_page[{r.assertion_id, r.page}].push_back(r.index);
+    {
+        const LatchGuard guard(latch_.get());
+        auto pending = pending_.find(txn_id);
+        if (pending == pending_.end()) return Status::OK();
+
+        // **Taken out of the map before anything can fail**, so a
+        // transaction's reservations are settled exactly once whatever
+        // happens below. Every exit from here is an error return, and leaving
+        // the list behind on one means the *next* transaction under this id
+        // settles them a second time - reachable, because
+        // `CommandDispatcher::EndWrite` uses `catalog::kBootstrapXid` for
+        // every statement when there is no transaction manager, so the id is
+        // not unique per transaction there. Double-settling silently moves an
+        // aggregate twice; dropping the remainder of a failed settle leaves it
+        // wrong in a way the returned error already reports. The second is
+        // the failure to prefer.
+        const std::vector<Reservation> reservations = std::move(pending->second);
+        pending_.erase(pending);
+        for (const Reservation& r : reservations) {
+            if (live_.count(r.assertion_id) == 0) continue;  // dropped mid-transaction
+            by_page[{r.assertion_id, r.page}].push_back(r.index);
+        }
     }
 
     for (const auto& [group, indexes] : by_page) {
@@ -433,28 +671,22 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
 
 Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* wal,
                                    std::uint64_t txn_id) {
-    auto pending = pending_.find(txn_id);
-    if (pending == pending_.end()) return Status::OK();
-
-    // Taken out of the map first, for the reason `CommitTxn` states: every exit
-    // below is an error return, and a reservation left pending is one the next
-    // transaction under this id would settle a second time.
-    const std::vector<Reservation> reservations = std::move(pending->second);
-    pending_.erase(pending);
+    std::vector<Reservation> reservations;
+    {
+        const LatchGuard guard(latch_.get());
+        auto pending = pending_.find(txn_id);
+        if (pending == pending_.end()) return Status::OK();
+        // Taken out of the map first, for the reason `CommitTxn` states: every
+        // exit below is an error return, and a reservation left pending is one
+        // the next transaction under this id would settle a second time.
+        reservations = std::move(pending->second);
+        pending_.erase(pending);
+    }
 
     // Reverse order, the undo trail's own convention - not load-bearing for
     // these (removal is by name), but it keeps the compensation stream
     // reading as an unwind.
     for (auto it = reservations.rbegin(); it != reservations.rend(); ++it) {
-        auto held = live_.find(it->assertion_id);
-        if (held == live_.end()) continue;  // dropped mid-transaction
-        LiveAssertion& a = held->second;
-        Status undone = it->departure
-                            ? a.cabin.UnapplyDeparture(it->key, it->value, it->page, it->index)
-                            : a.cabin.Unapply(it->key, it->value, it->page, it->index);
-        if (!undone.ok()) return undone;
-        ++a.counters.aborted;
-
         // **Log, then mark, then stamp** - WAL-before-data, and here the order
         // is the correctness argument rather than a convention. Marking first
         // leaves a window where the frame carries its *old*, already-durable
@@ -464,25 +696,39 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         // entry the page says is orphaned - `VerifyAgainstEntries` reporting
         // Corruption for a directory that this time really is wrong.
         //
-        // `Unapply` above stays ahead of both: its missing-pair refusal is the
-        // check that proves `(page, index)` names *this* group's entry, and it
-        // must run before a flag is OR'd into whatever lives at that slot.
+        // `Unapply` stays ahead of both: its missing-pair refusal is the check
+        // that proves `(page, index)` names *this* group's entry, and it must
+        // run before a flag is OR'd into whatever lives at that slot. It and
+        // the record are one step under the directory latch, for the snapshot
+        // (the header's paragraph); the mark is page work and runs after.
         wal::Lsn stamp = wal::kNoLsn;
-        if (wal != nullptr) {
-            std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
-            wal::AssertRollbackPayload fields{};
-            fields.assertion_id = it->assertion_id;
-            fields.delta = it->value;
-            fields.index = it->index;
-            auto used = wal::EncodeAssertRollback(
-                payload, fields,
-                std::as_bytes(std::span<const char>(it->key.data(), it->key.size())));
-            if (!used.ok()) return used.status();
-            wal::RecordSpec spec{wal::RecordType::kAssertRollback, txn_id, it->page};
-            spec.flags = it->departure ? wal::kAssertRollbackFlagDeparture : 0;
-            auto rec = wal->Append(spec, payload);
-            if (!rec.ok()) return rec.status();
-            stamp = rec.value();
+        {
+            const LatchGuard guard(latch_.get());
+            auto held = live_.find(it->assertion_id);
+            if (held == live_.end()) continue;  // dropped mid-transaction
+            LiveAssertion& a = held->second->a;
+            Status undone = it->departure
+                                ? a.cabin.UnapplyDeparture(it->key, it->value, it->page, it->index)
+                                : a.cabin.Unapply(it->key, it->value, it->page, it->index);
+            if (!undone.ok()) return undone;
+            ++a.counters.aborted;
+
+            if (wal != nullptr) {
+                std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
+                wal::AssertRollbackPayload fields{};
+                fields.assertion_id = it->assertion_id;
+                fields.delta = it->value;
+                fields.index = it->index;
+                auto used = wal::EncodeAssertRollback(
+                    payload, fields,
+                    std::as_bytes(std::span<const char>(it->key.data(), it->key.size())));
+                if (!used.ok()) return used.status();
+                wal::RecordSpec spec{wal::RecordType::kAssertRollback, txn_id, it->page};
+                spec.flags = it->departure ? wal::kAssertRollbackFlagDeparture : 0;
+                auto rec = wal->Append(spec, payload);
+                if (!rec.ok()) return rec.status();
+                stamp = rec.value();
+            }
         }
 
         // The entry bytes stay - the slot is the recorded leak that rides on

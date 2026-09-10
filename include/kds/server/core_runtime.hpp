@@ -20,7 +20,6 @@
 #include "kds/stats/access_batch.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
-#include "kds/server/assertion_build_service.hpp"
 #include "kds/server/fk_probe_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"
@@ -330,6 +329,12 @@ public:
         // way; the purge runs on one core and this is what lets that core
         // see a peer's marks.
         std::atomic<std::uint64_t>* mark_counter = nullptr;
+        // **The instance's assertion registry** (AT-S5d), borrowed the same
+        // way: every core's writes check and reserve into the one directory
+        // each assertion has, and core 0's mount has already resumed it, so
+        // a runtime handed one resumes nothing. Null builds this runtime's
+        // dispatcher its own and resumes into it - a fixture's shape.
+        exec::AssertionEnforcer* assertions = nullptr;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -491,13 +496,6 @@ public:
     }
     IndexBuildServer* index_builds() noexcept {
         return index_builds_.has_value() ? &*index_builds_ : nullptr;
-    }
-
-    // PW1c-6c's owner half, exposed for the same reason: a test drives a
-    // build and reads what the owner did. Null on core 0 and before
-    // AttachTransport.
-    AssertionBuildServer* assertion_builds() noexcept {
-        return assertion_builds_.has_value() ? &*assertion_builds_ : nullptr;
     }
 
     // This core's half of statement shipping (SS3), exposed for the same
@@ -668,14 +666,6 @@ private:
     // touches none of them.
     PendingIndexBuilds pending_index_builds_;
     std::optional<IndexBuildServer> index_builds_;
-
-    // PW1c-6c (assertion_build_service.hpp): the owner's half of a
-    // peer-owned relation's CREATE ASSERTION, armed at AttachTransport on
-    // peers. No window beside it, where the index build has one - the
-    // owner adopts inside its own build task, so there is nothing to hold
-    // off. It borrows the catalog, store, WAL, transaction manager and the
-    // dispatcher's registry, all declared below; references only.
-    std::optional<AssertionBuildServer> assertion_builds_;
 
     // The two objects this core's checkpointer borrows (PW3). Built at
     // `AttachTransport`, not at `Open`: the anchor publishes over the ring,

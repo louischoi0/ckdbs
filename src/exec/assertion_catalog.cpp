@@ -581,9 +581,8 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
                                              const parser::AssertionStmt& stmt,
                                              const txn::ReadView& check_view,
                                              wal::WalManager* wal) {
-    // **The order is validate -> build -> publish** (§8.1), and the three
-    // steps are the three entry points a cross-core create splits across
-    // (PW1c-6c): this is the single-core arm, where all three are here.
+    // **The order is validate -> build -> publish** (§8.1): the three entry
+    // points a cross-core create split across until AT-S5d, back to back.
     auto prepared = PrepareAssertionDef(catalog, store, stmt);
     if (!prepared.ok()) return prepared.status();
 

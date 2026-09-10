@@ -27,7 +27,6 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/index_ddl.hpp"
 #include "kds/parser/parser.hpp"
-#include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
@@ -985,9 +984,11 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
 // when the catalog lists no assertions, and no test opened a single-stream
 // peer that owned one.
 //
-// The relation is core 0's here, so the peer counts the assertion as
-// foreign and adopts nothing - which is the point: the crash was in
-// *reaching* the scan, before any of that was decided.
+// The declaration has no cabin, so the resume cannot revive it and records
+// it unenforceable - which is beside the point: the crash was in *reaching*
+// the scan, before any of that was decided. (The peer counted it foreign
+// until AT-S5d; a peer with a registry of its own resumes every declaration
+// now, and one handed the instance's resumes none - the next cell.)
 TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMounts) {
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "asserted",
                                            TwoColumnSchema(), catalog::ClusteredType::kHeap);
@@ -1005,9 +1006,42 @@ TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMount
 
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    // It reached the resume and came back: the assertion is core 0's, so
-    // this core counted it foreign rather than adopting it.
-    EXPECT_GE(peer.value()->recovery().assertions_foreign, 1u);
+    // It reached the resume and came back, and the declaration it could not
+    // revive refuses its relation's writes rather than admitting them.
+    EXPECT_EQ(peer.value()->recovery().assertions_unrecovered, 1u);
+    EXPECT_TRUE(peer.value()->dispatcher().assertions().CannotEnforce(oid.value()));
+}
+
+TEST_F(CoreRuntimeTest, APeerHandedTheInstancesAssertionRegistryResumesNothing) {
+    // **AT-S5d**: the registry is the instance's and core 0's mount resumed
+    // it before any peer was built, so a peer handed it must not resume a
+    // second time - every directory would be adopted twice, and the second
+    // adoption would replace the first's live directory with a fresh one
+    // folded from the log, dropping whatever core 0 had reserved since.
+    // Here the one declaration is unrevivable, so a peer that resumed would
+    // leave it in the registry's unenforceable set; one that did not leaves
+    // the registry exactly as it was handed.
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "asserted_shared",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(exec::InsertAssertion(core0_->catalog, *core0_store_, /*wal=*/nullptr,
+                                      /*id=*/1, oid.value(), "a_bound",
+                                      "CHECK COUNT(*) <= 100", kInvalidPageId)
+                    .ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    exec::AssertionEnforcer instance(/*shared=*/true);
+    CoreRuntime::Config config = ConfigFor(1);
+    config.assertions = &instance;
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    EXPECT_EQ(peer.value()->recovery().assertions_enforcing, 0u);
+    EXPECT_EQ(peer.value()->recovery().assertions_unrecovered, 0u);
+    EXPECT_FALSE(instance.CannotEnforce(oid.value()))
+        << "the peer resumed into the instance's registry";
+    EXPECT_EQ(&peer.value()->dispatcher().assertions(), &instance)
+        << "the peer's writes would check a registry of their own";
 }
 
 TEST_F(CoreRuntimeTest, APeersOwnSuperblockAnswersForTheVolumeAndNotWithZeros) {
@@ -3689,9 +3723,6 @@ struct ForeignIndexRig {
     // the contract's other half, and the reason nothing pumps `core0`
     // after this rig starts unwinding.
     std::optional<IndexBuildClient> client;
-    // Core 0's assertion-build client (PW1c-6c), declared with `client` and
-    // for its reason.
-    std::optional<AssertionBuildClient> assertion_client;
     // Core 0's statement-shipping client (SS2), declared with `client` and
     // for its reason: the dispatcher holds a pointer to it, so it must
     // outlive the dispatcher.
@@ -3928,12 +3959,6 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.client.emplace(*rig.core0, rig.ring(), rig.clock);
     ASSERT_TRUE(rig.client->RegisterReplyReceiver().ok());
     rig.dispatcher->SetIndexBuilds(&*rig.client);
-
-    // Core 0's half of a peer-owned relation's CREATE ASSERTION (PW1c-6c).
-    // The owner's half is the peer's own, wired by `AttachTransport` above.
-    rig.assertion_client.emplace(*rig.core0, rig.ring(), rig.clock);
-    ASSERT_TRUE(rig.assertion_client->RegisterReplyReceiver().ok());
-    rig.dispatcher->SetAssertionBuilds(&*rig.assertion_client);
 
     // Core 0's arrival-core half of statement shipping (SS2). The owner's
     // half is the peer's own, wired by `AttachTransport` above - which is
@@ -6209,161 +6234,19 @@ TEST_F(CoreRuntimeTest, AParentDeleteMeetingALiveForeignIntentAnswersBusyBeforeA
         << "the released intent was still being reported: " << after;
 }
 
-// `ACreateAssertionOnAPeerRelationIsBuiltAndEnforcedByTheOwner` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers stay as dead protocol for AT-S10.
+// `ACreateAssertionOnAPeerRelationIsBuiltAndEnforcedByTheOwner` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers went with the registry becoming the instance's at AT-S5d.
 
-TEST_F(CoreRuntimeTest, AnOwnerBuiltAssertionIsEnforcingAgainAfterTheOwnersRestart) {
-    // The other half of building on the owner: the cabin, its `ASSERT_BUILD`
-    // records and AS6a's base are all in **the owner's** stream, so it is
-    // the owner's own mount that folds them back - which is why PW3's peer
-    // checkpoint had to be carrying assertion snapshots before this was
-    // sound, and why `ResumeAssertionsAfterRecovery` now runs on every core.
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "assert_restart");
+// `AnOwnerBuiltAssertionIsEnforcingAgainAfterTheOwnersRestart` stood here until AT-S5d: it pinned the owner's own mount folding a cabin it built into its own registry; the assertion registry is the instance's since AT-S5d, so the build runs where the session is and the ship it exercised is struck.
 
-    DispatchOutcome made;
-    auto create = rig.Start(
-        "CREATE ASSERTION cap ON assert_restart GROUP BY (v) CHECK COUNT(*) <= 1", made);
-    ASSERT_TRUE(rig.Drive(*create)) << made.response;
-    ASSERT_EQ(made.response.rfind("ERR", 0), std::string::npos) << made.response;
-    // The row is core 0's and unlogged in this rig, so it reaches the device
-    // only by a flush - which is what the owner's remount will read.
-    FlushCatalog();
-    ASSERT_TRUE(core0_store_->Sync().ok());
-    // **And the owner's own pages, which under one stream nothing else puts
-    // there** (AM-S0). The revive below walks the cabin chain and claims
-    // each page from its stream stamp, and a stamp is read off the
-    // *device* - so the pages the owner built have to have reached it.
-    // Under per-core streams the restarted peer replayed its own log and
-    // re-faulted them on the way past; under one stream a peer runs no
-    // recovery of its own (core 0's pass is the instance's), so what stands
-    // in for that replay is the flush a clean stop performs - `Serve`'s
-    // tail, which is what this reset models.
-    ASSERT_TRUE(rig.peer->store().Sync().ok());
+// `AnAssertionTheOwnerCannotEnforceRefusesTheRelationsWritesByName` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers went with the registry becoming the instance's at AT-S5d.
 
-    rig.peer.reset();
-    CoreRuntime::Config config = ConfigFor(1);
-    auto again = CoreRuntime::Open(config, *device_, clock_, nullptr);
-    ASSERT_TRUE(again.ok()) << again.status().message();
+// `ADropOfAPeerOwnedAssertionEvictsTheOwnersDirectory` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers went with the registry becoming the instance's at AT-S5d.
 
-    // The two facts the resume rests on, pinned separately from its result
-    // because each was a real obstacle. **One**: a peer can read the whole
-    // declaration - the heap row from the low catalog range and the spilled
-    // text from the var-heap extent the mount grants itself, without which
-    // this scan is refused `may not fault page N`. **Two**: the cabin the
-    // owner built in the *previous* run is writable in this one, and only
-    // *after* the revive has walked the chain, because that walk is what
-    // lets the store claim its own stamp (PW1c-7). Asking before it would
-    // answer no, and the resume would refuse a relation it owns.
-    {
-        auto defs = exec::ListAssertions(again.value()->catalog(), again.value()->store());
-        ASSERT_TRUE(defs.ok()) << defs.status().message();
-        ASSERT_EQ(defs.value().size(), 1u);
-        auto revived = exec::ReviveAssertion(again.value()->catalog(), again.value()->store(),
-                                             defs.value().front());
-        ASSERT_TRUE(revived.ok()) << "revive: " << revived.status().message();
-        EXPECT_TRUE(again.value()->store().MayWrite(revived.value().chain.root()))
-            << "the owner may not append to the cabin it built, root page "
-            << revived.value().chain.root();
-    }
-    EXPECT_EQ(again.value()->recovery().assertions_enforcing, 1u);
-    EXPECT_EQ(again.value()->recovery().assertions_unrecovered, 0u);
-    EXPECT_TRUE(again.value()->dispatcher().assertions().AnyOn(rig.oid))
-        << "the owner mounted without the directory its own writes maintain";
+// `ARefusedForeignAssertionBuildLeavesTheOwnerEnforcingNothing` stood here until AT-S5d: it pinned an owner's refused build reaching core 0 through the reply; the assertion registry is the instance's since AT-S5d, so the build runs where the session is and the ship it exercised is struck.
 
-    // **With the recovered aggregate, not a zeroed directory**: group 10
-    // holds one row and the bound is one, so a second is refused. A shell
-    // with empty groups would admit it, and would report `enforcing=1`
-    // while enforcing nothing.
-    std::vector<parser::AstValue> row(1);
-    row[0].type = parser::ValueType::kInt;
-    row[0].int_val = 10;
-    EXPECT_EQ(again.value()->dispatcher().assertions().AdmitInsert(rig.oid, row).code(),
-              StatusCode::kAssertionViolation);
-    row[0].int_val = 40;
-    EXPECT_TRUE(again.value()->dispatcher().assertions().AdmitInsert(rig.oid, row).ok());
-}
+// `AForeignAssertionBuildAbandonedByCore0IsEvictedOnTheOwner` stood here until AT-S5d: it pinned `done(aborted)` evicting what an owner adopted for a build core 0 abandoned; the assertion registry is the instance's since AT-S5d, so the build runs where the session is and the ship it exercised is struck.
 
-// `AnAssertionTheOwnerCannotEnforceRefusesTheRelationsWritesByName` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers stay as dead protocol for AT-S10.
-
-// `ADropOfAPeerOwnedAssertionEvictsTheOwnersDirectory` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers stay as dead protocol for AT-S10.
-
-TEST_F(CoreRuntimeTest, ARefusedForeignAssertionBuildLeavesTheOwnerEnforcingNothing) {
-    // The owner's refusal, and what core 0 does with it: the data already
-    // carries two rows in group 10, so `COUNT(*) <= 1` cannot be declared -
-    // and the refusal has to come from the owner, because core 0 cannot see
-    // either row. It reaches the client with its own code, no row is
-    // published, and the owner adopted nothing, so the relation keeps
-    // taking writes.
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "assert_refused");
-
-    // The second row in group 10, written by the owner before any
-    // assertion exists.
-    ASSERT_EQ(rig.peer->dispatcher()
-                  .Dispatch("INSERT INTO assert_refused VALUES (10)")
-                  .response.rfind("ERR", 0),
-              std::string::npos);
-
-    DispatchOutcome made;
-    auto create = rig.Start(
-        "CREATE ASSERTION toosmall ON assert_refused GROUP BY (v) CHECK COUNT(*) <= 1", made);
-    ASSERT_TRUE(rig.Drive(*create)) << made.response;
-    ASSERT_EQ(made.response.rfind("ERR ", 0), 0u) << made.response;
-    EXPECT_NE(made.response.find("ASSERTION_VIOLATION"), std::string::npos) << made.response;
-    EXPECT_FALSE(rig.peer->dispatcher().assertions().AnyOn(rig.oid))
-        << "a refused build left a directory enforcing on the owner";
-
-    // Nothing published: `SHOW ASSERTIONS` on core 0 knows of none.
-    const std::string shown = rig.dispatcher->Dispatch("SHOW ASSERTIONS").response;
-    EXPECT_NE(shown.find("assertions=0"), std::string::npos) << shown;
-
-    // And the relation is writable, which a leftover window would have
-    // denied - this protocol opens none.
-    DispatchOutcome out;
-    auto insert = rig.Start("INSERT INTO assert_refused VALUES (40)", out);
-    ASSERT_TRUE(rig.Drive(*insert)) << out.response;
-    EXPECT_EQ(out.response.rfind("ERR ", 0), std::string::npos) << out.response;
-}
-
-TEST_F(CoreRuntimeTest, AForeignAssertionBuildAbandonedByCore0IsEvictedOnTheOwner) {
-    // `done(aborted)`: the owner built and adopted, and core 0 then failed
-    // to publish. Reached here through the synchronous `Dispatch()`, which
-    // is the path that cannot park - it abandons the statement and tells
-    // the owner, so the reply arrives at a client with no waiter and the
-    // no-waiter branch says `done(aborted)` itself.
-    //
-    // What must be true afterwards is that the owner enforces **nothing**:
-    // a directory kept for a constraint no `sys.assertions` row names would
-    // refuse writes forever for a statement that answered ERR.
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "assert_abandon");
-
-    const std::string refused =
-        rig.dispatcher
-            ->Dispatch("CREATE ASSERTION gone ON assert_abandon GROUP BY (v) CHECK COUNT(*) <= 1")
-            .response;
-    ASSERT_EQ(refused.rfind("ERR ", 0), 0u) << refused;
-    EXPECT_NE(refused.find("needs the reactor path"), std::string::npos) << refused;
-
-    // Both directions drained: the request reaches the owner, it builds and
-    // adopts, its reply finds no waiter, and the `done(aborted)` that
-    // follows evicts what it adopted.
-    rig.Pump(16);
-    EXPECT_EQ(rig.peer->assertion_builds()->builds(), 1u)
-        << "the owner never saw the request this test is about";
-    EXPECT_FALSE(rig.peer->dispatcher().assertions().AnyOn(rig.oid))
-        << "the owner is enforcing a constraint core 0 abandoned";
-
-    // The relation still takes writes, in the group the abandoned
-    // assertion would have capped.
-    DispatchOutcome out;
-    auto insert = rig.Start("INSERT INTO assert_abandon VALUES (10)", out);
-    ASSERT_TRUE(rig.Drive(*insert)) << out.response;
-    EXPECT_EQ(out.response.rfind("ERR ", 0), std::string::npos) << out.response;
-    EXPECT_EQ(RowsWith(*rig.peer, "assert_abandon", ",10"), 2) << out.response;
-}
-
-// `AForeignAssertionBuildsInsideAnExplicitTransactionLikeTheLocalArm` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers stay as dead protocol for AT-S10.
+// `AForeignAssertionBuildsInsideAnExplicitTransactionLikeTheLocalArm` stood here until AT-S5: it pinned a foreign build request core 0 sent the owner; the DDL builds where it runs since AT-S5, and the request handlers went with the registry becoming the instance's at AT-S5d.
 
 TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersIsNotShippedAndKeepsItsRefusal) {
     // R6's multi-owner statement: `SoleForeignOwner` refuses a chain whose

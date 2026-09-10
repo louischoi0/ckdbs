@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -152,9 +153,21 @@ class AssertionSnapshotSource {
 public:
     virtual ~AssertionSnapshotSource() = default;
 
-    // One entry per live assertion. Called on the checkpointer's thread while
-    // nothing else touches the directories (core-local, §6.1).
+    // One entry per live assertion.
     virtual std::vector<AssertionCabinSnapshot> SnapshotAssertions() const = 0;
+
+    // The snapshot handed to `visit` with the directories held still until it
+    // returns - which is what the checkpointer calls, because `visit` appends
+    // the `ASSERT_SNAPSHOT` records and a snapshot is a base only if no
+    // `ASSERT_*` record lands between the headers it carries and its own LSN.
+    // A source whose directories nothing else can move (a single-threaded
+    // owner, a test's fixed cabin) needs nothing more than the default; the
+    // instance's registry, which every core reserves into, overrides it to
+    // hold its latch across the call (AT-S5d, `exec/assertion_check.hpp`).
+    using SnapshotVisitor = std::function<Status(const std::vector<AssertionCabinSnapshot>&)>;
+    virtual Status VisitSnapshots(const SnapshotVisitor& visit) const {
+        return visit(SnapshotAssertions());
+    }
 };
 
 // The pages a checkpoint has to get on disk, and the way to do it. The

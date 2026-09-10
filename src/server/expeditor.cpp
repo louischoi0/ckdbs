@@ -1068,6 +1068,12 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // peer's client writes core-0-owned relations - so its writers block on
     // an in-doubt row exactly as a peer's do, and both read the same key.
     expeditor->dispatcher_->set_in_doubt_ceiling_ns(expeditor->config_.in_doubt_ceiling_ns);
+    // **The instance's assertion registry** (AT-S5d), before the resume
+    // below fills it: core 0's dispatcher checks and reserves into the one
+    // every peer is handed at `Start`. Armed only where a second reactor can
+    // reach it - `base/latch.hpp`'s G2, the lock table's own sizing.
+    expeditor->assertions_.emplace(/*shared=*/expeditor->config_.cores > 1);
+    expeditor->dispatcher_->set_assertions(&*expeditor->assertions_);
     // SHOW META's recovery block (RC09). A pointer into the member rather than
     // a copy, so the block reports the mount's own report and cannot drift from
     // it; `recovery_` is declared above the dispatcher and so outlives it.
@@ -1092,14 +1098,13 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // `checkpoint_lsn` is that core's `CHECKPOINT_BEGIN`, which can sit
     // past core 0's own snapshot exactly as it can past a peer's. Starting
     // there finds no base, and no base is not a slow scan: it is
-    // `NoteUnenforceable` for every assertion this core owns. The field the
+    // `NoteUnenforceable` for every assertion there is. The field the
     // fold does bound is `redo_start_lsn` — at or below every core's redo
     // start, which is at or below every core's own `CHECKPOINT_BEGIN`. The
     // `checkpoint_lsn` arm beside this one was the per-core anchor's.
     expeditor->recovery_ = ResumeAssertionsAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
-        /*owner_core=*/0, /*stream_core=*/0,
-        expeditor->database_->superblock.wal_anchor(0).redo_start_lsn,
+        /*stream_core=*/0, expeditor->database_->superblock.wal_anchor(0).redo_start_lsn,
         expeditor->dispatcher_->assertions(), expeditor->recovery_, &*expeditor->logger_);
 
     // **The completion checkpoint** (RC08), which is what makes the next
@@ -1320,7 +1325,6 @@ struct ClearReactorBorrows {
         dispatcher->SetShippedStatements(nullptr);
         dispatcher->SetTxn2pc(nullptr);
         dispatcher->SetIndexBuilds(nullptr);
-        dispatcher->SetAssertionBuilds(nullptr);
         // R6-5's borrow runs the other way - the executor asks through the
         // 2PC server, and that server is a *member*, so it outlives the
         // reactor while holding it by reference. Withdrawn here so the two
@@ -1812,6 +1816,7 @@ Status Expeditor::Start() {
             core_config.schema_word = &schema_version_;
             core_config.oid_sequence = &oid_sequence_;
             core_config.mark_counter = &delete_mark_count_;
+            core_config.assertions = &*assertions_;
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
@@ -1890,14 +1895,6 @@ Status Expeditor::Start() {
         index_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
         if (Status s = index_builds_->RegisterReplyReceiver(); !s.ok()) return s;
         dispatcher_->SetIndexBuilds(&*index_builds_);
-
-        // Core 0's assertion-build client (PW1c-6c), the same shape and the
-        // same ordering rule: a relation another core owns has its Bound
-        // Cabin built there, because the owner's writes are what maintain
-        // it.
-        assertion_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
-        if (Status s = assertion_builds_->RegisterReplyReceiver(); !s.ok()) return s;
-        dispatcher_->SetAssertionBuilds(&*assertion_builds_);
 
         // **Core 0's two halves of statement shipping** (SS1/SS3): the
         // owner's, because a peer ships core 0 every statement against a

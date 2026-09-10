@@ -23,7 +23,6 @@
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
-#include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/range_alloc.hpp"
@@ -842,6 +841,16 @@ private:
     // item 11 is where the fourth word decides it.
     std::atomic<std::uint64_t> delete_mark_count_{0};
 
+    // **The instance's assertion registry** (AT-S5d, AT-R15): the one
+    // directory per assertion every core's writes check and reserve into,
+    // `LockTable`'s idiom - this class owns it, core 0's dispatcher is
+    // pointed at it in `Open` before the mount resumes it, and every peer is
+    // handed it through `CoreRuntime::Config`. Declared above the dispatcher,
+    // the cores and the checkpointer, all of which borrow it, so it outlives
+    // every one of them. Optional only for the in-place build: its latch
+    // makes it immovable, and whether it is armed is the config's.
+    std::optional<exec::AssertionEnforcer> assertions_;
+
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
@@ -920,11 +929,6 @@ private:
     // used only while that scheduler runs; nothing pumps it after Serve
     // returns.
     std::optional<IndexBuildClient> index_builds_;
-
-    // Core 0's side of a peer-owned relation's CREATE ASSERTION (PW1c-6c,
-    // assertion_build_service.hpp), on the same terms as `index_builds_`
-    // above and armed beside it.
-    std::optional<AssertionBuildClient> assertion_builds_;
 
     // **Core 0's two halves of statement shipping** (SS1/SS3), armed with
     // the transport for `index_builds_`' reason. Core 0 is an owner like

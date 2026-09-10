@@ -237,12 +237,10 @@ void LogRangeDecline(Logger* log, std::uint32_t core_id, catalog::Oid rel_oid,
 // order, and the pair is what closes the race rather than either alone.
 //
 // The **fifth gate is asked here against the durable rows, not the
-// registry**, and the difference is the point: core 0's
-// `AssertionEnforcer` holds nothing for a peer-owned relation
-// (`mount_recovery.cpp` counts it foreign and adopts neither record), so
-// asking it would answer "eligible" for exactly the relation whose
-// assertion should decline it. `sys.assertions` is authoritative on core
-// 0 by construction.
+// registry**. The reason it was written for - core 0's registry held
+// nothing for a peer-owned relation - went at AT-S5d with the per-core
+// registry; the durable rows still answer the same question, and
+// `sys.assertions` is authoritative by construction.
 // The store is the **concrete** one, not the `PageStore` seam, and that is
 // the flush: core 0 formats the head in its own frame and every core has
 // its own store over the shared device, so `FlushPages`/`EvictClean` -

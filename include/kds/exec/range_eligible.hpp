@@ -34,12 +34,12 @@
 // locks, nothing retained. The answer is **authoritative on the
 // relation's owner core only**: the four `TableAccess` gates are catalog
 // facts every core caches from the same core-0-written rows — a peer's
-// copy can be behind, which is the two windows named below — and the
-// `AssertionEnforcer` is core-local, so only the owner's registry holds
-// the relation's live directory (PW1c-6c — the owner builds and holds
-// the Bound Cabin) or its unenforceable record. RD5 allocates on the
-// owner (§6b: a range opens where the owner's lease carves its id
-// block), so the authority and the caller coincide by construction.
+// copy can be behind, which is the two windows named below. The
+// `AssertionEnforcer` half is every core's alike since AT-S5d, the
+// registry being the instance's; it was the owner's alone until then.
+// RD5 allocates on the owner (§6b: a range opens where the owner's lease
+// carves its id block), so the authority and the caller coincide by
+// construction.
 //
 // **Scope: a *catalog* relation answers `kNone` here.** Every gate
 // passes `sys.tables`, yet a catalog relation is categorically

@@ -119,7 +119,7 @@ Status SimInstance::Boot() {
     // folds its directories from.
     if (run_recovery_tail) {
         recovery_ = server::ResumeAssertionsAfterRecovery(
-            boot_->catalog, *store_, *log_device_, /*owner_core=*/0, /*stream_core=*/0,
+            boot_->catalog, *store_, *log_device_, /*stream_core=*/0,
             boot_->superblock.wal_anchor(0).checkpoint_lsn, dispatcher_->assertions(),
             recovery_, /*log=*/nullptr);
         if (Status s = RunCheckpoint(); !s.ok()) return s;

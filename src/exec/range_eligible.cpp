@@ -64,11 +64,10 @@ RangeGate RangeEligible(const catalog::TableAccess& access,
     if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
         return RangeGate::kForeignKey;
     }
-    // C2's fifth gate (§9): live *or* known-and-unenforceable. Both mean
-    // "a Bound Cabin exists whose chain is one core's" — the live one
-    // this owner appends to, the unenforceable one a pre-PW1c-6c file's
-    // core-0 chain — and either way a split puts a writer on a core the
-    // cabin cannot follow.
+    // C2's fifth gate (§9): live *or* known-and-unenforceable. It was
+    // written for a Bound Cabin whose chain was one core's; that premise
+    // went at AT-S5 and AT-S5d, and `crosscore.md` §6a says what the gate
+    // still stands on and that it is not re-decided here.
     if (enforcer.AnyOn(access.oid) || enforcer.CannotEnforce(access.oid)) {
         return RangeGate::kAssertion;
     }

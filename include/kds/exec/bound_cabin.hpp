@@ -47,9 +47,9 @@
 // this ships is the structure those three need, with the arithmetic and the
 // collision rule already right.
 //
-// Concurrency: core-local. An assertion is single-relation (AS8) and a
-// relation's state belongs to its home core, so the whole protocol is one
-// core's (§6.1). No latches, no atomics, no CAS loops.
+// Concurrency: none of its own. A `BoundCabin` is guarded by whoever holds
+// it - since AT-S5d the instance's assertion registry, under its directory
+// latch (`assertion_check.hpp`, §6.1). No atomics, no CAS loops.
 
 namespace kds::exec {
 

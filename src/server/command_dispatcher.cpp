@@ -6,7 +6,6 @@
 #include "kds/base/crash_point.hpp"  // RP7: the coordinator's three kill points
 #include "kds/base/current_core.hpp"
 
-#include "kds/server/assertion_build_service.hpp"
 #include "kds/server/fk_probe_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
@@ -1318,20 +1317,6 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         *out = FinishIndexBuild(build, session != nullptr ? *session : autocommit_session_);
     }
 
-    if (out->pending_assertion_build.has_value() && assertion_builds_ != nullptr) {
-        // The owner's Bound Cabin build (PW1c-6c, assertion_build_service.hpp).
-        // `pending_index_build`'s shape exactly, and for its reasons: the
-        // predicate re-finds the waiter and reads the clock, so the deadline
-        // ends the park unaided, and the pending record is copied off the
-        // outcome because phase 2 writes the outcome whole.
-        const PendingAssertionBuild build = std::move(*out->pending_assertion_build);
-        const std::function<bool()> settled = [this, id = build.request_id] {
-            return assertion_builds_->Settled(id);
-        };
-        co_await sched::WaitUntil{&settled};
-        *out = FinishAssertionBuild(build);
-    }
-
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
         // statement is the whole change: every other runnable connection
@@ -1625,20 +1610,6 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
         index_builds_->Done(build.owner_core, build.def.index_oid, /*committed=*/false);
         return {ErrorReply(Status::TxnConflict(
                     "CREATE INDEX on '" + build.table_name +
-                    "' needs the reactor path to await its owner's build; retry on a served "
-                    "connection")),
-                false};
-    }
-    if (outcome.pending_assertion_build.has_value()) {
-        // The same stance for the owner's Bound Cabin (PW1c-6c): with no
-        // reactor nothing here receives the reply, so the statement is
-        // abandoned now and the owner told - otherwise it would be left
-        // enforcing a constraint no row will ever name.
-        const PendingAssertionBuild& build = *outcome.pending_assertion_build;
-        assertion_builds_->Close(build.request_id);
-        assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/false);
-        return {ErrorReply(Status::TxnConflict(
-                    "CREATE ASSERTION on '" + build.table_name +
                     "' needs the reactor path to await its owner's build; retry on a served "
                     "connection")),
                 false};
@@ -2615,15 +2586,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // remainder. A surviving declaration whose directory could not be
         // rebuilt is counted here and left *out* of the registry, so
         // SHOW ASSERTIONS reports `enforcing=0` for it rather than a
-        // constraint that would admit every write.
-        // `_foreign` is neither of those: an assertion on a relation another
-        // core owns is enforced by that core (PW1c-6c), so this core reads
-        // the declaration and takes nothing on. Printed rather than folded
-        // into either counter, because a correctly-partitioned instance
-        // would otherwise read as half-unrecovered.
+        // constraint that would admit every write. Core 0's mount resumes
+        // the instance's registry (AT-S5d), so on a peer both are 0 for
+        // `recovery_by=core0`'s reason. `recovery_assertions_foreign` stood
+        // beside them until then, counting the declarations a core left to
+        // the relation's owner; nothing is another core's now.
         os << " recovery_assertions_enforcing=" << recovery_->assertions_enforcing
-           << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered
-           << " recovery_assertions_foreign=" << recovery_->assertions_foreign;
+           << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered;
     }
     return {os.str(), false};
 }
@@ -3999,75 +3968,16 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     }
     const auto& stmt = std::get<parser::AssertionStmt>(parsed.value());
 
-    // A relation another core owns has its Bound Cabin built *there*
-    // (PW1c-6c): the cabin is appended to by every write to the relation,
-    // and only the relation's owner may write the owner's pages, so a cabin
-    // built here would be one nobody can maintain. `BeginForeignAssertionBuild`
-    // is the two phases; a dispatcher with no client is a fixture without a
-    // ring and is refused by name rather than left to build in the wrong
-    // core's pages. The unfiltered row read is `HandleIndex`'s, for its
-    // reason: the build touches physical pages whichever view resolved the
-    // name, and an unresolvable name falls through to `PrepareAssertionDef`,
-    // which owns that refusal and its byte position.
-    //
-    // **DROP keeps its catalog half here and gains one message**: the
-    // registry it evicts from is the owner's now, so a drop that only
-    // retired the row would leave the owner enforcing a constraint no row
-    // names - the opposite failure to the one this task closes, and just as
-    // wrong. The `done(aborted)` leg is exactly "forget this id", so the
-    // drop arm below sends it. Fire and forget, with no waiter: a lost
-    // message leaves the owner over-enforcing until its next mount, which
-    // is the fail-closed side of a message that cannot be acknowledged
-    // without a second protocol.
-    if (!stmt.drop) {
-        if (auto rel_oid = catalog_.FindTableOidByName(stmt.table_name); rel_oid.ok()) {
-            auto rel_row = catalog_.GetSysTableRow(rel_oid.value());
-            if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
-                if (assertion_builds_ != nullptr) {
-                    return BeginForeignAssertionBuild(stmt, rel_row.value().owner_core);
-                }
-                return {ErrorReply(Status::NotImplemented(
-                            "CREATE ASSERTION on '" + stmt.table_name + "' at byte " +
-                            std::to_string(stmt.table_byte_offset) +
-                            ": the relation is owned by core " +
-                            std::to_string(rel_row.value().owner_core) +
-                            ", whose writes maintain the Bound Cabin, so the cabin is built "
-                            "there (workplan-peer-writer.md §7d, PW1c-6c) - and this "
-                            "dispatcher has no assertion-build client to reach it")),
-                        false};
-            }
-        }
-    }
-
     if (stmt.drop) {
-        // Which core holds the directory, read **before** the row is
-        // retired - afterwards the assertion's target oid is unreadable,
-        // and with it the answer to "who has to forget this". A lookup that
-        // fails leaves `owner` unset and the drop exactly as it was.
-        std::optional<std::uint32_t> owner;
-        if (assertion_builds_ != nullptr) {
-            if (auto def = exec::FindAssertionByName(catalog_, page_store_, stmt.name);
-                def.ok() && def.value().has_value()) {
-                if (auto row = catalog_.GetSysTableRow(def.value()->target_oid);
-                    row.ok() && row.value().owner_core != core_id_) {
-                    owner = row.value().owner_core;
-                }
-            }
-        }
         auto id = exec::DropAssertion(catalog_, page_store_, stmt, wal_);
         if (!id.ok()) {
             return {ErrorReply(id.status()), false, 0, id.status()};
         }
         if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
-        // This core's registry, which holds the directory when the relation
-        // is this core's, and the owner's, which holds it otherwise. Both
-        // are called: `Evict` is a no-op on an id a registry never held, and
-        // naming both is what keeps the drop's effect independent of where
-        // the relation lives.
-        enforcer_.Evict(id.value());
-        if (owner.has_value()) {
-            assertion_builds_->Done(*owner, id.value(), /*committed=*/false);
-        }
+        // The instance's registry, the one place the directory is (AT-S5d).
+        // Until then the owner's held it and a drop on core 0 sent it a
+        // fire-and-forget `done(aborted)` to forget it.
+        enforcer_->Evict(id.value());
         std::ostringstream os;
         os << "DROPPED ASSERTION name=" << stmt.name << " assertion_id=" << id.value();
         if (logging(LogLevel::kInfo)) {
@@ -4094,7 +4004,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     exec::AssertionDdlResult& result = created.value();
     const bool adopted = result.live.has_value();
     if (adopted) {
-        enforcer_.Adopt(std::move(*result.live));
+        enforcer_->Adopt(std::move(*result.live));
     }
     // After the adoption, deliberately (the review's asymmetry note): a
     // sync failure then answers ERR with the live registry still enforcing
@@ -4117,115 +4027,6 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "created assertion '" + stmt.name + "' on '" + stmt.table_name +
                               "' (built, enforcing)");
-    }
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::BeginForeignAssertionBuild(const parser::AssertionStmt& stmt,
-                                                              std::uint32_t owner_core) {
-    // Admitted inside an explicit transaction (AK-S1, ddl-transactional.md
-    // §5f): the row `FinishAssertionBuild` writes takes no transaction, and
-    // the owner refuses none of the relation's writes across the park, so
-    // there is nothing for a session to be asked about.
-    //
-    // §3.1's checks and the id, on the catalog this core owns, before a
-    // byte crosses: a declaration that would have been refused locally is
-    // refused without asking a peer to scan a relation for it. The id is
-    // issued here - `ASSERT_BUILD` records on the owner carry it - and a
-    // burned one is never reissued, the ids' standing rule.
-    auto prepared = exec::PrepareAssertionDef(catalog_, page_store_, stmt);
-    if (!prepared.ok()) return {ErrorReply(prepared.status()), false, 0, prepared.status()};
-
-    const std::uint64_t request_id = next_remote_request_++;
-    if (Status s = assertion_builds_->Request(owner_core, request_id,
-                                              prepared.value().target_oid,
-                                              prepared.value().assertion_id, stmt.source_text);
-        !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "asked core " + std::to_string(owner_core) +
-                              " to build assertion '" + stmt.name + "' on " + stmt.table_name +
-                              " (request " + std::to_string(request_id) + ")");
-    }
-    DispatchOutcome pending;
-    pending.pending_assertion_build =
-        PendingAssertionBuild{request_id,  owner_core,      prepared.value().assertion_id,
-                              prepared.value().target_oid, stmt.name, stmt.table_name,
-                              stmt.source_text};
-    return pending;
-}
-
-DispatchOutcome CommandDispatcher::FinishAssertionBuild(const PendingAssertionBuild& build) {
-    const AssertionBuildOutcome* reply = assertion_builds_->Find(build.request_id);
-    Status verdict = Status::OK();
-    PageId root = kInvalidPageId;
-    std::uint64_t rows = 0;
-    std::uint32_t groups = 0;
-    if (reply == nullptr) {
-        verdict = Status::IoError("CREATE ASSERTION on '" + build.table_name +
-                                  "': the wait for core " + std::to_string(build.owner_core) +
-                                  "'s build was closed under the statement");
-    } else if (!reply->arrived) {
-        // The deadline. Retryable: a retry builds afresh under a new id,
-        // and the owner is told below, so the directory it may have adopted
-        // in the meantime does not outlive this statement.
-        verdict = Status::TxnConflict(
-            "CREATE ASSERTION on '" + build.table_name + "': core " +
-            std::to_string(build.owner_core) + " did not reply within " +
-            std::to_string(kAssertionBuildReplyDeadlineNs / 1'000'000'000ull) +
-            " s; the build is abandoned and the owner told (workplan-peer-writer.md PW1c-6c)");
-    } else if (!reply->status.ok()) {
-        // The owner's own refusal, code and message intact: an
-        // `ASSERTION_VIOLATION` for data already past the bound and a
-        // `TXN_CONFLICT` for an unsettled relation are both compatibility
-        // surfaces a client switches on, and they must read the same
-        // whichever core ran the scan.
-        verdict = reply->status.WithContext("CREATE ASSERTION on '" + build.table_name +
-                                            "': core " + std::to_string(build.owner_core) +
-                                            " refused the build");
-    } else {
-        root = reply->cabin_root;
-        rows = reply->rows_incorporated;
-        groups = reply->group_count;
-    }
-    assertion_builds_->Close(build.request_id);
-    if (!verdict.ok()) {
-        assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/false);
-        if (logging(LogLevel::kWarn)) log_->Warn("ddl", verdict.message());
-        return {ErrorReply(verdict), false, 0, verdict};
-    }
-
-    // Phase 2: the publish, which is the single commit point (§8.1a) and
-    // the *only* thing left - the cabin, its base and its directory are all
-    // the owner's already. A refusal here (a same-named assertion created
-    // while this was parked, the relation dropped) orphans the owner's
-    // chain through the `done(aborted)` below.
-    if (Status s = exec::InsertAssertion(catalog_, page_store_, wal_, build.assertion_id,
-                                         build.target_oid, build.name, build.source_text, root);
-        !s.ok()) {
-        assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/false);
-        return {ErrorReply(s), false, 0, s};
-    }
-
-    // `done(committed)` before the durability wait, `index_build_service.hpp`'s
-    // order and this statement's own local stance: a sync failure answers
-    // ERR with the owner still enforcing what its log already holds -
-    // over-enforcing until the operator retries, where the other order
-    // would leave a durably published constraint unenforced on the
-    // instance.
-    assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/true);
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
-
-    std::ostringstream os;
-    os << "CREATED ASSERTION name=" << build.name << " assertion_id=" << build.assertion_id
-       << " on=" << build.table_name << " cabin_root=" << root << " rows=" << rows
-       << " groups=" << groups << " enforcing=" << (kWritePathEnforcesAssertions ? 1 : 0)
-       << " built_by_core=" << build.owner_core;
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "created assertion '" + build.name + "' on '" + build.table_name +
-                              "', built and enforced by core " +
-                              std::to_string(build.owner_core));
     }
     return {os.str(), false};
 }
@@ -4265,27 +4066,21 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
         // core's registry holds the directory - which a restart empties
         // until recovery replays it, so a surviving catalog row reports 0
         // rather than claiming a check that cannot run.
+        //
+        // The registry is the instance's (AT-S5d), so the answer is the
+        // instance's from every core. Until then it was this core's, and a
+        // row on a relation another core owned carried `enforced_by_core=`
+        // to say whose answer `1` would have been.
         os << " enforcing="
            << ((def.cabin_root != kInvalidPageId && kWritePathEnforcesAssertions &&
-                enforcer_.Holds(def.id))
+                enforcer_->Holds(def.id))
                    ? 1
                    : 0);
-        // **And which core that answer is about** (PW1c-6c). A relation
-        // another core owns has its Bound Cabin built, held and appended to
-        // there, so this core's registry does not hold the directory and
-        // `enforcing=0` above means "not by this core" rather than "not at
-        // all". The owner is named instead of the claim being made on its
-        // behalf: nothing here can see another core's registry, and a `1`
-        // printed from a catalog row would be a guess. Ask that core.
-        if (auto owner = catalog_.GetSysTableRow(def.target_oid);
-            owner.ok() && owner.value().owner_core != core_id_) {
-            os << " enforced_by_core=" << owner.value().owner_core;
-        }
         // §9's production counters, printed only while the registry holds
         // the assertion: they live and die with the directory, so an
         // unenforced row prints no numbers rather than zeros that would
         // read as "counted, and nothing happened".
-        if (const auto* counters = enforcer_.CountersOf(def.id); counters != nullptr) {
+        if (const auto counters = enforcer_->CountersOf(def.id); counters.has_value()) {
             os << " checks=" << counters->checks << " violations=" << counters->violations
                << " reserved=" << counters->reserved << " aborted=" << counters->aborted;
         }
@@ -6790,8 +6585,8 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     // only where the PW1c-4 grants and this core's own extent lease make it
     // sound - any relation, clustered either way (the btree arm lifted at
     // PW2-4), whose secondary structures are owner-built: an index
-    // (PW1c-6b-4) and, since 2026-08-26, a Bound Cabin this core holds the
-    // directory for (PW1c-6c). The key-mode arm lifted with the mode (2026-08-25) and
+    // (PW1c-6b-4) and, since 2026-08-26, a Bound Cabin (PW1c-6c; the
+    // instance's registry holds every directory since AT-S5d). The key-mode arm lifted with the mode (2026-08-25) and
     // its refusal is per row in `InsertOneRow`, so this gate no longer says
     // anything about keys at all. The interim guard this
     // replaced indicted its own blacklist shape ("a page-writing verb
@@ -6863,25 +6658,16 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         //
         // **The assertion arm lifted 2026-08-26 (PW1c-6c)**, and what is
         // left in its place is the narrower question it should always have
-        // asked. A peer-owned relation's Bound Cabin is owner-built
-        // (assertion_build_service.hpp): its pages come from this core's
-        // lease, carry this core's stamp, and `ReserveInsert` appends to
-        // them as an ordinary local write - so a relation whose assertions
-        // *this registry holds* is funded, and refusing it would refuse
-        // every write to a constraint this core is enforcing correctly.
-        //
-        // What still refuses is an assertion this core knows of and cannot
-        // enforce (`CannotEnforce`). Reading `AnyOn` for it was the defect -
-        // `AnyOn` is false on a core whose registry never heard of the
-        // assertion, which is exactly the core that must refuse
+        // asked: an assertion the instance knows of and cannot enforce
+        // (`CannotEnforce`). Reading `AnyOn` for it was the defect - `AnyOn`
+        // was false on a core whose registry never heard of the assertion,
+        // which is exactly the core that had to refuse
         // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
         // Finding 2: a shipped write put a second row in a group under
-        // `CHECK COUNT(*) <= 1`). **The case that fed it is gone** (AW-S1b):
-        // it was a cabin core 0 built for this relation before PW1c-6c,
-        // whose pages the owner's `MayWrite` denied, and a cabin page is a
-        // user page every core writes now. What reaches `CannotEnforce`
-        // today is a revive that failed or a checkpoint whose snapshots do
-        // not cover the base (`server/mount_recovery.cpp`).
+        // `CHECK COUNT(*) <= 1`). There is one registry since AT-S5d, so
+        // no core's answer differs from another's. What reaches
+        // `CannotEnforce` is a revive that failed or a checkpoint whose
+        // snapshots do not cover the base (`server/mount_recovery.cpp`).
         // **The foreign-key arm lifted 2026-09-01 (AH-T4, operator's
         // ratification).** It refused a write to any FK-linked relation on
         // any core but 0, and its reason was *"validation reads the linked
@@ -6913,7 +6699,7 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // failure (`bench/v2.2.0/results-shipping-part-a-*` Finding 2, a
         // shipped write putting a second row in a group under
         // `CHECK COUNT(*) <= 1`); AK-S10 is its stage.
-        if (enforcer_.CannotEnforce(access.oid)) {
+        if (enforcer_->CannotEnforce(access.oid)) {
             return Status::NotImplemented(
                 "a relation under an assertion this core cannot enforce cannot take "
                 "writes on core " +
@@ -7730,7 +7516,7 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
     // false of what the per-row path could do.
     return ta.clustered_type == catalog::ClusteredType::kHeap &&
            ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
-           !enforcer_.AnyOn(oid);
+           !enforcer_->AnyOn(oid);
 }
 
 DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stmt,
@@ -8069,12 +7855,19 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
 
     // ---- The admission check (docs/spec/assertion.md §6.2 step 2) -------
     //
-    // Pure, and before the id for FK's reason: a refused row burns nothing.
-    // The reservation (step 3) happens after placement, when the entry has
-    // a pk and a location to carry; nothing runs between the two on a
-    // cooperative core, so the answer holds - and in a bulk statement this
-    // row's admission sees every earlier row's reservation, which is the
+    // Before the id for FK's reason: a refused row burns nothing. The
+    // reservation (step 3) happens after placement, when the entry has a
+    // pk and a location to carry - and in a bulk statement this row's
+    // admission sees every earlier row's reservation, which is the
     // intra-statement accumulation BI2 exists to keep.
+    //
+    // **The admitted contribution is held until then** (AT-S5d). The
+    // registry is the instance's, and the page work between here and the
+    // reservation gives another core's writer time to be admitted against
+    // the same group; a pure check here is what let two cores both admit at
+    // count 0. `admitted` gives its hold back on every exit that does not
+    // reach the reservation - a refusal below, a failed placement, a borrow
+    // that parks and re-runs this row.
     //
     // **And a rejection a reservation caused is a wait** (AO-S6e-c, census
     // row 11). `assertion.md` §6.2 called this a *bounded false rejection*
@@ -8097,7 +7890,9 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // key any row can have (`kFirstRowId`), which is what lets the wait's
     // messages say so rather than name row zero.
     std::uint64_t reserver = 0;
-    if (Status s = enforcer_.AdmitInsert(oid, body, WriterId(scope), &reserver); !s.ok()) {
+    exec::AssertionEnforcer::Hold admitted;
+    if (Status s = enforcer_->AdmitInsert(oid, body, WriterId(scope), &reserver, &admitted);
+        !s.ok()) {
         if (reserver != 0) {
             NoteBlockingWriter(scope.txn, reserver, /*pk=*/0, RepeatableReadWait::kCapable);
         }
@@ -8232,9 +8027,9 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // the row over-reserves (compensated by the loser's rollback) rather
     // than under-reserving, which no compensation could see. A failure here
     // fails the statement; the abort path unwinds whatever was applied.
-    if (Status s = enforcer_.ReserveInsert(page_store_, wal_, WriterId(scope), oid,
-                                           body, row_id, placed.value().page_id,
-                                           placed.value().slot);
+    if (Status s = enforcer_->ReserveInsert(page_store_, wal_, WriterId(scope), admitted, oid,
+                                            body, row_id, placed.value().page_id,
+                                            placed.value().slot);
         !s.ok()) {
         return ErrorReply(s);
     }
@@ -10822,7 +10617,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // A relation with neither copies nothing.
         std::vector<parser::AstValue> previous;
         if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() ||
-            enforcer_.AnyOn(ta.oid)) {
+            enforcer_->AnyOn(ta.oid)) {
             previous = row.value();
         }
 
@@ -10849,9 +10644,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // poisoned - the AS9 resolution, decided 2026-08-09: uniform with
         // every other write failure, because "open and usable" cannot be
         // promised once a multi-row statement has partly happened.
-        if (enforcer_.AnyOn(ta.oid)) {
+        if (enforcer_->AnyOn(ta.oid)) {
             std::uint64_t reserver = 0;
-            if (Status s = enforcer_.AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
+            if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
                                                            ta.oid, previous, row.value(),
                                                            id.value(), page_id, slot, &reserver);
                 !s.ok()) {
@@ -11278,7 +11073,7 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
     // 4): flags cleared, ASSERT_COMMIT logged, before the commit record. A
     // failure leaves the transaction open - the client may retry COMMIT or
     // ROLLBACK, and the pending set is untouched until one succeeds.
-    if (Status s = enforcer_.CommitTxn(page_store_, wal_, id); !s.ok()) {
+    if (Status s = enforcer_->CommitTxn(page_store_, wal_, id); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
     auto committed = txn_->Commit(*txn, effective_durability_);
@@ -11431,7 +11226,7 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     // The reservations first (§6.2 step 5): each one removed from its
     // group, ASSERT_ROLLBACK logged, before the undo trail replays - so the
     // directory and the pages unwind in the same statement the rows do.
-    if (Status s = enforcer_.AbortTxn(page_store_, wal_, id); !s.ok()) {
+    if (Status s = enforcer_->AbortTxn(page_store_, wal_, id); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
     Status aborted = txn_->Abort(*txn, RowLocatorForRollback());
@@ -11985,8 +11780,8 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // below. One statement at a time per core is what makes the shared
         // id safe.
         return result.ok()
-                   ? enforcer_.CommitTxn(page_store_, wal_, catalog::kBootstrapXid)
-                   : enforcer_.AbortTxn(page_store_, wal_, catalog::kBootstrapXid);
+                   ? enforcer_->CommitTxn(page_store_, wal_, catalog::kBootstrapXid)
+                   : enforcer_->AbortTxn(page_store_, wal_, catalog::kBootstrapXid);
     }
 
     // **R6-5: was this refusal one a wait could get past, and is the
@@ -12097,7 +11892,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     // Closing it means changing what a failed settle leaves behind, which
     // is the enforcer's decision and not this arm's:
     // `docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`.
-    if (Status s = enforcer_.CommitTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
+    if (Status s = enforcer_->CommitTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
         return AbortOwnedScope(scope, s);
     }
     auto committed = txn_->Commit(*scope.txn, effective_durability_);
@@ -12123,12 +11918,12 @@ Status CommandDispatcher::AbortOwnedScope(WriteScope& scope, const Status& repor
     //
     // **A no-op on one of the three callers**, worth saying at the call
     // rather than leaving to be discovered: after a failed
-    // `enforcer_.CommitTxn` there is no pending list left to unapply, and
+    // `enforcer_->CommitTxn` there is no pending list left to unapply, and
     // `EndWrite`'s comment at that arm states what that leaves behind.
     // Called unconditionally anyway, because on the other two it is the
     // whole of the assertion unwind and a test on which caller it is would
     // be the branch that goes wrong.
-    Status unwound = enforcer_.AbortTxn(page_store_, wal_, id);
+    Status unwound = enforcer_->AbortTxn(page_store_, wal_, id);
     if (Status s = txn_->Abort(*scope.txn, RowLocatorForRollback()); unwound.ok()) {
         unwound = s;
     }
@@ -12480,8 +12275,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // without bound. The departure entry is what keeps
         // header == Σ(entries) true while the aggregate goes down. Before
         // the undo record, so a failure here leaves none behind.
-        if (enforcer_.AnyOn(ta.oid)) {
-            if (Status s = enforcer_.ReserveDelete(page_store_, wal_, WriterId(scope), ta.oid,
+        if (enforcer_->AnyOn(ta.oid)) {
+            if (Status s = enforcer_->ReserveDelete(page_store_, wal_, WriterId(scope), ta.oid,
                                                    frame.SlotsFor(0), id, page_id, slot);
                 !s.ok()) {
                 return s;

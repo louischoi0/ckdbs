@@ -227,14 +227,12 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 
 // ---- The three halves `CREATE ASSERTION` is made of (PW1c-6c) ------------
 //
-// A relation another core owns has its Bound Cabin built **there**, because
-// the cabin is written on every write to that relation and only its owner
-// may write the owner's pages (`docs/inflight/in-progress/workplan-peer-writer.md` §7d).
-// So the statement splits where the index build splits (`exec::PrepareIndexDef`
-// / `exec::BuildIndexTree`, PW1c-6b-1): the catalog half stays on core 0, the
-// page half moves to the owner, and the local `CreateAssertion` below is the
-// three back to back - one implementation, two callers, and a peer-owned
-// relation's assertion is checked by exactly the rules a core-0-owned one is.
+// Split where the index build splits (`exec::PrepareIndexDef` /
+// `exec::BuildIndexTree`, PW1c-6b-1) so that a relation another core owned
+// could have its Bound Cabin built **there**, with the catalog half on core 0.
+// That cross-core caller went at AT-S5d with the per-core registry it served;
+// `CreateAssertion` below, the three back to back, is the one caller now, and
+// the split stays because it is the order §8.1 states.
 
 // What core 0 resolves before anything is built: the relation, and the id
 // the build's `ASSERT_BUILD` records will carry.

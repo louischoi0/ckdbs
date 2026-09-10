@@ -552,17 +552,27 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
     ASSERT_EQ(db.cores().size(), 1u);
     CoreRuntime& peer = *db.cores().front();
 
-    // **Enforcing, not merely known.** A core that knows of an assertion it
-    // cannot enforce refuses the relation's writes (`assertion.md` §6.1), so
-    // `assertions_unrecovered` moving is a relation that stops taking writes
-    // rather than a cosmetic count. This is the reading that would catch the
-    // floor defect if the anchor were arranged to expose it.
-    EXPECT_EQ(peer.recovery().assertions_enforcing, 1u);
-    EXPECT_EQ(peer.recovery().assertions_unrecovered, 0u);
+    // **Enforcing, not merely known.** A registry that knows of an assertion
+    // it cannot enforce refuses the relation's writes (`assertion.md` §6.1),
+    // so `assertions_unrecovered` moving is a relation that stops taking
+    // writes rather than a cosmetic count. This is the reading that would
+    // catch the floor defect if the anchor were arranged to expose it.
+    //
+    // **Core 0's count, and the peer's zero** (AT-S5d). The registry is the
+    // instance's and core 0's mount resumes it, for every relation; the peer
+    // is handed it and resumes nothing. The peer's own resume was what this
+    // cell read until then, and it is also what the segfault above was in.
+    EXPECT_EQ(db.recovery().assertions_enforcing, 1u);
+    EXPECT_EQ(db.recovery().assertions_unrecovered, 0u);
+    EXPECT_EQ(peer.recovery().assertions_enforcing, 0u);
+    EXPECT_EQ(&peer.dispatcher().assertions(), &db.dispatcher().assertions())
+        << "the peer checks a registry of its own";
 
     // And the enforcement itself, which is the reading that does not depend
     // on a counter being named correctly: the second row in group 7 is
-    // refused by the assertion.
+    // refused by the assertion - **arriving on core 0's listener**, for a
+    // relation `kRotate` placed on core 1, which is D1 exactly: until AT-S5d
+    // core 0's registry held no directory for it and admitted the row.
     RunningInstance running(db, config.debug_text_port);
     ASSERT_TRUE(running.Run());
     const std::string violating = SendLineRetrying(running.client(), "INSERT INTO cap VALUES (7)");
