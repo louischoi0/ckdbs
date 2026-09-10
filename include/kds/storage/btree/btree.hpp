@@ -72,12 +72,33 @@
 // the records. Same division as heap_chain.hpp, where `linked_from` and
 // `grew_chain` exist for exactly that.
 //
-// Concurrency: none of its own, like heap_chain.hpp. Descent takes and
-// releases each page through the PageStore; the caller holds the pin/latch
-// discipline (CLAUDE.md's page-latch consistency model). There is no
-// latch coupling and no B-link right-link protocol, because there is no
-// concurrent mutation to protect against yet - the server is one
-// cooperative thread and nothing here suspends.
+// ---- Concurrency: one page at a time, and one window that is checked ---
+//
+// No synchronisation of its own, like heap_chain.hpp: a descent takes and
+// releases each page through the `PageStore`, and the pin and the page
+// latch ride in the `PageRef` it holds (`page.md` §6 - the latch is held
+// by a *core*, so it serialises cores as readily as tasks on one). There
+// is still **no latch coupling and no B-link right-link protocol**: a
+// descent never holds two pages at once, and an internal node is read and
+// let go before its child is asked for.
+//
+// *"There is no concurrent mutation to protect against yet - the server is
+// one cooperative thread and nothing here suspends"* stood here until
+// AT-S5c. AT-S5 made a write run where the session is, so two cores reach
+// one relation's leaves, and the sentence stopped being true of the one
+// place in this file that depends on it: **a write descent's re-fetch**,
+// which must drop the leaf's shared hold before asking for it exclusive
+// because the page latch is never upgraded. `DescendTo` carries the
+// window's whole account; what closes it is that a leaf's coverage
+// interval can shrink in exactly one way, and that way rewrites the leaf's
+// own `next_page_id`.
+//
+// **What is still owed to the single-core reading** is the *absence* of a
+// protocol rather than any particular line: a reader holds one page's
+// share while it reads, and nothing here reasons across two pages without
+// holding both. A structural change that had to be seen atomically across
+// levels - a merge, a rebalance - would need the coupling this file does
+// not have, and none exists.
 
 namespace kds::btree {
 

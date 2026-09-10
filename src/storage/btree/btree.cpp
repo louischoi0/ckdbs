@@ -63,6 +63,52 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
     return std::span<std::byte, kPageSize>(bytes.data(), kPageSize);
 }
 
+// **Does this leaf still hold the top of `key`'s range?** (AT-S5c.)
+//
+// A leaf covers `[min_key, right sibling's min_key)`. Both ends are
+// immutable - `min_key` is invariant 2 and the sibling's is its own - so
+// the interval changes in exactly one way: a page is spliced in on the
+// right, which is what both split shapes do (`BtreeInsert`'s append and
+// `SplitLeafAndInsert`'s divide). Asking the sibling is therefore the whole
+// test, and it is asked of the *current* chain rather than compared against
+// an earlier reading, because the descent may have been routed here before
+// the split even began.
+//
+// **Only the upper end.** A key below `min_key` is not a race - the bound
+// cannot move - it is a caller whose id sequence went backwards, and
+// `BtreeInsert` reports that in its own words. Answering it here would turn
+// a deterministic `OutOfRange` into a retryable conflict.
+//
+// **Free on the shape the engine actually inserts.** A monotonic pk lands
+// on the rightmost leaf, which has no right sibling and no fetch to make.
+// What pays is a caller-supplied key landing mid-chain (§4.1), one
+// resident-page read.
+//
+// The caller holds this leaf; the sibling is taken shared and released
+// here. The order is always leaf-then-right-neighbour, which is the order a
+// scan takes and the order a split takes, so it closes no cycle: nothing in
+// this file holds a page and asks for the one to its *left*.
+StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& leaf,
+                                   std::uint64_t key) {
+    const PageId right = leaf.next_page_id();
+    if (right == kInvalidPageId) return true;  // the rightmost leaf holds every key above it
+    auto bytes = store.GetForRead(right);
+    if (!bytes.ok()) return bytes.status();
+    return key < heap::PageView(bytes.value().bytes()).min_key();
+}
+
+// How many times a descent may start over before it gives up and asks the
+// caller to retry (AT-S5c). A restart happens when another core split the
+// leaf this descent was routed to, so the key belongs on a page that did
+// not exist when the parent was read. **A restart makes progress rather
+// than spinning**, and that is a property of the split rather than of this
+// bound: a splitter holds the old leaf exclusive across its own
+// `PromoteSeparator`, so a re-descent blocks on that leaf and is granted it
+// only once the parent carries the new separator. The bound is here so that
+// a pathological stream of splits ends in a refusal a client can read
+// rather than in a loop nothing reports.
+constexpr int kMaxDescentRestarts = 4;
+
 // Follows child pointers for `key` from `root`, recording the path.
 //
 // Internal nodes are never modified by a descent, so they are always
@@ -70,49 +116,102 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
 // be mutated: an insert takes it for write so the frame is marked dirty, a
 // lookup does not, which is what keeps a read-only statement from
 // scheduling a write-back of everything it read (page_store.hpp).
+//
+// ---- The window, and what closes it (AT-S5c) ----------------------------
+//
+// A write descent cannot hold what it found. The page latch is never
+// upgraded (AM-S1, `page_latch.hpp`), so the leaf's shared hold has to go
+// before the exclusive one is asked for, and in between the leaf is held by
+// nobody. Until AT-S5 that window could not be entered: a relation's writes
+// all ran on its owner core, the reactor serialised them, and nothing
+// between the two lines suspends. AT-S5 made a write run where the session
+// is, so two cores now reach one relation's leaves and the window is real.
+//
+// **And the window is wider than that re-fetch**, which is the correction
+// this stage's own cell forced. There is no latch coupling here: an
+// internal node is read, its child chosen, and the node released before the
+// child is asked for. So the child's key range can shrink between the
+// parent read and the leaf's arrival - before this descent has touched the
+// leaf at all, leaving nothing to compare a later reading against. A first
+// draft of this check captured the leaf's right link under the shared hold
+// and compared it after the exclusive one; it closed the re-fetch window,
+// and `btree_race_test.cpp` still failed.
+//
+// **So what is checked is coverage itself**, which is what a descent
+// promises - `BtreeInsert` says it in its own words, *"the descent is
+// exact, so the leaf it landed on is the only page that may hold `id`"* -
+// asked of the chain as it stands: `LeafStillCoversKey` above. Once `Get`
+// returns, the leaf is held **exclusive** for the life of the `Descent`
+// (`PageRef` carries the latch, not only the pin) and every splice must
+// write this leaf, so the answer cannot go stale under the caller that
+// receives it.
 StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_t key,
                             bool leaf_for_write) {
-    Descent d;
-    PageId current = root;
-    for (;;) {
-        if (d.depth >= storage::kMaxBtreeDepth) {
-            return Status::Corruption("btree descent from page " + std::to_string(root) +
-                                      " exceeded " + std::to_string(storage::kMaxBtreeDepth) +
-                                      " levels; the child pointers are cyclic or corrupt");
-        }
-        d.path[d.depth] = current;
+    for (int attempt = 0; attempt <= kMaxDescentRestarts; ++attempt) {
+        Descent d;
+        PageId current = root;
+        // Every path out of this loop returns, except the one `break` below
+        // - the chain moved under the window and the descent starts over.
+        for (;;) {
+            if (d.depth >= storage::kMaxBtreeDepth) {
+                return Status::Corruption("btree descent from page " + std::to_string(root) +
+                                          " exceeded " + std::to_string(storage::kMaxBtreeDepth) +
+                                          " levels; the child pointers are cyclic or corrupt");
+            }
+            d.path[d.depth] = current;
 
-        auto bytes = store.GetForRead(current);
-        if (!bytes.ok()) return bytes.status();
-        if (IsLeafPage(bytes.value().bytes())) {
-            if (!leaf_for_write) {
-                d.leaf = std::move(bytes.value());
+            auto bytes = store.GetForRead(current);
+            if (!bytes.ok()) return bytes.status();
+            if (IsLeafPage(bytes.value().bytes())) {
+                if (!leaf_for_write) {
+                    d.leaf = std::move(bytes.value());
+                    return d;
+                }
+                // Re-fetch for write: the frame is already resident, so
+                // this is a hash lookup that flips the dirty flag, and it
+                // happens only on the insert path where a WAL append
+                // dwarfs it. The read handle is dropped **first**, because
+                // asking for the latch exclusive while this task's own
+                // share is live is the one self-deadlock in the tree's
+                // access patterns, found by the census.
+                bytes.value().Release();
+                auto writable = store.Get(current);
+                if (!writable.ok()) return writable.status();
+                // Still a leaf. Nothing turns one into an internal node and
+                // no page id is ever reused, so this is unreachable rather
+                // than defensive - and it costs one byte's compare to read
+                // as a diagnosis instead of as a misparsed slot directory.
+                if (Status s = RequireType(writable.value().bytes(), current,
+                                           PageType::kBtreeLeaf);
+                    !s.ok()) {
+                    return s;
+                }
+                heap::PageView relatched(writable.value().bytes());
+                auto covers = LeafStillCoversKey(store, relatched, key);
+                if (!covers.ok()) return covers.status();
+                if (!covers.value()) {
+                    break;  // a page was spliced in; `key` is past this leaf now
+                }
+                d.leaf = std::move(writable.value());
                 return d;
             }
-            // Re-fetch for write: the frame is already resident, so this
-            // is a hash lookup that flips the dirty flag, and it happens
-            // only on the insert path where a WAL append dwarfs it.
-            //
-            // The read handle is dropped **first**. It holds the page's
-            // latch shared, and the page latch is never upgraded (AM-S1,
-            // page_latch.hpp): asking for it exclusive while this task's
-            // own share is live is the one self-deadlock in the tree's
-            // access patterns, found by the census. Nothing can evict
-            // between the release and the re-fetch on a single-threaded
-            // core, which is the argument the comment above already makes.
-            bytes.value().Release();
-            auto writable = store.Get(current);
-            if (!writable.ok()) return writable.status();
-            d.leaf = std::move(writable.value());
-            return d;
-        }
 
-        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal); !s.ok()) {
-            return s;
+            if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal);
+                !s.ok()) {
+                return s;
+            }
+            current = InternalView(bytes.value().bytes()).ChildFor(key);
+            ++d.depth;
         }
-        current = InternalView(bytes.value().bytes()).ChildFor(key);
-        ++d.depth;
     }
+    // Retryable, because nothing about the statement is wrong: the tree
+    // moved under it every time it looked, and the next attempt meets a
+    // different tree.
+    return Status::TxnConflict("btree descent for key " + std::to_string(key) + " from page " +
+                               std::to_string(root) + " restarted " +
+                               std::to_string(kMaxDescentRestarts) +
+                               " times without settling on a leaf; the chain is being split "
+                               "faster than a descent can reach it");
 }
 
 // Highest live Keystone id in a leaf, or 0 if it holds none. Used to
@@ -764,19 +863,54 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     return promoted;
 }
 
+// **A miss has to prove it is a miss** (AT-S5c).
+//
+// A read descent takes no window of its own - it holds what it finds - but
+// it shares the write descent's other gap: there is no latch coupling, so
+// the parent is released before the child is asked for, and a *divide* on
+// another core moves the upper half of that child's keys to a new page in
+// between. A lookup routed to the old leaf then finds nothing and answers
+// `NotFound` for a row that exists, which is the one answer this file's
+// header says a lookup may never give.
+//
+// **The check is on the miss and not on the hit**, and that is what keeps
+// it off the hot path: a hit is authoritative however the chain has moved
+// since - the row is *here* - so nothing needs asking. Only an empty-handed
+// lookup owes a reason, and it pays one resident-page read to give one.
 StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id) {
-    auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
-    if (!descent.ok()) return descent.status();
-    const PageId leaf_id = descent.value().path[descent.value().depth];
-    heap::PageView leaf(descent.value().leaf.bytes());
+    for (int attempt = 0; attempt <= kMaxDescentRestarts; ++attempt) {
+        auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
+        if (!descent.ok()) return descent.status();
+        const PageId leaf_id = descent.value().path[descent.value().depth];
+        heap::PageView leaf(descent.value().leaf.bytes());
 
-    auto slot = FindSlotForId(leaf, id, leaf.slot_count());
-    if (slot.ok()) return Location{leaf_id, slot.value()};
-    if (slot.status().code() != StatusCode::kNotFound) return slot.status();
-    return Status::NotFound("no tuple with primary key " + std::to_string(id) + " in leaf " +
-                            std::to_string(leaf_id));
+        auto slot = FindSlotForId(leaf, id, leaf.slot_count());
+        if (slot.ok()) return Location{leaf_id, slot.value()};
+        if (slot.status().code() != StatusCode::kNotFound) return slot.status();
+
+        auto covers = LeafStillCoversKey(store, leaf, id);
+        if (!covers.ok()) return covers.status();
+        if (covers.value()) {
+            return Status::NotFound("no tuple with primary key " + std::to_string(id) +
+                                    " in leaf " + std::to_string(leaf_id));
+        }
+        // The key belongs past this leaf now, so the miss says nothing about
+        // the row. Descend again; the splitter held this leaf across its own
+        // `PromoteSeparator`, so the parent already carries the separator
+        // that routes the second attempt correctly.
+    }
+    return Status::TxnConflict("lookup of primary key " + std::to_string(id) + " from page " +
+                               std::to_string(root) + " was outrun by " +
+                               std::to_string(kMaxDescentRestarts) +
+                               " splits; the leaf it reached had given the key away each time");
 }
 
+// **No coverage check here, and the reason is directional** (AT-S5c). A
+// seek names where an ordered scan starts, and the scan walks *forward*
+// from it along `next_page_id`. A split can only move keys to the right, so
+// a seek outrun by one lands on the page to the **left** of where the key
+// went - and the scan reaches that page next. Landing early costs a page;
+// landing late would cost rows, and no split produces it.
 StatusOr<PageId> BtreeSeekLeaf(storage::PageStore& store, PageId root, std::uint64_t id) {
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
     if (!descent.ok()) return descent.status();

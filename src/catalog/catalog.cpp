@@ -2359,13 +2359,21 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // stale map) and its root is never walked here - execution ships to
     // the owner, whose own fill resolves through its own anchor - so only
     // Corruption is loud.
-    // Scoped to this core's OWN relations (PW2-4, the C3 decision taken as
-    // "owner-readable": the anchor lives above kCatalogOverflowLimit,
-    // outside the invalidation set, so a cross-core reader's frame would
-    // never refresh - and a foreign relation's root is never walked here
-    // anyway, execution ships to the owner). A foreign relation keeps the
-    // row's CREATE-time value, and diagnostics of a foreign relation show
-    // exactly that - stated, build-invariant, no faultability probe.
+    // **Every core, since AT-S5c.** This was scoped to the core that owned
+    // the relation (PW2-4, the C3 decision taken as "owner-readable") on
+    // two grounds, and AT-S5 falsified the second: *"the anchor lives above
+    // kCatalogOverflowLimit, outside the invalidation set, so a cross-core
+    // reader's frame would never refresh - and a foreign relation's root is
+    // never walked here anyway, execution ships to the owner."* A write
+    // runs where the session is now, so every core walks every relation's
+    // tree, and a core that skipped this kept the **CREATE-time** root out
+    // of the `sys.tables` row: after any level growth it descended into
+    // what had become the leftmost subtree and wrote rows into a leaf that
+    // could not hold them. Found by AT-S5c's coverage check refusing it.
+    // The first ground is answered too, and by a different stage: one frame
+    // table serves every core since AM-S2 step 3, and the schema word is
+    // bumped at the repoint (`UpdateRelationDescPage`), so a stale memo is
+    // dropped at the next task boundary rather than never.
     // Held for the whole fill (the 96b0343 review's C2): the first form
     // dropped the ref and re-fetched per index row - an N+1 that, under a
     // sized pool, could fail mid-fill and leave the access half-anchored
@@ -2373,7 +2381,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // rows - a silently wrong tree for maintenance to append into). One
     // read, one failure decision, no tear expressible.
     std::optional<storage::PageRef> anchor_held;
-    if (access.anchor_page_id != kInvalidPageId && access.owner_core == core_id_) {
+    if (access.anchor_page_id != kInvalidPageId) {
         auto anchor = store_.GetForRead(access.anchor_page_id);
         if (anchor.ok()) {
             if (Status s = storage::ValidatePageHeader(anchor.value().bytes(),
@@ -2795,8 +2803,10 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
     // **in place**: the pre-anchor BumpVersion here destroyed the entry
     // the running INSERT was holding, and on a peer it would have
     // broadcast a cluster-wide invalidation per split. Same one-field/
-    // one-owner license as the index root's in-place update. A system
-    // relation (no anchor) cannot reach this function - its fixed catalog
+    // one-owner license as the index root's in-place update - and since
+    // AT-S5c the *word* is bumped beside it, which is not the same thing:
+    // it drops nothing here and drops every other core's memo there. A
+    // system relation (no anchor) cannot reach this function - its fixed catalog
     // page never grows a level - so an anchorless call is a defect.
     if (anchor_page_id == kInvalidPageId) {
         return Status::InvalidArgument(
@@ -2809,6 +2819,20 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
         return s;
     }
     cache_.UpdateDescPage(table_oid, new_desc_page_id);
+    // **And every other core is told** (AT-S5c). The in-place update above
+    // is this core's; until AT-S5 that was the whole story, because a
+    // relation's writes all ran on its owner and no other core's memo of
+    // the root was ever used to descend. A write runs where the session is
+    // now, so a peer holding the pre-growth root descends into what is now
+    // the *leftmost subtree* and writes a row into a leaf that cannot hold
+    // it - the same wrong answer AT-S5c's coverage check refuses, one level
+    // up. `BumpWord` and not `BumpVersion`: this core's entry is correct
+    // and was just repaired in place, so it adopts the bump and keeps it,
+    // while every other core drops its memo at its next task boundary and
+    // re-reads the root from the anchor (`catalog.md` CT2). What covers the
+    // window between the bump and that boundary is the descent's own
+    // refusal, which is retryable.
+    BumpWord();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         // A relation's entry page moving is a structural change to the
         // relation, rare enough to deserve Debug rather than Trace.

@@ -38,6 +38,7 @@ add_executable(kds_tests
     txn_session_test.cpp
     heap_chain_test.cpp
     btree_test.cpp
+    btree_race_test.cpp
     index_key_test.cpp
     index_tree_test.cpp
     index_ddl_test.cpp

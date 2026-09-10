@@ -86,6 +86,19 @@ protected:
             auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
                                              payload.value(), /*trx_id=*/1, access.value()->oid);
             ASSERT_TRUE(placed.ok()) << placed.status().message();
+            // **A level growth moves the root, and this fixture has to
+            // persist it the way the dispatcher does.** It did not, so
+            // every insert after the first growth descended from the old
+            // root - which is the new root's leftmost child - and landed in
+            // a leaf that could not hold the key. Silent until AT-S5c gave
+            // the descent a coverage check; it refuses now, which is how
+            // this was found.
+            if (placed.value().new_root != kInvalidPageId) {
+                ASSERT_TRUE(boot_->catalog
+                                .UpdateRelationDescPage(oid.value(), placed.value().new_root,
+                                                        access.value()->anchor_page_id)
+                                .ok());
+            }
         } else {
             auto placed = heap::ChainInsert(store_, access.value()->desc_page_id, id.value(),
                                             payload.value(), /*trx_id=*/1, access.value()->oid);
