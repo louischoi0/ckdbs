@@ -52,7 +52,9 @@ struct Descent {
     // one Shape C the stopped review never reached, found by finishing its
     // checklist: any fault between the descent and the caller's read (a
     // split's CreateNew is the everyday case) could walk the leaf's usage
-    // down and reclaim it mid-operation. Peak pins (MG03): 1, this ref.
+    // down and reclaim it mid-operation. Peak pins (MG03): 1 here, and 2 for the
+    // span of `LeafStillCoversKey`, which takes the right sibling shared
+    // and drops it before the descent returns (AT-S5c).
     storage::PageRef leaf;
 };
 
@@ -86,14 +88,24 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
 //
 // The caller holds this leaf; the sibling is taken shared and released
 // here. The order is always leaf-then-right-neighbour, which is the order a
-// scan takes and the order a split takes, so it closes no cycle: nothing in
-// this file holds a page and asks for the one to its *left*.
+// scan takes, so it closes no cycle: **nothing anywhere holds a page and
+// asks for the one to its left**, and the only other multi-page hold in
+// this file is bottom-up (a leaf, then its parent, in `PromoteSeparator`).
+// A split reads `next_page_id` and never fetches the page it names.
 StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& leaf,
                                    std::uint64_t key) {
     const PageId right = leaf.next_page_id();
     if (right == kInvalidPageId) return true;  // the rightmost leaf holds every key above it
     auto bytes = store.GetForRead(right);
     if (!bytes.ok()) return bytes.status();
+    // `min_key` lives in the heap page *body*, not the common header, so on
+    // anything that is not a leaf those bytes are another view's fields -
+    // an arbitrary number, which can read as "covered" and admit the write
+    // this function exists to refuse. Every other fetch in this file checks
+    // its type; this one was the exception (AT-S5c's review, C4).
+    if (Status s = RequireType(bytes.value().bytes(), right, PageType::kBtreeLeaf); !s.ok()) {
+        return s;
+    }
     return key < heap::PageView(bytes.value().bytes()).min_key();
 }
 
@@ -207,11 +219,22 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
     // Retryable, because nothing about the statement is wrong: the tree
     // moved under it every time it looked, and the next attempt meets a
     // different tree.
+    // **What this knows, rather than one guess at why.** Churn is one
+    // cause; a **stale root** is the everyday other, and it does not look
+    // different from here - a descent from a pre-growth root lands in what
+    // is now the leftmost subtree every time, so a key outside that subtree
+    // exhausts the bound without anything racing at all. Retryable is right
+    // for both (the client's retry crosses a task boundary, where
+    // `Revalidate()` drops the memo and the fill re-reads the anchor), so
+    // the code does not change - the message stops naming a cause it cannot
+    // tell (AT-S5c's review, C5).
     return Status::TxnConflict("btree descent for key " + std::to_string(key) + " from page " +
-                               std::to_string(root) + " restarted " +
-                               std::to_string(kMaxDescentRestarts) +
-                               " times without settling on a leaf; the chain is being split "
-                               "faster than a descent can reach it");
+                               std::to_string(root) + " gave up after " +
+                               std::to_string(kMaxDescentRestarts + 1) +
+                               " attempts: each leaf it reached had already given the key away. "
+                               "Either the chain is being split faster than a descent can cross "
+                               "it, or this core is descending from a root that has since grown "
+                               "a level");
 }
 
 // Highest live Keystone id in a leaf, or 0 if it holds none. Used to
@@ -900,9 +923,12 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
         // that routes the second attempt correctly.
     }
     return Status::TxnConflict("lookup of primary key " + std::to_string(id) + " from page " +
-                               std::to_string(root) + " was outrun by " +
-                               std::to_string(kMaxDescentRestarts) +
-                               " splits; the leaf it reached had given the key away each time");
+                               std::to_string(root) + " gave up after " +
+                               std::to_string(kMaxDescentRestarts + 1) +
+                               " attempts: each leaf it reached had already given the key away. "
+                               "Either the chain is being split faster than a descent can cross "
+                               "it, or this core is descending from a root that has since grown "
+                               "a level");
 }
 
 // **No coverage check here, and the reason is directional** (AT-S5c). A

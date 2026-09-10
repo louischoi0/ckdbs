@@ -2401,19 +2401,32 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
             }
             access.desc_page_id = storage::AnchorClusteredRoot(anchor.value().bytes());
             anchor_held.emplace(std::move(anchor.value()));
-        } else if (anchor.status().code() == StatusCode::kCorruption) {
+        } else {
+            // **An unfaultable anchor is a refusal now, not a fall-through**
+            // (AT-S5c's review, C3). What stood here read: *"an own
+            // relation's unfaultable anchor is the pre-grant window ... it
+            // falls back to the CREATE-time row - safe because nothing can
+            // have moved a root the owner could not yet write, and
+            // self-healing because the grant receiver drops this cache when
+            // the rights land"*. Both halves of that are gone: AW-S1b
+            // deleted the grants, and AT-S5c removed the `owner_core` gate
+            // above because every core walks every tree. So the fall-back
+            // no longer lands on a root nobody could have moved - it lands
+            // on the **CREATE-time** root of a relation another core may
+            // have grown, which is exactly the silent wrong answer this
+            // stage exists to remove, and for the *index* roots filled from
+            // this same anchor there is no coverage check underneath to
+            // refuse the consequence.
+            //
+            // Refusing is recoverable and admitting is not, which is the
+            // rule this engine states elsewhere; a caller that cannot read
+            // the one page carrying a relation's current roots does not
+            // know where the relation is.
             return anchor.status().WithContext(
-                "resolving the clustered root through anchor page " +
-                std::to_string(access.anchor_page_id) + " of this core's own relation");
+                "resolving the clustered root of relation oid " + std::to_string(oid) +
+                " through anchor page " + std::to_string(access.anchor_page_id) +
+                "; without it this core cannot tell where the relation's tree begins");
         }
-        // An own relation's *unfaultable* anchor is the pre-grant window
-        // (P6's resolve-before-grant contract: a peer fills its relation's
-        // access before any grant arrives), and it falls back to the
-        // CREATE-time row - safe because nothing can have moved a root the
-        // owner could not yet write, and self-healing because the grant
-        // receiver drops this cache when the rights land (the f5686f8
-        // review's C1, closed at the grant rather than by refusing the
-        // fill). Corruption alone is loud.
     }
 
     // The row-size constant, computed once here and carried for the life of
@@ -3715,6 +3728,28 @@ Status Catalog::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root,
     // catalog_cache.hpp's: a root belongs to one index and is read by
     // nothing else, and a drop would dangle the running statement's
     // TableAccess.
+    //
+    // **"read by nothing else" was AT-S5's routing, and the word is bumped
+    // for the same reason the clustered root's is** (AT-S5c's review). A
+    // write runs where the session is now, so every core walks this index
+    // and every core's `TableAccess::IndexRef::root_page_id` is a memo of
+    // it. A peer that kept the pre-growth root descends into what is now
+    // the new root's *leftmost subtree*: the entry lands in a page no
+    // descent from the current root reaches, so the row is lost to every
+    // later probe - and if that peer's own insert then grows a level from
+    // the stale root, its `UpdateIndexRoot` republishes a root whose
+    // subtree does not contain the other core's entries at all. The
+    // clustered root's twin has carried this since AT-S5c; the index root
+    // is the same defect one structure over, and unlike the clustered case
+    // there is no coverage check underneath to refuse it (`index_tree.cpp`
+    // has none), so it is silent.
+    //
+    // `BumpWord` and not `BumpVersion`, for `UpdateRelationDescPage`'s
+    // reason exactly: this core's entry was just repaired in place and
+    // adopts the bump, so `MaintainIndexes`' loop keeps the `access` and
+    // `ix` it is iterating; every other core drops its memo at its next
+    // task boundary and re-reads the root from the anchor, which
+    // `InitTableAccess` reads on every core since AT-S5c.
     if (anchor_page_id == kInvalidPageId) {
         return Status::InvalidArgument(
             "relation oid " + std::to_string(rel_oid) +
@@ -3726,6 +3761,7 @@ Status Catalog::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root,
         return s;
     }
     cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
+    BumpWord();  // every other core re-reads; this one keeps its entry
     return Status::OK();
 }
 

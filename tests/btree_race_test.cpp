@@ -125,8 +125,8 @@ inline constexpr int kRounds = 6;
 inline constexpr int kThreads = 2;
 
 // **The rendezvous, and why the cell is worth nothing without it.**
-// Measured: with the threads merely started together and left to walk forty
-// leaves, the mutant below survived **three runs in six** - the two drift
+// Measured: with the threads merely started together and left to walk the
+// chain, the mutant below survived **three runs in six** - the two drift
 // apart after a few inserts, and once they are on different leaves neither
 // is queued on the other's latch and the window never opens. What produces
 // it is both threads entering `BtreeInsert` for the *same* leaf at the same
@@ -202,7 +202,10 @@ TEST(BtreeRaceTest, ALookupDoesNotMissARowADivideMovedUnderIt) {
     created.value().second.Release();
 
     // Dense enough to fill leaves, and spaced by ten so the divider below
-    // has somewhere to land *inside* one.
+    // has somewhere to land *inside* one. **Sized against the root like the
+    // other two**: 600 rows at ~1 KB is well under an internal node's 678
+    // separators even after the divider doubles the leaf count, and
+    // `root_moved` below is what says so rather than this arithmetic.
     constexpr std::uint64_t kRows = 600;
     constexpr int kProbesPerRound = 8;
     std::vector<std::uint64_t> present;
@@ -315,7 +318,7 @@ TEST(BtreeRaceTest, AScanOfTheChainStillReturnsEveryRowInOrder) {
     // **The root may not move during the concurrent phase, and the cell
     // says so rather than hoping.** A level growth republishes the root,
     // which every thread holds a copy of - a different race, and not this
-    // one. Forty leaves plus the inserts below stay far under an internal
+    // one. Twenty leaves plus the inserts below stay far under an internal
     // node's 678 separators, so the growth cannot happen; the flag is here
     // so that a future change to the numbers fails loudly instead of
     // quietly testing something else.
