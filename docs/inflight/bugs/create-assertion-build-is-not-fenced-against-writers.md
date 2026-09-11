@@ -34,6 +34,13 @@ that reaches `ReserveInsert` *after* the adoption is admitted there instead
 - AT-S5d's uncovered-assertion arm - so the window is the three steps above
 all falling before `Adopt`.
 
+**The same window on the other write paths**, which ask the registry once
+per row and have no reservation-time re-check: an `UPDATE` that read
+`AnyOn` false (`CommandDispatcher`'s update walk) and a `DELETE`
+(`ReserveDelete`'s caller) move a row the cabin never hears of, and
+`SortedFillEligible`'s `!AnyOn` admits a heap bulk fill that bypasses the
+check entirely. Each is the same missing fence.
+
 ## Reproduction
 
 Not reproduced; the read is the evidence. Two cores: core A runs

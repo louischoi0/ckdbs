@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -56,8 +57,9 @@
 // ASSERT_COMMIT), ABORT reverses each reservation (ASSERT_ROLLBACK). In the
 // no-transaction-manager configuration every statement is its own
 // transaction under kBootstrapXid, and the dispatcher ends it either way at
-// statement end - one statement at a time per core is what makes the shared
-// key safe.
+// statement end - one statement at a time per registry is what makes the
+// shared key safe, which holds only for a dispatcher with a registry of its
+// own: every instance has a transaction manager.
 //
 // ---- Page spans -----------------------------------------------------------
 //
@@ -125,7 +127,7 @@ class WalManager;
 
 namespace kds::exec {
 
-// One published assertion, live on this core: everything the write hook
+// One published assertion, live in the registry: everything the write hook
 // needs, resolved once at CREATE (or by future recovery) so the per-write
 // cost is lookups and never a catalog scan or a re-parse.
 struct LiveAssertion {
@@ -215,12 +217,12 @@ public:
     // The checkpoint's base (AS6a, RC07): every live cabin's group headers,
     // `{group_id, key, count, sum}` and never the entry lists, and never a
     // hold. Keys are owned by the returned value.
-    std::vector<wal::AssertionCabinSnapshot> SnapshotAssertions() const override;
+    std::vector<wal::AssertionCabinSnapshot> SnapshotAssertions() const;
     // The same, with the directory latch held until `visit` returns - the
     // checkpointer's entry point, so its `ASSERT_SNAPSHOT` records are
     // appended with no `ASSERT_*` record able to land between the headers
     // they carry and their own LSN (the header's snapshot paragraph).
-    Status VisitSnapshots(const SnapshotVisitor& visit) const override;
+    Status VisitSnapshots(const wal::SnapshotVisitor& visit) const override;
 
     // ---- An admission's held contribution (AT-S5d) ------------------------
     //
@@ -251,18 +253,16 @@ public:
     // INSERT's admission - run before the row id is allocated, FK's
     // ordering, so a refusal burns nothing. `values` are the statement's
     // VALUES list: columns after the pk, so schema position p is values[p-1].
-    //
-    // With `hold`, an admitted row's contribution is **held** until
-    // `ReserveInsert` logs it; without one the call is a pure check, which
-    // is a test's and a diagnostic's use and never a write path's.
+    // An admitted row's contribution is **held** in `hold` until
+    // `ReserveInsert` logs it; mandatory, so no write path can admit a row
+    // another core's admission does not see.
     //
     // `reserver`, when given, is filled on a refusal with a transaction
     // whose reservation or hold is part of what refused it - the caller's
     // cue to wait rather than fail (AO-S6e-c). Left at 0 when the refusing
     // aggregate is settled.
     Status AdmitInsert(catalog::Oid oid, std::span<const parser::AstValue> values,
-                       std::uint64_t writer_txn = 0, std::uint64_t* reserver = nullptr,
-                       Hold* hold = nullptr);
+                       std::uint64_t writer_txn, Hold& hold, std::uint64_t* reserver = nullptr);
 
     // INSERT's reservation, after placement: the arrival entry, the
     // ASSERT_RESERVE record, and the hold becoming header. An assertion the
@@ -317,9 +317,8 @@ private:
         std::uint16_t index = 0;
     };
 
-    // One admitted, unlogged contribution. `held_` carries the sum per
-    // group for the admission's arithmetic; this record is what a waiter's
-    // `ReserverOnLocked` and a release need.
+    // One admitted, unlogged contribution: what an admission's arithmetic,
+    // a waiter's `ReserverOnLocked` and a release read.
     struct HeldContribution {
         std::uint64_t txn_id = 0;
         std::uint64_t assertion_id = 0;
@@ -339,18 +338,34 @@ private:
     std::uint64_t ReserverOnLocked(std::uint64_t assertion_id, const std::string& key,
                                    std::uint64_t exclude_txn) const;
 
-    // Under the directory latch, all four. `FitsLocked`: whether `check`
-    // more fits `key`'s group with every held contribution counted.
-    // `HoldLocked`: holds `value` for `txn_id` and answers the hold's
-    // serial. The amount checked and the amount held differ for an `UPDATE`
-    // (`AdmitAndReserveUpdate` says why); an `INSERT` passes one number to
-    // both.
-    StatusOr<bool> FitsLocked(const LiveAssertion& a, const std::string& key,
-                              std::int64_t check) const;
-    StatusOr<std::uint64_t> HoldLocked(std::uint64_t txn_id, std::uint64_t assertion_id,
-                                       const std::string& key, std::int64_t value);
+    // Under the directory latch, all of these. `AdmitLocked` is the one
+    // admission: whether `check` more fits `key`'s group with every held
+    // contribution counted (no check at all when `check` is empty), the
+    // violation naming `row` when it does not - with `reserver` filled if
+    // given - and otherwise `hold` held for `txn_id` under the serial it
+    // answers. The amount checked and the amount held differ for an
+    // `UPDATE` (`AdmitAndReserveUpdate` says why); an `INSERT` passes one
+    // number to both.
+    StatusOr<std::uint64_t> AdmitLocked(LiveAssertion& a, const std::string& key,
+                                        std::optional<std::int64_t> check, std::int64_t hold,
+                                        std::uint64_t txn_id,
+                                        std::span<const parser::AstValue> row,
+                                        std::size_t first_col_pos, std::uint64_t* reserver);
     void ReleaseHoldLocked(std::uint64_t serial);
     std::vector<wal::AssertionCabinSnapshot> SnapshotLocked() const;
+    void PublishDeclaredLocked() noexcept;
+
+    // **Nothing declared, asked without the latch** (the AT-S5d review). The
+    // write path asks the registry on every row of every relation, and a
+    // latch every core takes for a relation that carries no assertion is a
+    // cost with nothing behind it. `declared_` is the count of relations
+    // with a live or unenforceable assertion, published under the latch by
+    // the three calls that change it; reading 0 just before an adoption is
+    // what taking the latch just before it reads, so the answer is no
+    // staler than the latched one.
+    bool NothingDeclared() const noexcept {
+        return declared_.load(std::memory_order_acquire) == 0;
+    }
 
     // Appends one entry and logs it, the header change and the hold's
     // conversion (`serial`, 0 for none) atomic with the record under the
@@ -370,10 +385,11 @@ private:
     // relation's others.
     std::unordered_map<catalog::Oid, std::vector<std::uint64_t>> unenforceable_;
     std::unordered_map<std::uint64_t, std::vector<Reservation>> pending_;
-    // Held contributions by serial, and their sum per (assertion, group).
+    // Held contributions by serial. Bounded by the rows in flight - one per
+    // statement per assertion - so an admission sums it by scanning.
     std::unordered_map<std::uint64_t, HeldContribution> holds_;
-    std::unordered_map<std::uint64_t, std::unordered_map<std::string, std::int64_t>> held_;
     std::uint64_t next_hold_serial_ = 0;
+    std::atomic<std::size_t> declared_{0};
 };
 
 }  // namespace kds::exec

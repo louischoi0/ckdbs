@@ -46,6 +46,8 @@
 #include "kds/sched/task.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/wal/log_scanner.hpp"
+#include "kds/wal/payload.hpp"
 
 // One core's stack, and the shutdown protocol that stops it
 // (docs/inflight/in-progress/workplan-crosscore.md P2).
@@ -1042,6 +1044,56 @@ TEST_F(CoreRuntimeTest, APeerHandedTheInstancesAssertionRegistryResumesNothing) 
         << "the peer resumed into the instance's registry";
     EXPECT_EQ(&peer.value()->dispatcher().assertions(), &instance)
         << "the peer's writes would check a registry of their own";
+}
+
+TEST_F(CoreRuntimeTest, APeerHandedTheInstancesAssertionRegistryWritesNoSnapshotOfIt) {
+    // **The AT-S5d review's defect 1.** Every core's checkpointer used to
+    // snapshot its own registry; once the registry was the instance's, every
+    // core snapshotted the same assertions into the one stream. Each
+    // `CHECKPOINT_BEGIN` is appended outside the registry's latch, so two
+    // cores' runs can land back to back, and recovery then meets the second
+    // run's first group while the first run's base is still open - a
+    // duplicate group id, a failed pass, and every asserted relation refusing
+    // writes for the mount. Only core 0 snapshots the instance's registry
+    // now, so a peer handed it writes no `ASSERT_SNAPSHOT` at its completion
+    // checkpoint or at any other.
+    //
+    // **Mutation**, measured: the peer's checkpointer handed the registry
+    // anyway - its two checkpoints write two snapshots, killed 1 in 1.
+    constexpr std::uint64_t kAssertionId = 77;
+    exec::AssertionEnforcer instance(/*shared=*/true);
+    exec::LiveAssertion live;
+    live.assertion_id = kAssertionId;
+    live.target_oid = 4000;
+    instance.Adopt(std::move(live));
+
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+    CoreRuntime::Config config = ConfigFor(1);
+    config.assertions = &instance;
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    // The completion checkpoint, then a cadence one.
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+    ASSERT_TRUE(peer.value()->Checkpoint().ok());
+    ASSERT_TRUE(peer.value()->Sync().ok());
+    ASSERT_TRUE(core0_wal_->Flush().ok());
+
+    int snapshots = 0;
+    auto scanned = wal::ScanLog(*core0_log_device_, /*core_id=*/0, /*from_lsn=*/0,
+                                [&](const wal::DecodedRecord& record) -> Status {
+                                    if (record.type() != wal::RecordType::kAssertSnapshot) {
+                                        return Status::OK();
+                                    }
+                                    auto decoded = wal::DecodeAssertSnapshot(record.payload);
+                                    if (!decoded.ok()) return decoded.status();
+                                    if (decoded.value().fields.assertion_id == kAssertionId) {
+                                        ++snapshots;
+                                    }
+                                    return Status::OK();
+                                });
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    EXPECT_EQ(snapshots, 0) << "a peer snapshotted the registry core 0 snapshots";
 }
 
 TEST_F(CoreRuntimeTest, APeersOwnSuperblockAnswersForTheVolumeAndNotWithZeros) {

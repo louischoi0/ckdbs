@@ -363,10 +363,9 @@ CREATE ASSERTION <name> ON <table> GROUP BY (<col> [, ...])
   arriving on any core is checked against the same aggregate; two sessions
   on two cores inserting into a group with room for one row get one row
   and one `ASSERTION_VIOLATION`. `SHOW ASSERTIONS` answers the same from
-  every core. (From 2026-08-26 until this change each core enforced only
-  the relations it owned: the success line carried `built_by_core=<n>` and
-  another core's `SHOW ASSERTIONS` printed `enforced_by_core=<n>`. Both
-  fields are gone.) One limit is stated rather than hidden: a write on
+  every core. `CREATE ASSERTION`'s success line carries no
+  `built_by_core=` and `SHOW ASSERTIONS` no `enforced_by_core=` field any
+  more. One limit is stated rather than hidden: a write on
   another core that runs **during** a `CREATE ASSERTION` on the same
   relation is not fenced off from the build, so run the create while the
   relation is quiet.

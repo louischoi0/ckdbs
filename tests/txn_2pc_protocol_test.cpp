@@ -3093,7 +3093,8 @@ TEST_F(LockDeadlockTest, AnAssertionsRejectionIsFinalWhenTheReserverCommits) {
 TEST_F(LockDeadlockTest, AnAssertionRejectionWithNothingReservedIsRefusedAtOnce) {
     // The third answer, and the one that says the wait is not unconditional:
     // where the aggregate that refuses is **settled**, no decide can change
-    // it and `ReserverOn` names nobody, so the violation is delivered now.
+    // it and the registry names nobody to wait for, so the violation is
+    // delivered now.
     ASSERT_EQ(Local("CREATE TABLE trades (id int64, account int64, qty int64) BTREE")
                   .rfind("CREATED", 0),
               0u);

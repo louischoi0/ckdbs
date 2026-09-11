@@ -2195,8 +2195,14 @@ public:
     // shape and a one-core instance's. `enforcer` must outlive the dispatcher,
     // and the swap happens before the first statement - nothing reserved into
     // the registry it replaces.
-    void set_assertions(exec::AssertionEnforcer* enforcer) noexcept {
-        enforcer_ = enforcer != nullptr ? enforcer : owned_enforcer_.get();
+    void set_assertions(exec::AssertionEnforcer* enforcer) {
+        if (enforcer != nullptr) {
+            owned_enforcer_.reset();
+            enforcer_ = enforcer;
+        } else if (owned_enforcer_ == nullptr) {
+            owned_enforcer_ = std::make_unique<exec::AssertionEnforcer>();
+            enforcer_ = owned_enforcer_.get();
+        }
     }
 
     // RD5's decline counters, written on the drain tick (CoreRuntime) and

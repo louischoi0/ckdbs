@@ -3,9 +3,10 @@
 `CREATE TABLE` and `CREATE INDEX` are atomic, isolated, consistent and
 durable; `DROP INDEX` is atomic and isolated on core 0 — on a relation
 another core owns it is refused inside a transaction (§5e); `DROP TABLE`
-is atomic only — §5 says what each gets and §5a why they differ. §5e and
-§5f are the two-core cases: a `CREATE INDEX` or `CREATE ASSERTION` whose
-relation another core owns is built by that owner and published by core 0.
+is atomic only — §5 says what each gets and §5a why they differ. §5e is
+the two-core case: a `CREATE INDEX` whose relation another core owns is
+built by that owner and published by core 0. §5f is `CREATE ASSERTION`,
+which was that case too until AT-S5d and runs where its session is now.
 
 ## 0. The decision this reverses
 
@@ -108,8 +109,9 @@ Built, and what each gets:
 - **`CREATE INDEX` on a relation another core owns** — atomic and
   isolated across two cores: the owner builds the tree from its own lease,
   core 0 writes and commits the `sys.indexes` row (§5e).
-- **`CREATE ASSERTION` on a relation another core owns** — the owner
-  builds, core 0 publishes; admitted inside a transaction (§5f).
+- **`CREATE ASSERTION`** — built and published where its session is,
+  whoever owns the relation, since AT-S5d; admitted inside a transaction
+  (§5f).
 - The autocommit path is unchanged in behaviour: a bare `CREATE TABLE`
   commits immediately.
 
@@ -464,46 +466,39 @@ ROLLBACK would then restore an index missing every meanwhile-write.
 Autocommit keeps only the commit-failure window every DDL has and is
 admitted; a `DROP INDEX` on a relation core 0 owns is untouched.
 
-### 5f. The same relation's `CREATE ASSERTION`, and why it is not §5e twice
+### 5f. `CREATE ASSERTION`, built where its session is
 
-The shape is §5e's — core 0 checks the declaration and issues the id, the
-owner builds, core 0 publishes the `sys.assertions` row, the statement
-parks between the two phases — and the *reason* is stronger. An index is
-built once from rows core 0 cannot see; a Bound Cabin is **written by
-every subsequent write to the relation**, so its pages have to be the
-owner's for the assertion's whole life, not only at build time.
+**Since AT-S5d the statement runs where its session is**, whoever owns the
+relation: the checks and the id, the build, the publish and the adoption
+into the instance's one assertion registry (`assertion.md` §6.1). From
+PW1c-6c until then a relation another core owned had its Bound Cabin built
+by that owner - §5e's shape, core 0 publishing and parking between the two
+phases - because the owner's registry was the only one its writes asked.
 
-**Admitted inside an explicit transaction**, and on the same terms as a
-locally-declared one: `InsertAssertion` writes under no transaction, so
-the owner enforces before `COMMIT` and a `ROLLBACK` leaves the assertion
-in place. One consequence is shared with the local arm and named rather
-than hidden: a transaction that has already written the relation meets
-the build's in-flight refusal (`assertion_build.cpp`'s `kBusy` →
-`TXN_CONFLICT`), and a retry inside that transaction cannot succeed — its
-own row stays in flight until it ends — while each attempt burns an
-assertion id and orphans the owner's chain. Run the declaration first, or
-outside the transaction that writes.
+**Admitted inside an explicit transaction**: `InsertAssertion` writes
+under no transaction, so the assertion enforces before `COMMIT` and a
+`ROLLBACK` leaves it in place. One consequence is named rather than hidden:
+a transaction that has already written the relation meets the build's
+in-flight refusal (`assertion_build.cpp`'s `kBusy` → `TXN_CONFLICT`), and a
+retry inside that transaction cannot succeed - its own row stays in flight
+until it ends - while each attempt burns an assertion id and orphans a
+chain. Run the declaration first, or outside the transaction that writes.
 
-**Atomic**, on the same terms: one publishing event, core 0's row. A refused
-reply, a deadline or a failed publish tells the owner `done(aborted)` and the
-chain orphans with the entries any meanwhile-write put in it, exactly as a
-dropped assertion's pages orphan.
+**Atomic**: one publishing event, the `sys.assertions` row. A refused build
+or a failed publish adopts nothing, and the chain the build wrote orphans,
+exactly as a dropped assertion's pages do.
 
-**Isolated differently, and deliberately.** §5e's owner refuses the
-relation's writes for the whole build; this one refuses none, because the
-owner adopts the directory at the end of its own synchronous build task —
-there is no interval between the last scanned row and the adoption in which a
-write could be missed. What that leaves is a write admitted after the
-adoption and before core 0's publish: counted by a cabin whose row is on its
-way, and reserved into an orphan chain if the publish then fails. The cabin
-is a stricter-than-snapshot admission structure (`assertion.md` §4.3),
-so counting early is the side it already errs on.
-
-**One gap of its own**: a write that passed its admission check and then
-parked can reserve after an adoption that happened in between, so a single
-row can be reserved unchecked. `CREATE INDEX` has the identical hole against
-its window; both need a statement's gate-to-write span to be atomic, which
-nothing provides.
+**Not isolated from a writer on another core.** The build takes no relation
+lock, so a write on another core that is admitted before the directory is
+adopted, lands its row where the scan has already passed, and reaches its
+reservation before the adoption is counted by neither
+(`docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`;
+`workorder-at-m3-uniformity.md` AT-0 item 13). An `INSERT` that reaches its
+reservation *after* the adoption is admitted there instead, so the hole the
+local arm used to share with `CREATE INDEX` - a write that passed its
+admission, parked, and reserved unchecked after an adoption - is closed for
+an insert; an `UPDATE` or `DELETE` asks the registry once per row and is
+exposed the same way the unfenced build is.
 
 ## 6. Open decisions — do not assume
 

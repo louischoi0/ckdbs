@@ -158,7 +158,7 @@ protected:
         class Source final : public wal::AssertionSnapshotSource {
         public:
             explicit Source(const BoundCabin& cabin) : cabin_(cabin) {}
-            std::vector<wal::AssertionCabinSnapshot> SnapshotAssertions() const override {
+            Status VisitSnapshots(const wal::SnapshotVisitor& visit) const override {
                 // The seam owns its keys, so this is a straight copy - the
                 // first version of this fixture had to keep a `mutable` vector
                 // of strings alive across the call, which is the trap that
@@ -173,7 +173,7 @@ protected:
                     entry.key = g.key;
                     out.groups.push_back(std::move(entry));
                 }
-                return {out};
+                return visit({out});
             }
 
         private:
@@ -652,7 +652,8 @@ TEST_F(AssertionResumeTest, AFreshRegistryResumesEnforcingWithTheRecoveredAggreg
     const auto admit = [&](std::int64_t amount) {
         row[0].int_val = 1;  // branch
         row[1].int_val = amount;
-        return fresh.AdmitInsert(4000, row);
+        AssertionEnforcer::Hold hold;  // given back on return: each probe is its own
+        return fresh.AdmitInsert(4000, row, /*writer_txn=*/0, hold);
     };
     EXPECT_EQ(admit(50).code(), StatusCode::kAssertionViolation) << "70 + 50 > 100";
     EXPECT_TRUE(admit(30).ok()) << "70 + 30 == 100, exactly at the bound";
@@ -692,7 +693,8 @@ TEST_F(AssertionResumeTest, AnAssertionCreatedAfterTheLastCheckpointStillRecover
     const auto admit = [&](std::int64_t amount) {
         row[0].int_val = 1;
         row[1].int_val = amount;
-        return fresh.AdmitInsert(4000, row);
+        AssertionEnforcer::Hold hold;  // given back on return: each probe is its own
+        return fresh.AdmitInsert(4000, row, /*writer_txn=*/0, hold);
     };
     EXPECT_EQ(admit(50).code(), StatusCode::kAssertionViolation) << "70 + 50 > 100";
     EXPECT_TRUE(admit(30).ok()) << "70 + 30 == 100";

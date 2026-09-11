@@ -194,11 +194,12 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
 
     // §6a's converse at the **door**, not only at `PrepareAssertionDef`
     // (workplan-range-directory.md §9b), and the difference is a race
-    // rather than a duplicate. The peer path parks between the two: core 0
-    // prepares, the owner builds and adopts, core 0 lands the row here -
-    // and the owner's drain tick can open a range for that relation inside
-    // that window. §9b's rule is that core 0's single catalog stream
-    // serializes the pair and whichever write lands second is refused;
+    // rather than a duplicate: between the prepare and this row landing -
+    // the build's whole length - the owner's drain tick can open a range
+    // for that relation. (The peer path, which parked between the two until
+    // AT-S5d, made the window longer; the build alone keeps it open.) §9b's
+    // rule is that the catalog serializes the pair and whichever write
+    // lands second is refused;
     // `Catalog::CreateIndex` re-checks `CheckIndexDef` for exactly this
     // reason, and without the same re-check here the assertion window the
     // enumeration named stays open in the one direction RD5 cannot see.
@@ -443,7 +444,29 @@ StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
     return oid.value();
 }
 
-}  // namespace
+
+// ---- `CREATE ASSERTION` in its three steps -----------------------------
+//
+// Validate, build, publish (`assertion.md` §8.1), split at the index build's
+// seams (`exec::PrepareIndexDef` / `exec::BuildIndexTree`, PW1c-6b-1) so a
+// relation another core owned could have its Bound Cabin built there. That
+// caller went at AT-S5d with the per-core registry it served, so the two
+// halves are this file's own and `CreateAssertion` runs them back to back.
+
+// The relation, and the id the build's `ASSERT_BUILD` records will carry.
+struct AssertionPrepared {
+    catalog::Oid target_oid = 0;
+    std::uint64_t assertion_id = 0;
+};
+
+// The root the publish names, the two numbers the reply reports, and the
+// live directory the registry will adopt.
+struct AssertionCabinBuild {
+    PageId cabin_root = kInvalidPageId;
+    std::size_t rows_incorporated = 0;
+    std::size_t group_count = 0;
+    LiveAssertion live;
+};
 
 StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
                                                 storage::PageStore& store,
@@ -551,13 +574,13 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
     // `enforcing=0` is *permanent* until DROP + CREATE. With a long
     // `checkpoint_interval_ms` that is every new assertion.
     //
-    // **Into the stream of the core that built it**, which is the core that
-    // will append to the cabin - so the base and the records folded onto it
-    // are one stream's, whichever core that is (PW1c-6c). Logged before the
-    // publish rather than after it: the owner cannot see core 0's row, so
-    // the cross-core order is forced, and the local path keeps the same one
-    // rather than differing by path (assertion_catalog.hpp says what that
-    // costs).
+    // Logged before the publish rather than after it, the order the
+    // owner-built path needed while the build ran on another core and could
+    // not wait for core 0's row (PW1c-6c, retired at AT-S5d). What it costs
+    // is an `ASSERT_SNAPSHOT` for an assertion whose publish then fails - a
+    // base no catalog row names, which no mount folds, because a mount folds
+    // only what `ListAssertions` returns. Moving it after the publish would
+    // be a durability change of its own, and is not made here.
     if (wal != nullptr) {
         wal::AssertionCabinSnapshot base;
         base.assertion_id = assertion_id;
@@ -575,6 +598,8 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
     }
     return out;
 }
+
+}  // namespace
 
 StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
                                              storage::PageStore& store,

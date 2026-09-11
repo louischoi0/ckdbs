@@ -833,14 +833,21 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     checkpoint_anchor_->SetLogger(log_);
     checkpointer_.emplace(*wal_, *checkpoint_target_, *txn_manager_, *checkpoint_anchor_);
     checkpointer_->SetLogger(log_);
-    // AS6a's snapshot source, wired on the same terms core 0 wires it.
-    //
-    // **The instance's registry since AT-S5d**, so every core's checkpoint
-    // snapshots every assertion, and a mount takes the first snapshot past
-    // its scan start as the base and skips the rest (`assertion_recover.cpp`).
-    // Each is a base only because the registry holds its latch across the
-    // records (`VisitSnapshots`): another core may be reserving into it.
-    checkpointer_->SetAssertionSource(&dispatcher_->assertions());
+    // AS6a's snapshot source - **only for a registry this runtime owns**
+    // (AT-S5d). The instance's registry is snapshotted by core 0's
+    // checkpoints alone. Two cores snapshotting it would put two runs of the
+    // same assertions into the one stream, and nothing orders them: each
+    // `CHECKPOINT_BEGIN` is appended outside the registry's latch, so the
+    // runs can land back to back, and recovery reads the second run's first
+    // record while the first run's base is still open - a duplicate group
+    // id, a failed pass, and every asserted relation refusing writes for the
+    // mount (`assertion_recover.cpp`). Core 0's snapshot is always in range:
+    // the scan starts at the anchor fold's `redo_start_lsn`, which is at or
+    // below core 0's own `CHECKPOINT_BEGIN`. A runtime with its own registry
+    // - a fixture - snapshots it, as every core did before AT-S5d.
+    const wal::AssertionSnapshotSource* snapshot_source =
+        config_.assertions == nullptr ? &dispatcher_->assertions() : nullptr;
+    checkpointer_->SetAssertionSource(snapshot_source);
 
     // **The completion checkpoint** (RC08), which core 0 runs at the end of
     // its own recovery and a peer could not: it publishes an anchor past
@@ -861,7 +868,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // the block is kept (PW3b).
     return CheckpointAfterRecovery(config_.core_id, *wal_, *checkpoint_target_,
                                    *checkpoint_anchor_, log_, &scheduler_->clock(),
-                                   &recovery_.checkpoint_ns, &dispatcher_->assertions());
+                                   &recovery_.checkpoint_ns, snapshot_source);
 }
 
 void CoreRuntime::Run() {

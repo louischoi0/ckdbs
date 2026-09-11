@@ -87,7 +87,7 @@ enum class RangeGate : std::uint8_t {
     kCabin,       // never returned since SB3; answered, not deferred — range_eligible.cpp
     kSpill,       // §6a: var-heap partition under a boundary undesigned
     kForeignKey,  // §6a: validation reads the linked relation
-    kAssertion,   // §6a fifth gate (C2): one core's chain, one core's registry
+    kAssertion,   // §6a fifth gate (C2): kept, its per-core premise gone at AT-S5d
 };
 
 // The gate's name for the decline's log line and for the counter's

@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -16,6 +17,12 @@
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/sched/clock.hpp"
+#include "kds/wal/checkpointer.hpp"
+#include "kds/wal/log_scanner.hpp"
+#include "kds/wal/manager.hpp"
+#include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/payload.hpp"
 
 // **One assertion registry, reserved into from more than one core** (AT-S5d,
 // AT-R15, D1).
@@ -38,6 +45,8 @@
 //   - **A snapshot holds the directory against a reservation on another
 //     core**, which is what keeps a checkpoint's base equal to the fold of
 //     the records before it.
+//   - **A held negative contribution lends no room**, and **every snapshot
+//     equals the fold of the records before it** on a real shared log.
 //   - **Eight cores reserving into one cabin lose no entry**, which pins
 //     the directory latch and - measured, and said where - not the chain
 //     latch.
@@ -140,9 +149,9 @@ TEST(AssertionRaceTest, TwoCoresAdmittingIntoOneGroupAdmitExactlyOneAndRefuseThe
     // but only after the second had been placed and refused at its
     // reservation.
     //
-    // **Mutation**, measured: `AdmitInsert` takes no hold (`if (hold ==
-    // nullptr) continue;` made unconditional) - both admissions answer OK,
-    // killed 5 runs in 5.
+    // **Mutation**, measured: `AdmitInsert` giving each hold straight back
+    // instead of keeping it - both admissions answer OK, killed 5 runs in 5
+    // (and 5 in 5 against the first draft's equivalent).
     std::unique_ptr<storage::MemoryPageDevice> device;
     auto store = ArmedStore(device);
     ASSERT_NE(store, nullptr);
@@ -164,7 +173,7 @@ TEST(AssertionRaceTest, TwoCoresAdmittingIntoOneGroupAdmitExactlyOneAndRefuseThe
                 const auto values = Row(round);
                 AssertionEnforcer::Hold hold;
                 gate.Wait();
-                const Status admit = enforcer.AdmitInsert(kOid, values, txn, nullptr, &hold);
+                const Status admit = enforcer.AdmitInsert(kOid, values, txn, hold);
                 gate.Wait();  // both have asked; neither has reserved
                 if (!admit.ok()) {
                     if (admit.code() == StatusCode::kAssertionViolation) {
@@ -202,9 +211,9 @@ TEST(AssertionRaceTest, AnAssertionAdoptedBetweenAnAdmissionAndItsReservationIsC
     // Reserving it unchecked would put a row in a group the constraint says
     // must stay empty; the reservation checks it instead, and refuses.
     //
-    // **Mutation**, measured: `ReserveInsert` reserves an uncovered
-    // assertion without refusing on `FitsLocked` - the reservation answers
-    // OK and the group reads 1, killed 1 in 1 (the cell is single-threaded).
+    // **Mutation**, measured: `ReserveInsert` admitting an uncovered
+    // assertion with no check - the reservation answers OK and the group
+    // reads 1, killed 1 in 1 (the cell is single-threaded).
     std::unique_ptr<storage::MemoryPageDevice> device;
     auto store = ArmedStore(device);
     ASSERT_NE(store, nullptr);
@@ -212,7 +221,7 @@ TEST(AssertionRaceTest, AnAssertionAdoptedBetweenAnAdmissionAndItsReservationIsC
 
     const auto values = Row(7);
     AssertionEnforcer::Hold hold;
-    ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/1, nullptr, &hold).ok());
+    ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/1, hold).ok());
     enforcer.Adopt(CountCap(*store, /*id=*/1, /*bound=*/0));
 
     const Status reserved =
@@ -239,19 +248,19 @@ TEST(AssertionRaceTest, AHoldCountsInEveryAdmissionAndInNoSnapshotAndIsRoomAgain
 
     {
         AssertionEnforcer::Hold first;
-        ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/1, nullptr, &first).ok());
+        ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/1, first).ok());
         EXPECT_EQ(SnapshotCount(enforcer, 7), 0) << "a hold reached the header before its record";
 
         std::uint64_t reserver = 0;
         AssertionEnforcer::Hold second;
-        const Status refused = enforcer.AdmitInsert(kOid, values, /*writer_txn=*/2, &reserver,
-                                                    &second);
+        const Status refused = enforcer.AdmitInsert(kOid, values, /*writer_txn=*/2, second,
+                                                    &reserver);
         EXPECT_EQ(refused.code(), StatusCode::kAssertionViolation) << refused.message();
         EXPECT_EQ(reserver, 1u) << "a refusal caused by a hold names nobody to wait for";
     }  // `first` gives its hold back here, unreserved
 
     AssertionEnforcer::Hold third;
-    ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/3, nullptr, &third).ok())
+    ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/3, third).ok())
         << "a hold given back left the group full";
     ASSERT_TRUE(enforcer
                     .ReserveInsert(*store, /*wal=*/nullptr, 3, third, kOid, values, /*pk=*/3,
@@ -287,7 +296,7 @@ TEST(AssertionRaceTest, ASnapshotHoldsTheDirectoryAgainstAReservationOnAnotherCo
     std::thread other([&] {
         SetCurrentCore(1);
         AssertionEnforcer::Hold hold;
-        EXPECT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/1, nullptr, &hold).ok());
+        EXPECT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/1, hold).ok());
         admitted.store(true, std::memory_order_release);
         while (!visiting.load(std::memory_order_acquire)) std::this_thread::yield();
         reserving.store(true, std::memory_order_release);
@@ -344,7 +353,8 @@ TEST(AssertionRaceTest, EightCoresReservingIntoOneCabinLoseNoEntryAndCountEveryO
     // reading the tail inside another's growth, a window this shape does not
     // open: the chain latch removed survived 10 runs in 10, at two writers
     // and again at eight. The latch stays because the writer's tail and page
-    // count are plain fields two threads would otherwise write.
+    // count are plain fields two threads would otherwise write - a data race
+    // a ThreadSanitizer run would report whatever this cell observes.
     std::unique_ptr<storage::MemoryPageDevice> device;
     auto store = ArmedStore(device);
     ASSERT_NE(store, nullptr);
@@ -367,7 +377,7 @@ TEST(AssertionRaceTest, EightCoresReservingIntoOneCabinLoseNoEntryAndCountEveryO
                 AssertionEnforcer::Hold hold;
                 gate.Wait();
                 const std::uint64_t pk = static_cast<std::uint64_t>(n) * kWriters + t + 1;
-                if (!enforcer.AdmitInsert(kOid, values, txn, nullptr, &hold).ok() ||
+                if (!enforcer.AdmitInsert(kOid, values, txn, hold).ok() ||
                     !enforcer
                          .ReserveInsert(*store, /*wal=*/nullptr, txn, hold, kOid, values, pk,
                                         kInvalidPageId, 0)
@@ -395,6 +405,185 @@ TEST(AssertionRaceTest, EightCoresReservingIntoOneCabinLoseNoEntryAndCountEveryO
     EXPECT_EQ(on_chain, static_cast<std::uint64_t>(kWriters) * kPerThread)
         << "an entry was appended to a page the chain no longer reaches";
     for (int t = 0; t < kWriters; ++t) EXPECT_EQ(SnapshotCount(enforcer, t), kPerThread);
+}
+
+
+// `GROUP BY (g) CHECK SUM(a) <= bound` on `(id, g, a)`.
+LiveAssertion SumCap(storage::PageStore& store, std::uint64_t id, std::int64_t bound) {
+    LiveAssertion a = CountCap(store, id, bound);
+    a.aggregate = BoundAggregate::kSum;
+    a.sum_col = 2;
+    a.sum_col_name = "a";
+    a.cabin = BoundCabin(BoundAggregate::kSum, bound);
+    return a;
+}
+
+std::vector<parser::AstValue> Row2(std::int64_t g, std::int64_t amount) {
+    std::vector<parser::AstValue> row(2);
+    row[0].type = parser::ValueType::kInt;
+    row[0].int_val = g;
+    row[1].type = parser::ValueType::kInt;
+    row[1].int_val = amount;
+    return row;
+}
+
+TEST(AssertionRaceTest, ANegativeContributionIsHeldAsZeroSoItLendsNoRoom) {
+    // A held contribution counts in every admission - **only if it is
+    // positive**. A negative one would read as room, and the statement that
+    // holds it can still fail and take the room back: the group is at its
+    // bound of 10, a -5 is held, and a +3 that fits only if the -5 is real
+    // must be refused until the -5 is logged.
+    //
+    // **Mutation**, measured: `AdmitLocked` counting negative holds too -
+    // the +3 is admitted against 5, killed 1 in 1 (single-threaded).
+    std::unique_ptr<storage::MemoryPageDevice> device;
+    auto store = ArmedStore(device);
+    ASSERT_NE(store, nullptr);
+    AssertionEnforcer enforcer(/*shared=*/true);
+    enforcer.Adopt(SumCap(*store, /*id=*/1, /*bound=*/10));
+
+    {
+        AssertionEnforcer::Hold full;
+        ASSERT_TRUE(enforcer.AdmitInsert(kOid, Row2(1, 10), /*writer_txn=*/1, full).ok());
+        ASSERT_TRUE(enforcer
+                        .ReserveInsert(*store, /*wal=*/nullptr, 1, full, kOid, Row2(1, 10),
+                                       /*pk=*/1, kInvalidPageId, 0)
+                        .ok());
+    }
+
+    AssertionEnforcer::Hold negative;
+    ASSERT_TRUE(enforcer.AdmitInsert(kOid, Row2(1, -5), /*writer_txn=*/2, negative).ok());
+    {
+        AssertionEnforcer::Hold three;
+        EXPECT_EQ(enforcer.AdmitInsert(kOid, Row2(1, 3), /*writer_txn=*/3, three).code(),
+                  StatusCode::kAssertionViolation)
+            << "a held -5 lent its room before its record existed";
+    }
+    ASSERT_TRUE(enforcer
+                    .ReserveInsert(*store, /*wal=*/nullptr, 2, negative, kOid, Row2(1, -5),
+                                   /*pk=*/2, kInvalidPageId, 0)
+                    .ok());
+    AssertionEnforcer::Hold three;
+    EXPECT_TRUE(enforcer.AdmitInsert(kOid, Row2(1, 3), /*writer_txn=*/3, three).ok())
+        << "the -5 is logged and the group is at 5";
+}
+
+TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
+    // **The durability claim, on a real log.** A checkpoint's
+    // `ASSERT_SNAPSHOT` is recovery's base, and recovery folds onto it only
+    // the `ASSERT_*` records *after* it - so a snapshot must equal the fold
+    // of every record before it, or a mount that starts there counts one
+    // reservation twice or not at all. Two writer threads reserve into one
+    // assertion through their own managers attached to one shared stream,
+    // and the third snapshots the registry into that stream as often as it
+    // can while they do. Afterwards the stream is read back in order: every
+    // snapshot must match the reservations logged ahead of it.
+    //
+    // **Mutation**, measured: `ReserveOne` appending its record before it
+    // takes the directory latch for the header change - a snapshot lands
+    // between the two - killed 5 runs in 5.
+    constexpr std::uint64_t kSegment = 4 * 1024 * 1024;
+    auto log_device = wal::MemoryLogDevice::Create(kSegment);
+    ASSERT_TRUE(log_device.ok()) << log_device.status().message();
+    sched::ManualClock clock;
+    wal::WalManagerConfig owner_config;
+    owner_config.shared_stream = true;
+    owner_config.ring_capacity = 2 * 1024 * 1024;
+    auto owner = wal::WalManager::Open(log_device.value().get(), clock, /*core_id=*/0,
+                                       owner_config);
+    ASSERT_TRUE(owner.ok()) << owner.status().message();
+    owner.value()->StartWriter();
+
+    std::unique_ptr<storage::MemoryPageDevice> device;
+    auto store = ArmedStore(device);
+    ASSERT_NE(store, nullptr);
+    AssertionEnforcer enforcer(/*shared=*/true);
+    enforcer.Adopt(CountCap(*store, /*id=*/1, /*bound=*/1'000'000));
+
+    constexpr int kPerThread = 400;
+    std::atomic<int> writing{kThreads};
+    std::atomic<int> failures{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            const auto core = static_cast<std::uint32_t>(t + 1);
+            SetCurrentCore(core);
+            auto wal = wal::WalManager::Attach(owner.value()->stream(), owner.value()->writer(),
+                                               clock, core);
+            if (!wal.ok()) {
+                failures.fetch_add(1);
+                writing.fetch_sub(1);
+                return;
+            }
+            const std::uint64_t txn = 100 + static_cast<std::uint64_t>(t);
+            const auto values = Row(t);
+            for (int n = 0; n < kPerThread; ++n) {
+                AssertionEnforcer::Hold hold;
+                const std::uint64_t pk = static_cast<std::uint64_t>(n) * kThreads + t + 1;
+                if (!enforcer.AdmitInsert(kOid, values, txn, hold).ok() ||
+                    !enforcer
+                         .ReserveInsert(*store, wal.value().get(), txn, hold, kOid, values, pk,
+                                        kInvalidPageId, 0)
+                         .ok()) {
+                    failures.fetch_add(1);
+                }
+            }
+            writing.fetch_sub(1);
+        });
+    }
+
+    SetCurrentCore(0);
+    int snapshots = 0;
+    while (writing.load(std::memory_order_acquire) > 0) {
+        ASSERT_TRUE(enforcer
+                        .VisitSnapshots([&](const std::vector<wal::AssertionCabinSnapshot>& cabins)
+                                            -> Status {
+                            for (const wal::AssertionCabinSnapshot& cabin : cabins) {
+                                if (Status s = wal::LogAssertionSnapshot(*owner.value(), cabin);
+                                    !s.ok()) {
+                                    return s;
+                                }
+                            }
+                            return Status::OK();
+                        })
+                        .ok());
+        ++snapshots;
+    }
+    for (std::thread& thread : threads) thread.join();
+    ASSERT_EQ(failures.load(), 0);
+    ASSERT_TRUE(owner.value()->Flush().ok());
+
+    // The stream, in order: the fold of every reservation so far, per group,
+    // against every snapshot's groups.
+    std::unordered_map<std::uint32_t, std::int64_t> folded;
+    int checked = 0;
+    int mismatched = 0;
+    auto scanned = wal::ScanLog(
+        *log_device.value(), /*core_id=*/0, /*from_lsn=*/0,
+        [&](const wal::DecodedRecord& record) -> Status {
+            if (record.type() == wal::RecordType::kAssertReserve) {
+                auto entry = wal::DecodeAssertEntry(record.payload);
+                if (!entry.ok()) return entry.status();
+                ++folded[entry.value().fields.group_id];
+            } else if (record.type() == wal::RecordType::kAssertSnapshot) {
+                auto snapshot = wal::DecodeAssertSnapshot(record.payload);
+                if (!snapshot.ok()) return snapshot.status();
+                for (const wal::SnapshotGroupEntry& group : snapshot.value().groups) {
+                    ++checked;
+                    if (group.count != folded[group.group_id]) ++mismatched;
+                }
+            }
+            return Status::OK();
+        });
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+
+    EXPECT_GT(snapshots, 10) << "too few snapshots landed among the reservations to test anything";
+    EXPECT_GT(checked, 0);
+    EXPECT_EQ(mismatched, 0) << "of " << checked
+                             << " snapshot groups, some differ from the fold before them";
+    std::int64_t total = 0;
+    for (const auto& [group, count] : folded) total += count;
+    EXPECT_EQ(total, static_cast<std::int64_t>(kThreads) * kPerThread);
 }
 
 }  // namespace

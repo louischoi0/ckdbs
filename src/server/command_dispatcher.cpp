@@ -4062,15 +4062,12 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
         if (!named) os << "oid=" << def.target_oid;
 
         // Three conditions, each honest on its own: the structure was built
-        // (a root), the write path checks (AST07's constant), and this
-        // core's registry holds the directory - which a restart empties
+        // (a root), the write path checks (AST07's constant), and the
+        // instance's registry holds the directory - which a restart empties
         // until recovery replays it, so a surviving catalog row reports 0
-        // rather than claiming a check that cannot run.
-        //
-        // The registry is the instance's (AT-S5d), so the answer is the
-        // instance's from every core. Until then it was this core's, and a
-        // row on a relation another core owned carried `enforced_by_core=`
-        // to say whose answer `1` would have been.
+        // rather than claiming a check that cannot run. The same answer from
+        // every core since AT-S5d; `enforced_by_core=` named whose answer it
+        // was while each core had a registry of its own.
         os << " enforcing="
            << ((def.cabin_root != kInvalidPageId && kWritePathEnforcesAssertions &&
                 enforcer_->Holds(def.id))
@@ -7872,8 +7869,8 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // **And a rejection a reservation caused is a wait** (AO-S6e-c, census
     // row 11). `assertion.md` §6.2 called this a *bounded false rejection*
     // and accepted it: a statement refused because of a delta belonging to
-    // a transaction that later aborts. The delta's owner is knowable -
-    // `ReserverOn` names one - so the statement waits for that decide and
+    // a transaction that later aborts. The delta's owner is knowable - the
+    // registry names one (`ReserverOnLocked`) - so the statement waits for that decide and
     // asks again, on exactly the channel every other wait in this family
     // uses. Its abort releases the delta and the re-run is admitted; its
     // commit makes the refusal true, and the re-run says so.
@@ -7891,7 +7888,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // messages say so rather than name row zero.
     std::uint64_t reserver = 0;
     exec::AssertionEnforcer::Hold admitted;
-    if (Status s = enforcer_->AdmitInsert(oid, body, WriterId(scope), &reserver, &admitted);
+    if (Status s = enforcer_->AdmitInsert(oid, body, WriterId(scope), admitted, &reserver);
         !s.ok()) {
         if (reserver != 0) {
             NoteBlockingWriter(scope.txn, reserver, /*pk=*/0, RepeatableReadWait::kCapable);
@@ -10615,9 +10612,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // with no Cabin copies nothing.
         // ...and what tells the index hook the same thing (index.md §2).
         // A relation with neither copies nothing.
+        //
+        // **Asked once, and the answer used at both sites below** (the
+        // AT-S5d review). The registry is the instance's, so an assertion
+        // adopted on another core between two asks would send the check an
+        // empty `previous` - a read past the end of it.
+        const bool asserted = enforcer_->AnyOn(ta.oid);
         std::vector<parser::AstValue> previous;
-        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() ||
-            enforcer_->AnyOn(ta.oid)) {
+        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() || asserted) {
             previous = row.value();
         }
 
@@ -10644,7 +10646,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // poisoned - the AS9 resolution, decided 2026-08-09: uniform with
         // every other write failure, because "open and usable" cannot be
         // promised once a multi-row statement has partly happened.
-        if (enforcer_->AnyOn(ta.oid)) {
+        if (asserted) {
             std::uint64_t reserver = 0;
             if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
                                                            ta.oid, previous, row.value(),
@@ -11777,7 +11779,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // No manager: every statement is its own transaction under
         // kBootstrapXid, and this is its end - so its assertion
         // reservations settle here, exactly as a real transaction's do
-        // below. One statement at a time per core is what makes the shared
+        // below. One statement at a time per registry is what makes the shared
         // id safe.
         return result.ok()
                    ? enforcer_->CommitTxn(page_store_, wal_, catalog::kBootstrapXid)

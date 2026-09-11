@@ -77,13 +77,19 @@ bool AssertionEnforcer::Holds(std::uint64_t assertion_id) const {
 }
 
 bool AssertionEnforcer::AnyOn(catalog::Oid oid) const {
+    if (NothingDeclared()) return false;
     const LatchGuard guard(latch_.get());
     return by_oid_.count(oid) != 0;
 }
 
 bool AssertionEnforcer::CannotEnforce(catalog::Oid oid) const {
+    if (NothingDeclared()) return false;
     const LatchGuard guard(latch_.get());
     return unenforceable_.count(oid) != 0;
+}
+
+void AssertionEnforcer::PublishDeclaredLocked() noexcept {
+    declared_.store(by_oid_.size() + unenforceable_.size(), std::memory_order_release);
 }
 
 std::size_t AssertionEnforcer::unenforceable() const {
@@ -144,7 +150,7 @@ std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotAssertions()
     return SnapshotLocked();
 }
 
-Status AssertionEnforcer::VisitSnapshots(const SnapshotVisitor& visit) const {
+Status AssertionEnforcer::VisitSnapshots(const wal::SnapshotVisitor& visit) const {
     // Held across `visit`, which appends the records: directory latch then
     // WAL stream latch, the order every reservation takes them in too.
     const LatchGuard guard(latch_.get());
@@ -167,11 +173,12 @@ void AssertionEnforcer::Adopt(LiveAssertion assertion) {
     // than per relation: a relation may carry both, and a write it admits
     // on the strength of this one would still be unchecked against the
     // other (PW1c-6c).
-    auto stale = unenforceable_.find(oid);
-    if (stale == unenforceable_.end()) return;
-    auto& blocked = stale->second;
-    blocked.erase(std::remove(blocked.begin(), blocked.end(), id), blocked.end());
-    if (blocked.empty()) unenforceable_.erase(stale);
+    if (auto stale = unenforceable_.find(oid); stale != unenforceable_.end()) {
+        auto& blocked = stale->second;
+        blocked.erase(std::remove(blocked.begin(), blocked.end(), id), blocked.end());
+        if (blocked.empty()) unenforceable_.erase(stale);
+    }
+    PublishDeclaredLocked();
 }
 
 void AssertionEnforcer::NoteUnenforceable(catalog::Oid oid, std::uint64_t assertion_id) {
@@ -183,6 +190,7 @@ void AssertionEnforcer::NoteUnenforceable(catalog::Oid oid, std::uint64_t assert
     if (std::find(ids.begin(), ids.end(), assertion_id) == ids.end()) {
         ids.push_back(assertion_id);
     }
+    PublishDeclaredLocked();
 }
 
 void AssertionEnforcer::Evict(std::uint64_t assertion_id) {
@@ -201,71 +209,61 @@ void AssertionEnforcer::Evict(std::uint64_t assertion_id) {
         if (ids.empty()) unenforceable_.erase(blocked);
         break;
     }
-    auto it = live_.find(assertion_id);
-    if (it == live_.end()) return;
-    auto& ids = by_oid_[it->second->a.target_oid];
-    ids.erase(std::remove(ids.begin(), ids.end(), assertion_id), ids.end());
-    if (ids.empty()) by_oid_.erase(it->second->a.target_oid);
-    live_.erase(it);
-    // Its holds' sums go with it; the records stay until their `Hold`s
-    // release them, which then finds no sum to lower. Pending reservations
-    // stay in their transactions' lists and are skipped at commit/abort by
-    // the lookup below - the same rule replay's skip has, and for the same
-    // reason. A reservation already past `OnLocked` finishes on its own
-    // `shared_ptr`, into a chain nothing names any more.
-    held_.erase(assertion_id);
+    if (auto it = live_.find(assertion_id); it != live_.end()) {
+        auto& ids = by_oid_[it->second->a.target_oid];
+        ids.erase(std::remove(ids.begin(), ids.end(), assertion_id), ids.end());
+        if (ids.empty()) by_oid_.erase(it->second->a.target_oid);
+        live_.erase(it);
+    }
+    // Its holds stay until their `Hold`s release them, and count toward
+    // nothing meanwhile: no admission asks about an evicted id. Pending
+    // reservations stay in their transactions' lists and are skipped at
+    // commit/abort by the lookup below - the same rule replay's skip has,
+    // and for the same reason. A reservation already past `OnLocked`
+    // finishes on its own `shared_ptr`, into a chain nothing names any more.
+    PublishDeclaredLocked();
 }
 
 // ---- Holds (AT-S5d) -------------------------------------------------------
 
-StatusOr<bool> AssertionEnforcer::FitsLocked(const LiveAssertion& a, const std::string& key,
-                                             std::int64_t check) const {
-    std::int64_t asked = check;
-    if (auto by = held_.find(a.assertion_id); by != held_.end()) {
-        if (auto group = by->second.find(key);
-            group != by->second.end() && __builtin_add_overflow(group->second, check, &asked)) {
-            return Status::OutOfRange("assertion \"" + a.name +
-                                      "\": the held contributions and this row's overflow int64");
+StatusOr<std::uint64_t> AssertionEnforcer::AdmitLocked(
+    LiveAssertion& a, const std::string& key, std::optional<std::int64_t> check,
+    std::int64_t hold, std::uint64_t txn_id, std::span<const parser::AstValue> row,
+    std::size_t first_col_pos, std::uint64_t* reserver) {
+    if (check.has_value()) {
+        // Every held contribution to the group counts, **positive ones
+        // only**: a negative one held would read as room to another core's
+        // admission, and the statement that held it may still fail and take
+        // the room back - a false admission, the one outcome §6.2 rules
+        // out. Summed by a scan: `holds_` is bounded by the rows in flight,
+        // one per statement per assertion.
+        std::int64_t asked = *check;
+        for (const auto& [serial, held] : holds_) {
+            if (held.assertion_id != a.assertion_id || held.key != key || held.value <= 0) {
+                continue;
+            }
+            if (__builtin_add_overflow(asked, held.value, &asked)) {
+                return Status::OutOfRange("assertion \"" + a.name +
+                                          "\": the held contributions and this row's overflow "
+                                          "int64");
+            }
+        }
+        ++a.counters.checks;
+        auto admitted = a.cabin.Admit(key, asked);
+        if (!admitted.ok()) return admitted.status();
+        if (!admitted.value().admitted) {
+            ++a.counters.violations;
+            if (reserver != nullptr) *reserver = ReserverOnLocked(a.assertion_id, key, txn_id);
+            return Refuse(a, row, first_col_pos);
         }
     }
-    auto admitted = a.cabin.Admit(key, asked);
-    if (!admitted.ok()) return admitted.status();
-    return admitted.value().admitted;
-}
-
-StatusOr<std::uint64_t> AssertionEnforcer::HoldLocked(std::uint64_t txn_id,
-                                                      std::uint64_t assertion_id,
-                                                      const std::string& key, std::int64_t value) {
-    // **Only a positive contribution is counted.** A negative one held would
-    // read as room to another core's admission, and the statement that held
-    // it may still fail and take the room back - a false admission, the one
-    // outcome §6.2 rules out. Its record keeps the signed value, which is
-    // what a waiter's net reads.
-    const std::int64_t counted = std::max<std::int64_t>(value, 0);
-    std::int64_t& sum = held_[assertion_id][key];
-    std::int64_t next = 0;
-    if (__builtin_add_overflow(sum, counted, &next)) {
-        return Status::OutOfRange("assertion id " + std::to_string(assertion_id) +
-                                  ": the held contributions overflow int64");
-    }
-    sum = next;
     const std::uint64_t serial = ++next_hold_serial_;
-    holds_.emplace(serial, HeldContribution{txn_id, assertion_id, key, value});
+    holds_.emplace(serial, HeldContribution{txn_id, a.assertion_id, key, hold});
     return serial;
 }
 
 void AssertionEnforcer::ReleaseHoldLocked(std::uint64_t serial) {
-    auto it = holds_.find(serial);
-    if (it == holds_.end()) return;  // converted already, or never taken
-    const HeldContribution& held = it->second;
-    if (auto by = held_.find(held.assertion_id); by != held_.end()) {
-        if (auto group = by->second.find(held.key); group != by->second.end()) {
-            group->second -= std::max<std::int64_t>(held.value, 0);
-            if (group->second == 0) by->second.erase(group);
-        }
-        if (by->second.empty()) held_.erase(by);
-    }
-    holds_.erase(it);
+    holds_.erase(serial);  // a converted or never-taken serial is not there
 }
 
 void AssertionEnforcer::Hold::Release() {
@@ -316,44 +314,29 @@ std::uint64_t AssertionEnforcer::ReserverOnLocked(std::uint64_t assertion_id,
 
 Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
                                       std::span<const parser::AstValue> values,
-                                      std::uint64_t writer_txn, std::uint64_t* reserver,
-                                      Hold* hold) {
+                                      std::uint64_t writer_txn, Hold& hold,
+                                      std::uint64_t* reserver) {
+    if (NothingDeclared()) return Status::OK();
     const LatchGuard guard(latch_.get());
     auto on = by_oid_.find(oid);
     if (on == by_oid_.end()) return Status::OK();
-    // What this call held, given back if a later assertion refuses or
+    hold.owner_ = this;
+    // What this call held is given back if a later assertion refuses or
     // fails: a refused row holds nothing.
-    std::vector<Hold::Item> taken;
-    const auto give_back = [&] {
-        for (const Hold::Item& item : taken) ReleaseHoldLocked(item.serial);
-    };
+    const std::size_t before = hold.items_.size();
     for (const std::uint64_t id : on->second) {
         LiveAssertion& a = live_.at(id)->a;
-        const std::string key = KeyFor(a, values, /*first_col_pos=*/1);
-        const std::int64_t contribution = ContributionOf(a, values, 1);
-        ++a.counters.checks;
-        auto fits = FitsLocked(a, key, contribution);
-        if (!fits.ok()) {
-            give_back();
-            return fits.status();
-        }
-        if (!fits.value()) {
-            ++a.counters.violations;
-            give_back();
-            if (reserver != nullptr) *reserver = ReserverOnLocked(a.assertion_id, key, writer_txn);
-            return Refuse(a, values, 1);
-        }
-        if (hold == nullptr) continue;
-        auto serial = HoldLocked(writer_txn, a.assertion_id, key, contribution);
+        const std::int64_t contribution = ContributionOf(a, values, /*first_col_pos=*/1);
+        auto serial = AdmitLocked(a, KeyFor(a, values, 1), contribution, contribution,
+                                  writer_txn, values, 1, reserver);
         if (!serial.ok()) {
-            give_back();
+            for (std::size_t i = before; i < hold.items_.size(); ++i) {
+                ReleaseHoldLocked(hold.items_[i].serial);
+            }
+            hold.items_.resize(before);
             return serial.status();
         }
-        taken.push_back(Hold::Item{serial.value(), a.assertion_id});
-    }
-    if (hold != nullptr && !taken.empty()) {
-        hold->owner_ = this;
-        hold->items_.insert(hold->items_.end(), taken.begin(), taken.end());
+        hold.items_.push_back(Hold::Item{serial.value(), a.assertion_id});
     }
     return Status::OK();
 }
@@ -437,6 +420,7 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
         std::int64_t value = 0;
         std::uint64_t serial = 0;
     };
+    if (NothingDeclared()) return Status::OK();
     std::vector<Work> work;
     {
         const LatchGuard guard(latch_.get());
@@ -450,15 +434,10 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
                 w.serial = covered->serial;
             } else {
                 // Adopted after this row's admission: admitted here, and
-                // held in `hold` so a failure below gives it back too.
-                ++a.counters.checks;
-                auto fits = FitsLocked(a, w.key, w.value);
-                if (!fits.ok()) return fits.status();
-                if (!fits.value()) {
-                    ++a.counters.violations;
-                    return Refuse(a, values, 1);
-                }
-                auto serial = HoldLocked(txn_id, a.assertion_id, w.key, w.value);
+                // held in `hold` so a failure below gives it back too. Not
+                // waitable - the row is placed by now.
+                auto serial = AdmitLocked(a, w.key, w.value, w.value, txn_id, values, 1,
+                                          /*reserver=*/nullptr);
                 if (!serial.ok()) return serial.status();
                 w.serial = serial.value();
                 hold.owner_ = this;
@@ -471,10 +450,10 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
         if (Status s = ReserveOne(store, wal, txn_id, *w.live, w.key, /*departure=*/false,
                                   w.value, pk, row_page, row_slot, w.serial);
             !s.ok()) {
-            return s;
+            return s;  // `hold` gives back what was not converted
         }
-        std::erase_if(hold.items_, [&](const Hold::Item& item) { return item.serial == w.serial; });
     }
+    hold.items_.clear();  // every one converted
     return Status::OK();
 }
 
@@ -545,19 +524,8 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
         Hold hold;
         {
             const LatchGuard guard(latch_.get());
-            if (check.has_value()) {
-                ++a.counters.checks;
-                auto fits = FitsLocked(a, new_key, *check);
-                if (!fits.ok()) return fits.status();
-                if (!fits.value()) {
-                    ++a.counters.violations;
-                    if (reserver != nullptr && !reserved_any) {
-                        *reserver = ReserverOnLocked(a.assertion_id, new_key, txn_id);
-                    }
-                    return Refuse(a, new_row, 0);
-                }
-            }
-            auto serial = HoldLocked(txn_id, a.assertion_id, new_key, new_contrib);
+            auto serial = AdmitLocked(a, new_key, check, new_contrib, txn_id, new_row, 0,
+                                      reserved_any ? nullptr : reserver);
             if (!serial.ok()) return serial.status();
             hold.owner_ = this;
             hold.items_.push_back(Hold::Item{serial.value(), a.assertion_id});

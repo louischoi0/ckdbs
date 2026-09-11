@@ -140,6 +140,8 @@ struct AssertionCabinSnapshot {
 // fold has nothing to fold onto.
 Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin);
 
+using SnapshotVisitor = std::function<Status(const std::vector<AssertionCabinSnapshot>&)>;
+
 // Where the checkpoint gets those snapshots. Implemented by whoever owns the
 // live assertions; absent (null) on a core that has none, in which case a
 // checkpoint writes no ASSERT_SNAPSHOT records at all and costs nothing.
@@ -153,21 +155,13 @@ class AssertionSnapshotSource {
 public:
     virtual ~AssertionSnapshotSource() = default;
 
-    // One entry per live assertion.
-    virtual std::vector<AssertionCabinSnapshot> SnapshotAssertions() const = 0;
-
-    // The snapshot handed to `visit` with the directories held still until it
-    // returns - which is what the checkpointer calls, because `visit` appends
-    // the `ASSERT_SNAPSHOT` records and a snapshot is a base only if no
-    // `ASSERT_*` record lands between the headers it carries and its own LSN.
-    // A source whose directories nothing else can move (a single-threaded
-    // owner, a test's fixed cabin) needs nothing more than the default; the
-    // instance's registry, which every core reserves into, overrides it to
-    // hold its latch across the call (AT-S5d, `exec/assertion_check.hpp`).
-    using SnapshotVisitor = std::function<Status(const std::vector<AssertionCabinSnapshot>&)>;
-    virtual Status VisitSnapshots(const SnapshotVisitor& visit) const {
-        return visit(SnapshotAssertions());
-    }
+    // One entry per live assertion, handed to `visit` with the directories
+    // held still until it returns. `visit` appends the `ASSERT_SNAPSHOT`
+    // records, and a snapshot is a base only if no `ASSERT_*` record lands
+    // between the headers it carries and its own LSN - so the instance's
+    // registry, which every core reserves into, holds its latch across the
+    // call (AT-S5d, `exec/assertion_check.hpp`).
+    virtual Status VisitSnapshots(const SnapshotVisitor& visit) const = 0;
 };
 
 // The pages a checkpoint has to get on disk, and the way to do it. The

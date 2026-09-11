@@ -1,7 +1,7 @@
 # ASSERTION — Group-Level Declarative Constraints
 
 Status: **ADOPTED (v1 scope), built and enforcing on every core**
-Related documents: `docs/spec/cabin.md` (§12 is the Bound Cabin class split this spec requires), `docs/spec/wal.md`, `docs/spec/txn.md`, `docs/spec/foreign-keys.md`, `docs/spec/crosscore.md` (CC7's owner-builds exception). The U5 durability tier §5 cites is a design reference with no owning doc — v1 has no unique index (`docs/spec/index.md` IX11). ANALYZE's surface is `manual/sql/sql.md` §4.
+Related documents: `docs/spec/cabin.md` (§12 is the Bound Cabin class split this spec requires), `docs/spec/wal.md`, `docs/spec/txn.md`, `docs/spec/foreign-keys.md`, `docs/spec/crosscore.md` (CC7, whose owner-builds exception assertions left at AT-S5d). The U5 durability tier §5 cites is a design reference with no owning doc — v1 has no unique index (`docs/spec/index.md` IX11). ANALYZE's surface is `manual/sql/sql.md` §4.
 
 ---
 
@@ -331,9 +331,12 @@ On a multi-core instance:
   another core** (§8.1), which is
   `docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`.
 - **Core 0's mount resumes the registry, for every relation**, before any
-  peer is built; a peer handed it resumes nothing. Every core's checkpoint
-  snapshots the whole registry, and a mount takes the first snapshot past
-  its scan start as the base and skips the rest (§7).
+  peer is built; a peer handed it resumes nothing. **Only core 0's
+  checkpoints snapshot it** (§7): two cores' runs of the same assertions in
+  the one stream could land back to back, and recovery would meet the
+  second run's first group while the first run's base was still open. A
+  mount's scan starts at or below core 0's own `CHECKPOINT_BEGIN`, so its
+  snapshot is always in range.
 - **An assertion the registry knows of and cannot enforce refuses the
   relation's writes, on every core.** Refusing is recoverable; admitting an
   unchecked write is not. What reaches "cannot enforce" is a revive that
