@@ -7,7 +7,6 @@
 #include "kds/base/current_core.hpp"
 
 #include "kds/server/fk_probe_service.hpp"
-#include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
 #include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
 #include "kds/server/txn_2pc_service.hpp"  // R6-3: the coordinator's two phases
@@ -509,86 +508,6 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     co_return Status::OK();
 }
 
-sched::Coro CommandDispatcher::AwaitIndexWindow(std::string_view line, Session* session,
-                                                DispatchOutcome* out,
-                                                sched::MonoTimeNs* statement_deadline_ns) {
-    // ---- AO-S6e-a: census row 4's refusal, converted --------------------
-    //
-    // The window is the owner's own, and so is its close. `OnDone` shuts it
-    // inside a task that runs to completion before another is polled, and
-    // the index's catalog row bumped the schema word in phase 2, ahead of
-    // the commit and so ahead of `done` (AT-S2). The re-run is a whole
-    // statement through `DispatchAndStage`, whose head revalidates - so a
-    // park that ends on `!Covers(oid)` cannot resolve without seeing the
-    // index, and writes into one this core knows about.
-    //
-    // That ordering is the whole reason AO-S6e-a is a window and not the
-    // relation `X` census row 4 names. A lock released on core 0 at the
-    // DDL's decide is a write to a shared table, seen here before either
-    // ring message is drained, and the writer it admits writes a row into
-    // nobody's index.
-    //
-    // `pending_index_builds_` is non-null by construction: `index_window`
-    // is set only under the gate's own non-null test and the pointer is
-    // assigned once at startup. Not re-tested here, on the copy-out's own
-    // argument - a guard on a state that cannot occur reads as evidence
-    // that it can.
-    const catalog::Oid oid = *out->index_window;
-    out->index_window.reset();
-    // **Bounded, and bounded once for the statement** (the AO-S6e-a
-    // review's C1, C2 and C4). Three things the first build got wrong by
-    // taking no deadline at all:
-    //
-    // - A shipped write runs here while its **arrival** core counts down
-    //   `kShippedStatementDeadlineNs`. A park that outlived it answered the
-    //   client `UnknownOutcome` for a row this core then committed.
-    //   `kIndexWindowWaitNs` is half that number and derived from it, so
-    //   the refusal is on its way back before the count runs out.
-    // - The loop above may enter this more than once, and a per-entry
-    //   ceiling makes the *statement's* stall the ceiling times the number
-    //   of windows. `AwaitWriteBlock` states the same rule four hundred
-    //   lines up: bounded once, not once per blocker.
-    // - The window's own expiry is not a bound this can lean on. It runs
-    //   from a timer armed only where `wal_drain_interval_ns > 0`
-    //   (`core_runtime.cpp`), which is not the default, so with a lost
-    //   `done` and no tick nothing would ever have ended the park.
-    if (*statement_deadline_ns == 0) {
-        *statement_deadline_ns = NowNs() + static_cast<sched::MonoTimeNs>(kIndexWindowWaitNs);
-    }
-    const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
-    const std::function<bool()> closed = [this, oid, deadline_ns] {
-        return !pending_index_builds_->Covers(oid) || NowNs() >= deadline_ns;
-    };
-    co_await sched::WaitUntil{&closed};
-    if (pending_index_builds_->Covers(oid)) {
-        // **The refusal, after all, and it is the one already in `out`.**
-        // The gate returned it before this park was ever opened, which is
-        // what made the statement write nothing; a build slower than the
-        // ceiling is answered exactly as it was before AO-S6e-a, retryably
-        // and naming `PW1c-6b`. Nothing is rendered here, because rendering
-        // it twice is how two spellings of one refusal begin.
-        if (logging(LogLevel::kWarn)) {
-            log_->Warn("index", "core " + std::to_string(core_id_) +
-                                    " refused a write of relation oid " + std::to_string(oid) +
-                                    " after waiting " +
-                                    std::to_string(kIndexWindowWaitNs / 1'000'000'000) +
-                                    " s for its index-build window to close");
-        }
-        co_return Status::OK();
-    }
-    if (logging(LogLevel::kDebug)) {
-        log_->Debug("index", "core " + std::to_string(core_id_) + " held a write of relation oid " +
-                                 std::to_string(oid) +
-                                 " until its index-build window closed, and is running it again");
-    }
-    // The re-run is a whole statement, which is exactly what the refusal
-    // bought: the gate runs before any row work, so nothing of this
-    // statement is on the page to be written twice.
-    const MayParkScope parking(*this, /*allowed=*/true, /*resumed=*/false);
-    *out = DispatchAndStage(line, session);
-    co_return Status::OK();
-}
-
 sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session* session,
                                                  DispatchOutcome* out,
                                                  sched::MonoTimeNs* statement_deadline_ns) {
@@ -753,20 +672,16 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // **The deadline is the statement's** and is threaded through both
     // callers for the reason the function states.
     sched::MonoTimeNs statement_deadline_ns = 0;
-    sched::MonoTimeNs index_window_deadline_ns = 0;
     // **One loop over both waits, not two arms** (the AO-S6e-a review's
     // C3). Each wait's re-run is a whole fresh statement and can meet what
-    // the other waits for: an index-window re-run can meet a held row, and
-    // a write-block re-run can meet a window that opened while it waited.
+    // the other waits for: a relation-lock re-run can meet a held row, and
+    // a write-block re-run can meet a relation a DDL took while it waited.
     // Two sequential arms answer the second of those with a refusal the
     // first would have waited out - which is item 16's defect, on a new
     // pair. Both waits are deadline-bounded and both clear their own field
-    // on every exit, so the loop ends when neither is set.
+    // on every exit, so the loop ends when neither is set. (AO-S6e-a's
+    // index-build window was a third, and went at AT-S5e with the window.)
     for (;;) {
-        if (out->index_window.has_value()) {
-            co_await AwaitIndexWindow(line, session, out, &index_window_deadline_ns);
-            continue;
-        }
         if (out->write_block.has_value()) {
             co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns,
                                      /*resumed=*/false);
@@ -895,13 +810,6 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // 16). The re-run inside is a fresh whole statement, so a
             // probe it raises is collected by the next turn of this same
             // loop - which is why this is here and not after it.
-            // AO-S6e-a's, beside item 16's and for its reason: a resume
-            // meets everything a first dispatch can, an open index-build
-            // window included, and a field set on a returned outcome that
-            // nobody consumes is how a leak begins.
-            if (out->index_window.has_value()) {
-                co_await AwaitIndexWindow(probe.line, session, out, &index_window_deadline_ns);
-            }
             if (out->write_block.has_value()) {
                 co_await AwaitWriteBlock(probe.line, session, out, &statement_deadline_ns,
                                          /*resumed=*/true);
@@ -1303,20 +1211,6 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                                  tags, render);
     }
 
-    if (out->pending_index_build.has_value() && index_builds_ != nullptr) {
-        // The owner's build (PW1c-6b-3, index_build_service.hpp). The
-        // predicate re-finds the waiter each poll and reads the clock, so
-        // the deadline ends the park with nothing having to wake it. The
-        // pending record is copied off the outcome first: phase 2 writes
-        // the outcome whole.
-        const PendingIndexBuild build = std::move(*out->pending_index_build);
-        const std::function<bool()> settled = [this, id = build.request_id] {
-            return index_builds_->Settled(id);
-        };
-        co_await sched::WaitUntil{&settled};
-        *out = FinishIndexBuild(build, session != nullptr ? *session : autocommit_session_);
-    }
-
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
         // statement is the whole change: every other runnable connection
@@ -1367,7 +1261,6 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     pending_commit_lsn_ = wal::kNoLsn;
     blocking_writer_ = 0;
     blocked_pk_ = 0;
-    index_window_wait_ = 0;
     lock_wait_.reset();
     last_refusal_ = Status::OK();
     last_refusal_detail_ = wire::kNoDetail;
@@ -1438,19 +1331,9 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     if (!last_refusal_.ok() && outcome.status.ok()) outcome.status = last_refusal_;
     outcome.resource_detail = std::exchange(last_refusal_detail_, wire::kNoDetail);
     last_refusal_ = Status::OK();
-    // AO-S6e-a's, on the same terms as the blocker above. **The exclusion
-    // is the gate's own return, not the forks' placement** - the first
-    // draft said both forks were upstream of it and only the *ship* fork
-    // is; the foreign-key probe's is below the affinity gate at all three
-    // sites. What makes the fields mutually exclusive is that the gate
-    // returns its refusal immediately, so a statement that set this one
-    // reached neither fork. Stated rather than guarded, and now stated
-    // correctly, because the guard was declined on the strength of it.
-    if (index_window_wait_ != 0) outcome.index_window = index_window_wait_;
-    index_window_wait_ = 0;
-    // AO-S6e-b's, on the same terms and mutually exclusive with both for
-    // the same reason: the borrow is asked for inside a DDL body, which a
-    // statement that met the affinity gate or a row conflict never reaches.
+    // AO-S6e-b's, on the same terms, and exclusive with the blocker above
+    // since AT-S5e by `NoteBlockingWriter`'s own guard: a statement parked
+    // on a relation's slot records no row blocker beside it.
     if (lock_wait_.has_value()) outcome.lock_wait = std::move(lock_wait_);
     lock_wait_.reset();
     blocking_writer_ = 0;
@@ -1596,22 +1479,6 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                     "a cross-owner transaction's COMMIT reached a path that cannot await its "
                     "participants; nothing was asked of them and the transaction is still "
                     "open")),
-                false};
-    }
-    if (outcome.pending_index_build.has_value()) {
-        // The same stance for the owner's build (PW1c-6b-3): with no reactor
-        // nothing here receives the reply, so the statement is abandoned
-        // now rather than spun on, and the owner is told - its window would
-        // otherwise wait the ceiling out on a tree nobody will publish.
-        // (`index_builds_` is set: nothing produces the pending outcome
-        // without it.)
-        const PendingIndexBuild& build = *outcome.pending_index_build;
-        index_builds_->Close(build.request_id);
-        index_builds_->Done(build.owner_core, build.def.index_oid, /*committed=*/false);
-        return {ErrorReply(Status::TxnConflict(
-                    "CREATE INDEX on '" + build.table_name +
-                    "' needs the reactor path to await its owner's build; retry on a served "
-                    "connection")),
                 false};
     }
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
@@ -1810,7 +1677,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleCabin(Trim(line));
         }
         if (IEquals(sub, "ASSERTION")) {
-            return HandleAssertion(Trim(line));
+            return HandleAssertion(Trim(line), session);
         }
         // `UNIQUE` routes here too, so its refusal comes from the parser
         // with the byte offset of the word itself rather than from this
@@ -1852,7 +1719,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleIndex(Trim(line), session);
         }
         if (IEquals(sub, "ASSERTION")) {
-            return HandleAssertion(Trim(line));
+            return HandleAssertion(Trim(line), session);
         }
         if (IEquals(sub, "NAMESPACE")) {
             return HandleNamespace(Trim(line), session);
@@ -2177,12 +2044,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     //   - A statement refused **before resolution** for any other reason -
     //     a parse error, `max_insert_rows`, the multi-row-without-a-
     //     transaction refusal - never reaches the affinity check.
-    //   - The **owner-core** refusal
-    //     (PW1c-7) and `IndexBuildPending` (PW1c-6b-2), are deliberately
-    //     *not* counted: the write is not cross-core at all, it is this
-    //     core's own write waiting on a grant or a build window, and
-    //     folding them in would inflate the 2PC evidence with cases 2PC
-    //     does not address.
+    //   - The **owner-core** refusal (PW1c-7) and the index-build window's
+    //     (PW1c-6b-2, gone at AT-S5e) were deliberately *not* counted: the
+    //     write was not cross-core at all, it was this core's own write
+    //     waiting on a grant or a build window.
     //
     // `docs/inflight/in-progress/workplan-peer-writer.md` §8's pre-parse DML guard - the class
     // §6 names as invisible to a relation-keyed counter - was removed at
@@ -2500,22 +2365,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " sched_" << kGroupNames[i]
                << "_consumed_us=" << scheduler_view_->consumed_ns(group) / 1000;
         }
-    }
-
-    // PW1c-6b-2's windows on a peer: how many of this core's relations
-    // refuse writes for an index build core 0 has not yet said `done` for,
-    // and the oldest's age - a window is otherwise visible to a client
-    // only as a retryable refusal, and to nobody as a duration.
-    if (pending_index_builds_ != nullptr) {
-        // Oldest first (core_affinity.hpp), so the front is the maximum.
-        sched::MonoTimeNs oldest_ns = 0;
-        if (!pending_index_builds_->empty()) {
-            const std::uint64_t opened = pending_index_builds_->entries().front().opened_at_ns;
-            const sched::MonoTimeNs now = NowNs();
-            if (now > opened) oldest_ns = now - opened;
-        }
-        os << " index_build_windows=" << pending_index_builds_->size()
-           << " index_build_window_age_max_us=" << oldest_ns / 1000;
     }
 
     // The last recovery, for the operator who has to answer "what did the
@@ -3203,9 +3052,9 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
 
 namespace {
 
-// The one spelling of a successful CREATE INDEX (docs/spec/client-manual.md),
-// for both arms of the statement. `tail` is what differs: the local arm's
-// ` entries=0`, the foreign arm's ` built_by_core=<n>`.
+// The one spelling of a successful CREATE INDEX (docs/spec/client-manual.md).
+// `tail` was what differed between the local arm's ` entries=0` and the
+// owner-built arm's ` built_by_core=<n>`, which went at AT-S5e.
 std::string CreatedIndexReply(std::string_view name, std::string_view table,
                               catalog::Oid index_oid, PageId root, std::uint16_t key_width,
                               std::uint16_t entry_width, const std::string& tail,
@@ -3222,9 +3071,9 @@ std::string CreatedIndexReply(std::string_view name, std::string_view table,
 
 DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                                Session& session) {
-    // Parsed before the DDL scope exists: the PW1c-6 refusal below must
-    // not cost a transaction id (PW4's philosophy - refuse before
-    // resources), and the parse is pure.
+    // Parsed before the DDL scope exists: a statement that does not parse
+    // costs no transaction id (PW4's philosophy - refuse before resources),
+    // and the parse is pure.
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
@@ -3235,92 +3084,57 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     }
     const parser::IndexStmt stmt = std::get<parser::IndexStmt>(std::move(parsed.value()));
 
-    // A relation another core owns has its index built *there* (§7c,
-    // decided 2026-08-25: the owner builds - `Backfill` here would read
-    // the device's stale image and miss every row the owner holds), which
-    // is `BeginForeignIndexBuild`'s two phases below. The client that
-    // drives them is wired on core 0 by the Expeditor (PW1c-6b-4); a
-    // dispatcher without one is a socket-free test, and it is refused by
-    // name rather than left to build a tree in the wrong core's pages.
-    // The unfiltered row read is deliberate: the build touches physical
-    // pages whichever view resolved the name. An unresolvable name falls
-    // through - exec::CreateIndex owns that refusal and its byte position.
-    if (!stmt.drop) {
-        if (auto rel_oid = catalog_.FindTableOidByName(stmt.table_name); rel_oid.ok()) {
-            auto rel_row = catalog_.GetSysTableRow(rel_oid.value());
-            if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
-                if (index_builds_ != nullptr) {
-                    return BeginForeignIndexBuild(stmt, rel_row.value().owner_core, session);
-                }
-                return {ErrorReply(Status::NotImplemented(
-                            "CREATE INDEX on '" + stmt.table_name + "' at byte " +
-                            std::to_string(stmt.table_byte_offset) +
-                            ": the relation is owned by core " +
-                            std::to_string(rel_row.value().owner_core) +
-                            ", built by its owner (workplan-peer-writer.md §7c, PW1c-6b), "
-                            "and this dispatcher has no index-build client to reach it")),
-                        false};
-            }
-        }
-    }
-
-    // The drop's cross-core hole the gate lift opens (PW1c-6b-4, the
-    // review's finding). DROP INDEX marks the sys.indexes row and
-    // `BumpVersion` bumps the schema word *at the mark*, before the commit; on the
-    // owner, DT9's "is the deleter in flight" predicate walks that core's
-    // own live list and never finds core 0's transaction, so the mark
-    // reads as settled and the index leaves the owner's view at once. With
-    // the shape gate lifted the owner now takes writes and maintains
-    // nothing for the vanished index - and a ROLLBACK restores it missing
-    // every row written meanwhile. Inside a transaction that window is the
-    // client's to hold open, so it is refused by name, exactly as the
-    // sibling CREATE is (BeginForeignIndexBuild) and for the same reason.
-    // Autocommit keeps only the commit-failure window every DDL has, so it
-    // is left admitted. Core-local (core 0 owns the relation) stays
-    // isolated by DT9 and is untouched.
-    if (stmt.drop && session.in_explicit_txn()) {
-        if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
-            auto rel_row = catalog_.GetSysTableRow(ix.value().table_oid);
-            if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
-                return {ErrorReply(Status::NotImplemented(
-                            "DROP INDEX '" + stmt.index_name + "' at byte " +
-                            std::to_string(stmt.byte_offset) +
-                            ": its relation is owned by core " +
-                            std::to_string(rel_row.value().owner_core) +
-                            ", whose maintenance cannot see this delete-mark's deleter in "
-                            "flight (DT9 is core-local), so inside a transaction the owner "
-                            "would stop maintaining the index before COMMIT and a ROLLBACK "
-                            "would restore it missing the owner's meanwhile-writes; run it "
-                            "in autocommit (workplan-peer-writer.md PW1c-6b-4)")),
-                        false};
-            }
-        }
-    }
-
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        // ---- AT-S5e: the relation `X`, for both statements --------------
+        //
+        // **Taken before the first catalog write, on whichever core the
+        // session is**, as `DROP TABLE` has taken it since AO-S6e-b. A
+        // writer of the relation holds its `IX` from before it decides
+        // anything from the relation's indexes (`InsertParsed`,
+        // `DeclaredWriteBorrow`) until its transaction decides, so the grant
+        // is the moment no writer is mid-statement, and every writer that
+        // arrives afterwards parks on the table's slot until this decides -
+        // then re-runs, asks the schema word at its task boundary, and
+        // resolves the index list this statement left.
+        //
+        // What it replaces: an owner-built `CREATE INDEX` with a refusal
+        // window only the owner could see (PW1c-6b), and a local build that
+        // opened none (D6) - so since AT-S5 a row written on another core
+        // during a backfill was missing from the finished index. A name that
+        // does not resolve takes no borrow and falls through to the refusal
+        // `exec::CreateIndex`/`DropIndex` owns, with its byte position.
+        const std::optional<txn::ReadView> resolve_view = ViewFor(session);
+        std::optional<catalog::Oid> relation;
+        if (stmt.drop) {
+            if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
+                relation = ix.value().table_oid;
+            }
+        } else if (auto oid = catalog_.FindTableOidByName(
+                       stmt.table_name, resolve_view.has_value() ? &*resolve_view : nullptr);
+                   oid.ok()) {
+            relation = oid.value();
+        }
+        if (relation.has_value()) {
+            if (std::optional<Status> held = BorrowRelationForDdl(scope, *relation);
+                held.has_value()) {
+                return {ErrorReply(*held), false, 0, *held};
+            }
+        }
 
         if (stmt.drop) {
-            // **Allowed inside an explicit transaction again as of DT9, and
-            // the history is the point.** DT5 shipped this as atomic *and
-            // isolated* on the strength of `SHOW INDEXES` filtering; that was
-            // wrong, because `InitTableAccess` builds a relation's index list
-            // through `ListIndexes()` with a **null view**, so index
-            // maintenance treated the delete-mark as done the moment it was
-            // written - another session's INSERT wrote no index entry, and a
-            // rollback restored the index missing that row. It was then
-            // refused rather than answered wrongly.
-            //
-            // DT9 closes it at the read instead of at the statement: an
-            // unfiltered catalog read now counts a delete-mark only once its
-            // deleter is no longer in flight (`catalog.cpp`'s `ScanAll`), so
-            // maintenance keeps writing entries for an index whose drop has
-            // not committed. If the drop commits the entries go with the
-            // index; if it rolls back the index is whole.
-            //
-            // **The claim this may carry is core-0-scoped**, not "isolated"
-            // outright: `IsInFlight` answers about one core's transactions,
-            // and it is every writer's core only while CC3 refuses
-            // cross-core writes (`docs/spec/ddl-transactional.md` §5a).
+            // **Isolated on every core since AT-S5e.** DT5 shipped this as
+            // atomic *and isolated* on the strength of `SHOW INDEXES`
+            // filtering, which was wrong - index maintenance reads the list
+            // with a null view, so another session's INSERT wrote no entry
+            // for an index whose drop had not committed - and DT9 closed it
+            // at the read: an unfiltered catalog read counts a delete-mark
+            // only once its deleter is no longer in flight (`catalog.cpp`'s
+            // `ScanAll`). That predicate is one core's (`IsInFlight`), so the
+            // claim was core-0-scoped and a drop on a peer-owned relation was
+            // refused inside a transaction (PW1c-6b-4). The relation `X`
+            // above is what makes it moot: no writer of the relation runs
+            // while the drop is undecided, on any core, so the predicate is
+            // never asked about one.
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
             auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -3347,10 +3161,9 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // Resolved under the session's view (spec §5's rule: an index is a
         // schema object and CREATE INDEX is a resolution route). An index
         // must not be built against a relation the caller cannot see.
-        const std::optional<txn::ReadView> create_view = ViewFor(session);
         auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
                                         create_ddl.txn != nullptr ? &created_row : nullptr,
-                                        create_view.has_value() ? &*create_view : nullptr, wal_);
+                                        resolve_view.has_value() ? &*resolve_view : nullptr, wal_);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
         if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
@@ -3365,138 +3178,13 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // CREATE INDEX) and the backfill over a populated relation makes
         // false. It stays until the field is dropped or counted - either
         // is client-visible, so neither is done in passing (the PW1c-6b-3
-        // review's finding); the foreign arm prints who built the tree and
-        // never the literal.
+        // review's finding).
         return {CreatedIndexReply(stmt.index_name, stmt.table_name, result.value().index_oid,
                                   result.value().root_page_id, result.value().key_width,
                                   result.value().entry_width, " entries=0",
                                   result.value().warnings),
                 false};
     });
-}
-
-DispatchOutcome CommandDispatcher::BeginForeignIndexBuild(const parser::IndexStmt& stmt,
-                                                          std::uint32_t owner_core,
-                                                          Session& session) {
-    // Inside an explicit transaction the owner's refusal window would last
-    // until the client's COMMIT, however far off that is, so the statement
-    // is refused by name before anything is sent (§7c). Not poisoned:
-    // nothing was written and the transaction is as it was.
-    if (session.in_explicit_txn()) {
-        return {ErrorReply(Status::NotImplemented(
-                    "CREATE INDEX on '" + stmt.table_name + "' at byte " +
-                    std::to_string(stmt.table_byte_offset) + ": the relation is owned by core " +
-                    std::to_string(owner_core) +
-                    ", which refuses its writes from the build until this statement ends - "
-                    "inside a transaction, the client's COMMIT; run it in autocommit "
-                    "(workplan-peer-writer.md PW1c-6b-3)")),
-                false};
-    }
-    // Resolved under the session's view (spec §5's rule), as the local arm
-    // is; `kByOwner` stands the owner refusal down, since the owner seeds
-    // its own anchor. The oid is issued here, before any page exists - a
-    // burned one is never reissued, the ids' standing rule - and no page of
-    // the relation is touched: the catalog pages are this core's.
-    const std::optional<txn::ReadView> view = ViewFor(session);
-    auto def = exec::PrepareIndexDef(catalog_, stmt, view.has_value() ? &*view : nullptr,
-                                     catalog::Catalog::AnchorSeed::kByOwner);
-    if (!def.ok()) return {ErrorReply(def.status()), false, 0, def.status()};
-
-    const std::uint64_t request_id = next_remote_request_++;
-    if (Status s = index_builds_->Request(owner_core, request_id, def.value()); !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "asked core " + std::to_string(owner_core) + " to build index '" +
-                              stmt.index_name + "' on " + stmt.table_name + " (request " +
-                              std::to_string(request_id) + ")");
-    }
-    DispatchOutcome pending;
-    pending.pending_index_build = PendingIndexBuild{request_id, owner_core,
-                                                    std::move(def.value()), stmt.table_name,
-                                                    stmt.key_columns[0].name};
-    return pending;
-}
-
-DispatchOutcome CommandDispatcher::FinishIndexBuild(const PendingIndexBuild& build,
-                                                    Session& session) {
-    const IndexBuildOutcome* reply = index_builds_->Find(build.request_id);
-    Status verdict = Status::OK();
-    PageId root = kInvalidPageId;
-    if (reply == nullptr) {
-        verdict = Status::IoError("CREATE INDEX on '" + build.table_name +
-                                  "': the wait for core " + std::to_string(build.owner_core) +
-                                  "'s build was closed under the statement");
-    } else if (!reply->arrived) {
-        // The deadline. Retryable: the owner's window closes on the
-        // done(aborted) below - or, if the request itself is still in the
-        // ring, when its reply reaches the receiver's no-waiter branch -
-        // and a retry after that builds afresh.
-        verdict = Status::TxnConflict(
-            "CREATE INDEX on '" + build.table_name + "': core " +
-            std::to_string(build.owner_core) + " did not reply within " +
-            std::to_string(kIndexBuildReplyDeadlineNs / 1'000'000'000ull) +
-            " s; the build is abandoned and the owner told (workplan-peer-writer.md "
-            "PW1c-6b-3)");
-    } else if (!reply->status.ok()) {
-        verdict = reply->status.WithContext("CREATE INDEX on '" + build.table_name +
-                                            "': core " + std::to_string(build.owner_core) +
-                                            " refused the build");
-    } else {
-        root = reply->root_page_id;
-    }
-    index_builds_->Close(build.request_id);
-    if (!verdict.ok()) {
-        index_builds_->Done(build.owner_core, build.def.index_oid, /*committed=*/false);
-        if (logging(LogLevel::kWarn)) log_->Warn("ddl", verdict.message());
-        return {ErrorReply(verdict), false, 0, verdict};
-    }
-
-    // Phase 2 proper: the row alone under a DDL scope of its own - the
-    // local arm's shape minus the build and the anchor seed. A refusal
-    // here (a same-named index created while this was parked, the
-    // relation dropped) aborts the scope and orphans the owner's tree
-    // through the done(aborted) below. The staged-commit member is zeroed
-    // first because DispatchAndStage, the only other place that zeroes
-    // it, is not on this path.
-    pending_commit_lsn_ = wal::kNoLsn;
-    DispatchOutcome out = InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        DdlScope ddl = DdlScopeFor(scope);
-        catalog::Catalog::IndexDef def = build.def;
-        def.root_page_id = root;
-        catalog::CatalogRowRef created_row;
-        auto index_oid = catalog_.CreateIndex(def, ddl.trx_id,
-                                              ddl.txn != nullptr ? &created_row : nullptr,
-                                              catalog::Catalog::AnchorSeed::kByOwner);
-        // Before the status is read: a create that failed after the row
-        // went down still left it there.
-        if (ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
-            ddl.written.push_back(created_row);
-            NoteDdlRows(ddl);
-        }
-        if (!index_oid.ok()) return {ErrorReply(index_oid.status()), false, 0, index_oid.status()};
-        if (logging(LogLevel::kInfo)) {
-            log_->Info("ddl", "created index '" + def.name + "' on " + build.table_name +
-                                  ", built by core " + std::to_string(build.owner_core));
-        }
-        return {CreatedIndexReply(def.name, build.table_name, index_oid.value(), root,
-                                  def.key_width, def.entry_width,
-                                  " built_by_core=" + std::to_string(build.owner_core),
-                                  exec::IndexCreationWarnings(catalog_, def,
-                                                              build.key_column_name)),
-                false};
-    });
-    // The commit record is appended (or the scope aborted) by now: the
-    // owner's window closes either way, and `committed` publishes the
-    // tree. Sent before the durability wait, which the caller takes -
-    // index_build_service.hpp on why that order is sound.
-    const bool committed = out.response.rfind("ERR ", 0) != 0;
-    index_builds_->Done(build.owner_core, build.def.index_oid, committed);
-    // DispatchAndStage's read-out of the staged commit, for its reason:
-    // the caller waits on `pending_lsn`, never on the member.
-    out.pending_lsn = pending_commit_lsn_;
-    pending_commit_lsn_ = wal::kNoLsn;
-    return out;
 }
 
 DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
@@ -3957,7 +3645,7 @@ DispatchOutcome CommandDispatcher::HandleShowNamespaces(Session& session) {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Session& session) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
@@ -3984,6 +3672,72 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
             log_->Info("ddl", "dropped assertion '" + stmt.name + "'");
         }
         return {os.str(), false};
+    }
+
+    // ---- AT-S5e, AT-0 item 13: the relation `X`, for the build ----------
+    //
+    // **A build no writer on another core can slip past.** Every writer of
+    // the relation holds its `IX` from before its admission until its
+    // transaction decides (`InsertParsed`, `DeclaredWriteBorrow`), so the
+    // grant below is the moment no writer is mid-statement, and a writer
+    // arriving during the build parks on the table's slot until the
+    // directory is adopted, then re-runs and is checked against it. Without
+    // it a writer admitted against no assertion could land a row where the
+    // scan had already passed and reserve before the adoption - in neither
+    // the scan nor the cabin (the bug entry this closes).
+    //
+    // **Held by a transaction of the statement's own, not the session's**
+    // (the operator's mark on AT-0 item 13): it writes nothing, the build's
+    // catalog writes are not its writes, and it is rolled back when the
+    // statement ends - so the lock is released at the statement's end and a
+    // failed `CREATE ASSERTION` still poisons nothing, where the session's
+    // transaction would have held the relation to its `COMMIT` and taken the
+    // failure with it. A transaction rather than a minted id because a
+    // waiter names its holder (`HolderName`), and a minted id reads as "a
+    // positioned reader". The unfiltered name read is `HandleIndex`'s
+    // earlier shape: an unresolvable name takes no borrow and falls through
+    // to `PrepareAssertionDef`'s refusal and byte position.
+    struct BuildLock {
+        txn::TransactionManager* manager = nullptr;
+        txn::Transaction* txn = nullptr;
+        ~BuildLock() {
+            if (txn != nullptr) (void)manager->Abort(*txn);
+        }
+    } build_lock;
+    if (locks_ != nullptr && txn_ != nullptr) {
+        if (auto rel = catalog_.FindTableOidByName(stmt.table_name); rel.ok()) {
+            auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
+            if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
+            build_lock.manager = txn_;
+            build_lock.txn = begun.value();
+            const txn::LockKey unit = txn::LockKey::Relation(rel.value());
+            std::uint64_t blocker = 0;
+            std::shared_ptr<txn::LockWaitSlot> wake;
+            auto took = locks_->TryAcquire(build_lock.txn->id(), unit, txn::LockMode::kExclusive,
+                                           build_lock.txn->borrows(), &blocker,
+                                           may_park_ ? &wake : nullptr);
+            if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
+            if (!took.value()) {
+                // **This session's own transaction wrote the relation**: the
+                // build's in-flight refusal, answered now rather than after
+                // a wait for a decide only this session can make.
+                if (session.transaction() != nullptr && session.transaction()->id() == blocker) {
+                    if (wake != nullptr) locks_->DropWake(unit, wake);
+                    const Status own = Status::TxnConflict(
+                        "relation '" + stmt.table_name +
+                        "' has a row written by this session's own transaction; CREATE "
+                        "ASSERTION reads settled state - retry when it has ended");
+                    return {ErrorReply(own), false, 0, own};
+                }
+                if (wake != nullptr) {
+                    lock_wait_ = DispatchOutcome::LockWait{unit, blocker, std::move(wake)};
+                }
+                const Status held = Status::TxnConflict("relation oid " +
+                                                        std::to_string(rel.value()) +
+                                                        " is held by " + HolderName(blocker));
+                return {ErrorReply(held), false, 0, held};
+            }
+        }
     }
 
     // The visibility the build's scan reads under: latest settled state,
@@ -6601,47 +6355,17 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     {
         // **On every core since AT-S5**, where this block ran on peers alone
         // as PW1c-5's shape gate; what survives in it survives everywhere.
-        // PW1c-6b-2's window (index_build_service.hpp): an index of this
-        // relation is being built here, or built and not yet published by
-        // core 0's commit, and a row written now would be in nobody's
-        // index. Retryable - `done` closes it. Before the shape gate,
-        // because the relation *looks* funded until the commit lands.
-        if (pending_index_builds_ != nullptr && pending_index_builds_->Covers(access.oid)) {
-            // **AO-S6e-a: the refusal becomes a wait**, census row 4's
-            // outcome. Recorded here and acted on in `DispatchAsync`, for
-            // `NoteBlockingWriter`'s reason and under its one condition:
-            // this runs inside a write path with no reactor beneath it, and
-            // a synchronous `Dispatch()` has nowhere to park, so without
-            // `may_park_` the refusal below is still the honest answer.
-            //
-            // The refusal is returned either way. It is what makes the
-            // statement write nothing, which is what makes the re-run
-            // correct - the same division `CheckWriteConflictBlocking` uses
-            // and for the same reason.
-            if (may_park_) index_window_wait_ = access.oid;
-            return IndexBuildPending(core_id_, relation);
-        }
-        // The btree arm lifted 2026-08-24 (PW2-4): a root move writes the
-        // relation's own granted anchor page and updates the cache in
-        // place - no catalog write remains on the growth path. **The
-        // indexed arm lifted 2026-08-25 (PW1c-6b-4)**: a peer-owned
-        // relation's index is owner-built (§7c, PW1c-6b-3) - a peer takes
-        // no DDL, and there is no migration - so every index page is this
-        // core's own, allocated from its lease and stamped by its stream,
-        // and maintenance is a local write: `AppendIndexEntry` writes
-        // owner-stamped leaves (MayWrite passes on the own stamp) and a
-        // root split's `UpdateIndexRoot` writes the relation's granted
-        // anchor (PW2-4), the last catalog write off the growth path. What
-        // would break this is an index whose tree is *not* the owner's,
-        // and the two routes to one are shut: a relation indexed on core 0
-        // and then moved needs the mover (R5), which does not exist -
-        // `owner_core` is written once, by CreateTable - and a local build
-        // against a foreign relation is refused by `CheckIndexDef` itself
-        // (catalog.cpp, the 96b0343 review's C4). Where that refusal is
-        // keyed off - a hook-less fixture catalog - the tree really is
-        // core 0's, and the backstop is the store's: `MayWrite` refuses a
-        // page carrying neither this lease, a grant, nor this stream's
-        // stamp, so the ending is a refused write, never a torn tree.
+        // PW1c-6b-2's index-build window stood first here, turned into a
+        // wait by AO-S6e-a; it went at AT-S5e, where `CREATE INDEX` took the
+        // relation `X` a writer's `IX` waits on, on every core.
+        // The btree arm lifted 2026-08-24 (PW2-4) and the indexed arm
+        // 2026-08-25 (PW1c-6b-4). The indexed arm's argument - a peer-owned
+        // relation's index was owner-built, so every index page was the
+        // owner's own and maintenance a local write - went with the per-core
+        // pool and then with the owner-built path itself (AT-S5e): every
+        // core builds and maintains every relation's indexes through the one
+        // frame table, under the page latch, and a build fences the
+        // relation's writers with its `X`.
         //
         // **The key-mode arm lifted 2026-08-25** with the mode itself
         // (heap-and-tuple.md §4.1). What it was really refusing was the
@@ -7402,12 +7126,30 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // row goes to the one relation.
     if (Status affinity = CheckWriteAffinity(*ta, stmt.table_name, *scope.session, target_id);
         !affinity.ok()) {
-        // ErrorReply, not a bare "ERR ": the affinity refusals are
-        // TxnConflict (CrossCoreWriteRefused, IndexBuildPending)
-        // and the wire's `TXN_CONFLICT retryable=1` is what a client
+        // ErrorReply, not a bare "ERR ": what the gate still refuses
+        // (`CannotEnforce`) must reach the wire with its code, and a
+        // retryable refusal's `TXN_CONFLICT retryable=1` is what a client
         // retries on - all three write sites spelled it without until
         // PW1c-7's test asked for the bit.
         return {ErrorReply(affinity), false, 0, affinity};
+    }
+
+    // ---- The relation's intention, before anything is admitted (AT-S5e,
+    // AT-0 item 13) ---------------------------------------------------------
+    //
+    // **Here and not at the first id borrow**, where an `INSERT` used to
+    // take it. A DDL that claims the relation - a `CREATE INDEX` about to
+    // backfill, a `CREATE ASSERTION` about to build a cabin - takes its `X`
+    // against this `IX`, and it is a fence only if it stands over everything
+    // the statement decides from the relation's secondary structures:
+    // assertion admission and the sorted fill's `AnyOn` gate below, not
+    // just the placement. Taken after them, a writer could be admitted
+    // against no assertion, let a build finish and publish, and then place
+    // a row the cabin never counts. Held for the transaction, so every row
+    // of the statement is covered by this one ask.
+    if (std::optional<Status> held = BorrowOrWait(scope, txn::LockKey::Relation(ta->oid),
+                                                  RepeatableReadWait::kCapable)) {
+        return {ErrorReply(*held), false, 0, *held};
     }
 
     // ---- The bulk loop (docs/spec/bulkinsert.md §2.3, §4) ---------------
@@ -11384,6 +11126,10 @@ void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session
 void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx,
                                            std::uint64_t pk, RepeatableReadWait rerun) {
     if (!may_park_ || clock_ == nullptr || txn_ == nullptr) return;
+    // A relation-level refusal already parked this statement on the table's
+    // slot (`BorrowChain`); a second wait on the same statement would be
+    // one the outcome cannot carry.
+    if (lock_wait_.has_value()) return;
     if (!txn_->IsInFlight(trx)) return;
     // The two guards the declaration argues for. A null `waiter` is
     // autocommit before its transaction is opened: it holds nothing and
@@ -11492,31 +11238,37 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
         return cap;
     };  // `Status`, not `StatusOr<bool>`: the cap has no granted arm to report.
 
-    // A relation unit is outermost and takes no intention above it.
-    //
-    // **No caller reaches this since AO-S6e-b** - a `WHERE`-less write
-    // declares the whole id space as a range now, and the DDL borrow asks
-    // the table directly because it needs a wake registration. It stays
-    // because it is not dead code but a *rule*: without it a relation unit
-    // handed to this function would take an `IX` above itself on its own
-    // key, which the table grants (a transaction never conflicts with
-    // itself) and which would leave the ask meaning nothing.
-    if (unit.unit == txn::LockUnit::kRelation) {
-        auto rel = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
-        if (!rel.ok()) return refused(rel.status());
-        return rel.value();
-    }
-
     // **No unit without the intention above it.** `lock_table.hpp` states
     // the obligation and states its failure mode: a unit borrowed under a
     // relation entry this transaction has no `IX` on is invisible to a
     // relation-level ask, so the table answers a later `S`/`X` at the
     // relation "free" while a key beneath it is held - a wrong answer
     // given quietly rather than a refusal.
-    auto rel = locks_->TryAcquire(id, txn::LockKey::Relation(unit.rel_oid),
-                                  txn::LockMode::kIntentionExclusive, holdings, blocker);
+    //
+    // **And the one ask here a DDL refuses** (AT-S5e). A relation `X` -
+    // `DROP TABLE`, `CREATE`/`DROP INDEX`, a `CREATE ASSERTION`'s build -
+    // refuses this `IX`, and that holder may be on any core: the row-level
+    // wait (`NoteBlockingWriter`) polls `IsInFlight`, which is this core's
+    // live set, so it would answer "not in flight" for a DDL on a peer and
+    // the write would be refused rather than held. A refusal here parks on
+    // the table's own slot instead, flipped by the release from whichever
+    // core releases - `BorrowRelationForDdl`'s wait, from the other side.
+    const txn::LockKey relation = txn::LockKey::Relation(unit.rel_oid);
+    std::shared_ptr<txn::LockWaitSlot> wake;
+    auto rel = locks_->TryAcquire(id, relation, txn::LockMode::kIntentionExclusive, holdings,
+                                  blocker, may_park_ ? &wake : nullptr);
     if (!rel.ok()) return refused(rel.status());
-    if (!rel.value()) return false;
+    if (!rel.value()) {
+        if (wake != nullptr) {
+            lock_wait_ = DispatchOutcome::LockWait{relation, *blocker, std::move(wake)};
+        }
+        return false;
+    }
+    // A relation unit asks for the intention alone: it is a writer
+    // declaring the relation it is about to write (`InsertParsed`), never a
+    // DDL's claim on the object, which asks the table itself
+    // (`BorrowRelationForDdl`) because it needs its own wait.
+    if (unit.unit == txn::LockUnit::kRelation) return true;
     auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
     if (!under.ok()) return refused(under.status());
     return under.value();
@@ -11641,6 +11393,15 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     auto took = BorrowChain(scope, unit, &blocker);
     if (!took.ok()) return took.status();
     if (took.value() || blocker == 0) return std::nullopt;
+    // Refused at the relation: parked on the slot `BorrowChain` registered,
+    // not on the holder's decide - see there. (A relation unit is only ever
+    // refused there; a narrower one refused there on a path that cannot
+    // park is named by its rows below, which a DDL holding the relation
+    // does hold.)
+    if (lock_wait_.has_value() || unit.unit == txn::LockUnit::kRelation) {
+        return Status::TxnConflict("relation oid " + std::to_string(unit.rel_oid) +
+                                   " is held by " + HolderName(blocker));
+    }
 
     // **A refused borrow stops the write.** An insert has no conflict check
     // of its own to convert - the row does not exist, so there is no header
@@ -11799,17 +11560,6 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
         blocking_writer_ = 0;
         blocked_pk_ = 0;
-    }
-    // **And AO-S6e-a's window, on the same test and for the same reason.**
-    // The affinity gate runs before any row work on a *fresh* dispatch, so
-    // this is normally vacuous - but a statement resumed from a mid-walk
-    // park re-enters it with rows already written, and waiting there would
-    // end in a re-run of a statement whose transaction this failure has
-    // just poisoned: a non-retryable "transaction is aborted" where the
-    // client used to get the retryable refusal. Worse, from a wait.
-    if (index_window_wait_ != 0 &&
-        (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
-        index_window_wait_ = 0;
     }
     // **And AO-S6e-b's lock wait, on the same test and with one more
     // thing to undo.** The borrow is asked for before the DDL's first

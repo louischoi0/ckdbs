@@ -284,7 +284,7 @@ void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
     }
 
     // **Everything past here can walk a whole relation, so it leaves the
-    // drain.** `IndexBuildServer::OnRequest`'s shape and for its reason;
+    // drain.** The retired index build server's shape and for its reason;
     // `kSystem` because this is another core's constraint check and not
     // this core's client's statement. The payload is copied into the task
     // because the span belongs to the ring slot.

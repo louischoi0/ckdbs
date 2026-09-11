@@ -204,7 +204,7 @@ inline constexpr std::size_t kTxnParticipantReplyMessageMax =
 // applied) and anything else is the refusal, whose message is in `message`.
 //
 // `message_len` bounds `message` rather than a NUL terminating it. That is
-// SS1's discipline and not `IndexBuildReplyPayload`'s: these are bytes this
+// SS1's discipline and not the retired index-build reply's: these are bytes this
 // core did not compute, and an explicit length that the reader bounds
 // against the array is what stands between a forged payload and a read past
 // it. A NUL that is simply absent has no such backstop.
@@ -591,7 +591,7 @@ struct TxnParticipantOutcome {
     Status status;  // meaningful once `replied`
 };
 
-// What one phase's waiter holds. `IndexBuildClient`'s shape widened from
+// What one phase's waiter holds. The retired index-build client's shape widened from
 // one respondent to N: the phase settles when every participant has replied
 // or the deadline has passed, and **a phase that settles on the deadline is
 // not a refusal** - what it means is the leg's own, above.

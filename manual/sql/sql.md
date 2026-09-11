@@ -365,10 +365,9 @@ CREATE ASSERTION <name> ON <table> GROUP BY (<col> [, ...])
   and one `ASSERTION_VIOLATION`. `SHOW ASSERTIONS` answers the same from
   every core. `CREATE ASSERTION`'s success line carries no
   `built_by_core=` and `SHOW ASSERTIONS` no `enforced_by_core=` field any
-  more. One limit is stated rather than hidden: a write on
-  another core that runs **during** a `CREATE ASSERTION` on the same
-  relation is not fenced off from the build, so run the create while the
-  relation is quiet.
+  more. A `CREATE ASSERTION` waits for every open write to the relation,
+  and a write arriving while it builds waits for it to finish - on any
+  core - so the new constraint counts every row.
 
 ### CREATE CABIN / DROP CABIN (built, CB01-CB11)
 
@@ -801,12 +800,12 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
 - **`DROP INDEX` is transactional too** (2026-08-18): inside an explicit
   transaction it is rolled back, and it is isolated — index maintenance
   keeps writing entries for an index whose drop has not committed, so a
-  `ROLLBACK` leaves the index whole, including rows another session
-  wrote while the drop was open. The isolation is proved for writers on
-  one core, which is every writer this engine has today (cross-core
-  writes are refused). It was refused inside a transaction
+  `ROLLBACK` leaves the index whole. Since AT-S5e a `DROP INDEX` or
+  `CREATE INDEX` holds the relation while it is undecided, so a write to
+  it from any core waits for the DDL to commit or roll back and then runs
+  against the index list it left. It was refused inside a transaction
   between 2026-08-16 and 2026-08-18, for the wrong result that fix
-  closes. Two limits on all of the above, both deliberate:
+  closes, and again for a relation another core owned until AT-S5e. Two limits on all of the above, both deliberate:
   - **Not crash-durable.** Catalog writes are still unlogged and the
     catalog is not recovered, so a committed `CREATE TABLE` survives a
     crash only if its page reached the device. "Transactional" here means

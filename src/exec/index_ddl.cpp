@@ -216,8 +216,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
 StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
                                                      const parser::IndexStmt& stmt,
-                                                     const txn::ReadView* view,
-                                                     catalog::Catalog::AnchorSeed seed) {
+                                                     const txn::ReadView* view) {
     auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
@@ -284,7 +283,7 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
     // - so this buys the *position* of the failure and nothing else: a
     // heap relation refused by name rather than as a page-type error from
     // inside the build.
-    if (Status s = catalog.CheckIndexDef(def, seed); !s.ok()) return s;
+    if (Status s = catalog.CheckIndexDef(def); !s.ok()) return s;
 
     // The oid, issued before any page exists so the root and every page
     // the backfill splits off carry it from birth (page.md §2a). Burned

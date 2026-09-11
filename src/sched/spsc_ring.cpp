@@ -28,9 +28,6 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kAnchorWrite: return "ANCHOR_WRITE";
         case RingMessageKind::kTrxIdLease: return "TRXID_LEASE";
         case RingMessageKind::kRowIdLease: return "ROWID_LEASE";
-        case RingMessageKind::kIndexBuildRequest: return "INDEX_BUILD_REQUEST";
-        case RingMessageKind::kIndexBuildReply: return "INDEX_BUILD_REPLY";
-        case RingMessageKind::kIndexBuildDone: return "INDEX_BUILD_DONE";
         case RingMessageKind::kShippedStatementRequest: return "SHIPPED_STATEMENT_REQUEST";
         case RingMessageKind::kShippedStatementReply: return "SHIPPED_STATEMENT_REPLY";
         case RingMessageKind::kTxnPrepareRequest: return "TXN_PREPARE_REQUEST";

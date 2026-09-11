@@ -484,7 +484,7 @@ public:
     // reached exactly as an abandoned one is. It also (R6-5) asks about
     // every prepared one
     // that has been in doubt for `kTxnInDoubtCeilingNs`. Driven from the
-    // reactor's periodic tick, the way `PendingIndexBuilds::Expire` is - a
+    // reactor's periodic tick, as the retired index-build windows' expiry was - a
     // lazy sweep would never run for an abandoned context, since nothing
     // arrives for it by definition.
     //

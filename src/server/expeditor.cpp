@@ -1324,7 +1324,6 @@ struct ClearReactorBorrows {
         dispatcher->SetStatementShip(nullptr);
         dispatcher->SetShippedStatements(nullptr);
         dispatcher->SetTxn2pc(nullptr);
-        dispatcher->SetIndexBuilds(nullptr);
         // R6-5's borrow runs the other way - the executor asks through the
         // 2PC server, and that server is a *member*, so it outlives the
         // reactor while holding it by reference. Withdrawn here so the two
@@ -1595,14 +1594,8 @@ Status Expeditor::Start() {
     // borrow - a member holding this reactor - and is cleared by the same
     // guard, so a dispatch after `Serve` returns refuses as a single-core
     // one does instead of shipping through a destroyed reactor.
-    //
-    // `index_builds_` is the third of the same shape and is cleared here
-    // too: it captures this function's `scheduler` exactly as the shipping
-    // client does, and a `CREATE INDEX` through the public `dispatcher()`
-    // accessor after `Serve` returned would send on a destroyed reactor.
-    // It was installed and never withdrawn before this guard existed - the
-    // hazard is the one the `set_scheduler_view` argument above states, and
-    // withdrawing all three together is what makes this struct's name true.
+    // (The index-build client was the third of the same shape until AT-S5e
+    // retired it.)
     live.clear_reactor_borrows.emplace(&*dispatcher_, &shipped_executor_);
 
     // Core-local, and installed before any statement runs: from here on a
@@ -1888,19 +1881,11 @@ Status Expeditor::Start() {
         }
         dispatcher_->SetRemoteReads(&*remote_reads_);
 
-        // Core 0's index-build client (PW1c-6b-4): the foreign arm of
-        // CREATE INDEX sends the owner a build request and parks on the
-        // reply here. Registered before the dispatcher learns about it,
-        // remote_reads_' rule, so a reply cannot beat its receiver.
-        index_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
-        if (Status s = index_builds_->RegisterReplyReceiver(); !s.ok()) return s;
-        dispatcher_->SetIndexBuilds(&*index_builds_);
-
         // **Core 0's two halves of statement shipping** (SS1/SS3): the
         // owner's, because a peer ships core 0 every statement against a
         // relation core 0 owns, and the arrival core's, because core 0's
         // own clients name peer-owned relations. Registered before the
-        // dispatcher is told about the client, for `index_builds_`' reason -
+        // dispatcher is told about the client, for `remote_reads_`' reason -
         // a reply must never beat its receiver.
         //
         // The executor is built first: the server holds its seam. Both

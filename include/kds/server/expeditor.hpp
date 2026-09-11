@@ -23,7 +23,6 @@
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
-#include "kds/server/index_build_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/range_alloc.hpp"
 #include "kds/server/row_id_lease_service.hpp"
@@ -920,18 +919,8 @@ private:
     // and both consumers discard unmatched tags silently.
     std::optional<RemoteStepServer> remote_steps_;
 
-    // Core 0's side of a peer-owned relation's CREATE INDEX (PW1c-6b-4,
-    // index_build_service.hpp): the dispatcher's foreign arm parks on it
-    // between the request it sends the owner and the sys.indexes row it
-    // then commits. Armed with the transport, beside remote_reads_ and for
-    // its reason - a reply must never beat its receiver. It captures the
-    // Serve() scheduler exactly as remote_reads_' send lambda does, and is
-    // used only while that scheduler runs; nothing pumps it after Serve
-    // returns.
-    std::optional<IndexBuildClient> index_builds_;
-
     // **Core 0's two halves of statement shipping** (SS1/SS3), armed with
-    // the transport for `index_builds_`' reason. Core 0 is an owner like
+    // the transport, beside `remote_reads_` and for its reason. Core 0 is an owner like
     // any other - a peer's client ships it the statements it owns - and an
     // arrival core like any other, so it needs both.
     //

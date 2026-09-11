@@ -59,15 +59,21 @@ this layer does not see.
 
 ## What is true meanwhile
 
-The gate is inert in production. Nothing is unsound: core 0 running
-`CREATE INDEX` on a peer-owned relation is refused at the dispatcher
-(PW1c-6), and a peer running it ships the DDL to core 0 (CC13). What is
-lost is the catalog-level defence for a non-dispatcher caller, which is a
-defence against a caller that does not exist yet.
+**Re-verified at AT-S5e on `m3-at`, and the premise moved.** The gate is
+still inert in production and the predicate is unchanged. What changed is
+what surrounds it: the dispatcher's PW1c-6 refusal is gone, and so is the
+owner-built path and its `kByOwner` seed. `CREATE INDEX` on a peer-owned
+relation builds where its session is and seeds the anchor itself, under the
+relation `X` (`ddl-transactional.md` §5e) - which is the ruled shape. So a
+catalog with a publisher installed would now refuse a legitimate,
+production-shaped build, and option 1 (re-key on ownership alone) would
+refuse every such build. Of the three options above, only 2 (delete the
+gate) or 3 (retire the hook) is consistent with AT-S5e. Still the
+operator's to pick; nothing here depends on which.
 
 ## Owner
 
-Whoever takes ownership routing next — AT (`ar0-5-amendment-uniformity.md`)
-if it lands before anything else touches `CreateIndex`. Related:
-`docs/spec/crosscore.md` CC7's owner-builds exception, which is the ruling
-that says core 0 keeps the catalog half and the owner runs the page half.
+`instructions/v3.0.0/workorder-at-m3-uniformity.md` - AT-S5e left it for the
+decision above rather than taking option 2 on its own account.
+`docs/spec/crosscore.md` CC7's owner-builds exception, which this entry once
+cited as the ruling for the page half, is retired.

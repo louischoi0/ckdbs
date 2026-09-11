@@ -45,13 +45,12 @@
 // pointers - so what actually travels is the statement **text**, and the
 // owner parses and binds it against its own catalog and its own pages.
 //
-// That is not a concession, it is the same argument PW1c-6b made when it
-// moved `CREATE INDEX`'s page half to the owner rather than shipping a
-// plan: a plan bound on the arrival core is bound against *that* core's
-// view, and a peer's view of a relation it does not own is a device image
-// that can be behind. `index_build_service.hpp` states it as "Backfill
-// here would read the device's stale image and miss every row the owner
-// holds". Binding on the owner is the only place the answer is authoritative.
+// That was the argument PW1c-6b made when it moved `CREATE INDEX`'s page
+// half to the owner: a plan bound on the arrival core was bound against
+// *that* core's view, and a peer's view of a relation it did not own was a
+// device image that could be behind. One frame table serves every core since
+// AM-S2 step 3 and the index build's ship went at AT-S5e; whether a shipped
+// read still needs its owner is AT-0 item 4's.
 //
 // The cost is one extra parse. Against the 21-23 microseconds a statement
 // costs and the ~0.9 ms a commit's sync costs (pretasks §4), it is not
@@ -74,8 +73,7 @@
 // ---- The waiter, and the two ways it ends ------------------------------
 //
 // The arrival core opens a waiter under a deadline and parks the statement
-// on it (the dispatcher's `co_await sched::WaitUntil`, the same park
-// `IndexBuildClient` uses). It ends two ways and they are **not** the same
+// on it (the dispatcher's `co_await sched::WaitUntil`). It ends two ways and they are **not** the same
 // answer:
 //
 //   - a **reply** arrives. Its status crosses as a code and a message and
@@ -586,8 +584,9 @@ struct ShippedStatementOutcome {
 // The arrival core's side: the waiters, the deadline, the send and the
 // reply receiver. A map for its stable addresses - the receiver writes
 // into an entry while other entries come and go, and a vector would move
-// it. `IndexBuildClient`'s shape, minus the `done` leg: an autocommit
-// statement opens no window on the owner, so there is nothing to close.
+// it. No `done` leg, where the retired index-build client had one: an
+// autocommit statement opens no window on the owner, so there is nothing to
+// close.
 class StatementShipClient {
 public:
     StatementShipClient(std::uint32_t core_id, sched::Scheduler& scheduler,

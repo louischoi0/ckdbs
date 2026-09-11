@@ -55,13 +55,12 @@
 // a user relation as a system one. `catalog::IsSystemNamespace` is the
 // identity spelling; `range_alloc.cpp` carries why this one diverges.
 //
-// Two admission windows this function cannot see, named so RD5 closes
+// Two admission windows this function could not see, named so RD5 closes
 // them rather than discovers them (§9's enumeration): an index build in
-// flight (`PendingIndexBuilds::Covers`) and an assertion between core 0's
-// catalog half and the owner's adoption. Both are races against a core-0
-// catalog write, and the range row is itself a core-0 catalog write
-// (CC10 step 3), so core 0's single stream is the serialization point —
-// RD5's obligation, not a field here.
+// flight and an assertion between its catalog half and its adoption. Both
+// builds hold the relation `X` since AT-S5e, which the range allocator's
+// write does not take - so the serialization point is still the catalog
+// write, RD5's obligation, not a field here.
 
 namespace kds::exec {
 

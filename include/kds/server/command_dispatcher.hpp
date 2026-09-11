@@ -157,7 +157,6 @@ enum class PhysicalOptimizerMode : std::uint8_t {
     kShadow = 1,
 };
 
-class IndexBuildClient;
 class StatementShipClient;
 class FkProbeClient;
 class FkIntentTable;
@@ -168,19 +167,6 @@ class ShippedStatementExecutor;
 // pointer-to-const parameter.
 class Txn2pcClient;
 struct TxnPhaseOutcome;
-
-// A peer-owned relation's `CREATE INDEX` between its two phases on core 0
-// (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-3): the definition core 0
-// prepared and sent - the oid issued, the root the owner's to fill - and
-// what phase 2 needs to answer the client. Carried by value across the
-// park: the statement's frame is the one thing that survives it.
-struct PendingIndexBuild {
-    std::uint64_t request_id = 0;
-    std::uint32_t owner_core = 0;
-    catalog::Catalog::IndexDef def;
-    std::string table_name;       // the reply line
-    std::string key_column_name;  // the Cabin warning
-};
 
 // A statement this core sent to the core that owns its relation (SS2,
 // statement_ship_service.hpp), between the send and the answer. What the
@@ -471,13 +457,6 @@ struct DispatchOutcome {
     // the star read: whole rows, rendered from the relation's schema.
     PendingRemoteRender remote_render = {};
 
-    // A peer-owned relation's CREATE INDEX this statement sent to the owner
-    // to build (PW1c-6b-3): the reply is not in `response` yet.
-    // `DispatchAsync()` parks on the owner's reply under its deadline and
-    // finishes through `FinishIndexBuild()`; the synchronous `Dispatch()`
-    // has no reactor to receive one on and abandons it, telling the owner.
-    std::optional<PendingIndexBuild> pending_index_build = std::nullopt;
-
     // A statement shipped to its owner core (SS2): the reply is not in
     // `response` yet. `DispatchAsync()` parks on the owner's answer under
     // its deadline and finishes through `FinishShippedStatement()`.
@@ -537,40 +516,6 @@ struct DispatchOutcome {
         std::uint64_t pk = 0;      // the row it holds
     };
     std::optional<WriteBlock> write_block = std::nullopt;
-
-    // **AO-S6e-a: the relation whose index build this write is waiting
-    // out**, or `nullopt`. The one refusal in the affinity gate that a
-    // re-run can get past on its own: an index of this relation is being
-    // built here, or built and not yet published by core 0's commit, and a
-    // row written now would be in nobody's index
-    // (`index_build_service.hpp`). The window closes twice over - at the
-    // `done` core 0 sends, and at `kIndexBuildPendingCeilingNs` if none
-    // arrives - so the wait needs no deadline of its own and no second
-    // name for one.
-    //
-    // **A window and not a lock**, which is what AO-S6e's own §"AO-S6e-a is
-    // blocked" argues for at length: the window's close, the owner's
-    // catalog-cache drop and the admission of the next write are one
-    // ordered event on this reactor (`core_runtime.cpp`'s
-    // `done(committed)` seam), and a relation `X` released on core 0 at its
-    // decide would let a writer in before this core had drained either
-    // message. Census row 4's *outcome* - the refusal becomes a wait - with
-    // none of its mechanism.
-    //
-    // Set only under `may_park_`, for `write_block`'s reason: the two
-    // non-parking seams - the synchronous `Dispatch()` and `ExecuteInsert`,
-    // which the KWP load path drives - have no reactor to park on, and
-    // their honest answer is the retryable refusal itself. The gate runs
-    // before any row work on a fresh dispatch, so a statement that reaches
-    // it has written nothing; `EndWrite` drops it on the one path where
-    // that is false, a resume from a mid-walk park.
-    //
-    // **The wait is invisible to `SHOW META`**, and that is a gap rather
-    // than a decision: an operator who used to see an error line now sees a
-    // stall with no counter behind it. `index_build_windows` reports the
-    // windows and not the writers held by them. A counter is client-visible
-    // surface, so it is not added in passing.
-    std::optional<catalog::Oid> index_window = std::nullopt;
 
     // **AO-S6e-b: the unit this statement asked for and did not get**, or
     // nullopt. `DROP TABLE`'s relation `X` against a positioned reader's
@@ -1174,30 +1119,9 @@ private:
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
                                 sched::MonoTimeNs* statement_deadline_ns, bool resumed);
 
-    // **AO-S6e-a: the index-build window's wait.** Parks until the window
-    // over `out->index_window` closes and then re-runs `line` whole, or
-    // until `kIndexWindowWaitNs` runs out, in which case the refusal the
-    // gate already put in `out` stands. `statement_deadline_ns` is in-out
-    // and zero means "not taken yet", so a statement that meets two windows
-    // stalls once rather than once per window.
-    //
-    // **Why the window's own close is what makes the re-run correct**, and
-    // why this is not the relation `X` M2's census names: the owner's
-    // `OnDone` closes the window in one handler task that runs to
-    // completion before the next task is polled, and the index's row bumped
-    // the schema word ahead of `done` - so a park ending on the close
-    // re-runs through a boundary that cannot miss the index (AT-S2). A lock
-    // released by core 0 at the DDL's decide is a write to a table both
-    // cores share, seen here before either ring message is drained - it
-    // would admit exactly the unindexed write the window exists to prevent.
-    //
-    // On return `out->index_window` is empty, whichever way it ended.
-    sched::Coro AwaitIndexWindow(std::string_view line, Session* session, DispatchOutcome* out,
-                                 sched::MonoTimeNs* statement_deadline_ns);
-
     // **AO-S6e-b: the statement waits for the unit it was refused, then
-    // runs again whole.** `AwaitIndexWindow`'s shape, with the table's slot
-    // in place of the window's predicate - so it costs one atomic load per
+    // runs again whole.** The retired index-build window's shape, with the
+    // table's slot in place of the window's predicate - so it costs one atomic load per
     // reactor iteration and never a partition latch on the poll path - and
     // with the same statement deadline as the write-block wait, because
     // both are the lock family's fault net and a second bound would be a
@@ -1570,19 +1494,10 @@ private:
     // lost.
     Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
 
+    // Both statements take the relation `X` before their first catalog write
+    // and build where the session is (AT-S5e); the owner-built arm of
+    // PW1c-6b-3 went with the per-core structures it served.
     DispatchOutcome HandleIndex(std::string_view line, Session& session);
-    // The foreign arm's two phases (PW1c-6b-3). Phase 1: the refusal inside
-    // an explicit transaction, the definition under the session's view with
-    // the oid issued, the request sent, the outcome returned pending. Phase
-    // 2, once `IndexBuildClient::Settled`: the owner's root read, the
-    // `sys.indexes` row written with no anchor seed under a DDL scope, the
-    // commit, `done` - or the timeout / the owner's refusal as the error
-    // and `done(aborted)`. Phase 2 stages its commit through
-    // `pending_commit_lsn_` exactly as DispatchAndStage does, so the
-    // caller's durability wait is unchanged.
-    DispatchOutcome BeginForeignIndexBuild(const parser::IndexStmt& stmt,
-                                           std::uint32_t owner_core, Session& session);
-    DispatchOutcome FinishIndexBuild(const PendingIndexBuild& build, Session& session);
     DispatchOutcome HandleShowIndexes(Session& session);
 
     // `CREATE ASSERTION` / `DROP ASSERTION` (docs/spec/assertion.md §3,
@@ -1597,9 +1512,10 @@ private:
     // The build was the owner's from PW1c-6c until then, shipped to it and
     // adopted into its registry, because only the owner wrote the relation
     // and only its registry was asked; the registry is one now and every
-    // core writes. No session: assertions are non-transactional DDL
-    // (`ddl-transactional.md` §5).
-    DispatchOutcome HandleAssertion(std::string_view line);
+    // core writes. Non-transactional DDL (`ddl-transactional.md` §5): the
+    // session is read only to tell its own transaction's `IX` from another
+    // writer's when the build's relation `X` is refused (AT-S5e).
+    DispatchOutcome HandleAssertion(std::string_view line, Session& session);
 
     // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
     // on and its declaration verbatim.
@@ -1959,14 +1875,6 @@ public:
     // instrument. `sink` must outlive this.
     void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
 
-    // Where CheckWriteAffinity reads that an index of a relation this core
-    // owns is being built here (PW1c-6b-2, core_affinity.hpp). Installed
-    // beside the demand sink, on the same cores; a dispatcher never told
-    // admits every write the shape gate does. `builds` must outlive this.
-    void SetPendingIndexBuilds(const PendingIndexBuilds* builds) noexcept {
-        pending_index_builds_ = builds;
-    }
-
     // The foreign-key probe client (AH-T2, fk_probe_service.hpp). Without
     // one - a dispatcher with no reactor - a foreign parent is refused
     // rather than asked, which is what every unit fixture sees. `client`
@@ -1990,16 +1898,6 @@ public:
     void SetFkPendingDeletes(FkPendingDeleteTable* pending) noexcept {
         fk_pending_deletes_ = pending;
     }
-
-    // Arms the foreign arm of CREATE INDEX (PW1c-6b-3,
-    // index_build_service.hpp): a relation another core owns has its index
-    // built there, with this dispatcher parked between the request and the
-    // row. Core 0 only. `client` must outlive the dispatcher. Installed by
-    // the Expeditor on every multi-core instance since PW1c-6b-4, which
-    // lifted the owner's shape gate in the same step - so what a
-    // dispatcher never told refuses is a fixture with no reactor to park
-    // on, not production.
-    void SetIndexBuilds(IndexBuildClient* client) noexcept { index_builds_ = client; }
 
     // Arms **statement shipping** (SS2, statement_ship_service.hpp): an
     // autocommit statement whose relation another core owns is carried
@@ -2584,9 +2482,6 @@ private:
     SuperBlock& superblock_;
     catalog::Catalog& catalog_;
     storage::PageStore& page_store_;
-    // PW1c-7's demand sink; null on core 0 and on hook-less fixtures.
-    // PW1c-6b-2's window; null on the same cores.
-    const PendingIndexBuilds* pending_index_builds_ = nullptr;
 
     // AH-T2's client, or null where nothing pumps a reactor. Not owned -
     // `CoreRuntime` owns it, and the outlives-the-dispatcher rule the
@@ -2630,9 +2525,6 @@ private:
     // re-entry's hoist to consume instead of collecting again. Set and
     // cleared with the two above, on the same rule.
     std::optional<FkDeleteRows> resumed_fk_rows_;
-    // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
-    // stands (see SetIndexBuilds).
-    IndexBuildClient* index_builds_ = nullptr;
     // SS2's client, on every core of a multi-core instance; null wherever
     // the cross-core refusal still stands (see SetStatementShip).
     StatementShipClient* statement_ship_ = nullptr;
@@ -2886,16 +2778,7 @@ private:
     std::uint64_t blocking_writer_ = 0;
     std::uint64_t blocked_pk_ = 0;
 
-    // **AO-S6e-a**, on `blocking_writer_`'s terms exactly: the relation
-    // whose open index-build window refused this statement, read back out
-    // by `DispatchAndStage` into `DispatchOutcome::index_window`. A member
-    // rather than a threaded parameter because `CheckWriteAffinity`
-    // answers a `Status` and the three write paths between it and the
-    // outcome would each grow a parameter for one oid; one statement runs
-    // at a time per core, so there is no second value to confuse it with.
-    // Zero means none - `kInvalidOid` is not a spelling this file uses.
-    catalog::Oid index_window_wait_ = 0;
-    // The same shape for AO-S6e-b's lock wait: set where the borrow is
+    // On `blocking_writer_`'s terms, AO-S6e-b's lock wait: set where the borrow is
     // refused, read back out by `DispatchAndStage` into
     // `DispatchOutcome::lock_wait`. It carries a `shared_ptr`, so the slot
     // outlives the DDL transaction whose ask registered it - which it must,

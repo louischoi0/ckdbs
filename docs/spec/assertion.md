@@ -327,9 +327,8 @@ On a multi-core instance:
 - **`CREATE ASSERTION` is built where its session is** and adopts into the
   instance's registry. It was built by the relation's owner from PW1c-6c,
   shipped to it and adopted into its registry; the ship and its three ring
-  kinds went at AT-S5d. **The build is not fenced against a writer on
-  another core** (§8.1), which is
-  `docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`.
+  kinds went at AT-S5d. **The build holds the relation `X`** (§8.1, AT-S5e),
+  so no writer on any core runs beside it.
 - **Core 0's mount resumes the registry, for every relation**, before any
   peer is built; a peer handed it resumes nothing. **Only core 0's
   checkpoints snapshot it** (§7): two cores' runs of the same assertions in
@@ -575,14 +574,17 @@ The build runs **synchronously inside the CREATE statement**, not in a
 background scheduling group: the engine has no suspendable statement path
 (`crosscore.md` P4), and the index backfill set the precedent. On one
 cooperative core this means no write can interleave with the build, so
-§8.1a's membership protocol is met trivially. **Not on more than one core,
-since AT-S5**: a write runs where its session is, and a write on another
-core that is admitted before the build's directory is adopted, and places
-its row where the build's scan has already passed, is in neither the
-cabin nor the scan. Nothing fences it - the build takes no relation lock -
-and §8.1a's membership protocol, which would, is not built.
-`docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`
-carries it, and `workorder-at-m3-uniformity.md` AT-0 item 13 its shape. A row written by a transaction still in
+§8.1a's membership protocol is met trivially. **On more than one core the
+build holds the relation `X`** (AT-S5e, the operator's mark on
+`workorder-at-m3-uniformity.md` AT-0 item 13): every writer of the relation
+holds its `IX` from before its admission until it decides, so the build
+starts when none is mid-statement and every writer arriving during it parks
+until the directory is adopted, then re-runs against it. The holder is a
+transaction of the statement's own, rolled back at its end
+(`ddl-transactional.md` §5f). From AT-S5 until then a write on another core
+could land a row the scan had passed before the adoption, in neither the
+cabin nor the scan; §8.1a's membership protocol, which would reconcile such
+a write, is still not built, and the `X` is why it need not be. A row written by a transaction still in
 flight when the build reads it refuses the CREATE with `TxnConflict`,
 retryably — counting it and losing the abort would overstate the group
 forever, and skipping it and seeing the commit would understate it.
@@ -621,8 +623,8 @@ Membership removes the external assumption rather than repairing it.
 Correctness reduces to **check-then-apply atomicity** — classify the row,
 then apply its delta, with nothing in between. One cooperative core's event
 loop provided it, because both happened inside one uninterruptible step;
-the registry's directory latch is what would provide it across cores
-(§6.1), and the protocol is not built (§8.1).
+across cores the build's relation `X` makes the question not arise (§8.1),
+and the protocol is not built.
 
 *What follows from it.*
 

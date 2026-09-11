@@ -49,6 +49,7 @@ add_executable(kds_tests
     assertion_build_test.cpp
     assertion_enforce_test.cpp
     assertion_race_test.cpp
+    ddl_fence_rig_test.cpp
     index_maintain_test.cpp
     index_compile_test.cpp
     index_contract_test.cpp

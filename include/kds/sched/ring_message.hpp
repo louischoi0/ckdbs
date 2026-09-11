@@ -88,17 +88,12 @@ enum class RingMessageKind : std::uint16_t {
     // id space is exhausted; the requester fails honestly, never waits.
     kRowIdLease = 22,
 
-    // core 0 <-> owner core: a peer-owned relation's CREATE INDEX, built
-    // by the owner (workplan-peer-writer.md §7c, PW1c-6b;
-    // server/index_build_service.hpp). The request carries the definition
-    // core 0 prepared (`server::IndexBuildRequestPayload`), the reply the
-    // root the owner built or why not (`IndexBuildReplyPayload`, matched
-    // to its request by `request_id`), and `done` the statement's end
-    // (`IndexBuildDonePayload`) - which is what closes the owner's
-    // write-refusal window on that relation.
-    kIndexBuildRequest = 25,
-    kIndexBuildReply = 26,
-    kIndexBuildDone = 27,
+    // 25, 26 and 27 were the index build's request, reply and done - a
+    // peer-owned relation's CREATE INDEX built by its owner behind a
+    // write-refusal window (PW1c-6b) - struck at AT-S5e: `CREATE INDEX`
+    // takes the relation `X` and builds where its session is, and every
+    // writer's `IX` waits on it from whichever core. **The values are not
+    // reused.**
 
     // arrival core <-> owner core: a single-statement autocommit
     // transaction executed by the relation's owner and answered through
@@ -256,9 +251,6 @@ constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
         case RingMessageKind::kAnchorWrite:
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kRowIdLease:
-        case RingMessageKind::kIndexBuildRequest:
-        case RingMessageKind::kIndexBuildReply:
-        case RingMessageKind::kIndexBuildDone:
         case RingMessageKind::kShippedStatementRequest:
         case RingMessageKind::kShippedStatementReply:
         case RingMessageKind::kTxnPrepareRequest:
@@ -298,10 +290,10 @@ constexpr std::size_t CountKnownRingMessageKinds() noexcept {
     }
     return n;
 }
-static_assert(CountKnownRingMessageKinds() == 26,
+static_assert(CountKnownRingMessageKinds() == 23,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
               "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck), 26 at AT-S5d (30, 31, 32 "
-              "struck)");
+              "struck), 23 at AT-S5e (25, 26, 27 struck)");
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

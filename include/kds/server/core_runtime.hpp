@@ -21,7 +21,6 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/fk_probe_service.hpp"
-#include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"
 #include "kds/server/statement_ship_service.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -489,15 +488,6 @@ public:
     catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
     RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
 
-    // PW1c-6b-2's window and the service that keeps it, exposed for the
-    // same reason. Null on core 0 and before AttachTransport.
-    const PendingIndexBuilds& pending_index_builds() const noexcept {
-        return pending_index_builds_;
-    }
-    IndexBuildServer* index_builds() noexcept {
-        return index_builds_.has_value() ? &*index_builds_ : nullptr;
-    }
-
     // This core's half of statement shipping (SS3), exposed for the same
     // reason: a test drives a shipped statement and reads what the owner
     // did with it. Null before AttachTransport.
@@ -657,15 +647,6 @@ private:
     // `SO_REUSEPORT` had accepted it on. Declared above `dispatcher_`,
     // which borrows it.
     std::optional<SessionStepClient> remote_reads_;
-
-    // PW1c-6b-2 (index_build_service.hpp): the window the dispatcher's
-    // gate reads - declared before the dispatcher, which holds a pointer
-    // - and the owner's half of a peer-owned relation's CREATE INDEX,
-    // armed at AttachTransport on peers. It borrows the catalog, store
-    // and WAL declared below; references only, and its destructor
-    // touches none of them.
-    PendingIndexBuilds pending_index_builds_;
-    std::optional<IndexBuildServer> index_builds_;
 
     // The two objects this core's checkpointer borrows (PW3). Built at
     // `AttachTransport`, not at `Open`: the anchor publishes over the ring,

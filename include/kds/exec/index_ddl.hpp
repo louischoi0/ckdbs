@@ -23,10 +23,10 @@
 // ---- Three halves (workplan-peer-writer.md §7c, PW1c-6b-1) ---------------
 //
 // `CreateIndex` is `PrepareIndexDef`, then `BuildIndexTree`, then
-// `Catalog::CreateIndex` - three because a peer-owned relation's index is
-// built by the core that owns its pages: core 0 prepares the definition and
-// publishes the row, the owner builds the tree from its own lease, and the
-// definition crosses the ring between them as the plain `IndexDef`.
+// `Catalog::CreateIndex`. Three because a peer-owned relation's index was
+// built by the core that owned its pages - core 0 prepared and published,
+// the owner built - until AT-S5e retired that path; the halves stay as the
+// order the statement runs in, with `CreateIndex` their one caller.
 //
 // ---- The error / warning line --------------------------------------------
 //
@@ -68,12 +68,9 @@ struct IndexDdlResult {
 // Fails with NotFound for an unknown relation or column, Unsupported for a
 // key column whose type has no index encoding, and whatever `CheckIndexDef`
 // answers for the rest - passed through rather than restated, so there is
-// one answer to "why not" and not two that can drift. `seed` goes to that
-// check: `kByOwner` is how core 0 prepares a definition for a relation
-// another core owns, whose anchor it must not seed.
+// one answer to "why not" and not two that can drift.
 StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
-    catalog::Catalog& catalog, const parser::IndexStmt& stmt, const txn::ReadView* view = nullptr,
-    catalog::Catalog::AnchorSeed seed = catalog::Catalog::AnchorSeed::kHere);
+    catalog::Catalog& catalog, const parser::IndexStmt& stmt, const txn::ReadView* view = nullptr);
 
 // The page half: the root allocated from `store` and formatted, the tree
 // backfilled over everything `access` already holds (spec §10a - every
@@ -94,10 +91,9 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
                                 wal::WalManager* wal);
 
 // What a successful CREATE INDEX has to say besides its row (the
-// `IndexDdlResult::warnings` lines), for both arms of the statement -
-// the local one through `CreateIndex`, the owner-built one from the
-// dispatcher's phase 2. Today one line: the key column already carries a
-// Cabin. `key_column` is the user's spelling, for the message.
+// `IndexDdlResult::warnings` lines). Today one line: the key column
+// already carries a Cabin. `key_column` is the user's spelling, for the
+// message.
 std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
                                                const catalog::Catalog::IndexDef& def,
                                                std::string_view key_column);

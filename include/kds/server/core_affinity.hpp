@@ -128,49 +128,10 @@ Status CrossCoreReadNotImplemented(std::uint32_t this_core, std::uint32_t target
                                 std::string_view relation);
 
 
-// The refusal a write gets on the owner of a relation whose index is being
-// built there, or built and not yet published by core 0's commit
-// (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-2). It
-// must close, because a row written inside it would be in nobody's index
-// (index_build_service.hpp says why).
-//
-// **Since AO-S6e-a a served write does not see this**: it parks until the
-// window closes and then runs, and this refusal is what the two seams that
-// cannot park - the synchronous `Dispatch()` and `ExecuteInsert`, which
-// the KWP load path drives - still answer, and what a park that outlives
-// `kIndexWindowWaitNs` falls back to. Retryable on all three, and the
-// retry then writes.
-Status IndexBuildPending(std::uint32_t this_core, std::string_view relation);
-
-// The index builds a core is running or has built and not yet heard `done`
-// for (PW1c-6b-2). Opened, closed and expired by the index build service
-// (the ring half); asked by the dispatcher's write gate. Here for
-// here rather than beside the ring functions: this is the dispatcher's
-// whole dependency on the path, and pulling the scheduler and transport
-// headers into command_dispatcher.hpp for it would tax every translation
-// unit that includes the dispatcher. Times are `sched::MonoTimeNs`, spelled as the integer they
-// are so this header pulls no scheduler header in.
-class PendingIndexBuilds {
-public:
-    struct Entry {
-        catalog::Oid table_oid;
-        std::uint64_t index_oid;
-        std::uint64_t opened_at_ns;
-    };
-
-    void Open(catalog::Oid table_oid, std::uint64_t index_oid, std::uint64_t now_ns);
-    // Closes the window `index_oid` names; false when none was open.
-    bool Close(std::uint64_t index_oid);
-    bool Covers(catalog::Oid table_oid) const noexcept;
-    // Closes and returns every window opened `ceiling_ns` or more ago.
-    std::vector<Entry> Expire(std::uint64_t now_ns, std::uint64_t ceiling_ns);
-    bool empty() const noexcept { return entries_.empty(); }
-    std::size_t size() const noexcept { return entries_.size(); }
-    // Open windows, oldest first. `SHOW META` reads their ages.
-    const std::vector<Entry>& entries() const noexcept { return entries_; }
-
-private:
-    std::vector<Entry> entries_;
-};
+// `IndexBuildPending` and `PendingIndexBuilds` stood here until AT-S5e:
+// the refusal and the window a write met while an index of its relation
+// was being built by the relation's owner (PW1c-6b-2), turned into a wait
+// by AO-S6e-a. `CREATE INDEX` takes the relation `X` a writer's `IX`
+// waits on since AT-S5e, on every core, and both went with the window.
 
 }  // namespace kds::server

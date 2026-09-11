@@ -495,9 +495,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         if (config.access_statistics) {
             runtime->dispatcher_->SetAccessBatch(&runtime->access_batch_);
         }
-        // And the index-build window its gate reads (PW1c-6b-2); the
-        // service that opens and closes it is armed at AttachTransport.
-        runtime->dispatcher_->SetPendingIndexBuilds(&runtime->pending_index_builds_);
         // And the lease refills' cost, for `SHOW META` on this core
         // (lease_refill_stats.hpp): the trace PW6's four-writer cell asked
         // for.
@@ -647,36 +644,6 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // the client is what lets a statement open a stage, and a reply must
     // not be able to beat its receiver into existence.
     dispatcher_->SetRemoteReads(&*remote_reads_);
-
-    // The owner's half of a peer-owned relation's CREATE INDEX (PW1c-6b-2,
-    // index_build_service.hpp), peers only: core 0 builds its own
-    // relations' indexes in the statement and never asks itself. The
-    // build is a `system` task on this reactor and its replies ride the
-    // retry task on `transport` - the parameter, since `transport_` is
-    // assigned below. `done(committed)` used to drop the catalog cache so
-    // the published index was seen by the first admitted write; since
-    // AT-S2 the row write's bump of the schema word does that at the next
-    // cached read, and the callback has nothing left to do.
-    if (config_.core_id != 0) {
-        index_builds_.emplace(*catalog_, *store_, &*wal_, config_.core_id, pending_index_builds_,
-                              *scheduler_, transport, log_);
-        if (Status s = scheduler_->RegisterMessageHandler(
-                sched::RingMessageKind::kIndexBuildRequest,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    index_builds_->OnRequest(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler_->RegisterMessageHandler(
-                sched::RingMessageKind::kIndexBuildDone,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    index_builds_->OnDone(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-    }
 
     // **Statement shipping, both halves** (SS1's wiring rule,
     // statement_ship_service.hpp): every core answers requests and every
@@ -945,8 +912,6 @@ void CoreRuntime::Run() {
                 MaybeRefillTrxIds();
                 MaybeRefillRowIds();
                 MaybeFlushAccessStats();
-                // And the index-build windows' ceiling (PW1c-6b-2).
-                if (index_builds_.has_value()) index_builds_->Expire(scheduler_->clock().Now());
             });
         }
     }

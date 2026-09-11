@@ -702,8 +702,14 @@ because the session core's borrow ends when its statement returns
   (`read_borrow.hpp`; `workorder-at-m3-uniformity.md` AT-7 item 10). It is
   also what keeps a reader out of the wait-for graph: a reader never waits,
   so it is always a sink, and a chain that reaches one ends there.
-- **Its one consumer in M2 is DDL's relation `X`** — `DROP TABLE`
-  (`drop-table.md` DT7). AO-R12 puts the read borrow there for a *mover*,
+- **Its consumers are DDL's relation `X`** — `DROP TABLE` (`drop-table.md`
+  DT7) in M2, and since AT-S5e `CREATE INDEX`, `DROP INDEX` and a `CREATE
+  ASSERTION`'s build (`ddl-transactional.md` §5e, §5f). A writer's relation
+  `IX` refused by one of them parks on the table's own slot rather than on
+  the holder's decide (`BorrowChain`), because the holder may be on another
+  core and `IsInFlight` is one core's; an `INSERT` asks for that `IX` ahead
+  of its assertion admission (`InsertParsed`, AT-0 item 13), so a build
+  cannot slip between a writer's check and its row. AO-R12 puts the read borrow there for a *mover*,
   and no mover exists (`physical-optimizer.md` is shadow-only), so what a
   position is declared to today is the drop that must not overtake it.
   **That `X` is refused by a writer's `IX` too**, so the drop waits for an

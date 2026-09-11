@@ -3110,6 +3110,42 @@ TEST_F(LockDeadlockTest, AnAssertionRejectionWithNothingReservedIsRefusedAtOnce)
     EXPECT_NE(w.out->response.find("ASSERTION_VIOLATION"), std::string::npos) << w.out->response;
 }
 
+TEST_F(LockDeadlockTest, ACreateAssertionOverItsOwnTransactionsWriteIsRefusedAtOnce) {
+    // **AT-0 item 13's one case with no one to wait for.** The build takes
+    // the relation `X` under a transaction of its own (AT-S5e), and the
+    // session's own open transaction holds the relation's `IX` from its
+    // INSERT - so the ask is refused by a holder whose decide only this
+    // session can make. Parking would wait out the fault net; the build's
+    // in-flight refusal is answered at once instead, and it poisons
+    // nothing, the statement being non-transactional DDL.
+    //
+    // **Mutation**, measured: the own-transaction test removed, killed 1 in
+    // 1.
+    ASSERT_EQ(Local("CREATE TABLE own (id int64, account int64, qty int64) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+    Session mine;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &mine).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO own VALUES (7, 60)", &mine)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Started w =
+        Start("CREATE ASSERTION cap ON own GROUP BY (account) CHECK SUM(qty) <= 100", mine);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the build parked on its own session's transaction";
+    EXPECT_NE(w.out->response.find("TXN_CONFLICT"), std::string::npos) << w.out->response;
+    EXPECT_NE(w.out->response.find("this session's own transaction"), std::string::npos)
+        << w.out->response;
+    EXPECT_FALSE(mine.failed()) << "a refused non-transactional DDL poisoned the transaction";
+    EXPECT_EQ(dispatcher_->Dispatch("COMMIT", &mine).response.rfind("COMMIT", 0), 0u);
+
+    // Settled, the same declaration builds.
+    EXPECT_EQ(Local("CREATE ASSERTION cap ON own GROUP BY (account) CHECK SUM(qty) <= 100")
+                  .rfind("CREATED", 0),
+              0u);
+}
+
 TEST_F(LockDeadlockTest, AnUpdateThatHasAlreadyReservedIsRefusedRatherThanWaited) {
     // **The review's B1, and the cell that would have caught it.**
     // `AdmitAndReserveUpdate` is per *assertion* and not atomic across

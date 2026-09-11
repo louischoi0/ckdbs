@@ -4,9 +4,9 @@
 durable; `DROP INDEX` is atomic and isolated on core 0 — on a relation
 another core owns it is refused inside a transaction (§5e); `DROP TABLE`
 is atomic only — §5 says what each gets and §5a why they differ. §5e is
-the two-core case: a `CREATE INDEX` whose relation another core owns is
-built by that owner and published by core 0. §5f is `CREATE ASSERTION`,
-which was that case too until AT-S5d and runs where its session is now.
+how `CREATE INDEX` and `DROP INDEX` fence a relation's writers on every core
+(the relation `X`, since AT-S5e), and §5f is `CREATE ASSERTION`'s build,
+fenced the same way.
 
 ## 0. The decision this reverses
 
@@ -103,12 +103,11 @@ Built, and what each gets:
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
   §5a is the whole argument. In autocommit it retires its dependent rows;
   inside a transaction it delete-marks them.
-- **`CREATE INDEX`** — atomic and isolated, exactly as `CREATE TABLE`.
-- **`DROP INDEX`** — atomic and isolated, **core-0-scoped** (§5b): on a
-  relation another core owns it is refused inside a transaction (§5e).
-- **`CREATE INDEX` on a relation another core owns** — atomic and
-  isolated across two cores: the owner builds the tree from its own lease,
-  core 0 writes and commits the `sys.indexes` row (§5e).
+- **`CREATE INDEX`** — atomic and isolated, exactly as `CREATE TABLE`,
+  on every core: it takes the relation `X` and builds where its session is
+  (§5e).
+- **`DROP INDEX`** — atomic and isolated on every core, admitted inside a
+  transaction (§5b, §5e).
 - **`CREATE ASSERTION`** — built and published where its session is,
   whoever owns the relation, since AT-S5d; admitted inside a transaction
   (§5f).
@@ -249,11 +248,14 @@ ask about, and may have one that is not its own (the transaction-id
 ceiling is unlogged, `txn/trx_id.hpp`, so a crash can reissue the block);
 §5c removes the question by retiring every such mark at mount.
 
-**The claim is core-0-scoped.** `IsInFlight` answers about one core's
-`live_` list, and a peer maintains its own relation's index. A core-0
-`DROP INDEX` on a peer-owned relation is therefore **refused inside a
-transaction** (§5e); no other cross-core DDL may lean on this predicate
-without the same guard.
+**The predicate is core-local, and no cross-core claim leans on it.**
+`IsInFlight` answers about one core's `live_` list. A `DROP INDEX` is
+isolated on every core not because another core can see its deleter but
+because it holds the relation `X` (§5e): no writer of the relation runs,
+anywhere, while the mark's deleter is in flight. A core-0 `DROP INDEX` on a
+peer-owned relation was refused inside a transaction for exactly this
+predicate's scope until AT-S5e; any other cross-core DDL that would lean on
+it needs the same `X`.
 
 **The cache learns it at both endings.** `EndDdlScope` invalidates the
 catalog cache unconditionally when a DDL-holding transaction resolves,
@@ -364,107 +366,51 @@ DDL ever occupied. The purge exists to bound `marks` and remove §5b's
 ambiguity, never to speed reads — a retired slot's `NotFound` path costs
 slightly more than a settled mark's one comparison.
 
-### 5e. A relation another core owns: `CREATE INDEX` built by the owner
+### 5e. `CREATE INDEX` and `DROP INDEX` take the relation `X`
 
-`CREATE INDEX` is core 0's statement — the catalog has one writer — but
-the tree it builds is *pages*, and a relation another core owns holds its
-pages in that core's pool, stamped by that core's stream, with rows core 0
-never faulted. Core 0 cannot backfill them. So the **build** runs on the
-owner while the **catalog write** stays on core 0, and the statement is
-two phases with a park between them (`crosscore.md` CC7's owner-builds
-exception says why the pages may not travel the other way instead).
+**Since AT-S5e both statements take the relation `X` before their first
+catalog write, on whichever core the session is**, and build or mark there
+(`workorder-at-m3-uniformity.md` AT-S5e, D6). The borrow is `DROP TABLE`'s
+(§5a, AO-S6e-b): the DDL transaction's, held to its decide, and waited for
+on the table's own slot when a writer or a positioned reader holds the
+relation.
 
-**Atomic.** The owner builds the tree from its own lease under `kNoTxnId`
-and replies with the root; core 0 writes the `sys.indexes` row naming that
-root and commits. There is exactly one publishing event — core 0's commit
-— and until it lands nothing names the tree. A rollback, a refused reply,
-or a reply that never comes ends the statement with an error and tells the
-owner `done(aborted)`: the tree orphans, exactly as a dropped index's
-pages orphan, and no row points at it. A crash between core 0's
-commit-record *append* and its durability makes the DDL a recovery loser —
-the row is retired and the owner's `kNoTxnId` tree, redone regardless, is
-an orphan. Atomic across the crash, because orphaned is not published.
+**What it fences.** Every writer of the relation holds its `IX` from before
+it decides anything from the relation's secondary structures - an `INSERT`
+asks at `InsertParsed`, ahead of its assertion admission and the sorted
+fill's gate; an `UPDATE` or `DELETE` at its declared borrow, ahead of its
+walk - until its transaction decides. So the grant is the moment no writer
+is mid-statement, and a writer that arrives while the DDL is undecided
+parks on the slot and re-runs after the decide, asking the schema word at
+its task boundary (`catalog.md` CT2) and resolving the index list the DDL
+left. A writer on another core waits the same way: the slot is flipped by
+the release from whichever core releases, where the row-level wait polls
+one core's `IsInFlight` and would read a DDL on another core as finished.
 
-**Isolated** (and since AO-S6e-a the owner's refusal below is a *wait* on
-a served connection; the paragraph after the two gaps states it). From the request's arrival until `done`, the owner **refuses
-writes to the relation** (a retryable `TXN_CONFLICT`): a row written while
-the index is being built would be indexed by nobody, since the owner's
-catalog shows no index until core 0's commit invalidates its cache. And
-the half-built index is invisible everywhere else — the `sys.indexes` row
-is stamped with core 0's transaction and filtered by every reader's view
-until it commits, and the owner's cache holds no index until
-`done(committed)` (or the catalog-invalidation broadcast) drops it. So no
-session reads a partial index and no write slips past unindexed.
+**Atomic and isolated, on every core.** A `CREATE INDEX` backfills with no
+concurrent writer, so the finished index holds every row, and nothing names
+it until its commit; a rollback orphans the tree as a dropped index's
+pages orphan. A `DROP INDEX` inside a transaction is admitted: its mark
+counts only once its deleter is no longer in flight (§5b), and since no
+writer of the relation runs on any core while the drop is undecided, that
+core-local predicate is never asked about one.
 
-**The window is a wait, not a refusal** (AO-S6e-a,
-`instructions/v3.0.0/workorder-ao-m2-lock-family.md`). A write on the owner
-that meets an open window used to be refused `TxnConflict` and told to
-retry; on a served connection it now **parks until the window closes and
-then runs**. The refusal survives on the two seams that cannot park — the
-synchronous `Dispatch` and `ExecuteInsert`, which the KWP load path drives,
-neither with a reactor beneath it — which is the same division every other
-wait in this family makes.
-
-**The park is bounded by `kIndexWindowWaitNs` and not by the window**, and
-the bound is derived rather than chosen: a shipped write runs on the owner
-while its *arrival* core counts down `kShippedStatementDeadlineNs`, and a
-park outliving that count would answer the client `UnknownOutcome` for a
-row the owner then commits. The constant is half that number, with the
-relation asserted where it is declared. A build that finishes inside it
-converts a refusal into a wait; a longer one is refused exactly as before,
-retryably and at once. The bound is the *statement's*, taken once, so a
-statement that meets two windows stalls once rather than twice.
-
-**And the window's close is why this is not the relation lock M2's census
-proposed.** `IndexBuildServer::OnDone` closes the window and *then* drops
-the catalog cache; the handler runs inside a task, and a task runs to
-completion before another is polled, so a wait that ends on the close
-cannot have missed the drop and the write it admits writes into an index
-this core knows. A lock released by core 0 at the DDL's decide is a write
-to a table shared by both cores, seen on the owner before either ring
-message is drained: it would admit exactly the unindexed write the window
-exists to prevent. (The exception this row once carried — a peer's cache
-drop that returned early when its page eviction failed — went with the
-eviction at AT-S2; the re-run's boundary asks the schema word, `catalog.md`
-CT2.)
-
-**What the wait is not visible in.** `SHOW META` reports
-`index_build_windows` — the windows, not the writers parked behind them —
-and the cross-core write counters exclude this refusal by decision
-(`crosscore.md` §6). So an operator who used to see an error line now sees
-a stall with no counter behind it. A counter is client-visible surface and
-is not added in passing; the gap is stated rather than closed.
-
-**Two gaps a single-core `CREATE INDEX` does not have**, neither a
-correctness defect today:
-
-- **A window that expires.** The owner bounds its refusal window by
-  `kIndexBuildPendingCeilingNs` (180 s) against a lost `done`; core 0
-  bounds its park by `kIndexBuildReplyDeadlineNs` (60 s). The ceiling
-  exceeds the deadline, so the owner never releases while core 0 is still
-  waiting — but nothing bounds the commit leg, so if the window expires
-  before a late commit lands, writes are admitted that the published
-  index would miss. Unreachable in practice at these timeouts. **The wait
-  above inherits this bound and does not widen it**: a parked write is
-  released by the same expiry that used to end the refusal, so the ceiling
-  bounds one statement's park exactly as it bounded one statement's
-  window.
-- **`SHOW INDEXES` on core 0** for a peer-owned relation reads the
-  build-time root from the `sys.indexes` row — a foreign `InitTableAccess`
-  does not read the owner's anchor — which a maintenance split can move, so
-  a stale root walks a subtree and prints a plausible-wrong
-  `entries=`/`height=`. Diagnostics only: a cross-core *read* downgrades an
-  index probe to a scan before it ships (`step_descriptor.cpp`), so query
-  answers never depend on core 0's stale root.
-
-**`DROP INDEX` on a peer-owned relation is refused inside a transaction**
-(`NotImplemented`, naming the owner), for §5b's reason: the mark's
-`BumpVersion` broadcasts before core 0 commits, the owner's §5b predicate
-walks its own live list and cannot see core 0's deleter, so it would drop
-the index from its view and maintain nothing before COMMIT — and a
-ROLLBACK would then restore an index missing every meanwhile-write.
-Autocommit keeps only the commit-failure window every DDL has and is
-admitted; a `DROP INDEX` on a relation core 0 owns is untouched.
+**What it replaced**, briefly, because the citations outlive it. From
+PW1c-6b until AT-S5e a relation another core owned had its index built
+**by the owner**, core 0 publishing the row and parking between the two
+phases, behind a write-refusal window only the owner could see; AO-S6e-a
+turned the refusal into a wait. A local build opened no window at all, which
+was sound only while every write to a relation ran on its owner. AT-S5 made
+a write run where its session is, so a row written on another core during a
+backfill was missing from the finished index (D6). A core-0 `DROP INDEX` on
+a peer-owned relation was refused inside a transaction for §5b's reason.
+The ship, the window (`PendingIndexBuilds`, `IndexBuildPending`,
+`kIndexWindowWaitNs`), `SHOW META`'s `index_build_windows` and
+`index_build_window_age_max_us`, the reply's `built_by_core=` and that
+refusal all went with it. AO-S6e-a declined this same `X` because the
+owner's window close, its cache drop and its next admitted write were one
+ordered event a lock released on core 0 could not reproduce; AT-S2's schema
+word is that ordering, so the objection had expired.
 
 ### 5f. `CREATE ASSERTION`, built where its session is
 
@@ -488,17 +434,19 @@ chain. Run the declaration first, or outside the transaction that writes.
 or a failed publish adopts nothing, and the chain the build wrote orphans,
 exactly as a dropped assertion's pages do.
 
-**Not isolated from a writer on another core.** The build takes no relation
-lock, so a write on another core that is admitted before the directory is
-adopted, lands its row where the scan has already passed, and reaches its
-reservation before the adoption is counted by neither
-(`docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`;
-`workorder-at-m3-uniformity.md` AT-0 item 13). An `INSERT` that reaches its
-reservation *after* the adoption is admitted there instead, so the hole the
-local arm used to share with `CREATE INDEX` - a write that passed its
-admission, parked, and reserved unchecked after an adoption - is closed for
-an insert; an `UPDATE` or `DELETE` asks the registry once per row and is
-exposed the same way the unfenced build is.
+**Fenced from every writer, on every core, since AT-S5e** (AT-0 item 13,
+the operator's mark). The build takes the relation `X` as §5e's statements
+do, so it waits for every open writer of the relation and every writer that
+arrives parks until the directory is adopted and then re-runs against it.
+Until then the build took no lock, and a write on another core admitted
+before the adoption could land a row where the scan had passed and be
+counted by neither. **Its holder is a transaction of the statement's own**,
+not the session's: it writes nothing and is rolled back when the statement
+ends, so the relation is released at the statement's end rather than at the
+session's `COMMIT`, and a failed `CREATE ASSERTION` still poisons nothing.
+The one holder it cannot wait for is the session's own transaction, having
+written the relation - that is answered at once with the build's in-flight
+refusal.
 
 ## 6. Open decisions — do not assume
 

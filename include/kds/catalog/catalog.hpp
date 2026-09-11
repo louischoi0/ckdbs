@@ -1235,17 +1235,11 @@ public:
         std::uint8_t flags = 0;
     };
 
-    // Who seeds the relation's anchor slot with the new root (PW2-3).
-    // `kHere` is a relation this core owns: the row and the seed are one
-    // statement on one core. `kByOwner` is a relation another core owns
-    // (workplan-peer-writer.md §7c, PW1c-6b): the owner built the tree in
-    // its own pages and seeded its own anchor, so this core writes the
-    // row alone - and `CheckIndexDef`'s owner refusal, which guards
-    // exactly that seed, stands down. `kByOwner` *asserts* the owner
-    // seeded: passed for a relation this core owns, it leaves the slot
-    // empty and readers on the row's root (PW2-3's transitional path -
-    // degraded, not wrong). Not checked at runtime.
-    enum class AnchorSeed : std::uint8_t { kHere, kByOwner };
+    // `AnchorSeed` stood here until AT-S5e: who seeds the relation's anchor
+    // slot with a new index root - this core (`kHere`), or the relation's
+    // owner, which built the tree in its own pages (`kByOwner`, PW1c-6b).
+    // The owner-built path went with the per-core structures it served, so
+    // the creating core always seeds.
 
     // Writes the sys.indexes row and returns its `index_oid`.
     //
@@ -1263,8 +1257,7 @@ public:
     // with the creating transaction and its address reported, so a
     // rollback can retire it.
     StatusOr<Oid> CreateIndex(const IndexDef& def, std::uint64_t trx_id = kBootstrapXid,
-                               CatalogRowRef* where = nullptr,
-                               AnchorSeed seed = AnchorSeed::kHere);
+                               CatalogRowRef* where = nullptr);
 
     // Every refusal `CreateIndex` makes, without writing anything.
     //
@@ -1274,7 +1267,7 @@ public:
     // declaration that could never work should be refused by name before it
     // walks a relation, not after, and certainly not as a page-type error
     // from inside the build.
-    Status CheckIndexDef(const IndexDef& def, AnchorSeed seed = AnchorSeed::kHere);
+    Status CheckIndexDef(const IndexDef& def);
 
     // Retires the row. Retired rather than delete-marked, for DropCabin()'s
     // reason: a catalog read has no snapshot to filter a mark against, so a

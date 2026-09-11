@@ -246,9 +246,10 @@ public:
     // length of a relation scan - delaying every other core's decides and
     // probes queued behind it - and is charged to no scheduling group at
     // all (`sched.md` §4), so the cost AJ-T5 measures would be a cost
-    // `SHOW META` cannot locate. `IndexBuildServer::OnRequest` is the
-    // engine's one precedent for relation-scale work arriving as a message
-    // and it validates inline then submits; this follows it.
+    // `SHOW META` cannot locate. The index build's owner half
+    // (`IndexBuildServer::OnRequest`, retired at AT-S5e) was the engine's
+    // precedent for relation-scale work arriving as a message: it validated
+    // inline, then submitted; this follows it.
     void OnReverseRequest(const sched::MessageHeader& header,
                           std::span<const std::byte> payload);
 
@@ -417,7 +418,7 @@ public:
 
     // Installs the reply receiver. The handler captures `this` and there is
     // no unregister, so this must outlive every pump of that scheduler —
-    // `IndexBuildClient`'s rule and for its reason.
+    // the rule every reply receiver in this tree carries.
     Status RegisterReplyReceiver();
 
     // Opens the waiter under the deadline, then sends one owner's group.
