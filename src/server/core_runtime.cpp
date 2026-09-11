@@ -428,6 +428,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->txn_manager_.emplace(*runtime->trx_ids_, *runtime->undo_log_, *runtime->store_,
                                   &*runtime->wal_, config.visibility, config.core_id,
                                   runtime->locks_);
+    // The schema word a catalog-writing decide moves before its borrows go
+    // (AT-S5e): the same word this core's catalog asks at its boundaries.
+    runtime->txn_manager_->SetSchemaWord(config.schema_word);
 
     // Recording off, deliberately and not as a default - see the header:
     // Waystone is advisory, so a peer returns identical rows without it and

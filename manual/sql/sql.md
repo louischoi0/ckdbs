@@ -314,6 +314,10 @@ DROP INDEX ix_owner;
 - Maintenance is append-only; DELETE does not touch an index; there is no
   index-only scan (no visibility witness exists outside the tuple), so
   `COVERING` buys avoided base descents, nothing more.
+- `CREATE INDEX` and `DROP INDEX` **wait** for every open write to the
+  relation and for a statement already reading it, and hold new writes
+  until they commit or roll back - on any core. Like `DROP TABLE`, a wait
+  that reaches the lock family's 11 s bound is refused `TXN_CONFLICT`.
 - `SHOW INDEXES` lists them.
 
 ### CREATE ASSERTION / DROP ASSERTION (built and **enforcing**, AST01-AST10)

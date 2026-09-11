@@ -274,6 +274,18 @@ public:
     // and why a drop of the memo is enough.
     void Revalidate();
 
+    // Whether the memo `Revalidate` last settled is still the word's: false
+    // once another core's catalog write has moved it since. Read, never
+    // acted on - a drop is `Revalidate`'s, at a boundary. What asks it is a
+    // writer's **first** relation `IX` (`CommandDispatcher::BorrowChain`,
+    // AT-S5e): the grant fences every later DDL on the relation, so a word
+    // unmoved at that moment proves the statement resolved the relation's
+    // indexes and assertions as they now stand.
+    bool MemoIsCurrent() const noexcept {
+        return schema_word_ == nullptr ||
+               schema_word_->load(std::memory_order_acquire) == cache_built_at_;
+    }
+
     // Called at the end of a CreateTable whose owner is **not** the system
     // core (workplan P6c). It was the send side of CC7's flush-then-grant
     // handoff: the system core's installer flushed the relation's pages and

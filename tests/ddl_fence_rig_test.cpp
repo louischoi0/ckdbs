@@ -30,6 +30,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -259,6 +260,137 @@ TEST(DdlFenceRigTest, AWriterParksOnARelationXBeforeItsAssertionAdmission) {
     const auto after = registry.CountersOf(assertion_id);
     ASSERT_TRUE(after.has_value());
     EXPECT_EQ(after->checks, 1u);
+}
+
+// One statement on a started rig's core, run to its end: submitted, told to
+// go, and waited for by kicking that core.
+std::string RunOn(TwoCoreRig& rig, std::uint32_t core, Session* session, const std::string& sql) {
+    auto x = std::make_unique<Statement>();
+    x->sql = sql;
+    if (session != nullptr) x->session = session;
+    Submit(rig, core, *x);
+    x->go.store(true, std::memory_order_release);
+    EXPECT_TRUE(KickUntil(rig, core, [&] { return x->done.load(std::memory_order_acquire); },
+                          5000ms))
+        << sql << " never finished on core " << core;
+    return x->out.response;
+}
+
+TEST(DdlFenceRigTest, ADropIndexRolledBackOnCoreZeroKeepsTheRowAPeerWroteWhileItWasOpen) {
+    // **The AT-S5e review's C1.** A `DROP INDEX` inside a transaction on
+    // core 0 delete-marks the index; an `INSERT` on core 1 resolves the
+    // relation while the drop is open, and core 1 cannot see core 0's
+    // deleter in flight (DT9's predicate is one core's), so its memo leaves
+    // the index out. The insert parks on the relation `X`. `ROLLBACK`
+    // restores the index - and the insert, woken, must re-resolve before it
+    // writes, or its row is missing from the index the rollback kept. What
+    // makes it re-resolve is the decide moving the schema word **before**
+    // it releases the borrows (`Transaction::NoteWroteCatalog`); the DDL
+    // path's own bump comes after the release, in a race with the woken
+    // insert's re-run - so the cell runs the sequence for several rounds,
+    // and every round's row must be in the index.
+    //
+    // **Mutation**, measured: the pre-release word move removed from
+    // `TransactionManager::Abort` - killed 5 runs in 5 at this round count,
+    // where one round killed it once in three.
+    constexpr int kRounds = 8;
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    const catalog::Oid oid = PeerRelation(*rig, "dropped_ix");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    for (int v : {10, 20, 30}) {
+        ASSERT_EQ(rig->core(1)
+                      .dispatcher()
+                      .Dispatch("INSERT INTO dropped_ix VALUES (" + std::to_string(v) + ")")
+                      .response.rfind("INSERTED", 0),
+                  0u);
+    }
+    ASSERT_EQ(d0.Dispatch("CREATE INDEX dix ON dropped_ix (v)").response.rfind("CREATED INDEX", 0),
+              0u);
+    const txn::LockKey rel = txn::LockKey::Relation(oid);
+    rig->Start();
+
+    for (int round = 0; round < kRounds; ++round) {
+        Session ddl;
+        ASSERT_EQ(RunOn(*rig, 0, &ddl, "BEGIN").rfind("BEGIN", 0), 0u);
+        const std::string dropped = RunOn(*rig, 0, &ddl, "DROP INDEX dix");
+        ASSERT_NE(dropped.find("DROPPED INDEX"), std::string::npos) << dropped;
+
+        Statement insert;
+        insert.sql = "INSERT INTO dropped_ix VALUES (" + std::to_string(100 + round) + ")";
+        Submit(*rig, 1, insert);
+        insert.go.store(true, std::memory_order_release);
+        ASSERT_TRUE(KickUntil(*rig, 1, [&] { return rig->locks().WaiterCount(rel) == 1; }))
+            << "round " << round << ": the insert never parked on the relation the drop holds: "
+            << insert.out.response;
+
+        const std::string rolled = RunOn(*rig, 0, &ddl, "ROLLBACK");
+        ASSERT_EQ(rolled.rfind("ROLLBACK", 0), 0u) << rolled;
+        ASSERT_TRUE(KickUntil(*rig, 1, [&] { return insert.done.load(std::memory_order_acquire); },
+                              5000ms))
+            << "round " << round << ": the insert never resumed after the rollback";
+        ASSERT_EQ(insert.out.response.rfind("INSERTED", 0), 0u) << insert.out.response;
+    }
+    rig->Stop();
+
+    const std::string shown = rig->core(1).dispatcher().Dispatch("SHOW INDEXES").response;
+    EXPECT_NE(shown.find("name=dix"), std::string::npos) << "the rollbacks lost the index: " << shown;
+    EXPECT_NE(shown.find("entries=" + std::to_string(3 + kRounds)), std::string::npos)
+        << "a row written while a drop was open is missing from the index it kept: " << shown;
+}
+
+TEST(DdlFenceRigTest, AnUpdateOnAPeerWaitsForACreateIndexOnCoreZeroAndMaintainsIt) {
+    // The per-row path: `WHERE id = k` declares no range (a window of one
+    // key stays per row), so the `UPDATE`'s first relation intention is its
+    // tuple borrow at the qualifying row - after its resolution and after
+    // its walk reached the row. It parks there on the build's `X`, re-runs
+    // after the commit, and the value it moves is in the new index.
+    //
+    // **Mutation**, measured: `BorrowChain` registering no wake on a refused
+    // relation `IX` - killed 1 in 1.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    const catalog::Oid oid = PeerRelation(*rig, "updated_ix");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    ASSERT_EQ(rig->core(1).dispatcher().Dispatch("INSERT INTO updated_ix VALUES (10)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Session ddl;
+    ASSERT_EQ(d0.Dispatch("BEGIN", &ddl).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(d0.Dispatch("CREATE INDEX uix ON updated_ix (v)", &ddl)
+                  .response.rfind("CREATED INDEX", 0),
+              0u);
+
+    Statement update;
+    update.sql = "UPDATE updated_ix SET v = 77 WHERE id = 1";
+    Statement commit;
+    commit.sql = "COMMIT";
+    commit.session = &ddl;
+    Submit(*rig, 1, update);
+    rig->Start();
+    update.go.store(true, std::memory_order_release);
+    const txn::LockKey rel = txn::LockKey::Relation(oid);
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return rig->locks().WaiterCount(rel) == 1; }))
+        << "the update never parked on the relation the build holds: " << update.out.response;
+
+    Submit(*rig, 0, commit);
+    commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(
+        KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); }, 5000ms))
+        << "the update never resumed after the build committed";
+    EXPECT_EQ(update.out.response.rfind("UPDATED", 0), 0u) << update.out.response;
+    rig->Stop();
+
+    const std::string plan =
+        rig->core(1).dispatcher().Dispatch("ANALYZE SELECT * FROM updated_ix WHERE v = 77").response;
+    EXPECT_NE(plan.find("IndexProbe"), std::string::npos) << plan;
+    const std::string found =
+        rig->core(1).dispatcher().Dispatch("SELECT * FROM updated_ix WHERE v = 77").response;
+    EXPECT_NE(found.find(",77"), std::string::npos) << "the index missed the moved value: " << found;
 }
 
 }  // namespace

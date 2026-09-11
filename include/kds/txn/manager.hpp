@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -212,6 +213,15 @@ public:
     LockHoldings& borrows() noexcept { return borrows_; }
     const LockHoldings& borrows() const noexcept { return borrows_; }
 
+    // **This transaction wrote catalog rows** (AT-S5e). Set by the DDL path
+    // (`CommandDispatcher::MarkHoldsDdl`); what it buys is the schema word
+    // moving at the decide **before the borrows are released**, so a writer
+    // parked on this transaction's relation `X` re-runs through a boundary
+    // that cannot miss what the decide did to the catalog - a rolled-back
+    // `DROP INDEX`'s index, say, which another core's cache had left out
+    // while the drop was open.
+    void NoteWroteCatalog() noexcept { wrote_catalog_ = true; }
+
 private:
     friend class TransactionManager;
 
@@ -230,6 +240,7 @@ private:
     wal::Lsn prepare_lsn_ = 0;
     bool prepared_ = false;
     bool active_ = false;
+    bool wrote_catalog_ = false;
 };
 
 // Readers a purge must not purge under, beyond the live transactions the
@@ -399,6 +410,18 @@ public:
     // many may be live** since AN-S2: the 64 was the width of the view's
     // in-flight array, and a view is now a snapshot LSN that tracks no
     // set. What bounds the population is the sessions holding it.
+    // The instance's schema version word (AT-S2), moved by a decide of a
+    // transaction that wrote catalog rows before its borrows are released
+    // (`Transaction::NoteWroteCatalog`, AT-S5e). Null - a fixture's shape -
+    // moves nothing; the DDL path's own bump after the decide still runs.
+    void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
+
+    // How many `Transaction` objects this manager still holds, active or
+    // not - a decided one leaves only at `Release`. A cell's reading: a
+    // statement that begins a transaction of its own and never releases it
+    // grows this for the life of the core (the AT-S5e review's C5).
+    std::size_t tracked_transactions() const noexcept { return live_.size(); }
+
     StatusOr<Transaction*> Begin(IsolationLevel isolation);
 
     // Re-mints the read view at a statement boundary. A no-op under
@@ -759,6 +782,8 @@ private:
     // and null everywhere until AO-S3 constructs one. Null means a decide
     // releases nothing, which is the behaviour that stood before AO-S2.
     LockTable* locks_ = nullptr;
+    void MoveSchemaWordIfCatalogWriter(const Transaction& txn) noexcept;
+    std::atomic<std::uint64_t>* schema_word_ = nullptr;  // AT-S5e
 
     // `ids_.peek()` as `MaybeBurnIdleBlock` last saw it. Equal on two
     // consecutive ticks means this core issued nothing between them, which

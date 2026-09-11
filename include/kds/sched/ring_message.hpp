@@ -103,9 +103,9 @@ enum class RingMessageKind : std::uint16_t {
     // reply `ShippedStatementReplyPayload`, matched to its waiter by
     // `request_id`.
     //
-    // **There is no `done` leg**, where the index build has one: that
-    // exists to close the owner's write-refusal window, and an autocommit
-    // statement opens no window. A shipped statement is one round trip.
+    // **There is no `done` leg**, where the retired index build had one to
+    // close the owner's write-refusal window: an autocommit statement opens
+    // no window. A shipped statement is one round trip.
     kShippedStatementRequest = 28,
     kShippedStatementReply = 29,
 

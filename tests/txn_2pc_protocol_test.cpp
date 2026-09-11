@@ -3110,6 +3110,26 @@ TEST_F(LockDeadlockTest, AnAssertionRejectionWithNothingReservedIsRefusedAtOnce)
     EXPECT_NE(w.out->response.find("ASSERTION_VIOLATION"), std::string::npos) << w.out->response;
 }
 
+TEST_F(LockDeadlockTest, ACreateAssertionLeavesNoTransactionOfItsOwnBehind) {
+    // **The AT-S5e review's C5.** The build holds the relation under a
+    // transaction of its own, and `Abort` leaves a transaction tracked by
+    // design - so without `Release` every `CREATE ASSERTION`, and every
+    // re-run of one after a wake, left an inactive entry in the manager's
+    // list for the life of the core, walked on every begin and every mint.
+    //
+    // **Mutation**, measured: `BuildLock` without its `Release`, killed 1
+    // in 1.
+    ASSERT_EQ(Local("CREATE TABLE leftover (id int64, account int64, qty int64) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+    const std::size_t before = txns_->tracked_transactions();
+    ASSERT_EQ(Local("CREATE ASSERTION cap ON leftover GROUP BY (account) CHECK SUM(qty) <= 100")
+                  .rfind("CREATED", 0),
+              0u);
+    EXPECT_EQ(txns_->tracked_transactions(), before)
+        << "the build's own transaction is still tracked after the statement";
+}
+
 TEST_F(LockDeadlockTest, ACreateAssertionOverItsOwnTransactionsWriteIsRefusedAtOnce) {
     // **AT-0 item 13's one case with no one to wait for.** The build takes
     // the relation `X` under a transaction of its own (AT-S5e), and the

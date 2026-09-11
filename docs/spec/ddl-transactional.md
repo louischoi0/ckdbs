@@ -1,9 +1,8 @@
 # Transactional DDL
 
 `CREATE TABLE` and `CREATE INDEX` are atomic, isolated, consistent and
-durable; `DROP INDEX` is atomic and isolated on core 0 — on a relation
-another core owns it is refused inside a transaction (§5e); `DROP TABLE`
-is atomic only — §5 says what each gets and §5a why they differ. §5e is
+durable; `DROP INDEX` is atomic and isolated on every core, inside a
+transaction as well (§5e); `DROP TABLE` is atomic only — §5 says what each gets and §5a why they differ. §5e is
 how `CREATE INDEX` and `DROP INDEX` fence a relation's writers on every core
 (the relation `X`, since AT-S5e), and §5f is `CREATE ASSERTION`'s build,
 fenced the same way.
@@ -251,8 +250,10 @@ ceiling is unlogged, `txn/trx_id.hpp`, so a crash can reissue the block);
 **The predicate is core-local, and no cross-core claim leans on it.**
 `IsInFlight` answers about one core's `live_` list. A `DROP INDEX` is
 isolated on every core not because another core can see its deleter but
-because it holds the relation `X` (§5e): no writer of the relation runs,
-anywhere, while the mark's deleter is in flight. A core-0 `DROP INDEX` on a
+because it holds the relation `X` and moves the schema word before
+releasing it (§5e): a writer that resolved the relation while the mark's
+deleter was in flight writes nothing until the decide, and re-resolves
+after it. A core-0 `DROP INDEX` on a
 peer-owned relation was refused inside a transaction for exactly this
 predicate's scope until AT-S5e; any other cross-core DDL that would lean on
 it needs the same `X`.
@@ -375,25 +376,35 @@ catalog write, on whichever core the session is**, and build or mark there
 on the table's own slot when a writer or a positioned reader holds the
 relation.
 
-**What it fences.** Every writer of the relation holds its `IX` from before
-it decides anything from the relation's secondary structures - an `INSERT`
-asks at `InsertParsed`, ahead of its assertion admission and the sorted
-fill's gate; an `UPDATE` or `DELETE` at its declared borrow, ahead of its
-walk - until its transaction decides. So the grant is the moment no writer
-is mid-statement, and a writer that arrives while the DDL is undecided
-parks on the slot and re-runs after the decide, asking the schema word at
-its task boundary (`catalog.md` CT2) and resolving the index list the DDL
-left. A writer on another core waits the same way: the slot is flipped by
+**What it fences.** Every writer of the relation holds its `IX` from its
+first intention until its transaction decides - an `INSERT` asks at
+`InsertParsed`, ahead of its assertion admission and the sorted fill's
+gate; an `UPDATE` or `DELETE` at its declared borrow or, where its
+predicate declares no key window, at its first qualifying row. So a DDL's
+grant is a moment no writer is mid-statement, and a writer that arrives
+while the DDL is undecided parks on the slot and re-runs after the decide.
+**Two things make the re-run see what the decide did.** The decide moves
+the schema word before its borrows are released
+(`Transaction::NoteWroteCatalog`), so the re-run's task boundary drops the
+memo it resolved while the DDL was open - which matters for a rolled-back
+`DROP INDEX`, whose index another core's memo had left out, DT9's predicate
+being core-local (§5b). And a writer's *first* intention checks that the
+word has not moved since its own boundary (`Catalog::MemoIsCurrent`): the
+intention comes after the resolution, and a DDL could have taken the
+relation, published and released in between; moved, the statement runs
+again before it writes anything. A writer on another core waits the same way: the slot is flipped by
 the release from whichever core releases, where the row-level wait polls
 one core's `IsInFlight` and would read a DDL on another core as finished.
 
 **Atomic and isolated, on every core.** A `CREATE INDEX` backfills with no
 concurrent writer, so the finished index holds every row, and nothing names
 it until its commit; a rollback orphans the tree as a dropped index's
-pages orphan. A `DROP INDEX` inside a transaction is admitted: its mark
-counts only once its deleter is no longer in flight (§5b), and since no
-writer of the relation runs on any core while the drop is undecided, that
-core-local predicate is never asked about one.
+pages orphan. A `DROP INDEX` inside a transaction is admitted: a writer on
+another core may resolve the relation while the drop is open and leave the
+index out - its core cannot see the deleter in flight (§5b) - but it writes
+nothing until the drop decides, and the decide moves the word before it
+releases, so the writer re-resolves and maintains the index a rollback
+restored.
 
 **What it replaced**, briefly, because the citations outlive it. From
 PW1c-6b until AT-S5e a relation another core owned had its index built

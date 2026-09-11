@@ -1,5 +1,7 @@
 #include "kds/txn/manager.hpp"
 
+#include <optional>
+
 #include <algorithm>
 #include <bit>
 #include <limits>
@@ -283,6 +285,12 @@ void TransactionManager::NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid,
     txn.trail_.push_back(std::move(entry));
 }
 
+void TransactionManager::MoveSchemaWordIfCatalogWriter(const Transaction& txn) noexcept {
+    if (txn.wrote_catalog_ && schema_word_ != nullptr) {
+        schema_word_->fetch_add(1, std::memory_order_acq_rel);
+    }
+}
+
 StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
                                               wal::DurabilityClass durability) {
     if (!txn.active_) {
@@ -298,7 +306,8 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     // the interval AN-Q3 names, and a marker stored inside it closes
     // nothing. Released on every exit, including a throw: a marker left
     // set caps every mint on the instance for good.
-    InstanceVisibility::PendingCommit pending(*visibility_, core_);
+    std::optional<InstanceVisibility::PendingCommit> pending;
+    pending.emplace(*visibility_, core_);
     if (wal_ != nullptr) {
         auto committed = wal_->Commit(txn.id_, durability);
         // **The borrows stay held here, and that is the contract, not an
@@ -334,6 +343,18 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     visibility_->PublishCommit(txn.id_, lsn);
     txn.active_ = false;
     PublishCoreBounds();
+    // **The marker lifts before the borrows go** (the AT-S5e review's C8),
+    // the order AO-R6 below states and the scope used to invert: a waiter
+    // this release wakes on another core can mint a view at once - a
+    // `CREATE ASSERTION` granted the relation mints its build's - and with
+    // the marker still set that view is capped below this commit, reading
+    // the rows it just made visible as not yet committed. The entry and the
+    // ceiling are both in by here, which is all the marker was for.
+    pending.reset();
+    // And the schema word, when this transaction wrote the catalog (AT-S5e):
+    // before the release, so a writer it wakes cannot re-run through a
+    // boundary that predates the decide.
+    MoveSchemaWordIfCatalogWriter(txn);
     // **The borrows go last** (AO-R6). After the window entry and after
     // `active_` falls, so a waiter this wakes re-checks against a
     // transaction it can already see as committed. Releasing first would
@@ -541,6 +562,12 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     // same fact the floor rests on, so nothing is owed here beyond letting
     // the transaction stop holding the floor down.
     PublishCoreBounds();
+    // The schema word before the borrows, as at commit: the compensations
+    // above put a rolled-back DDL's catalog rows back, and a writer this
+    // release wakes must re-run through a boundary that sees them - a
+    // `DROP INDEX` undone here restores an index a peer's cache had left
+    // out while the drop was open (the AT-S5e review's C1).
+    MoveSchemaWordIfCatalogWriter(txn);
     // And the borrows, last and for the same reason as at commit: the
     // compensations above have already put every page back, so a waiter
     // woken here reads the prior version rather than a half-undone one.

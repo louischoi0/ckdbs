@@ -78,6 +78,14 @@ std::string HolderName(std::uint64_t holder) {
                                      : "transaction " + std::to_string(holder);
 }
 
+// A relation refused at the relation unit, in the one spelling every such
+// refusal takes - a DDL's `X` meeting a writer or a reader, a writer's `IX`
+// meeting a DDL.
+Status RelationHeld(catalog::Oid oid, std::uint64_t holder) {
+    return Status::TxnConflict("relation oid " + std::to_string(oid) + " is held by " +
+                               HolderName(holder));
+}
+
 bool IEquals(std::string_view a, std::string_view b) {
     return a.size() == b.size() &&
            std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
@@ -508,9 +516,37 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     co_return Status::OK();
 }
 
+sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Session* session,
+                                                   DispatchOutcome* out,
+                                                   sched::MonoTimeNs* statement_deadline_ns,
+                                                   bool resumed) {
+    // **One loop over both waits, not two arms** (the AO-S6e-a review's
+    // C3). Each wait's re-run is a whole fresh statement and can meet what
+    // the other waits for: a relation-lock re-run can meet a held row, and
+    // a write-block re-run can meet a relation a DDL took while it waited.
+    // Two sequential arms answer the second of those with a refusal the
+    // first would have waited out - which is item 16's defect, on a new
+    // pair. Both waits are deadline-bounded and both clear their own field
+    // on every exit, so the loop ends when neither is set. One function, so
+    // the first dispatch and a foreign-key probe's resume cannot diverge.
+    for (;;) {
+        if (out->write_block.has_value()) {
+            co_await AwaitWriteBlock(line, session, out, statement_deadline_ns, resumed);
+            continue;
+        }
+        if (out->lock_wait.has_value()) {
+            co_await AwaitRelationLock(line, session, out, statement_deadline_ns, resumed);
+            continue;
+        }
+        break;
+    }
+    co_return Status::OK();
+}
+
 sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session* session,
                                                  DispatchOutcome* out,
-                                                 sched::MonoTimeNs* statement_deadline_ns) {
+                                                 sched::MonoTimeNs* statement_deadline_ns,
+                                                 bool resumed) {
     // ---- AO-S6e-b: DDL waits for a positioned reader ---------------------
     //
     // The ask was made inside the DDL body, before its first catalog write,
@@ -533,8 +569,8 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // core releases, and the kick that follows it is AU-S2's.
     // `locks_` and the slot are non-null by construction: this field is
     // set only where a `TryAcquire` asked for a wake and got one, which
-    // needs both. Not re-tested, on `AwaitIndexWindow`'s own argument - a
-    // guard on a state that cannot occur reads as evidence that it can.
+    // needs both. Not re-tested: a guard on a state that cannot occur reads
+    // as evidence that it can.
     const DispatchOutcome::LockWait wait = *out->lock_wait;
     out->lock_wait.reset();
 
@@ -568,14 +604,16 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // is an entry the walk can only ever pass through on its way to
     // nothing. The graph holds transactions, which is what its contract
     // says.
-    if (waiter_id != 0 && !txn::IsReadHolder(wait.holder) &&
+    // (Holder 0 is `BorrowChain`'s stale-memo re-run, which waits on nobody.)
+    if (waiter_id != 0 && wait.holder != 0 && !txn::IsReadHolder(wait.holder) &&
         locks_->NoteWaitFor(waiter_id, wait.holder)) {
         locks_->DropWake(wait.key, slot);
         locks_->ClearWaitFor(waiter_id);
         RefuseParkedWrite(*out, waiting_session,
                           DeadlockVictim(std::string(txn::LockUnitName(wait.key.unit)) + " oid " +
                                          std::to_string(wait.key.rel_oid) + ", held by " +
-                                         HolderName(wait.holder)));
+                                         HolderName(wait.holder)),
+                          wait.poisons);
         co_return Status::OK();
     }
 
@@ -610,7 +648,9 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
         // this the transaction whose statement failed stays usable and
         // commits - which is §6's failure atomicity broken by a wait that
         // was supposed to be invisible when it worked.
-        if (waiting_session.in_explicit_txn()) waiting_session.Poison();
+        // Not for a statement that poisons nothing when it fails - a
+        // `CREATE ASSERTION`'s build (the AT-S5e review's C6).
+        if (waiting_session.in_explicit_txn() && wait.poisons) waiting_session.Poison();
         co_return Status::OK();
     }
     if (logging(LogLevel::kDebug)) {
@@ -624,7 +664,7 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // never waits and so never queues behind this asker. The re-run asks
     // again and parks again if it must, and the statement's one deadline is
     // what bounds the sequence rather than each turn of it.
-    const MayParkScope parking(*this, /*allowed=*/true, /*resumed=*/false);
+    const MayParkScope parking(*this, /*allowed=*/true, resumed);
     *out = DispatchAndStage(line, session);
     co_return Status::OK();
 }
@@ -672,32 +712,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // **The deadline is the statement's** and is threaded through both
     // callers for the reason the function states.
     sched::MonoTimeNs statement_deadline_ns = 0;
-    // **One loop over both waits, not two arms** (the AO-S6e-a review's
-    // C3). Each wait's re-run is a whole fresh statement and can meet what
-    // the other waits for: a relation-lock re-run can meet a held row, and
-    // a write-block re-run can meet a relation a DDL took while it waited.
-    // Two sequential arms answer the second of those with a refusal the
-    // first would have waited out - which is item 16's defect, on a new
-    // pair. Both waits are deadline-bounded and both clear their own field
-    // on every exit, so the loop ends when neither is set. (AO-S6e-a's
-    // index-build window was a third, and went at AT-S5e with the window.)
-    for (;;) {
-        if (out->write_block.has_value()) {
-            co_await AwaitWriteBlock(line, session, out, &statement_deadline_ns,
-                                     /*resumed=*/false);
-            continue;
-        }
-        // AO-S6e-b's, the third of the same shape and in the same loop for
-        // C3's reason: this wait's re-run is a whole `DROP TABLE`, which can
-        // meet a row conflict or an index window of its own, and a second
-        // reader can take the relation between the flip and the re-ask - so
-        // the loop is what re-parks it, under the one statement deadline.
-        if (out->lock_wait.has_value()) {
-            co_await AwaitRelationLock(line, session, out, &statement_deadline_ns);
-            continue;
-        }
-        break;
-    }
+    co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns, /*resumed=*/false);
 
     if (out->pending_fk_probe.has_value() && fk_probes_ != nullptr) {
         // **The one park that resumes by re-entering the statement.**
@@ -806,13 +821,17 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
             resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
             resumed_fk_rows_.reset();
-            // **And the wait the allowance above makes recordable** (item
-            // 16). The re-run inside is a fresh whole statement, so a
-            // probe it raises is collected by the next turn of this same
-            // loop - which is why this is here and not after it.
-            if (out->write_block.has_value()) {
-                co_await AwaitWriteBlock(probe.line, session, out, &statement_deadline_ns,
-                                         /*resumed=*/true);
+            // **And the waits the allowance above makes recordable** (item
+            // 16) - both of them, a relation `X` taken during the park as
+            // much as a held row (the AT-S5e review's C3: this arm waited
+            // for a row only, so a relation refusal reached the client and
+            // its wake registration was never dropped). The re-run inside
+            // is a fresh whole statement, so a probe it raises is collected
+            // by the next turn of this same loop - which is why this is here
+            // and not after it.
+            if (out->write_block.has_value() || out->lock_wait.has_value()) {
+                co_await AwaitStatementWaits(probe.line, session, out, &statement_deadline_ns,
+                                             /*resumed=*/true);
                 // **What the earlier rounds answered does not survive a
                 // whole re-run.** A verdict is "as of the view the probe
                 // was answered under", and the point of the wait is that
@@ -911,8 +930,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     if (out->pending_shipped.has_value() && statement_ship_ != nullptr) {
         // The owner's execution (SS2/SS3, statement_ship_service.hpp). The
         // predicate re-finds the waiter each poll and reads the clock, so
-        // the deadline ends the park with nothing having to wake it -
-        // `pending_index_build`'s shape, and for its reason.
+        // the deadline ends the park with nothing having to wake it.
         const PendingShippedStatement shipped = std::move(*out->pending_shipped);
         out->pending_shipped.reset();
         const std::function<bool()> settled = [this, id = shipped.request_id] {
@@ -1317,8 +1335,13 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // probe settles, which is where the probe arm takes it (AO-S6d, item
     // 16); the resume re-resolves the forward check anyway, so a busy
     // parent is seen again and waited on there.
-    if (blocking_writer_ != 0 && !outcome.pending_fk_probe.has_value() &&
-        !outcome.pending_shipped.has_value()) {
+    // **And never beside a relation wait** (the AT-S5e review's C4): a
+    // statement can record a busy parent's writer before it asks its
+    // relation `IX`, and a write-block re-run would overwrite the outcome
+    // and drop the relation's wake without a `DropWake`. The relation
+    // re-run re-resolves the parent anyway.
+    if (blocking_writer_ != 0 && !lock_wait_.has_value() &&
+        !outcome.pending_fk_probe.has_value() && !outcome.pending_shipped.has_value()) {
         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
     }
     // **The refusal, installed where the path that raised it could not
@@ -1331,9 +1354,9 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     if (!last_refusal_.ok() && outcome.status.ok()) outcome.status = last_refusal_;
     outcome.resource_detail = std::exchange(last_refusal_detail_, wire::kNoDetail);
     last_refusal_ = Status::OK();
-    // AO-S6e-b's, on the same terms, and exclusive with the blocker above
-    // since AT-S5e by `NoteBlockingWriter`'s own guard: a statement parked
-    // on a relation's slot records no row blocker beside it.
+    // AO-S6e-b's, on the same terms, and exclusive with the blocker above:
+    // `NoteBlockingWriter` records none once a relation wait is set, and
+    // the blocker is not installed when one recorded earlier meets it.
     if (lock_wait_.has_value()) outcome.lock_wait = std::move(lock_wait_);
     lock_wait_.reset();
     blocking_writer_ = 0;
@@ -2044,10 +2067,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     //   - A statement refused **before resolution** for any other reason -
     //     a parse error, `max_insert_rows`, the multi-row-without-a-
     //     transaction refusal - never reaches the affinity check.
-    //   - The **owner-core** refusal (PW1c-7) and the index-build window's
-    //     (PW1c-6b-2, gone at AT-S5e) were deliberately *not* counted: the
-    //     write was not cross-core at all, it was this core's own write
-    //     waiting on a grant or a build window.
     //
     // `docs/inflight/in-progress/workplan-peer-writer.md` §8's pre-parse DML guard - the class
     // §6 names as invisible to a relation-keyed counter - was removed at
@@ -3053,16 +3072,17 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
 namespace {
 
 // The one spelling of a successful CREATE INDEX (docs/spec/client-manual.md).
-// `tail` was what differed between the local arm's ` entries=0` and the
-// owner-built arm's ` built_by_core=<n>`, which went at AT-S5e.
+// `entries=0` is a literal the manual documents, and the backfill over a
+// populated relation makes it false; it stays until the field is dropped or
+// counted - either is client-visible, so neither is done in passing (the
+// PW1c-6b-3 review's finding).
 std::string CreatedIndexReply(std::string_view name, std::string_view table,
                               catalog::Oid index_oid, PageId root, std::uint16_t key_width,
-                              std::uint16_t entry_width, const std::string& tail,
-                              const std::vector<std::string>& warnings) {
+                              std::uint16_t entry_width, const std::vector<std::string>& warnings) {
     std::ostringstream os;
     os << "CREATED INDEX name=" << name << " on=" << table << " index_oid=" << index_oid
        << " root_page=" << root << " key_width=" << key_width << " entry_width=" << entry_width
-       << tail;
+       << " entries=0";
     for (const std::string& warning : warnings) os << "\\n" << "WARN " << warning;
     return os.str();
 }
@@ -3115,7 +3135,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             relation = oid.value();
         }
         if (relation.has_value()) {
-            if (std::optional<Status> held = BorrowRelationForDdl(scope, *relation);
+            if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
                 held.has_value()) {
                 return {ErrorReply(*held), false, 0, *held};
             }
@@ -3131,10 +3151,15 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // only once its deleter is no longer in flight (`catalog.cpp`'s
             // `ScanAll`). That predicate is one core's (`IsInFlight`), so the
             // claim was core-0-scoped and a drop on a peer-owned relation was
-            // refused inside a transaction (PW1c-6b-4). The relation `X`
-            // above is what makes it moot: no writer of the relation runs
-            // while the drop is undecided, on any core, so the predicate is
-            // never asked about one.
+            // refused inside a transaction (PW1c-6b-4). A writer on another
+            // core still asks it at its resolution and may leave the index
+            // out; what makes that harmless is the relation `X` above - the
+            // writer writes nothing until the drop decides - and the decide
+            // moving the schema word before it releases
+            // (`Transaction::NoteWroteCatalog`), so the writer re-resolves.
+            // Without the second a rollback's woken writer kept its memo and
+            // wrote no entry into the index it restored (the AT-S5e review's
+            // C1).
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
             auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -3174,14 +3199,9 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
         }
-        // `entries=0` is a literal the manual documents (client-manual.md,
-        // CREATE INDEX) and the backfill over a populated relation makes
-        // false. It stays until the field is dropped or counted - either
-        // is client-visible, so neither is done in passing (the PW1c-6b-3
-        // review's finding).
         return {CreatedIndexReply(stmt.index_name, stmt.table_name, result.value().index_oid,
                                   result.value().root_page_id, result.value().key_width,
-                                  result.value().entry_width, " entries=0",
+                                  result.value().entry_width,
                                   result.value().warnings),
                 false};
     });
@@ -3516,7 +3536,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // isolated - a read that starts after this grant takes no borrow
         // and reads on under DT1, which is `ddl-transactional.md` §5a
         // unchanged.
-        if (std::optional<Status> held = BorrowRelationForDdl(scope, oid.value());
+        if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
             held.has_value()) {
             return {ErrorReply(*held), false, 0, *held};
         }
@@ -3676,66 +3696,50 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
 
     // ---- AT-S5e, AT-0 item 13: the relation `X`, for the build ----------
     //
-    // **A build no writer on another core can slip past.** Every writer of
-    // the relation holds its `IX` from before its admission until its
-    // transaction decides (`InsertParsed`, `DeclaredWriteBorrow`), so the
-    // grant below is the moment no writer is mid-statement, and a writer
-    // arriving during the build parks on the table's slot until the
-    // directory is adopted, then re-runs and is checked against it. Without
-    // it a writer admitted against no assertion could land a row where the
-    // scan had already passed and reserve before the adoption - in neither
-    // the scan nor the cabin (the bug entry this closes).
-    //
-    // **Held by a transaction of the statement's own, not the session's**
-    // (the operator's mark on AT-0 item 13): it writes nothing, the build's
-    // catalog writes are not its writes, and it is rolled back when the
-    // statement ends - so the lock is released at the statement's end and a
-    // failed `CREATE ASSERTION` still poisons nothing, where the session's
-    // transaction would have held the relation to its `COMMIT` and taken the
-    // failure with it. A transaction rather than a minted id because a
-    // waiter names its holder (`HolderName`), and a minted id reads as "a
-    // positioned reader". The unfiltered name read is `HandleIndex`'s
-    // earlier shape: an unresolvable name takes no borrow and falls through
-    // to `PrepareAssertionDef`'s refusal and byte position.
+    // Every writer of the relation holds its `IX` from its first intention
+    // until its transaction decides, so the grant is the moment no writer
+    // is mid-statement, and a writer arriving during the build parks until
+    // the directory is adopted. **The holder is a transaction of the
+    // statement's own** (the operator's mark on item 13): it writes nothing
+    // and is rolled back when the statement ends, so the relation is
+    // released there and a failed `CREATE ASSERTION` poisons nothing - a
+    // transaction rather than a minted id because a waiter names its holder.
+    // **The session's own transaction is tested first**, by what it holds
+    // rather than by who the table reports (the review's C7): with it and
+    // another writer both holding the relation, the table may name the
+    // other, and waiting for it would end in the same refusal. Resolved
+    // under the session's view, as `HandleIndex` resolves; a name that does
+    // not resolve takes no borrow and falls to `PrepareAssertionDef`.
     struct BuildLock {
         txn::TransactionManager* manager = nullptr;
         txn::Transaction* txn = nullptr;
         ~BuildLock() {
-            if (txn != nullptr) (void)manager->Abort(*txn);
+            if (txn == nullptr) return;
+            (void)manager->Abort(*txn);
+            manager->Release(*txn);  // `Abort` keeps it in `live_` by design
         }
     } build_lock;
     if (locks_ != nullptr && txn_ != nullptr) {
-        if (auto rel = catalog_.FindTableOidByName(stmt.table_name); rel.ok()) {
+        const std::optional<txn::ReadView> view = ViewFor(session);
+        if (auto rel = catalog_.FindTableOidByName(stmt.table_name,
+                                                   view.has_value() ? &*view : nullptr);
+            rel.ok()) {
+            const txn::Transaction* own = session.transaction();
+            if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(rel.value()))) {
+                const Status mine = Status::TxnConflict(
+                    "relation '" + stmt.table_name +
+                    "' is held by this session's own transaction; CREATE ASSERTION reads "
+                    "settled state - retry when it has ended");
+                return {ErrorReply(mine), false, 0, mine};
+            }
             auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
             if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
             build_lock.manager = txn_;
             build_lock.txn = begun.value();
-            const txn::LockKey unit = txn::LockKey::Relation(rel.value());
-            std::uint64_t blocker = 0;
-            std::shared_ptr<txn::LockWaitSlot> wake;
-            auto took = locks_->TryAcquire(build_lock.txn->id(), unit, txn::LockMode::kExclusive,
-                                           build_lock.txn->borrows(), &blocker,
-                                           may_park_ ? &wake : nullptr);
-            if (!took.ok()) return {ErrorReply(took.status()), false, 0, took.status()};
-            if (!took.value()) {
-                // **This session's own transaction wrote the relation**: the
-                // build's in-flight refusal, answered now rather than after
-                // a wait for a decide only this session can make.
-                if (session.transaction() != nullptr && session.transaction()->id() == blocker) {
-                    if (wake != nullptr) locks_->DropWake(unit, wake);
-                    const Status own = Status::TxnConflict(
-                        "relation '" + stmt.table_name +
-                        "' has a row written by this session's own transaction; CREATE "
-                        "ASSERTION reads settled state - retry when it has ended");
-                    return {ErrorReply(own), false, 0, own};
-                }
-                if (wake != nullptr) {
-                    lock_wait_ = DispatchOutcome::LockWait{unit, blocker, std::move(wake)};
-                }
-                const Status held = Status::TxnConflict("relation oid " +
-                                                        std::to_string(rel.value()) +
-                                                        " is held by " + HolderName(blocker));
-                return {ErrorReply(held), false, 0, held};
+            if (std::optional<Status> held =
+                    BorrowRelationForDdl(build_lock.txn, rel.value(), /*poisons=*/false);
+                held.has_value()) {
+                return {ErrorReply(*held), false, 0, *held};
             }
         }
     }
@@ -6335,9 +6339,9 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     // PW1c-5's shape gate, a **whitelist**: on a peer, a write is admitted
     // only where the PW1c-4 grants and this core's own extent lease make it
     // sound - any relation, clustered either way (the btree arm lifted at
-    // PW2-4), whose secondary structures are owner-built: an index
-    // (PW1c-6b-4) and, since 2026-08-26, a Bound Cabin (PW1c-6c; the
-    // instance's registry holds every directory since AT-S5d). The key-mode arm lifted with the mode (2026-08-25) and
+    // PW2-4), whose secondary structures were owner-built until AT-S5d and
+    // AT-S5e: an index (PW1c-6b-4) and, since 2026-08-26, a Bound Cabin
+    // (PW1c-6c). The key-mode arm lifted with the mode (2026-08-25) and
     // its refusal is per row in `InsertOneRow`, so this gate no longer says
     // anything about keys at all. The interim guard this
     // replaced indicted its own blacklist shape ("a page-writing verb
@@ -6355,9 +6359,6 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     {
         // **On every core since AT-S5**, where this block ran on peers alone
         // as PW1c-5's shape gate; what survives in it survives everywhere.
-        // PW1c-6b-2's index-build window stood first here, turned into a
-        // wait by AO-S6e-a; it went at AT-S5e, where `CREATE INDEX` took the
-        // relation `X` a writer's `IX` waits on, on every core.
         // The btree arm lifted 2026-08-24 (PW2-4) and the indexed arm
         // 2026-08-25 (PW1c-6b-4). The indexed arm's argument - a peer-owned
         // relation's index was owner-built, so every index page was the
@@ -6413,9 +6414,10 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // The Cabin arm lifted 2026-09-02 (AK-S2): every core holds a
         // `stats::CabinStore`, so the owner observes, appends and serves,
         // and the arm had nothing left to guard. The tail went with it -
-        // every secondary structure a peer-owned relation can carry is
-        // owner-built or owner-held, and a new one must be added here
-        // rather than admitted by omission. `workplan-peer-writer.md` §4
+        // every secondary structure a relation can carry was then owner-built
+        // or owner-held, and is built under the relation `X` by any core
+        // since AT-S5e; a new one must be added here rather than admitted by
+        // omission. `workplan-peer-writer.md` §4
         // has the account. **`CannotEnforce` stays** with its *measured*
         // failure (`bench/v2.2.0/results-shipping-part-a-*` Finding 2, a
         // shipped write putting a second row in a group under
@@ -8520,7 +8522,8 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
     }
 }
 
-void CommandDispatcher::MarkHoldsDdl(const txn::Transaction& txn) {
+void CommandDispatcher::MarkHoldsDdl(txn::Transaction& txn) {
+    txn.NoteWroteCatalog();
     if (std::find(ddl_txns_.begin(), ddl_txns_.end(), txn.id()) == ddl_txns_.end()) {
         ddl_txns_.push_back(txn.id());
     }
@@ -11090,7 +11093,7 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
 }
 
 void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session,
-                                          const Status& refused) {
+                                          const Status& refused, bool poison) {
     // **AO-S3b: the wait ended badly and the statement is still holding a
     // scope open.** A statement parked mid-walk left its transaction, its
     // view and its position on the session so the resume could pick them
@@ -11119,7 +11122,7 @@ void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session
     // Inside an explicit transaction this is a failed statement like any
     // other and the client must ROLLBACK; in autocommit the scope was
     // already unwound.
-    if (session.in_explicit_txn()) session.Poison();
+    if (poison && session.in_explicit_txn()) session.Poison();
     if (logging(LogLevel::kWarn)) log_->Warn("lock", refused.message());
 }
 
@@ -11170,9 +11173,9 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     blocked_pk_ = pk;
 }
 
-std::optional<Status> CommandDispatcher::BorrowRelationForDdl(const WriteScope& scope,
-                                                              catalog::Oid oid) {
-    if (locks_ == nullptr || scope.txn == nullptr) return std::nullopt;
+std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* holder,
+                                                              catalog::Oid oid, bool poisons) {
+    if (locks_ == nullptr || holder == nullptr) return std::nullopt;
 
     // AR2 §3's DDL row: **the relation, `X`, for the DDL transaction**. Its
     // one consumer in M2 is the read borrow beneath it (AO-R12): a
@@ -11187,18 +11190,18 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(const WriteScope& 
     // same condition every other wait in this file records under. Without
     // it the honest answer is the refusal itself, which is what a
     // synchronous `Dispatch()` has always had.
-    auto took = locks_->TryAcquire(scope.txn->id(), unit, txn::LockMode::kExclusive,
-                                   scope.txn->borrows(), &blocker,
-                                   may_park_ ? &wake : nullptr);
+    auto took = locks_->TryAcquire(holder->id(), unit, txn::LockMode::kExclusive,
+                                   holder->borrows(), &blocker, may_park_ ? &wake : nullptr);
     if (!took.ok()) return took.status();
     if (took.value()) return std::nullopt;
-    if (wake != nullptr) lock_wait_ = DispatchOutcome::LockWait{unit, blocker, std::move(wake)};
+    if (wake != nullptr) {
+        lock_wait_ = DispatchOutcome::LockWait{unit, blocker, std::move(wake), poisons};
+    }
     // Retryable, and it says who rather than what to do: a client that
     // reached this over the synchronous path has the same recourse it has
     // for any conflict, and one that reached it over `DispatchAsync` never
     // sees it - the wait above swallows it and runs the statement again.
-    return Status::TxnConflict("relation oid " + std::to_string(oid) + " is held by " +
-                               HolderName(blocker));
+    return RelationHeld(oid, blocker);
 }
 
 std::uint64_t CommandDispatcher::NextReadHolder() noexcept {
@@ -11254,6 +11257,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // the table's own slot instead, flipped by the release from whichever
     // core releases - `BorrowRelationForDdl`'s wait, from the other side.
     const txn::LockKey relation = txn::LockKey::Relation(unit.rel_oid);
+    const bool first_intention = !holdings.Holds(relation);
     std::shared_ptr<txn::LockWaitSlot> wake;
     auto rel = locks_->TryAcquire(id, relation, txn::LockMode::kIntentionExclusive, holdings,
                                   blocker, may_park_ ? &wake : nullptr);
@@ -11263,6 +11267,29 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
             lock_wait_ = DispatchOutcome::LockWait{relation, *blocker, std::move(wake)};
         }
         return false;
+    }
+    // **The first intention is where the statement's memo has to be
+    // current** (the AT-S5e review's C2). The memo was settled at the task
+    // boundary, and the `IX` is asked later - after the resolution, and for
+    // a per-row write after a walk - so a `CREATE INDEX` or a `CREATE
+    // ASSERTION` could take the relation `X`, publish and release in
+    // between, leaving this statement to write rows into a relation whose
+    // new index or assertion it never resolved. From this grant on no DDL
+    // can take the relation until this transaction decides, so the word
+    // unmoved here is the proof; moved, the statement has written nothing
+    // under the relation yet and runs again through a boundary that
+    // re-resolves - parked on a slot already flipped, so the re-run is
+    // immediate. Conservative: any catalog write anywhere moves the word.
+    if (first_intention && !catalog_.MemoIsCurrent()) {
+        if (may_park_) {
+            auto flipped = std::make_shared<txn::LockWaitSlot>();
+            flipped->ready.store(true, std::memory_order_release);
+            lock_wait_ = DispatchOutcome::LockWait{relation, /*holder=*/0, std::move(flipped)};
+        }
+        return Status::TxnConflict("relation oid " + std::to_string(unit.rel_oid) +
+                                   ": the catalog changed between this statement's resolution "
+                                   "and its first write to the relation; it runs again against "
+                                   "the current schema");
     }
     // A relation unit asks for the intention alone: it is a writer
     // declaring the relation it is about to write (`InsertParsed`), never a
@@ -11399,8 +11426,7 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     // park is named by its rows below, which a DDL holding the relation
     // does hold.)
     if (lock_wait_.has_value() || unit.unit == txn::LockUnit::kRelation) {
-        return Status::TxnConflict("relation oid " + std::to_string(unit.rel_oid) +
-                                   " is held by " + HolderName(blocker));
+        return RelationHeld(unit.rel_oid, blocker);
     }
 
     // **A refused borrow stops the write.** An insert has no conflict check

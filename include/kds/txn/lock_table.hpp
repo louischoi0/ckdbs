@@ -508,6 +508,15 @@ public:
 
     std::size_t size() const noexcept { return held_.size(); }
     bool empty() const noexcept { return held_.empty(); }
+    // Whether `key` is held at any mode - the question a caller asks before
+    // an ask whose *first* grant means something (AT-S5e: a writer's first
+    // relation intention, and a DDL's own-transaction test).
+    bool Holds(const LockKey& key) const noexcept {
+        for (const Held& h : held_) {
+            if (h.key == key) return true;
+        }
+        return false;
+    }
 
     // The unit this transaction is queued on, if any. **At most one**: a
     // transaction is one thread of control and can be blocked on exactly

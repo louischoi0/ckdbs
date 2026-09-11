@@ -62,7 +62,9 @@ public:
         : locks_(holder != 0 ? locks : nullptr), holder_(holder), taken_(taken) {}
     // Declaring `rel` at once: what a write does at its resolve. A write
     // resolves a schema exactly as a read does and its own `IX` is taken
-    // rows later, so it declares the relation before the schema read, as a
+    // after that - before its admission for an `INSERT`, at its declared
+    // borrow or first qualifying row for an `UPDATE` or `DELETE` (AT-S5e) -
+    // so it declares the relation before the schema read, as a
     // `SELECT`'s bind does - an `IS`, compatible with that `IX`, so the
     // writer pays nothing for it. `INSERT`, `UPDATE` and `DELETE` are the
     // three callers; the two with a `WHERE` then hand the borrow to

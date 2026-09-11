@@ -1049,6 +1049,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                     *expeditor->store_, &*expeditor->wal_,
                                     &*expeditor->visibility_,
                                     /*core=*/0, expeditor->locks_.get());
+    // The schema word a catalog-writing decide moves before its borrows go
+    // (AT-S5e) - the instance's, every core's catalog asks it.
+    expeditor->txn_manager_->SetSchemaWord(&expeditor->schema_version_);
 
     expeditor->dispatcher_.emplace(
         expeditor->database_->superblock, expeditor->database_->catalog, *expeditor->store_,

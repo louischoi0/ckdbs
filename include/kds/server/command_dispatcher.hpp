@@ -517,24 +517,29 @@ struct DispatchOutcome {
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
-    // **AO-S6e-b: the unit this statement asked for and did not get**, or
-    // nullopt. `DROP TABLE`'s relation `X` against a positioned reader's
-    // `IS` is the one asker; the wait is on the table's own slot and not on
-    // the holder's decide, because the holder may be a **read borrow on
-    // another core** and `TransactionManager::IsInFlight` is per-core - it
-    // would answer "not in flight" for a reader that is very much reading,
-    // and the write-block loop's predicate would spin instead of waiting.
+    // **AO-S6e-b: the relation unit this statement asked for and did not
+    // get**, or nullopt. Asked by a DDL's relation `X` (`DROP TABLE`,
+    // `CREATE`/`DROP INDEX`, a `CREATE ASSERTION`'s build) against a
+    // writer's `IX` or a reader's `IS`, and since AT-S5e by a writer's first
+    // `IX` against a DDL's `X`. The wait is on the table's own slot and not
+    // on the holder's decide, because the holder may be on another core and
+    // `TransactionManager::IsInFlight` is per-core.
     //
     // The slot is what a release flips (`lock_table.hpp`, AU-S2's
-    // write-then-kick), and `holder` is carried for the refusal's text
-    // rather than for the graph: no edge is drawn for this wait, and
-    // AO-S6e-b's section argues why one is not owed - a read borrow never
-    // waits, so it is always a sink, and the asker holds nothing while it
-    // waits because its DDL transaction was unwound before the park.
+    // write-then-kick). `holder` names the refusal and draws the wait-for
+    // edge where both ends are transactions - a waiter inside an explicit
+    // transaction holds what that transaction has written
+    // (`AwaitRelationLock`); a read borrow is never an edge's end, and a
+    // holder of 0 is a stale-memo re-run (`BorrowChain`) that waits on
+    // nobody.
     struct LockWait {
         txn::LockKey key;
         std::uint64_t holder = 0;
         std::shared_ptr<txn::LockWaitSlot> slot;
+        // Whether the refusal that ends the wait badly poisons an explicit
+        // transaction - false for a statement that is not the transaction's,
+        // a `CREATE ASSERTION`'s build (AT-S5e).
+        bool poisons = true;
     };
     std::optional<LockWait> lock_wait = std::nullopt;
 
@@ -1076,7 +1081,8 @@ private:
     // prefers `out.status` over `StatusFromErrorReply(out.response)`, and
     // KWP is the default port, so a refusal that sets only the rendered
     // line reaches the debug arm and nobody else.
-    void RefuseParkedWrite(DispatchOutcome& out, Session& session, const Status& refused);
+    void RefuseParkedWrite(DispatchOutcome& out, Session& session, const Status& refused,
+                           bool poison = true);
 
     // **The write-block wait, and the two places a statement can meet one**
     // (AO-S6d, AO-0 item 16). Parks until `out->write_block`'s holder
@@ -1134,7 +1140,14 @@ private:
     // On return `out->lock_wait` is empty unless the re-run asked again,
     // which the loop that calls this is what handles.
     sched::Coro AwaitRelationLock(std::string_view line, Session* session, DispatchOutcome* out,
-                                  sched::MonoTimeNs* statement_deadline_ns);
+                                  sched::MonoTimeNs* statement_deadline_ns, bool resumed);
+
+    // Both waits, looped until neither is set: the first dispatch's and a
+    // foreign-key probe resume's, through one function so the two cannot
+    // diverge (the AT-S5e review's C3). `resumed` is the re-runs' parking
+    // flag, as `AwaitWriteBlock` takes it.
+    sched::Coro AwaitStatementWaits(std::string_view line, Session* session, DispatchOutcome* out,
+                                    sched::MonoTimeNs* statement_deadline_ns, bool resumed);
 
     // `cur` is the row's own writer, from the tuple header, and decides the
     // **MVCC verdict** (first-updater-wins, `txn.md` §5) - a writer this
@@ -1290,7 +1303,8 @@ private:
     // One caller, `DROP TABLE`: AR2 §3's DDL row names `CREATE`, `ALTER`
     // and `CREATE INDEX` too, and none of them takes this - the drop is the
     // only one whose census fate AO-S6e owed.
-    std::optional<Status> BorrowRelationForDdl(const WriteScope& scope, catalog::Oid oid);
+    std::optional<Status> BorrowRelationForDdl(txn::Transaction* holder, catalog::Oid oid,
+                                               bool poisons = true);
 
     StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
                                std::uint64_t* blocker = nullptr);
@@ -1452,7 +1466,7 @@ private:
     std::uint64_t catalog_marks_purged_ = 0;
     // Records that this transaction now holds uncommitted catalog rows,
     // which is what turns on `ViewFor`'s filtering.
-    void MarkHoldsDdl(const txn::Transaction& txn);
+    void MarkHoldsDdl(txn::Transaction& txn);
 
     // `CREATE CABIN` / `DROP CABIN` (docs/spec/cabin.md §10). One handler
     // for both: they share a parse and a reply shape, and differ only in
