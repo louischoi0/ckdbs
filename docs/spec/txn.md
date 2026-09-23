@@ -52,16 +52,19 @@ described here so the instance-wide sweep is not written without them:
    resume is a task defect, not a ceiling exemption. `[PROPOSED]` — no
    sweep reaches a read view, and no task re-mints on a ceiling's account;
    this is a second mechanism on a different object, not this one.
-3. **Prepared contexts** — D4's exclusion, inherited unchanged: after a
-   participant replies prepared it may not unilaterally abort. It leaves
-   with 2PC at AT. **Built** (`ExpireEnrolled`'s `prepared` arm).
+3. **Prepared contexts** — D4's exclusion: after a participant replied
+   prepared it could not unilaterally abort. **Gone at AT-S6** with the
+   protocol that made a context prepared; there is no exclusion to
+   inherit, because there is no participant.
 
-**Where it is enforced today, which is narrower than the rule**: the sweep
-exists only over cross-owner *participant* contexts
-(`ShippedStatementExecutor::ExpireEnrolled`), so a plain local transaction
-carries no start time and nothing sweeps it — `txn/manager.hpp` has no
-clock. The rule above is the engine's scope; the instance-wide half of its
-enforcement is not built (AW-S3's record says what remains).
+**Where it is enforced today, which is narrower than the rule**: nowhere.
+The sweep existed over cross-owner *participant* contexts alone
+(`ShippedStatementExecutor::ExpireEnrolled`), and that executor went with
+the protocol at AT-S6 — so no transaction carries a start time and nothing
+sweeps one; `txn/manager.hpp` has no clock. The rule above is the engine's
+scope and **none of it is enforced**, which is a widening of the gap AW-S3
+recorded rather than a new one: its instance-wide half was already
+unbuilt, and AT-S6 removed the narrow half that was.
 
 **Two consequences of the sweep being a periodic tick, not a deadline.**
 It rides `wal_drain_interval_ns` (1 ms by default), so a context is swept
@@ -418,11 +421,10 @@ that `txn::AutocommitSnapshot` returns beside the snapshot, so registering
 is structural rather than disciplinary. Each core publishes the oldest
 `snapshot_lsn` over both into its slot, and a held mint lowers that slot
 *before* it reads the ceiling, so a pass on another core can never outrun a
-view in the gap between its mint and its registration. A snapshot that is
-**adopted** rather than minted — a cross-owner REPEATABLE READ participant
-taking its coordinator's (`cross-owner-txn.md` §3) — lowers the slot the
-same way before the view moves, and is safe to hold because the
-coordinator's live transaction already holds it.
+view in the gap between its mint and its registration. A snapshot was also **adopted** rather than minted until AT-S6 — a
+cross-owner REPEATABLE READ participant taking its coordinator's — and
+lowered the slot the same way before the view moved; nothing adopts now,
+because no transaction reaches a second core.
 `TransactionManager::ReadHorizon()` is the minimum over cores: **the
 instance's oldest live snapshot**, not this core's. A version superseded by
 a transaction below the floor, or committed at or below every live and

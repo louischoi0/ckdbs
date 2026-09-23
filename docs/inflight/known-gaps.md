@@ -219,6 +219,23 @@ statement about an engine that no longer exists; re-verify or strike it.
   been running against a volume they contradicted. See the fixture entry
   under Testing.
 
+- **No transaction has a lifetime ceiling any more, and the sweep that
+  enforced one is gone.** Verified at AT-S6 (2026-09-23) on
+  `at-s6-2pc-retired`. AN-R14 ruled a 10 s envelope and a 60 s ceiling for
+  every transaction, and what was built enforced it over **cross-owner
+  participant contexts alone** (`ShippedStatementExecutor::ExpireEnrolled`)
+  - AW-S3's record already said the instance-wide half was unbuilt and
+  unlettered. AT-S6 retired the executor with the protocol, so the narrow
+  half went too: `txn/manager.hpp` has no clock, no transaction carries a
+  start time, and **an abandoned explicit transaction holds the instance's
+  read horizon and its undo for the life of the process**.
+
+  A client that opens a transaction and stops talking is what reaches it,
+  and nothing refuses or reclaims. It is a widening of AW-S3's gap rather
+  than a new one, and it is now the whole of that rule. Owner:
+  `instructions/v3.0.0/workorder-aw-m1-close.md` §11.2, which sized the
+  instance-wide half and ruled it its own letter.
+
 - **A core that stops is not an idle core, and it pins the instance's
   commit-order floor for good.** Verified at AN-S2 on
   `an-s2-read-view-cutover`, recorded here per AN-R14's instruction that

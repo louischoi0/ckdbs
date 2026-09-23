@@ -26,7 +26,9 @@ write scope is CC3 and §6; what may split is §6a; how inserts spread is §6b.
 
 Scope boundary: this spec covers cross-core **reads** and the routing every
 statement takes. Cross-core **commit** — a transaction touching relations
-owned by more than one core — is specified in `docs/spec/cross-owner-txn.md`;
+owned by more than one core — was specified in
+`docs/spec/cross-owner-txn.md`, which is retired: a transaction is one
+core's, whole, since AT-S6;
 where the two disagree, that one wins on the protocol and this one on
 routing. "Cross-core write" includes a statement or transaction writing two
 ranges owned by different cores, *even ranges of one relation* (CC3); a
@@ -153,7 +155,7 @@ Message kinds:
 | `STEP_CREDIT` | downstream → upstream | grants N batch credits (§4) |
 | `STEP_CANCEL` | any → any in pipeline | stop producing/consuming; discard tagged state |
 | `STEP_ERROR` | failing core → downstream chain + session | Status code + retryable flag (protocol D9 mapping) |
-| `SHIPPED_ROW_DESC` (`kShippedRowDesc`) | owner → arrival core | one chunk of a shipped read's row description, ahead of the first batch on the answer edge, with its own sequence (§4a) |
+| `SHIPPED_ROW_DESC` (`kShippedRowDesc`) | upstream → the core that opened the stage | one chunk of the answer's row description, ahead of the first batch on the answer edge, with its own sequence (§4a). The name is the shipped read it was written for and the kind outlived it (AT-S6) |
 
 Every message carries the tag `(session_core, request_id, step_id)`.
 `request_id` is allocated per statement by the session core, sequential per
@@ -168,7 +170,7 @@ silently; this is the teardown correctness rule, not an error.
   column set. `wire/row_codec.hpp` is the D5 encoder and
   `include/kds/wire/kwp.hpp` the frame codec around it. One encoder, two
   consumers; no second row format — a private batch format is refused,
-  which is what lets a shipped read's rows reach a KWP client without
+  which is what lets a stage's rows reach a KWP client without
   being re-encoded (§4a).
 - Batch size: `kStepBatchTargetBytes` (32 KiB) is the target, always ≤ the
   ring's max message payload (`StepBatchCeiling`). A row larger than the
@@ -191,18 +193,22 @@ silently; this is the teardown correctness rule, not an error.
   deliberate: waking a core for a message that is not in the ring is the
   spin the wake exists to remove, moved to the sender.
 
-### 4a. The shipped read's answer edge
+### 4a. The answer edge
 
-A shipped *read* (§6) on a session that carries a result sink — every
-KWP/1 session — is answered in **rows on an answer edge over this same
-step wire**, and nothing about that wire changes. The arrival core mints
-the `PipelineTag` and registers the receiver *before* it ships; the
-request carries the tag; the owner installs a batch sink on the shipped
-session and sends `STEP_BATCH` under the existing credit protocol; the
-ship reply POD arrives last as the **terminator**, carrying the status
-with `text_len = 0`. Codec, batch builder, credit grant,
-`STEP_CANCEL` and the ceiling are reused unchanged — this is a fifth
-**producer** on the pipeline, not a second pipeline.
+A read a **stage** answers for another core - a fan-in over a split
+relation, or a two-step join's consuming stage - delivers **rows on an
+answer edge over this same step wire**, and nothing about that wire
+changes. The asking core mints the `PipelineTag` and registers the
+receiver *before* it opens the stage; the owner installs a batch sink and
+sends `STEP_BATCH` under the existing credit protocol. Codec, batch
+builder, credit grant, `STEP_CANCEL` and the ceiling are reused unchanged.
+
+**A shipped read was the fifth producer on it until AT-S6**, and that is
+where this section's shape comes from: the arrival core shipped the
+statement with the tag on the request, the owner streamed the rows back,
+and the ship reply POD arrived last as the terminator carrying the status.
+Nothing ships now (§6), so the terminator arm and the producer went; the
+edge is the pipeline's alone.
 
 **Buffered on the owner and sent under credit, not streamed row by row.**
 A `ResultSink` is called from inside the executor's row callback and **has
@@ -218,8 +224,7 @@ what one row encoding buys. A `ResultSink` answers whether its `Emit` takes
 that encoding (`AcceptsEncodedRows`, **false by default**, so a sink
 written without reading this gets the safe answer); a sink that says yes
 is handed the edge's bytes as they arrived. The text form says no — its
-`Emit` takes rendered text — and a shipped read to a text session never
-asks, because that arm ships `form = 0`. Row boundaries come from
+`Emit` takes rendered text, and a text session's reader never asks. Row boundaries come from
 `wire::DecodeRowExtents`, the same walk `DecodeRowBatch` performs, in the
 file that owns the format, so nothing reads the row format twice.
 
@@ -295,8 +300,8 @@ surprise:
 (`STEP_CANCEL` where the read is still open remotely), a mid-result owner
 failure means the reply carries a non-OK status and the arrival core
 forwards **nothing** — a partial result set must not reach a client as a
-whole one — and a client disconnect closes the tag on the path that
-closes a pending shipped statement.
+whole one — and a client disconnect closes the tag on the
+session's own teardown path.
 
 ## 5. Isolation Semantics
 
@@ -347,25 +352,29 @@ transaction's.
 - **READ COMMITTED** statements: semantically equivalent to local execution —
   RC already permits each statement (and each lookup within it) to observe
   the latest committed state.
-- **REPEATABLE READ** transactions issuing cross-core reads: a cross-owner
-  RR transaction reads **one instant on every core** — the snapshot its
-  coordinator pinned at BEGIN, carried on every shipped statement and
-  adopted by each participant when it opens its context (AN-S3;
-  `docs/spec/cross-owner-txn.md` §3 owns the rule, `docs/spec/client-manual.md`
-  states it in the client's words). Until AN-S2 the promise was consistent
-  *per core* — each participant minted its own view at its own BEGIN — and
-  two such transactions could disagree about the order of two commits on
-  two cores; AN-S2 made the view instance-wide and AN-S3 carried the
-  snapshot across, which is what closed it.
+- **REPEATABLE READ** transactions: one view, on one core. The
+  transaction pins its snapshot at `BEGIN` and every statement of it runs
+  where the session is, so "one instant on every core" is true by having
+  only one core to be true on.
+
+  **It was a protocol until AT-S6** (AN-S3): a cross-owner RR transaction
+  carried its coordinator's snapshot on every shipped statement and each
+  participant adopted it when it opened its context. Before AN-S2 the
+  promise was consistent *per core* - each participant minted its own view
+  at its own BEGIN - and two such transactions could disagree about the
+  order of two commits on two cores; AN-S2 made the view instance-wide and
+  AN-S3 carried the snapshot across. Nothing ships now, so nothing carries
+  and nothing adopts.
 
   **The remote-step pipeline does not run inside such a transaction.** It
-  reads each core's latest-committed snapshot outside any enrolled
-  transaction, which inside a cross-owner transaction is not a weakening
-  but a **wrong answer** — that transaction's own writes on the owner live
-  in the transaction the owner holds for it, and no view this leg can take
-  shows them. So both remote-read fast paths are skipped for a session that
-  can enrol, and the read ships instead (§6), under §4a's bounds: the
-  widest row on a typed session, the one-slot reply on a text one.
+  reads each core's latest-committed snapshot outside the asking
+  transaction, so a stage cannot show that transaction's own uncommitted
+  rows - which inside an explicit transaction is a **wrong answer**, not a
+  weakening. **So both remote-read fast paths were skipped for a session
+  that could enrol, and the read shipped instead** - which is the arm
+  AT-S6 removed, because the shipped read could not show those rows
+  either. What a session inside a transaction gets now is a local walk,
+  which is the one reader that can see them.
 - Catalog: the plan is resolved entirely on the session core from its
   catalog cache; a remote step trusts the descriptor in `STEP_OPEN` and does
   not re-resolve. DDL invalidation between resolve and execute surfaces as a
@@ -373,43 +382,46 @@ transaction's.
 
 ## 6. Writes
 
-The shipping unit and the refusal are per range; on a one-range relation
-every rule below reads with "relation" for "range".
+**No statement crosses.** A read and a write both run on the core their
+session is on, and the pages they touch are faulted through the one frame
+table AM-S2 step 3 made the instance's. What a relation's `owner_core`
+still decides is where a range is opened and where a placement-bound task
+runs, never where a statement executes (D18).
 
-- A single DML statement is shipped **whole** to the core owning its
-  target range and executes there under that core's transaction
-  machinery — statement shipping, implied by protocol D3, involving no
-  pipeline. An **autocommit, single-relation** statement — read or write —
-  whose relation another core owns is carried to that core as *text*,
-  parsed and bound there against the owner's own catalog, executed under
-  the owner's ordinary local implicit transaction, and committed through
-  the owner's group committer, which is the whole performance argument.
-  The arrival core parks a waiter under a deadline and answers with the
-  owner's own reply, the `retryable` bit included. A statement **inside an
-  explicit transaction** ships and *enrols*, for writes and for reads —
-  `docs/spec/cross-owner-txn.md`.
+**Statement shipping was how a statement reached a relation another core
+owned**, and it is retired in two halves:
 
-  **What is refused**, each a scope statement: a statement **spanning
-  two owners** (a multi-owner *statement*, which is not a multi-owner
-  *transaction* and is not what the commit protocol addresses), and a
-  statement on a path that **cannot park** — the synchronous dispatch
-  entry, because sending from a path that cannot wait would leave a
-  statement the owner may have committed with nowhere to deliver its
-  answer. `cross_core_write_refusals` counts these. Shipping is
-  **unconditional** where it applies: the engine does not ship or refuse
-  by load.
+- **Writes, at AT-S5.** A single DML statement was shipped whole to the
+  core owning its target range and executed there under that core's
+  transaction machinery. `MayWrite`'s last arm, the three write ship forks
+  and the cross-owner refusals went with it.
+- **Reads, at AT-S6.** An autocommit read was carried to the owner as
+  text and answered from there; a read *inside an explicit transaction*
+  shipped and **enrolled**, which is what gave a transaction a half on
+  another core at all. It went because it was wrong rather than merely
+  unnecessary: the write it was written beside had stopped shipping, so
+  the two halves of one transaction ran under two transaction ids and the
+  read could not see its own uncommitted row
+  (`docs/inflight/bugs/a-shipped-read-cannot-see-its-transactions-own-write.md`).
+  The two-phase commit protocol lost its last traffic with it
+  (`cross-owner-txn.md`, retired).
 
-  A lost or late answer is **not** a refusal. It is `UNKNOWN_OUTCOME`,
-  non-retryable by construction, because this engine issues primary keys
-  and a blind retry of a statement that may have committed inserts a
-  second row. The owner keeps a bounded per-(arrival core, session)
-  record of what it last answered — and of what it is still running — so
-  a duplicate is answered from the record rather than executed twice
-  (§4a for the typed read's exemption).
+What the mechanism cost is recorded rather than lost: the refusals it
+converted, the `UNKNOWN_OUTCOME` a lost answer had to be, and the
+per-(arrival core, session) dedup record that kept a duplicate from
+executing twice. A citation to any of it resolves against
+`git show c63e49f:docs/spec/crosscore.md`.
 
-  **Target resolution is pk arithmetic against the directory alone**
-  (§2a): a DML on a split relation whose predicate does not bound its rows
-  to one owned range is a cross-core write, refused retryably.
+**What is still refused, and it is the only shape left**: a read of a
+**split** relation this core does not wholly hold, in a statement the
+fan-in cannot take (`CheckReadAffinity`). A walk here would cover this
+core's ranges and answer short, which is the one ending that section may
+not leave open.
+
+**Target resolution is pk arithmetic against the directory alone** (§2a):
+a DML on a split relation whose predicate does not bound its rows to one
+owned range is a cross-core write, refused retryably.
+
 - A write to a range this core does not own, reaching `CheckWriteAffinity`
   without having been shipped, is refused `CrossCoreWriteRefused`
   (retryable, protocol D9; the same client contract as first-updater-wins

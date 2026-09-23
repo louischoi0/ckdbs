@@ -1,524 +1,73 @@
-# Cross-Owner Transactions — the two-phase commit protocol
-
-What happens when one client transaction touches relations owned by more
-than one core — the cross-core **commit** that `docs/spec/crosscore.md`'s
-scope boundary defers and that `docs/spec/wal.md` §3 points at. Every rule
-below is enforced by code and covered by a test named where it matters.
-
-**Scope, stated once.** Cross-owner transactions are complete at **relation
-granularity**: a participant is a core, never a relation. Multi-*range*
-transactions are not supported (§8). A core-count change is refused at
-mount (`docs/spec/wal.md` §3); the resolver here reads files rather than
-live cores, so it does not depend on the coordinator running.
-
----
-
-## 1. The shape
-
-A transaction is **cross-owner** the moment it touches a relation another
-core owns. There is no declaration, no join, no registration up front:
-
-- The **arrival core coordinates** — the core the client's connection is
-  on. Not the data's owner, not core 0, and not a coordinator chosen by
-  what the transaction touches.
-- **Participants are discovered as the transaction runs.** The first
-  statement this session ships to core *P* enrols *P*; the list is
-  `Session::participants()`, in discovery order, and it is empty until the
-  first ship.
-- A transaction whose every relation is owned by one core has **no
-  participants** and takes the single-core path unchanged. That is a test
-  on `participants().empty()`, and it is what keeps `cores = 1` and every
-  local transaction byte-identical to a world without this protocol.
-- A participant runs the transaction as an **ordinary local transaction**
-  under **its own** trx id, carved from its own core's lease. The
-  coordinator's `(session_id, transaction_id)` is recorded beside it when
-  prepare brings it. There is no shared transaction id — under per-core
-  streams a shared id would have put foreign ids in every participant's
-  stream, which `CoreRuntime::Open`'s mount check refused, and under one
-  stream the id stays per core because the lease is (`trx_id.hpp`). Commit
-  *order* is global: the commit record's LSN, which the instance read view
-  carries (`txn.md` §4.1, `ratification-an-commit-order.md` AN-D4).
-
-### 1a. How a statement reaches a participant
-
-By **statement shipping** (`docs/spec/crosscore.md` §6): the statement
-crosses as *text*, is parsed and bound on the owner against the owner's own
-catalog, and executes there. Inside a transaction it differs from the
-autocommit case in exactly three wire bits:
-
-| bit | on | meaning |
-|---|---|---|
-| `in_txn` | request | run this under the transaction held for `(coordinator core, session_id)`, and do not end that transaction when the statement finishes |
-| `isolation` | request | the **coordinator's** level, because the level selects a branch (§3) and a participant that fell back to its own config default would give a transaction the weaker promise while its client was told the stronger one |
-| `join` | request | this statement may **join** a context and may not open one (§2a) |
-| `snapshot_lsn` | request | the coordinator's snapshot, which the participant adopts when it opens a REPEATABLE READ context (§3, AN-S3); zeroed and unread outside `in_txn` with REPEATABLE READ, so 0 - a legal snapshot on a fresh instance - is never mistaken for "none stated" |
-
-and none on the way back: the reply carried the participant's watermark
-(§3) until AN-S2 removed it with the quantity it was read from, and the
-eight bytes went to the reply text (`kShippedStatementReplyTextMax`, 1000).
-The request paid eight for the snapshot at AN-S3 and eight for the coordinator's transaction id at AO-S4b (the wait-for edge only the owner can record), so the longest shippable
-statement is **960 bytes** (`kShippedStatementTextMax`).
-
-**Both reads and writes ship, and a read enrols.** A transaction that wrote
-a row on a peer and then reads that relation has to see its own uncommitted
-write; only that peer's own transaction can show it, and nothing the
-coordinator holds can supply it. An enrolling read takes the general
-shipping route rather than the purpose-built single-hop remote reader, and
-a core that only *read* becomes a full participant and is walked at decide.
-
-**A participant that wrote nothing writes no `TXN_PREPARE` and takes no
-sync for it.** Its prepare is answered immediately, `MarkPrepared(kNoLsn)`,
-and everything else about it is unchanged — it is still prepared, still in
-doubt, still decided by the coordinator, still counted, and a writer of the
-rows it holds still blocks on it. `SHOW META` reports
-`shipped_readonly_prepares` where one has happened, absent otherwise.
-
-- *The record would carry no information.* What a participant's PREPARE
-  buys is recovery: the mount finds it, sees no decision in this stream,
-  and resolves **this core's rows** against the coordinator's. A
-  transaction that wrote nothing has no rows here — no redo, and an empty
-  undo chain — so replaying this stream reaches the same state whichever
-  way the coordinator decided.
-- *The predicate is one recovery already depends on.* "Wrote nothing" is
-  `Transaction::last_undo_ptr() == kNoUndoPtr` (`txn/manager.hpp`), safe to
-  lean on because a loser is undone by walking its undo chain: a write
-  that logged redo without first recording undo would already survive a
-  rollback.
-- *What changes, and why it is not a unilateral abort.* Without the
-  record, a crash before the decide leaves nothing in this stream, so the
-  next mount may find the transaction in a checkpoint's active table and
-  roll it back as an ordinary loser, **including where the coordinator
-  committed**. §2's prohibition is on a participant unilaterally aborting
-  *work*; a participant with no rows has no state that the two verdicts
-  distinguish, and the rollback of an empty undo chain is the same empty
-  change as the commit.
-
-**Every decide target is a participant since AT-S5f.** A second kind
-stood beside them - a core that answered a foreign-key probe held a
-*reference intent* and nothing else, was not asked to prepare, and was
-told the decide because the decide is what released the intent. No probe
-is sent and no intent is granted (`docs/spec/foreign-keys.md` §2b), so
-the decide's target list is `participants_` and the wire's `intent_only`
-byte is struck.
-
-**A shipped *read* is exempt from the dedup record.** The record answers a
-duplicate from what the owner last replied, so a lost reply cannot become a
-second execution — a rule written about a **write** against an
-engine-issued pk, where a blind retry is a second row. A read has no side
-effect to guess about, so a duplicate simply re-executes; under READ
-COMMITTED it may answer different rows than the original, which two
-successive RC statements already may. `Remember` runs for every write. The
-exemption also bounds the record by construction: a typed read's answer is
-a whole result set (`crosscore.md` §4a), and a record that kept it would be
-a result-set cache needing a cap.
-
-**What does not ship**, each a scope statement:
-
-- a statement **spanning two owners** (`SoleForeignOwner` refuses two
-  foreign owners) — a multi-owner *statement* is not a multi-owner
-  *transaction*, and only the second is this protocol's business;
-- a statement on a path that **cannot park**, because a protocol opened
-  from a path that cannot await its answers would leave participants
-  prepared with nobody to decide for them;
-- `ANALYZE`, which would answer a request for a plan with a result set.
-
----
-
-## 2. The protocol
-
-Two phases, both over the existing core ring, both in `6b`'s
-request/reply shape — POD payload, parked waiter on the coordinator, a
-deadline, `Status::FromWire`.
-
-1. **Prepare.** The coordinator sends prepare to every participant. A
-   participant makes its work durable — under one stream by asking core 0's
-   writer and waiting on it, under per-core streams by its own `fdatasync`
-   (`docs/spec/wal.md` §3) — writes a `TXN_PREPARE` record naming the coordinator's
-   `(session_id, transaction_id)`, and replies **prepared** or **refused**.
-   The promise is made *after* the record is durable, never at the append.
-2. **Decide.** Every participant prepared ⇒ the coordinator commits, and
-   that `COMMIT` **is the decision** — one record, one author, wherever the
-   log is. Any refusal or
-   timeout ⇒ abort. Either way it then tells the participants, and waits
-   for their acknowledgements. A participant applies the decision as its
-   own ordinary local COMMIT or ROLLBACK, and **under D2 `group` it
-   acknowledges at the append**, its own record's durability riding the
-   next drain — see the contract below.
-
-**The decision is recorded in exactly one place**, the coordinator's, and
-that is the whole design: a decision recorded in two places could be
-recovered two ways. Under per-core streams that place was a distinct
-*stream*, and the argument had a second leg — LSNs were stream-local and
-never compared across cores. With one stream per instance (`docs/spec/wal.md`
-§3) the second leg is gone and the first is untouched: one record, one
-author, one reading. One-phase commit and presumed-commit/presumed-abort
-stay foreclosed by it.
-
-**A participant that replied prepared may not unilaterally abort.** The
-lifetime ceiling that ends an un-prepared context stops applying to it; the
-shutdown path leaves it in doubt rather than rolling it back, because a
-`TXN_ABORT` for a transaction the coordinator may already have committed
-is durable disagreement — the one outcome two-phase commit exists to
-prevent. It ends only by the decided COMMIT or ROLLBACK, or at the next
-mount.
-
-**A prepared transaction takes no further statement.** Prepare is a promise
-that everything the transaction wrote is durable; a statement admitted
-after it would write rows the record does not cover.
-
-**The transaction's durability point is the coordinator's decision
-record, and a participant's own terminal record is a redo shortcut.** Once
-the decision is durable in the coordinator's stream, the outcome is fixed
-and reachable everywhere: a participant whose own COMMIT survived is a
-winner by redo, and one whose COMMIT was lost holds a durable `TXN_PREPARE`
-and resolves to the same answer against that stream (§2c). Both routes end
-at the same outcome, so the participant's record is what makes recovery
-*cheap*, never what makes it *correct*.
-
-Two things follow, and both are contracts rather than observations:
-
-- **Under D2 `group` a participant acknowledges a decide at its COMMIT
-  append**, not after its own `fdatasync`. The append registers the commit
-  with the group, so the next drain syncs it whether or not anybody is
-  parked; a wait there would remove a serialization, not add a durability.
-  The chain therefore **waits** for two syncs and **performs** three (§5a);
-  `wal_syncs` counts the performed ones.
-- **D1 `strict` keeps three waited.** Its sync happens *inside* the commit
-  call, before it returns, so there is no post-append wait to move; buying
-  the same saving there would mean committing a participant's half at a
-  class the session did not ask for. **D3 `relaxed` never takes this
-  wait.**
-
-What is *not* licensed by this: a participant may still not acknowledge a
-**prepare** before its record is durable (step 1's rule stands — the
-promise is the durability), and the coordinator may still not answer a
-client before its own decision record is durable. Those two waits are the
-protocol; only the third is bookkeeping.
-
-### 2a. A context is joined, never re-opened
-
-A participant's context is keyed on `(coordinator core, session_id)` and
-nothing else — the statement leg carries no transaction id. Two things end
-one while its coordinator's transaction is still open: the **lifetime
-ceiling** (`kTxnLifetimeCeilingNs`, 60 s measured from the context's own
-`BEGIN`, whether or not statements are still arriving — AN-R14, `txn.md`
-§1) and the participant core stopping. Both erase it.
-
-So the coordinator states, on every statement after the first it sent that
-owner, that the statement may only **join**. A participant told to join and
-finding nothing refuses `TxnConflict`, retryably: nothing of the
-transaction survives on that core and running it again from the top has
-nothing to undo.
-
-Without the join rule the next statement would open a fresh transaction,
-prepare and commit would make *that* half durable alone, and the client
-would be told everything committed. `shipped_join_refusals` counts the
-refusal; it is `shipped_enrolment_expiries` seen from the other side.
-
-One byte suffices because `Session::Finish()` mints a fresh `ship_id` for
-every cross-owner transaction, so a key can only ever name one
-transaction — *"have you got it"* is the whole question.
-
-### 2b. In doubt, and the bounded wait
-
-A participant that has replied prepared and heard no decision is **in
-doubt**. It may neither abort nor commit; it holds its locks and waits.
-Two things bound the wait:
-
-- The participant **asks** its coordinator what was decided, once per
-  `in_doubt_ceiling_ms`, over a third exchange that is a *resolution ask*
-  and not a third phase. A coordinator that still holds the decision
-  answers it. One that no longer holds the record answers
-  `UnknownOutcome`, which is terminal: nothing at runtime can resolve that
-  transaction and the next mount is what does.
-- A **writer of the same rows** blocks rather than being refused
-  immediately. **Since AO-S3 it waits for the holder to decide rather than
-  for a clock**: the ceiling that used to end the wait is now a fault net
-  (11 s, `txn::kLockWaitFaultNetNs`) that fires only when something is
-  broken and is logged as a fault. Reaching it is still a **retryable**
-  refusal and not `UnknownOutcome`, and that distinction is still load
-  bearing: `UnknownOutcome` tells a client to read the data back, and a
-  *blocked writer*'s own statement plainly did nothing.
-
-`in_doubt_ceiling_ms` no longer reaches this wait; it is inert and M3
-re-scopes it (`workorder-ao-m2-lock-family.md` AO-R8).
-
-### 2c. Recovery
-
-At mount, a `TXN_PREPARE` with no decision beside it is neither a winner
-nor a loser: it is a **fourth outcome**. The coordinator's record is the
-authority, and resolving it is a *log* read, not a message — which is why
-it survives a coordinator that is not running.
-
-**Under one stream** (`wal.md` §3) that read is the mount's own scan. The
-coordinator's decision, if it was ever made durable, is in the same log the
-`TXN_PREPARE` is in and inside the same replay range, because the prepare
-floor below puts it there. So **absence of a decision is abort**, decided
-by the one pass, with no second file opened and no cross-stream comparison
-to make.
-
-**Under per-core streams** the coordinator's stream is a different file and
-resolution opens it, which is what the retention obligation below is
-written against.
-
-A prepared transaction **floors the checkpoint's redo start** at its
-`TXN_PREPARE` (`ActiveTransactions::OldestPreparedLsn`,
-`Checkpointer::Start`). Without that floor the record leaves the replay
-range once the transaction's pages are written back, the next mount reads
-the active-list entry as a loser, and rolls back a transaction the
-coordinator may have committed — reached with no message and no refusal
-anywhere. `docs/spec/wal.md` §11-3 carries it. The price is the standard
-one: an in-doubt transaction pins the log, and §2b's ceiling is what bounds
-how much.
-
-**The retention obligation.** Resolution takes *no decision found ⇒ ABORT*.
-Under per-core streams it scans the coordinator's stream whole from LSN 0,
-because no sound lower bound exists — a bound from this stream's LSNs would
-be a cross-stream comparison, and one from the coordinator's checkpoint
-would assume the decision sits above it. Under one stream the bound is the
-fold's redo start and it *is* sound, for the reason the floor gives. Either
-way the answer holds only while the decision is still in the log, so:
-
-> **A coordinator's stream may not recycle a segment holding a decision
-> until every participant of that transaction has made its own terminal
-> record durable.** A pre-durable acknowledgement does not discharge this:
-> either the ack carries the participant's durable point, or retention is
-> floored by something other than the acks.
-
-Under one stream the coordinator's segment is also the participant's, and
-the fold discharges the rule rather than restating it: the redo start is
-the minimum over every core, so no core's checkpoint can retire a segment
-another core still needs. The obligation is written for the per-core case
-and for whatever a later topology brings.
-
-Nothing recycles a WAL segment today (`wal.md` §11), so the rule constrains
-a policy that does not yet exist. It is written down because the policy
-that would break it — retention keyed on a core's own checkpoint alone — is
-locally correct and silently recovers another core's committed transaction
-as aborted, and because a D2 acknowledgement no longer proves a
-participant's half durable (§2).
-
----
-
-## 3. Isolation — what a cross-owner transaction promises
-
-**A cross-owner transaction under REPEATABLE READ reads one instant on
-every core it touches** (AN-R5, AN-S3): the snapshot its coordinator
-pinned at `BEGIN`. It is a product property, not only a spec line —
-`docs/spec/client-manual.md` states it in the client's words.
-
-Concretely:
-
-- The coordinator's transaction pins its view at its own `BEGIN` — a
-  commit-LSN snapshot over the instance's one commit order (`txn.md` §4.1)
-  — and every statement it ships inside that transaction carries that
-  `snapshot_lsn` (§1a's fourth bit).
-- **The participant adopts it.** The statement that enrols a core opens an
-  ordinary local transaction there with `BEGIN` at the coordinator's level,
-  and under REPEATABLE READ that transaction's view then takes the
-  coordinator's snapshot in place of the one its `BEGIN` minted
-  (`TransactionManager::AdoptSnapshot`), before its first statement reads
-  anything and before the context is recorded. Statements that join read
-  through the same view; §2a's join rule is what guarantees it cannot be
-  silently replaced by a newer one.
-- **What makes an adopted snapshot safe to reclaim under**, since it is the
-  one case the instance read view's lock-free argument does not cover
-  (`instance_visibility.hpp`): the coordinator's transaction is live with
-  that very snapshot and its core's slot is at or below it, so no
-  reclamation pass has passed a commit above it and none will while that
-  transaction runs — and the participant lowers its own slot to the
-  snapshot before its view moves, so from then on both cores hold it, and
-  the participant alone holds it once the coordinator's `COMMIT` lets go.
-  **The case that argument does not reach**: a coordinator that gave up
-  on the transaction while the statement was in flight - a deadline, a
-  session torn down - so that its slot rose before the participant
-  adopted. A pass may then have passed a commit above the snapshot, and
-  the adopted view answers that commit visible by the floor. Nothing
-  observes it: both exits `Finish()` the coordinator's session, after
-  which no further statement of that transaction can ship, the parked
-  waiter is gone so the late reply is discarded on its identity check,
-  and the participant's writes are unwound by the rollback fan-out or the
-  lifetime ceiling. No client reads the wrong rows and no wrong row is
-  made durable, which is why this is stated here rather than filed as a
-  gap.
-  A snapshot above the participant's own ceiling is refused, never clamped:
-  one commit order makes it impossible for a coordinator that minted first,
-  so it can only be a wire defect, and adopting it would cover commits
-  whose entries are not yet in the window.
-- **No check stands over the promise on the coordinator** (AN-R5a). Until
-  AN-S2 it carried a per-participant watermark — that participant's
-  `ReadView::up_to_trx_id`, compared with itself one reply later — and
-  refused a reply that named a different value; the quantity went with the
-  trx-id predicate, and the branch it guarded was unreachable (the one
-  event that moves a pinned view is the context being replaced, which §2a
-  refuses a leg earlier). Adoption does not reinstate a check: the
-  participant reads at the coordinator's snapshot by construction rather
-  than being caught reading elsewhere.
-- **READ COMMITTED adopts nothing.** RC already permits every statement to
-  observe the latest committed state, so there is no instant to carry, and
-  the default level pays nothing for any of this — the encoder zeroes the
-  field outside REPEATABLE READ.
-
-Two cross-owner RR transactions therefore agree about the order of any two
-commits on any two cores: each reads one prefix of the instance's commit
-order, chosen at its `BEGIN`. That case was the price of a per-core
-`ReadView`, and `crosscore.md` §5 paid it until AN-S2 made the view
-instance-wide and AN-S3 carried the snapshot across. Sharing the log did
-not change it on its own — a shared WAL gives every
-commit a comparable LSN, and it was AN, not M0, that minted a snapshot
-across cores; AR0-3 declined the cut vector that
-would.
-
-**The remote-step pipeline does not run inside such a transaction**, and
-that is a rule rather than an accident. `HandleSelect`'s two remote-read
-fast paths — the single-step one that takes `SELECT * FROM <peer
-relation>` and the two-step join — sit *above* the shipping fork and answer
-from the owning core's latest-committed view, outside any transaction this
-session holds (`crosscore.md` §5's CC4). Inside an autocommit statement
-that is the documented weakening. Inside a cross-owner transaction it is a
-**wrong answer**: this transaction's own writes on that owner live in the
-transaction the owner is holding for it, and no view the pipeline can take
-shows them. So a session that can enrol is diverted to the ship path, where
-the read joins that transaction.
-
-It is gated on `MayEnrolShip` rather than on "is in a transaction", so
-exactly the sessions that can *reach* the ship path are diverted: a
-dispatcher with no 2PC client, or a path that cannot park, keeps the
-pipeline it had.
-
-**The reply cap.** A shipped read answered as *text* must fit one ring
-slot — `kShippedStatementReplyTextMax`, 1000 bytes of reply text — and an
-answer past it is refused (*the read returned nothing and changed
-nothing*) rather than truncated: a refusal and not a wrong answer. A typed
-client's shipped read is answered in rows on an answer edge
-(`crosscore.md` §4a), so its bound is the widest row rather than the whole
-reply. The same read outside a transaction takes the pipeline and has no
-such bound.
-
----
-
-## 4. What a client sees
-
-- A cross-owner `COMMIT` answers `COMMIT trx_id=<n>` exactly as a local one
-  does, and a client cannot tell from the reply that two phases ran.
-- A prepare refusal or a participant that never answers aborts the whole
-  transaction and says **who** refused, in that participant's own words and
-  with its own retryable bit.
-- A shipped statement whose answer is lost is `UNKNOWN_OUTCOME`,
-  **non-retryable by construction**: this engine issues primary keys, so a
-  blind retry of a statement that may have committed inserts a second row.
-  The remedy is to **read the data back**, never to retry — the words
-  shipped statements already use.
-- A **write** that fails on its owner **poisons the transaction**, exactly
-  as a local write's failure does: failure atomicity is per transaction, so
-  the client must `ROLLBACK`. A **read** that fails does not, for the same
-  reason and read the same way — a local `SELECT` that fails leaves its
-  transaction open, and the two have to agree.
-- A shipped **read** whose answer never arrives is told so in its own
-  words: *the read returned nothing and changed nothing*. The code is still
-  `UNKNOWN_OUTCOME`, because the answer genuinely did not arrive and
-  nothing here may invite a retry loop, but the write's advice — read the
-  data back — is not given to a statement whose whole purpose was to read
-  it.
-- A `ROLLBACK` tells the participants too, so their contexts end at the
-  client's word rather than at the lifetime ceiling.
-- **The client's answer does not depend on participant acknowledgements.**
-  The coordinator answers from its own decision record: where a
-  participant does not acknowledge, the coordinator logs a line and the
-  client is still told `COMMIT`, because the decision is durable and the
-  transaction is settled — the unacknowledged participant is holding locks
-  in doubt (§2b), which is a liveness fact about that core and not an
-  outcome the client is owed. So an acknowledgement is a **release
-  signal**, never a durability proof, and D2's ack at the COMMIT append
-  (§2) weakens nothing the client is promised. What the durability class
-  governs, exactly as for a one-owner transaction, is when the
-  **decision** reaches the platter before the client hears it.
-
----
-
-## 5. Sizing and configuration
-
-| name | where | what bounds it |
-|---|---|---|
-| `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` = 200 ms | **Nothing, since AO-S3** — the writer's stall was its only reader and that wait now ends on the holder's decide. Kept so a configuration carrying it still mounts; M3 re-scopes it to the lock-wait fault net (AO-R8). What bounds a writer that waits too long is `txn::kLockWaitFaultNetNs`, 11 s, a fault and not a ceiling. Log retention never tracked this knob; the floor in §2c holds the log back and `kTxnPhaseDeadlineNs` bounds a slow-but-alive coordinator |
-| `kTxnLifetimeCeilingNs` | `shipped_statement_executor.hpp`, 60 s | How long a participant context lives, measured from its own `BEGIN` and **not** from its last statement (AN-R14, `txn.md` §1). Above the statement deadline so a context outlives at least one full round trip taken from its own start; a transaction that is still busy at 60 s is rolled back all the same, so this is reachable on a healthy path and `shipped_enrolment_expiries` is not a defect counter |
-| `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is a live transaction holding the instance's undo and commit window down for the lifetime ceiling, opened by a coordinator this core cannot see. It was sized as a quarter of the core's 64-entry live-transaction table; **that table has no bound since AN-S2** (the 64 was the read view's in-flight array, retired with the trx-id predicate), so the number stands on the retention argument alone, unmeasured |
-| wire sizing | `txn_2pc_service.hpp` | 24 bytes per request leg, 256 for the participant reply, against a 1,024-byte ring slot — asserted against `kCoreRingPayloadBytes`, never the literal |
-
-### 5a. Measured sizing — what the protocol costs, in parts
-
-**The commit is three device syncs, and the durability class changes that
-in one leg only.** Counted per core through `SHOW META`'s `wal_syncs`,
-measured against the `bench/` tree at `1769487`
-(`git show 1769487:bench/v2.7.0/`):
-
-| durability class | one-owner commit | cross-owner commit |
-|---|---:|---:|
-| `strict` | 1 sync | **3** — 2 on the participant, 1 on the coordinator |
-| `group` | 1 sync | **3** performed, 2 waited (§2) |
-| `relaxed` | 0 sync | **2** |
-
-Two of the three legs are unconditional on the durability class by
-construction: the participant's prepare (`shipped_statement_executor.cpp`,
-`RequestDurable` then a park — the promise is made after the record is
-durable, never at the append) and the coordinator's decide
-(`command_dispatcher.cpp`: `relaxed`'s window is a promise about this
-stream's own recent commits, not about a record another core is about to
-act on). Only the third leg, the participant's own local COMMIT, rides the
-class — which is why `relaxed` shows 2 and not 3, and why **the cross-owner
-increment is +2 syncs in all three classes**. The increment is a device
-cost: with the WAL segments on tmpfs what remains is the ring hop and the
-parks.
-
----
-
-## 6. Observability
-
-`SHOW META`, core-local like every counter there, so a whole-instance
-reading is one per core. **Absent rather than zeroed** where the shape is
-structurally impossible.
-
-| field | reads |
+# Cross-Owner Transactions — retired at AT-S6 (2026-09-23)
+
+**There is no cross-owner transaction in this engine.** A transaction is
+one core's, whole: every statement of it — read and write — runs on the
+core its session is on, so no other core holds a half of it to prepare, to
+decide, or to be in doubt about.
+
+This file described the two-phase commit protocol that existed while that
+was not true. It is kept as the record of what the protocol was and why it
+went, in the shape
+`docs/spec/create-pattern-user-defined-patterns-v1.md` set for a withdrawn
+subject: **nothing below is a live contract**, and a citation to one of
+its old sections resolves against `git show c63e49f:docs/spec/cross-owner-txn.md`.
+
+## What it was
+
+A statement whose relation another core owned was **shipped** there. The
+owner opened a context on a session of its own — a *participant* — and the
+sending core became the *coordinator*. At `COMMIT` the coordinator ran D4's
+two phases over its participants: a `TXN_PREPARE` each participant made
+durable in its own stream and answered, the coordinator's own decision
+record as the durability point, then a decide each participant applied. A
+participant that had prepared and heard nothing was **in doubt** and asked
+(R6-5); a participant found at the next mount with a prepare and no
+decision was resolved from the coordinator's stream.
+
+Six ring kinds carried it (33–38), two more carried the statement (28, 29),
+and three files implemented it: `statement_ship_service`,
+`shipped_statement_executor` and `txn_2pc_service`.
+
+## Why it went, in the order the reasons arrived
+
+1. **AT-S5 (2026-09-09) moved every write.** A write runs where the session
+   is, through the one frame table AM-S2 step 3 made the instance's, so the
+   three write ship forks retired. What was left shipping was a read.
+2. **A read that ships cannot see its own transaction's write.** The two
+   halves ran under two transaction ids and visibility is by id, so a
+   transaction that wrote a peer-owned relation and read it back in the
+   same statement sequence was answered zero rows — a quiet wrong answer,
+   found by AT-S6's survey and reproduced on the two-core rig. The fork's
+   own comment argued for shipping on exactly that ground (*"only the
+   peer's own transaction can show it"*), which had become the argument for
+   the defect.
+3. **The operator took AT-0 item 4 / D18's first shape on 2026-09-23**: a
+   read stops shipping. It closes the defect — both halves are one
+   transaction on one core — and it leaves the protocol with no traffic at
+   all, which is what AT-R6 assumed when it said *"2PC no longer exists
+   inside a single node"*.
+
+**What was already true before the stage ran**: no participant could write
+a `TXN_PREPARE` record. SA-T0 made a participant that wrote nothing skip
+the record, and after AT-S5 no participant could write, so the durable half
+of the protocol had been unreachable since that stage. The stage's
+done-conditions — an undecided prepare cannot be constructed, recovery's
+undecided-prepare arm is unreachable — held before a line was written.
+
+## Where its parts live now
+
+| what it did | what does it |
 |---|---|
-| `shipped_enrolled` / `shipped_enrolments` | this core as a participant: how many cross-owner transactions it holds now, and how many it has opened. Each live one holds the instance's undo and commit window down (the horizon is instance-wide since AN-S2) |
-| `shipped_enrolment_refusals` | enrolments this core declined — its own limit, or a trx-id lease it could not draw. Retryable |
-| `shipped_enrolment_expiries` | contexts the **lifetime** ceiling rolled back — either no decide arrived, or the transaction was still running at 60 s (AN-R14). It is no longer "should be 0": an abandoning coordinator and an over-long but healthy transaction reach it alike, and only the workload's own lifetime distribution separates them |
-| `shipped_join_refusals` | statements that could only join a context and found none — §2a, the other side of the line above. **A subset of `shipped_enrolment_refusals`**, not a count beside it: every refusal the enrolment path returns is counted there too, so the two are never summed |
-| `shipped_readonly_prepares` | participants prepared without a record because they wrote nothing (§1a) |
-| `txn_in_doubt`, `_asks`, `_committed`, `_aborted`, `_unresolved` | the in-doubt population and what became of it. `txn_in_doubt_unresolved` is the one number naming a transaction nothing at runtime can finish |
-| `wal_syncs`, `wal_interval_syncs` | not this protocol's counters, but the ones its cost is read from (`docs/spec/client-manual.md`). Every device sync this core performed, and the D3 idle tick within it; `wal_syncs - wal_interval_syncs` is the part somebody was parked on. Cumulative from mount, so a reading is a before/after delta, and §5a's per-transaction sync counts are this field divided by the transactions between two readings |
+| carry a statement to the relation's owner | nothing — the statement runs here (`crosscore.md` §6) |
+| let a transaction read a peer-owned relation | a local walk; every core faults every page |
+| one instant on every core under RR (AN-S3) | one core, one view (`txn.md` §5) |
+| bound a wait on a row held by a prepared transaction | the lock family's fault net, `lock_wait_fault_net_ms` |
+| end a participant's context at the coordinator's decide | nothing to end |
+| resolve an in-doubt participant at mount | nothing to resolve; `wal.md`'s mount scan carries what replaced it |
 
----
+## What is not retired with it
 
-## 7. Testing
-
-- **The kill −9 matrix** (`git show 1769487:bench/txn_2pc_kill_matrix_probe.py`):
-  six crash points across the protocol, twelve cells with the ordinal
-  siblings, run three passes. Four of the six expect **0** committed on
-  both relations (a 1 would be a transaction nobody decided) and two expect
-  **1** (a 0 would be a decision made durable and not carried out). In every
-  one, **unequal counts are a torn transaction**, which is the failure the
-  protocol exists to make impossible.
-- Unit coverage: `tests/txn_2pc_protocol_test.cpp` (both halves of the
-  protocol, in doubt, resolution, the blocked writer),
-  `tests/shipped_statement_executor_test.cpp` (the participant's context,
-  the ceiling, the join rule),
-  `tests/core_runtime_test.cpp` (end to end over two real cores),
-  `tests/prepared_recovery_test.cpp` (the fourth outcome at mount).
-- **What the simulation corpus does not cover**: `sim/instance.cpp` mounts
-  core 0 alone, so it cannot mount a prepared transaction at all. A green
-  corpus means this protocol broke nothing the corpus covers.
-
----
-
-## 8. What this protocol does not do
-
-- **Multi-range transactions** — a participant is a core, never a
-  relation, so only owner discovery would differ; a transaction over a
-  spread relation is not supported (`docs/spec/crosscore.md`).
-- **A read-only participant's decide leg** — a participant that wrote
-  nothing skips its prepare record and its sync (§1a) but is still told
-  the decide and acknowledges it.
-- **A shipped read answered as text past one ring slot** (§3).
-- **Snapshot forwarding to the remote-step pipeline** (§3).
-- **Online core-count change** (`docs/spec/wal.md` §3).
+**The remote-step protocol is a different mechanism and stays.** A fan-in
+over a split relation and a two-step join open stages on other cores
+(`kStep*`, `crosscore.md` §4a); a stage is a read, not a transaction half.
+Whether it survives AT is AT-0 item 4's other half, undecided.

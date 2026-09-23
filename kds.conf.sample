@@ -575,30 +575,32 @@ join_build_max_rows = 65536
 
 # ---- Cross-owner transactions ----------------------------------------------
 
-# How long a write waits for a row held by a transaction this core has
-# **prepared** for a cross-owner commit and is waiting for the coordinator
-# to decide (docs/spec/txn.md, the two-phase commit protocol's D5). Such a
-# transaction may neither commit nor abort here until it is told, so it
-# holds its rows - and this is the bound on how long anyone else waits for
-# them.
+# How long a statement may wait for what it needs before the engine calls
+# the wait a **fault** and refuses the waiter (`lock_wait_fault_net_ms`).
 #
-# At the ceiling the statement is refused TXN_CONFLICT with retryable=1,
-# and the message names the wait rather than only the row. It is never
-# UNKNOWN_OUTCOME: the refused statement did nothing at all, so telling a
-# client to go and read its data would be wrong.
+# It is not the ordinary end of a wait. A statement that waits for a row,
+# a range or a relation is woken by the holder's decide, whenever that
+# comes; this bound exists for the case where no decide comes - a detector
+# that missed a cycle, or a holder that is stuck - and when it fires it
+# aborts the **waiter**, never the holder, and logs the fault as one.
 #
-# The default is ~100x the healthy decision window this host measures
-# (a ~0.94 ms commit sync plus a ~21 us ring hop each way, so about 2 ms
-# end to end) and sits deliberately below the coordinator's own 10 s phase
-# deadline: a writer refused here is refused for a decision that is late,
-# not for one that is merely slow.
+# **This key was `in_doubt_ceiling_ms` and a file that still sets that is
+# refused at startup**, naming this one. The old key bounded a wait on a
+# row held by a transaction this core had prepared for a cross-owner
+# commit; there is no cross-owner transaction since v3.0.0's M3, and the
+# quantity the key named - how long a wait may run before it is a fault -
+# is this one.
 #
-# `in_doubt_ceiling_ms = 0` refuses immediately instead of waiting. It is
-# not an off-switch - it is the other policy, kept reachable so the two can
-# be measured against each other. Only a transaction spanning two owners
-# can put a row in this state, so on a single-core instance this key does
-# nothing.
-in_doubt_ceiling_ms = 200
+# The default is 1 s. It was 11 s while two-phase commit was in the tree,
+# because an honest holder could sit inside a coordinator's 10 s phase
+# deadline and a shorter net would have fired on a transaction doing
+# nothing wrong. Nothing waits on another core now, so the longest honest
+# wait is a local statement's own work.
+#
+# `lock_wait_fault_net_ms = 0` refuses immediately instead of waiting. It
+# is not an off-switch - it is the other policy, kept reachable so the two
+# can be measured against each other.
+lock_wait_fault_net_ms = 1000
 
 # How many primary-key ids one **range** of a relation covers - and, because
 # D6 makes them one quantity, how many ids a non-core-0 core leases at a
