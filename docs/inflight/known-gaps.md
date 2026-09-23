@@ -403,6 +403,37 @@ there is no second core's registration to be answered by.
   resting on the two dead grounds. Owner: `ar0-5-amendment-uniformity.md`
   (AT), with the one-line message fix owed by whoever touches it first.
 
+- **A peer-accepted session does not reach the physical optimizer or the
+  Cabin controller, and one of the two answers as though it did.** Verified
+  at `aaf0f47`, 2026-09-23, on `at-s8-checkpoint-listener`. AT-S8 made every
+  core listen, so the kernel sends sessions to peers by default; a peer's
+  dispatcher is handed the statement limits (`StatementLimits`) but not
+  `set_relayout`, `set_optimizer_signals`, `set_cabin_optimizer_enabled` or
+  `set_cabin_optimizer_view`, which `Expeditor::Open` sets on core 0's alone.
+  So on a peer `SET CABIN_OPTIMIZER ON` replies OK while the controller reads
+  core 0's flag only - an accepted spelling that enforces nothing, which
+  `CLAUDE.md`'s truthfulness rule forbids; `SHOW CABIN_OPTIMIZER` and
+  `SHOW RELAYOUT` answer from state the peer does not have; and a peer's
+  reads feed no optimizer signal. Not fixed in AT-S8 because the fix is a
+  decision - share the controller's flag, view and signal sink as instance
+  state, or refuse those statements on a peer - and it is the operator's.
+  Owner: AT (`workorder-at-m3-uniformity.md`, AT-S8's row).
+
+- **A multi-core test instance binds its probed port with SO_REUSEPORT.**
+  Verified at `aaf0f47`. `ExpeditorTest`'s fixtures probe a free loopback
+  port and then bind it; above one core every listener sets SO_REUSEPORT
+  since AT-S8, so two concurrent ctest processes that probe the same port
+  both bind it and exchange connections silently, where before the second
+  bind failed loudly. Unobserved, and a flake rather than an engine defect.
+  Owner: the test fixture.
+
+- **No cell drives a stale writeback against a re-faulted frame.** Verified
+  at `aaf0f47`. AT-S8 step 1b draws every frame's dirty generation from the
+  store's own counter, so a frame evicted and faulted back never repeats the
+  value a concurrent writeback recorded at its copy; the interleaving needs
+  two writebacks and an eviction inside one device write, and no cell forces
+  it. Owner: `docs/spec/page.md` §6.
+
 ## Locks
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
