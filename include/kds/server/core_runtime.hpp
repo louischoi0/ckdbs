@@ -18,7 +18,6 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/txn/lock_table.hpp"
-#include "kds/stats/access_batch.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -479,15 +478,11 @@ public:
     // statement asks it for an id (catalog/row_id_lease.hpp).
     void MaybeRefillRowIds();
 
-    // And CR7's access statistics, on the same tick and for the same reason
-    // the lease checks are there: cheap `system` work, and a timer of its
-    // own would cost more than it measures. The **cadence is
-    // `wal_drain_interval_ns`**, deliberately not a knob of its own - the
-    // engine already has a name for "how often a core does its cheap
-    // background work", and a second name for one quantity is what
-    // `docs/rules/rules.md` and this milestone's own review rule forbid.
-    // What CB7's sweep sizes is the *buffer*, `kAccessBatchCapacity`.
-    void MaybeFlushAccessStats();
+    // **`MaybeFlushAccessStats` rode this tick and is gone** (AT-S7). It
+    // sent CR7's folded access shapes to core 0 at `wal_drain_interval_ns`,
+    // because a peer could not write `sys.access_stats`; it writes the row
+    // where the statement ran now, so there is nothing to flush and no
+    // cadence to pick.
 
     // **CC7's grant receivers went with the grants** (AW-S1b):
     // `GrantRelationFault`, `GrantRelationWrite` and the `AdmitWritePages`
@@ -620,11 +615,6 @@ private:
     // tick rather than racing the first.
     bool row_id_refill_in_flight_ = false;
 
-    // CR7: this core's folded access shapes, between two ticks. Peers only -
-    // core 0 writes `sys.access_stats` directly, being the only core that
-    // may. Declared before the dispatcher for the reason every other seam
-    // here is: the dispatcher holds a pointer to it.
-    stats::AccessBatch access_batch_;
     // **The instance's store, borrowed** (AT-S7), and null wherever
     // `Config::cabins` was: then `cabin_store_` below is this runtime's
     // own, which only a fixture builds now.

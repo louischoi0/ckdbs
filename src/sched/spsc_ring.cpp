@@ -28,11 +28,6 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kAnchorWrite: return "ANCHOR_WRITE";
         case RingMessageKind::kTrxIdLease: return "TRXID_LEASE";
         case RingMessageKind::kRowIdLease: return "ROWID_LEASE";
-        // Both were missing: `kAccessStatsBatch` since CR7 added it, and it
-        // read as "unknown" in every log line that named a kind. Added with
-        // XG1's own kind rather than left, because the next reader of this
-        // switch would have copied the omission.
-        case RingMessageKind::kAccessStatsBatch: return "ACCESS_STATS_BATCH";
         case RingMessageKind::kShippedRowDesc: return "SHIPPED_ROW_DESC";
     }
     return "unknown";

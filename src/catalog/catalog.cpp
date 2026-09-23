@@ -3056,6 +3056,28 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
         return Status::InvalidArgument("catalog: access kind 0 is reserved for an unset row");
     }
 
+    // **The relation's root page, held exclusive across the whole call**
+    // (AT-S7, `crosscore.md` CC13). Every core records its own accesses
+    // now - the fold a peer sent to core 0 is gone with the ring kind that
+    // carried it - so the walk below, the increment it makes and the
+    // admission of a shape nobody has seen have to be one act against a
+    // relation two reactors reach. Page 11 is the door: `ForFirstRow` and
+    // `InsertRow` both enter the chain here, so a core holding it exclusive
+    // is the only core inside, and the acquisition each of them makes on
+    // this core is the re-entrant one the latch grants its owner
+    // (`device_page_store.hpp`, "Re-entrant for the owning core").
+    //
+    // **The race it closes is the admission, not the increment.** A match
+    // is read, changed and written under `ForFirstRow`'s own hold on the
+    // page it was found on, so no count is lost without this; what is lost
+    // without it is the *shape* - two cores that both miss the same new one
+    // both admit it, and the second row no later increment ever reaches,
+    // because `ForFirstRow` stops at the first match. One shape's count
+    // would split in two and stay split, which is the one way an advisory
+    // statistic can mislead the mover rather than merely thin out.
+    auto held = store_.Get(kCatalogPageAccessStats);
+    if (!held.ok()) return held.status();
+
     // `live` counts every row the walk passed, across every page of the
     // chain - which is what the cap below has to be measured against now
     // that the relation is not one page.

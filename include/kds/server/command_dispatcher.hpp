@@ -24,7 +24,6 @@
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
-#include "kds/stats/access_batch.hpp"
 #include "kds/stats/access_stats.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
@@ -1592,28 +1591,12 @@ public:
     // instrument. `sink` must outlive this.
     void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
 
-    // **Where this core's access shapes go** (CR7). Unset on core 0, which
-    // writes `sys.access_stats` directly because it is the only core that
-    // may. Set on a peer, whose accesses are folded here and flushed to
-    // core 0 on the reactor tick - and setting it is also what *enables*
-    // recording on a peer, which was constructed with it off because there
-    // was nowhere to put a shape. `batch` must outlive the dispatcher.
-    void SetAccessBatch(stats::AccessBatch* batch) noexcept {
-        access_batch_ = batch;
-        access_batch_counters_ = batch == nullptr ? nullptr : &batch->counters();
-    }
-
-    // **Where this core's `SHOW META` reads its CR7 block from when it is
-    // the core that *applies* batches** - core 0, which folds a peer's
-    // counts into `sys.access_stats` and owns the counters the handler
-    // fills. A peer sets the pointer through `SetAccessBatch` instead,
-    // because its batch carries its own; the block is one block either way,
-    // and which half of it is non-zero says which end of the wire this core
-    // is.
-    void SetAccessStatsApplied(const stats::AccessBatchCounters* counters) noexcept {
-        access_batch_counters_ = counters;
-    }
-
+    // **`SetAccessBatch` and `SetAccessStatsApplied` stood here and are
+    // gone** (AT-S7). A peer had no way to write `sys.access_stats`, so it
+    // folded its shapes into an `AccessBatch` and core 0 applied the fold;
+    // both halves and the `SHOW META` block that reported them retire with
+    // the ring kind, because every core writes the relation itself now
+    // (`crosscore.md` CC13).
 
     // ---- R6-5: D5's bounded wait, the one function it is reached through -
     //
@@ -2138,13 +2121,6 @@ private:
     catalog::Catalog& catalog_;
     storage::PageStore& page_store_;
 
-
-    // `SetAccessBatch`. Null on core 0 and on every dispatcher nobody wired.
-    stats::AccessBatch* access_batch_ = nullptr;
-
-    // What `SHOW META`'s CR7 block reads: a peer's own batch counters, or on
-    // core 0 the handler's applied counts.
-    const stats::AccessBatchCounters* access_batch_counters_ = nullptr;
 
     // Whether the statement running right now can park (set by
     // `DispatchAsync`, never by `Dispatch`). One statement runs at a time

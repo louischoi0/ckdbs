@@ -9,6 +9,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 // `sys.access_stats` (docs/spec/heap-and-tuple.md §7): how often each access
@@ -270,6 +271,101 @@ TEST_F(AccessStatsTest, TheStoredKindIsNeverZeroAndRoundTrips) {
         EXPECT_EQ(*back, kind);
     }
     EXPECT_FALSE(exec::AccessKindOfStored(catalog::kAccessKindUnset).has_value());
+}
+
+// ---- One relation, whichever core recorded it (AT-S7) --------------------
+//
+// The three cells that stood in `access_batch_test.cpp` for CR7's wire -
+// the fold by shape, the buffer's overflow count and a peer's fold reaching
+// the row the local path writes - retire with the batch: a peer writes
+// `sys.access_stats` itself, so there is no fold, no message and no drop.
+// What has to stay true is the property the wire existed to preserve, and
+// it is pinned here instead.
+
+TEST_F(AccessStatsTest, TwoCoresRecordingOneShapeShareItsRow) {
+    // Two catalogs over one store, which is what two cores are: each has
+    // its own memo and both walk the same pages. A shape one of them admits
+    // is the shape the other increments.
+    catalog::Catalog peer(store_);
+    ASSERT_TRUE(peer.RecordAccess(/*kind=*/1, /*rel_id=*/4242, /*mask=*/0b101, /*now=*/900).ok());
+    ASSERT_TRUE(boot_->catalog.RecordAccess(1, 4242, 0b101, 950).ok());
+    ASSERT_TRUE(peer.RecordAccess(1, 4242, 0b101, 990).ok());
+
+    auto rows = boot_->catalog.ListAccessStats();
+    ASSERT_TRUE(rows.ok()) << rows.status().message();
+    std::size_t found = 0;
+    for (const catalog::SysAccessStatRow& row : rows.value()) {
+        if (row.rel_id != 4242) continue;
+        ++found;
+        // **The totals are what the done-condition names**: three
+        // executions, one row, and `last_seen` the newest of them - which
+        // is what a fold-then-apply produced and what a shared row has to
+        // produce too.
+        EXPECT_EQ(row.use_count, 3u);
+        EXPECT_EQ(row.last_seen, 990u);
+    }
+    EXPECT_EQ(found, 1u) << "a second row for one shape splits its count and no later "
+                            "increment reaches it - ForFirstRow stops at the first match";
+}
+
+// ---- CR6 / CB8: unlogged, and discarded when damaged ---------------------
+//
+// Carried over from `access_batch_test.cpp`, whose batch half AT-S7 retired.
+// Nothing about these two changed: the relation is still the sole unlogged
+// catalog relation, and a mount that finds it damaged still discards it.
+
+class AccessStatsDurabilityTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        catalog_.emplace(store_);
+        ASSERT_TRUE(catalog_->Bootstrap().ok());
+        ASSERT_TRUE(catalog_->RecordAccess(/*kind=*/1, /*rel_id=*/5, /*mask=*/1, /*now=*/10).ok());
+        ASSERT_TRUE(catalog_->RecordAccess(1, 6, 1, 11).ok());
+    }
+
+    storage::InMemoryPageStore store_{128};
+    std::optional<catalog::Catalog> catalog_;
+};
+
+TEST_F(AccessStatsDurabilityTest, AnUndamagedRelationIsLeftAlone) {
+    // The direction the discard must never err in: it runs at every mount,
+    // so a false positive would empty a healthy statistic on every restart
+    // and the optimizer would never accumulate anything.
+    auto reset = catalog_->ResetAccessStatsIfDamaged();
+    ASSERT_TRUE(reset.ok()) << reset.status().message();
+    EXPECT_FALSE(reset.value()) << "a healthy relation was discarded";
+
+    auto rows = catalog_->ListAccessStats();
+    ASSERT_TRUE(rows.ok());
+    EXPECT_EQ(rows.value().size(), 2u);
+}
+
+TEST_F(AccessStatsDurabilityTest, ABrokenChainIsDiscardedAndTheRelationWorksAgain) {
+    // Damage the chain the way a half-applied grow would: a link to a page
+    // that is not there. Nothing redoes this relation (CR6), so without the
+    // discard the failure is permanent - every `RecordAccess` and every
+    // `SHOW ACCESS` fails for the life of the file.
+    {
+        auto head = store_.Get(catalog::kCatalogPageAccessStats);
+        ASSERT_TRUE(head.ok()) << head.status().message();
+        heap::PageView page(head.value().bytes());
+        page.set_next_page_id(9999);
+    }
+    ASSERT_FALSE(catalog_->ListAccessStats().ok())
+        << "the fixture did not actually break the relation";
+
+    auto reset = catalog_->ResetAccessStatsIfDamaged();
+    ASSERT_TRUE(reset.ok()) << reset.status().message();
+    EXPECT_TRUE(reset.value());
+
+    // Empty, readable, and writable again - which is the whole claim:
+    // invariant 8 prices a lost trail as performance, so an empty statistic
+    // is a slower optimizer and never a wrong answer.
+    auto rows = catalog_->ListAccessStats();
+    ASSERT_TRUE(rows.ok()) << rows.status().message();
+    EXPECT_TRUE(rows.value().empty());
+    ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
+    EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
 }
 
 }  // namespace

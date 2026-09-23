@@ -116,13 +116,15 @@ enum class RingMessageKind : std::uint16_t {
     // (`docs/spec/cross-owner-txn.md`).
 
 
-    // CR7: a peer's folded access statistics, peer -> core 0, one-way.
-    // There is no reply and there is deliberately no retry: `sys.access_stats`
-    // is invariant 8's advisory class, so a full ring **drops** the batch
-    // (CR8) where every other kind on this enum retries. The exception is
-    // stated here as well as at the send, because this enum is where a
-    // reader looks to learn what a kind costs.
-    kAccessStatsBatch = 39,
+    // 39 was kAccessStatsBatch, CR7's one-way flush of a peer's folded
+    // access statistics to core 0 - and the one kind on this enum that
+    // could be **dropped** rather than retried (CR8), because
+    // `sys.access_stats` is invariant 8's advisory class. Struck at AT-S7:
+    // the relation sits in the reserved range, which is why a peer had to
+    // send rather than write, and every core writes every page since
+    // AT-S5. A statistic is recorded where the statement ran, so there is
+    // nothing to fold and nothing to drop (`docs/spec/crosscore.md` CC13).
+    // **The value is not reused.**
 
     // owner -> arrival core: the **result description** of a shipped read
     // answered in typed rows (XG1, `docs/spec/crosscore.md` §4a). Sent on
@@ -175,7 +177,6 @@ constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
         case RingMessageKind::kAnchorWrite:
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kRowIdLease:
-        case RingMessageKind::kAccessStatsBatch:
         case RingMessageKind::kShippedRowDesc:
             return true;
         case RingMessageKind::kUnset:
@@ -202,11 +203,11 @@ constexpr std::size_t CountKnownRingMessageKinds() noexcept {
     }
     return n;
 }
-static_assert(CountKnownRingMessageKinds() == 11,
+static_assert(CountKnownRingMessageKinds() == 10,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
               "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck), 26 at AT-S5d (30, 31, 32 "
               "struck), 23 at AT-S5e (25, 26, 27 struck), 19 at AT-S5f (41, 42, 43, 44 "
-              "struck), 11 at AT-S6 (28, 29 and 33-38 struck)");
+              "struck), 11 at AT-S6 (28, 29 and 33-38 struck), 10 at AT-S7 (39 struck)");
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

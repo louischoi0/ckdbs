@@ -44,8 +44,6 @@
 
 namespace kds::stats {
 
-class AccessBatch;
-
 // Counters for the recorder itself, so a silent stop is detectable.
 struct AccessStatsCounters {
     std::uint64_t steps_recorded = 0;
@@ -60,15 +58,15 @@ struct AccessStatsCounters {
 //
 // `now` is the injected clock's reading, or 0 when there is no clock -
 // `last_seen` is best-effort in the same sense `sys.patterns`' is.
-// `batch` is CR7's peer sink: when it is set the accesses are folded into it
-// and flushed to core 0 on the tick, because a peer may not write
-// `sys.access_stats` at all (CC11 - the relation sits in the reserved
-// range). When it is null the write is local and immediate, which is core
-// 0's path and the only one before CR7. **One walk either way**: a second
-// recorder would be a second definition of what a shape is.
+//
+// **The write is local and immediate on every core** (AT-S7). A peer took
+// a second path until then - CR7's fold into an `AccessBatch`, flushed to
+// core 0 over the ring - because `sys.access_stats` sits in the reserved
+// range and a peer could not write it. Every core writes every page since
+// AT-S5, so the sink parameter, the batch, the ring kind and CR8's
+// permitted drop are all gone and this is the one path again.
 void RecordChainAccess(catalog::Catalog& catalog, const exec::StepChain& chain,
-                       std::uint64_t now, AccessStatsCounters* counters = nullptr,
-                       AccessBatch* batch = nullptr);
+                       std::uint64_t now, AccessStatsCounters* counters = nullptr);
 
 // The column bitmap for one step's access shape.
 //

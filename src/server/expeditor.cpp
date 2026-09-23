@@ -1,6 +1,5 @@
 #include "kds/server/expeditor.hpp"
 
-#include "kds/server/access_stats_service.hpp"
 
 #include <pthread.h>
 #include <sched.h>
@@ -1941,20 +1940,12 @@ Status Expeditor::Start() {
             return s;
         }
 
-        // **CR7's receiving half**, core 0's alone: a peer folds its access
-        // shapes and sends them here, because `sys.access_stats` sits in the
-        // reserved range and only this core may write it (CC11). The
-        // counters are core 0's own `SHOW META` block, and what they count
-        // is what this core *applied* - a peer's `access_batches_sent` and
-        // this core's `access_batches_applied` differ by exactly CR8's
-        // permitted drops, which is what makes a drop diagnosable from
-        // either end.
-        if (Status s = RegisterAccessStatsBatchHandler(scheduler, database_->catalog,
-                                                       &access_batch_counters_);
-            !s.ok()) {
-            return s;
-        }
-        dispatcher_->SetAccessStatsApplied(&access_batch_counters_);
+        // **CR7's receiving half stood here and is gone** (AT-S7): a peer
+        // folded its access shapes and sent them to this core to apply,
+        // because `sys.access_stats` sat in the reserved range and only
+        // core 0 could write it. Every core writes it now, under the
+        // relation's root page latch, so there is no handler to register
+        // and no applied counters to report (`crosscore.md` CC13).
 
         // **CC7's publish hook went with the grants** (AW-S1b). It ran at
         // every DDL that placed a relation on a peer: flush the creation

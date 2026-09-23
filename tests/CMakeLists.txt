@@ -12,6 +12,7 @@ add_executable(kds_tests
     deadlock_rig_test.cpp
     fk_cross_core_rig_test.cpp
     shipped_read_own_write_test.cpp
+    access_stats_across_cores_test.cpp
     cabin_serve_across_cores_test.cpp
     read_borrow_rig_test.cpp
     current_core_test.cpp
@@ -83,7 +84,6 @@ add_executable(kds_tests
     catalog_row_test.cpp
     waystone_page_test.cpp
     waystone_dir_test.cpp
-    access_batch_test.cpp
     trace_test.cpp
     range_scan_test.cpp
     range_eligible_test.cpp

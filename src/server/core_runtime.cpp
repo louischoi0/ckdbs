@@ -13,7 +13,6 @@
 
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/catalog_spills.hpp"
-#include "kds/server/access_stats_service.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -428,7 +427,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         runtime->superblock_, *runtime->catalog_, *runtime->store_, log, &clock,
         &*runtime->wal_, config.durability, config.budget,
         /*recorder=*/nullptr, /*replay_enabled=*/false,
-        /*access_statistics=*/false,
+        // **The instance's switch, on every core** (AT-S7). This was a
+        // hard `false` for every core a runtime opens, because
+        // `sys.access_stats` sat in the reserved range and a peer could
+        // not write it; CR7 gave a peer a batch instead, and the batch is
+        // gone with the ring kind that flushed it.
+        config.access_statistics,
         runtime->cabins(), &*runtime->txn_manager_,
         config.isolation, config.core_id);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
@@ -470,21 +474,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // shipped or refused every write to a relation it did not own -
         // because the catalog pages had one writer. They have none
         // (`DevicePageStore::MayWrite` names what serialises them).
-        // CR7: a peer records its access shapes into a local batch and
-        // flushes them to core 0 on the tick. Before this it recorded
-        // nothing at all - the dispatcher above is constructed with
-        // `access_statistics = false`, because `sys.access_stats` sits in
-        // the reserved range and a peer may not write it - which is
-        // `crosscore.md` §6a's "a peer that records nothing cannot feed the
-        // mover", and the one prerequisite of R5 this order owes.
-        // Honouring the instance's own `access_statistics` switch rather
-        // than a second one: a peer used to be forced off because it had
-        // nowhere to write, and now the operator's one setting means the
-        // same thing on every core. Off leaves the peer exactly as it was.
-        if (config.access_statistics) {
-            runtime->dispatcher_->SetAccessBatch(&runtime->access_batch_);
-        }
-        // And the lease refills' cost, for `SHOW META` on this core
+        // **CR7's batch was armed here and is gone** (AT-S7): a peer
+        // recorded nothing until CR7, then folded into a batch and flushed
+        // it to core 0 on the tick, because `sys.access_stats` sits in the
+        // reserved range and a peer could not write it. It writes the
+        // relation itself now, under its root page's latch, so the switch
+        // above is the whole of the arming and this block has nothing left
+        // to do for statistics.
+        // The lease refills' cost, for `SHOW META` on this core
         // (lease_refill_stats.hpp): the trace PW6's four-writer cell asked
         // for.
         runtime->dispatcher_->set_lease_refill_stats(&runtime->trx_id_refill_.stats,
@@ -768,7 +765,6 @@ void CoreRuntime::Run() {
                 MaybeBurnIdleTrxIdBlock();
                 MaybeRefillTrxIds();
                 MaybeRefillRowIds();
-                MaybeFlushAccessStats();
             });
         }
     }
@@ -807,16 +803,6 @@ void CoreRuntime::Run() {
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor stopped");
     }
-}
-
-void CoreRuntime::MaybeFlushAccessStats() {
-    // One send, no retry, and a drop if the ring is full: CR8, the engine's
-    // one exception to `sched/send_retry.hpp`'s never-drop rule, on the
-    // ground invariant 8 already states - this trail is priced as
-    // performance and never as a result. `FlushAccessBatch` carries the
-    // argument and the counters that keep a drop visible.
-    if (transport_ == nullptr) return;
-    (void)FlushAccessBatch(*transport_, config_.core_id, catalog::kSystemCore, access_batch_);
 }
 
 void CoreRuntime::MaybeRefillRowIds() {

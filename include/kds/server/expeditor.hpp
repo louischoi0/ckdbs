@@ -17,7 +17,6 @@
 #include "kds/server/config_file.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
-#include "kds/stats/access_batch.hpp"
 #include "kds/server/core_runtime.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
@@ -880,7 +879,6 @@ private:
     // directly, being the only core that may - so only the applied half of
     // this struct is ever non-zero here. **Declared before `dispatcher_`**,
     // which holds a pointer to it and must therefore die first.
-    stats::AccessBatchCounters access_batch_counters_;
 
     std::optional<CommandDispatcher> dispatcher_;
 
