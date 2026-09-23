@@ -849,6 +849,16 @@ private:
     // makes it immovable, and whether it is armed is the config's.
     std::optional<exec::AssertionEnforcer> assertions_;
 
+    // **Page 0's two writers since AT-S8, and the one run** - declared above
+    // everything that borrows them. `superblock_latch_` is taken around every
+    // mutation of `database_->superblock` and the encode that follows it:
+    // `trx_ids_`' carve on core 0 and the checkpoint anchor's fold from any
+    // core (`SuperBlockCheckpointAnchor::SetLatch`). `checkpoint_gate_` is
+    // what lets at most one of the instance's checkpointers run
+    // (`wal::CheckpointGate`); every peer is handed both.
+    Latch superblock_latch_;
+    wal::CheckpointGate checkpoint_gate_;
+
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;

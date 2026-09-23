@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 
+#include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/server/superblock.hpp"
@@ -91,6 +92,14 @@ public:
           persist_(std::move(persist)),
           next_(superblock.next_trx_id()),
           ceiling_(superblock.next_trx_id()) {}
+
+    // **The superblock latch** (AT-S8), null where one thread writes page 0.
+    // `Carve` raises the ceiling in the one `SuperBlock` every core's
+    // checkpoint anchor also mutates and encodes whole
+    // (`server::SuperBlockCheckpointAnchor::SetLatch`), so the raise is held
+    // under it; `persist` takes it again around its own encode. `latch` must
+    // outlive this.
+    void SetLatch(Latch* latch) noexcept { superblock_latch_ = latch; }
 
     // Issues the next id, reserving and persisting a new block when the
     // current one is spent. Fails with OutOfRange past kMaxTrxId - never
@@ -198,6 +207,7 @@ private:
     std::uint64_t next_;
     std::uint64_t ceiling_;
     TrxIdLease* lease_ = nullptr;
+    Latch* superblock_latch_ = nullptr;  // SetLatch; last, off the hot offsets
     // The size of the window `next_`/`ceiling_` came from, so `low_water()`
     // measures against what was actually granted rather than against a
     // constant a smaller grant would sit permanently below.

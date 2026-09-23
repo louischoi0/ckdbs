@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 
+#include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/page_store.hpp"
@@ -86,10 +88,15 @@
 // that turns checkpointing off keeps the anchor it mounted with, which is
 // the same bargain turning checkpointing off already makes.
 //
-// Buffer pools are per core in M0 (`page.md` section 6), so a dirty table
-// is a per-core fact and each core still runs its own fuzzy checkpoint. A
-// single gathered checkpoint is M1's, when the pools merge; then this fold
-// has one input and becomes an identity.
+// **Why every core still has an input, with one pool** (AT-S8). The dirty
+// table stopped being a per-core fact at AM-S2 step 3; the active-transaction
+// table did not. Each core's `TransactionManager` holds its own live set,
+// unlatched, and recovery needs every live transaction's undo head in some
+// `CHECKPOINT_BEGIN` inside the replay range - so each core checkpoints its
+// own set, one run at a time under `wal::CheckpointGate`, and this fold is
+// what keeps every core's latest `CHECKPOINT_BEGIN` in range. One gathered
+// checkpoint would need an instance-wide active table, which was the
+// alternative the operator declined at AT-S8.
 
 namespace kds::server {
 
@@ -105,12 +112,24 @@ public:
     // Diagnostic log, null (discard) by default; `log` must outlive this.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
+    // **The superblock latch** (AT-S8), null where one thread writes page 0.
+    // Every core's checkpointer publishes here since `RemoteCheckpointAnchor`
+    // retired, so the fold and the in-memory `SuperBlock` it encodes are
+    // written from any core, and so is `next_trx_id` by core 0's carve
+    // (`txn::TrxIdSequence::SetLatch`): both mutate one object and encode it
+    // whole, and an encode racing the other's field write is a torn image.
+    // Held across the mutation and the encode, **never across the sync** -
+    // an image encoded under the latch already carries every field a
+    // concurrent writer set before it, so whichever sync lands last lands a
+    // complete one. `latch` must outlive this.
+    void SetLatch(Latch* latch) noexcept { latch_ = latch; }
+
     Status Publish(const wal::CheckpointAnchorRecord& anchor) override;
 
     // Anchors published through this object since it was constructed. The
     // checkpoint-duration/cadence counterpart of WalStats; also what the
     // tests assert against.
-    std::uint64_t publishes() const noexcept { return publishes_; }
+    std::uint64_t publishes() const noexcept { return publishes_.load(std::memory_order_relaxed); }
 
     // How many distinct cores have published into the fold. The warm-up is
     // over when this reaches the volume's core count; 0 under per-core
@@ -148,7 +167,9 @@ private:
     SuperBlock& superblock_;
     storage::PageStore& store_;
     Logger* log_ = nullptr;
-    std::uint64_t publishes_ = 0;
+    Latch* latch_ = nullptr;
+    // Atomic because a publish counts after its sync, outside the latch.
+    std::atomic<std::uint64_t> publishes_{0};
     wal::CheckpointAnchorRecord mount_anchor_{};
 
     // Indexed by core id, with a bit per core that has published. An array

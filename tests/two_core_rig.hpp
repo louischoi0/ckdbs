@@ -253,6 +253,14 @@ private:
             config.oid_sequence = &oid_sequence_;
             config.mark_counter = &pending_marks_;
             config.assertions = &assertions_;
+            // The peer's checkpointer publishes into an anchor, as
+            // `Expeditor`'s peers do (AT-S8); a rig never remounts, so an
+            // in-memory one stands in for page 0. Core 0's is `Expeditor`'s
+            // in production and a rig has none.
+            if (id != 0) {
+                config.checkpoint_anchor = &peer_anchor_;
+                config.checkpoint_gate = &checkpoint_gate_;
+            }
             config.wal_drain_interval_ns = options_.wal_drain_interval_ns;
             config.scheduler.max_idle_block_ms = options_.max_idle_block_ms;
             auto core = CoreRuntime::Open(config, *device_, clock_, /*log=*/nullptr);
@@ -269,15 +277,6 @@ private:
 
         // ---- Core 0's half that `Expeditor` wires and a runtime does not ----
         CoreRuntime& core0 = *cores_[0];
-        // The peer's completion checkpoint publishes its anchor here
-        // (`remote_checkpoint_anchor.hpp`); a rig never remounts, so it is
-        // acknowledged by dropping it rather than by writing page 0.
-        if (Status s = core0.scheduler().RegisterMessageHandler(
-                sched::RingMessageKind::kAnchorWrite,
-                [](const sched::MessageHeader&, std::span<const std::byte>) {});
-            !s.ok()) {
-            return s;
-        }
         // The two lease services' grant sides, over core 0's own sequence
         // and catalog - production's handlers, so a peer whose tick asks is
         // answered the way an instance answers it.
@@ -323,6 +322,8 @@ private:
     std::atomic<std::uint64_t> schema_word_{0};  // AT-S2: one for both cores
     std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b: one for both cores
     std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b: one for both cores
+    wal::InMemoryCheckpointAnchor peer_anchor_;    // AT-S8: page 0's stand-in
+    wal::CheckpointGate checkpoint_gate_;          // AT-S8: one for both cores
     exec::AssertionEnforcer assertions_{/*shared=*/true};  // AT-S5d: one for both cores
     std::array<std::thread, 2> threads_;
     // Last, so they die first: every runtime borrows everything above.

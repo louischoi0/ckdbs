@@ -58,7 +58,10 @@ enum class RingMessageKind : std::uint16_t {
 
     // ---- System services (workplan P1, owned by P5/P6) ------------------
     // Not sent yet either.
-    kAnchorWrite = 16,        // -> core 0: publish a WAL checkpoint anchor
+    // 16 was kAnchorWrite, struck at AT-S8: a peer's checkpoint published
+    // its anchor through core 0 because page 0 was core 0's; every core's
+    // checkpointer publishes into the instance's anchor under the
+    // superblock latch now. **The value is not reused.**
     // 17 was kExtentLease, struck at AT-S2b: the page-id lease refill went
     // with the per-core pool at AW-S1b. **The value is not reused.**
     kTrxIdLease = 18,         // -> core 0: request a transaction-id block
@@ -174,7 +177,6 @@ constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
         case RingMessageKind::kStepCredit:
         case RingMessageKind::kStepCancel:
         case RingMessageKind::kStepError:
-        case RingMessageKind::kAnchorWrite:
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kRowIdLease:
         case RingMessageKind::kShippedRowDesc:
@@ -203,11 +205,12 @@ constexpr std::size_t CountKnownRingMessageKinds() noexcept {
     }
     return n;
 }
-static_assert(CountKnownRingMessageKinds() == 10,
+static_assert(CountKnownRingMessageKinds() == 9,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
               "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck), 26 at AT-S5d (30, 31, 32 "
               "struck), 23 at AT-S5e (25, 26, 27 struck), 19 at AT-S5f (41, 42, 43, 44 "
-              "struck), 11 at AT-S6 (28, 29 and 33-38 struck), 10 at AT-S7 (39 struck)");
+              "struck), 11 at AT-S6 (28, 29 and 33-38 struck), 10 at AT-S7 (39 struck), 9 at "
+              "AT-S8 (16 struck)");
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

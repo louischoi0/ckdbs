@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -221,6 +222,51 @@ public:
 private:
     CheckpointAnchorRecord anchor_{};
     std::uint64_t publishes_ = 0;
+};
+
+// **At most one checkpoint runs in the instance** (AT-S8). Every core keeps
+// its own checkpointer, because each core's active-transaction table is its
+// own and unlatched and recovery needs every live transaction's undo head in
+// some `CHECKPOINT_BEGIN` inside the replay range; what the instance shares
+// is the pool they all walk and the anchor they all publish into. So the run
+// is the instance's and the table is the core's: a cadence tick that finds
+// another core's checkpoint running skips, and its next tick tries again.
+// A skip costs a later redo start for that core's contribution to the fold,
+// never an answer. The instance owns one; a fixture that builds none runs
+// ungated.
+class CheckpointGate {
+public:
+    // One attempt at the run, released at scope end if it was taken. A null
+    // gate always enters. Acquire on entry, so a run that follows another
+    // sees every write-back the previous one made.
+    class Hold {
+    public:
+        explicit Hold(CheckpointGate* gate) noexcept
+            : gate_(gate),
+              entered_(gate == nullptr || !gate->running_.exchange(true, std::memory_order_acquire)) {
+            if (!entered_) gate_->skipped_.fetch_add(1, std::memory_order_relaxed);
+        }
+        explicit Hold(CheckpointGate& gate) noexcept : Hold(&gate) {}
+        ~Hold() {
+            if (entered_ && gate_ != nullptr) gate_->running_.store(false, std::memory_order_release);
+        }
+        Hold(const Hold&) = delete;
+        Hold& operator=(const Hold&) = delete;
+
+        bool entered() const noexcept { return entered_; }
+
+    private:
+        CheckpointGate* gate_;
+        bool entered_;
+    };
+
+    // Attempts that found the run held, over the process. A test's evidence
+    // that two cores met the gate; nothing else reads it.
+    std::uint64_t skipped() const noexcept { return skipped_.load(std::memory_order_relaxed); }
+
+private:
+    std::atomic<bool> running_{false};
+    std::atomic<std::uint64_t> skipped_{0};
 };
 
 struct CheckpointerConfig {

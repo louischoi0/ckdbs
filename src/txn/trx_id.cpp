@@ -33,7 +33,10 @@ StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
         ceiling = kMaxTrxId + 1;
     }
 
-    if (Status s = superblock_.SetNextTrxId(ceiling); !s.ok()) return s;
+    {
+        LatchGuard hold(superblock_latch_);
+        if (Status s = superblock_.SetNextTrxId(ceiling); !s.ok()) return s;
+    }
     if (persist_ != nullptr) {
         // **Raised in memory first, then made durable, and not rolled back
         // on failure.** The asymmetry is deliberate and it only errs one

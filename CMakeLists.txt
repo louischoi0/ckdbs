@@ -45,7 +45,6 @@ add_library(kds
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
     src/server/superblock_checkpoint_anchor.cpp
-    src/server/remote_checkpoint_anchor.cpp
     src/server/core_runtime.cpp
     src/server/mount_recovery.cpp
     src/server/stop_signal.cpp

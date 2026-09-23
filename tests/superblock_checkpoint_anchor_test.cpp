@@ -1,6 +1,10 @@
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <optional>
+#include <thread>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -13,7 +17,7 @@
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
-#include "kds/server/remote_checkpoint_anchor.hpp"
+#include "kds/txn/trx_id.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/page_mgr/checkpoint_target.hpp"
@@ -430,118 +434,53 @@ TEST_F(SuperBlockAnchorTest, PublishingForACoreBeyondTheTableIsRefused) {
     EXPECT_EQ(anchor.publishes(), 0u);
 }
 
-// ---- The cross-core path (workplan-crosscore.md M5, P2) ---------------
+// ---- Page 0's two writers (AT-S8) --------------------------------------
 //
-// The superblock is page 0 and belongs to the system core, so a checkpoint
-// completing anywhere else sends its anchor rather than writing it. What
-// must hold is that the two routes produce the **same page**: the remote one
-// is a delivery mechanism, not a second implementation.
+// A peer's checkpoint publishes here from its own core since
+// `RemoteCheckpointAnchor` and `kAnchorWrite` retired, while core 0's
+// transaction-id carve raises `next_trx_id` in the same `SuperBlock` and
+// encodes it whole. The superblock latch is what keeps one's encode off the
+// other's field write. Each cell holds the latch on this thread and proves
+// the writer on the other one does not finish until it is released - which
+// is the claim, and what removing either guard fails.
 
-// **The slot this used to assert is gone** (AM-S4(d)): there is one slot,
-// so a peer's anchor cannot land in "that peer's". What survives is the
-// claim the section header makes and the one worth keeping - the remote
-// route is a *delivery mechanism*, not a second implementation - and the
-// way to see that under one stream is that the delivered numbers reach the
-// **fold** intact. Core 2's are made the lowest of the three, so slot 0
-// carrying them is proof the payload crossed the ring unmangled and went
-// through the same `Publish` a local checkpoint uses.
-TEST_F(SuperBlockAnchorTest, AnAnchorSentFromAPeerIsFoldedIntoSlotZero) {
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/3, 16, 128);
-    ASSERT_TRUE(transport.ok());
+namespace {
+constexpr auto kLatchWait = std::chrono::milliseconds(50);
+}  // namespace
 
-    // A three-core volume, because the fold holds the mount's anchor until
-    // every core has published and `Publish` refuses an id at or above the
-    // count.
-    superblock_ = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, /*cores=*/3);
-    {
-        auto page = store_.GetUnpinned(kSuperBlockPageId);
-        ASSERT_TRUE(page.ok());
-        superblock_.Encode(page.value());
-    }
+TEST_F(SuperBlockAnchorTest, AnAnchorPublishWaitsForTheSuperblockLatch) {
+    Latch latch;
+    SuperBlockCheckpointAnchor anchor(superblock_, store_);
+    anchor.SetLatch(&latch);
 
-    // Core 2's side: a scheduler to run the send task on, and the anchor
-    // that queues it.
-    sched::NullIoBackend peer_io;
-    sched::Scheduler peer(clock_, peer_io);
-    RemoteCheckpointAnchor remote(transport.value(), peer, /*core_id=*/2);
-
-    ASSERT_TRUE(remote.Publish({/*core_id=*/2, 111, 222, 333, 44}).ok());
-    EXPECT_EQ(remote.sends(), 1u);
-    // Queued, not sent - Publish() returns before the task has run, which is
-    // the whole of "fire and forget".
-    peer.RunOnce();
-
-    // Core 0's side: the handler Expeditor installs, doing what a local
-    // publish does.
-    SuperBlockCheckpointAnchor local(superblock_, store_);
-    sched::MessageHeader header{};
-    std::vector<std::byte> payload;
-    ASSERT_TRUE(transport.value().TryReceive(/*dst_core=*/0, header, payload));
-    ASSERT_EQ(header.kind, static_cast<std::uint16_t>(sched::RingMessageKind::kAnchorWrite));
-    ASSERT_EQ(payload.size(), sizeof(AnchorWritePayload));
-
-    AnchorWritePayload fields{};
-    std::memcpy(&fields, payload.data(), sizeof(fields));
-    ASSERT_TRUE(local.Publish({fields.core_id, fields.checkpoint_lsn, fields.redo_start_lsn,
-                                fields.durable_lsn, fields.segment_no})
-                    .ok());
-
-    // Not on the page yet: the warm-up holds the anchor where the mount
-    // found it until every core has published, and this is the delivered
-    // one being counted rather than ignored.
-    {
-        auto reloaded = Reload();
-        ASSERT_TRUE(reloaded.ok());
-        EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 0u);
-    }
-
-    // The other two, locally and higher, so the minimum is the one that
-    // crossed the ring.
-    ASSERT_TRUE(local.Publish({/*core_id=*/0, 900, 800, 1000, 0}).ok());
-    ASSERT_TRUE(local.Publish({/*core_id=*/1, 950, 850, 1050, 0}).ok());
-
-    auto reloaded = Reload();
-    ASSERT_TRUE(reloaded.ok());
-    EXPECT_EQ(reloaded.value().wal_anchor(0).checkpoint_lsn, 111u);
-    EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 222u);
-    EXPECT_EQ(reloaded.value().wal_anchor(0).durable_lsn, 333u);
-    // The four numbers stay one core's set: a field-wise minimum would have
-    // taken core 0's segment_no beside core 2's LSNs.
-    EXPECT_EQ(reloaded.value().wal_anchor(0).segment_no, 44u);
-    EXPECT_EQ(reloaded.value().wal_anchor_count(), 1u);
+    std::optional<LatchGuard> held(std::in_place, &latch);
+    std::thread peer([&] { EXPECT_TRUE(anchor.Publish({0, 100, 200, 300, 0}).ok()); });
+    std::this_thread::sleep_for(kLatchWait);
+    EXPECT_EQ(anchor.publishes(), 0u) << "the publish ran under another holder's latch";
+    EXPECT_EQ(superblock_.wal_anchor(0).redo_start_lsn, 0u);
+    held.reset();
+    peer.join();
+    EXPECT_EQ(anchor.publishes(), 1u);
+    EXPECT_EQ(superblock_.wal_anchor(0).redo_start_lsn, 200u);
 }
 
-TEST_F(SuperBlockAnchorTest, ThePeersAnchorScheduleSurvivesAMomentarilyFullRing) {
-    // Silent drop is forbidden (sched.md §5) even for a message whose loss
-    // would be survivable, so the send goes through the retry task.
-    auto transport = sched::RealRingTransport::Create(2, /*capacity_slots=*/1, 128);
-    ASSERT_TRUE(transport.ok());
+TEST_F(SuperBlockAnchorTest, ATrxIdCarveWaitsForTheSuperblockLatch) {
+    Latch latch;
+    txn::TrxIdSequence ids(superblock_);
+    ids.SetLatch(&latch);
+    const std::uint64_t before = superblock_.next_trx_id();
 
-    // Fill core 1 -> core 0 so the anchor cannot go out on its first try.
-    sched::MessageHeader filler{};
-    filler.src_core = 1;
-    filler.dst_core = 0;
-    filler.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kStepEof);
-    ASSERT_TRUE(transport.value().TrySend(filler, {}).ok());
-
-    sched::NullIoBackend peer_io;
-    sched::Scheduler peer(clock_, peer_io);
-    RemoteCheckpointAnchor remote(transport.value(), peer, /*core_id=*/1);
-    ASSERT_TRUE(remote.Publish({1, 10, 20, 30, 0}).ok());
-
-    for (int i = 0; i < 4; ++i) peer.RunOnce();
-
-    // Drain the filler; the anchor goes out on the next iteration rather
-    // than having been dropped.
-    sched::MessageHeader got{};
-    std::vector<std::byte> payload;
-    ASSERT_TRUE(transport.value().TryReceive(0, got, payload));
-    EXPECT_EQ(got.kind, static_cast<std::uint16_t>(sched::RingMessageKind::kStepEof));
-
-    peer.RunOnce();
-    ASSERT_TRUE(transport.value().TryReceive(0, got, payload))
-        << "the anchor was dropped when the ring was full";
-    EXPECT_EQ(got.kind, static_cast<std::uint16_t>(sched::RingMessageKind::kAnchorWrite));
+    std::optional<LatchGuard> held(std::in_place, &latch);
+    std::atomic<bool> carved{false};
+    std::thread core0([&] {
+        EXPECT_TRUE(ids.Carve(txn::kTrxIdBlockSize).ok());
+        carved.store(true);
+    });
+    std::this_thread::sleep_for(kLatchWait);
+    EXPECT_FALSE(carved.load()) << "the carve raised the ceiling under another holder's latch";
+    held.reset();
+    core0.join();
+    EXPECT_EQ(superblock_.next_trx_id(), before + txn::kTrxIdBlockSize);
 }
 
 }  // namespace

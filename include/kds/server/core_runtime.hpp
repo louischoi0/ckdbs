@@ -26,7 +26,6 @@
 #include "kds/server/range_alloc.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
-#include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/page_store_checkpoint_target.hpp"
@@ -229,8 +228,8 @@ public:
         // startup thread - where recovery starts this stream's scan (RV1/RV2,
         // server/mount_recovery.hpp). It cannot be read from `superblock_`
         // below: that is a default-constructed copy whose anchor slots are
-        // all zero, and a peer's checkpointer publishes its anchor *through*
-        // core 0 (remote_checkpoint_anchor.hpp) rather than into its own.
+        // all zero, and a peer's checkpointer publishes into the instance's
+        // anchor (`checkpoint_anchor` below) rather than into its own.
         // A zeroed anchor is legal and means "no checkpoint yet, scan from
         // the head of the stream" - which is why the mistake would be silent.
         //
@@ -350,6 +349,17 @@ public:
         // a runtime handed one resumes nothing. Null builds this runtime's
         // dispatcher its own and resumes into it - a fixture's shape.
         exec::AssertionEnforcer* assertions = nullptr;
+
+        // **The instance's checkpoint anchor and its run** (AT-S8), borrowed
+        // from `Expeditor`. A runtime handed an anchor builds a checkpointer
+        // at `Open`, runs the completion checkpoint there, and publishes
+        // every later one into this anchor directly - the fold and page 0
+        // are guarded by the superblock latch the anchor carries. Null
+        // builds no checkpointer: a fixture, and a core-0 runtime, whose
+        // checkpointer is `Expeditor`'s. The gate may be null where the
+        // anchor is not, which runs ungated (`wal::CheckpointGate`).
+        wal::CheckpointAnchor* checkpoint_anchor = nullptr;
+        wal::CheckpointGate* checkpoint_gate = nullptr;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -430,25 +440,21 @@ public:
     // returns, so an acknowledged commit on this core survives the stop.
     Status Sync();
 
-    // Runs one checkpoint to completion and publishes its anchor **through
-    // core 0** (PW3, docs/inflight/in-progress/workplan-peer-writer.md; remote_checkpoint_anchor.hpp
-    // carries why that send is one-way). A no-op on a core with no
-    // checkpointer - core 0's is `Expeditor`'s, and a runtime with no
-    // transport has nowhere to publish to.
+    // Runs one checkpoint to completion and publishes its anchor into the
+    // instance's (`Config::checkpoint_anchor`), under the instance's gate: a
+    // call that finds another core's checkpoint running skips and returns OK
+    // (AT-S8, `wal::CheckpointGate`). A no-op on a core with no checkpointer
+    // - core 0's is `Expeditor`'s, and a runtime handed no anchor has
+    // nowhere to publish to.
     //
-    // Public for the reason `GrantRelationFault` is: the cadence below calls
-    // it, and a test drives it without a reactor.
+    // Public because the cadence below calls it and a test drives it
+    // without a reactor.
     Status Checkpoint();
 
-    // **The shutdown checkpoint** (PW3b, docs/inflight/in-progress/workplan-peer-writer.md) - the
-    // third of core 0's three checkpoint points, which PW3 left a peer
-    // without: a graceful restart replayed up to one `checkpoint_interval`
-    // of every peer's stream. Flushes this core's pages, runs one checkpoint
-    // and publishes its anchor **directly through `system_anchor`** - core
-    // 0's `SuperBlockCheckpointAnchor` - rather than over the ring, because
-    // after the worker join no reactor runs on either side to carry a send
-    // (remote_checkpoint_anchor.hpp's last section holds the argument and
-    // the rejected alternative).
+    // **The shutdown checkpoint** (PW3b) - the third of core 0's three
+    // checkpoint points, which a peer once lacked: a graceful restart
+    // replayed up to one `checkpoint_interval` of every peer's work.
+    // Flushes this core's pages, then runs `Checkpoint()`.
     //
     // The page flush comes first for the reason core 0's final Sync()
     // precedes its checkpoint (expeditor.cpp): a checkpoint's redo start is
@@ -463,7 +469,7 @@ public:
     // still runs and nothing is published. Not fatal to a shutdown when it
     // fails: the data is durable through the syncs, and the cost is a slower
     // next mount, which the caller logs.
-    Status ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor);
+    Status ShutdownCheckpoint();
 
     // The same, for this core's transaction ids (PW1): a peer may not raise
     // the superblock's ceiling, so its windows are granted. Peers only -
@@ -643,12 +649,10 @@ private:
     // which borrows it.
     std::optional<SessionStepClient> remote_reads_;
 
-    // The two objects this core's checkpointer borrows (PW3). Built at
-    // `AttachTransport`, not at `Open`: the anchor publishes over the ring,
-    // so it cannot exist before the ring does. Declared below `scheduler_`
-    // and `store_`, which they hold references to.
+    // The target this core's checkpointer flushes through (PW3), built at
+    // `Open` when the runtime is handed an anchor. Declared below `store_`,
+    // which it holds a reference to.
     std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
-    std::optional<RemoteCheckpointAnchor> checkpoint_anchor_;
 
     // The statement stack. A peer's `SuperBlock` is a **copy** taken on the
     // startup thread: the dispatcher needs one for SHOW-class commands, and

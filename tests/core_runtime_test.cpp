@@ -862,83 +862,41 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblo
     EXPECT_GE(next_on_core0.value(), block.value().first + block.value().count);
 }
 
-// Core 0's receiving half of a peer's anchor, as `Expeditor::Serve` wires
-// it: the ring payload decoded into the superblock anchor's Publish.
-void RegisterAnchorReceiver(sched::Scheduler& core0, SuperBlockCheckpointAnchor& receiver) {
-    ASSERT_TRUE(core0
-                    .RegisterMessageHandler(
-                        sched::RingMessageKind::kAnchorWrite,
-                        [&receiver](const sched::MessageHeader&,
-                                    std::span<const std::byte> payload) {
-                            ASSERT_EQ(payload.size(), sizeof(AnchorWritePayload));
-                            AnchorWritePayload fields{};
-                            std::memcpy(&fields, payload.data(), sizeof(fields));
-                            wal::CheckpointAnchorRecord record;
-                            record.core_id = fields.core_id;
-                            record.checkpoint_lsn = fields.checkpoint_lsn;
-                            record.redo_start_lsn = fields.redo_start_lsn;
-                            record.durable_lsn = fields.durable_lsn;
-                            record.segment_no = fields.segment_no;
-                            EXPECT_TRUE(receiver.Publish(record).ok());
-                        })
-                    .ok());
-}
-
-TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
-    // PW3. A peer cannot write page 0, so its completed checkpoint sends the
-    // anchor and core 0 writes it (remote_checkpoint_anchor.hpp). Before
-    // this, a peer had no checkpointer at all: it published nothing, its
-    // anchor slot never advanced, and every later mount rescanned its whole
-    // stream - free while a peer could not write, and not free since PW1.
+TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesTheInstanceSuperblock) {
+    // PW3, and since AT-S8 with no ring in it: a peer handed the instance's
+    // `SuperBlockCheckpointAnchor` publishes into it directly, from its own
+    // core, where it used to send the anchor to core 0 as `kAnchorWrite`.
     //
-    // The property asserted is the end of that path, not the send: the
-    // peer's anchor reaches core 0 and is folded into the volume's one
-    // anchor. `SuperBlockCheckpointAnchor` is the receiving half here
-    // exactly as it is in `Expeditor::Serve`.
-    //
-    // **What "reaches core 0" means changed with AR0 M0**, and this test is
-    // where it shows. Under per-core streams the peer's number landed in
-    // *its own* slot, and the slot moving was the proof. Under one stream
-    // there is one anchor, slot 0, holding the minimum over every core - and
-    // it does not move until every core has published at least once, or it
-    // would advance past records a silent core still needs (AL-S3's
-    // warm-up). So the arrival is proved by the fold's own input, and the
-    // anchor's movement by completing the fold.
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-
+    // The property asserted is the end of that path: the peer's anchor is
+    // folded into the volume's one anchor. Under one stream there is one
+    // anchor, slot 0, holding the minimum over every core - and it does not
+    // move until every core has published at least once, or it would advance
+    // past records a silent core still needs (AL-S3's warm-up). So the
+    // arrival is proved by the fold's own input, and the anchor's movement by
+    // completing the fold.
+    Latch superblock_latch;
+    wal::CheckpointGate gate;
     SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
-    RegisterAnchorReceiver(core0, receiver);
+    receiver.SetLatch(&superblock_latch);
 
     ASSERT_EQ(core0_->superblock.wal_anchor(0).checkpoint_lsn, 0u)
         << "a fresh database has no anchor before anything checkpoints";
     ASSERT_EQ(receiver.folded_cores(), 0u);
 
     CoreRuntime::Config config = ConfigFor(1);
+    config.checkpoint_anchor = &receiver;
+    config.checkpoint_gate = &gate;
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // AttachTransport runs the completion checkpoint (RC08's half for a
-    // peer) and queues the send on this core's own reactor.
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-
-    for (int i = 0; i < 20; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
-    }
-
-    EXPECT_EQ(receiver.publishes(), 1u)
-        << "the peer's completion checkpoint never reached core 0";
+    // `Open` ran the completion checkpoint (RC08's half for a peer), and it
+    // published synchronously - no transport attached, no reactor turned.
+    EXPECT_EQ(receiver.publishes(), 1u) << "the peer's completion checkpoint never published";
     EXPECT_EQ(receiver.folded_cores(), 1u)
-        << "it reached core 0 but is not in the fold, so it counts for nothing";
+        << "it published but is not in the fold, so it counts for nothing";
     // Held, not advanced: core 0 has not published, so one core's number is
     // not yet a floor for the instance.
     EXPECT_EQ(core0_->superblock.wal_anchor(0).checkpoint_lsn, 0u);
-    // And no peer slot was written, which is the other half of one anchor.
     EXPECT_EQ(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u);
 
     // Core 0 speaks, the warm-up ends, and the one anchor moves.
@@ -946,8 +904,7 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     // **Above the peer, deliberately.** The fold selects the *lowest*
     // `redo_start_lsn` and breaks a tie by ascending core id, so a stand-in
     // sharing the peer's number would win it - and this test would then
-    // assert its own synthetic record back to itself while proving nothing
-    // about the peer's anchor reaching page 0, which is its whole subject.
+    // assert its own synthetic record back to itself.
     const wal::Lsn peer_point = peer.value()->wal().appended_lsn();
     ASSERT_TRUE(receiver
                     .Publish({/*core_id=*/0, peer_point + 1, peer_point + 1, peer_point + 1, 0})
@@ -955,20 +912,79 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     EXPECT_EQ(receiver.folded_cores(), 2u);
     const std::uint64_t folded = core0_->superblock.wal_anchor(0).checkpoint_lsn;
     EXPECT_GT(folded, 0u) << "every core has published and the anchor still has not moved";
-    // And it is the *peer's* record that landed, not core 0's stand-in -
-    // which is the sentence this test's name makes.
     EXPECT_NE(folded, peer_point + 1)
         << "slot 0 carries the stand-in, so the peer's anchor never reached the superblock";
 
-    // A second checkpoint advances it rather than republishing the first -
-    // the cadence's whole purpose - and it is still slot 0 that moves.
-    ASSERT_TRUE(peer.value()->Checkpoint().ok());
-    for (int i = 0; i < 20; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
+    // And it reached page 0, not only the in-memory object: the image
+    // decoded off the frame carries the fold.
+    {
+        auto page = core0_store_->GetForRead(kSuperBlockPageId);
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        auto on_page = SuperBlock::Decode(page.value().bytes());
+        ASSERT_TRUE(on_page.ok()) << on_page.status().message();
+        EXPECT_EQ(on_page.value().wal_anchor(0).checkpoint_lsn, folded);
     }
+
+    // A cadence checkpoint advances it rather than republishing the first.
+    ASSERT_TRUE(peer.value()->Checkpoint().ok());
     EXPECT_EQ(receiver.publishes(), 3u);
     EXPECT_GE(core0_->superblock.wal_anchor(0).checkpoint_lsn, folded);
+    EXPECT_EQ(gate.skipped(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, APeersCheckpointSkipsWhileAnotherCoresRuns) {
+    // AT-S8's first done-condition: two cores cannot run a checkpoint at
+    // once. The run is held here the way another core's checkpoint holds it;
+    // the peer's cadence tick must then publish nothing and say so by the
+    // gate's count, and the next tick after the release must run.
+    wal::InMemoryCheckpointAnchor anchor;
+    wal::CheckpointGate gate;
+    CoreRuntime::Config config = ConfigFor(1);
+    config.checkpoint_anchor = &anchor;
+    config.checkpoint_gate = &gate;
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_EQ(anchor.publishes(), 1u) << "the completion checkpoint is ungated and runs at Open";
+
+    {
+        const wal::CheckpointGate::Hold other_core(gate);
+        ASSERT_TRUE(other_core.entered());
+        ASSERT_TRUE(peer.value()->Checkpoint().ok()) << "a skip is not a failure";
+        EXPECT_EQ(anchor.publishes(), 1u) << "the peer checkpointed while the run was held";
+        EXPECT_EQ(gate.skipped(), 1u);
+    }
+
+    ASSERT_TRUE(peer.value()->Checkpoint().ok());
+    EXPECT_EQ(anchor.publishes(), 2u) << "the release did not let the next tick run";
+    EXPECT_EQ(gate.skipped(), 1u);
+}
+
+TEST(CheckpointGateTest, TwoThreadsNeverHoldTheRunAtOnce) {
+    // The gate's own claim, under real threads: whichever of two contenders
+    // enters, the other is refused until it leaves. `inside` would reach 2
+    // if both ever held the run.
+    wal::CheckpointGate gate;
+    std::atomic<int> inside{0};
+    std::atomic<int> worst{0};
+    std::atomic<std::uint64_t> entered{0};
+    const auto contend = [&] {
+        for (int i = 0; i < 20000; ++i) {
+            const wal::CheckpointGate::Hold run(gate);
+            if (!run.entered()) continue;
+            entered.fetch_add(1, std::memory_order_relaxed);
+            const int now = inside.fetch_add(1) + 1;
+            int seen = worst.load();
+            while (now > seen && !worst.compare_exchange_weak(seen, now)) {
+            }
+            inside.fetch_sub(1);
+        }
+    };
+    std::thread a(contend);
+    std::thread b(contend);
+    a.join();
+    b.join();
+    EXPECT_EQ(worst.load(), 1);
+    EXPECT_EQ(entered.load() + gate.skipped(), 40000u) << "every attempt either ran or counted";
 }
 
 // A peer that is told the volume has one stream, and handed nothing to
@@ -1063,15 +1079,15 @@ TEST_F(CoreRuntimeTest, APeerHandedTheInstancesAssertionRegistryWritesNoSnapshot
     live.target_oid = 4000;
     instance.Adopt(std::move(live));
 
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
+    wal::InMemoryCheckpointAnchor anchor;
     CoreRuntime::Config config = ConfigFor(1);
     config.assertions = &instance;
+    config.checkpoint_anchor = &anchor;  // AT-S8: no anchor, no checkpointer
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    // The completion checkpoint, then a cadence one.
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+    // The completion checkpoint at `Open`, then a cadence one.
     ASSERT_TRUE(peer.value()->Checkpoint().ok());
+    ASSERT_EQ(anchor.publishes(), 2u) << "the cell's premise: the peer checkpointed twice";
     ASSERT_TRUE(peer.value()->Sync().ok());
     ASSERT_TRUE(core0_wal_->Flush().ok());
 
@@ -3918,11 +3934,6 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.transport.emplace(std::move(transport));
     rig.core0.emplace(rig.clock, rig.io0);
     ASSERT_TRUE(rig.core0->AttachTransport(&rig.ring(), 0).ok());
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kAnchorWrite,
-                                             [](const sched::MessageHeader&,
-                                                std::span<const std::byte>) {})
-                    .ok());
 
     rig.catalog2.emplace(*core0_store_, storage::kDefaultInlineCellWidth, /*core_count=*/2);
     rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);

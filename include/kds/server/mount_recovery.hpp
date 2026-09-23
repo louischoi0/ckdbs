@@ -52,8 +52,8 @@
 // The anchor is passed **in** rather than read from a `SuperBlock&` here,
 // because a peer's superblock is not the live one: `CoreRuntime` holds a
 // default-constructed copy whose anchor slots are all zero, while the
-// anchor a peer's checkpointer published lives in core 0's page 0
-// (`server/remote_checkpoint_anchor.hpp`). A function reading the
+// anchor a peer's checkpointer published lives in the instance's page 0
+// (`server/superblock_checkpoint_anchor.hpp`). A function reading the
 // superblock in front of it would therefore recover core 0 from its anchor
 // and every peer from the head of its stream, silently.
 //

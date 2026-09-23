@@ -287,20 +287,10 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             "this core its id blocks (docs/inflight/in-progress/workplan-peer-writer.md PW1)");
     }
 
-    // **No completion checkpoint here** (RC08), and the reason is the same one
-    // that makes the refusal above a refusal: publishing an anchor means
-    // writing page 0, which belongs to the system core (M5), and the ring this
-    // core would send it over (remote_checkpoint_anchor.hpp) is not attached
-    // until AttachTransport().
-    //
-    // **Not here is no longer nowhere** (PW3). What used to make that a
-    // permanent state was that a peer could not reserve a transaction id, so
-    // its stream held no writes of its own to rescan; PW1 ended it. Only the
-    // *placement* survives: the completion checkpoint runs at
-    // `AttachTransport()`, where the ring exists, and the cadence in `Run()`.
-    // A peer with no transport still publishes nothing and still rescans,
-    // which describes a test fixture rather than a server. Core 0's own
-    // checkpoint runs in Expeditor::Open.
+    // **No completion checkpoint here** (RC08): it runs at the end of `Open`,
+    // once the dispatcher whose assertion registry it may snapshot exists,
+    // and only on a runtime handed the instance's anchor (AT-S8). Core 0's
+    // own runs in Expeditor::Open.
     // **The system range, and nothing else** (AW-S1b). This installed an
     // extent lease beside it while per-core stores existed; the lease is
     // gone, and what survives is the boundary below which only core 0 may
@@ -542,6 +532,45 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             runtime->recovery_, log);
     }
 
+    // **This core's checkpointer** (PW3), built wherever the runtime is handed
+    // the instance's anchor (AT-S8). It waited for `AttachTransport` while its
+    // anchor was a send over the ring; it publishes into `Expeditor`'s
+    // `SuperBlockCheckpointAnchor` now, so it needs nothing the ring gives.
+    if (config.checkpoint_anchor != nullptr) {
+        runtime->checkpoint_target_.emplace(*runtime->store_);
+        runtime->checkpointer_.emplace(*runtime->wal_, *runtime->checkpoint_target_,
+                                       *runtime->txn_manager_, *config.checkpoint_anchor);
+        runtime->checkpointer_->SetLogger(log);
+        // AS6a's snapshot source - **only for a registry this runtime owns**
+        // (AT-S5d). The instance's registry is snapshotted by core 0's
+        // checkpoints alone: two cores snapshotting it would put two runs of
+        // the same assertions into the one stream, and nothing orders them -
+        // each `CHECKPOINT_BEGIN` is appended outside the registry's latch,
+        // so the runs can land back to back, and recovery reads the second
+        // run's first record while the first run's base is still open (a
+        // duplicate group id, a failed pass, and every asserted relation
+        // refusing writes for the mount, `assertion_recover.cpp`). A
+        // runtime with its own registry - a fixture - snapshots it.
+        const wal::AssertionSnapshotSource* snapshot_source =
+            config.assertions == nullptr ? &runtime->dispatcher_->assertions() : nullptr;
+        runtime->checkpointer_->SetAssertionSource(snapshot_source);
+
+        // **The completion checkpoint** (RC08): an anchor past everything
+        // the mount replayed, so the next crash scans from here. On the
+        // startup thread, before any worker exists, so it needs no gate.
+        // Through the helper core 0 uses rather than `Checkpoint()`: it
+        // carries the empty active table (the fact here), the Info line
+        // that is this core's evidence its mount bounded the next crash,
+        // and the context that names which checkpoint aborted the mount.
+        if (Status s = CheckpointAfterRecovery(
+                config.core_id, *runtime->wal_, *runtime->checkpoint_target_,
+                *config.checkpoint_anchor, log, &runtime->scheduler_->clock(),
+                &runtime->recovery_.checkpoint_ns, snapshot_source);
+            !s.ok()) {
+            return s;
+        }
+    }
+
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {
         log->Debug("core", "core " + std::to_string(config.core_id) +
                                " ready: wal stream, page store, catalog, dispatcher");
@@ -648,57 +677,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // to prepare.
 
     transport_ = &transport;
-
-    // **This core's checkpointer** (PW3, docs/inflight/in-progress/workplan-peer-writer.md), and
-    // it can only be built here: the anchor publishes over the ring, so it
-    // cannot exist before the ring does.
-    //
-    // Peers only. Core 0's checkpointer is `Expeditor`'s and writes page 0
-    // directly; a core-0 `CoreRuntime` exists only in tests, and giving it
-    // one would have it send its own anchor to itself.
-    if (config_.core_id == 0) return Status::OK();
-
-    checkpoint_target_.emplace(*store_);
-    checkpoint_anchor_.emplace(transport, *scheduler_, config_.core_id, /*system_core=*/0);
-    checkpoint_anchor_->SetLogger(log_);
-    checkpointer_.emplace(*wal_, *checkpoint_target_, *txn_manager_, *checkpoint_anchor_);
-    checkpointer_->SetLogger(log_);
-    // AS6a's snapshot source - **only for a registry this runtime owns**
-    // (AT-S5d). The instance's registry is snapshotted by core 0's
-    // checkpoints alone. Two cores snapshotting it would put two runs of the
-    // same assertions into the one stream, and nothing orders them: each
-    // `CHECKPOINT_BEGIN` is appended outside the registry's latch, so the
-    // runs can land back to back, and recovery reads the second run's first
-    // record while the first run's base is still open - a duplicate group
-    // id, a failed pass, and every asserted relation refusing writes for the
-    // mount (`assertion_recover.cpp`). Core 0's snapshot is always in range:
-    // the scan starts at the anchor fold's `redo_start_lsn`, which is at or
-    // below core 0's own `CHECKPOINT_BEGIN`. A runtime with its own registry
-    // - a fixture - snapshots it, as every core did before AT-S5d.
-    const wal::AssertionSnapshotSource* snapshot_source =
-        config_.assertions == nullptr ? &dispatcher_->assertions() : nullptr;
-    checkpointer_->SetAssertionSource(snapshot_source);
-
-    // **The completion checkpoint** (RC08), which core 0 runs at the end of
-    // its own recovery and a peer could not: it publishes an anchor past
-    // everything this core's mount replayed, so the next crash scans from
-    // here rather than from wherever core 0 last wrote this slot. Run on the
-    // startup thread, before the worker exists - the send it queues is
-    // picked up by this core's own reactor once `Run()` starts, and core 0's
-    // `kAnchorWrite` handler is registered before any peer attaches.
-    //
-    // Through the same helper core 0 uses, rather than through `Checkpoint()`
-    // below: `CheckpointAfterRecovery` *is* "the completion checkpoint" as a
-    // named thing, and it carries three that the cadence path does not - the
-    // `NoActiveTransactions` table (empty by fact here, and its signature is
-    // what makes handing over a stale one impossible), the Info line that is
-    // a peer's only evidence its mount bounded the next crash, and the
-    // context on failure that says which checkpoint aborted the mount.
-    // Timed into this core's recovery block as core 0's is (RC09), now that
-    // the block is kept (PW3b).
-    return CheckpointAfterRecovery(config_.core_id, *wal_, *checkpoint_target_,
-                                   *checkpoint_anchor_, log_, &scheduler_->clock(),
-                                   &recovery_.checkpoint_ns, snapshot_source);
+    return Status::OK();
 }
 
 void CoreRuntime::Run() {
@@ -965,9 +944,18 @@ Status CoreRuntime::Checkpoint() {
     const CurrentCoreGuard as_this_core(core_id());
 
     // Nothing to do on a core that has no checkpointer: core 0, whose one
-    // lives on `Expeditor`, and any runtime built without a transport, which
-    // has nowhere to publish an anchor to.
+    // lives on `Expeditor`, and any runtime handed no anchor.
     if (!checkpointer_.has_value()) return Status::OK();
+
+    // At most one of the instance's checkpointers runs (AT-S8).
+    const wal::CheckpointGate::Hold run(config_.checkpoint_gate);
+    if (!run.entered()) {
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("checkpoint", "core " + std::to_string(config_.core_id) +
+                                          ": skipped: another core's checkpoint is running");
+        }
+        return Status::OK();
+    }
 
     // Cumulative counters, so this checkpoint's contribution is the delta -
     // `Expeditor::Checkpoint`'s reason: logging the running total would read
@@ -997,7 +985,7 @@ Status CoreRuntime::Checkpoint() {
     return Status::OK();
 }
 
-Status CoreRuntime::ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor) {
+Status CoreRuntime::ShutdownCheckpoint() {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
     const CurrentCoreGuard as_this_core(core_id());
 
@@ -1005,23 +993,7 @@ Status CoreRuntime::ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor) {
     // and wants no checkpointer, while only the publish below does. The
     // header says why the order matters.
     if (Status s = store_->Sync(); !s.ok()) return s;
-    if (!checkpointer_.has_value()) return Status::OK();
-
-    // The anchor goes direct: no reactor runs on either side now
-    // (remote_checkpoint_anchor.hpp's last section).
-    //
-    // **Cleared again whatever happens** (the PW3b review's C3): `Expeditor`
-    // declares `cores_` above `checkpoint_anchor_`, so reverse-order
-    // destruction takes the anchor *first* and an armed route would outlive
-    // its target - unreachable today only because `Serve` clears `cores_`
-    // before returning. And an armed route on a core whose reactor still ran
-    // would have a peer's thread write page 0, which is the M5 violation the
-    // header's "shutdown path only" asks for; clearing it on the failure
-    // path too makes that a fact rather than a convention.
-    checkpoint_anchor_->RouteDirectly(&system_anchor);
-    Status s = Checkpoint();
-    checkpoint_anchor_->RouteDirectly(nullptr);
-    return s;
+    return Checkpoint();
 }
 
 Status CoreRuntime::ListenAndAttach(std::uint16_t port, Protocol protocol,

@@ -1,5 +1,6 @@
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace kds::server {
@@ -70,15 +71,17 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
     if (anchor.core_id >= superblock_.core_count()) {
         // Refused rather than recorded: an out-of-range id would set a
         // bit no `core_count` accounts for, releasing the warm-up early
-        // and putting a phantom core's number into the minimum. The
-        // ring path memcpys this id out of a peer's payload
-        // (`expeditor.cpp`), so it is the one field here that does not
-        // come from a caller this object can see.
+        // and putting a phantom core's number into the minimum. Every
+        // core's checkpointer publishes here directly since AT-S8, so the
+        // id is the calling core's own configuration.
         return Status::InvalidArgument(
             "superblock: checkpoint anchor names core " + std::to_string(anchor.core_id) +
             ", which this database's core count (" + std::to_string(superblock_.core_count()) +
             ") does not have");
     }
+    // The fold, the field and the image under one hold (`SetLatch`); the
+    // sync below is outside it.
+    std::optional<LatchGuard> hold(std::in_place, latch_);
     per_core_[anchor.core_id] = anchor;
     published_ |= std::uint64_t{1} << anchor.core_id;
     const std::uint32_t slot = 0;
@@ -102,6 +105,7 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
         return page.status();
     }
     superblock_.Encode(page.value().bytes());
+    hold.reset();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         // The superblock is the one page whose every rewrite matters -
         // it is what a restart reads first.

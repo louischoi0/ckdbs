@@ -17,7 +17,6 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/send_retry.hpp"
-#include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/file_page_device.hpp"
 
 #if KDS_WITH_TLS
@@ -1039,6 +1038,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     Expeditor* self = expeditor.get();
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
                                 [self] { return self->PersistSuperBlock(); });
+    expeditor->trx_ids_->SetLatch(&expeditor->superblock_latch_);
     // Before the manager that publishes into it. **Unconditional since
     // AM-S4(d)**: the arm that skipped it was per-core streams, where
     // there is no comparable commit order to record (AN-R1), and no such
@@ -1144,6 +1144,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->checkpoint_target_.emplace(*expeditor->store_);
     expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
     expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
+    expeditor->checkpoint_anchor_->SetLatch(&expeditor->superblock_latch_);
     if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
                                            *expeditor->checkpoint_target_,
                                            *expeditor->checkpoint_anchor_, &*expeditor->logger_,
@@ -1222,13 +1223,27 @@ Status Expeditor::OpenLog() {
 }
 
 Status Expeditor::PersistSuperBlock() {
-    auto page = store_->Get(kSuperBlockPageId);
-    if (!page.ok()) return page.status();
-    database_->superblock.Encode(page.value().bytes());
+    {
+        // The encode under the superblock latch and the sync outside it
+        // (`superblock_latch_`): a peer's checkpoint anchor encodes the same
+        // object from its own core.
+        LatchGuard hold(&superblock_latch_);
+        auto page = store_->Get(kSuperBlockPageId);
+        if (!page.ok()) return page.status();
+        database_->superblock.Encode(page.value().bytes());
+    }
     return Sync();
 }
 
 Status Expeditor::Checkpoint() {
+    // At most one of the instance's checkpointers runs (AT-S8,
+    // `wal::CheckpointGate`); a tick that finds a peer's running skips.
+    const wal::CheckpointGate::Hold run(checkpoint_gate_);
+    if (!run.entered()) {
+        logger_->Debug("checkpoint", "skipped: another core's checkpoint is running");
+        return Status::OK();
+    }
+
     // CheckpointStats counters are cumulative over the process, so this
     // one's contribution is the delta. Logging the running total would
     // read as "this checkpoint flushed 5 pages" on every tick after the
@@ -1661,46 +1676,9 @@ Status Expeditor::Start() {
             wakers->Kick(0);
         };
 
-        // The system core's half of the anchor path (M5): the superblock is
-        // page 0 and belongs to core 0, so a peer's completed checkpoint
-        // sends its anchor here and this writes it. The write itself goes
-        // through the same SuperBlockCheckpointAnchor a local checkpoint
-        // uses, so there is exactly one piece of code that knows how an
-        // anchor reaches the page.
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kAnchorWrite,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    if (payload.size() != sizeof(AnchorWritePayload)) {
-                        logger_->Error("checkpoint",
-                                       "anchor write from core " +
-                                           std::to_string(header.src_core) + " has " +
-                                           std::to_string(payload.size()) +
-                                           " bytes, not " +
-                                           std::to_string(sizeof(AnchorWritePayload)));
-                        return;
-                    }
-                    AnchorWritePayload fields{};
-                    std::memcpy(&fields, payload.data(), sizeof(fields));
-
-                    wal::CheckpointAnchorRecord record;
-                    record.core_id = fields.core_id;
-                    record.checkpoint_lsn = fields.checkpoint_lsn;
-                    record.redo_start_lsn = fields.redo_start_lsn;
-                    record.durable_lsn = fields.durable_lsn;
-                    record.segment_no = fields.segment_no;
-
-                    if (Status s = checkpoint_anchor_->Publish(record); !s.ok()) {
-                        // Nowhere to return it: the sender is fire-and-forget
-                        // by design, because a lost anchor costs a longer
-                        // replay and never an answer (wal.md §8-3).
-                        logger_->Error("checkpoint", "publishing core " +
-                                                         std::to_string(fields.core_id) +
-                                                         "'s anchor failed: " + s.message());
-                    }
-                });
-            !s.ok()) {
-            return s;
-        }
+        // **No anchor handler** (AT-S8): a peer's checkpointer publishes into
+        // `checkpoint_anchor_` itself, under `superblock_latch_`, so
+        // `kAnchorWrite` and `RemoteCheckpointAnchor` are gone.
 
         // Every peer's page-id lease is carved here, on the startup thread,
         // out of core 0's free map - which is the only writer of it (M5).
@@ -1776,7 +1754,7 @@ Status Expeditor::Start() {
             // This peer's own anchor, copied out of the superblock core 0
             // decoded. A peer's `SuperBlock` member is a default-constructed
             // one whose anchor slots are all zero, and a peer's checkpointer
-            // publishes through core 0 (remote_checkpoint_anchor.hpp) - so
+            // publishes into the instance's anchor rather than its own - so
             // without this copy every peer would recover from the head of its
             // stream while core 0 recovered from its checkpoint.
             //
@@ -1823,6 +1801,11 @@ Status Expeditor::Start() {
             core_config.oid_sequence = &oid_sequence_;
             core_config.mark_counter = &delete_mark_count_;
             core_config.assertions = &*assertions_;
+            // The instance's anchor and its run (AT-S8): this peer's
+            // checkpointer publishes into core 0's `SuperBlockCheckpointAnchor`
+            // directly and takes the one gate every checkpointer takes.
+            core_config.checkpoint_anchor = &*checkpoint_anchor_;
+            core_config.checkpoint_gate = &checkpoint_gate_;
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
@@ -2189,7 +2172,7 @@ Status Expeditor::RunUntilStopped() {
         // `Sync()` above is - after the join this thread owns the peer, and
         // it has owned core 0 all along - and not fatal on the same terms as
         // core 0's own below.
-        if (Status s = core->ShutdownCheckpoint(*checkpoint_anchor_); !s.ok()) {
+        if (Status s = core->ShutdownCheckpoint(); !s.ok()) {
             logger_->Error("expeditor",
                            "core " + std::to_string(core->core_id()) +
                                ": the shutdown checkpoint failed, so its next mount will "
