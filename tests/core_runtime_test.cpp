@@ -915,6 +915,20 @@ TEST_F(CoreRuntimeTest, APeerHandedTheOptimizerSurfaceSetsTheInstancesSwitchAndS
 
     const std::string show = d.Dispatch("SHOW CABIN_OPTIMIZER").response;
     EXPECT_EQ(show.find("absent"), std::string::npos) << "the peer cannot see the controller: " << show;
+
+    // And the read waits out a tick: the view latch held here as core 0's
+    // cadence holds it. **Mutation**: drop the handler's guard and the SHOW
+    // answers under the hold.
+    std::optional<LatchGuard> tick(std::in_place, &view_latch);
+    std::atomic<bool> answered{false};
+    std::thread reader([&] {
+        (void)d.Dispatch("SHOW CABIN_OPTIMIZER");
+        answered.store(true);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(answered.load()) << "SHOW CABIN_OPTIMIZER read the controller mid-tick";
+    tick.reset();
+    reader.join();
 }
 
 TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesTheInstanceSuperblock) {

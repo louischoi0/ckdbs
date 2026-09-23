@@ -448,7 +448,7 @@ struct StatementLimits {
 // one signal collector (latched above one core), one switch, one controller
 // and executor - and every dispatcher is handed the same value.
 // `view_latch` is what core 0's cadence holds across a tick; a view read
-// from another core takes it too. Null members leave the dispatcher's own.
+// from another core takes it too. A null switch leaves the dispatcher's own; every other member is taken as given.
 struct OptimizerSurface {
     PhysicalOptimizerMode relayout_mode = PhysicalOptimizerMode::kShadow;
     sched::MonoTimeNs decay_half_life_ns = 600'000'000'000ULL;

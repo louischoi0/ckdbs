@@ -1978,7 +1978,7 @@ Status Expeditor::Start() {
             // Under the view latch (AT-S8): a `SHOW CABIN_OPTIMIZER` on any
             // core reads the controller this tick mutates. The switch is the
             // instance's, so a `SET` on a peer reaches it.
-            const LatchGuard view(config_.cores > 1 ? &cabin_view_latch_ : nullptr);
+            const LatchGuard view(Optimizer().view_latch);
             Status ticked = cabin_executor_->Tick(*optimizer_signals_, [this] {
                 return cabin_optimizer_on_.load(std::memory_order_relaxed);
             });

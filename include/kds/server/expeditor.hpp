@@ -862,7 +862,10 @@ private:
     // reads; the collector's latch, armed above one core; and the view latch
     // core 0's cadence holds across a tick while any core's
     // `SHOW CABIN_OPTIMIZER` reads the controller. Order: the view latch is
-    // outer to the collector's; neither is held across I/O by a reader.
+    // outer to the collector's. **The tick holds the view latch across I/O**
+    // - a `CreateCabin` and the whole seeded build's walk - so a
+    // `SHOW CABIN_OPTIMIZER` on a peer sleeps that peer's reactor for a
+    // build (`known-gaps.md`); a reader never holds it across I/O.
     std::atomic<bool> cabin_optimizer_on_{false};
     Latch optimizer_signals_latch_;
     Latch cabin_view_latch_;

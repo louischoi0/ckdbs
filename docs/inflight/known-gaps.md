@@ -403,6 +403,15 @@ there is no second core's registration to be answered by.
   resting on the two dead grounds. Owner: `ar0-5-amendment-uniformity.md`
   (AT), with the one-line message fix owed by whoever touches it first.
 
+- **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
+  Verified at `4bf80fa`, 2026-09-23. AT-S8 put the controller behind a view
+  latch that core 0's cadence holds across a tick, and a tick may create a
+  Cabin and walk its relation for the seeded build; the latch is a
+  `std::mutex`, so a peer's `SHOW` sleeps that peer's reactor - and every
+  session on it - for the build. Liveness, not correctness. The fix is for
+  the tick to publish a copy of the view at its end and the `SHOW` to read
+  the copy. Owner: `docs/spec/physical-optimizer.md` Part II.
+
 - **A multi-core test instance binds its probed port with SO_REUSEPORT.**
   Verified at `aaf0f47`. `ExpeditorTest`'s fixtures probe a free loopback
   port and then bind it; above one core every listener sets SO_REUSEPORT
