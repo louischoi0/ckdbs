@@ -1782,15 +1782,42 @@ TEST_F(PatternCatalogTest, RootAndDepthAreValidatedAsAPair) {
 
     // A root with no depth is unwalkable; a depth with no root has nothing
     // to walk. Both are refused before the page is touched.
-    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(10, 4096, 0).code(), StatusCode::kInvalidArgument);
-    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(10, kInvalidPageId, 1).code(),
+    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(10, 4096, 0).status().code(),
               StatusCode::kInvalidArgument);
-    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(10, 4096, kMaxPatternDirDepth + 1).code(),
+    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(10, kInvalidPageId, 1).status().code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(10, 4096, kMaxPatternDirDepth + 1).status().code(),
               StatusCode::kInvalidArgument);
 
     // The two coherent shapes: a directory, and none.
-    EXPECT_TRUE(catalog_.SetPatternWaystoneRoot(10, 4096, 1).ok());
-    EXPECT_TRUE(catalog_.SetPatternWaystoneRoot(10, kInvalidPageId, 0).ok());
+    EXPECT_TRUE(catalog_.ClaimPatternWaystoneRoot(10, 4096, 1).ok());
+    EXPECT_TRUE(catalog_.ClaimPatternWaystoneRoot(10, kInvalidPageId, 0).ok());
+}
+
+// **A claim, not a store** (AT-S7): every core records trails, so two can
+// find a pattern with no directory and each build one. The row keeps the
+// first and tells the second which pair won, so both write into one
+// directory instead of the second stranding every trail in the first.
+TEST_F(PatternCatalogTest, ASecondDirectoryIsRefusedAndTheFirstIsAnswered) {
+    ASSERT_TRUE(catalog_.RegisterPattern(12, kStmtClassUnclassified).ok());
+    auto first = catalog_.ClaimPatternWaystoneRoot(12, 4096, 1);
+    ASSERT_TRUE(first.ok());
+    EXPECT_EQ(first.value().first, 4096u);
+
+    auto second = catalog_.ClaimPatternWaystoneRoot(12, 8192, 2);
+    ASSERT_TRUE(second.ok()) << "a loser is told the winner, never refused";
+    EXPECT_EQ(second.value().first, 4096u) << "the second directory replaced the first";
+    EXPECT_EQ(second.value().second, 1);
+
+    auto row = catalog_.GetSysPatternRow(12);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().waystone_root, 4096u);
+
+    // Clearing is not a claim and always takes - it is how a directory is
+    // retired.
+    ASSERT_TRUE(catalog_.ClaimPatternWaystoneRoot(12, kInvalidPageId, 0).ok());
+    EXPECT_TRUE(catalog_.ClaimPatternWaystoneRoot(12, 8192, 2).ok());
+    EXPECT_EQ(catalog_.GetSysPatternRow(12).value().waystone_root, 8192u);
 }
 
 TEST_F(PatternCatalogTest, SettingTheRootUpdatesTheCachedEntryInPlace) {
@@ -1799,7 +1826,7 @@ TEST_F(PatternCatalogTest, SettingTheRootUpdatesTheCachedEntryInPlace) {
     const PatternAccess* held = registered.value();
     ASSERT_FALSE(held->has_waystone_directory());
 
-    ASSERT_TRUE(catalog_.SetPatternWaystoneRoot(11, 4096, 2).ok());
+    ASSERT_TRUE(catalog_.ClaimPatternWaystoneRoot(11, 4096, 2).ok());
 
     // The pointer the caller was holding is still valid *and* now reports
     // the new directory - which is the whole reason this is an in-place
@@ -1816,7 +1843,8 @@ TEST_F(PatternCatalogTest, SettingTheRootUpdatesTheCachedEntryInPlace) {
 }
 
 TEST_F(PatternCatalogTest, SettingTheRootOfAnUnknownPatternIsNotFound) {
-    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(404, 4096, 1).code(), StatusCode::kNotFound);
+    EXPECT_EQ(catalog_.ClaimPatternWaystoneRoot(404, 4096, 1).status().code(),
+              StatusCode::kNotFound);
 }
 
 // ---- What registration must not disturb -----------------------------------

@@ -87,12 +87,21 @@ struct ReadView {
     // sentinel floor, is the copied floor the header above refuses.
     bool sees_everything = false;
 
-    // Another transaction was in flight on the minting core when this view
-    // was taken. **Not consulted by `Visible`** - the window answers that
-    // per writer - but read by the Cabin's banking rule (cabin.md section
-    // 6a): a set banked from a view that could not see an in-flight
-    // writer's rows is missing them the moment that writer commits, and
-    // this is the fact that used to be `in_flight_count != 0`.
+    // Another transaction was in flight when this view was taken. **Not
+    // consulted by `Visible`** - the window answers that per writer - but
+    // read by the Cabin's banking rule (cabin.md section 6a): a set banked
+    // from a view that could not see an in-flight writer's rows is missing
+    // them the moment that writer commits.
+    //
+    // **The instance's fact since AT-S7, not the minting core's.** It was
+    // stamped from that core's own `live_` list, which was the whole
+    // question while a Cabin store was a core's own; one store serves
+    // every core, so a transaction in flight anywhere writes rows this
+    // view cannot see. The mint asks both - its own list, and
+    // `InstanceVisibility::AnyUnresolved` - and the banking gate asks the
+    // instance again at the instant it announces the build, because a
+    // fact stamped at the mint says nothing about a transaction that
+    // began after it.
     bool in_flight_at_mint = false;
 
     // txn.md section 4.1's predicate, in `ratification-an-commit-order.md`

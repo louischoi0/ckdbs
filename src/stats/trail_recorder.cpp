@@ -78,14 +78,19 @@ StatusOr<std::pair<PageId, std::uint8_t>> TrailRecorder::EnsureDirectory(
     auto root = CreateDirPage(store_);
     if (!root.ok()) return root.status();
 
-    // The single writer of the root/depth pair, which validates them
+    // The one writer of the root/depth pair, which validates them
     // together: a root without its depth is unwalkable, and a depth that
     // disagrees sends every walk to the wrong leaf.
-    if (Status s = catalog_.SetPatternWaystoneRoot(pattern.pattern_id, root.value(), 1);
-        !s.ok()) {
-        return s;
-    }
-    return std::make_pair(root.value(), std::uint8_t{1});
+    //
+    // **And answers the pair in force, which is not always this one**
+    // (AT-S7). Every core records trails, so two can reach this line for
+    // one pattern; the row keeps the first directory and this walks the
+    // winner's rather than repointing the row at its own, which would
+    // strand every trail already written into the first. The loser's page
+    // is leaked, and a leaked page is what every unreferenced page here is.
+    auto claimed = catalog_.ClaimPatternWaystoneRoot(pattern.pattern_id, root.value(), 1);
+    if (!claimed.ok()) return claimed.status();
+    return claimed.value();
 }
 
 void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCollector& trail,

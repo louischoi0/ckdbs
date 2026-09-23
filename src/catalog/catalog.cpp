@@ -2948,6 +2948,17 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
     // re-learnable rather than permanently blocked. The stale row stays
     // where it is; reclaiming it is retention's job (P15), and rewriting it
     // here would be an overwrite of a live tuple for no gain.
+    // **The relation's root page, held exclusive across the whole call**
+    // (AT-S7), for `RecordAccess`'s reason and against the same hazard:
+    // every core registers patterns now, and the check below and the
+    // insert under it are a read-then-write that two cores would both
+    // pass. The loser's row is a duplicate `GetSysPatternRow` never
+    // returns - it answers at the first match - so one shape would own two
+    // rows, one of which collects every later `use_count` bump and the
+    // other of which holds a `waystone_root` nothing walks.
+    auto held = store_.Get(kCatalogPagePatterns);
+    if (!held.ok()) return held.status();
+
     if (GetSysPatternRow(pattern_id).ok()) {
         return Status::AlreadyExists("catalog: this pattern is already registered");
     }
@@ -2965,7 +2976,7 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
     row.stmt_class = stmt_class;
     // No directory until one is built: a pattern waits for its first trail,
     // so the root/depth pair is only ever set by its one writer,
-    // SetPatternWaystoneRoot().
+    // ClaimPatternWaystoneRoot().
     row.dir_depth = 0;
     // Every pattern is observed, and none is pinned. These were arguments
     // until 2026-08-31, when declared patterns were withdrawn and left
@@ -3016,11 +3027,29 @@ Status Catalog::MutatePatternRow(std::uint64_t pattern_id,
     return Status::OK();
 }
 
-Status Catalog::SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root,
-                                        std::uint8_t depth) {
+StatusOr<std::pair<PageId, std::uint8_t>> Catalog::ClaimPatternWaystoneRoot(
+    std::uint64_t pattern_id, PageId root, std::uint8_t depth) {
     if (Status s = CheckWaystonePair(root, depth); !s.ok()) return s;
 
-    Status s = MutatePatternRow(pattern_id, [root, depth](SysPatternRow& row) {
+    // **A claim, not a store** (AT-S7). Every core records trails now, so
+    // two of them can find a pattern with no directory and each build one;
+    // the first to reach this row wins and the second adopts its pair
+    // rather than repointing the row at a second directory, which would
+    // strand every trail already written into the first. The write is made
+    // under the row's page hold inside `MutatePatternRow`, so the test and
+    // the store are one act.
+    //
+    // Clearing (`root == kInvalidPageId`) is not a claim and always takes:
+    // it is how a directory is retired.
+    PageId in_force = root;
+    std::uint8_t depth_in_force = depth;
+    Status s = MutatePatternRow(pattern_id, [&](SysPatternRow& row) {
+        const bool clearing = root == kInvalidPageId;
+        if (!clearing && row.waystone_root != kInvalidPageId) {
+            in_force = row.waystone_root;
+            depth_in_force = row.dir_depth;
+            return;
+        }
         row.waystone_root = root;
         row.dir_depth = depth;
     });
@@ -3029,13 +3058,13 @@ Status Catalog::SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root,
     // Updated in place rather than invalidated, and only on success: a
     // failed overwrite moved nothing, and publishing the new pair into the
     // cache would make it disagree with the page.
-    cache_.UpdatePatternWaystone(pattern_id, root, depth);
+    cache_.UpdatePatternWaystone(pattern_id, in_force, depth_in_force);
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("catalog", "pattern " + std::to_string(pattern_id) +
-                                   " waystone root=" + std::to_string(root) +
-                                   " depth=" + std::to_string(depth));
+                                   " waystone root=" + std::to_string(in_force) +
+                                   " depth=" + std::to_string(depth_in_force));
     }
-    return Status::OK();
+    return std::make_pair(in_force, depth_in_force);
 }
 
 Status Catalog::TouchPattern(std::uint64_t pattern_id, std::uint64_t last_seen) {
@@ -3170,9 +3199,10 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // **§6a's converse was here and is gone** (SB3,
     // `instructions/v2.7.1/workorder-sb.md`): a Cabin on a split relation
     // is admitted, and is born correctly scoped rather than born
-    // incomplete, because an Observational set is authoritative for
-    // (observed value × the ranges its core owns) - `docs/spec/cabin.md`
-    // §4b, enforced at the serve site in `step_vm.cpp` and at the build in
+    // incomplete: a set is authoritative for the observed value
+    // (`docs/spec/cabin.md` §4b as rewritten at AT-S7), and what a step
+    // may bank from or answer from is its own walk's span - enforced at
+    // the serve site in `step_vm.cpp` and at the build in
     // `cabin_optimizer_exec.cpp`, which walks every chain this core owns
     // rather than the `lo = 0` one. The **auto** path came through here
     // too and is admitted on the same terms.

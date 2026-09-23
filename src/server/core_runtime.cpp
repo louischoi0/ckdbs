@@ -423,10 +423,17 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     if (config.cabins && runtime->cabins_ == nullptr) {
         runtime->cabin_store_.emplace(config.cabin_limits);
     }
+    // **Waystone records here too since AT-S7.** A peer had no recorder
+    // at all - `sys.patterns` is a catalog page and rule 3 of the header's
+    // asymmetry list said why - and every core writes catalog pages since
+    // AT-S5. Built before the dispatcher, which borrows it.
+    if (config.waystone_recording) {
+        runtime->trail_recorder_.emplace(*runtime->catalog_, *runtime->store_, &clock);
+    }
     runtime->dispatcher_.emplace(
         runtime->superblock_, *runtime->catalog_, *runtime->store_, log, &clock,
         &*runtime->wal_, config.durability, config.budget,
-        /*recorder=*/nullptr, /*replay_enabled=*/false,
+        runtime->trail_recorder_ ? &*runtime->trail_recorder_ : nullptr, config.waystone_replay,
         // **The instance's switch, on every core** (AT-S7). This was a
         // hard `false` for every core a runtime opens, because
         // `sys.access_stats` sat in the reserved range and a peer could

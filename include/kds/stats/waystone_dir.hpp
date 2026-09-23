@@ -167,7 +167,7 @@ StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId ro
 // Deepens a directory by one level: allocates a new root whose slot 0
 // points at `root`, and returns it. The caller raises its stored depth by
 // one at the same time - the two are one fact, which is why
-// Catalog::SetPatternWaystoneRoot() writes them together.
+// Catalog::ClaimPatternWaystoneRoot() writes them together.
 //
 // Read the growth note in this file's header before calling: the prior
 // contents survive only for the 1-in-2048 of keys whose new top digit is

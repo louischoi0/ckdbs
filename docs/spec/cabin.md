@@ -252,56 +252,46 @@ while a relation's keys have only ascended, page and slot once one has
 been admitted below its high-water mark — IX8a's rule applied with
 `heap-and-tuple.md` §4.1's `key_order` respected.
 
-### 4b. Authority under a split relation
+### 4b. What a set speaks for, and what a step may answer from it
 
-**A Cabin's entry set is authoritative for (observed value × the ranges
-its core owns).** `CabinStore::NoteWrite` appends only where the value is
-observed and only on the core performing the write, so a write into a
-range another core owns is appended nowhere; a set therefore speaks for
-the ranges its core owns and nothing else.
+**The scope rule that stood here is struck** (AT-S7). It read *"a Cabin's
+entry set is authoritative for (observed value × the ranges its core
+owns)"*, and it rested on one sentence about the write hook:
+`CabinStore::NoteWrite` appended *only on the core performing the write*,
+so a write into a range another core owns was appended nowhere. There is
+one store for the instance now and every core appends into it, so a set
+is again authoritative for the observed value and nothing narrows it —
+§1's promise, unqualified. Three rules followed from the narrowing and
+two of them go with it: there is no per-core claim for a probe to
+resolve, and no core whose ranges a set speaks for.
 
-This is an **authority change, not a narrowing by convention.** §1's
-promise is unchanged in its own scope; what the scope is has become
-explicit, because a relation may have more than one owner. Three rules
-follow, and none of them is a preference:
+**What survives is not a property of the set but of the step.** A walk
+that covers less than the relation answers less than the relation, in
+both directions:
 
-1. **A relation of one range is unchanged, byte for byte.**
-   `ranges.empty()` is CC9's zero-cost invariant reaching the serve path —
-   one load from an entry the step is already holding and one predictable
-   branch — and it is written first so it can never pay for the split
-   case. A one-range relation's owner owns every range, so the scoped
-   claim and the v1 claim are the same claim.
-2. **A probe resolves the ranges it needs through the range directory.**
-   Ranges the serving core owns are answered from the set; any range it
-   does not own falls through to that range's own stage — which is the
-   fan-in the read surface already opens (`docs/spec/crosscore.md` §2a).
-   The Cabin does not open the stage and never could: which cores a read
-   fans out to is a plan-time fact, and the plan already splits a split
-   relation into one stage per maximal contiguous run of same-owner
-   ranges.
-3. **Therefore a set may be served only where the serving core's owned
-   ranges cover the walk the step would otherwise do.** That is the
-   predicate, stated at the serve site rather than inherited from the
-   router: `TableAccess::ServableBy` is what the dispatcher asks before
-   reading locally, and a serve that leaned on it from two functions away
-   would be correct only because of a neighbouring invariant. When it does
-   not hold, the probe **falls through to the walk** — always legal, §1's
-   corollary, a performance event and never an answer.
+1. **A step may only bank from a walk that would have reached every
+   qualifying row.** A walk bounded to a range collects the matches in
+   that range, and a set banked from it is missing exactly the rows it
+   did not reach — recorded once and served as authoritative forever
+   after, which is the C1 break in its most durable form.
+2. **A step may only answer from a set what its own walk would have
+   answered.** A stage over one range of a split relation serving the
+   whole set would return rows outside its span, and the fan-in above it
+   would deliver them twice.
 
-Every core holds its own Cabin store — its listener, its peer dispatcher
-and the fan-in stages it runs — so a relation's owner observes, appends
-and serves whether a statement reached it shipped, as a stage, or on its
-own listener. A split relation (two or more owners) is never read
-locally: `HandleSelect` routes it to the fan-in, `CheckReadAffinity`
-refuses whatever the fan-in's shape gate will not admit, and a stage
-serves only where `ServableBy` holds for the whole walk — so on a split
-relation a Cabin probe serves nothing and walks everything, and §4c's
-fall-through counter reads it.
+Both are one predicate, asked once at the serve site
+(`CabinScopeCovers`): the relation has one range, or this step's walk
+spans the whole key space and `TableAccess::ServableBy` holds for this
+core. A one-range relation — every relation created since insert
+spreading went off — takes `ranges.empty()` and pays one predictable
+branch. When the predicate does not hold the probe **falls through to the
+walk** — always legal, §1's corollary, a performance event and never an
+answer — and §4c's counter reads it.
 
 **The transition rule is the discard**, and it is `crosscore.md` CC10's:
-sets banked while the relation was whole were banked under the *old*
-claim, and nothing in a set records which claim it was made under. They are
-therefore dropped before the grant that creates the second owner, not
+sets banked while the relation was whole were banked from a walk that
+reached all of it, and nothing in a set records what walk made it. They
+are therefore dropped before the grant that creates the second owner, not
 after. See CC10's pre-grant window; the two halves are one rule and the
 sequence is where it lives.
 
@@ -361,22 +351,36 @@ price of authority. Relations with no Cabin pay nothing.
 ## 6. Why this is sound in KDS specifically
 
 The classic hazard of build-by-observation is the write that slips
-between the recording scan and activation. KDS deletes the hazard
-structurally: statements for a relation run on its owning core (D3) to
-completion, with no mid-statement interleaving — so *scan + record +
-mark observed* is atomic with respect to every other statement that
-could touch the relation. No build locks, no double-scan protocols.
+between the recording scan and activation. **KDS used to delete it
+structurally and no longer does.** Statements for a relation ran on its
+owning core (D3) to completion, with no mid-statement interleaving, so
+*scan + record + mark observed* was atomic with respect to every other
+statement that could touch the relation — no build locks, no double-scan
+protocols. A write runs where the session is (AT-S5), a read too
+(AT-S6), and one store serves every core (AT-S7): two reactors reach one
+set, and the atomicity that argument rested on is gone. This section said
+*"if either changes, §4–§5 must be redesigned, not relaxed"*, and §6a is
+that redesign.
+
+**The announce is what replaces it.** A walk that intends to bank does
+not walk and then mark; it marks first, with an **empty set `Find`
+refuses to serve**, and merges its matches into that set at the end. The
+write hook appends into an announced set exactly as into an observed one,
+so every write on every core from the announce onward is in the set
+before the walk's own matches join it. A surplus entry is legal (§1); a
+missing one is the break. What an announce cannot cover — a write already
+made when it ran — is the banking gate's, and §6a states the two halves
+as one rule.
+
 The second classic hazard — identifier reuse corrupting stale
-references — is deleted by the adopted issue-once invariant (K1).
-This spec is valid **only** under both: the core-ownership execution
-model and the Keystone id contract. If either changes, §4–§5 must be
-redesigned, not relaxed.
+references — is deleted by the adopted issue-once invariant (K1), which
+is unchanged. This spec is valid **only** under it and under §6a's rule.
 
 ### 6a. A set is banked only from a view nothing can contradict
 
-§6's argument is about a write racing the scan, and core ownership does
-delete that. What it does not reach is a write the scan *could not see*,
-resolving afterwards:
+§6's announce covers every write made **during** the walk, on any core.
+What it does not reach is a write the scan *could not see*, made before
+the announce and resolving afterwards:
 
 - a transaction **in flight** when the walk ran has rows the walk could not
   see, and the moment it commits they are live and missing from a set that
@@ -401,22 +405,43 @@ INSERT INTO t VALUES (0, 'b');
 SELECT * FROM t WHERE v = 0;   -- would return the second row alone
 ```
 
-**The rule.** `WalkAndRecord` declines when the walk's read view was minted
-beside an in-flight transaction or belongs to one:
+**The rule, in three questions and one order.** `WalkAndRecord` declines
+when the walk's read view was minted beside an in-flight transaction or
+belongs to one:
 
     !view.in_flight_at_mint && view.own_trx_id == kNoTrxId
 
-Both facts are in the `ReadView` the walk carries, so this costs two
-comparisons on the miss path and needs nothing new. The first was
-`in_flight_count == 0` until AN-S2 turned the view into a commit-LSN
-snapshot that carries no in-flight set; the manager now stamps the one bit
-this rule needs at the mint - "another transaction on this core was live" -
-and the rule's meaning is unchanged. Declining is free
-by §1's corollary — an unobserved value is answered by the authoritative
-scan, a performance event and never a wrong one — and `SHOW CABINS`
-reports `unbankable_views=` so an operator can tell "nobody probed this
-column" from "every probe that would have recorded ran inside a
-transaction".
+then announces the build, and only then asks the instance again:
+
+    !visibility->AnyUnresolved() &&
+    visibility->SnapshotCeiling() == view.snapshot_lsn
+
+**`in_flight_at_mint` is the instance's fact since AT-S7.** It was the
+minting core's own `live_` list, which was the whole question while a
+Cabin store was a core's own; one store serves every core, so a
+transaction in flight on a peer writes rows this view cannot see and
+commits them the moment it ends. The mint asks both — its own list, and
+`InstanceVisibility::AnyUnresolved` — and a manager with no instance to
+ask, which is a fixture's shape, gets the local answer alone and needs no
+more: one core has no second reactor to have a window with.
+
+**Why the second pair is asked after the announce, and why it is asked at
+all.** Between the mint and the announce another core may begin a
+transaction and write this value: the mint's bit was stamped before that
+transaction existed, and the announce installed its set after that write.
+`AnyUnresolved` catches it while it is still unresolved, and a
+`SnapshotCeiling` that has moved catches it once it has committed — a
+commit in that window is invisible to the walk about to run. The order is
+what makes the answers mean anything: the announce takes the partition's
+latch, so a write the hook has already taken released that latch before
+it, and the transaction's own publication is therefore visible to the two
+loads that follow.
+
+Declining is free by §1's corollary — an unobserved value is answered by
+the authoritative scan, a performance event and never a wrong one — and
+`SHOW CABINS` reports `unbankable_views=` so an operator can tell "nobody
+probed this column" from "every probe that would have recorded ran
+against a busy instance".
 
 **The assumption this rests on, named because nothing else names it**:
 `TransactionManager::Begin` allocates an id and pushes into `live_`
@@ -431,10 +456,16 @@ this rule a second look.
 **What it costs, stated rather than discovered.** Two things, and the first
 is wider than it sounds:
 
-- `in_flight_at_mint` is a property of the *manager*, not of the relation, so
-  **one** session idling on an open `BEGIN` stops every Cabin on that core
-  from building — including relations that transaction has never touched.
-  Not "a workload that stays in transactions": one session is enough.
+- `in_flight_at_mint` is a property of the *instance* since AT-S7, not of
+  the relation and no longer of one core, so **one** session idling on an
+  open `BEGIN` anywhere stops every Cabin on every core from building —
+  including relations that transaction has never touched. Not "a workload
+  that stays in transactions": one session is enough, and the blast radius
+  grew with the store. The two instance loads at the announce are the same
+  shape: an autocommit write in flight on any core declines a build. What
+  buys that back is the announce itself, which took the *walk* out of the
+  window entirely — before it, every write during a walk was lost and the
+  window was as long as the scan.
 - the heal path (`FallBackAndReRecord`) un-observes *before* it re-records,
   so a stale-hint probe taken inside a transaction drops the set and
   declines to rebuild it. On a heap relation that erodes a Cabin rather
@@ -483,12 +514,12 @@ Distinct trust classes, cooperative operation; none replaces another:
   descent. Correctness never depends on any of them.
 - **ANALYZE narrates all three.** Per step: cabin hit/miss, trail
   replay/fallback, and the recording events themselves.
-- **And all three are scoped to one core's ranges.** Cabin's scope is
-  §4b's — observed value × the ranges its core owns — Waystone's is its
-  trail's own core by invariant 8, and the clustered tree's is the range
-  its owner holds. The three degrade independently *within* a scope; none
-  of them speaks for a range its core does not own, and the fan-in is
-  where the ranges are put back together.
+- **And the Cabin layer is no longer one of the scoped ones** (AT-S7).
+  Its sets are the instance's and speak for the observed value whole;
+  what is still scoped is the *step* that reads one (§4b), Waystone's
+  trail by invariant 8, and the clustered tree's range. The three degrade
+  independently, and the fan-in is where the ranges are put back
+  together.
 
 ## 8. Materialization policy and the full-coverage limit (C5)
 
@@ -543,8 +574,15 @@ ANALYZE's `cabin_optimizer=true` mark both read, and what separates a
 Cabin the engine may drop on its own judgement from one an operator
 declared — and is **off by default** (`cabin_optimizer`). With the
 controller off, a column declared `auto` behaves exactly as an undeclared
-one. The controller's signals are core 0's, so a peer-owned relation
-earns no `CABIN AUTO`.
+one.
+
+**Its input is half the instance's since AT-S7.** A Cabin *probe* on any
+core reaches the signals, because the store that forwards to them is the
+instance's; the **scan-shape** signal is still core 0's alone, because it
+is recorded by that core's dispatcher (`set_optimizer_signals`) and no
+peer is given one. So a relation read only from peers feeds EXTEND and
+not CREATE, which is a thinner version of "a peer-owned relation earns no
+`CABIN AUTO`" rather than the whole of it. `known-gaps.md` carries it.
 
 A policy on the **primary-key column is refused**, not ignored: the pk's
 Cabin is the clustered tree (§2), so any of the three would be a statement
@@ -639,11 +677,12 @@ not**.
 
 **The scope of the two classes differs and §4b is where the
 Observational one is stated.** An Observational set is authoritative for
-(observed value × the ranges its core owns) and falls through for the
-rest; a Bound Cabin's coverage contract is 100% of the target relation's
-live rows, and a scope narrower than the relation would be a contract
-change rather than an authority one — which is why `crosscore.md` §6a
-gates it from split and migration both.
+the observed value across the instance since AT-S7, and what falls
+through is a *step* whose walk would not have covered the relation; a
+Bound Cabin's coverage contract is 100% of the target relation's live
+rows, and a scope narrower than the relation would be a contract change
+rather than an authority one — which is why `crosscore.md` §6a gates it
+from split and migration both.
 
 **Observational Cabin semantics are untouched by this section.** Every
 property §§1-11 of this document states — the superset invariant, append-only

@@ -3289,15 +3289,16 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         // and never probed by equality. `observed>0 hits=0` means the
         // values being probed are not the ones being observed. And
         // `scope_declines>0` (SB-R4) means neither: the probes arrived and
-        // the serve path declined them, because this core's owned ranges
-        // do not cover the walk (`docs/spec/cabin.md` §4b rule 3) - the
+        // the serve path declined them, because the step's own walk would
+        // not have covered the relation (`docs/spec/cabin.md` §4b) - the
         // third reading, which the first two cannot be distinguished from
         // without it.
         //
-        // **And only for a relation this core owns** (AK-S2): a set lives on
-        // its owner's store, so another core's store knows nothing of it,
-        // and `InfoFor` on an id it never met answers zeros - which would
-        // read as "never probed" for a Cabin serving thousands elsewhere.
+        // **And it is the instance's figure since AT-S7**: one store, so a
+        // Cabin's counters are the same numbers whichever core is asked,
+        // where before AK-S2's per-core store made `InfoFor` on an id this
+        // core never met answer zeros - "never probed" for a Cabin serving
+        // thousands elsewhere.
         const bool held_here = access.ok() && access.value()->owner_core == core_id_;
         if (cabins_ != nullptr && held_here) {
             const stats::CabinStore::CabinInfo info = cabins_->InfoFor(row.cabin_id);

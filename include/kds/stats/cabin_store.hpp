@@ -61,12 +61,22 @@ class OptimizerSignals;
 // ---- Why a scan can safely fill it --------------------------------------
 //
 // The classic build-by-observation hazard is a write slipping between the
-// recording scan and the mark. KDS deletes it structurally: statements for a
-// relation run to completion on its owning core (D3), so scan + record +
-// mark-observed is atomic against every other statement (§6). This whole
-// file is valid **only** under that model and under the Keystone issue-once
-// invariant (K1), which is what makes a stored pk a name that can dangle but
-// can never mis-attribute.
+// recording scan and the mark. It used to be deleted structurally -
+// statements for a relation ran to completion on its owning core (D3), so
+// scan + record + mark-observed was atomic against every other statement
+// (§6) - and **that argument is gone**: a write runs where the session is
+// (AT-S5), a read too (AT-S6), and one store serves every core (AT-S7), so
+// two reactors reach one set.
+//
+// What replaces it is `BeginRecording`, and it is the reason a build is
+// announced rather than simply committed. Announcing installs the set
+// **empty and unservable**, so the write hook appends into it from the
+// instant the walk begins: a write on any core during the walk is in the
+// set before the walk's own matches are merged in. What the announce
+// cannot cover - a write already made when it ran - is the banking gate's,
+// and §6a states the two halves as one rule. The Keystone issue-once
+// invariant (K1) is unchanged and is still what makes a stored pk a name
+// that can dangle but can never mis-attribute.
 //
 // **Concurrency: one store for the instance, partitioned by `cabin_id`**
 // (AT-S7; AR1 §11's second shape, marked as AT-0 item 9 on 2026-09-23).
@@ -305,7 +315,7 @@ public:
         std::uint64_t unbankable_views = 0;
         // SB-R4: probes that found a Cabin and declined to use it because
         // the serving core's owned ranges do not cover the walk this step
-        // would do (`docs/spec/cabin.md` §4b rule 3). It is the one number
+        // would do (`docs/spec/cabin.md` §4b). It is the one number
         // that tells "this Cabin is not earning its write hook" apart from
         // "this Cabin cannot be reached from where the read runs", which
         // hits and misses cannot: both of those are zero either way.
@@ -421,8 +431,31 @@ public:
         return limits_.max_entries_per_value;
     }
 
+    // **Announces a build for `key`** (AT-S7), installing an empty set that
+    // `Find` refuses to serve and that `NoteWrite` appends to. Returns
+    // false when the value may not be built - it is already observed, a
+    // build is already announced, or the per-cabin value cap is in the way
+    // - and a false answer means the caller must not walk-and-commit.
+    //
+    // **Why an announce exists at all**: the write hook is a no-op on an
+    // unobserved value, so every write between the walk's start and its
+    // commit used to vanish, and with one store for the instance those
+    // writes come from cores the walk cannot stop. An announced set
+    // collects them instead, and `Commit` merges the walk's matches into
+    // what the hook has already put there. A surplus entry is legal (§1);
+    // a missing one is the C1 break.
+    //
+    // Every announce must be ended - `Commit` or `CancelRecording` - or the
+    // value stays unservable for the life of the store.
+    bool BeginRecording(const CabinKey& key);
+
+    // Ends an announce without banking: the set and its mark go, and the
+    // value is unobserved again, which is where it started.
+    void CancelRecording(const CabinKey& key);
+
     // Marks `key` observed with `entries` as its set. Returns false when the
-    // value was **not** observed - a cap was in the way - which is a
+    // value was **not** observed - a cap was in the way, or a write that
+    // arrived during an announced build could not be kept - which is a
     // complete answer and never an error.
     //
     // The caller must only reach here from a walk that **completed**: a
@@ -441,8 +474,8 @@ public:
     // Drops every observed set and every sighting belonging to one Cabin,
     // **leaving the Cabin and its accounting in place**. CC10's pre-grant
     // discard (`docs/spec/cabin.md` §4b, `crosscore.md` CC10): the sets
-    // were banked under the whole-relation claim and nothing in a set
-    // records which claim it was made under, so they go before the grant
+    // were banked from a walk that reached the whole relation and nothing
+    // in a set records what walk made it, so they go before the grant
     // that creates a second owner. The Cabin itself still exists and
     // re-observes, which is why this does not erase `info_` — zeroing a
     // Cabin's history here would zero the very counters that price the
@@ -475,7 +508,8 @@ public:
 
     // ---- Inspection -----------------------------------------------------
 
-    // The serve-scope decline of §4b rule 3, per Cabin and store-wide.
+    // The serve-scope decline of §4b's span rule, per Cabin and
+    // store-wide.
     // Counted at the serve site rather than derived from the router,
     // because the router's answer is two functions away.
     void NoteScopeDecline(std::uint64_t cabin_id);
@@ -507,6 +541,13 @@ private:
         std::unordered_map<CabinKey, std::uint8_t, CabinKeyHash> sightings;
         // Keys past the per-value entry cap - see NoteEntryCapRefusal.
         std::unordered_set<CabinKey, CabinKeyHash> entry_capped;
+        // Announced builds: the key is in `observed` and **not servable**.
+        // The mapped value is whether the build is still good - a cap or an
+        // `Unobserve` during the walk sets it false, and `Commit` then
+        // refuses rather than banking a set the store has already declared
+        // it cannot keep. Bounded by the builds in flight, which is at most
+        // one per core.
+        std::unordered_map<CabinKey, bool, CabinKeyHash> building;
         std::unordered_map<std::uint64_t, CabinInfo> info;
     };
 

@@ -157,14 +157,15 @@ tags and per-level detail: `docs/spec/client-manual.md` §1.
 [VALUES]` (page-level debugging). Full list: `manual/sql/sql.md` §6.
 
 **Multi-core.** `cores > 1` spawns one pinned reactor thread per core.
-Relations are owned by a core (a namespace selects it, `docs/spec/namespace.md`)
-and statements reach that owner over the cross-core pipeline. The cores
-share **one WAL stream** — core 0 opens the log and every peer appends
-through it — so a peer's `SHOW META` WAL block reads zero syncs by
+Relations are owned by a core (a namespace selects it, `docs/spec/namespace.md`),
+and a statement runs where the session is rather than reaching that owner.
+The cores share **one WAL stream** — core 0 opens the log and every peer
+appends through it — so a peer's `SHOW META` WAL block reads zero syncs by
 construction and the instance's durability cost is read on core 0
-(`docs/spec/wal.md` §3). `waystone_recording` and `access_statistics` stay
-off on peers by design. Recovery runs once, on core 0, before any peer
-exists.
+(`docs/spec/wal.md` §3). `waystone_recording` and `access_statistics` mean
+the same thing on every core: a peer writes `sys.patterns` and
+`sys.access_stats` itself, and both relations are the instance's one.
+Recovery runs once, on core 0, before any peer exists.
 
 ## 6. What a restart loses — known gaps
 

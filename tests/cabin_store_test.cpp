@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -383,6 +384,73 @@ TEST(CabinStoreTest, AnUnsetColumnPolicyReadsAsAuto) {
     EXPECT_TRUE(catalog::CabinPolicyPermitsCreation(catalog::kCabinPolicyAuto));
     EXPECT_TRUE(catalog::CabinPolicyPermitsCreation(catalog::kCabinPolicyEnabled));
     EXPECT_FALSE(catalog::CabinPolicyPermitsCreation(catalog::kCabinPolicyDisabled));
+}
+
+// ---- The announced build (AT-S7, cabin.md §6 and §6a) --------------------
+//
+// One store for the instance means a write on another core can land while
+// a walk is building a set. The announce is what makes that a *kept* write
+// rather than a lost one, and these four cells are the whole mechanism:
+// the set is unservable while it builds, the hook appends into it anyway,
+// the commit merges rather than replaces, and anything that drops the set
+// mid-build refuses the commit instead of banking a short one.
+
+TEST(CabinStoreTest, AnAnnouncedSetIsNotServedWhileItBuilds) {
+    CabinStore store;
+    const CabinKey key = KeyFor(1, Str("aaa"));
+    ASSERT_TRUE(store.BeginRecording(key));
+    // Present in the table and still "scan, this Cabin knows nothing" -
+    // serving it would serve a set holding none of the walk's matches,
+    // which is the C1 break in its purest form.
+    EXPECT_FALSE(store.Find(key).valid());
+    store.CancelRecording(key);
+    EXPECT_FALSE(store.Find(key).valid());
+}
+
+TEST(CabinStoreTest, AWriteDuringAnAnnouncedBuildIsInTheCommittedSet) {
+    CabinStore store;
+    const CabinKey key = KeyFor(1, Str("aaa"));
+    ASSERT_TRUE(store.BeginRecording(key));
+    // The write hook, on whichever core: an unobserved value takes no
+    // append, and an announced one does - which is the whole point.
+    store.NoteWrite(key, EntryFor(/*pk=*/77, /*page=*/9, /*slot=*/3));
+    // The walk's own matches, merged in rather than replacing.
+    ASSERT_TRUE(store.Commit(key, {EntryFor(1), EntryFor(2)}));
+
+    const CabinSet set = store.Find(key);
+    ASSERT_TRUE(set.valid());
+    ASSERT_EQ(set.size(), 3u) << "the concurrent write was dropped, which is the C1 break";
+    std::vector<std::uint64_t> pks;
+    for (std::size_t i = 0; i < set.size(); ++i) pks.push_back(set.At(i).pk);
+    EXPECT_NE(std::find(pks.begin(), pks.end(), 77u), pks.end())
+        << "the row written during the walk is missing from the banked set";
+}
+
+TEST(CabinStoreTest, ASecondBuildOfOneValueIsRefusedRatherThanMerged) {
+    CabinStore store;
+    const CabinKey key = KeyFor(1, Str("aaa"));
+    ASSERT_TRUE(store.BeginRecording(key));
+    // Two walks merging into one set would put each one's matches under
+    // the other's completion license: one may finish and commit a set the
+    // other is still filling.
+    EXPECT_FALSE(store.BeginRecording(key));
+    store.CancelRecording(key);
+    EXPECT_TRUE(store.BeginRecording(key));
+    store.CancelRecording(key);
+}
+
+TEST(CabinStoreTest, AnUnobserveDuringABuildRefusesTheCommit) {
+    CabinStore store;
+    const CabinKey key = KeyFor(1, Str("aaa"));
+    ASSERT_TRUE(store.BeginRecording(key));
+    store.NoteWrite(key, EntryFor(77));
+    // The heal path's answer to any surprise, arriving mid-build: the set
+    // it drops holds appends this walk cannot reproduce, so the commit
+    // must not bank the walk's matches alone.
+    store.Unobserve(key);
+    EXPECT_FALSE(store.Commit(key, {EntryFor(1)}));
+    EXPECT_FALSE(store.Find(key).valid())
+        << "a refused commit leaves the value unobserved, which is where it started";
 }
 
 }  // namespace

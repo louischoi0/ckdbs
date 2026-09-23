@@ -230,6 +230,22 @@ public:
         PublishIssueCursor(core, cursor);
     }
 
+    // **Is any transaction unresolved anywhere in the instance** (AT-S7).
+    // Derived from the same `oldest_unresolved` slots, kept as a count so
+    // the question costs one load rather than a walk of every slot.
+    //
+    // Its one caller is the Cabin's banking rule (`cabin.md` §6a), which
+    // needs "nothing can still commit below my snapshot" and used to get a
+    // weaker fact: `ReadView::in_flight_at_mint`, stamped from the minting
+    // core's own `live_` list. One store for the instance made that answer
+    // the wrong question - a transaction in flight on *another* core writes
+    // rows this view cannot see and will commit them the moment it ends -
+    // so the question is the instance's now, and it is asked where the
+    // answer is used rather than carried on the view.
+    bool AnyUnresolved() const noexcept {
+        return cores_with_unresolved_.load(std::memory_order_acquire) != 0;
+    }
+
     // This core's oldest live snapshot LSN, `kUnboundedBound` with none.
     void PublishSnapshotBound(std::uint32_t core, std::uint64_t lsn) noexcept;
 
@@ -399,6 +415,12 @@ private:
     // over the slots stops here rather than at `kMaxWalCores`, so the
     // shipped `cores = 1` pays one slot per mint and not sixty-four.
     // Monotone: a core never detaches.
+    // How many cores report an unresolved transaction, maintained by
+    // `PublishOldestUnresolved` alone: only the owning core writes a slot,
+    // so the transition it observes is its own and the count cannot race
+    // itself. `AnyUnresolved` is the reader.
+    std::atomic<std::uint32_t> cores_with_unresolved_{0};
+
     std::atomic<std::uint32_t> slots_in_use_{0};
 
     mutable Latch window_latch_;

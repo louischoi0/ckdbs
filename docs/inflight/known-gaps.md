@@ -260,6 +260,53 @@ statement about an engine that no longer exists; re-verify or strike it.
   `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`
   and `…ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible`.)*
 
+- **The cabin optimizer's build does not announce, so a write during its
+  walk is lost.** Verified at AT-S7 (2026-09-23) on
+  `at-s7-one-cabin-store`. The serve path's build announces its set before
+  it walks (`cabin.md` §6), so the write hook appends into it from any
+  core and the commit merges; `CabinOptimizerExecutor::BuildSeededSets`
+  walks and then `Commit`s, which with one store for the instance is the
+  hazard §6 used to delete structurally — a write on another core between
+  its walk and its commit is in neither, and the set is banked short.
+
+  Not reachable today for two reasons that are both configuration rather
+  than construction: the controller is **off by default**
+  (`cabin_optimizer`), and its walks run on core 0's tick. Closing it is
+  the same two calls the serve path makes. Owner:
+  `src/exec/cabin_optimizer_exec.cpp`.
+
+- **The cabin optimizer's CREATE decision still sees one core.** Verified
+  at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`. One store for the
+  instance means a Cabin *probe* on any core reaches
+  `stats::OptimizerSignals` - the store forwards to them - but the
+  **scan-shape** signal is recorded by a dispatcher, and only core 0's is
+  given one (`Expeditor::Open`'s `set_optimizer_signals`; no
+  `CoreRuntime` calls it). A relation read only from peers therefore
+  feeds EXTEND and not CREATE.
+
+  It is the residue of "a peer-owned relation earns no `CABIN AUTO`"
+  (`cabin.md` §10), which was whole before this stage. The controller is
+  off by default, so nothing reads either signal today. Owner:
+  `docs/spec/physical-optimizer.md` Part II.
+
+- **A Cabin builds rarely on a busy instance, and that is the price of
+  one store.** Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`.
+  §6a's banking gate refuses while **anything** is unresolved anywhere —
+  `ReadView::in_flight_at_mint` became the instance's fact, and the
+  announce asks `InstanceVisibility::AnyUnresolved` again — so one
+  autocommit write in flight on any core declines every build on every
+  core. It was one core's transactions declining one core's builds, which
+  §6a already called wider than it sounds; the store's topology made it
+  the instance's.
+
+  Correct, and conservative in the only legal direction: an unobserved
+  value is answered by the authoritative scan. What it costs is that a
+  Cabin may never fill on a write-heavy instance, which `SHOW CABINS`
+  reports as `unbankable_views=` and nothing else distinguishes from "the
+  column is never probed". Sharpening it means a per-value record of which
+  unresolved transactions could contradict a build, which is a structure
+  §6a does not have. Owner: `docs/spec/cabin.md` §6a.
+
 ## Foreign keys
 
 - **A child's forward check holds nothing, so a parent can be deleted

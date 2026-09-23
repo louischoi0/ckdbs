@@ -100,13 +100,23 @@ ReadView TransactionManager::MintView(std::uint64_t own_trx_id, bool held) noexc
     view.visibility = visibility_;
     // The Cabin's bit (cabin.md section 6a), and the one reason this still
     // walks `live_`: a set may not be banked from a view that could not see
-    // a transaction in flight on this core. `Begin` mints before it pushes,
-    // so the owner is never its own contemporary here.
+    // a transaction in flight. `Begin` mints before it pushes, so the owner
+    // is never its own contemporary here.
+    //
+    // **Two questions since AT-S7, because one store serves every core.**
+    // This core's list answers for this core - and is the whole answer on a
+    // manager with no instance to ask, which is a fixture's shape - and
+    // `AnyUnresolved` answers for every other. A transaction in flight on a
+    // peer writes rows this view cannot see and commits them the moment it
+    // ends, which is the same break the local half has always guarded.
     for (const std::unique_ptr<Transaction>& t : live_) {
         if (t->active_ && t->id_ != own_trx_id) {
             view.in_flight_at_mint = true;
             break;
         }
+    }
+    if (!view.in_flight_at_mint && visibility_ != nullptr) {
+        view.in_flight_at_mint = visibility_->AnyUnresolved();
     }
     return view;
 }

@@ -35,7 +35,17 @@ void InstanceVisibility::PublishOldestUnresolved(std::uint32_t core,
     // transaction with a lower id lowers it. It can never fall below the
     // floor, because the floor never passes this core's issue cursor and
     // every id this core issues is at or above that cursor.
-    slots_[core].oldest_unresolved.store(trx_id, std::memory_order_release);
+    // **Exchanged rather than stored**, so the transition this core makes
+    // is observed exactly once and the instance-wide count below stays
+    // exact. Only the owning core writes this slot (the header's
+    // Concurrency note), so the read-modify-write races nothing.
+    const std::uint64_t was = slots_[core].oldest_unresolved.exchange(trx_id,
+                                                                     std::memory_order_release);
+    if (was == kUnboundedBound && trx_id != kUnboundedBound) {
+        cores_with_unresolved_.fetch_add(1, std::memory_order_release);
+    } else if (was != kUnboundedBound && trx_id == kUnboundedBound) {
+        cores_with_unresolved_.fetch_sub(1, std::memory_order_release);
+    }
     NoteSlot(core);
 }
 

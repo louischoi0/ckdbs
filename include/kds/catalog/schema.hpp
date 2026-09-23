@@ -579,7 +579,7 @@ struct TableAccess {
 // `fingerprint_version`, `stmt_class` - is written once at registration
 // and never changes. The location - `waystone_root`, `dir_depth` - changes
 // only when the directory deepens, through the single writer
-// Catalog::SetPatternWaystoneRoot(), which updates this entry in place so
+// Catalog::ClaimPatternWaystoneRoot(), which updates this entry in place so
 // the cache stays coherent without a global invalidation. The lifecycle
 // policy - `origin`, `flags` - has **no** writer since declared patterns
 // were withdrawn on 2026-08-31: every registration passes kOriginAuto and

@@ -76,11 +76,16 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     const catalog::TableAccess& access, std::uint16_t col_pos, std::uint64_t cabin_id,
     const std::function<bool()>& enabled, bool* aborted) {
     *aborted = false;
-    // **§4b rule 3, asked here as well as at the serve site** (`step_vm.cpp`'s
-    // `CabinScopeCovers`), and not because a caller is expected to get it
-    // wrong: this is the *other* place a set is banked, and a set banked
-    // from fewer ranges than it will speak for is a subset served as
-    // authoritative - recorded once, wrong forever after. Unreachable
+    // **§4b's span rule, asked here as well as at the serve site**
+    // (`step_vm.cpp`'s `CabinScopeCovers`), and not because a caller is
+    // expected to get it wrong: this is the *other* place a set is banked,
+    // and a set banked from fewer ranges than it will speak for is a
+    // subset served as authoritative - recorded once, wrong forever after.
+    //
+    // **This path does not announce** (AT-S7), so a write landing during
+    // its walk is lost where the serve site's build would have kept it.
+    // Sound only because the controller is off by default and its walks
+    // run on core 0's tick; `known-gaps.md` carries it. Unreachable
     // today, and only by two facts that live in other files (the serve
     // site declines before `Observe`, so no sightings accrue on a
     // non-servable relation, and `Discard` clears the sightings pre-grant),

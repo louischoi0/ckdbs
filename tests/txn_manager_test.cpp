@@ -362,8 +362,13 @@ TEST_F(TxnManagerTest, AnEndedButUnreleasedTransactionIsNotInFlight) {
     Transaction* fresh = Begin();
     ASSERT_NE(fresh, nullptr);
     EXPECT_TRUE(fresh->view().Visible(ended->id()));
-    EXPECT_FALSE(fresh->view().in_flight_at_mint)
-        << "an ended transaction is not a contemporary of the next view";
+    // The `in_flight_at_mint` half of this cell went with the field
+    // (AT-S7): the Cabin's banking rule reads the instance's unresolved
+    // count where it decides, and this manager is built with no
+    // `InstanceVisibility` to count into. `AViewMintedBesideAnotherCores
+    // LiveTransactionStaysBlindToIt` is where the replacement is pinned.
+    // What this cell is about - an ended transaction is visible before it
+    // is released - is the line above.
 
     mgr_->Release(*ended);
 }

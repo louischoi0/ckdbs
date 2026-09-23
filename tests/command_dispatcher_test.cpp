@@ -64,7 +64,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsListsARegisteredPattern) {
 
 TEST_F(CommandDispatcherTest, ShowPatternsReportsAWaystoneDirectory) {
     ASSERT_TRUE(boot_->catalog.RegisterPattern(7, catalog::kStmtClassUnclassified).ok());
-    ASSERT_TRUE(boot_->catalog.SetPatternWaystoneRoot(7, 4096, 2).ok());
+    ASSERT_TRUE(boot_->catalog.ClaimPatternWaystoneRoot(7, 4096, 2).ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("SHOW PATTERNS");

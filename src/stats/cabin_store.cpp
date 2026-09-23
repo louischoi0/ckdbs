@@ -115,6 +115,14 @@ CabinSet CabinStore::Find(const CabinKey& key) {
     std::lock_guard<std::mutex> hold(part.latch);
     auto it = part.observed.find(key);
     if (it == part.observed.end()) return CabinSet{};
+    // **An announced build is present and unservable** (AT-S7). Its set
+    // holds whatever the write hook has appended since the announce and
+    // none of the walk's own matches yet, so it is not a superset of
+    // anything and serving it would be the C1 break in its purest form.
+    // Answering "not observed" is exactly right: the walk is what answers
+    // this probe, which is what the probe that announced the build is
+    // already doing.
+    if (part.building.find(key) != part.building.end()) return CabinSet{};
     // The count is fixed here; `CabinSet`'s declaration says why an entry
     // appended after it is not a row this reader missed.
     return CabinSet{this, index, it->second, it->second->size()};
@@ -230,6 +238,39 @@ std::uint8_t CabinStore::Observe(const CabinKey& key) {
     return count;
 }
 
+bool CabinStore::BeginRecording(const CabinKey& key) {
+    Partition& part = PartitionFor(key.cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    // Already observed, or already being built by another core's probe.
+    // Both are "do not walk-and-commit": the first is the heal path, which
+    // un-observes before it re-records, and the second would have two
+    // walks merging into one set with no way to tell whose matches are
+    // whose.
+    if (part.observed.find(key) != part.observed.end()) return false;
+    if (part.building.find(key) != part.building.end()) return false;
+    // The per-cabin value cap, taken **here** rather than at the commit:
+    // an announced set occupies a value slot from this instant, so two
+    // builds cannot both pass a cap with one slot left.
+    if (part.info[key.cabin_id].values >= limits_.max_values) return false;
+
+    part.observed.emplace(key, std::make_shared<CabinEntrySet>());
+    part.building.emplace(key, true);
+    AddSetLocked(part, key.cabin_id, /*entries=*/0);
+    return true;
+}
+
+void CabinStore::CancelRecording(const CabinKey& key) {
+    Partition& part = PartitionFor(key.cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    auto mark = part.building.find(key);
+    if (mark == part.building.end()) return;
+    part.building.erase(mark);
+    if (auto it = part.observed.find(key); it != part.observed.end()) {
+        RemoveSetLocked(part, key.cabin_id, it->second->size());
+        part.observed.erase(it);
+    }
+}
+
 bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
     enum class Counted { kNone, kCapRefusal, kRecording };
     Counted counted = Counted::kNone;
@@ -238,6 +279,40 @@ bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
         Partition& part = PartitionFor(key.cabin_id);
         std::lock_guard<std::mutex> hold(part.latch);
 
+        // **The announced build's half** (AT-S7). Its set already holds
+        // every write the hook took during the walk, from whichever core
+        // made it, so the walk's matches are *added* to it rather than
+        // replacing it - a surplus entry is legal (§1) and a missing one
+        // is the break. The mark is cleared either way: an announce that
+        // reaches here is over.
+        if (auto mark = part.building.find(key); mark != part.building.end()) {
+            const bool good = mark->second;
+            part.building.erase(mark);
+            auto it = part.observed.find(key);
+            // Unreachable: `BeginRecording` installs the set and only
+            // `CancelRecording` and this line remove it while the mark
+            // stands. Handled rather than asserted, because banking here
+            // would bank a set with no appends in it.
+            if (it == part.observed.end()) return false;
+            if (!good || it->second->size() + entries.size() > limits_.max_entries_per_value) {
+                // Either the store already said it could not keep this
+                // value - a cap or an `Unobserve` during the walk - or the
+                // merged set is over the per-value cap, which §1 answers by
+                // refusing to observe rather than truncating.
+                RemoveSetLocked(part, key.cabin_id, it->second->size());
+                part.observed.erase(it);
+                part.sightings.erase(key);
+                counted = Counted::kCapRefusal;
+            } else {
+                const std::size_t added = entries.size();
+                it->second->insert(it->second->end(), entries.begin(), entries.end());
+                part.info[key.cabin_id].entries += added;
+                ++part.info[key.cabin_id].recordings;
+                part.sightings.erase(key);
+                counted = Counted::kRecording;
+                accepted = true;
+            }
+        } else
         // Re-observing a value that is already observed replaces its set.
         // That is the **heal** path (spec §4's heap fallback), and it is
         // sound for the same reason the first recording is: the set comes
@@ -297,6 +372,13 @@ void CabinStore::Unobserve(const CabinKey& key) {
             RemoveSetLocked(part, key.cabin_id, it->second->size());
             part.observed.erase(it);
             dropped = true;
+        }
+        // An announced build whose set is dropped here is no longer good.
+        // The mark stays so its `Commit` refuses; erasing it would let the
+        // commit take the "not building" arm and bank the walk's matches
+        // alone, without the appends this just discarded (AT-S7).
+        if (auto mark = part.building.find(key); mark != part.building.end()) {
+            mark->second = false;
         }
         if (!dropped) return;
         // The sighting count goes too. A value that was just un-observed
@@ -365,6 +447,14 @@ std::size_t CabinStore::Discard(std::uint64_t cabin_id) {
     for (auto it = part.entry_capped.begin(); it != part.entry_capped.end();) {
         it = it->cabin_id == cabin_id ? part.entry_capped.erase(it) : std::next(it);
     }
+    // **An announced build loses its set above and keeps its mark** (AT-S7),
+    // set false so its `Commit` refuses. Erasing the mark instead would let
+    // the commit take the un-announced arm and bank the walk's matches over
+    // a discard whose whole point is that they are no longer trustworthy -
+    // CC10's pre-grant discard being exactly that case.
+    for (auto& [key, good] : part.building) {
+        if (key.cabin_id == cabin_id) good = false;
+    }
     // Every one of this Cabin's sets has gone, so the two live figures are
     // zero exactly - not decremented set by set, which would be the same
     // arithmetic done in a way that can drift. `RemoveSet`'s saturation
@@ -380,6 +470,14 @@ void CabinStore::Forget(std::uint64_t cabin_id) {
     Discard(cabin_id);
     Partition& part = PartitionFor(cabin_id);
     std::lock_guard<std::mutex> hold(part.latch);
+    // The announce marks go too: the Cabin is gone, so the walks that made
+    // them will find no `sys.cabins` row to commit against and the marks
+    // would be the one thing of this Cabin that outlived it. `Commit` on a
+    // key with no mark and no set banks a fresh one, which is the same
+    // answer a probe compiled before the DROP already gets.
+    for (auto it = part.building.begin(); it != part.building.end();) {
+        it = it->first.cabin_id == cabin_id ? part.building.erase(it) : std::next(it);
+    }
     part.info.erase(cabin_id);
 }
 
@@ -413,6 +511,12 @@ void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
             RemoveSetLocked(part, key.cabin_id, it->second->size());
             part.observed.erase(it);
             part.sightings.erase(key);
+            // An announced build loses its set here, so its commit must
+            // not bank one: the mark stays, saying the build is no longer
+            // good (AT-S7).
+            if (auto mark = part.building.find(key); mark != part.building.end()) {
+                mark->second = false;
+            }
             counted = Counted::kCap;
         } else {
             // **Appended, and a reader walking this set is unharmed**: a

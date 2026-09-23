@@ -27,22 +27,18 @@ namespace {
 // the discard and the grant are then one task on one reactor with no
 // window between them at all.
 //
-// **Why this is not the acknowledged broadcast SB-R2 describes.** When it
-// was written there was exactly one `stats::CabinStore` in the engine,
-// core 0's, so the acknowledgement set was one core and it was this one.
-// **Since AK-S2 (2026-09-02) every core holds a store**, and the set this
-// function discards from is still core 0's alone - a relation's owner
-// holds the sets that matter, and a peer-owned relation's owner is not
-// this core. That is sufficient for one reason only: a range never opens
-// under v2.8.0 (`ratification-ae.md` AE-3.2, `range_size_ids` off). The
-// serve site's scope rule (`cabin.md` §4b, `CabinScopeCovers`) is the
-// *second* half and not a substitute for the first - it declines on
-// `access.ranges`, which the owner's cache learns from the invalidation
-// broadcast, so between the grant and that refresh the owner would serve
-// a set the new range's writer never appended to. The day a range opens
-// with a store on its owner, this is the acknowledged broadcast SB-R2
-// describes and the grant waits on the acknowledgements; `known-gaps.md`
-// carries it.
+// **Why this needs no acknowledged broadcast** (SB-R2). When it was
+// written there was exactly one `stats::CabinStore`, core 0's, so the
+// acknowledgement set was one core and it was this one; AK-S2 gave every
+// core its own and left this function discarding from core 0's alone,
+// which was sufficient only because a range never opens
+// (`ratification-ae.md` AE-3.2, `range_size_ids` off) - the gap
+// `known-gaps.md` carried. **AT-S7 closes it by construction**: one store
+// serves the instance, so a discard here is the discard, every core's,
+// and there is no second store to acknowledge anything. The serve site's
+// span rule (`cabin.md` §4b, `CabinScopeCovers`) is a separate question
+// and not a substitute - it is about what a *step* may answer from a set,
+// not about which sets exist.
 //
 // Internal to this file: the one caller is below, and the mover (R5) can
 // export it when it is the second. A null store discards nothing and

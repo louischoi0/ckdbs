@@ -863,7 +863,7 @@ public:
     //
     // The row is written kOriginAuto, unpinned, and with **no waystone
     // directory** - the directory arrives through the one writer of that
-    // pair, SetPatternWaystoneRoot(), when the first trail is recorded.
+    // pair, ClaimPatternWaystoneRoot(), when the first trail is recorded.
     // `origin` and `flags` were parameters until 2026-08-31: `CREATE
     // PATTERN` passed kOriginUser and kPatternPinned, and withdrawing
     // declared patterns left one caller and one value for each.
@@ -871,7 +871,8 @@ public:
                                                     std::uint8_t stmt_class);
 
     // Points a pattern at its waystone directory, writing root and depth as
-    // one unit.
+    // one unit, and **answers the pair in force** - which is not always the
+    // one passed in.
     //
     // The two are one fact and there is deliberately no setter for either
     // alone: a root without its depth is unwalkable, and a depth that
@@ -881,15 +882,27 @@ public:
     // kMaxPatternDirDepth - so every reader downstream may trust the pair
     // without re-checking it.
     //
+    // **A claim rather than a store since AT-S7**, and the return value is
+    // why it is named one: every core records trails, so two can find a
+    // pattern with no directory and each build one. A row that already
+    // carries a root keeps it and the caller is told which pair won, so
+    // both cores write into one directory instead of the second stranding
+    // every trail already in the first. Clearing (`kInvalidPageId`, depth
+    // 0) is not a claim and always takes - it is how a directory is
+    // retired. The losing caller's page is leaked, which is what every
+    // unreferenced page in this engine is.
+    //
     // Updates the cached PatternAccess in place rather than invalidating
     // (catalog_cache.hpp explains why that is the exception it is), so a
     // caller holding a `const PatternAccess*` keeps a valid pointer and
-    // sees the new directory.
+    // sees the directory in force.
     //
     // Fails with NotFound if no sys.patterns row carries `pattern_id`, and
     // with InvalidArgument for an incoherent pair. Page lifetime of the old
     // directory is the caller's business: this writes the row.
-    Status SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root, std::uint8_t depth);
+    StatusOr<std::pair<PageId, std::uint8_t>> ClaimPatternWaystoneRoot(std::uint64_t pattern_id,
+                                                                      PageId root,
+                                                                      std::uint8_t depth);
 
     // A `SetPatternOrigin()` stood here - the in-place rewrite of a
     // pattern's `origin` and `flags`, which `CREATE PATTERN` called to
@@ -1426,7 +1439,7 @@ private:
     // lives in the cache.
     StatusOr<const std::vector<SysTypeRow>*> EnsureTypes();
 
-    // The in-place rewrite behind SetPatternWaystoneRoot() and
+    // The in-place rewrite behind ClaimPatternWaystoneRoot() and
     // TouchPattern(): finds the current-version sys.patterns row for
     // `pattern_id`, hands it to `mutate`, and writes it back over the same
     // slot. One scan and one version filter for every writer, so no two can

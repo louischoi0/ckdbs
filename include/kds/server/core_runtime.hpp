@@ -19,6 +19,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/stats/cabin_store.hpp"
+#include "kds/stats/trail_recorder.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/remote_step_service.hpp"
@@ -64,49 +65,42 @@
 //      core did not own could not reach that map at all.
 //   3. **Waystone records nothing here.** `waystone_recording` is off on a
 //      peer, and this is not a default anybody should change without
-//      reading the next paragraph. **`access_statistics` is no longer in
-//      that sentence**: since CR7 (2026-08-31) a peer records its access
-//      shapes into a local batch and flushes them to core 0, which applies
-//      them to the one `sys.access_stats` only it may write. **Neither is
-//      the Cabin** (AK-S2, 2026-09-02): a peer holds its own
-//      `stats::CabinStore`. It reads no catalog page and writes none -
-//      observation is memory-resident on the core whose writes append to
-//      it. **What made that sound was an invariant that is gone**: a
-//      relation's one owner used to be exactly the core every write to it
-//      landed on and every shipped read of it ran on, so the owner's
+//      reading the next paragraph. **`access_statistics` left this
+//      sentence at AT-S7**: every core writes `sys.access_stats` itself,
+//      under the relation's root page latch, so the instance's one switch
+//      arms it here exactly as on core 0 - CR7's fold-and-flush to core 0
+//      and the ring kind that carried it are retired. **The Cabin left it
+//      too** (AT-S7): one `stats::CabinStore` serves the instance, so a
+//      peer observes into the same sets it serves from. AK-S2 had given
+//      each core its own, on an invariant that AT-S5 and AT-S6 then
+//      removed - a relation's one owner used to be exactly the core every
+//      write to it landed on and every read of it ran on, so the owner's
 //      store was the only one that could observe a value *and* stay a
-//      superset through the writes that follow (`cabin.md` §4b). A write
-//      runs where the session is since AT-S5 and a read since AT-S6, so a
-//      store here is missing whatever another core wrote - a live defect
-//      with an owner (`docs/inflight/bugs/a-cabin-set-serves-a-query-short-across-cores.md`,
-//      AT-S7's). What holds it where it already was is `CabinScopeCovers`'
-//      owner test, not this paragraph.
+//      superset through the writes that follow. The defect that left
+//      behind (a set served a query short across cores) is closed; what
+//      replaced the ownership argument is `cabin.md` §6's announce.
 //
 // ---- Why a peer records nothing (P6's known cost) -----------------------
 //
-// `sys.patterns` and `sys.access_stats` are catalog pages written on the
-// **ordinary statement path** - `TrailRecorder::EnsurePattern` registers a
-// shape seen twice, and every successful statement records its access
-// shapes. Under rule 1 above a peer cannot write them, and neither can be
-// shipped to core 0: the access-stat write could be (it is explicitly
-// best-effort), but `RegisterPattern` returns a `PatternAccess*` the
-// recorder uses immediately, so it needs an answer, and nothing here can
-// wait for one.
+// `sys.patterns` is a catalog page written on the **ordinary statement
+// path** - `TrailRecorder::EnsurePattern` registers a shape seen twice.
+// Under rule 1 above a peer could not write it, and the write could not be
+// shipped to core 0 either: `RegisterPattern` returns a `PatternAccess*`
+// the recorder uses immediately, so it needs an answer, and nothing here
+// can wait for one.
 //
-// Both features are advisory by construction - invariant 8 for Waystone,
-// "a degraded statistic, not a degraded database" for the other - so a peer
-// with them off returns **exactly the same rows**, more slowly, and
-// contributes nothing to the optimizer's input.
+// Waystone is advisory by construction (invariant 8), so a peer with it
+// off returns **exactly the same rows**, more slowly, and contributes
+// nothing to a replay.
 //
-// **Half of that cost is paid off** (CR7, `crosscore.md` CC13): the access
-// statistics now cross, by folding on the peer and flushing to core 0 on
-// the reactor tick, and a full ring drops the batch rather than retrying it
-// (CR8). Note what was *not* the fix: per-core statistics **relations**,
-// which this paragraph used to name and which the ratification declined -
-// they would have opened oid allocation, row migration and a core-count
-// question, where the requirement was only that a peer's accesses be
-// counted at all. Waystone's half stands, for the reason above it: the
-// recorder needs an answer and nothing here can wait for one.
+// **`sys.access_stats` left this paragraph at AT-S7**: rule 1 is history,
+// so a peer writes the relation where the statement ran and CR7's fold,
+// its ring kind and CR8's permitted drop are all retired
+// (`crosscore.md` CC13). Note what was *not* the fix, then or now:
+// per-core statistics **relations**, which this paragraph used to name and
+// which the ratification declined - they would have opened oid allocation,
+// row migration and a core-count question, where the requirement was only
+// that a peer's accesses be counted at all.
 //
 // Core 0 still owns the superblock, the free map, the catalog pages and the
 // listener. Those live on `Expeditor` rather than here: they are the
@@ -213,13 +207,23 @@ public:
         // instance-wide decision it is not modelling.
         std::uint64_t range_size_ids = kRangeSizeOff;
 
-        // CR7: whether this core records access shapes at all. **The
+        // Whether this core records access shapes at all. **The
         // instance's own `access_statistics` setting**, passed down rather
-        // than re-decided here - core 0 has always read it, and a peer used
-        // to have it forced off because it had nowhere to write. Now it
-        // folds into a batch and flushes to core 0, so the operator's one
+        // than re-decided here - core 0 has always read it, and a peer had
+        // it forced off because it had nowhere to write. It writes
+        // `sys.access_stats` itself since AT-S7, so the operator's one
         // switch means the same thing on every core.
         bool access_statistics = true;
+
+        // **Waystone's two switches, on the same terms** (AT-S7,
+        // `waystone_recording` and `waystone_replay`). A peer recorded no
+        // trail and replayed none, because `sys.patterns` is a catalog page
+        // and a peer could not write one; every core writes them under the
+        // page latch since AT-S5, and `Catalog::ClaimPatternWaystoneRoot`
+        // is what keeps two cores that build one pattern's directory from
+        // keeping two. Off leaves this core exactly as it was.
+        bool waystone_recording = true;
+        bool waystone_replay = true;
 
         // This core's WAL anchor, copied out of core 0's superblock on the
         // startup thread - where recovery starts this stream's scan (RV1/RV2,
@@ -615,6 +619,10 @@ private:
     // tick rather than racing the first.
     bool row_id_refill_in_flight_ = false;
 
+    // This core's trail recorder, built where `waystone_recording` is on
+    // (AT-S7 - it was core 0's alone). Declared ahead of the dispatcher,
+    // which holds a pointer to it.
+    std::optional<stats::TrailRecorder> trail_recorder_;
     // **The instance's store, borrowed** (AT-S7), and null wherever
     // `Config::cabins` was: then `cabin_store_` below is this runtime's
     // own, which only a fixture builds now.

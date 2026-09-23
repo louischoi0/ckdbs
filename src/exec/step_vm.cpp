@@ -701,12 +701,13 @@ private:
                                                 : step.cabin->value;
     }
 
-    // **Whether this core's Cabin may speak for the walk this step would
-    // do** (`docs/spec/cabin.md` §4b rule 3, SB-R1). A set is
-    // authoritative for (observed value × the ranges its core owns), so it
-    // may be served only where those ranges cover the walk exactly:
-    // narrower and the answer is short, wider and the same row is emitted
-    // by two stages of one fan-in.
+    // **Whether this step's walk covers the relation** (`cabin.md` §4b,
+    // SB-R1). Not a property of the set - one store for the instance makes
+    // a set authoritative for the observed value whole (AT-S7) - but of
+    // the step reading it: a walk narrower than the relation may neither
+    // bank from it (the set would be missing what the walk never reached)
+    // nor answer from it (the same row would be emitted by two stages of
+    // one fan-in).
     //
     // **The one-range answer is first and is one branch on a cached
     // field** - CC9's zero-cost invariant reaching the serve path, the
@@ -746,9 +747,8 @@ private:
         // was a core's own and a write ran where the session was - so a
         // set here was missing whatever another core wrote, and an
         // exhausted-set answer was short. One store serves every core now,
-        // so a set is again a superset of every pk carrying its value and
-        // the scope question is the one §4b actually asks: does this
-        // walk's span cover the ranges the set speaks for.
+        // so a set is a superset of every pk carrying its value whoever
+        // wrote it, and what is left to ask is the step's own span.
         if (access.ranges.empty()) return true;
         if (!access.ServableBy(catalog_.core_id())) return false;
         const catalog::PkSpan span = SpanFor(index);
@@ -757,11 +757,11 @@ private:
 
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
-        // §4b rule 3, before anything else this step could do with the
-        // Cabin - **the recording path is gated by it too**, not only the
-        // serve. A walk that covered less than this core's ranges would
-        // bank a set missing exactly the rows it did not reach, which is
-        // the C1 break in its most durable form: recorded once, served as
+        // §4b's span rule, before anything else this step could do with
+        // the Cabin - **the recording path is gated by it too**, not only
+        // the serve. A walk that covered less than the relation would bank
+        // a set missing exactly the rows it did not reach, which is the C1
+        // break in its most durable form: recorded once, served as
         // authoritative forever after.
         if (cabins_ != nullptr && step.cabin.has_value() && !CabinScopeCovers(access, index)) {
             cabins_->NoteScopeDecline(step.cabin->cabin_id);
@@ -844,21 +844,59 @@ private:
         }
 
         // **A set may only be banked from a view nothing can later
-        // contradict** (cabin.md §6a, which carries the argument and
-        // the assumption it rests on). The set outlives this statement and
-        // is authoritative for every later reader, so two things forbid
-        // recording: an **in-flight** transaction, whose write this walk
-        // cannot see and which is live the moment it commits, and the
-        // walk's **own** transaction, which may have hidden a row from
-        // itself with an uncommitted DELETE or a value-changing UPDATE that
-        // its ROLLBACK restores. Either leaves the set missing a live pk,
-        // which is the C1 break cabin_store.hpp's header forbids.
-        //
-        // Declining is free by §1's corollary - the value stays unobserved
-        // and the authoritative scan answers it - and under autocommit with
-        // nothing in flight this is two comparisons and no change.
+        // contradict** (cabin.md §6a, which carries the argument and the
+        // assumption it rests on). Two things forbid recording at the
+        // mint: an **in-flight** transaction anywhere in the instance,
+        // whose write this walk cannot see and which is live the moment it
+        // commits, and the walk's **own** transaction, which may have
+        // hidden a row from itself with an uncommitted DELETE or a
+        // value-changing UPDATE that its ROLLBACK restores. Either leaves
+        // the set missing a live pk - the C1 break cabin_store.hpp forbids.
         if (snapshot_.view.in_flight_at_mint ||
             snapshot_.view.own_trx_id != txn::kNoTrxId) {
+            cabins_->NoteUnbankableView();
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+
+        // **The build is announced before anything else is asked**, and
+        // the order is the argument (AT-S7). The announce installs an
+        // empty, unservable set that the write hook appends to, so every
+        // write from this instant onward - on any core - is in the set
+        // before this walk's own matches are merged in. It takes the
+        // partition's latch, which is also what orders the two questions
+        // below against every write the hook has already taken: a write
+        // that ran before this line released that latch before it, so its
+        // transaction's publication is visible to the loads that follow.
+        if (!cabins_->BeginRecording(key)) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+        // What the announce cannot cover, and the mint's bit cannot
+        // either, is the window **between** them: another core may begin a
+        // transaction after this view was minted and write this value
+        // before the announce installed the set. Two loads close it, and
+        // both are the instance's because one store is:
+        //
+        //   - anything unresolved anywhere, *now*, may still commit rows
+        //     this view cannot see;
+        //   - a ceiling that has moved since the mint means something
+        //     already did commit in that window, and those rows are
+        //     invisible to the walk about to run.
+        //
+        // Asked **after** the announce, which is what makes them answer
+        // about that window at all: the announce takes the partition's
+        // latch, so a write the hook has already taken released that latch
+        // before it, and its transaction's publication is visible to these
+        // loads. Null on a manager with no instance - a fixture - where
+        // the mint's own list is the whole answer and there is no second
+        // core to have a window with.
+        //
+        // Declining is free by §1's corollary - the value stays unobserved
+        // and the authoritative scan answers it.
+        const txn::InstanceVisibility* visibility = snapshot_.view.visibility;
+        if (visibility != nullptr &&
+            (visibility->AnyUnresolved() ||
+             visibility->SnapshotCeiling() != snapshot_.view.snapshot_lsn)) {
+            cabins_->CancelRecording(key);
             cabins_->NoteUnbankableView();
             co_return co_await RunWalkStep(steps, index, step, access);
         }
@@ -889,7 +927,12 @@ private:
         recording_ = outer_recording;
         completing_recording_ = outer_completing;
 
-        if (!walked.ok()) co_return walked;
+        // **Every exit from here ends the announce**, or the value stays
+        // unservable for the life of the store (AT-S7).
+        if (!walked.ok()) {
+            cabins_->CancelRecording(key);
+            co_return walked;
+        }
         // **Only a completed walk may be committed.** A walk that a sink
         // stopped, or that the budget ended, collected the rows it reached
         // and not the rows it did not - and a set marked observed while
@@ -898,7 +941,10 @@ private:
         // that knows whether the walk finished. A stopped walk whose
         // completion license survived ran to the relation's end *through*
         // the stop, so its set is whole.
-        if (stopped_ && !walked_through_stops) co_return Status::OK();
+        if (stopped_ && !walked_through_stops) {
+            cabins_->CancelRecording(key);
+            co_return Status::OK();
+        }
 
         // Sorted here, once, rather than on every hit: entries served in
         // page order batch same-page tuples into one fetch (§3), and a set

@@ -365,8 +365,14 @@ TEST_F(VisibilityWiringTest, AViewMintedBesideAnotherCoresLiveTransactionStaysBl
     ASSERT_TRUE(reader.ok()) << reader.status().message();
     const ReadView pinned = reader.value()->view();
     EXPECT_FALSE(pinned.Visible(live_id)) << "live on another core";
-    EXPECT_FALSE(pinned.in_flight_at_mint)
-        << "the Cabin's bit is this core's: core 1 had nothing else live";
+    // **And the instance says so, which is the whole of AT-S7's change to
+    // the Cabin's banking rule.** `ReadView::in_flight_at_mint` was asked
+    // here and answered **false** - core 1 had nothing else live - so a
+    // Cabin set banked from this view would have been missing every row
+    // core 0's live transaction was about to commit. The question is the
+    // instance's now and is asked where the set is announced.
+    EXPECT_TRUE(vis_.AnyUnresolved())
+        << "core 0's transaction is live, and a view minted here cannot see it";
 
     ASSERT_TRUE(core0->Commit(*live.value(), wal::DurabilityClass::kRelaxed).ok());
     core0->Release(*live.value());

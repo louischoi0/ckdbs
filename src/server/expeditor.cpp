@@ -1758,6 +1758,10 @@ Status Expeditor::Start() {
             core_config.access_statistics = config_.access_statistics;
             // AK-S2: and the Cabin's, now that a peer holds a store.
             core_config.cabins = config_.cabins;
+            // Waystone's two switches, which a peer honoured as "off" until
+            // AT-S7 because it could not write `sys.patterns`.
+            core_config.waystone_recording = config_.waystone_recording;
+            core_config.waystone_replay = config_.waystone_replay;
             core_config.cabin_limits = config_.CabinLimitsOf();
             // **This peer borrows the instance's pool** (AM-S2 step 3): a
             // frame table of its own over the same device is what sharing
