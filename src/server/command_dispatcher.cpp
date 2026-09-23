@@ -3299,20 +3299,22 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         // where before AK-S2's per-core store made `InfoFor` on an id this
         // core never met answer zeros - "never probed" for a Cabin serving
         // thousands elsewhere.
-        const bool held_here = access.ok() && access.value()->owner_core == core_id_;
-        if (cabins_ != nullptr && held_here) {
+        //
+        // **The owner test that stood here is gone with the second store**
+        // (AT-S7). It printed `(held by core N)` and five dashes for any
+        // relation this core did not own, because a peer's store knew
+        // nothing of that Cabin; one store knows all of them, so the
+        // dashes said "unknown" about a number this core can read.
+        if (cabins_ != nullptr) {
             const stats::CabinStore::CabinInfo info = cabins_->InfoFor(row.cabin_id);
             os << " observed=" << info.values << " entries=" << info.entries
                << " hits=" << info.hits << " misses=" << info.misses
                << " scope_declines=" << info.scope_declines;
-        } else if (cabins_ == nullptr) {
+        } else {
             // Not "0": the store is off, so every count is unknown rather
             // than zero, and printing zeros would read as "nothing has
             // happened" when the truth is "nothing is being recorded".
             os << " observed=- entries=- hits=- misses=- scope_declines=- (cabins = off)";
-        } else {
-            os << " observed=- entries=- hits=- misses=- scope_declines=- (held by core "
-               << (access.ok() ? std::to_string(access.value()->owner_core) : "?") << ")";
         }
     }
     return {os.str(), false};

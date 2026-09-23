@@ -115,9 +115,13 @@ ReadView TransactionManager::MintView(std::uint64_t own_trx_id, bool held) noexc
             break;
         }
     }
-    if (!view.in_flight_at_mint && visibility_ != nullptr) {
-        view.in_flight_at_mint = visibility_->AnyUnresolved();
-    }
+    // No null test: a manager handed no instance builds its own
+    // (`manager.hpp`'s constructor), and the two lines above this one
+    // already dereference it. On that own instance `AnyUnresolved` *is*
+    // the local answer, so the list above is what stays sharper - it is
+    // the only one of the two that can exclude this view's own
+    // transaction.
+    if (!view.in_flight_at_mint) view.in_flight_at_mint = visibility_->AnyUnresolved();
     return view;
 }
 

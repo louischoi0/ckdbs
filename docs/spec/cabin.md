@@ -414,28 +414,45 @@ belongs to one:
 then announces the build, and only then asks the instance again:
 
     !visibility->AnyUnresolved() &&
-    visibility->SnapshotCeiling() == view.snapshot_lsn
+    visibility->CommitCeiling() == view.snapshot_lsn
 
 **`in_flight_at_mint` is the instance's fact since AT-S7.** It was the
 minting core's own `live_` list, which was the whole question while a
 Cabin store was a core's own; one store serves every core, so a
 transaction in flight on a peer writes rows this view cannot see and
 commits them the moment it ends. The mint asks both — its own list, and
-`InstanceVisibility::AnyUnresolved` — and a manager with no instance to
-ask, which is a fixture's shape, gets the local answer alone and needs no
-more: one core has no second reactor to have a window with.
+`InstanceVisibility::AnyUnresolved`. There is no "no instance" case: a
+manager handed none builds its own, on which `AnyUnresolved` *is* the
+local answer. The list is kept because it is the sharper of the two at
+the mint — it is the only one that can exclude this view's own
+transaction, which the count cannot.
 
 **Why the second pair is asked after the announce, and why it is asked at
 all.** Between the mint and the announce another core may begin a
 transaction and write this value: the mint's bit was stamped before that
 transaction existed, and the announce installed its set after that write.
-`AnyUnresolved` catches it while it is still unresolved, and a
-`SnapshotCeiling` that has moved catches it once it has committed — a
-commit in that window is invisible to the walk about to run. The order is
-what makes the answers mean anything: the announce takes the partition's
+`AnyUnresolved` catches it while it is still unresolved, and a commit
+ceiling that has moved catches it once it has committed — a commit in
+that window is invisible to the walk about to run. The order is what
+makes the answers mean anything: the announce takes the partition's
 latch, so a write the hook has already taken released that latch before
 it, and the transaction's own publication is therefore visible to the two
 loads that follow.
+
+**The ceiling read is `CommitCeiling`, the published maximum, and not
+`SnapshotCeiling`.** The snapshot ceiling is that maximum capped by every
+core's pending-commit marker, and `TransactionManager::Commit` clears its
+marker *after* it has published its window entry and dropped out of the
+unresolved count — `PublishCommit`, then `PublishCoreBounds`, then
+`EndCommit`. In that interval a writer that committed above this snapshot
+answers `AnyUnresolved` false and leaves the snapshot ceiling pinned at
+this view's own snapshot, so both halves of the gate pass and the set is
+banked missing that writer's rows: the C1 break, reached without any
+mint/announce window at all. The published maximum is raised inside
+`PublishCommit`'s hold and therefore strictly before the count drops, so
+the pair has no such interval. What it costs is a decline for a commit
+that was merely *pending* when this view was minted, which is the legal
+direction.
 
 Declining is free by §1's corollary — an unobserved value is answered by
 the authoritative scan, a performance event and never a wrong one — and

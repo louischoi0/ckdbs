@@ -351,17 +351,20 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
         const stats::CabinSet set = cabins_.Find(key);
         if (!set.valid()) continue;
 
-        // **Rebuilt and committed, not edited in place** (AT-S7). This loop
-        // held a `std::vector<CabinEntry>*` and healed, erased and appended
-        // through it, which one store for the instance forbids: the set is
-        // another core's to read while this runs. What it does instead is
-        // what `Commit`'s own header calls the heal path - walk the set,
-        // build the set it should be, and replace it wholesale - and the
-        // replacement is sound for the reason a first recording is, since
-        // every entry in it came from this set or from a descent.
+        // **Rebuilt and written back, not edited in place** (AT-S7). This
+        // loop held a `std::vector<CabinEntry>*` and healed, erased and
+        // appended through it, which one store for the instance forbids:
+        // the set is another core's to read while this runs. What it does
+        // instead is walk the handle, build the set those entries should
+        // be, and hand it back through `Rebuild` - which replaces exactly
+        // the entries this handle names and **keeps whatever the write
+        // hook appended while the walk above ran**. A wholesale `Commit`
+        // would drop those appends, and a set missing a live pk is the C1
+        // break; `Rebuild`'s own comment carries the argument.
         //
         // A reader holding the old set walks on over it, which is safe for
-        // the same reason: what it holds is still a superset.
+        // the reason the store's header gives: what it holds is still a
+        // superset.
         std::vector<stats::CabinEntry> rebuilt;
         rebuilt.reserve(set.size());
         bool unobserve = false;
@@ -403,9 +406,9 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             cabins_.Unobserve(key);
             continue;
         }
-        // Nothing changed is the common case, and committing then would
-        // spend a recording and an allocation to write back what is
-        // already there.
+        // Nothing changed is the common case, and writing back then would
+        // spend an allocation and a latch to restate what is already
+        // there.
         bool same = rebuilt.size() == set.size();
         for (std::size_t i = 0; same && i < rebuilt.size(); ++i) {
             const stats::CabinEntry held = set.At(i);
@@ -413,7 +416,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
                    held.slot == rebuilt[i].slot && held.page_epoch == rebuilt[i].page_epoch &&
                    held.flags == rebuilt[i].flags;
         }
-        if (!same) cabins_.Commit(key, std::move(rebuilt));
+        if (!same) cabins_.Rebuild(key, set, std::move(rebuilt));
     }
     ++counters_.heals;
     return Status::OK();

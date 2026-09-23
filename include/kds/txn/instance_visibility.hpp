@@ -344,7 +344,15 @@ public:
     // value can find every entry it covers. **Not what a mint reads**: it
     // says nothing about commits whose LSN is fixed and whose entry is not
     // yet in, and `SnapshotCeiling` is the one that does. The cells read
-    // it to tell the two apart; nothing in the engine does.
+    // it to tell the two apart.
+    //
+    // **The Cabin's banking gate reads it too** (`cabin.md` §6a), and for
+    // the property the snapshot ceiling does not have: this is raised
+    // before a committer drops out of `cores_with_unresolved_`, where the
+    // ceiling's pending-commit cap is cleared *after*. A gate asking "has
+    // anything committed above my snapshot" over the capped value has an
+    // interval where the answer is no and the commit has happened; over
+    // this one it has none. A mint must still not read it.
     std::uint64_t CommitCeiling() const noexcept { return commit_ceiling_.load(); }
 
     // The lowest LSN any future snapshot could be capped to by a commit in
@@ -411,16 +419,16 @@ private:
 
     std::array<CoreVisibilitySlot, server::kMaxWalCores> slots_{};
 
-    // One past the highest core that has published anything. Every walk
-    // over the slots stops here rather than at `kMaxWalCores`, so the
-    // shipped `cores = 1` pays one slot per mint and not sixty-four.
-    // Monotone: a core never detaches.
     // How many cores report an unresolved transaction, maintained by
     // `PublishOldestUnresolved` alone: only the owning core writes a slot,
     // so the transition it observes is its own and the count cannot race
     // itself. `AnyUnresolved` is the reader.
     std::atomic<std::uint32_t> cores_with_unresolved_{0};
 
+    // One past the highest core that has published anything. Every walk
+    // over the slots stops here rather than at `kMaxWalCores`, so the
+    // shipped `cores = 1` pays one slot per mint and not sixty-four.
+    // Monotone: a core never detaches.
     std::atomic<std::uint32_t> slots_in_use_{0};
 
     mutable Latch window_latch_;

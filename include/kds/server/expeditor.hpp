@@ -874,12 +874,6 @@ private:
     std::optional<stats::CabinOptimizer> cabin_controller_;
     std::optional<exec::CabinOptimizerExecutor> cabin_executor_;
 
-    // CR7: what core 0 applied of the peers' folded access statistics, for
-    // its own `SHOW META`. Core 0 keeps no batch - it writes the relation
-    // directly, being the only core that may - so only the applied half of
-    // this struct is ever non-zero here. **Declared before `dispatcher_`**,
-    // which holds a pointer to it and must therefore die first.
-
     std::optional<CommandDispatcher> dispatcher_;
 
     std::unique_ptr<wal::FileLogDevice> log_device_;

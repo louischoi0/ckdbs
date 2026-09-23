@@ -465,6 +465,35 @@ public:
     // stated at both ends (see step_vm.cpp's recording branch).
     bool Commit(const CabinKey& key, std::vector<CabinEntry> entries);
 
+    // **The batch heal's write-back** (workplan PHY04's HEAL). Replaces the
+    // first `viewed` entries of `key`'s set with `entries` and **keeps
+    // everything appended after them**.
+    //
+    // The tail is the whole reason this is not a `Commit`. A `CabinSet`'s
+    // count is fixed when the handle is taken, so a heal that walks the
+    // handle and then commits what it rebuilt would replace the set with a
+    // value that cannot include what the write hook appended while it
+    // walked - and with one store for the instance those appends come from
+    // cores the heal cannot stop. Dropping them leaves the set missing a
+    // live pk, which is the C1 break; keeping them is what the old
+    // edit-the-vector-in-place heal got for free and what one store took
+    // away.
+    //
+    // **`viewed` is the handle the heal walked, not a count**, and that is
+    // what makes the write-back safe against a set replaced under it: an
+    // `Unobserve` and a re-record between the walk and this call install a
+    // different set, and overwriting its first N entries with a rebuild of
+    // someone else's would drop whatever it holds there. The handle names
+    // the storage it read, so a set that is no longer that storage is left
+    // alone.
+    //
+    // A no-op wherever there is no set to heal: the value is not observed,
+    // the set is not the one `viewed` names, an announce owns it until its
+    // own `Commit`, or the result would pass the per-value cap - in which
+    // case the set stands as it was, which is always legal because what
+    // stands is still a superset.
+    void Rebuild(const CabinKey& key, const CabinSet& viewed, std::vector<CabinEntry> entries);
+
     // Drops a value's set and its observed mark, returning queries for it to
     // the authoritative scan path. Always legal, by §1's corollary - which
     // is what makes it the right answer to a failed append, a cap, or any
@@ -570,7 +599,10 @@ private:
     // catalog and dense, so the low bits spread; the multiply is there so
     // two cabins on one relation do not land together by construction.
     static std::size_t PartitionOf(std::uint64_t cabin_id) noexcept {
-        return static_cast<std::size_t>((cabin_id * 0x9E3779B97F4A7C15ULL) >> 60) % kPartitions;
+        // The shift alone lands in [0, 16), so no modulo follows it - and
+        // the assert is what keeps that true if the count ever moves.
+        static_assert(kPartitions == 16, "the >> 60 below is the partition count, spelled once");
+        return static_cast<std::size_t>((cabin_id * 0x9E3779B97F4A7C15ULL) >> 60);
     }
     Partition& PartitionFor(std::uint64_t cabin_id) noexcept {
         return partitions_[PartitionOf(cabin_id)];

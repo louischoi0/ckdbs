@@ -878,24 +878,43 @@ private:
         //
         //   - anything unresolved anywhere, *now*, may still commit rows
         //     this view cannot see;
-        //   - a ceiling that has moved since the mint means something
-        //     already did commit in that window, and those rows are
-        //     invisible to the walk about to run.
+        //   - a **published** commit order above this snapshot means
+        //     something already did commit that the walk cannot see, and
+        //     those rows would be missing from the set forever.
+        //
+        // **`CommitCeiling`, not `SnapshotCeiling`, and the difference is a
+        // wrong answer.** A snapshot ceiling is the published maximum
+        // *capped by every core's pending-commit marker*, and that marker
+        // is cleared after the committing core has already published its
+        // window entry and dropped out of the unresolved count
+        // (`TransactionManager::Commit`: `PublishCommit`, then
+        // `PublishCoreBounds`, then `EndCommit`). In that interval a writer
+        // that committed above this snapshot answers `AnyUnresolved` false
+        // *and* leaves `SnapshotCeiling` pinned at this view's own
+        // snapshot - both loads pass, and a set banked here is missing
+        // exactly that writer's rows. The published maximum is monotone,
+        // is raised inside `PublishCommit`'s hold and therefore strictly
+        // before the count drops, so the pair below has no such interval.
+        // The cost is a decline for a commit that was merely *pending* at
+        // the mint, which is the legal direction.
         //
         // Asked **after** the announce, which is what makes them answer
         // about that window at all: the announce takes the partition's
         // latch, so a write the hook has already taken released that latch
         // before it, and its transaction's publication is visible to these
-        // loads. Null on a manager with no instance - a fixture - where
-        // the mint's own list is the whole answer and there is no second
-        // core to have a window with.
+        // loads. The count is read first and the ceiling second, so a
+        // count read as zero was written by the `fetch_sub` its committer
+        // made after publishing - and this core's ceiling load is ordered
+        // after that publication. Null on a manager with no instance - a
+        // fixture - where the mint's own list is the whole answer and
+        // there is no second core to have a window with.
         //
         // Declining is free by §1's corollary - the value stays unobserved
         // and the authoritative scan answers it.
         const txn::InstanceVisibility* visibility = snapshot_.view.visibility;
         if (visibility != nullptr &&
             (visibility->AnyUnresolved() ||
-             visibility->SnapshotCeiling() != snapshot_.view.snapshot_lsn)) {
+             visibility->CommitCeiling() != snapshot_.view.snapshot_lsn)) {
             cabins_->CancelRecording(key);
             cabins_->NoteUnbankableView();
             co_return co_await RunWalkStep(steps, index, step, access);

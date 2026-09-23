@@ -453,5 +453,54 @@ TEST(CabinStoreTest, AnUnobserveDuringABuildRefusesTheCommit) {
         << "a refused commit leaves the value unobserved, which is where it started";
 }
 
+// ---- The batch heal's write-back (PHY04, and the same hazard) -----------
+
+TEST(CabinStoreTest, AHealKeepsWhatTheWriteHookAppendedWhileItWalked) {
+    CabinStore store;
+    const CabinKey key = KeyFor(1, Str("aaa"));
+    ASSERT_TRUE(store.Commit(key, {EntryFor(1), EntryFor(2)}));
+
+    // What HEAL does: take a handle, whose count is fixed here, walk it
+    // and rebuild the entries it names. The handle itself is what goes
+    // back, so the write-back knows which storage it is replacing.
+    const CabinSet held = store.Find(key);
+    ASSERT_TRUE(held.valid());
+
+    // And what another core does meanwhile, which the handle cannot see.
+    store.NoteWrite(key, EntryFor(/*pk=*/77, /*page=*/9, /*slot=*/3));
+
+    // The heal drops a dangling pk and repairs a hint. A wholesale replace
+    // here would take pk 77 with it: the set would be authoritative and
+    // missing a live row, which is the C1 break.
+    store.Rebuild(key, held, {EntryFor(/*pk=*/1, /*page=*/42, /*slot=*/7)});
+
+    const CabinSet healed = store.Find(key);
+    ASSERT_TRUE(healed.valid());
+    ASSERT_EQ(healed.size(), 2u);
+    EXPECT_EQ(healed.At(0).pk, 1u);
+    EXPECT_EQ(healed.At(0).page_id, 42u) << "the repaired hint was not written back";
+    EXPECT_EQ(healed.At(1).pk, 77u) << "the row written during the heal was dropped";
+    EXPECT_EQ(store.InfoFor(1).values, 1u) << "a heal moves no value slot";
+    EXPECT_EQ(store.InfoFor(1).entries, 2u);
+}
+
+TEST(CabinStoreTest, AHealDoesNotTouchAnAnnouncedBuild) {
+    CabinStore store;
+    const CabinKey key = KeyFor(1, Str("aaa"));
+    ASSERT_TRUE(store.BeginRecording(key));
+    store.NoteWrite(key, EntryFor(77));
+    // An announce owns its set until its own commit merges into it, and it
+    // is unservable meanwhile - so `Find` hands out no handle to heal by
+    // and an invalid one heals nothing.
+    store.Rebuild(key, store.Find(key), {EntryFor(1)});
+    ASSERT_TRUE(store.Commit(key, {EntryFor(2)}));
+
+    const CabinSet set = store.Find(key);
+    ASSERT_TRUE(set.valid());
+    ASSERT_EQ(set.size(), 2u);
+    EXPECT_EQ(set.At(0).pk, 77u);
+    EXPECT_EQ(set.At(1).pk, 2u);
+}
+
 }  // namespace
 }  // namespace kds::stats

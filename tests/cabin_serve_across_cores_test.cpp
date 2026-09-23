@@ -101,5 +101,56 @@ TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote
     rig->Stop();
 }
 
+// **The other half of the same rule, and the stage's second
+// done-condition**: a peer's observation is *banked* and then *served*.
+// The cell above has core 0 bank and core 1 write; this one has core 1
+// bank and core 0 serve, which is the direction a per-core store could
+// not do at all - a set banked on a peer lived and died there.
+//
+// **The mutation**: drop `config.cabins_store = &cabins_` from
+// `two_core_rig.hpp` and core 0's read is a miss that banks its own set,
+// `hits = 0`.
+TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
+    TwoCoreRig::Options options;
+    options.wal_drain_interval_ns = 1'000'000;
+    auto opened = TwoCoreRig::Open(options);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    auto rig = std::move(opened.value());
+
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, v int64) BTREE").response.substr(0, 3),
+              "CRE");
+    ASSERT_EQ(d0.Dispatch("CREATE CABIN ON r0(v)").response.substr(0, 3), "CRE");
+    auto oid = rig->core(0).catalog().FindTableOidByName("r0");
+    ASSERT_TRUE(oid.ok());
+    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok());
+    ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
+
+    // Core 1 reads first, and a **declared** Cabin records on the first
+    // sighting (`cabin.md` §5's n=1), so this walk is what banks the set.
+    OneShot peer;
+    peer.statement = "SELECT id FROM r0 WHERE v = 7";
+    rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), peer)));
+    rig->Start();
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return peer.done.load(std::memory_order_acquire); },
+                          8000ms))
+        << peer.out.response;
+    ASSERT_EQ(peer.out.response, "id\\n17") << peer.out.response;
+    ASSERT_EQ(rig->core(1).cabins()->stats().recordings, 1u)
+        << "the peer banked nothing, so what core 0 serves below is its own set";
+
+    // And core 0 is served from it - a set it never walked for.
+    const std::string served = d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response;
+    EXPECT_EQ(served, "id\\n17") << served;
+    EXPECT_EQ(rig->core(0).cabins()->stats().hits, 1u)
+        << "core 0 walked instead of serving from the peer's set";
+    EXPECT_EQ(rig->core(0).cabins()->stats().recordings, 1u)
+        << "core 0 banked a second set, so the two stores are not one";
+    rig->Stop();
+}
+
 }  // namespace
 }  // namespace kds::server

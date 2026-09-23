@@ -260,6 +260,35 @@ statement about an engine that no longer exists; re-verify or strike it.
   `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`
   and `…ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible`.)*
 
+- **Two cores recording one pattern can strand a trail in a directory
+  slot.** Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`.
+  `LookupOrCreateWaystonePage` (`src/stats/waystone_dir.cpp`) reads a
+  child slot under one page hold, **releases it**, allocates, then
+  re-acquires to link. Two cores whose instances collide on one
+  `DirIndexAt` can both read `kEmptyDirSlot`, both allocate, and the
+  second link overwrites the first - stranding a trail the first has
+  already written, and leaking a page. Newly reachable because AT-S7
+  turns recording on for every core.
+
+  Invariant 8 prices it exactly: a lost trail is a lost replay and never
+  a result. Not closed because the obvious fix - hold the parent across
+  `CreateNew` - introduces a page latch held across a durability wait on
+  a path `device_page_store.hpp` permits it on only for a fault. Owner:
+  `docs/spec/waystone-concpets.md`.
+
+- **`ClaimPatternWaystoneRoot` has no path for deepening a directory.**
+  Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`. The claim
+  refuses to replace a root that is set, which is what keeps two cores
+  building one directory from keeping two; `GrowPatternDirectory` exists
+  to deepen one and would be handed back the *old* pair, leaving the row
+  pointing at the old root at the old depth while a new level exists - a
+  miss for every key, not an error.
+
+  Not live: `GrowPatternDirectory` has no caller outside its own cells, so
+  every directory is depth 1. Closing it means a compare-and-set contract
+  the claim does not have. `waystone_dir.hpp`'s header carries the trap;
+  owner: `include/kds/catalog/catalog.hpp`.
+
 - **The cabin optimizer's build does not announce, so a write during its
   walk is lost.** Verified at AT-S7 (2026-09-23) on
   `at-s7-one-cabin-store`. The serve path's build announces its set before

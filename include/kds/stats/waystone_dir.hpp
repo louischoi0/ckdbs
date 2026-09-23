@@ -169,6 +169,15 @@ StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId ro
 // one at the same time - the two are one fact, which is why
 // Catalog::ClaimPatternWaystoneRoot() writes them together.
 //
+// **Nothing calls this, and the day something does it owes a second
+// writer** (AT-S7). `ClaimPatternWaystoneRoot` became a *claim*: it
+// refuses to replace a root that is already set, so handing it a deepened
+// root would leave the row pointing at the old one at the old depth while
+// this function has already built the new level - a lookup then walks the
+// wrong number of levels, which is a miss for every key rather than an
+// error. Deepening needs a replace, and a replace needs its own
+// compare-and-set against the pair the caller deepened from.
+//
 // Read the growth note in this file's header before calling: the prior
 // contents survive only for the 1-in-2048 of keys whose new top digit is
 // zero, and everything else is cooled, not corrupted.

@@ -28,6 +28,9 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kAnchorWrite: return "ANCHOR_WRITE";
         case RingMessageKind::kTrxIdLease: return "TRXID_LEASE";
         case RingMessageKind::kRowIdLease: return "ROWID_LEASE";
+        // Every kind this build sends has a name here, which is what
+        // makes a log line naming one readable; `kAccessStatsBatch`'s went
+        // with the kind at AT-S7.
         case RingMessageKind::kShippedRowDesc: return "SHIPPED_ROW_DESC";
     }
     return "unknown";

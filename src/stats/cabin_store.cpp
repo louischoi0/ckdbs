@@ -329,12 +329,6 @@ bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
             // make room: the second would be a policy decision §8 has not
             // made, and this one is reversible by the next execution.
             counted = Counted::kCapRefusal;
-        } else if (entries.size() > limits_.max_entries_per_value) {
-            // Deliberately *not* truncated. A truncated set marked observed
-            // is missing qualifying pks, which is the one thing the
-            // invariant forbids outright (header rule 2).
-            part.sightings.erase(key);
-            counted = Counted::kCapRefusal;
         }
 
         if (counted == Counted::kNone) {
@@ -360,6 +354,50 @@ bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
     if (counted == Counted::kCapRefusal) ++stats_.cap_refusals;
     if (counted == Counted::kRecording) ++stats_.recordings;
     return accepted;
+}
+
+void CabinStore::Rebuild(const CabinKey& key, const CabinSet& viewed,
+                         std::vector<CabinEntry> entries) {
+    Partition& part = PartitionFor(key.cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    auto it = part.observed.find(key);
+    if (it == part.observed.end()) return;
+    // **The same storage the heal walked, or nothing.** An `Unobserve` and
+    // a re-record between the walk and this call leave a different set
+    // under this key, and replacing its first entries with a rebuild of
+    // the old one would drop live pks it holds there. Identity, not size:
+    // two sets of one length are not one set.
+    //
+    // **An announced build is covered by the same test and needs no second
+    // one.** `Find` hands out no handle for one, so no caller can be
+    // holding its storage; and a set that *was* handed out cannot become
+    // an announce without an `Unobserve` first, which takes it out of
+    // `observed` and fails this test anyway.
+    if (it->second != viewed.entries_) return;
+    CabinEntrySet& held = *it->second;
+    if (viewed.size() > held.size()) return;
+
+    // **A new storage, never a shrink of the old one.** A reader's
+    // `CabinSet` holds the set alive through its `shared_ptr` and indexes
+    // it by a count taken before this ran; shrinking that deque under it
+    // would index past its end. Installing a fresh one leaves that reader
+    // walking exactly what it took, which is still a superset - the only
+    // property a reader depends on - and is the same discipline `Commit`'s
+    // heal arm follows.
+    auto fresh = std::make_shared<CabinEntrySet>(entries.begin(), entries.end());
+    fresh->insert(fresh->end(), held.begin() + static_cast<std::ptrdiff_t>(viewed.size()),
+                  held.end());
+    // At the cap the set is left as it is rather than truncated or
+    // un-observed: what stands is a superset, and a heal is maintenance
+    // that may always decline (§1's corollary).
+    if (fresh->size() > limits_.max_entries_per_value) return;
+
+    // Not a set arriving or leaving - the value keeps its slot - so
+    // `values` does not move and only the entry count is restated.
+    CabinInfo& info = part.info[key.cabin_id];
+    info.entries -= std::min(info.entries, held.size());
+    info.entries += fresh->size();
+    it->second = std::move(fresh);
 }
 
 void CabinStore::Unobserve(const CabinKey& key) {

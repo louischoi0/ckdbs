@@ -3104,6 +3104,15 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
     // because `ForFirstRow` stops at the first match. One shape's count
     // would split in two and stay split, which is the one way an advisory
     // statistic can mislead the mover rather than merely thin out.
+    //
+    // **What it costs is stated rather than discovered, and it is not
+    // measured.** This runs once per step per statement on every core, so
+    // at `cores > 1` every core's statement end takes one exclusive latch
+    // on one page; the hold spans a chain walk bounded by
+    // `kMaxAccessShapes` and, on the admit path, an `InsertRow` that may
+    // grow the chain. That is the shape `access_statistics = off` exists
+    // for, and the stage that wrote this line ran no A/B - the interleaved
+    // overhead measurement is suspended.
     auto held = store_.Get(kCatalogPageAccessStats);
     if (!held.ok()) return held.status();
 
