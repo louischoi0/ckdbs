@@ -204,6 +204,14 @@ public:
         // an unconfigured instance's is.
         StatementLimits statement_limits;
 
+        // **The instance's optimizer surface** (AT-S8, `OptimizerSurface`):
+        // the relayout mode, the one collector, the one `CABIN_OPTIMIZER`
+        // switch and the controller view. A peer handed none of it used to
+        // answer `SET CABIN_OPTIMIZER` with an OK that moved nothing the
+        // controller reads. Default-constructed, the dispatcher keeps its own
+        // - a fixture's shape.
+        OptimizerSurface optimizer;
+
         // RD5's `range_size_ids`, copied from core 0 like every other
         // shared setting. One number sizes both the row-id lease grant and
         // the range; the argument for both is `server/range_alloc.hpp`'s.

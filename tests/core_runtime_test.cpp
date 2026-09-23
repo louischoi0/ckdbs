@@ -889,6 +889,34 @@ TEST_F(CoreRuntimeTest, APeersDispatcherRunsUnderTheStatementLimitsItIsHanded) {
     EXPECT_NE(reply.find("sort_max_rows"), std::string::npos) << reply;
 }
 
+TEST_F(CoreRuntimeTest, APeerHandedTheOptimizerSurfaceSetsTheInstancesSwitchAndSeesItsController) {
+    // AT-S8, on the operator's word: every core accepts sessions, so a peer
+    // must reach the one optimizer. Handed nothing, `SET CABIN_OPTIMIZER ON`
+    // on a peer answered OK and flipped a flag of its own that nothing read,
+    // and `SHOW CABIN_OPTIMIZER` answered "absent". **Mutation**: drop
+    // `set_optimizer_surface` from `CoreRuntime::Open` and both halves fail.
+    std::atomic<bool> instance_switch{false};
+    stats::CabinOptimizer controller;
+    Latch view_latch;
+    OptimizerSurface surface;
+    surface.cabin_optimizer_on = &instance_switch;
+    surface.controller = &controller;
+    surface.view_latch = &view_latch;
+
+    CoreRuntime::Config config = ConfigFor(1);
+    config.optimizer = surface;
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    CommandDispatcher& d = peer.value()->dispatcher();
+
+    const std::string set = d.Dispatch("SET CABIN_OPTIMIZER ON").response;
+    EXPECT_EQ(set.rfind("OK", 0), 0u) << set;
+    EXPECT_TRUE(instance_switch.load()) << "the peer's SET moved a flag the controller never reads";
+
+    const std::string show = d.Dispatch("SHOW CABIN_OPTIMIZER").response;
+    EXPECT_EQ(show.find("absent"), std::string::npos) << "the peer cannot see the controller: " << show;
+}
+
 TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesTheInstanceSuperblock) {
     // PW3, and since AT-S8 with no ring in it: a peer handed the instance's
     // `SuperBlockCheckpointAnchor` publishes into it directly, from its own

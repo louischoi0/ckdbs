@@ -1110,16 +1110,16 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         return s;
     }
 
-    expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
-                                         expeditor->config_.decay_half_life_ns);
-    // PHY01's collector, wired to both feeders: the dispatcher touches
-    // S1/S2 per successful SELECT, the Cabin store forwards S3 from its
-    // counting sites. One construction site, the config's clock and
-    // half-life bound once.
+    // PHY01's collector, wired to both feeders: every core's dispatcher
+    // touches S1/S2 per successful SELECT, the one Cabin store forwards S3
+    // from its counting sites. One construction site, the config's clock
+    // and half-life bound once, and latched above one core (AT-S8).
     expeditor->optimizer_signals_.emplace(&expeditor->clock_,
                                           expeditor->config_.decay_half_life_ns);
-    expeditor->dispatcher_->set_optimizer_signals(&*expeditor->optimizer_signals_);
-    expeditor->dispatcher_->set_cabin_optimizer_enabled(expeditor->config_.cabin_optimizer);
+    if (expeditor->config_.cores > 1) {
+        expeditor->optimizer_signals_->SetLatch(&expeditor->optimizer_signals_latch_);
+    }
+    expeditor->cabin_optimizer_on_.store(expeditor->config_.cabin_optimizer);
     // PHY04: the decision core and its executor, only where a Cabin can
     // exist at all. The cadence task registers in Serve() beside the
     // checkpointer's.
@@ -1129,10 +1129,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
             expeditor->database_->catalog, *expeditor->store_, *expeditor->cabin_store_,
             *expeditor->cabin_controller_, &*expeditor->txn_manager_);
         expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
-        // PHY06: SHOW CABIN_OPTIMIZER reads both, read-only.
-        expeditor->dispatcher_->set_cabin_optimizer_view(&*expeditor->cabin_controller_,
-                                                         &*expeditor->cabin_executor_);
     }
+    // One surface for every core (AT-S8): core 0's dispatcher here, every
+    // peer's at `Start`.
+    expeditor->dispatcher_->set_optimizer_surface(expeditor->Optimizer());
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
                                  wal::DurabilityClassName(expeditor->config_.durability) +
@@ -1188,6 +1188,20 @@ Status Expeditor::PersistSuperBlock() {
         database_->superblock.Encode(page.value().bytes());
     }
     return Sync();
+}
+
+OptimizerSurface Expeditor::Optimizer() {
+    OptimizerSurface surface;
+    surface.relayout_mode = config_.physical_optimizer;
+    surface.decay_half_life_ns = config_.decay_half_life_ns;
+    surface.signals = &*optimizer_signals_;
+    surface.cabin_optimizer_on = &cabin_optimizer_on_;
+    if (cabin_controller_) {
+        surface.controller = &*cabin_controller_;
+        surface.executor = &*cabin_executor_;
+    }
+    surface.view_latch = config_.cores > 1 ? &cabin_view_latch_ : nullptr;
+    return surface;
 }
 
 Status Expeditor::Checkpoint() {
@@ -1672,6 +1686,7 @@ Status Expeditor::Start() {
             // The statement limits core 0's dispatcher got in `Open` (AT-S8):
             // a session accepted here runs here, under the same config file.
             core_config.statement_limits = config_.Limits();
+            core_config.optimizer = Optimizer();
             core_config.range_size_ids = config_.range_size_ids;
             // CR7: the instance's switch reaches the peers now that they
             // have somewhere to put a shape.
@@ -1960,8 +1975,13 @@ Status Expeditor::Start() {
         const sched::MonoTimeNs interval =
             config_.cabin_optimizer_snapshot_interval_ms * 1'000'000ULL;
         scheduler.SubmitEvery(interval, [this] {
-            Status ticked = cabin_executor_->Tick(
-                *optimizer_signals_, [this] { return dispatcher_->cabin_optimizer_enabled(); });
+            // Under the view latch (AT-S8): a `SHOW CABIN_OPTIMIZER` on any
+            // core reads the controller this tick mutates. The switch is the
+            // instance's, so a `SET` on a peer reaches it.
+            const LatchGuard view(config_.cores > 1 ? &cabin_view_latch_ : nullptr);
+            Status ticked = cabin_executor_->Tick(*optimizer_signals_, [this] {
+                return cabin_optimizer_on_.load(std::memory_order_relaxed);
+            });
             if (!ticked.ok() && logger_->enabled(LogLevel::kWarn)) {
                 logger_->Warn("expeditor", "cabin optimizer tick failed: " + ticked.message());
             }

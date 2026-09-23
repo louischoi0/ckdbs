@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "kds/base/latch.hpp"
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
@@ -436,6 +438,25 @@ struct StatementLimits {
     exec::AggregateLimits aggregate;
     std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
     std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
+};
+
+// **The physical optimizer's surface, as one value** (AT-S8, on the
+// operator's word). Every core accepts sessions, and a peer's dispatcher was
+// wired with none of this: `SET CABIN_OPTIMIZER` there answered OK and moved
+// a flag nothing read, `SHOW CABIN_OPTIMIZER` answered "absent", and its
+// reads fed no signal. The pieces are the instance's - one relayout mode,
+// one signal collector (latched above one core), one switch, one controller
+// and executor - and every dispatcher is handed the same value.
+// `view_latch` is what core 0's cadence holds across a tick; a view read
+// from another core takes it too. Null members leave the dispatcher's own.
+struct OptimizerSurface {
+    PhysicalOptimizerMode relayout_mode = PhysicalOptimizerMode::kShadow;
+    sched::MonoTimeNs decay_half_life_ns = 600'000'000'000ULL;
+    stats::OptimizerSignals* signals = nullptr;
+    std::atomic<bool>* cabin_optimizer_on = nullptr;
+    const stats::CabinOptimizer* controller = nullptr;
+    const exec::CabinOptimizerExecutor* executor = nullptr;
+    Latch* view_latch = nullptr;
 };
 
 class CommandDispatcher {
@@ -1708,9 +1729,21 @@ public:
     // consumer is PHY04's cadence task, which reads it at every batch
     // boundary.
     void set_cabin_optimizer_enabled(bool enabled) noexcept {
-        cabin_optimizer_enabled_ = enabled;
+        cabin_optimizer_on_->store(enabled, std::memory_order_relaxed);
     }
-    bool cabin_optimizer_enabled() const noexcept { return cabin_optimizer_enabled_; }
+    bool cabin_optimizer_enabled() const noexcept {
+        return cabin_optimizer_on_->load(std::memory_order_relaxed);
+    }
+
+    // Every piece of the optimizer surface at once, as an instance hands it
+    // to each core (AT-S8, `OptimizerSurface`).
+    void set_optimizer_surface(const OptimizerSurface& surface) noexcept {
+        set_relayout(surface.relayout_mode, surface.decay_half_life_ns);
+        set_optimizer_signals(surface.signals);
+        if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
+        set_cabin_optimizer_view(surface.controller, surface.executor);
+        cabin_optimizer_view_latch_ = surface.view_latch;
+    }
 
 
     // What the mount's recovery did, for `SHOW META` (RC09). A pointer into
@@ -2453,7 +2486,16 @@ private:
     // SELECT allocate nothing for its counting.
     stats::OptimizerSignals* optimizer_signals_ = nullptr;
     exec::ExecStats exec_stats_;
-    bool cabin_optimizer_enabled_ = false;  // §II.6: off, experimental
+    // §II.6's switch, off by default and experimental. **The instance's
+    // since AT-S8** (`OptimizerSurface::cabin_optimizer_on`): a `SET` on any
+    // core flips the one flag the controller's cadence reads, where it used
+    // to flip a per-dispatcher bool that only core 0's was ever read from.
+    // A dispatcher handed none points at its own.
+    std::atomic<bool> own_cabin_optimizer_on_{false};
+    std::atomic<bool>* cabin_optimizer_on_ = &own_cabin_optimizer_on_;
+    // Held across the controller view's read (AT-S8): core 0's cadence
+    // mutates the controller under it. Null where one thread owns both.
+    Latch* cabin_optimizer_view_latch_ = nullptr;
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
     // A peer's lease refill stats, set_lease_refill_stats(); null on core 0.
     const LeaseRefillStats* trx_id_refill_stats_ = nullptr;

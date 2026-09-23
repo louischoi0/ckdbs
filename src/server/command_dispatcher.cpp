@@ -1287,7 +1287,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // under one stream it can only ever say 1. That is now every volume,
        // so it is printed nowhere.
        << " wal_topology=single"
-       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+       << " cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off")
        // The core serving this session (PW6, docs/inflight/in-progress/workplan-peer-writer.md).
        // Every core listens (AT-S8), so the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -
@@ -1759,14 +1759,14 @@ DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest
         return {"ERR SET CABIN_OPTIMIZER takes exactly one value, on or off", false};
     }
     if (IEquals(value, "ON")) {
-        cabin_optimizer_enabled_ = true;
+        set_cabin_optimizer_enabled(true);
     } else if (IEquals(value, "OFF")) {
-        cabin_optimizer_enabled_ = false;
+        set_cabin_optimizer_enabled(false);
     } else {
         return {"ERR SET CABIN_OPTIMIZER takes on or off, not '" + std::string(value) + "'",
                 false};
     }
-    return {std::string("OK cabin_optimizer=") + (cabin_optimizer_enabled_ ? "on" : "off"),
+    return {std::string("OK cabin_optimizer=") + (cabin_optimizer_enabled() ? "on" : "off"),
             false};
 }
 
@@ -3382,18 +3382,25 @@ DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
     // managed table and decision log, the executor's applied counters, the
     // collector's S3 quality - so the view cannot disagree with the engine
     // about anything, only omit.
+    //
+    // Under the view latch (AT-S8): the controller and executor are the
+    // instance's, and core 0's cadence mutates both across a tick held
+    // under it; a read from any core waits the tick out rather than
+    // walking a table mid-rebuild. Outer to the collector's own latch,
+    // which `QualityOf` below takes - the tick's order.
+    const LatchGuard view(cabin_optimizer_view_latch_);
     if (cabin_controller_ == nullptr) {
         // Not an empty table: with no controller nothing is managing, and
         // an empty listing would read as "managing nothing yet" when the
         // truth is "not constructed" - SHOW CABINS' `cabins = off` rule.
-        // Not "(cabins = off)" either, since AK-S2: a peer holds a Cabin
-        // store and no optimizer, so the reason has to name the optimizer.
-        return {"CABIN_OPTIMIZER absent (no cabin optimizer on this core)", false};
+        // The instance has one controller and every core is handed it
+        // (AT-S8), so absent is the instance's answer, not this core's.
+        return {"CABIN_OPTIMIZER absent (no cabin optimizer on this instance)", false};
     }
 
     const stats::CabinOptimizerConfig& config = cabin_controller_->config();
     std::ostringstream os;
-    os << "cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+    os << "cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off")
        << " managed=" << cabin_controller_->managed_count()
        << " pages_committed=" << cabin_controller_->pages_committed()
        << " page_budget=" << config.page_budget;

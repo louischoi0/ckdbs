@@ -856,6 +856,16 @@ private:
     // takes it. The gate is not a latch: a failed attempt skips, so it
     // orders against nothing.
     Latch superblock_latch_;
+
+    // **The optimizer surface's shared state** (AT-S8, `OptimizerSurface`):
+    // the `CABIN_OPTIMIZER` switch every core's `SET` flips and the cadence
+    // reads; the collector's latch, armed above one core; and the view latch
+    // core 0's cadence holds across a tick while any core's
+    // `SHOW CABIN_OPTIMIZER` reads the controller. Order: the view latch is
+    // outer to the collector's; neither is held across I/O by a reader.
+    std::atomic<bool> cabin_optimizer_on_{false};
+    Latch optimizer_signals_latch_;
+    Latch cabin_view_latch_;
     wal::CheckpointGate checkpoint_gate_;
 
     std::optional<txn::TrxIdSequence> trx_ids_;
@@ -941,6 +951,12 @@ private:
     // an instance that never entered core 0's reactor has nothing to sync
     // and nothing to checkpoint.
     void StopStartedCores();
+
+    // The optimizer surface every core's dispatcher is handed (AT-S8,
+    // `OptimizerSurface`): the relayout mode, the collector, the switch, and
+    // the controller view where a Cabin store exists. The view latch is
+    // armed above one core only.
+    OptimizerSurface Optimizer();
 
     // The live set a checkpoint records now comes from the transaction
     // manager, which implements wal::ActiveTransactions. `NoActiveTransactions`

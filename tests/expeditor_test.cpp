@@ -445,6 +445,16 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
     EXPECT_EQ(handed.aggregate.max_distinct, 13u);
     EXPECT_EQ(handed.sort_max_rows, 7u);
     EXPECT_EQ(handed.join_build_max_rows, 17u);
+
+    // And the optimizer's switch is one flag (AT-S8, `OptimizerSurface`): a
+    // flip on core 0 reads on the peer, and the peer holds the instance's
+    // collector rather than none.
+    const OptimizerSurface& surface = peer.config().optimizer;
+    ASSERT_NE(surface.cabin_optimizer_on, nullptr) << "the peer was handed no switch";
+    db.dispatcher().set_cabin_optimizer_enabled(true);
+    EXPECT_TRUE(surface.cabin_optimizer_on->load()) << "core 0 and the peer hold two switches";
+    EXPECT_NE(surface.signals, nullptr) << "the peer's reads feed no optimizer signal";
+    EXPECT_NE(surface.view_latch, nullptr) << "two cores and no view latch";
 }
 
 // ---- AT-0 item 7: the fault net's key sets the fault net ----------------

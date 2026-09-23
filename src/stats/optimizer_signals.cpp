@@ -67,6 +67,7 @@ CabinQualitySignal* OptimizerSignals::CabinFor(std::uint64_t cabin_id) {
 
 void OptimizerSignals::NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched,
                                      CandidateRef candidate) {
+    LatchGuard hold(latch_);
     FingerprintSignal* signal = FingerprintFor(pattern_id);
     if (candidate.valid()) signal->candidate = candidate;
     Touch(signal->executions, clock_, half_life_ns_);
@@ -80,6 +81,7 @@ void OptimizerSignals::NoteExecution(std::uint64_t pattern_id, std::uint64_t pag
 }
 
 void OptimizerSignals::NoteCabinLookup(std::uint64_t cabin_id, bool served) {
+    LatchGuard hold(latch_);
     CabinQualitySignal* signal = CabinFor(cabin_id);
     Touch(signal->lookups, clock_, half_life_ns_);
     if (!served) Touch(signal->coverage_misses, clock_, half_life_ns_);
@@ -87,10 +89,12 @@ void OptimizerSignals::NoteCabinLookup(std::uint64_t cabin_id, bool served) {
 
 void OptimizerSignals::NoteCabinHint(std::uint64_t cabin_id, bool ok) {
     if (ok) return;  // only failures move the quality signal
+    LatchGuard hold(latch_);
     Touch(CabinFor(cabin_id)->hint_failures, clock_, half_life_ns_);
 }
 
 SnapshotCabin OptimizerSignals::QualityOf(std::uint64_t cabin_id) const {
+    LatchGuard hold(latch_);
     SnapshotCabin out;
     out.cabin_id = cabin_id;
     auto found = cabins_.find(cabin_id);
@@ -102,6 +106,7 @@ SnapshotCabin OptimizerSignals::QualityOf(std::uint64_t cabin_id) const {
 }
 
 OptimizerSnapshot OptimizerSignals::Snapshot() {
+    LatchGuard hold(latch_);
     OptimizerSnapshot snapshot;
     snapshot.version = ++version_;
     snapshot.decay_epoch = clock_ != nullptr ? clock_->Now() : 0;

@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "kds/base/latch.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/stats/decay.hpp"
 
@@ -45,7 +46,13 @@
 // scheduling, no locks (rules.md #3). PHY02's `Decide` takes the snapshot
 // and nothing else.
 //
-// Concurrency: core-local, no synchronization of its own.
+// Concurrency: **the instance's, latched above one core** (AT-S8). Every
+// core's dispatcher notes executions into it and the one Cabin store
+// forwards every core's lookups - the second since AT-S7 made the store the
+// instance's, which made this a data race on two unsynchronised maps until
+// AT-S8 gave it `SetLatch`. Each public method holds the latch for its
+// body; it is innermost, taken holding nothing but the controller view's
+// latch (`OptimizerSurface::view_latch`, outer, across a tick).
 
 namespace kds::stats {
 
@@ -167,8 +174,18 @@ public:
     // fully decayed", which is the honest reading either way.
     SnapshotCabin QualityOf(std::uint64_t cabin_id) const;
 
-    std::size_t tracked_fingerprints() const noexcept { return fingerprints_.size(); }
-    std::size_t tracked_cabins() const noexcept { return cabins_.size(); }
+    std::size_t tracked_fingerprints() const noexcept {
+        LatchGuard hold(latch_);
+        return fingerprints_.size();
+    }
+    std::size_t tracked_cabins() const noexcept {
+        LatchGuard hold(latch_);
+        return cabins_.size();
+    }
+
+    // The latch every method holds (the header's concurrency note); null,
+    // the default, at one core. `latch` must outlive this.
+    void SetLatch(Latch* latch) noexcept { latch_ = latch; }
 
 private:
     // The entry for `id`, evicting the coldest when the map is full and
@@ -179,6 +196,7 @@ private:
 
     const sched::Clock* clock_;
     sched::MonoTimeNs half_life_ns_;
+    Latch* latch_ = nullptr;
     std::uint64_t version_ = 0;
     std::unordered_map<std::uint64_t, FingerprintSignal> fingerprints_;
     std::unordered_map<std::uint64_t, CabinQualitySignal> cabins_;

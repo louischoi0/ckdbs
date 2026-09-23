@@ -1,6 +1,9 @@
 #include "kds/stats/optimizer_signals.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <optional>
+#include <thread>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -286,5 +289,30 @@ TEST(OptimizerSignalsTest, AnOptimizerOwnedCabinRowSurvivesARestartWithItsTag) {
     EXPECT_TRUE(found) << "the optimizer-owned row did not survive the restart";
 }
 
+
+// AT-S8: the collector is the instance's - every core's dispatcher notes
+// executions into it and the one Cabin store forwards every core's lookups,
+// which since AT-S7 was a data race on two unsynchronised maps. Held here the
+// way another core's note holds it; a lookup on a second thread must not land
+// until it is released. **Mutation**: drop the guard in `NoteCabinLookup` and
+// the lookup lands under the hold.
+TEST(OptimizerSignalsTest, ANoteWaitsForTheCollectorsLatch) {
+    sched::ManualClock clock;
+    stats::OptimizerSignals signals(&clock, /*half_life_ns=*/1'000'000'000);
+    Latch latch;
+    signals.SetLatch(&latch);
+
+    std::optional<LatchGuard> held(std::in_place, &latch);
+    std::atomic<bool> noted{false};
+    std::thread peer([&] {
+        signals.NoteCabinLookup(/*cabin_id=*/7, /*served=*/true);
+        noted.store(true);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(noted.load()) << "a lookup landed under another holder's latch";
+    held.reset();
+    peer.join();
+    EXPECT_EQ(signals.tracked_cabins(), 1u);
+}
 }  // namespace
 }  // namespace kds::server
