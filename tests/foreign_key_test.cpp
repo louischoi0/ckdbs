@@ -741,9 +741,15 @@ TEST_F(ForeignKeyCheckTest, AChildInARangeAnotherCoreOwnsStillBlocksTheParent) {
     // AT-S5f it turned the answer into a `NotImplemented` refusal.
     //
     // The child is heap: D1 declines every btree relation a directory, so
-    // a btree child could never reach this arm.
+    // a btree child could never reach this arm. **Spelled `HEAP` since the
+    // AT-S5f review**: SUS-1 made BTREE the storage default, which turned
+    // this cell's child into a btree relation whose reverse check takes
+    // `BtreeVisit` and reads no directory at all - so the cell passed
+    // without ever reaching `AllWalkHeads`, and the mutant that walks this
+    // core's heads alone survived it. The suspension is lifted in the test
+    // binary (`HeapStorageAllowedForTest`), so the word is all it takes.
     ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
-                  "qty int64)")
+                  "qty int64) HEAP")
                   .substr(0, 7),
               "CREATED");
     // Ids 1 and 2, both below the boundary, neither referencing account 1,
@@ -775,7 +781,7 @@ TEST_F(ForeignKeyCheckTest, AChildInASecondOwnedRangeStillBlocksTheParent) {
     // report "no children", delete the parent, and leave a dangling
     // foreign key with nothing logged.
     ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
-                  "qty int64)")
+                  "qty int64) HEAP")
                   .substr(0, 7),
               "CREATED");
     // Ids 1 and 2, both below the boundary, and neither references
@@ -878,7 +884,15 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-TEST_F(ForeignKeyPlacementTest, ACrossOwnerForeignKeyIsAdmittedAndSaysWhatItCosts) {
+TEST_F(ForeignKeyPlacementTest, ACrossOwnerForeignKeyIsAdmittedAndSaysNothing) {
+    // **This cell asserted a notice until AT-S5f**, and the notice named
+    // two costs that stage deleted: one cross-core probe round per write,
+    // and a `DELETE` of a referenced parent refused until the reverse
+    // fan-out was built. Both checks run on the core the statement runs
+    // on now, so a cross-owner foreign key costs what a colocated one
+    // costs - and a cell that kept asserting the old sentence would have
+    // pinned a client-visible falsehood while staying green, which is
+    // what the AT-S5f review found it doing.
     ASSERT_EQ(Run("CREATE NAMESPACE ledger").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("CREATE NAMESPACE trading").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("CREATE TABLE ledger.accounts (id int64, name varchar) BTREE").substr(0, 7),
@@ -889,12 +903,14 @@ TEST_F(ForeignKeyPlacementTest, ACrossOwnerForeignKeyIsAdmittedAndSaysWhatItCost
     // **Admitted** - the pair is legal since AH-T4, and a refusal here
     // would be the constraint coming back.
     ASSERT_EQ(out.substr(0, 7), "CREATED") << out;
-    EXPECT_NE(out.find("WARN"), std::string::npos) << out;
-    // Both costs, because "admitted" must not read as "free"...
-    EXPECT_NE(out.find("cross-core probe"), std::string::npos) << out;
-    EXPECT_NE(out.find("DELETE of a referenced parent row is refused"), std::string::npos) << out;
-    // ...and the one thing the user can act on.
-    EXPECT_NE(out.find("one namespace"), std::string::npos) << out;
+    // And silent, for the same reason the colocated pair below is: there
+    // is nothing about the placement of a foreign key left to warn about.
+    EXPECT_EQ(out.find("WARN"), std::string::npos) << out;
+    EXPECT_EQ(out.find("probe"), std::string::npos) << out;
+
+    // The constraint is declared and enforced, which is what "admitted"
+    // has to mean beyond the reply text.
+    EXPECT_NE(Run("SHOW FKEYS").find("trades"), std::string::npos);
 }
 
 TEST_F(ForeignKeyPlacementTest, AForeignKeyInsideOneNamespaceIsSilent) {

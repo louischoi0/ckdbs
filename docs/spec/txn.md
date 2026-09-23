@@ -658,10 +658,10 @@ level: **can the re-run answer differently once this holder decides?**
   where a view is *applied*, not where this one is minted) — so the level
   does not enter: the holder's commit makes the
   parent visible to the re-run, and its abort makes the answer a terminal
-  `FkViolation` instead of a retryable conflict. The cross-owner half of
-  the same check parks without asking the level at all, so this is also
-  what keeps one statement's answer independent of which core its parent
-  lives on.
+  `FkViolation` instead of a retryable conflict. **One wait, whichever
+  core the holder is on** since AT-S5f: the check asks the instance's
+  table for the parent row and parks on the slot, because `IsInFlight` is
+  one core's live set and the check descends every parent here.
 - **No, where the site cannot tell.** A statement that declared a coarse
   unit and had it refused knows *who* refused it and not *what* they hold,
   so a holder that already wrote a row the walk will reach is
@@ -748,8 +748,8 @@ because the session core's borrow ends when its statement returns
   is bound, so each holds the relation `IS`; the slice is the outermost
   walk's alone, and each of the three reads falls through to that walk when
   its own path cannot answer. **What takes none: the foreign-key check
-  family** - an `INSERT`'s or `UPDATE`'s parent, a `DELETE`'s children, and
-  the relation an `FkProbeServer` resolves on the answering core - because
+  family** - an `INSERT`'s or `UPDATE`'s parent and a `DELETE`'s children,
+  both read on the core the statement runs on since AT-S5f - because
   those checks are helpers beside the executor and not steps
   (`fk_check.hpp`: "`exec::Compile()` is SELECT-only"), so none of them
   passes the compiler seam AT-S1 threaded. The following letter's, with

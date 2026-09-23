@@ -245,31 +245,45 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Foreign keys
 
-- **A transaction whose participant is deleting the parent is answered
-  busy across cores where one core answers violation, and inside an
-  explicit transaction that busy cannot clear.** Verified on
-  `ao-s5b-c1c2` over `25c5849` (AO-S5(b) C1), by reading: the forward
-  probe's check view now carries the requester's own participant as its
-  writer, so `CheckParentPresent` would answer that participant's own
-  delete-mark `kViolation` as it does locally - but `FkProbeServer::Answer`
-  consults `FkPendingDeleteTable::Pending` first, and that table is keyed
-  on the deleting session with no coordinator identity to exclude the
-  asker by (`fk_intent.hpp`, the `Pending` comment). So a `BEGIN`, a
-  `DELETE` of the parent shipped to its owner, then a child `INSERT`
-  naming that parent at home is refused `TxnConflict retryable=1` on
-  every retry until the transaction ends - a retry loop that cannot
-  succeed, the shape F1 named. Pre-existing (before C1 the same probe was
-  answered busy by the delete-mark itself); C1 made it the one asymmetry
-  left between one core and two. The fix is an own-aware pre-gate, which
-  needs the coordinator's identity in the registration, or the probe
-  running the pre-gate after the visibility read for a writer view. Owner:
-  `docs/spec/foreign-keys.md` §5, which states the asymmetry.
-  **Re-pointed 2026-09-09 at M2's close** on `ao-m2-close` at `cf3d0d0`
-  (`instructions/v3.0.0/workorder-ao-m2-lock-family.md` §AO-8): this entry
-  sent the delete side's waits to "AO-S6's units", and AO-S6a through
-  AO-S6e-d touched no part of `FkPendingDeleteTable`, so M2 closed without
-  it and the pointer named a closed stage. It belongs with D9(a) in M3 (AT)
-  or takes its own letter; **no stage owns it today.**
+- **A child's forward check holds nothing, so a parent can be deleted
+  between the check and the child's write — across cores.** Opened by
+  AT-S5f (2026-09-23) and found by its own `critics-developer` pass;
+  verified by source read at `f247c52` on `at-s5f-fk-local`.
+
+  **Cost: a quiet wrong answer**, and the one `foreign-keys.md` §1 says a
+  constraint may not have — a committed child referencing a deleted
+  parent, both statements reporting success.
+
+  `ResolveForeignKeyParents` asks the lock table only on `kBusy`
+  (`src/server/command_dispatcher.cpp`, `WaitForParentRowWriter`'s one
+  caller), so a parent that passes is unheld from the check to the row
+  write. The parent's `DELETE` takes that row's `X` and walks the child
+  before marking, but the child row does not exist yet, so the walk is
+  honest and empty. **One core closes it by running to completion**
+  between the fork and the write; two reactors do not.
+
+  **What it replaced is wider, not narrower.** Until AT-S5f a passing
+  forward probe left a row-scoped reference intent on the parent's owner,
+  and that owner's `DELETE` answered busy while one was live — the
+  interval `[check, decide]`. The intent went with the probe protocol
+  (AT-R15's D5, the operator's ruling), and this window is what the
+  ruling entails rather than an oversight in carrying it out.
+
+  **The fix is D9(a)'s `S` fence** and needs nothing else: the parent's
+  `DELETE` already takes the row's `X` ahead of its walk, so an `S` the
+  child's check holds from the check to its decide is refused by it.
+  Owner: the following letter (`workorder-at-m3-uniformity.md` AT-0
+  item 6), with `docs/spec/foreign-keys.md` §3a stating the window.
+
+The entry that stood here before it - a transaction whose
+participant was deleting the parent answered `busy` across cores where one
+core answered `violation`, and could not clear inside an explicit
+transaction (AO-S5(b) C1, verified on `ao-s5b-c1c2` over `25c5849`) -
+**closed at AT-S5f** with the two things it needed: a `DELETE` that
+shipped to the parent's owner, which went at AT-S5, and
+`FkPendingDeleteTable`'s pre-gate ahead of the visibility read, which went
+with the probe protocol. Both checks read the rows themselves now, so
+there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 

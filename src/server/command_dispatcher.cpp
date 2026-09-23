@@ -4038,7 +4038,18 @@ void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
     // nothing in `holdings`, only the wake registration - so this check
     // takes no fence over the parent and holds nothing after it. That
     // distinction is the whole of why D9(a)'s `S` fence is a separate
-    // decision and not a side effect of this line.
+    // decision and not a side effect of this line, and it is also why the
+    // window before the child's write stays open across cores
+    // (`foreign-keys.md` §3a, `known-gaps.md`).
+    //
+    // **And no `IS` above it**, which `lock_table.hpp` calls a wrong
+    // answer given quietly: a unit held under a relation entry with no
+    // intention on it is invisible to a relation-level ask. It is sound
+    // here for a reason that is about this ask and not about the rule -
+    // the only arm that lasts is the *refused* one, which holds nothing
+    // for a relation ask to miss, and a grant is released before this
+    // function returns with no page touched in between. A borrow that
+    // outlived the ask would need the intention and would be D9(a).
     if (locks_ == nullptr || waiter == nullptr) {
         // No table to ask - a dispatcher built without one, which is the
         // configuration `CheckWriteConflictBlocking` keeps its own union
@@ -4049,10 +4060,9 @@ void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
         NoteBlockingWriter(waiter, holder, pk, RepeatableReadWait::kCapable);
         return;
     }
-    // A relation-level refusal already parked this statement
-    // (`BorrowChain`), and a second wait is one the outcome cannot carry -
-    // `NoteBlockingWriter`'s own first two guards, restated because this
-    // path does not go through it.
+    // `NoteBlockingWriter`'s own first two guards, on the path that does
+    // not go through it: no park without the allowance, and no second
+    // wait beside one the outcome already carries.
     if (!may_park_ || lock_wait_.has_value()) return;
 
     const txn::LockKey unit = txn::LockKey::Tuple(parent_rel, pk);
@@ -4146,14 +4156,15 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kPass:
             return Status::OK();
         case exec::FkVerdict::kBusy:
-            // **Three paths reach here and only one of them waited**, so
-            // the sentence names the holder's state and not a mechanism: a
-            // foreign parent whose writer AO-S5(b)'s park waited out to the
-            // probe's deadline (the fault-net shape), a foreign parent the
-            // owner registered for deletion (AJ-T1, answered busy with no
-            // park at all), and the self-referencing arm above, which is a
-            // local descent with no probe in it. Retryable in all three:
-            // the holder decides and the retry gets a real answer.
+            // **Two paths reach here since AT-S5f**, so the sentence names
+            // the holder's state and not a mechanism: the extraction pass's
+            // descent, whose wait ran to the lock family's fault net
+            // (`WaitForParentRowWriter`), and the self-referencing arm
+            // above, which never waits at all. The three the probe protocol
+            // made - a foreign parent's park on its owner's core, a parent
+            // the owner had registered for deletion - went with it.
+            // Retryable in both: the holder decides and the retry gets a
+            // real answer.
             return Status::TxnConflict("row id=" + std::to_string(value.int_val) + " of '" +
                                        RelationNameOf(fk.rel_oid) +
                                        "' is being written by another transaction that has "
@@ -4640,37 +4651,27 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // reach the trail - the orphan the review named, pre-existing on
         // the explicit-transaction path and recorded in
         // workplan-rv3-catalog-recovery.md's remainder.
-        // **AF-T4** (`ratification-af-namespace.md` AF-P5): a cross-owner
-        // foreign key is admitted - AH-T4 converted `CheckForeignKeyColocation`
-        // from a constraint to a recommendation - and this is where the
-        // recommendation is spoken, because this is where a user is
-        // choosing. Collected in the loop below and emitted with the
-        // cabin warnings, which is the reply shape a CREATE TABLE already
-        // has for "the relation is correct and something about it is worth
-        // knowing".
-        std::vector<std::string> fk_notices;
-        auto child_row = catalog_.GetSysTableRow(oid.value());
-        if (!child_row.ok()) {
-            return {ErrorReply(child_row.status()), false, 0, child_row.status()};
-        }
+        // **AF-T4's notice is gone with the cost it named** (AT-S5f).
+        // A cross-owner foreign key is admitted - AH-T4 converted
+        // `CheckForeignKeyColocation` from a constraint to a
+        // recommendation - and this is where the recommendation was
+        // spoken, because this is where a user is choosing. What it said
+        // was that "every write of this relation pays one cross-core probe
+        // round, and a DELETE of a referenced parent row is refused until
+        // the reverse fan-out is built".
+        //
+        // **Both halves are now false and there is no third to put in
+        // their place.** The forward check descends the parent here and
+        // the reverse check walks the child here, through the one frame
+        // table AM-S2 step 3 made the instance's, so a cross-owner
+        // foreign key costs the page faults a colocated one costs and
+        // nothing else - there is no round to pay and no refusal to warn
+        // about. A notice invented to keep the shape would be the defect
+        // this one had: a client told a cost the engine does not charge.
+        // The placement advice itself stands and `namespace.md` NS8 is
+        // where it lives, because it is about joins and reads, which do
+        // still cross.
         for (const PendingForeignKey& fk : pending_fkeys) {
-            auto parent_row = catalog_.GetSysTableRow(fk.parent_oid);
-            if (!parent_row.ok()) {
-                return {ErrorReply(parent_row.status()), false, 0, parent_row.status()};
-            }
-            if (parent_row.value().owner_core != child_row.value().owner_core) {
-                // Both costs named, because "admitted" must not read as
-                // "free" - the write cost is per statement and the DELETE
-                // one is a refusal (`foreign-keys.md` §2a, §3a).
-                fk_notices.push_back(
-                    "the foreign key on column " + std::to_string(fk.column_no) +
-                    " references '" + fk.parent_name + "', which core " +
-                    std::to_string(parent_row.value().owner_core) + " owns while this relation "
-                    "is core " + std::to_string(child_row.value().owner_core) +
-                    "'s: every write of this relation pays one cross-core probe round, and a "
-                    "DELETE of a referenced parent row is refused until the reverse fan-out "
-                    "is built; create the two in one namespace to keep them on one core");
-            }
             auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
             if (!created.ok()) {
                 // No survival claim in either direction: autocommit's
@@ -4703,7 +4704,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // is correct; what is missing is an accelerator, and reporting it as a
         // warning beats leaving a half-created table behind - there is no
         // transaction to roll one back into.
-        std::vector<std::string> warnings = std::move(fk_notices);
+        std::vector<std::string> warnings;
         for (const catalog::SysColumnRow& col : schema.columns) {
             if (catalog::EffectiveCabinPolicy(col.cabin_policy) != catalog::kCabinPolicyEnabled) {
                 continue;
@@ -10344,6 +10345,16 @@ std::uint64_t CommandDispatcher::NextReadHolder() noexcept {
     return ReadHolderId(core_id_, ++read_borrow_seq_, /*remote=*/false);
 }
 
+void CommandDispatcher::TakeLockWait(DispatchOutcome::LockWait wait) {
+    // The declaration carries the argument. Here only the order matters:
+    // the outgoing registration is dropped **before** the new one is
+    // installed, so a throw or an early return cannot leave two live.
+    if (lock_wait_.has_value() && locks_ != nullptr) {
+        locks_->DropWake(lock_wait_->key, lock_wait_->slot);
+    }
+    lock_wait_ = std::move(wait);
+}
+
 StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
                                              const txn::LockKey& unit,
                                              std::uint64_t* blocker) {
@@ -10399,7 +10410,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     if (!rel.ok()) return refused(rel.status());
     if (!rel.value()) {
         if (wake != nullptr) {
-            lock_wait_ = DispatchOutcome::LockWait{relation, *blocker, std::move(wake)};
+            TakeLockWait(DispatchOutcome::LockWait{relation, *blocker, std::move(wake)});
         }
         return false;
     }
@@ -10419,7 +10430,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
         if (may_park_) {
             auto flipped = std::make_shared<txn::LockWaitSlot>();
             flipped->ready.store(true, std::memory_order_release);
-            lock_wait_ = DispatchOutcome::LockWait{relation, /*holder=*/0, std::move(flipped)};
+            TakeLockWait(DispatchOutcome::LockWait{relation, /*holder=*/0, std::move(flipped)});
         }
         return Status::TxnConflict("relation oid " + std::to_string(unit.rel_oid) +
                                    ": the catalog changed between this statement's resolution "
@@ -10560,7 +10571,21 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     // refused there; a narrower one refused there on a path that cannot
     // park is named by its rows below, which a DDL holding the relation
     // does hold.)
-    if (lock_wait_.has_value() || unit.unit == txn::LockUnit::kRelation) {
+    //
+    // **Tested by the unit the wait names, not by a wait existing**
+    // (AT-S5f). `lock_wait_` was `BorrowChain`'s alone when this was
+    // written, so its mere presence meant "the relation refused this ask".
+    // The forward foreign-key check now records a *parent row's* wait at
+    // the dispatch fork, before any borrow is asked for, and a presence
+    // test reads that leftover as this relation's refusal: it names the
+    // relation where a row or a range was held, and takes the branch that
+    // skips the `NoteBlockingWriter` a narrower refusal owes.
+    // `BorrowChain` installs a relation unit and nothing else, so the key
+    // is exactly the question this line means to ask.
+    const bool refused_at_relation = lock_wait_.has_value() &&
+                                     lock_wait_->key.unit == txn::LockUnit::kRelation &&
+                                     lock_wait_->key.rel_oid == unit.rel_oid;
+    if (refused_at_relation || unit.unit == txn::LockUnit::kRelation) {
         return RelationHeld(unit.rel_oid, blocker);
     }
 

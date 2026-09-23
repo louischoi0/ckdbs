@@ -3985,10 +3985,10 @@ TEST_F(Txn2pcBlockedWriterTest, ARepeatableReadChildWaitsOutItsParentBecauseTheC
     // rather than the retryable conflict that sends a client into a loop.
     //
     // It is also what keeps one statement's answer independent of where its
-    // parent lives: the cross-owner half of this check parks on the
-    // parent's core with no isolation test at all
-    // (`fk_probe_service.cpp`), so excluding the level here answered the
-    // same `INSERT` differently on a two-core instance.
+    // parent lives - and since AT-S5f there is one half rather than two:
+    // the check descends every parent on the core the statement runs on,
+    // so a level test here would answer the same `INSERT` differently
+    // depending on nothing the client can see.
     ASSERT_EQ(Local("CREATE TABLE accounts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
     ASSERT_EQ(Local("CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts) BTREE")
                   .rfind("CREATED", 0),

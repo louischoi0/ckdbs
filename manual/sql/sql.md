@@ -50,9 +50,11 @@ DROP   NAMESPACE <name>;
 **A namespace decides which core owns the relations created in it, and
 nothing else.** It is not a separate storage area, it does not scope a
 transaction, and it does not scope a *name* — see "Qualified names" below.
-Two relations in one namespace are on one core, so a join or a foreign key
-between them never crosses; two relations in different namespaces are on
-different cores, so their work runs at the same time.
+Two relations in one namespace are on one core, so a join between them
+never crosses; two relations in different namespaces are on different
+cores, so their work runs at the same time. (A foreign key never crosses
+either way - both of its checks read every core's pages since v3.0.0's
+M3.)
 
 **The best practice is the whole feature.** Put relations that are joined,
 foreign-keyed or read together in one namespace. Put groups that have
@@ -225,8 +227,12 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
   index for the check not to be a scan.
 - v1 is RESTRICT-only and fail-fast. INSERT/UPDATE of an fk column checks the
   parent exists; DELETE of a parent checks for live children and stops at the
-  first one. Violations answer `ERR FK_VIOLATION retryable=0 ...`; a check
-  that meets an in-flight writer answers `ERR TXN_CONFLICT retryable=1 ...`.
+  first one. Violations answer `ERR FK_VIOLATION retryable=0 ...`.
+- **A parent being written is waited for, not refused**: the check holds the
+  statement until that transaction commits or rolls back and then runs it
+  again, wherever in the instance the writer is. A `DELETE` that meets a
+  child row being written still answers `ERR TXN_CONFLICT retryable=1 ...`,
+  and so does a wait that runs out of time.
 - `SHOW FKEYS` lists declarations. CASCADE / SET NULL do not exist (FK-M6,
   out of v1 by decision F2).
 

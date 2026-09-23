@@ -150,9 +150,14 @@ struct TxnDecideRequestPayload {
     // participant that a decide meeting no context was the expected case
     // rather than a lost transaction half. Nothing grants a reference
     // intent now, so every decide meets a context or is the anomaly. The
-    // space stays reserved rather than reclaimed: the payload's size is
-    // asserted, and AU-R4's rule for a struck kind - never renumbered,
-    // never reused - is the same rule for a struck field.
+    // space stays reserved rather than reclaimed: AU-R4's rule for a
+    // struck kind - never renumbered, never reused - is the same rule for
+    // a struck field, and the array is what encodes it. Named rather than
+    // left to trailing padding, which is what the size assertion alone
+    // would have allowed: `TxnPrepareRequestPayload` above spells its
+    // reserve out for the same reason, and the ring copies these byte for
+    // byte.
+    std::uint8_t reserved0[6];
 };
 static_assert(sizeof(TxnDecideRequestPayload) == 24);
 

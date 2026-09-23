@@ -248,8 +248,9 @@ a session there (`peer_listeners = on`).
 joined, foreign-keyed or read together belong in one namespace, so the
 wiring is core-local; relations that have nothing to do with each other
 belong in different ones, so their work runs at the same time. A foreign
-key across namespaces is admitted and priced (`foreign-keys.md` §2a); one
-inside a namespace never crosses at all.
+key across namespaces is admitted and costs what one inside a namespace
+costs: since AT-S5f neither crosses, because both of its checks read every
+core's pages (`foreign-keys.md` §2a, §3a).
 
 ## NS9 — What the catalog stores, and what it does not
 

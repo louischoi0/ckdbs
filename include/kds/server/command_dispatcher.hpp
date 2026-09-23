@@ -1213,8 +1213,17 @@ private:
     StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
                                std::uint64_t* blocker = nullptr);
 
-
-
+    // **One wait per statement, and the registration of the one it drops
+    // goes with it.** A statement can reach two asks that each want to
+    // park: since AT-S5f the forward foreign-key check takes the parent
+    // row's at the dispatch fork, and the relation's `IX` is asked after
+    // it. `DispatchOutcome` carries one, so the second install replaces the
+    // first - and a wake registration is the caller's to remove
+    // (`lock_table.hpp`), with nothing else that will: an entry is erased
+    // only when it has neither holder nor waiter, so one left behind keeps
+    // its entry, its waiter and its per-release kick for the life of the
+    // instance.
+    void TakeLockWait(DispatchOutcome::LockWait wait);
 
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables(Session& session);

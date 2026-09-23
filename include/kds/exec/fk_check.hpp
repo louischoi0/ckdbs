@@ -116,12 +116,13 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
 // why a thousand-row insert against one parent costs one descent rather
 // than a thousand.
 //
-// **Not to be confused with `server/fk_intent.hpp`.** That is the
-// *parent* side - what a parent's owner remembers so its own DELETE can
-// answer busy. This is the *child* side, statement-scoped, and it holds
-// answers rather than promises. AH-T2 fills it from a `kFkProbeRequest`
-// reply for a foreign parent; AH-T1 fills it locally, and the shape is the
-// same either way, which is the point of landing them apart.
+// **Filled in one place since AT-S5f**: the extraction pass, from a
+// descent this core makes. A second filler stood beside it - a
+// `kFkProbeRequest` reply for a parent another core owned - and a
+// *parent*-side counterpart remembered what a probe had been promised
+// (`server/fk_intent.hpp`), so a parent's own DELETE could answer busy.
+// Both went with the protocol; this holds answers, and there are no
+// promises left to confuse them with.
 class FkParentVerdicts {
 public:
     // The verdict for a parent pk this statement needs, or nullptr when it
@@ -158,7 +159,6 @@ public:
     bool collected() const noexcept { return collected_; }
 
 private:
-
     // A map, since AK-S3 (2026-09-02). This was a vector with a linear scan
     // while the set was one entry per distinct parent pk a single statement
     // *names* - a handful. The reverse direction now keys it per collected
@@ -180,7 +180,6 @@ struct FkReverseOptions {
     // There is deliberately no `declared` flag beside it: that one exists to
     // decide n=1 versus n=2 *when recording*, and this check never records.
     std::uint64_t cabin_id = 0;
-
 };
 
 struct FkReverseOutcome {

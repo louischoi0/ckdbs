@@ -177,231 +177,176 @@ up in `SHOW ACCESS` beside ordinary query shapes, which is what lets an
 operator compare constraint cost against query cost. An INSERT has no
 plan, so ANALYZE carries no tag for the check.
 
-## 2a. The forward check across owners — the park is at the dispatch fork
+## 2a. The forward check is hoisted, and nothing crosses (AT-S5f)
 
-**The problem, in one sentence.** The check runs where nothing can
-wait. `CheckForeignKeyOnWrite` is a plain `Status` member called per
-row from inside an already-open `WriteScope`, and nothing on that
-stack suspends — so a check that has to ask another core cannot ask
-from where it stands.
+**Where the check runs.** On the core the statement runs on, whichever
+core owns the parent. `CheckParentPresent` descends `parent.desc_page_id`
+with no ownership question in it, and since AM-S2 step 3 that is a page
+every core faults through one frame table — so the descent was already
+uniform and what made a parent *foreign* was a deferral above it, not the
+read below it. AT-S5f removed the deferral.
 
-**The answer is to move the asking, not to make the write scope
-wait.** Every foreign parent pk a statement needs is extracted
-**before any row work** — an INSERT's from its `VALUES`, an UPDATE's
-from its `SET` body — and probed at the **dispatch fork**, the one
-place a write already knows how to park: `HandleInsert` /
-`HandleUpdate` return `pending_remote` and resume there. The
-statement then runs **synchronously** against the intents it now
-holds, and the per-row check that remains inside the write scope
-answers from held intents and local state only. **Nothing inside an
-open `WriteScope` ever initiates a ring round trip.**
+**The hoist stays, and it is not about crossing.** Every parent pk a
+statement needs is still extracted **before any row work** — an INSERT's
+from its `VALUES`, an UPDATE's from its `SET` body — and resolved at the
+dispatch fork. Two things pay for it, and neither is a ring round trip:
 
-**One round per distinct owner, never per row.** The extracted pks are
-deduplicated and grouped by resolved owner; each foreign owner gets
-**one** `kFkProbeRequest` carrying its whole set, and enrolling that
-owner rides the same round (enrol-on-first-contact). A statement's
-foreign-FK cost is a function of **how many distinct owners its parents
-live on**, not of how many rows it writes — a thousand-row insert
-against one foreign parent costs one round trip.
+- **Deduplication** (AH-R2). The extracted pks are one entry per distinct
+  (parent relation, pk), so a thousand-row insert against one parent costs
+  one descent and `SHOW ACCESS` reports one `kLookup`.
+- **The wait has somewhere to happen.** The per-row check runs inside an
+  open `WriteScope`, which is no place to park; the fork is before any row
+  is written, so a statement refused there can be re-run whole.
+
+**Nothing inside an open `WriteScope` waits or crosses**, which was
+AH-R1's rule and survives it: the per-row check answers from the resolved
+verdicts and local state alone.
+
+**A parent held by an undecided writer is waited for, on whichever core
+holds it.** The row's own borrow is what the wait is taken on: its writer
+holds the tuple `X` (AO-S6a), the lock table is the instance's (AO-S5(a)),
+and a refused `TryAcquire` leaves a wake registration whose slot the
+holder's release flips from whichever core releases. The statement then
+runs again whole.
+
+- **A refused ask acquires nothing.** No queue position, nothing in the
+  transaction's holdings, only the registration — so the check takes no
+  fence over the parent and holds nothing after it. That is why D9(a)'s
+  `S` fence is still a separate decision and not a side effect of this
+  wait.
+- **A granted ask means the holder decided** between the header read and
+  the ask; the borrow is released at once and the statement takes the busy
+  verdict's retryable refusal, which is what a decided holder has always
+  produced.
+- **Without a lock table** — a dispatcher built without one — the holder
+  can only be this core's, and `NoteBlockingWriter`'s per-core predicate
+  is the honest wait (AO-S3's, unchanged).
+- **At every isolation level**, because the check view is minted at the
+  check and not at `BEGIN` (`txn.md` §5): a commit makes the parent
+  visible to the re-run and an abort makes the violation terminal, so
+  neither arm is futile.
+
+**It is a local descent, so it reads the transaction's own id** - and
+that is a dependency worth naming, because the probe it replaced carried
+the coordinator's `(session, transaction)` on the wire precisely so a
+parent written by one half of a cross-owner transaction was recognised as
+the *asker's own* rather than as a stranger's. AT-S5 deleted the write
+ship, so a transaction writes on one core and the two ids are one id. If
+a write ever ships again, this check will meet its own sibling's row,
+read a foreign holder, and wait on a transaction that is waiting for it -
+a cycle the detector cannot see, because both halves hold the same id.
+The check would then need the coordinator's identity back.
 
 **The parent set must be enumerable.** F1 makes an fk value a literal or
 a bound parameter, so the extraction pass is total. A statement whose
 parent set cannot be enumerated at the fork is **refused**, with the
-byte, rather than run against a partial set of intents. Fail-closed; in
-code an assert-and-refuse arm, not a handled path.
-
-**What the probe leaves behind is memory-resident, and that is safe
-for a stated reason.** The probe leaves a row-scoped **reference
-intent** on the parent's owner; a parent-side DELETE meeting a live
-foreign intent answers busy (§3a, one code wide per F3). Under
-`cross-owner-txn.md` §1a an intent-only participant writes no
-`TXN_PREPARE` record, so its intents die with the process. The
-invariant that makes that safe is a testable statement: **a participant
-that restarts after granting an intent and before its prepare leg
-forces the coordinator's transaction to fail** — the prepare cannot be
-answered by a process that has lost the enrolment. A window in which
-the coordinator can still commit is a defect, not a documented
-limitation.
-
-**The resume is a statement like any other, waits included** (AO-S6d,
-AO-0 item 16). What comes back from a probe is a fresh whole dispatch, and
-it can meet everything a first dispatch can - a row an undecided
-transaction holds, a range fence over the key it is about to write. Until
-AO-S6d it could not *wait* for any of them: the write-block wait ran before
-this arm and never after it, so a statement that parked on a foreign parent
-was refused where the same statement dispatched directly would have parked.
-Unhelpful rather than unsound — the resume ran without the parking
-allowance, so no blocker was recorded there and a failed statement poisoned
-its transaction exactly as any other does. The wait now runs over the
-resumed outcome on the same terms as over the first one, and its re-run is
-a whole statement, so the probe it raises is a **new round** of this same
-loop: verdicts held from the rounds before it are dropped, because a
-verdict is "as of the view the probe was answered under" and the point of
-the wait is that the holder has since decided. The lock-wait fault net is
-taken once for the statement rather than once per arm, so a statement that
-waits, then probes, then waits again still ends inside one net.
-
-**One thing a resume may not do is park mid-walk.** A mid-walk park leaves
-the walk's position and its count on the session, and the re-run that ends
-the wait is a whole statement that re-resolves every foreign parent - so it
-raises a fresh probe before it reaches the walk, and the parked write it
-had already taken off the session is gone. The next round would then walk
-from the beginning with its count at zero and, where the `WHERE` no longer
-matches the rows the earlier round wrote, report a count short of what the
-transaction changed. So a resume that has already written rows is answered
-with its conflict, which is what it was answered with before it could park
-at all; the wait a resume does get is the whole-statement one, taken before
-anything is written.
-
-**The forward check's own busy answer is a wait at every level**, including
-`REPEATABLE READ`, because the check view is minted at the check and not at
-`BEGIN` (`txn.md` §5's list): a commit makes the parent visible to the
-re-run and an abort makes the violation terminal, so neither arm is futile.
-The cross-core probe has always parked without asking the level; this is
-the same-core half agreeing with it.
+byte, rather than run against a partial set.
 
 The peer-writer funding gate (`CheckWriteAffinity`) does not refuse a
-write for carrying a foreign key; the cross-owner check is what
-validates it.
+write for carrying a foreign key.
 
-**The load path is in scope.** `CheckForeignKeyOnWrite`'s third caller
-is the KWP load path, which has its own batch boundary and takes the
-same hoist there. If no park-capable seam exists in it, that path
-**refuses** a cross-owner-FK write with a message naming this rule —
-never a silently local-only check, which is the one degraded mode §1
-says a constraint may not have.
+**The load path is in scope.** `CheckForeignKeyOnWrite`'s third caller is
+the KWP load path, which takes the same hoist at its own batch boundary.
+It never had text to re-run with and never needs any: nothing it does can
+park.
 
-## 2b. The intent's end — a holder is not a participant
+### 2b. What the crossing was, and what went with it
 
-§2a's intent is released by the transaction's **decide** and by nothing
-else. The decide releases by **(coordinator core, session)** alone, so a
-decide addressed only to intent holders may name no transaction — and
-the one an autocommit statement sends after being refused with its probes
-already out does name none, since the refused statement ran no
-transaction and the session's last id belongs to a committed one. A
-prepare always names the transaction; a decide must only when some target
-prepared (AO-S5(b) C2, which found that decide refused at the sender for
-naming none, and the intents it should have released held for the life
-of the process).
+Between AH (2026-09-01) and AT-S5f the forward check across owners was a
+**protocol**. A parent whose `owner_core` was not this core was deferred
+into that owner's group and asked over one `kFkProbeRequest` per owner;
+the owner answered a verdict and left a row-scoped **reference intent**
+behind, which its own `DELETE` consulted and which the child
+transaction's **decide** released. AO-S5(b) added the park: the parent's
+core held a busy probe until its writer decided rather than answering
+busy.
 
-**A core that answered a probe is an intent holder, not a participant.**
-The distinction is what the two lists exist to keep:
+All of it is retired — the two ring kind pairs, `FkIntentTable`,
+`FkPendingDeleteTable`, `fk_probe_service`, the probe park and its rounds
+loop, the intent-holder list beside `participants_`, and the decide's
+`intent_only` byte. **What replaces the intent is not a smaller intent:
+it is the reverse check** (§3a), which now sees every child row on every
+core, so an uncommitted child is evidence the parent's `DELETE` reads for
+itself rather than evidence another core has to have left behind.
 
-| | participant | intent holder |
-|---|---|---|
-| what it holds | rows of this transaction | a reference intent, and nothing else |
-| how it got a context | a statement shipped to it | it answered a probe |
-| the prepare | votes, and a missing context is an **abort** | is not asked |
-| the decide | told | told |
+**Every cross-core contact still mints the session's shipping identity**,
+but there is one contact now: a ship. `ShipStatement` mints it.
 
-An intent holder has no context to prepare with — the participant-side
-context lives in `ShippedStatementExecutor::enrolled_`, which a shipped
-statement fills — so the prepare goes to the participants and the decide
-to the union, and a core in both lists is prepared once and decided
-once.
-
-**The separation is what keeps the join bit true.** `HasParticipant` is
-what a shipped statement reads to decide whether the owner *already
-holds a context* — true means it must join one rather than open a
-second. An intent holder holds none, so it is recorded on its own list
-and answers `false` there.
-
-**An autocommit statement decides for itself.** Its transaction begins
-and ends inside one statement, so no `COMMIT` will ever run for it. The
-statement sends its own decide, after the write scope closes and never
-inside it (§2a), and waits for the acknowledgement. **The autocommit
-decide is sent before this core's commit record is durable**, unlike the
-explicit-transaction path where the decision is durable first. That is
-sound: if the coordinator dies in that window its child row is lost at
-recovery, so the parent whose intent was just released has no surviving
-referent.
-
-**A holder is told it is one, per target.** The decide carries
-`TxnDecideRequestPayload::intent_only`, set on the targets that hold an
-intent and no rows; without it a holder's missing context is
-indistinguishable from a participant's lost transaction half. A core in
-**both** lists is a participant and takes the ordinary path; the bit is
-a per-target fact, not a per-decide one.
-
-**A participant coordinates its own release.** When the write that
-probed was itself a *shipped* statement, the intent holder is enrolled
-on the participant's context session — and the coordinator's decision is
-applied by dispatching `COMMIT`/`ROLLBACK` through that session
-(`shipped_statement_executor.cpp`), which forks on
-`has_intent_holders()` like any other. So the participant sends its own
-decide, keyed `(its core, its ship id)`, which is exactly the key the
-intent carries — and the coordinator's own key, `(its core, its client
-session)`, is a different one, so the two do not collide.
-
-**Every cross-core contact mints the session's shipping identity**, not
-only a ship. The identity is what an intent's holder key
-`(coordinator core, session id)` is built from; a session that never
-minted one would probe under id 0 and share a holder key with every
-other un-shipped session on the core. `ShipStatement` and
-`SendForeignKeyProbes` are the two contacts, and both mint it.
-
-## 3a. The reverse check across owners — the fan-out
+## 3a. The reverse check sees every child (AT-S5f)
 
 A parent's `DELETE` asks *"does any child still reference me"*, and
 RESTRICT needs that answer to be **authoritative**: a "no children" that
 saw only some of the children is a dangling foreign key with the
 constraint reporting success, which §1 names as the one degraded mode a
-constraint may not have. A child can live on another core, and this core
-cannot see its rows, so the reverse check **fans out** at the dispatch
-fork, before the walk — the one place a write can still park (§2a's
-rule, applied to the other direction):
+constraint may not have.
 
-1. **The rows.** A bare `WHERE pk = k` names the one row. Any other
-   `WHERE` is the walk's answer, and the walk cannot park — so the pks
-   are **collected** first by a read-only pass under the statement's own
-   snapshot, applying exactly the walk's stage-1 match and marking
-   nothing. That is one extra walk of the parent per round, paid only on
-   this shape and only when a child lives on another core.
-2. **The registration**, before anything is asked: every pk goes into
-   the coordinator-local pending-delete set, so from here on a forward
-   probe for one of these rows answers in-flight and no *new* reference
-   intent can be granted while the fan-out is out. Then this core's own
-   intent table is asked, and a pk a foreign check is already relying on
-   answers busy (`TxnConflict`, retryable).
-3. **The fan-out**: one reverse probe per distinct child owner, carrying
-   up to `kFkReverseProbeMaxEntries` (child, pk) questions, answered by
-   the code that owner already runs for a local parent —
-   `CheckNoChildReferences` with its own `core_id`, its Cabin (F6) first
-   — under its own current snapshot. The child's owner records nothing
-   and is enrolled in nothing.
-4. **The resume** re-enters the statement with the answers held and
-   **the rows fixed** — a re-entry takes the pks its first round
-   collected rather than collecting again, so every round consumes one
-   known set. The per-row check answers a foreign child from the held
-   verdict and never falls through to a local walk; a collected pk with
-   no answer — a row that became visible after the pass — is refused
-   retryably (`TxnConflict`), not marked, and the retry's pass sees it.
-   A resume whose set outgrows one message per owner groups only the
-   unanswered pks and parks again: **one dispatch takes as many rounds
-   as the set needs**, `ceil(rows × children / kFkReverseProbeMaxEntries)`
-   per owner, and needs no bound because every round retires at least
-   one question from a finite set. The registration made at the fork
-   survives every park — a parked DELETE ends its scope without ending
-   the statement — which is what keeps a "no children" answered in round
-   one still true when the row is marked after round three.
+**So the check sees all of them.** `CheckNoChildReferences` walks every
+chain the child relation has — `TableAccess::AllWalkHeads`, one entry per
+range whoever owns it, or `desc_page_id` unsplit — and a btree child is
+descended whole. Two things stood in the way and both are gone: the
+refusal for a child with a range this core did not own, and the fan-out
+that replaced it (one `kFkReverseProbeRequest` per child owner, a
+collect pass to name the rows, a registration to hold the window open
+across the park, and as many rounds as the pk set needed).
 
-Verdicts map onto the reply as onto the local check: no visible child →
-clear; a committed visible child → `kFkViolation` (terminal); a row with
-a foreign `trx_id` → busy (F3). §4's one-MVCC rule is untouched.
+**It runs per row inside the walk**, where the local arm always ran.
+There is nothing to hoist: a check that asks nobody needs no answer in
+hand before the walk starts, and a DELETE on the synchronous path runs
+exactly as it does on a served one.
 
-What is refused: a DELETE on the synchronous path, which has no
-reactor to park on (retryable, never a local-only answer); a split child
-(`docs/spec/crosscore.md` §6a); and a child owner that does not answer
-within `kFkProbeReplyDeadlineNs` (retryable).
+**`WalkHeadsFor` is the read path's rule and not this one.** A fan-in
+stage covers the ranges it owns because the session concatenates the
+other stages; a constraint check has no other stage behind it, so the two
+questions are spelled by two methods rather than one with a flag.
 
-**And before the walk, the intents.** A live reference intent on the row
-being deleted is evidence no local walk can produce: a transaction on
-another core probed this parent, was told it exists, and is writing a
-child against it — a row this core cannot see. Meeting one answers
-**busy** (`TxnConflict`, retryable, one code wide per F3), because the
-foreign transaction has not committed and the answer depends on how it
-ends. The intent is released by that transaction's decide and by nothing
-else (§2a, §2b).
+Verdicts are the local check's: no visible child → clear; a committed
+visible child → `kFkViolation` (terminal); a row with an in-flight
+`trx_id` → busy (`TxnConflict`, retryable, F3), whichever core is writing
+it. §4's one-MVCC rule is untouched.
+
+**A parent being written is protected by the walk**: the child row is
+written before its transaction decides, the walk reads it, and an
+uncommitted row answers busy. That covers the interval `[the child's
+write, its decide]`.
+
+**The interval before it is open across cores, and the intent used to
+close it** (AT-S5f's own finding, from its review). The forward check
+takes no borrow on a parent it passes, so between the check and the
+child's write there is nothing holding the parent still:
+
+```
+core 0: DELETE p WHERE id=7 — takes the row's X, walks the child, finds
+        nothing, marks, commits
+core 1: INSERT INTO c VALUES (7) — passed its check a moment earlier on
+        a live header, now writes the row and commits
+```
+
+and the result is a committed child referencing a deleted parent, both
+statements reporting success — §1's one forbidden answer. **On one core
+this cannot happen**: a statement runs to completion between the fork and
+the write, so the `DELETE` has no place to interleave. Across cores two
+reactors run at once and it can.
+
+What closed it was the reference intent: the probe granted one on a pass,
+and the parent's owner answered its own `DELETE` busy while one was live
+(`[check, decide]`, wider than the window needs). Nothing replaces it
+here, and nothing in this section should be read as claiming otherwise.
+**The replacement is D9(a)'s `S` fence** — the parent's `DELETE` already
+takes that row's `X` before it walks, so an `S` held from the check to
+the child's decide is refused by it and the window closes exactly. D9(a)
+is the following letter's (AT-0 item 6), and this window is its first
+named consequence: `docs/inflight/known-gaps.md` carries it until then.
+
+**The Cabin may find a child and may not clear one** (AT-R15, D4).
+`stats::CabinStore` is a dispatcher's own and a write files its entry
+into the *writing* core's store, which since AT-S5 is where the session
+is rather than where the relation's owner is — so a set observed on this
+core can be complete for what this core wrote and blind to what another
+core wrote. A hit is therefore still authoritative and still returns
+without walking; an exhausted, all-non-matching set is **not** an
+authoritative "no children" and falls through to the walk. The store
+becomes the instance's at AT-S7, which is what restores the fast path
+rather than removing it.
 
 ## 3. Reverse check — parent DELETE
 
@@ -421,15 +366,15 @@ walk child_rel
   no lock manager exists** — there has been one since M2 — but because a row being
   written already carries its writer, and a check that asked the table
   would ask it about a row the header has already answered for. A violation costs a prefix; only a pass costs the relation.
-- Cost: a full child walk per deleted parent until a Cabin covers the
-  fk column. The fix is declared: `CREATE CABIN ON child(fk_col)` — whose
-  **verified empty set is the authoritative "no children"** RESTRICT
-  wants (F6). The reverse check consults an active Cabin on the child's
-  fk column **read-only**: an observed value's entry set is resolved and
-  key-re-checked, and an exhausted, all-non-matching set is an
-  authoritative "no children" answered **without walking**. A heap
-  child with a failed hint abandons the Cabin and walks, exactly as
-  `ServeFromCabin` does.
+- Cost: a full child walk per deleted parent. `CREATE CABIN ON
+  child(fk_col)` (F6) pays for the **violation** half of it: the reverse
+  check consults an active Cabin on the child's fk column **read-only**,
+  an observed value's entry set is resolved and key-re-checked, and a live
+  match there answers `kFkViolation` or busy without walking. A set that
+  drains does **not** answer "no children" — §3a says why — so the pass
+  case still costs the relation until AT-S7 makes the store the
+  instance's. A heap child with a failed hint abandons the Cabin and
+  walks, exactly as `ServeFromCabin` does.
 
 There is no reverse check for parent UPDATE: K2 makes pk update
 Unsupported, so the case is closed by contract, not by code.
@@ -467,42 +412,29 @@ implementation is the failure mode to refuse in review.
 
 ## 5. What is deliberately absent
 
-- The lock family is **not consulted for the reverse probe's own answer**
+- The lock family is **not consulted for the reverse check's own answer**
   (a `DELETE` meeting a child row being written is still answered `busy`;
-  D9(a)'s `S` fence is M3's, and AO-R14 says so). The engine has wait
-  queues and a deadlock detector since M2 — this bullet is about which
-  answer this check takes, not about what exists — F3 plus in-place `trx_id` makes the uncommitted
-  row itself the conflict signal, and run-to-completion removes the
-  check-to-write race that gap locks exist to close elsewhere. **The
-  forward check waits, on either core**: a same-core parent being written
-  is waited for since AO-S3, and a parent on another core since AO-S5(b) —
-  the parent's core parks the probe until the writer decides, up to the
-  probe's own deadline, records
-  `child -> holder` in the instance's wait-for graph on the child's
-  behalf, and answers from a fresh view; a child that would close a cycle
-  is refused naming deadlock rather than netted (AO-S4a/S4b, `txn.md` §5).
-  Past the deadline with the writer undecided the answer is `busy` as
-  before, which is the fault-net shape now rather than the ordinary one.
-  **The fresh view's writer is the requester's own participant on the
-  parent's core, when it has one**: a transaction that shipped its parent
-  `INSERT` there and then writes the child at home is asking about its
-  own pending image, and §4's `own_trx_id` rule answers it at once - pass
-  or violation - rather than parking it on a holder that decides only at
-  its own `COMMIT`, which the parked statement stands ahead of (AO-S5(b)
-  C1). Forward only: the reverse probe's view stays writerless, so a
-  transaction's own child rows are invisible to its own reverse probe,
-  which answers busy as it does for any writer. And one asymmetry with a
-  single core remains: a transaction whose participant is *deleting* the
-  parent - the row registered pending on that core (§2a's pre-gate, ahead
-  of the visibility read) - is answered busy there where one core answers
-  violation, and inside an explicit transaction that busy cannot clear
-  until the transaction ends; the pre-gate stores no coordinator identity
-  to exclude the asker by. **And a decide for the child that arrives while its probe is
-  parked abandons the park**: the child's waiter is closed and its
-  intents are released by that decide, so the park ends without answering
-  and grants nothing - where a re-answer stamped after the child's
-  deadline would have granted an intent no decide will ever release
-  (AO-S5(b) C2).
+  D9(a)'s `S` fence is the following letter's, and AO-R14 says so). The
+  engine has wait queues and a deadlock detector since M2 — this bullet
+  is about which answer this check takes, not about what exists — F3 plus
+  in-place `trx_id` makes the uncommitted row itself the conflict signal,
+  and run-to-completion removes the check-to-write race that gap locks
+  exist to close elsewhere. That is true of a child on any core since
+  AT-S5f: the walk reads the row's header wherever the writer is.
+- **The forward check waits, and the wait is one mechanism** (AT-S5f). A
+  parent being written is waited for on whichever core holds it, on the
+  parent row's own entry in the instance's lock table; the waiter records
+  `waiter -> holder` in the wait-for graph and a wait that would close a
+  cycle is refused naming deadlock rather than netted (AO-S4a, `txn.md`
+  §5). Past the lock family's fault net with the holder undecided the
+  answer is the busy verdict's refusal, which is the net's shape rather
+  than the ordinary one.
+- **A transaction's own pending image answers at once**, which needs no
+  special case now that the check reads the row itself: §4's `own_trx_id`
+  rule sees the transaction's own uncommitted parent and answers pass or
+  violation rather than parking on it. Forward only — the reverse check's
+  view stays writerless, so a transaction's own child rows answer busy to
+  its own reverse check as any writer's do.
 - No ON UPDATE actions of any kind (K2).
 - No cross-relation write hooks: both checks are *reads* injected into
   the writing statement's own path; FK never writes to the other

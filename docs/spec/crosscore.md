@@ -440,13 +440,17 @@ every rule below reads with "relation" for "range".
   unique indexes, Cabin, Waystone pages, and the var-heap live on the
   relation's owner core, always. Read-only join partners may live anywhere.
 - FK (`docs/spec/foreign-keys.md`): parent and child on two *relations* on
-  two cores is owner-granular and supported — the forward check hoists to
-  the dispatch fork, probes one round per distinct owner, and leaves a
-  row-scoped reference intent; the validation-to-commit window closes
-  because a parent `DELETE` meeting a live intent answers busy rather than
-  racing it, and nothing inside a `WriteScope` waits (`foreign-keys.md`
-  §2a/§2b). A split parent or child would make the validation
-  range-granular, which the engine does not do: §6a's FK gate.
+  two cores is **not a crossing at all since AT-S5f**. The forward check
+  still hoists to the dispatch fork - for deduplication, and because the
+  wait has to happen where nothing has been written yet - and descends
+  every parent here; the reverse check walks every chain of every child
+  here. Nothing is probed, nothing is left behind, and the
+  validation-to-commit window closes on the child row's own header: an
+  uncommitted child answers a parent's `DELETE` busy because the walk
+  reads it, where a reference intent on the parent's owner used to say so
+  (`foreign-keys.md` §2a/§3a). Nothing inside a `WriteScope` waits. A
+  split parent or child would make the validation range-granular, which
+  the engine does not do: §6a's FK gate.
 
 ### 6a. Write-Coupled Auxiliaries — What May Split
 

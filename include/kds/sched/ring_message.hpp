@@ -179,6 +179,14 @@ enum class RingMessageKind : std::uint16_t {
     // Control rather than data, like EOF and CREDIT: it carries no rows and
     // spends no credit.
     kShippedRowDesc = 40,
+
+    // 41 and 42 were kFkProbeRequest / kFkProbeReply and 43 and 44
+    // kFkReverseProbeRequest / kFkReverseProbeReply, struck at AT-S5f: the
+    // foreign key's forward and reverse checks both run on the core the
+    // statement runs on, through the one frame table AM-S2 step 3 made the
+    // instance's, so neither direction crosses and there is nothing left
+    // for a probe to ask. The reference intent the forward pair granted
+    // went with them (`docs/spec/foreign-keys.md` §2a, §3a).
 };
 
 // **The census of every kind this build sends or handles, and the number

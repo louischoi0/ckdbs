@@ -93,10 +93,13 @@ rows it holds still blocks on it. `SHOW META` reports
   distinguish, and the rollback of an empty undo chain is the same empty
   change as the commit.
 
-**A core that answered a foreign-key probe is an intent holder, not a
-participant** (`docs/spec/foreign-keys.md` §2b): it holds a reference
-intent and nothing else, is not asked to prepare, and is told the decide,
-which releases the intent.
+**Every decide target is a participant since AT-S5f.** A second kind
+stood beside them - a core that answered a foreign-key probe held a
+*reference intent* and nothing else, was not asked to prepare, and was
+told the decide because the decide is what released the intent. No probe
+is sent and no intent is granted (`docs/spec/foreign-keys.md` §2b), so
+the decide's target list is `participants_` and the wire's `intent_only`
+byte is struck.
 
 **A shipped *read* is exempt from the dedup record.** The record answers a
 duplicate from what the owner last replied, so a lost reply cannot become a

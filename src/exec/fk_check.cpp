@@ -190,10 +190,9 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
 
             // An observed value's set is a **superset** of the pks that
             // carry it, so every entry has to be checked and none may be
-            // trusted on sight - but the set being a superset is exactly
-            // what makes an exhausted, all-non-matching scan of it an
-            // authoritative "no children". That is the answer this whole
-            // structure exists to give.
+            // trusted on sight. A live match found here is therefore
+            // authoritative and returns without walking; an exhausted scan
+            // is not, and the loop's exit says why.
             const bool is_btree = child.clustered_type == catalog::ClusteredType::kBtree;
             std::unordered_set<std::uint64_t> seen;
             std::vector<parser::AstValue> scratch;
@@ -215,9 +214,9 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 if (at_page == kInvalidPageId) {
                     if (!is_btree) {
                         // No descent to heal the hint with. Abandon the
-                        // Cabin for this check and walk - the same answer
-                        // `ServeFromCabin` gives for the same reason, and
-                        // safe here because nothing has been concluded yet.
+                        // set for this check - `ServeFromCabin`'s answer
+                        // for the same reason - and take the walk, which
+                        // is where every exit from this loop goes now.
                         options.cabins->Unobserve(*key);
                         break;
                     }
