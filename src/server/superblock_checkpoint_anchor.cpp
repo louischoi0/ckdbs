@@ -1,6 +1,5 @@
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 
-#include <optional>
 #include <vector>
 
 namespace kds::server {
@@ -79,33 +78,39 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
             ", which this database's core count (" + std::to_string(superblock_.core_count()) +
             ") does not have");
     }
-    // The fold, the field and the image under one hold (`SetLatch`); the
-    // sync below is outside it.
-    std::optional<LatchGuard> hold(std::in_place, latch_);
-    per_core_[anchor.core_id] = anchor;
-    published_ |= std::uint64_t{1} << anchor.core_id;
-    const std::uint32_t slot = 0;
-    const wal::CheckpointAnchorRecord landing = FoldedAnchor();
+    // The fold, the field and the image under one hold (`SetLatch`) - and
+    // page 0's pin with them. The sync below is outside both: a pin kept
+    // across it holds page 0's exclusive page latch through the fsync, and
+    // core 0's carve, already under the superblock latch, would spin on it.
+    wal::CheckpointAnchorRecord landing;
+    std::size_t folded = 0;
+    {
+        LatchGuard hold(latch_);
+        per_core_[anchor.core_id] = anchor;
+        published_ |= std::uint64_t{1} << anchor.core_id;
+        landing = FoldedAnchor();
+        folded = folded_cores();  // read here: another core's publish writes the mask
 
-    const WalAnchorFields fields{landing.checkpoint_lsn, landing.redo_start_lsn,
-                                 landing.durable_lsn, landing.segment_no};
-    if (Status s = superblock_.SetWalAnchor(slot, fields); !s.ok()) {
-        return s;
-    }
-
-    // Fetched rather than cached: the superblock page is the store's to
-    // move, and holding a span across calls would outlive whatever frame it
-    // came from.
-    auto page = store_.Get(kSuperBlockPageId);
-    if (!page.ok()) {
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("superblock", "anchor publish could not read the superblock page: " +
-                                          page.status().message());
+        constexpr std::uint32_t kFoldSlot = 0;
+        const WalAnchorFields fields{landing.checkpoint_lsn, landing.redo_start_lsn,
+                                     landing.durable_lsn, landing.segment_no};
+        if (Status s = superblock_.SetWalAnchor(kFoldSlot, fields); !s.ok()) {
+            return s;
         }
-        return page.status();
+
+        // Fetched rather than cached: the superblock page is the store's to
+        // move, and holding a span across calls would outlive whatever frame
+        // it came from.
+        auto page = store_.Get(kSuperBlockPageId);
+        if (!page.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("superblock", "anchor publish could not read the superblock page: " +
+                                              page.status().message());
+            }
+            return page.status();
+        }
+        superblock_.Encode(page.value().bytes());
     }
-    superblock_.Encode(page.value().bytes());
-    hold.reset();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         // The superblock is the one page whose every rewrite matters -
         // it is what a restart reads first.
@@ -113,7 +118,7 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
                                       std::to_string(anchor.core_id) + ": redo_start=" +
                                       std::to_string(landing.redo_start_lsn) + " durable_lsn=" +
                                       std::to_string(landing.durable_lsn) + " (folded over " +
-                                      std::to_string(folded_cores()) + " of " +
+                                      std::to_string(folded) + " of " +
                                       std::to_string(superblock_.core_count()) + " cores)");
     }
 
