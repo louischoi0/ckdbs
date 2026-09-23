@@ -193,6 +193,21 @@ public:
         // carries the same default for the same reason.
         sched::MonoTimeNs lock_wait_fault_net_ns = txn::kLockWaitFaultNetNs;
 
+        // **The statement limits core 0's dispatcher is given** (AT-S8),
+        // copied like every other shared setting. A session runs on the
+        // core that accepted it since every core listens, and a peer's
+        // dispatcher built with its own defaults answered a statement
+        // core 0 would have refused - or refused one core 0 would have
+        // served - under the same config file: `indexes = off`, a lowered
+        // `sort_max_rows` and the rest simply did not reach it. Each
+        // default is the dispatcher's own, so a fixture's peer is built as
+        // an unconfigured instance's is.
+        bool indexes = true;
+        std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows;
+        exec::AggregateLimits aggregate_limits;
+        std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
+        std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
+
         // RD5's `range_size_ids`, copied from core 0 like every other
         // shared setting. One number sizes both the row-id lease grant and
         // the range; the argument for both is `server/range_alloc.hpp`'s.
@@ -400,27 +415,21 @@ public:
     // never attached a transport at all. `transport` must outlive this.
     Status AttachTransport(sched::RingTransport& transport);
 
-    // PW5: binds `port` with SO_REUSEPORT and attaches the listener to
-    // this core's reactor and dispatcher, on the startup thread before
-    // the worker exists. STOP accepted here routes to the system core
-    // (tcp_server.hpp's stop contract); the listener dies first at
-    // teardown - see ~CoreRuntime.
-    // `protocol` **must match every other listener on `port`**: peers
-    // share one port through SO_REUSEPORT, so the kernel hands a
-    // connection to whichever core it likes and a peer speaking a
-    // different framing would answer a KWP client in lines. KWP by
-    // default, like core 0's; the text protocol is passed explicitly by
-    // the tests that exercise the newline surface.
-    // `identity` mints this listener's session ids and cancel keys. It
-    // **must be the same source core 0 uses**, and that is a correctness
-    // statement rather than tidiness: peers share one port through
-    // SO_REUSEPORT, so the kernel decides which core accepts a connection,
-    // and two listeners minting from two independent counters can issue one
-    // session id twice. Unset falls back to `TcpServer`'s counter, which is
-    // distinct per listener and not unique across them.
-    Status ListenAndAttach(std::uint16_t port, Protocol protocol = Protocol::kKwp,
-                           wal::DurabilityClass durability = wal::DurabilityClass::kGroup,
-                           TcpServer::IdentitySource identity = {});
+    // PW5, and the arrangement since AT-S8: binds `port` with SO_REUSEPORT
+    // and attaches the listener to this core's reactor and dispatcher, on
+    // the startup thread before the worker exists. STOP accepted here
+    // routes to the system core (tcp_server.hpp's stop contract); the
+    // listener dies first at teardown - see ~CoreRuntime.
+    //
+    // `setup` **must be the one every other listener on `port` has**
+    // (`TcpServer::ClientSetup`): the kernel hands a connection to whichever
+    // core it likes, so a peer speaking another framing would answer a KWP
+    // client in lines, a peer without the TLS channel or the SCRAM gate would
+    // serve the secured port in plaintext and unauthenticated, and two
+    // identity sources minting from independent counters can issue one
+    // session id twice. The text protocol is passed explicitly by the tests
+    // that exercise the newline surface.
+    Status ListenAndAttach(std::uint16_t port, const TcpServer::ClientSetup& setup = {});
 
     // BUG-4 ordering (the PW5 review): closes the listener - and with it
     // every accepted session, rolling back open transactions - while this
@@ -428,6 +437,9 @@ public:
     // every core before the final per-core Sync(), the same detach-then-
     // sync order core 0's own teardown has always had. Idempotent.
     void CloseListener() noexcept { listener_.reset(); }
+    // Whether this core holds a client listener - every peer an instance
+    // opens does since AT-S8.
+    bool listening() const noexcept { return listener_.has_value(); }
 
     // Runs this core's reactor until another thread sets its stop flag
     // (`scheduler().Stop()`, AU-S3). This is the worker thread's whole body.
@@ -511,6 +523,9 @@ public:
     txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
 
     std::uint32_t core_id() const noexcept { return config_.core_id; }
+    // What this core was opened with. Immutable after `Open`, so readable
+    // from any thread - a test's view of what `Expeditor` handed a peer.
+    const Config& config() const noexcept { return config_; }
     sched::Scheduler& scheduler() noexcept { return *scheduler_; }
 
     // **How a peer stops the instance** (AU-S3). A client's `STOP` accepted

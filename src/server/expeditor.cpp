@@ -62,7 +62,6 @@ std::string Expeditor::Config::LogPath() const {
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
             "tls",        "tls_cert_file",        "tls_key_file",
-            "peer_listeners",
             "auth",       "users_file",
             "isolation",             "default_key_mode",
             "wal_drain_interval_us", "relaxed_flush_interval_us",
@@ -122,54 +121,37 @@ std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept {
     return frames / cores;
 }
 
-Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
-                               std::uint32_t cores) {
-    if (!peer_listeners) return Status::OK();
-    if (tls || auth_scram) {
-        return Status::NotImplemented(
-            "peer_listeners = on cannot yet be combined with tls or auth: the credential "
-            "store and TLS context live on core 0's stack, and sharing them across per-core "
-            "listeners is PW5's open half (workplan-peer-writer.md) - run peer listeners on "
-            "the loopback plaintext port, or keep one listener");
-    }
-    // One pairing that cannot work, refused rather than served (the PW5
-    // review's finding 6): one core has no peer to listen, so the sole
-    // effect would be SO_REUSEPORT on the only socket, which lets a second
-    // process bind the same port and silently take half the connections
-    // into a different database.
-    if (cores == 1) {
-        return Status::InvalidArgument(
-            "peer_listeners = on with cores = 1 has no peer to listen; the only effect "
-            "would be losing the exclusive bind on the one socket");
-    }
-    // **The second pairing this used to refuse is retired**, and it was
-    // already wrong before R4 rather than made wrong by it. The refusal
-    // read *"creating-core placement puts every relation on core 0, so
-    // every peer-accepted session would refuse every statement while
-    // answering OK to PING"* - true when PW5 wrote it, and falsified twice
-    // since:
-    //
-    //   - **statement shipping** (SS2, 2026-08-26): an autocommit
-    //     single-relation statement whose relation another core owns is
-    //     carried to that owner and answered with the owner's own reply.
-    //     A peer-accepted session under creating-core placement serves
-    //     every such statement, which is most of them.
-    //   - **insert spreading** (R4, 2026-08-29): with `range_size_ids`
-    //     armed such a session takes a **range of its own** on a core-0
-    //     relation and serves its writes locally, which is not merely
-    //     permissible - it is the arrangement `crosscore.md` §6b
-    //     describes, and the one a measurement of it must be able to
-    //     configure.
-    //
-    // What the refusal protected against therefore no longer exists, and
-    // keeping it cost the configuration §6b is written about. A statement
-    // a peer still cannot serve is refused by the affinity check with its
-    // own message, which is where a refusal about ownership belongs -
-    // never at startup, on a guess about what the sessions will ask for.
-    return Status::OK();
+std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfigKeys() {
+    return {
+        // AT-0 item 7. `in_doubt_ceiling_ms` bounded a writer's wait on a
+        // row this core had prepared and was in doubt about; nothing
+        // prepares since AT-S6, and the quantity the key named is the lock
+        // family's fault net.
+        {"in_doubt_ceiling_ms",
+         "in_doubt_ceiling_ms was the cross-owner in-doubt ceiling and there is no "
+         "cross-owner transaction since v3.0.0's M3; the wait it bounded is the lock "
+         "family's fault net, which is 'lock_wait_fault_net_ms'"},
+        // AT-S8 (AT-R12, D19). Every core listens on the port, so the switch
+        // has no off position left to describe.
+        {"peer_listeners",
+         "peer_listeners is retired since v3.0.0's M3: every core accepts on the port "
+         "(SO_REUSEPORT above one core) and a session runs on the core that accepted it; "
+         "remove the key"},
+    };
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
+    // **A retired key is refused by name, before the unknown-key check** -
+    // which is what makes its message reachable at all: a key missing from
+    // `KnownConfigKeys` is refused there as merely unknown, and AT-S6's
+    // successor-naming refusal of `in_doubt_ceiling_ms` sat below that
+    // check, unreachable, until AT-S8. Refused rather than ignored, because
+    // a file that still sets one is a file whose author expects it to do
+    // something.
+    for (const auto& [key, why] : RetiredConfigKeys()) {
+        if (file.Has(key)) return Status::InvalidArgument(file.origin() + ": " + why);
+    }
+
     std::vector<std::string> unknown = file.UnknownKeys(KnownConfigKeys());
     if (!unknown.empty()) {
         std::string msg = file.origin() + ": unknown config key(s):";
@@ -239,11 +221,6 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(file.origin() + ": " + parsed.status().message());
         }
         durability = parsed.value();
-    }
-    if (file.Has("peer_listeners")) {
-        auto v = file.GetBool("peer_listeners");
-        if (!v.ok()) return v.status();
-        peer_listeners = v.value();
     }
     if (file.Has("tls")) {
         auto v = file.GetBool("tls");
@@ -380,20 +357,6 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // this knob at any value. The semantics have one home, at
         // `kDefaultJoinBuildMaxRows` (exec/budget.hpp).
         join_build_max_rows = static_cast<std::size_t>(v.value());
-    }
-    // **The old spelling is refused, and it names its successor** (AT-0
-    // item 7). `in_doubt_ceiling_ms` bounded a writer's wait on a row this
-    // core had prepared and was in doubt about; nothing prepares and
-    // nothing is in doubt since AT-S6, and the quantity the key named -
-    // how long a statement may wait before the engine calls it a fault -
-    // is `lock_wait_fault_net_ms`. Refused rather than ignored, because a
-    // file that still sets it is a file whose author expects it to do
-    // something.
-    if (file.Has("in_doubt_ceiling_ms")) {
-        return Status::InvalidArgument(
-            "in_doubt_ceiling_ms was the cross-owner in-doubt ceiling and there is no "
-            "cross-owner transaction since v3.0.0's M3; the wait it bounded is the lock "
-            "family's fault net, which is 'lock_wait_fault_net_ms'");
     }
     if (file.Has("lock_wait_fault_net_ms")) {
         auto v = file.GetUint("lock_wait_fault_net_ms");
@@ -744,11 +707,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // behind another's, with no preemption to break the tie.
     if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
     if (Status s = CheckFrameBudget(config.buffer_pool_frames, config.cores); !s.ok()) return s;
-    if (Status s = CheckPeerListenerConfig(config.peer_listeners, config.tls, config.auth_scram,
-                                           config.cores);
-        !s.ok()) {
-        return s;
-    }
     const unsigned hardware_cores = std::thread::hardware_concurrency();
     // 0 means "not detectable" - not "no cores". Skipping the check is the
     // only honest response; refusing would make the server unstartable on a
@@ -1522,54 +1480,63 @@ Status Expeditor::Start() {
 #endif
     }
 
-    // With peer listeners on, every core's socket - this one included -
-    // must carry SO_REUSEPORT (tcp_server.hpp on why the first binder
-    // matters).
+    // **Every core listens on the port** (AT-S8, AT-R12, D19's mark): a
+    // session is accepted by whichever core the kernel picks and runs to
+    // completion there. So above one core every socket - this one included,
+    // and first - carries SO_REUSEPORT (tcp_server.hpp on why the first
+    // binder matters). At `cores = 1` there is no second socket, and the
+    // option would only lose the exclusive bind: a second process bound to
+    // the same port would silently take half the connections into a
+    // different database (the PW5 review's finding 6), so it is not set.
+    // Above one core that exposure is the arrangement's price, and it is
+    // stated in `manual/server/server.md`.
     {
-        auto opened = TcpServer::Listen(config_.port, config_.peer_listeners);
+        auto opened = TcpServer::Listen(config_.port, /*reuse_port=*/config_.cores > 1);
         if (!opened.ok()) return opened.status();
         listener.emplace(std::move(opened.value()));
     }
+
+    // **One setup for every listener on the port**, core 0's and each
+    // peer's (`TcpServer::ClientSetup`). The TLS context and the credential
+    // store are `ServeRuntime`'s, read-only after this point and outliving
+    // every peer (`cores_` is cleared before `running_` is reset), so the
+    // factories below are safe to call from any core - which is what the
+    // refusal of per-core listeners with TLS or SCRAM said they were not,
+    // when both lived on core 0's stack.
+    //
     // **The cut-over** (KW-D6, protocol-wp.md P13): the default port speaks
     // KWP/1. The newline protocol is not deleted - it is `debug_text_port`
     // below, off unless asked for.
-    listener.value().set_protocol(Protocol::kKwp);
-    listener.value().set_durability(config_.durability);
-    listener.value().set_server_info("kds");
+    TcpServer::ClientSetup client_setup;
+    client_setup.protocol = Protocol::kKwp;
+    client_setup.durability = config_.durability;
 #if KDS_WITH_TLS
     if (tls_context.has_value()) {
-        listener.value().set_channel_factory(
-            [ctx = &*tls_context] { return ctx->NewChannel(); });
+        client_setup.channel = [ctx = &*tls_context] { return ctx->NewChannel(); };
     }
     if (credentials.has_value()) {
-        listener.value().set_auth_gate_factory([store = &*credentials] {
+        client_setup.auth = [store = &*credentials] {
             return std::make_unique<ScramAuthGate>(store);
-        });
+        };
     }
-#endif
-
-    // **One identity source for every listener on the port.** Peers share
-    // it through SO_REUSEPORT, so a session id minted from a per-listener
-    // counter is unique only within one core - and the kernel decides which
-    // core a client lands on. Built here, once, and handed to core 0 below
-    // and to every peer at `ListenAndAttach`.
+    // **One identity source for every listener on the port.** A session id
+    // minted from a per-listener counter is unique only within one core -
+    // and the kernel decides which core a client lands on. The RNG SCRAM's
+    // salts already come from (`server/scram.cpp`).
     //
     // Without OpenSSL there is no unguessable source in this build, and the
     // fallback counter is honest about it: `kServerCapabilities` does not
     // offer `CANCEL` either way (handshake.hpp), so nothing depends on the
     // value being a secret today.
-    TcpServer::IdentitySource identity;
-#if KDS_WITH_TLS
-    // The RNG SCRAM's salts already come from (`server/scram.cpp`).
-    identity = [] {
+    client_setup.identity = [] {
         std::uint64_t v = 0;
         if (RAND_bytes(reinterpret_cast<unsigned char*>(&v), sizeof(v)) != 1) {
             return std::uint64_t{0};
         }
         return v;
     };
-    listener.value().set_identity_source(identity);
 #endif
+    listener.value().Configure(client_setup);
 
     // The newline text protocol's loopback debug surface (§12). A second
     // `TcpServer` over the same dispatcher, differing in one call - which
@@ -1730,6 +1697,14 @@ Status Expeditor::Start() {
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
             core_config.lock_wait_fault_net_ns = config_.lock_wait_fault_net_ns;
+            // The statement limits core 0's dispatcher got in `Open` (AT-S8):
+            // a session accepted here runs here, under the same config file.
+            core_config.indexes = config_.indexes;
+            core_config.max_insert_rows = config_.max_insert_rows;
+            core_config.aggregate_limits =
+                exec::AggregateLimits{config_.aggregate_max_groups, config_.aggregate_max_distinct};
+            core_config.sort_max_rows = config_.sort_max_rows;
+            core_config.join_build_max_rows = config_.join_build_max_rows;
             core_config.range_size_ids = config_.range_size_ids;
             // CR7: the instance's switch reaches the peers now that they
             // have somewhere to put a shape.
@@ -1818,12 +1793,9 @@ Status Expeditor::Start() {
                 !s.ok()) {
                 return s;
             }
-            if (config_.peer_listeners) {
-                if (Status s = core.value()->ListenAndAttach(
-                        config_.port, Protocol::kKwp, config_.durability, identity);
-                    !s.ok()) {
-                    return s;
-                }
+            // Every peer listens on the port with core 0's setup (AT-S8).
+            if (Status s = core.value()->ListenAndAttach(config_.port, client_setup); !s.ok()) {
+                return s;
             }
             cores_.push_back(std::move(core.value()));
         }

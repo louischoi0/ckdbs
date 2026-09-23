@@ -1,6 +1,7 @@
 #include "kds/server/config_file.hpp"
 
 #include <type_traits>
+#include <algorithm>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -549,43 +550,32 @@ TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) 
     EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
 }
 
-TEST(ExpeditorConfigTest, PeerListenersParseAndRefuseTlsOrAuth) {
-    // PW5's stated restriction: the credential store and TLS context are
-    // core 0's stack, so peer listeners with either is refused truthfully
-    // (Unsupported - understood and declined) rather than served with
-    // secrets shared by accident.
+TEST(ExpeditorConfigTest, ARetiredKeyIsRefusedByNameWithWhatReplacedIt) {
+    // AT-S8. `peer_listeners` is the arrangement rather than an option, so
+    // the key has no off position left to describe; and `in_doubt_ceiling_ms`
+    // (AT-S6) was refused with its successor named *below* the unknown-key
+    // check, which refused it first as merely unknown - the message was
+    // unreachable until the retired keys were checked ahead of it. Each is
+    // asserted by the words only its own message has.
     Expeditor::Config config;
-    EXPECT_FALSE(config.peer_listeners);
-    ASSERT_TRUE(config.ApplyFile(ParseOk("peer_listeners = on\n")).ok());
-    EXPECT_TRUE(config.peer_listeners);
 
-    constexpr auto kRotate = catalog::PlacementPolicy::kRotate;
-    constexpr auto kCreating = catalog::PlacementPolicy::kCreatingCore;
-    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true, 1).ok());
-    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2).ok());
-    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2).code(), StatusCode::kNotImplemented);
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2).code(), StatusCode::kNotImplemented);
+    Status listeners = config.ApplyFile(ParseOk("peer_listeners = on\n"));
+    EXPECT_EQ(listeners.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(listeners.message().find("every core accepts on the port"), std::string::npos)
+        << listeners.message();
+    EXPECT_EQ(listeners.message().find("unknown config key"), std::string::npos)
+        << listeners.message();
 
-    // The one pairing that cannot work (the PW5 review's finding 6): no
-    // peer to listen, so SO_REUSEPORT on the only socket loses the
-    // exclusive bind for nothing. A plain misconfiguration, so
-    // InvalidArgument.
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1).code(),
-              StatusCode::kInvalidArgument);
+    Status in_doubt = config.ApplyFile(ParseOk("in_doubt_ceiling_ms = 100\n"));
+    EXPECT_EQ(in_doubt.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(in_doubt.message().find("lock_wait_fault_net_ms"), std::string::npos)
+        << in_doubt.message();
 
-    // **The placement clause is retired** (2026-08-29). It refused
-    // creating-core placement because "a peer session could serve
-    // nothing", which statement shipping (SS2) and insert spreading (R4)
-    // each falsified - a peer-accepted session ships what it cannot own
-    // and, with ranges armed, takes a range of a core-0 relation and
-    // serves its writes locally. The function no longer takes placement or
-    // `range_size_ids` at all, which is why this is asserted as an absence
-    // of parameters rather than as a pair of accepted values.
-    static_assert(std::is_invocable_r_v<Status, decltype(CheckPeerListenerConfig), bool, bool,
-                                        bool, std::uint32_t>,
-                  "CheckPeerListenerConfig judges the listener alone");
-    (void)kRotate;
-    (void)kCreating;
+    // Neither is a key a file may set, and none of the known keys is retired.
+    for (const auto& [key, why] : Expeditor::Config::RetiredConfigKeys()) {
+        const auto known = Expeditor::Config::KnownConfigKeys();
+        EXPECT_EQ(std::find(known.begin(), known.end(), key), known.end()) << key;
+    }
 }
 
 TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal) {

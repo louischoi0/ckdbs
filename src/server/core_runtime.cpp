@@ -431,7 +431,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // gone with the ring kind that flushed it.
         config.access_statistics,
         runtime->cabins(), &*runtime->txn_manager_,
-        config.isolation, config.core_id);
+        config.isolation, config.core_id, config.indexes, config.max_insert_rows);
+    // Core 0's statement limits, the ones `Expeditor::Open` sets on its own
+    // dispatcher (AT-S8; `Config::indexes` says what went wrong without them).
+    runtime->dispatcher_->set_aggregate_limits(config.aggregate_limits);
+    runtime->dispatcher_->set_sort_max_rows(config.sort_max_rows);
+    runtime->dispatcher_->set_join_build_max_rows(config.join_build_max_rows);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.
@@ -996,17 +1001,13 @@ Status CoreRuntime::ShutdownCheckpoint() {
     return Checkpoint();
 }
 
-Status CoreRuntime::ListenAndAttach(std::uint16_t port, Protocol protocol,
-                                    wal::DurabilityClass durability,
-                                    TcpServer::IdentitySource identity) {
+Status CoreRuntime::ListenAndAttach(std::uint16_t port, const TcpServer::ClientSetup& setup) {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
     const CurrentCoreGuard as_this_core(core_id());
     auto listener = TcpServer::Listen(port, /*reuse_port=*/true);
     if (!listener.ok()) return listener.status();
     listener_.emplace(std::move(listener.value()));
-    listener_->set_protocol(protocol);
-    listener_->set_durability(durability);
-    if (identity) listener_->set_identity_source(std::move(identity));
+    listener_->Configure(setup);
     if (Status s = listener_->Attach(*scheduler_, *dispatcher_, log_); !s.ok()) {
         listener_.reset();
         return s;

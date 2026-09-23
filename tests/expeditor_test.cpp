@@ -414,6 +414,39 @@ TEST_F(ExpeditorTest, AtOneCoreTheDispatcherHoldsTheInstancesLockTable) {
         << "core 0's dispatcher records its edges in some other table, or none";
 }
 
+// ---- AT-S8: a session runs where it was accepted --------------------------
+//
+// Every core listens on the port, so what a peer is handed decides what a
+// session accepted there gets. Two halves, both read at the one moment the
+// assembly is whole and still: the peer holds a listener with no config key
+// asking for it, and its dispatcher was handed core 0's statement limits
+// rather than the dispatcher's own defaults.
+TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    config.indexes = false;
+    config.max_insert_rows = 9;
+    config.aggregate_max_groups = 11;
+    config.aggregate_max_distinct = 13;
+    config.sort_max_rows = 7;
+    config.join_build_max_rows = 17;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(db.Start().ok());
+    ASSERT_EQ(db.cores().size(), 1u);
+    const CoreRuntime& peer = *db.cores().front();
+
+    EXPECT_TRUE(peer.listening()) << "the peer accepts nothing on the instance's port";
+
+    const CoreRuntime::Config& handed = peer.config();
+    EXPECT_FALSE(handed.indexes);
+    EXPECT_EQ(handed.max_insert_rows, 9u);
+    EXPECT_EQ(handed.aggregate_limits.max_groups, 11u);
+    EXPECT_EQ(handed.aggregate_limits.max_distinct, 13u);
+    EXPECT_EQ(handed.sort_max_rows, 7u);
+    EXPECT_EQ(handed.join_build_max_rows, 17u);
+}
+
 // ---- AT-0 item 7: the fault net's key sets the fault net ----------------
 //
 // `in_doubt_ceiling_ms` was re-scoped and renamed to

@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kds/base/log.hpp"
@@ -94,23 +95,6 @@ namespace kds::server {
 // reason CheckCoreCount is one: testable without a server.
 Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 
-// Refuses every `peer_listeners = on` pairing that cannot work: with TLS
-// or SCRAM auth (both are built on core 0's stack; sharing them immutably
-// is PW5's open half - refused truthfully rather than served insecurely),
-// with `cores = 1` (no peer to listen, and SO_REUSEPORT on the only
-// socket loses the exclusive bind), and with creating-core placement
-// and with `cores = 1` (no peer to listen, and SO_REUSEPORT on the only
-// socket loses the exclusive bind). A free function for the same reason
-// its two siblings above are.
-//
-// **The placement clause is retired (2026-08-29)** and the parameters with
-// it. It refused creating-core placement because "a peer session could
-// serve nothing" - true when PW5 wrote it, falsified by statement shipping
-// (SS2) and again by insert spreading (R4), each of which gives such a
-// session something to do. The .cpp carries the argument.
-Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
-                               std::uint32_t cores);
-
 // EV4 (docs/spec/eviction.md §6), under the operator invariant of
 // 2026-08-24: the key is an instance total and every core's share is
 // equal - `frames / min(cores, hardware cores)` as ratified, which is
@@ -164,12 +148,6 @@ public:
         // refused with NotImplemented naming the build flag - a config
         // written for a capability this binary does not have fails
         // loudly, the physical_optimizer = on precedent.
-        // Per-core listeners (workplan-peer-writer.md PW5; the operator
-        // story is in kds.conf.sample, the socket mechanics in
-        // tcp_server.hpp). Off by default; the workable pairings are
-        // CheckPeerListenerConfig's to police.
-        bool peer_listeners = false;
-
         bool tls = false;
         std::string tls_cert_file;
         std::string tls_key_file;
@@ -594,6 +572,11 @@ public:
         // the fields it fills so adding a field and forgetting the key is
         // one edit away from being noticed.
         static std::vector<std::string> KnownConfigKeys();
+
+        // Keys this build refuses by name, each with the message that says
+        // what replaced it. `ApplyFile` checks them before the unknown-key
+        // check, so the message is what an operator sees.
+        static std::vector<std::pair<std::string, std::string>> RetiredConfigKeys();
 
         // Overlays `file` onto this config. Keys absent from the file leave
         // the current value alone, which is what makes the precedence chain

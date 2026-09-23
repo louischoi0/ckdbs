@@ -862,6 +862,33 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblo
     EXPECT_GE(next_on_core0.value(), block.value().first + block.value().count);
 }
 
+TEST_F(CoreRuntimeTest, APeersDispatcherRunsUnderTheStatementLimitsItIsHanded) {
+    // AT-S8: every core accepts sessions, so a peer's dispatcher must refuse
+    // what core 0's refuses under the same config file. It was built with
+    // the dispatcher's own defaults and never handed `sort_max_rows` and its
+    // siblings, so a peer-accepted session could sort a million rows where
+    // the operator had capped it at three.
+    CoreRuntime::Config config = ConfigFor(1);
+    config.sort_max_rows = 1;
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    // Funded as the grant cell above funds it, so the peer can write.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok()) << block.status().message();
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+    CommandDispatcher& d = peer.value()->dispatcher();
+    for (const char* sql : {"CREATE TABLE capped (id int64, v int64)",
+                            "INSERT INTO capped VALUES (1, 20)", "INSERT INTO capped VALUES (2, 10)"}) {
+        const std::string r = d.Dispatch(sql).response;
+        ASSERT_NE(r.rfind("ERR", 0), 0u) << sql << ": " << r;
+    }
+
+    const std::string reply = d.Dispatch("SELECT v FROM capped ORDER BY v").response;
+    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << "the peer sorted past the cap it was handed: " << reply;
+    EXPECT_NE(reply.find("sort_max_rows"), std::string::npos) << reply;
+}
+
 TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesTheInstanceSuperblock) {
     // PW3, and since AT-S8 with no ring in it: a peer handed the instance's
     // `SuperBlockCheckpointAnchor` publishes into it directly, from its own
@@ -3626,6 +3653,13 @@ int ConnectLoopback(std::uint16_t port) {
     return fd;
 }
 
+// The newline surface these listener cells speak, with no gate and no TLS.
+TcpServer::ClientSetup TextSetup() {
+    TcpServer::ClientSetup setup;
+    setup.protocol = Protocol::kText;
+    return setup;
+}
+
 std::string RoundTrip(int fd, std::string_view line) {
     std::string out(line);
     out.push_back('\n');
@@ -3682,7 +3716,7 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
     // the stop handler it feeds exists by the time a client can send STOP.
     std::atomic<bool> instance_stopped{false};
     peer.value()->set_instance_stop([&instance_stopped] { instance_stopped.store(true); });
-    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, Protocol::kText).ok());
+    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, TextSetup()).ok());
 
     std::thread worker([&] { peer.value()->Run(); });
 
@@ -3764,6 +3798,50 @@ TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     EXPECT_TRUE(shapes.value().empty());
 }
 
+TEST_F(CoreRuntimeTest, APeerListenerAsksTheAuthGateItIsHanded) {
+    // AT-S8: every core listens, so a peer's listener must gate a session
+    // exactly as core 0's does. The pairing of per-core listeners with
+    // `auth = scram` was refused while a peer's listener was wired by hand
+    // with neither factory - a peer-accepted session would have started
+    // authenticated. The gate here refuses every line and closes, so a
+    // statement answered by the dispatcher is the failure.
+    constexpr std::uint16_t kPort = 25443;
+    class RefuseAll final : public AuthGate {
+    public:
+        Result OnLine(std::string_view) override {
+            Result r;
+            r.reply = "ERR refused by the test's gate";
+            r.close = true;
+            return r;
+        }
+    };
+    std::atomic<int> gates{0};
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    std::atomic<bool> instance_stopped{false};
+    peer.value()->set_instance_stop([&instance_stopped] { instance_stopped.store(true); });
+    TcpServer::ClientSetup setup;
+    setup.protocol = Protocol::kText;
+    setup.auth = [&gates] {
+        gates.fetch_add(1);
+        return std::make_unique<RefuseAll>();
+    };
+    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, setup).ok());
+
+    std::thread worker([&] { peer.value()->Run(); });
+    const int fd = ConnectLoopback(kPort);
+    ASSERT_GE(fd, 0);
+    const std::string reply = RoundTrip(fd, "SHOW TABLES");
+    ::close(fd);
+    peer.value()->scheduler().Stop();
+    worker.join();
+
+    EXPECT_EQ(gates.load(), 1) << "the peer's listener built no gate for the session it accepted";
+    EXPECT_EQ(reply.rfind("ERR refused by the test's gate", 0), 0u)
+        << "the peer answered an unauthenticated statement: " << reply;
+}
+
 TEST_F(CoreRuntimeTest, APeerListenerIsTornDownBeforeTheReactorItRegisteredWith) {
     // PW5's teardown, and the one thing declaration order does not decide:
     // `~CoreRuntime`'s *body* drops the scheduler before any member
@@ -3778,7 +3856,7 @@ TEST_F(CoreRuntimeTest, APeerListenerIsTornDownBeforeTheReactorItRegisteredWith)
     constexpr std::uint16_t kPort = 25441;
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, Protocol::kText).ok());
+    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, TextSetup()).ok());
 
     // A socket without SO_REUSEPORT may not join a REUSEPORT group, so this
     // is the port being genuinely held by the peer.

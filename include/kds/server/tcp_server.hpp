@@ -151,6 +151,28 @@ public:
     }
     void set_server_info(std::string info) noexcept { server_info_ = std::move(info); }
 
+    // **What every client listener on the instance's port shares** (AT-S8).
+    // Every core accepts on the port, so core 0's listener and each peer's
+    // are configured from one value: a peer listener missing the TLS channel
+    // or the SCRAM gate would serve plaintext, unauthenticated sessions on
+    // the port the operator secured, which is why the pairing was refused
+    // while each listener was wired by hand. Unset factories and an unset
+    // identity source keep their setters' defaults. Before Attach().
+    struct ClientSetup {
+        Protocol protocol = Protocol::kKwp;
+        wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
+        IdentitySource identity;
+        ChannelFactory channel;
+        AuthGateFactory auth;
+    };
+    void Configure(const ClientSetup& setup) {
+        protocol_ = setup.protocol;
+        durability_ = setup.durability;
+        if (setup.identity) identity_source_ = setup.identity;
+        if (setup.channel) channel_factory_ = setup.channel;
+        if (setup.auth) auth_gate_factory_ = setup.auth;
+    }
+
     // Live client connections, for tests and for the shutdown path.
     std::size_t open_connections() const noexcept { return clients_.size(); }
 
