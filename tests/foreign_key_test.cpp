@@ -524,52 +524,10 @@ TEST_F(ForeignKeyCheckTest, ManyChildrenOfOneParentResolveItOnce) {
         << "the parent was resolved once per row rather than once: " << access;
 }
 
-// ---- AH-T2, first slice: a foreign parent is grouped, never descended ---
-//
-// `CheckParentPresent` descends `parent.desc_page_id` with no ownership
-// question anywhere in it, so on a parent this core does not own it would
-// fault a page it may not fault - or worse, answer from one. The extraction
-// pass now asks ownership **before** the descent and defers a foreign
-// parent into its owner's group; nothing sends that group yet, so the
-// statement is refused instead.
-//
-// **Tested here and not through the dispatcher, because the dispatcher path
-// is unreachable - behind two refusals that fire earlier.** Worth recording
-// rather than leaving to be discovered: `CheckForeignKeyColocation` refuses
-// a cross-owner declaration (it converts at AH-T4), and a dispatcher on a
-// core that owns neither relation is turned away first by the peer-write
-// refusal - *"this transaction's writes are bound to core 1 and relation
-// 'trades' is owned by core 0"*, which is what a first draft of this cell
-// caught while appearing to test the new code. A foreign parent therefore
-// arises only where migration separated an already-declared pair - AH-R6's
-// "relations split from their parents by history" - which nothing builds
-// for user relations yet.
-//
-// Same device as the colocation cell above, for the same stated reason. The
-// grouping it exercises is what AH-T2's sender consumes.
-TEST(FkParentVerdicts, ForeignParentsGroupByOwnerAndDeduplicate) {
-    exec::FkParentVerdicts held;
-    EXPECT_FALSE(held.has_foreign());
-
-    held.Defer(/*owner_core=*/1, /*parent_rel=*/4001, /*parent_pk=*/7);
-    held.Defer(/*owner_core=*/1, /*parent_rel=*/4001, /*parent_pk=*/7);  // second row, one parent
-    held.Defer(/*owner_core=*/1, /*parent_rel=*/4001, /*parent_pk=*/9);
-    held.Defer(/*owner_core=*/2, /*parent_rel=*/4002, /*parent_pk=*/7);  // same pk, other owner
-
-    ASSERT_TRUE(held.has_foreign());
-    // **Two groups, not four entries**: the unit is the owner, which is why
-    // a statement's cross-owner cost counts owners and not rows (AH-R2).
-    ASSERT_EQ(held.foreign().size(), 2u);
-    EXPECT_EQ(held.foreign()[0].owner_core, 1u);
-    EXPECT_EQ(held.foreign()[0].parents.size(), 2u);
-    EXPECT_EQ(held.foreign()[1].owner_core, 2u);
-    EXPECT_EQ(held.foreign()[1].parents.size(), 1u);
-
-    // Deferring does not resolve. A caller reading the absence of a verdict
-    // as a pass would be the exact hole this grouping exists to close.
-    EXPECT_EQ(held.Find(4001, 7), nullptr);
-    EXPECT_TRUE(held.empty());
-}
+// `ForeignParentsGroupByOwnerAndDeduplicate` stood here until AT-S5f: it
+// pinned that parents whose owner was not this core were grouped one per
+// owner for `kFkProbeRequest` to carry. No parent is deferred by owner, so
+// `FkParentVerdicts` is the held map alone and has no grouping half left.
 
 // Latest state, not the statement's snapshot: a parent deleted and committed
 // is gone for a check even though a snapshot taken earlier could still see
@@ -758,6 +716,13 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
 // needs an authoritative *"no children"* (F6), and a reverse check that
 // saw less than the whole child and answered `kPass` would not be a slow
 // constraint - it would be an absent one.
+//
+// **Until AT-S5f they pinned a refusal; they pin the answer now.** What
+// stood here was `CheckNoChildReferences`' scope guard - a child with a
+// range this core did not own was refused `NotImplemented`, fail-closed,
+// because the walk covered this core's chains alone. The walk covers every
+// chain of the relation now (`AllWalkHeads`), so the range's owner changes
+// nothing about the answer, which is what these two cells say.
 
 // Splits `name` at `lo`, giving the upper range to `owner`.
 void SplitChild(catalog::Catalog& catalog, const char* name, std::uint64_t lo,
@@ -769,28 +734,38 @@ void SplitChild(catalog::Catalog& catalog, const char* name, std::uint64_t lo,
     ASSERT_TRUE(catalog.OpenRangeRows(oid.value(), lo, owner, head.value()).ok());
 }
 
-TEST_F(ForeignKeyCheckTest, AChildRangeOnAnotherCoreRefusesRatherThanPassing) {
+TEST_F(ForeignKeyCheckTest, AChildInARangeAnotherCoreOwnsStillBlocksTheParent) {
+    // `AChildInASecondOwnedRangeStillBlocksTheParent` below, with the
+    // second range given to **core 1** - and that is the whole cell: the
+    // owner of the range the child sits in changes nothing, where until
+    // AT-S5f it turned the answer into a `NotImplemented` refusal.
+    //
     // The child is heap: D1 declines every btree relation a directory, so
     // a btree child could never reach this arm.
     ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
                   "qty int64)")
                   .substr(0, 7),
               "CREATED");
+    // Ids 1 and 2, both below the boundary, neither referencing account 1,
+    // so the chain this core would have walked alone finds nothing.
     ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 100)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 200)").substr(0, 8), "INSERTED");
 
-    // A range this core does not own. Everything below it - the whole of
-    // account 1's child population - is still visible here, and that is
-    // exactly the trap: a walk of what is visible answers "no children"
-    // for a parent whose children may sit in the range that is not.
-    SplitChild(boot_->catalog, "trades_h", /*lo=*/4096, /*owner=*/1);
+    SplitChild(boot_->catalog, "trades_h", /*lo=*/3, /*owner=*/1);
 
-    const std::string refused = Run("DELETE FROM accounts WHERE id = 1");
-    EXPECT_EQ(refused.rfind("ERR ", 0), 0u) << refused;
-    EXPECT_NE(refused.find("reverse check"), std::string::npos) << refused;
+    // Id 3: the first row of the second chain - the range core 1 owns - and
+    // the only reference to account 1 anywhere. Named rather than issued,
+    // so the cell says which chain the row is in rather than deriving it.
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (3, 1, 300)").substr(0, 8), "INSERTED");
 
-    // And the parent really is still there: a refusal, not a deletion that
-    // reported an error.
+    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1").substr(0, 16), "ERR FK_VIOLATION");
     EXPECT_EQ(RowCount("SELECT * FROM accounts WHERE id = 1"), 1u);
+
+    // The converse, so the cell is not passing by refusing everything: a
+    // parent nothing references anywhere is deleted, and the walk that
+    // reads core 1's chain is what establishes it.
+    ASSERT_EQ(Run("INSERT INTO accounts VALUES ('unreferenced')").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 3"), "DELETED 1");
 }
 
 TEST_F(ForeignKeyCheckTest, AChildInASecondOwnedRangeStillBlocksTheParent) {
@@ -823,33 +798,15 @@ TEST_F(ForeignKeyCheckTest, AChildInASecondOwnedRangeStillBlocksTheParent) {
     EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 2").substr(0, 16), "ERR FK_VIOLATION");
 }
 
-// The **Cabin** arm of that same refusal, and the reason it is asked
-// before the serve rather than beside the walk. An exhausted entry set is
-// an authoritative "no children" (F6) - and since SB-R1 it is
-// authoritative for *(observed value x the ranges its core owns)* alone
-// (`docs/spec/cabin.md` §4b). A set observed while the relation was whole
-// answers `kPass` for ranges it no longer speaks for, and no walk runs to
-// contradict it: a guard placed below the serve would be a guard this
-// shape never reaches. Account 2's set is observed empty *before* the
-// boundary opens, which is that state exactly.
-TEST_F(ForeignKeyCheckTest, ACabinCannotAnswerForAChildRangeOnAnotherCore) {
-    ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
-                  "qty int64)")
-                  .substr(0, 7),
-              "CREATED");
-    ASSERT_EQ(Run("CREATE CABIN ON trades_h(account_id)").substr(0, 7), "CREATED");
-    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (1, 100)").substr(0, 8), "INSERTED");
-    // A declared Cabin observes on the first probe, and the set it banks
-    // for account 2 is empty - the answer the serve exists to give.
-    ASSERT_EQ(RowCount("SELECT * FROM trades_h WHERE account_id = 2"), 0u);
-
-    SplitChild(boot_->catalog, "trades_h", /*lo=*/4096, /*owner=*/1);
-
-    const std::string refused = Run("DELETE FROM accounts WHERE id = 2");
-    EXPECT_EQ(refused.rfind("ERR ", 0), 0u) << refused;
-    EXPECT_NE(refused.find("reverse check"), std::string::npos) << refused;
-    EXPECT_EQ(RowCount("SELECT * FROM accounts WHERE id = 2"), 1u);
-}
+// **The Cabin arm's cell lives on the two-core rig** (AT-S5f):
+// `FkCrossCoreRigTest.ADrainedCabinSetDoesNotClearAParentAChildOnAnotherCoreReferences`.
+// `ACabinCannotAnswerForAChildRangeOnAnotherCore` stood here and pinned the
+// scope refusal that went with the guard; a first replacement tried to pin
+// the fall-through from one core and **could not**, which is the finding
+// worth the lines: on a single dispatcher the store sees every write, so a
+// set that would drain always holds the live child and the check returns
+// from inside the loop. The drained return needs two stores, and two
+// stores need two cores.
 
 // ---- NULL fk values: MATCH SIMPLE, both directions (null.md §4) ------
 

@@ -106,6 +106,17 @@ std::vector<PageId> TableAccess::WalkHeadsFor(std::uint32_t core_id, PkSpan span
     return heads;
 }
 
+std::vector<PageId> TableAccess::AllWalkHeads() const {
+    if (ranges.empty()) return {desc_page_id};
+    std::vector<PageId> heads;
+    heads.reserve(ranges.size());
+    // `ranges` is held in `lo` order, so this is too - the order
+    // `WalkHeadsFor` promises, kept here because a caller that walks both
+    // would otherwise read one relation two ways.
+    for (const RangeTarget& range : ranges) heads.push_back(range.entry_page);
+    return heads;
+}
+
 StatusOr<const RangeTarget*> TableAccess::RangeFor(std::uint64_t id) const {
     // RD3's zero-cost invariant, reaching the write path: one load from an
     // entry the caller is already holding, one predictable branch, and the

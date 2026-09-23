@@ -158,9 +158,6 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 };
 
 class StatementShipClient;
-class FkProbeClient;
-class FkIntentTable;
-class FkPendingDeleteTable;
 class ShippedStatementExecutor;
 // Forward-declared rather than included: this header is included nearly
 // everywhere, and what it needs of the 2PC service is one pointer and one
@@ -186,66 +183,6 @@ struct TxnPhaseOutcome;
 // with a rendered line, which is the failure the refusal existed to
 // prevent.
 inline constexpr bool kShippedTypedAnswerBuilt = true;
-
-// A statement parked on a foreign parent's owner answering its forward
-// check (AH-T2, `docs/spec/foreign-keys.md` §2a).
-//
-// **The one pending record that resumes by re-entering the statement**,
-// where every other one finishes work. There is nothing to finish here: a
-// probe answers a question the statement had before it started, so the
-// statement runs afterwards rather than being completed by the reply. The
-// verdicts land in `resumed_fk_verdicts_` and the line is dispatched
-// again, at which point the extraction pass resolves everything from held
-// state and sends nothing - the second pass is a plain local statement.
-//
-// The first pass wrote nothing: the probe is sent from the extraction pass,
-// which runs before any row work, and the write scope is abandoned exactly
-// as a shipped statement's is (`AbandonWriteForShipping`), so an explicit
-// transaction is neither poisoned nor committed by having parked.
-// AK-S3: the rows a parent DELETE deletes, as the reverse fan-out knows
-// them. `collected` says they came from a read-only pass over the relation
-// rather than from a `WHERE pk = k`, which is what decides what the walk
-// does with a row it meets that has no answer: a collected set can be
-// stale - a row visible now was not visible to the pass - and the walk
-// refuses that row retryably; a named pk with no answer is a caller bug.
-struct FkDeleteRows {
-    std::vector<std::uint64_t> pks;
-    bool collected = false;
-};
-
-struct PendingFkProbe {
-    // One per foreign owner - AH-R2's round, and why these are vectors.
-    // `request_ids[g]` addresses the reply for `groups[g]`, whose
-    // `parents` give the verdicts their identity: the reply is positional,
-    // so the request's own order is what maps an answer back to a pk.
-    std::vector<std::uint64_t> request_ids;
-    std::vector<exec::FkParentVerdicts::ForeignGroup> groups;
-    // AJ-T3: the reverse round's groups, filled instead of `groups` when
-    // `reverse` is set. **A statement's round is one direction or the
-    // other and never both**, which is a property of the statements
-    // themselves rather than a restriction: a DELETE runs no forward check
-    // (`DeleteInner` mints its check view for `fkeys_in` alone) and an
-    // INSERT or UPDATE runs no reverse one. One flag is therefore enough
-    // to say which vector the collect block should read. (A statement
-    // that ever needed both would resume into a second round, which
-    // `DispatchAsync` loops over since AK-S3; none does.)
-    std::vector<exec::FkReverseProbeGroup> reverse_groups;
-    bool reverse = false;
-    // The statement to run once the verdicts are in. Empty is impossible
-    // here: a path with no text (the KWP load chunk) keeps the refusal
-    // instead, exactly as it keeps the shipping one.
-    std::string line;
-    // **When the last round left** (AH-T6's leg). Stamped after every
-    // owner's request is away rather than before the first, because the
-    // leg being measured is the wait for the *slowest* owner and a stamp
-    // taken before the sends would charge the sending loop to it.
-    sched::MonoTimeNs sent_at_ns = 0;
-    // AK-S3: the rows a reverse round is about, fixed by the round that
-    // started the statement and carried through every re-entry, so a later
-    // round consumes a known set rather than re-deriving one under a new
-    // snapshot. Empty for a forward probe.
-    FkDeleteRows rows;
-};
 
 struct PendingShippedStatement {
     std::uint64_t request_id = 0;
@@ -308,17 +245,6 @@ struct PendingCrossOwnerCommit {
     std::uint64_t session_id = 0;
     std::uint64_t transaction_id = 0;
     std::vector<std::uint32_t> participants;
-    // **Who hears the decision**, which is not the same list as who is
-    // asked to prepare (work order AI, F4). A core holding only a
-    // foreign-key reference intent has no context to prepare and no vote to
-    // cast, and it must still be told the outcome, because the decide is
-    // the only thing that ends an intent. `participants` is the prepare's
-    // list; this is the decide's, and it is the union.
-    std::vector<std::uint32_t> decide_targets;
-    // Which of them hold an intent and no rows, so the decide can say so
-    // per target and a holder's missing context reads as expected rather
-    // than as a lost transaction half.
-    std::vector<std::uint32_t> intent_only;
 
     // **XF4's two coordinator-side stamps**, carried here because the
     // commit's two halves live in two functions: `PrepareAcrossOwners`
@@ -468,12 +394,6 @@ struct DispatchOutcome {
     // nowhere to deliver its answer - and the refusal `Dispatch()` would
     // have to invent could not be retryable (D4).
     std::optional<PendingShippedStatement> pending_shipped = std::nullopt;
-
-    // A foreign parent's forward check, sent and not yet answered (AH-T2).
-    // `DispatchAsync()` parks on every owner's reply under one deadline and
-    // then **re-dispatches the line**; the synchronous `Dispatch()` has no
-    // reactor to receive a reply on and refuses retryably.
-    std::optional<PendingFkProbe> pending_fk_probe = std::nullopt;
 
     // A cross-owner `COMMIT` whose prepare phase is in flight (R6-3). The
     // reply is not in `response` yet: `DispatchAsync()` runs the rest of
@@ -965,14 +885,11 @@ private:
     // transaction a failure **poisons the session** rather than unwinding -
     // rows already written stay, and the client must ROLLBACK (section 6).
     //
-    // `statement_ends` is false on the one caller that ends a *scope*
-    // without ending the statement - `AbandonWriteForShipping`, where the
-    // statement is parking on a probe or has gone to another owner and will
-    // run whole somewhere else. Only per-statement state hangs off it
-    // (AJ-T1's pending-delete clear); the scope's own unwind is identical
-    // on both arms.
-    Status EndWrite(Session& session, WriteScope& scope, const Status& result,
-                    bool statement_ends = true);
+    // **No `statement_ends` since AT-S5f.** It existed for one reader - the
+    // pending-delete registration a parked DELETE had to keep across its
+    // fan-out - and both the registration and the park went with the probe
+    // protocol. The scope's own unwind was always identical on both arms.
+    Status EndWrite(Session& session, WriteScope& scope, const Status& result);
 
     // **The one way an owned scope ends without committing** (AO-S6d,
     // AO-0 item 15). Three arms of `EndWrite` reach it: the statement
@@ -1110,20 +1027,8 @@ private:
     // the fault net bounds the *statement*, so a second entry inherits the
     // first one's deadline instead of starting a fresh one.
     //
-    // `resumed` is `resumed_from_fk_probe_` for the re-run this function
-    // makes, and it is **threaded rather than defaulted** so that the one
-    // caller that could otherwise get it wrong has to say so. The re-run
-    // from the probe arm dispatches a statement that has a crossing foreign
-    // key; if it could park mid-walk, the turn after it would re-run the
-    // whole statement, raise a fresh probe before the walk and discard the
-    // cursor - the defect `resumed_from_fk_probe_` exists to prevent, one
-    // frame deeper. It cannot today, because both verbs resolve every
-    // foreign parent before the first row is written, so such a re-run
-    // always returns a probe and never reaches the walk. That is an
-    // invariant of two other functions, which is exactly the kind a default
-    // argument turns into an accident.
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
-                                sched::MonoTimeNs* statement_deadline_ns, bool resumed);
+                                sched::MonoTimeNs* statement_deadline_ns);
 
     // **AO-S6e-b: the statement waits for the unit it was refused, then
     // runs again whole.** The retired index-build window's shape, with the
@@ -1140,14 +1045,13 @@ private:
     // On return `out->lock_wait` is empty unless the re-run asked again,
     // which the loop that calls this is what handles.
     sched::Coro AwaitRelationLock(std::string_view line, Session* session, DispatchOutcome* out,
-                                  sched::MonoTimeNs* statement_deadline_ns, bool resumed);
+                                  sched::MonoTimeNs* statement_deadline_ns);
 
-    // Both waits, looped until neither is set: the first dispatch's and a
-    // foreign-key probe resume's, through one function so the two cannot
-    // diverge (the AT-S5e review's C3). `resumed` is the re-runs' parking
-    // flag, as `AwaitWriteBlock` takes it.
+    // Both waits, looped until neither is set, through one function so the
+    // two cannot diverge (the AT-S5e review's C3): each wait's re-run is a
+    // whole fresh statement and can meet what the other waits for.
     sched::Coro AwaitStatementWaits(std::string_view line, Session* session, DispatchOutcome* out,
-                                    sched::MonoTimeNs* statement_deadline_ns, bool resumed);
+                                    sched::MonoTimeNs* statement_deadline_ns);
 
     // `cur` is the row's own writer, from the tuple header, and decides the
     // **MVCC verdict** (first-updater-wins, `txn.md` §5) - a writer this
@@ -1596,55 +1500,26 @@ private:
     // legal to run early and what the self-referencing carve-out protects.
     // `waiter` is the transaction this statement runs in (null in
     // autocommit before one is opened); it is what decides whether a busy
-    // parent becomes a wait - see `NoteBlockingWriter`.
+    // parent becomes a wait - see `WaitForParentRowWriter`.
     Status ResolveForeignKeyParents(const catalog::TableAccess& child,
                                      const std::vector<parser::AstValue>& body,
                                      const txn::ReadView& check_view,
                                      exec::FkParentVerdicts& into,
-                                     const txn::Transaction* waiter = nullptr);
+                                     txn::Transaction* waiter = nullptr);
 
-    // What the extraction pass deferred because its owner is not this
-    // core: **sent** as one probe per owner, and the statement parked
-    // (AH-T2). `line` is the statement to resume with; empty means a
-    // caller with no text, which refuses instead - the KWP load chunk,
-    // which keeps its cross-core refusal exactly as it keeps the
-    // shipping one.
+    // **The forward check's wait** (AT-S5f): the parent row named by `pk`
+    // is held by `holder`, which has not decided, so the statement waits
+    // for it rather than being refused. Records the wait; it is taken in
+    // `AwaitStatementWaits`, outside every page span, exactly as a write
+    // block's is.
     //
-    // Fills `out.pending_fk_probe` on success. Enrols each owner as a 2PC
-    // participant when this runs inside an explicit transaction, after the
-    // send, for the reason the shipping enrolment states: a participant
-    // recorded for a request that never left would be prepared for a
-    // transaction it holds nothing of.
-    // Ends this statement's reference intents where there is nothing to
-    // park on - the synchronous dispatch and the fork's own send failure.
-    // Always an abort: both callers are refusals, and a statement that did
-    // not run has nothing to commit. Autocommit only; see the definition.
-    void ReleaseIntentsWithoutWaiting(Session& session);
-
-    // AJ-T1: every row this session registered as about to be deleted,
-    // released. Called where the session's transaction ends and **not** at
-    // the decide sites beside `ReleaseIntentsWithoutWaiting` above, for the
-    // reason its definition states.
-    void ClearPendingDeletes(Session& session);
-
-    // AJ-T3's sender. The reverse's counterpart to `SendForeignKeyProbes`
-    // below, and shorter by everything the forward does about intents:
-    // a reverse round **enrols nobody** (AJ-R5), so there is no
-    // `EnrolIntentHolder`, no decide target and no release leg. What holds
-    // the window open is the pending-delete registration this core made
-    // before calling here, which its own transaction's end clears.
-    Status SendReverseForeignKeyProbes(const std::vector<exec::FkReverseProbeGroup>& groups,
-                                       const FkDeleteRows& rows, Session& session,
-                                       std::string_view line, DispatchOutcome& out);
-
-    Status SendForeignKeyProbes(const exec::FkParentVerdicts& held, Session& session,
-                                 std::string_view line, DispatchOutcome& out);
-
-    // The refusal that stands where a probe cannot be sent - no client
-    // (no reactor), or no text to resume with. Fail-closed: the
-    // alternative is `CheckParentPresent` descending a page this core may
-    // not fault.
-    Status RefuseUnsentForeignKeyProbes(const exec::FkParentVerdicts& held);
+    // Two shapes for one wait, and which one is used is a property of the
+    // dispatcher rather than of the parent: with a lock table the parent
+    // row's own borrow is asked for, so a holder on any core is waited
+    // for; without one there is no peer to reach and `NoteBlockingWriter`'s
+    // per-core predicate is the honest wait. The body states both.
+    void WaitForParentRowWriter(txn::Transaction* waiter, catalog::Oid parent_rel,
+                                std::uint64_t pk, std::uint64_t holder);
 
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
     // columns after the pk, which is the shape every downstream consumer
@@ -1656,42 +1531,11 @@ private:
 
     // The reverse check for every foreign key pointing at `parent` (§3),
     // run per row about to be delete-marked.
-    // AJ-T3: resolve which of `parent`'s children live on other cores, and
-    // if any do, register the row and build one reverse group per foreign
-    // owner. Returns the groups still to send - empty when every foreign
-    // child is already answered from a resumed round, which is what makes
-    // the second pass a plain local statement.
-    // `collect` is the read-only pass that names the rows a non-pk WHERE
-    // deletes (AK-S3), built by `DeleteInner` from the walk's own stage-1
-    // match; called only when the WHERE is not a bare pk equality, a
-    // child lives on another core, and no earlier round already fixed the
-    // rows (`resumed_fk_rows_`) - which is what keeps every other DELETE
-    // at one walk. `rows` receives what the fan-out is about, for the
-    // pending record to carry.
-    StatusOr<std::vector<exec::FkReverseProbeGroup>> HoistReverseForeignKeyChecks(
-        const catalog::TableAccess& parent, const std::vector<parser::Condition>& where,
-        Session& session, exec::FkParentVerdicts& held,
-        const std::function<StatusOr<std::vector<std::uint64_t>>()>& collect,
-        FkDeleteRows* rows);
-
-    // One probe round's replies, read into `forward` / `reverse` and every
-    // waiter closed. The status is the round's: OK, the first owner's own
-    // refusal, a retryable deadline (`*timed_out` set, so the caller does
-    // not time a leg nobody walked), or `Corruption` for a reply whose
-    // count does not match its question.
-    Status CollectProbeReplies(const PendingFkProbe& probe, exec::FkParentVerdicts& forward,
-                               exec::FkParentVerdicts& reverse, bool* timed_out);
-
-    // `reverse_held` carries AJ-T3's answers for children this core does
-    // **not** own: one verdict per (child relation, parent pk), resolved at
-    // the fork and read here. A foreign child with no entry is a caller
-    // bug and is refused rather than checked locally - the same rule
-    // `FkParentVerdicts` states for the forward, and for the same reason:
-    // checking locally is precisely the wrong answer, because this core
-    // cannot see the rows.
+    // Every child is walked here since AT-S5f, whoever owns it: the answer
+    // is this core's for the whole relation, so there is nothing resolved
+    // elsewhere to read.
     Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
-                                       const txn::ReadView& check_view,
-                                       const exec::FkParentVerdicts& reverse_held);
+                                       const txn::ReadView& check_view);
 
     // One access shape, recorded by hand because a check is not a step
     // (FK-M4). Never fails a write.
@@ -1768,7 +1612,7 @@ private:
     // resume with (AH-T2). Empty for a caller with no text - the KWP load
     // chunk - which then keeps the refusal, exactly as it keeps the
     // shipping one.
-    DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt, std::string_view line,
+    DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt,
                                     catalog::Oid oid, const catalog::TableAccess& ta,
                                     WriteScope& scope);
 
@@ -1777,12 +1621,12 @@ private:
     // Split out for the KWP load session (docs/inflight/in-progress/workplan-kwp-load.md KW5),
     // whose rows arrive binary and never had text - BI2's "same write
     // path" made literal, since this IS the path a T1 statement takes.
-    // `line` is the statement's text, for the one thing only text can do:
-    // be shipped to another core (SS2). Empty from the KWP load path, whose
-    // rows never were text - so that path keeps the cross-core refusal it
-    // has always had, structurally rather than by a flag.
-    DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope,
-                                 std::string_view line);
+    // **No `line` since AT-S5f.** The text was carried for the two things
+    // that needed to re-run the statement elsewhere - the write ship, gone
+    // at AT-S5, and the foreign-key probe's resume - so an INSERT now
+    // reaches this path the way a KWP load chunk always did, with no text
+    // and nowhere to send it.
+    DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope);
 
 public:
     // KW5's public seam: run one parsed INSERT under `session` exactly as
@@ -1888,30 +1732,6 @@ public:
     // collects nothing, which is every configuration that does not want the
     // instrument. `sink` must outlive this.
     void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
-
-    // The foreign-key probe client (AH-T2, fk_probe_service.hpp). Without
-    // one - a dispatcher with no reactor - a foreign parent is refused
-    // rather than asked, which is what every unit fixture sees. `client`
-    // must outlive this.
-    void SetFkProbes(FkProbeClient* client) noexcept { fk_probes_ = client; }
-
-    // This core's reference-intent table (AH-T3): what a foreign
-    // transaction left behind on a parent row this core owns, and what a
-    // local `DELETE` of that row must consult before it may proceed.
-    // Without one, a delete answers from local evidence alone - which is
-    // correct on every core that never grants an intent, and is what a
-    // unit fixture is. `intents` must outlive this.
-    void SetFkIntents(FkIntentTable* intents) noexcept { fk_intents_ = intents; }
-
-    // AJ-T1's half of the same mechanism, running the other way: the rows
-    // this core is about to delete, registered by a DELETE before it fans
-    // out to a foreign child's owner and consulted by `FkProbeServer`
-    // before it vouches for a parent. Without one a DELETE registers
-    // nothing, which is correct on a core no foreign child ever probes -
-    // and is what a unit fixture is. `pending` must outlive this.
-    void SetFkPendingDeletes(FkPendingDeleteTable* pending) noexcept {
-        fk_pending_deletes_ = pending;
-    }
 
     // Arms **statement shipping** (SS2, statement_ship_service.hpp): an
     // autocommit statement whose relation another core owns is carried
@@ -2497,48 +2317,6 @@ private:
     catalog::Catalog& catalog_;
     storage::PageStore& page_store_;
 
-    // AH-T2's client, or null where nothing pumps a reactor. Not owned -
-    // `CoreRuntime` owns it, and the outlives-the-dispatcher rule the
-    // other service pointers carry applies here too.
-    FkProbeClient* fk_probes_ = nullptr;
-
-    // AH-T3's half: the intents foreign transactions hold on rows this
-    // core owns. Not owned - `CoreRuntime` declares it ahead of the server
-    // that fills it, for the reason stated there.
-    FkIntentTable* fk_intents_ = nullptr;
-
-    // AJ-T1's mirror: what this core is about to delete. Not owned, for
-    // `fk_intents_`'s reason and beside it in `CoreRuntime`.
-    FkPendingDeleteTable* fk_pending_deletes_ = nullptr;
-
-    // **The verdicts a parked statement came back with**, consulted by the
-    // extraction pass before it resolves anything. Held on the dispatcher
-    // for `pending_commit_lsn_`'s reason: one statement runs at a time on
-    // a core, so there is no second value to confuse it with, and
-    // threading it through `HandleInsert` -> `InsertInner` ->
-    // `InsertParsed` -> `SortedFillInner` would put a parameter on four
-    // signatures for one path. **Set only around the synchronous resume**
-    // and cleared the moment it returns (AK-S3's rule, since a round loop
-    // now parks between rounds): a member filled across a `co_await` would
-    // be read as its own by whatever statement ran on this core meanwhile,
-    // so the answers accumulate in the coroutine's frame and land here for
-    // exactly one re-entry. A statement that did not park sees an empty one.
-    exec::FkParentVerdicts resumed_fk_verdicts_;
-
-    // AJ-T3's mirror, and it reuses `FkParentVerdicts` deliberately. What
-    // that class actually is - stripped of the forward's naming - is
-    // **(relation oid, pk) -> verdict**, resolved once at a fork and read
-    // per row, which is exactly what the reverse needs too. The forward
-    // reads the oid as the *parent* relation; here it is the **child**
-    // relation, and the pk is the parent row being deleted. Only `Find` and
-    // `Put` are shared - the grouping half is direction-specific and lives
-    // in `exec::FkReverseProbeGroup` - so nothing here has to pretend the
-    // two directions ask the same question.
-    exec::FkParentVerdicts resumed_fk_reverse_verdicts_;
-    // AK-S3: the rows the round that started a parent DELETE fixed, for the
-    // re-entry's hoist to consume instead of collecting again. Set and
-    // cleared with the two above, on the same rule.
-    std::optional<FkDeleteRows> resumed_fk_rows_;
     // SS2's client, on every core of a multi-core instance; null wherever
     // the cross-core refusal still stands (see SetStatementShip).
     StatementShipClient* statement_ship_ = nullptr;
@@ -2561,34 +2339,6 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
 
-    // **Whether the statement running right now is a foreign-key probe's
-    // resume** (AO-S6d, the item-16 review's B1). A resume can park like
-    // any other statement since `may_park_` reaches it - but it must not
-    // park **mid-walk**, and that is the one thing this flag is for.
-    //
-    // Why: a mid-walk park leaves the walk's position and its count on the
-    // session, and the wait's re-run is a whole statement that re-resolves
-    // every foreign parent from scratch (the held verdicts are dropped, for
-    // the reason the probe arm states). So the re-run raises a **fresh
-    // probe** before it reaches the walk, `HandleUpdate` hands that outcome
-    // to `AbandonWriteForShipping` - which, inside an explicit transaction,
-    // ends nothing and keeps the rows - and the parked write it had already
-    // taken off the session is gone. The next round then walks from the
-    // beginning with `rows_done` at 0, and a `WHERE` the earlier rows no
-    // longer match reports a count short of what the transaction changed:
-    // the silent partial `UPDATE` AO-S3b exists to prevent, arrived at from
-    // the other side.
-    //
-    // The whole-statement wait is untouched, and it is item 16's actual
-    // deliverable: a resume that meets a held row **before writing
-    // anything** is refused, `EndWrite` keeps the blocker, and
-    // `AwaitWriteBlock` re-runs it. What this flag withholds is only the
-    // park that needs a cursor to survive a round trip, and it withholds it
-    // by falling back to exactly what a resume did before AO-S6d - the
-    // refusal, with the rows written so far kept and the session poisoned,
-    // which is §6's failure atomicity and not a new outcome.
-    bool resumed_from_fk_probe_ = false;
-
     // **The allowance, taken and given back structurally** (AO-S6d).
     // `CommitAckScope`'s shape, and the argument for it is the one the
     // `DispatchAsync` site already makes about a hand-placed pair: it is
@@ -2601,27 +2351,17 @@ private:
     // about what "off" was.
     class MayParkScope {
     public:
-        // `resumed` is `resumed_from_fk_probe_`, carried here because the
-        // two windows are the same window at every site: the allowance and
-        // what the statement inside it is are set and restored together.
-        MayParkScope(CommandDispatcher& owner, bool allowed, bool resumed) noexcept
-            : owner_(owner),
-              saved_(owner.may_park_),
-              saved_resumed_(owner.resumed_from_fk_probe_) {
+        MayParkScope(CommandDispatcher& owner, bool allowed) noexcept
+            : owner_(owner), saved_(owner.may_park_) {
             owner_.may_park_ = allowed;
-            owner_.resumed_from_fk_probe_ = resumed;
         }
-        ~MayParkScope() {
-            owner_.may_park_ = saved_;
-            owner_.resumed_from_fk_probe_ = saved_resumed_;
-        }
+        ~MayParkScope() { owner_.may_park_ = saved_; }
         MayParkScope(const MayParkScope&) = delete;
         MayParkScope& operator=(const MayParkScope&) = delete;
 
     private:
         CommandDispatcher& owner_;
         bool saved_;
-        bool saved_resumed_;
     };
     // Where the statement now in flight owes a D2 commit's acknowledgement
     // (see `CommitAck`). A member for `may_park_`'s reason; unlike it, the
@@ -2898,11 +2638,6 @@ private:
     // ends inside this class's own parked commit block. Nothing else writes
     // it and nothing off this core reads it.
     CoordinatorCommitStats xowner_commit_;
-    // AH-T6's two legs. Walked only on a statement that crosses, so a
-    // colocated foreign key and a relation with none read no clock -
-    // `CoordinatorCommitStats`'s cost guard, unchanged.
-    ForeignKeyRoundStats fk_rounds_;
-
     // The physical optimizer's mode and R1 half-life (workplan PX06).
     // Shadow costs nothing at rest - the planner is pull-only, computed
     // when `SHOW RELAYOUT` asks - so shadow is the default here as it is
@@ -3074,7 +2809,7 @@ private:
     // Not defaulted, for `VisitRelation`'s reason: every caller knows
     // whether it has a row id, and a default would make "no id" the answer
     // a fourth write path gave by forgetting to think about it.
-    Status CheckWriteAffinity(const catalog::TableAccess& access, std::string_view relation,
+    Status CheckWriteAffinity(const catalog::TableAccess& access,
                               Session& session, std::optional<std::uint64_t> target_id);
 
     // **Which core a predicate-shaped write belongs on** (R4/IS4), for the

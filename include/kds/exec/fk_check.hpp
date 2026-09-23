@@ -157,40 +157,7 @@ public:
     void set_collected() noexcept { collected_ = true; }
     bool collected() const noexcept { return collected_; }
 
-    // ---- The foreign half: one group per owner, not per pk (AH-R2) -----
-    //
-    // A parent whose owner is not this core cannot be resolved by
-    // descending - its pages are another core's - so it is *grouped* here
-    // instead, and the group is what one `kFkProbeRequest` carries. The
-    // unit is the **owner**, which is why a statement's cross-owner cost
-    // counts owners and not rows.
-    struct ForeignGroup {
-        std::uint32_t owner_core = 0;
-        // Deduplicated, in first-seen order. Order is not load-bearing for
-        // correctness - the reply is matched by pk - but it is stable,
-        // which keeps a refusal's message stable run to run.
-        std::vector<std::pair<catalog::Oid, std::uint64_t>> parents;
-    };
-
-    // Records that `(parent_rel, parent_pk)` lives on `owner_core`, which
-    // is not this core. Idempotent on a repeat, like `Put`.
-    void Defer(std::uint32_t owner_core, catalog::Oid parent_rel, std::uint64_t parent_pk) {
-        for (ForeignGroup& g : foreign_) {
-            if (g.owner_core != owner_core) continue;
-            for (const auto& [rel, pk] : g.parents) {
-                if (rel == parent_rel && pk == parent_pk) return;
-            }
-            g.parents.emplace_back(parent_rel, parent_pk);
-            return;
-        }
-        foreign_.push_back(ForeignGroup{owner_core, {{parent_rel, parent_pk}}});
-    }
-
-    const std::vector<ForeignGroup>& foreign() const noexcept { return foreign_; }
-    bool has_foreign() const noexcept { return !foreign_.empty(); }
-
 private:
-    std::vector<ForeignGroup> foreign_;
 
     // A map, since AK-S3 (2026-09-02). This was a vector with a linear scan
     // while the set was one entry per distinct parent pk a single statement
@@ -204,32 +171,6 @@ private:
 };
 
 // What the reverse check may use to answer without walking (F6, FK-M5).
-// ---- The reverse fan-out's groups (AJ-T2/AJ-T3) --------------------------
-//
-// The mirror of `FkParentVerdicts::ForeignGroup` above, and here beside it
-// for the same reason: the *sender* is the dispatch fork, so the shape it
-// builds belongs where the forward's does rather than in the wire service
-// that carries it. `command_dispatcher.hpp` includes this header and
-// deliberately not `server/fk_probe_service.hpp`.
-//
-// One entry is one question - *"does any row of `child_oid` reference
-// `parent_pk` through column `child_column_no`"* - which is a triple where
-// the forward's is a pair, and is why AJ-R6 gives the two directions
-// separate wire kinds rather than one with a flag.
-struct FkReverseProbeEntry {
-    catalog::Oid child_oid = 0;
-    std::uint64_t parent_pk = 0;
-    std::uint16_t child_column_no = 0;
-};
-
-// Every reverse question for one child owner, which is what one round is. A
-// parent with three foreign children on one core costs one message, not
-// three - AH-R2's deduplication rule, applied to the other direction.
-struct FkReverseProbeGroup {
-    std::uint32_t owner_core = 0;
-    std::vector<FkReverseProbeEntry> entries;
-};
-
 struct FkReverseOptions {
     // The core-local Cabin store, or null when cabins are off.
     stats::CabinStore* cabins = nullptr;
@@ -240,15 +181,6 @@ struct FkReverseOptions {
     // decide n=1 versus n=2 *when recording*, and this check never records.
     std::uint64_t cabin_id = 0;
 
-    // The core running this check (`CommandDispatcher::core_id_`), which
-    // bounds what its answer is good for. The scope guard at the top of
-    // `CheckNoChildReferences` is where that matters and why.
-    //
-    // **The default is safe because there is exactly one caller and it
-    // sets it** - not because 0 is a harmless value. A future caller on
-    // core 3 that forgot, against a child whose ranges are all core 0's,
-    // would pass the guard and walk another core's chains.
-    std::uint32_t core_id = 0;
 };
 
 struct FkReverseOutcome {

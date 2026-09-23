@@ -10,7 +10,7 @@ add_executable(kds_tests
     two_core_rig_test.cpp
     lock_wake_rig_test.cpp
     deadlock_rig_test.cpp
-    fk_probe_rig_test.cpp
+    fk_cross_core_rig_test.cpp
     read_borrow_rig_test.cpp
     current_core_test.cpp
     alloc_race_test.cpp
@@ -56,7 +56,6 @@ add_executable(kds_tests
     superblock_test.cpp
     trx_id_lease_service_test.cpp
     statement_ship_service_test.cpp
-    fk_probe_service_test.cpp
     shipped_statement_executor_test.cpp
     txn_2pc_wire_test.cpp
     txn_2pc_protocol_test.cpp
@@ -106,7 +105,6 @@ add_executable(kds_tests
     waystone_replay_test.cpp
     waystone_contract_test.cpp
     cabin_contract_test.cpp
-    fk_intent_test.cpp
     foreign_key_test.cpp
     cabin_store_test.cpp
     scheduler_test.cpp

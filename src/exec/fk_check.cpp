@@ -156,57 +156,24 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                                                   const txn::ReadView& check_view,
                                                   const FkReverseOptions& options,
                                                   Budget* budget) {
-    // ---- Scope: this check answers for the whole child, or not at all ---
+    // ---- Scope: this check answers for the whole child (AT-S5f) ---------
     //
-    // **Asked first, before the Cabin and before the walk, because both of
-    // them are per-core answers.** The entry set speaks for (observed value
-    // x the ranges its core owns) since SB-R1 (`docs/spec/cabin.md` §4b),
-    // and the walk below covers the chains this core owns (RD6: one chain
-    // per range). Either would happily report *"no children"* for a child
-    // row sitting in a range another core holds - and `kPass` here is not a
-    // slow answer but a **dropped constraint**, the one degraded mode
-    // `foreign-keys.md` §1 says a constraint may not have.
+    // **There is no scope question left to ask.** What stood here was a
+    // refusal - a child whose ranges this core did not own was answered by
+    // nobody, because the walk below covered the chains this core owned
+    // (RD6: one chain per range) and would have reported *"no children"*
+    // for a child row in another core's range, which is not a slow answer
+    // but a **dropped constraint**, the one degraded mode
+    // `foreign-keys.md` §1 says a constraint may not have. The fan-out
+    // that replaced the refusal (AJ-T2) asked each range owner in turn.
     //
-    // So: refuse. `ServableBy` is the same predicate the read surface and
-    // `step_vm.cpp`'s `CabinScopeCovers` ask, not a third spelling of it,
-    // and the refusal is what SA-T5's fan-out replaces - one boolean probe
-    // per child-range owner, each answering from its own Cabin or its own
-    // walk.
-    //
-    // **Two ways a child can be out of reach, and the second went live
-    // with AH-T4.**
-    //
-    // The *range* half was unreachable when it was written -
-    // `RangeEligible`'s `kForeignKey` arm gates a split on either side of
-    // an FK - and stays so under v2.8.0, which splits nothing.
-    //
-    // The *owner* half is the one that matters now. Until AH-T4,
-    // `CheckForeignKeyColocation` forced parent and child onto one core,
-    // so `child.owner_core != core_id` could not happen and an unsplit
-    // foreign child was walked at `desc_page_id` with no scope question
-    // asked - correct only because of the refusal that has now been
-    // lifted. `workplan-auxiliaries-under-split.md` §3.1 named this exact
-    // exposure and said the day F5 relaxes, both directions are owed. This
-    // is that day, and this is the line that pays the owner direction.
-    //
-    // What it costs, stated rather than hidden: **a parent in a
-    // cross-owner foreign key cannot be deleted.** RESTRICT degrades to
-    // refusing the delete, which is fail-closed and not a wrong answer;
-    // what would replace it is the fan-out (SA-T5's shape) - one boolean
-    // probe per child owner, each answering from its own Cabin or its own
-    // walk. That is not built, and this refusal is what keeps its absence
-    // honest.
-    // The refusal that stood here - a child relation another core owned,
-    // whose rows this core could not see - went at AT-S5: every core reads
-    // every page, and the reverse check walks the child here.
-    if (!child.ranges.empty() && !child.ServableBy(options.core_id)) {
-        return Status::NotImplemented(
-            "relation oid " + std::to_string(child.oid) +
-            " has ranges core " + std::to_string(options.core_id) +
-            " does not own, and a foreign key's reverse check must see every child row to "
-            "answer 'no children'; a fan-out over the child's range owners is not built "
-            "(docs/spec/crosscore.md §6a, §9)");
-    }
+    // Both are gone with the route. Every core reads every page through
+    // the one pool since AM-S2 step 3, so the walk covers **every** chain
+    // of the child here (`AllWalkHeads` below), and an answer from this
+    // core is an answer for the whole relation. The Cabin is the one thing
+    // still scoped to a core, and it is handled where it is read rather
+    // than by a guard over the whole function: a per-core set may *find* a
+    // child and may not *clear* one (AT-R15, D4's first half).
 
     FkReverseOutcome outcome;
 
@@ -230,7 +197,6 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             const bool is_btree = child.clustered_type == catalog::ClusteredType::kBtree;
             std::unordered_set<std::uint64_t> seen;
             std::vector<parser::AstValue> scratch;
-            bool usable = true;
 
             for (stats::CabinEntry& entry : *entries) {
                 if (!seen.insert(entry.pk).second) continue;  // v→v′→v round trip
@@ -253,7 +219,6 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                         // `ServeFromCabin` gives for the same reason, and
                         // safe here because nothing has been concluded yet.
                         options.cabins->Unobserve(*key);
-                        usable = false;
                         break;
                     }
                     auto found = btree::BtreeLookup(store, child.desc_page_id, entry.pk);
@@ -311,13 +276,21 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 }
             }
 
-            if (usable) {
-                // Every entry accounted for and none of them a live child.
-                // No walk happened.
-                outcome.verdict = FkVerdict::kPass;
-                outcome.served_from_cabin = true;
-                return outcome;
-            }
+            // **An exhausted set no longer clears the parent** (AT-R15,
+            // D4's first half). The argument above is sound about the set
+            // and wrong about the *store*: `stats::CabinStore` is a
+            // dispatcher's own, so a child row inserted on another core
+            // never reached this set, and a drained loop here would clear
+            // a parent that has a child - `foreign-keys.md` §1's one
+            // forbidden answer, from the structure that exists to give the
+            // opposite one. So a set may **find** a child, which is what
+            // the two returns above do, and may not clear one: the walk
+            // below is what answers "no children" until the store becomes
+            // the instance's at AT-S7 (AT-0 item 9), which is what restores
+            // this return rather than removing it.
+            //
+            // `served_from_cabin` therefore stays true only on a hit, which
+            // is what `SHOW ACCESS` has always meant by it.
         } else {
             options.cabins->NoteMiss(options.cabin_id);
         }
@@ -377,29 +350,35 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
         return storage::VisitControl::kStop;
     };
 
-    // One walk per chain this core owns (RD6, `WalkHeadsFor`); the argument
-    // for taking that rule rather than `desc_page_id` is at
-    // `cabin_optimizer_exec.cpp`'s copy of it. **No range arm on the btree
-    // side**, and D1 is what makes that an absence rather than an omission:
-    // a btree relation never splits, so a btree child never has a directory.
+    // **One walk per chain the relation has** (RD6: one chain per range),
+    // and not per chain this core owns, which is what it read until
+    // AT-S5f. `WalkHeadsFor` is the *read path's* rule - a stage of a
+    // fan-in covers the ranges it owns because the session concatenates
+    // the stages - and a constraint check has no second stage to
+    // concatenate: it answers for the whole child or it drops the
+    // constraint. Every page is faultable from every core since AM-S2
+    // step 3, so the heads another core's ranges name are walked here.
+    // **No range arm on the btree side**, and D1 is what makes that an
+    // absence rather than an omission: a btree relation never splits, so a
+    // btree child never has a directory.
     Status walked = Status::OK();
     if (child.clustered_type == catalog::ClusteredType::kBtree) {
         walked = btree::BtreeVisit(store, child.desc_page_id, storage::PageAccess::kRead, visitor);
     } else {
-        const std::vector<PageId> heads = child.WalkHeadsFor(options.core_id);
+        const std::vector<PageId> heads = child.AllWalkHeads();
         // **Checked rather than assumed**, `TableAccess::RangeFor`'s reason
         // in this function's terms: no heads would run no loop body, leave
         // `verdict` at `kPass`, and report "no children" having read
-        // nothing - the silent drop this whole guard exists to prevent. The
-        // scope refusal above makes it unreachable (every range is ours, or
-        // there is no directory and the one head is `desc_page_id`), and
-        // that guarantee lives in another function, which is exactly when
-        // this engine checks instead of trusting.
+        // nothing - the silent drop this check may never produce.
+        // `AllWalkHeads` answers `desc_page_id` for an unsplit relation and
+        // one entry per range otherwise, so it is empty for no relation
+        // this engine can build - which is exactly when this engine checks
+        // instead of trusting.
         if (heads.empty()) {
             return Status::Corruption(
                 "relation oid " + std::to_string(child.oid) +
-                " yielded no chain heads for core " + std::to_string(options.core_id) +
-                "; a foreign key's reverse check cannot answer 'no children' from no walk");
+                " yielded no chain heads; a foreign key's reverse check cannot answer 'no "
+                "children' from no walk");
         }
         for (const PageId head : heads) {
             walked = heap::ChainVisit(store, head, storage::PageAccess::kRead, visitor);

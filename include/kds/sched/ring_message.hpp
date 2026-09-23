@@ -179,52 +179,6 @@ enum class RingMessageKind : std::uint16_t {
     // Control rather than data, like EOF and CREDIT: it carries no rows and
     // spends no credit.
     kShippedRowDesc = 40,
-
-    // child's core -> parent's owner: a foreign key's **forward check**
-    // across owners (SA-T4, `docs/spec/foreign-keys.md` F5 as SA-R6
-    // relaxes it). The request carries `server::FkProbeRequestPayload` -
-    // the parent relation, the pk the child references, and the
-    // coordinator's (session, transaction) - and the reply
-    // `FkProbeReplyPayload`, matched to its waiter by `request_id`.
-    //
-    // **Its own kind rather than a shipped statement**, and that is a
-    // capability difference rather than a taste: a shipped statement can
-    // answer "does this row exist" but cannot leave a **row-scoped
-    // reference intent** behind, which is the half that makes a parent's
-    // DELETE fail fast instead of racing the child's insert.
-    //
-    // There is no `done` leg. The intent is released by the transaction's
-    // **decide**, which every cross-owner transaction already sends, so a
-    // third message would be a second way to say what the decide says.
-    kFkProbeRequest = 41,
-    kFkProbeReply = 42,
-
-    // parent's owner -> child's owner: a foreign key's **reverse check**
-    // across owners (AJ-T2, `docs/spec/foreign-keys.md` §3a). The mirror of
-    // the pair above and the other half of the crossing: the forward asks
-    // *"does parent row pk exist"*, this asks *"does any row of child
-    // relation R reference pk through column c"*, which is what RESTRICT
-    // needs before a parent row may be deleted.
-    //
-    // **Its own pair rather than a direction flag on the forward** (AJ-R6),
-    // because the two carry different questions and answer different
-    // things: the forward's entry is `(parent oid, pk)` and its verdicts
-    // are exist / absent / in-flight, this one's is `(child oid, fk column,
-    // parent pk)` and its verdicts are clear / violation / busy. One
-    // payload serving both would be two unions and a flag deciding which
-    // half is meaningful, and a reader of a captured frame could not tell
-    // them apart at all.
-    //
-    // **Nothing is left behind, and that is the asymmetry worth knowing.**
-    // A forward probe grants a reference intent, so the parent's owner is
-    // an intent holder that a later decide must reach. A reverse probe
-    // answers a read and forgets it: the child's owner records nothing, is
-    // enrolled in nothing, and needs no decide (AJ-R5). What holds the
-    // window open instead lives on the *deleting* core, in
-    // `server::FkPendingDeleteTable`, and is cleared where that core's own
-    // transaction ends.
-    kFkReverseProbeRequest = 43,
-    kFkReverseProbeReply = 44,
 };
 
 // **The census of every kind this build sends or handles, and the number
@@ -261,10 +215,6 @@ constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
         case RingMessageKind::kTxnResolveReply:
         case RingMessageKind::kAccessStatsBatch:
         case RingMessageKind::kShippedRowDesc:
-        case RingMessageKind::kFkProbeRequest:
-        case RingMessageKind::kFkProbeReply:
-        case RingMessageKind::kFkReverseProbeRequest:
-        case RingMessageKind::kFkReverseProbeReply:
             return true;
         case RingMessageKind::kUnset:
             return false;
@@ -290,10 +240,11 @@ constexpr std::size_t CountKnownRingMessageKinds() noexcept {
     }
     return n;
 }
-static_assert(CountKnownRingMessageKinds() == 23,
+static_assert(CountKnownRingMessageKinds() == 19,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
               "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck), 26 at AT-S5d (30, 31, 32 "
-              "struck), 23 at AT-S5e (25, 26, 27 struck)");
+              "struck), 23 at AT-S5e (25, 26, 27 struck), 19 at AT-S5f (41, 42, 43, 44 "
+              "struck)");
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

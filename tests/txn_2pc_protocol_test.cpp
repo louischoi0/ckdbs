@@ -906,11 +906,10 @@ TEST_F(Txn2pcCoordinatorTest, EveryShapeThatCannotBeAPhaseIsRefusedBeforeAnythin
     EXPECT_EQ(client_->prepare_messages(), 0u);
     EXPECT_EQ(client_->decide_messages(), 0u);
 
-    // A decide naming no transaction is refused over a target that
-    // prepared - the id is what an in-doubt ask resolves by - and admitted
-    // over intent holders alone, who never ask (AO-S5(b) C2: the refusal
-    // arm's decide and `ReleaseIntentsWithoutWaiting` name none by design,
-    // and were refused here until then).
+    // **A decide naming no transaction is refused, full stop** (AT-S5f).
+    // It was admitted over reference-intent holders alone, who never ask an
+    // in-doubt question and so never need the id (AO-S5(b) C2); nothing
+    // grants an intent now, so every decide names its transaction.
     EXPECT_FALSE(client_->Decide(2, kSession, /*transaction_id=*/0, TxnDecision::kAbort, ok).ok());
     EXPECT_EQ(client_->decide_messages(), 0u);
 
@@ -918,11 +917,6 @@ TEST_F(Txn2pcCoordinatorTest, EveryShapeThatCannotBeAPhaseIsRefusedBeforeAnythin
     ASSERT_TRUE(client_->Prepare(1, kSession, kTxn, ok).ok());
     EXPECT_FALSE(client_->Prepare(1, kSession, kTxn, ok).ok());
 
-    ASSERT_TRUE(client_->Decide(3, kSession, /*transaction_id=*/0, TxnDecision::kAbort, ok,
-                                /*intent_only=*/ok)
-                    .ok());
-    EXPECT_EQ(client_->decide_messages(), 1u) << "the intent-only decide did not leave";
-    client_->Close(3);
 }
 
 // ---- The coordinator's COMMIT, end to end ------------------------------------

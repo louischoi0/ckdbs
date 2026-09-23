@@ -10,37 +10,6 @@
 namespace kds::server {
 namespace {
 
-// Whether `core` is named in `intent_only`: a decide target holding a
-// reference intent and nothing else (F4), which the wire's per-target
-// byte tells the participant.
-bool HoldsIntentOnly(std::uint32_t core, std::span<const std::uint32_t> intent_only) {
-    for (std::uint32_t holder : intent_only) {
-        if (holder == core) return true;
-    }
-    return false;
-}
-
-// Whether every target of a decide holds an intent and nothing else - the
-// one shape of decide that may name no transaction. An intent is released
-// by `(coordinator core, session)` (`fk_intent.hpp`) and its holder never
-// prepared, so nothing on the receiving side reads the id - and the sender
-// may genuinely have none: an autocommit statement refused after its
-// probes left ran no transaction, and the one before it on the session
-// committed, so naming that would key an ABORT on a committed transaction
-// (`DispatchAsync`'s refusal arm). `OpenPhase` used to refuse transaction 0
-// for every phase, which refused every such decide at the sender - the
-// refusal arm's and `ReleaseIntentsWithoutWaiting`'s, an `Error` line where
-// a logger was installed and nothing else - and left the intents those
-// statements had been granted held for the life of the process: F1's
-// defect on the arm F1 did not reach (AO-S5(b) C2).
-bool IntentOnlyEverywhere(std::span<const std::uint32_t> participants,
-                          std::span<const std::uint32_t> intent_only) {
-    for (std::uint32_t core : participants) {
-        if (!HoldsIntentOnly(core, intent_only)) return false;
-    }
-    return true;
-}
-
 }  // namespace
 
 StatusOr<TxnDecision> TxnDecisionOf(const TxnDecideRequestPayload& decide) {
@@ -182,7 +151,6 @@ void Txn2pcServer::OnDecide(const sched::MessageHeader& header,
     ask.session_id = request.session_id;
     ask.transaction_id = request.transaction_id;
     ask.retry = request.retry != 0;
-    ask.intent_only = request.intent_only != 0;
     const std::uint64_t request_id = header.request_id;
 
     // Refused rather than guessed, and the refusal leaves this core in
@@ -436,16 +404,18 @@ Status Txn2pcClient::Prepare(std::uint64_t request_id, std::uint64_t session_id,
 
 Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
                             std::uint64_t transaction_id, TxnDecision decision,
-                            std::span<const std::uint32_t> participants,
-                            std::span<const std::uint32_t> intent_only) {
+                            std::span<const std::uint32_t> participants) {
     if (decision == TxnDecision::kUnset) {
         return Status::InvalidArgument(
             "cross-owner transaction: a decide must name commit or abort; kUnset is the zeroed "
             "buffer and a participant refuses it into doubt");
     }
-    // **A decide over intent holders alone may name no transaction**
-    // (`IntentOnlyEverywhere` above carries the argument).
-    if (transaction_id == 0 && !IntentOnlyEverywhere(participants, intent_only)) {
+    // **Every decide names a transaction since AT-S5f.** The one that
+    // could not was a decide over reference-intent holders alone: they
+    // never prepared, nothing on the receiving side read the id, and the
+    // sender genuinely had none (AO-S5(b) C2). Both the holders and the
+    // statements that made them are gone with the probe protocol.
+    if (transaction_id == 0) {
         return Status::InvalidArgument(
             "cross-owner transaction: a decide over a participant that prepared must name the "
             "coordinator's transaction id, and 0 is the id no transaction has");
@@ -484,7 +454,6 @@ Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
         ++decide_messages_;
         // **Per target**, because one transaction can hold rows on one core
         // and only an intent on another, and the byte says which this is.
-        request.intent_only = HoldsIntentOnly(core, intent_only) ? 1 : 0;
         sched::SubmitSendPod(scheduler_, transport_, core_id_, core, /*session_core=*/core_id_,
                              request_id, sched::RingMessageKind::kTxnDecideRequest, request);
     }
@@ -492,8 +461,7 @@ Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
 }
 
 Status Txn2pcClient::AbortAndForget(std::uint64_t session_id, std::uint64_t transaction_id,
-                                    std::span<const std::uint32_t> participants,
-                                    std::span<const std::uint32_t> intent_only) {
+                                    std::span<const std::uint32_t> participants) {
     // The same shape checks `OpenPhase` makes, and made here because there
     // is no phase to open: an out-of-range core is the one send failure
     // `MakeSendRetryTask` does not retry, and the coordinator is not one of
@@ -505,7 +473,7 @@ Status Txn2pcClient::AbortAndForget(std::uint64_t session_id, std::uint64_t tran
     }
     // `Decide`'s rule on the id: named, unless every target holds an intent
     // and nothing else.
-    if (transaction_id == 0 && !IntentOnlyEverywhere(participants, intent_only)) {
+    if (transaction_id == 0) {
         return Status::InvalidArgument(
             "cross-owner transaction: an abort over a participant must name the coordinator's "
             "transaction id, and 0 is the id no transaction has");
@@ -548,7 +516,6 @@ Status Txn2pcClient::AbortAndForget(std::uint64_t session_id, std::uint64_t tran
         ++aborts_forgotten_;
         // Per target, `Decide`'s byte: a holder answers from its intent-only
         // arm, a participant applies the abort.
-        request.intent_only = HoldsIntentOnly(core, intent_only) ? 1 : 0;
         sched::SubmitSendPod(scheduler_, transport_, core_id_, core, /*session_core=*/core_id_,
                              /*request_id=*/0, sched::RingMessageKind::kTxnDecideRequest,
                              request);

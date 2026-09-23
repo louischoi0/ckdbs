@@ -708,23 +708,6 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             sched::RingMessageKind::kTxnDecideRequest,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
                 txn_2pc_server_->OnDecide(header, payload);
-                // **The decide is what ends a reference intent, and the
-                // only thing that does** (AH-R5, fk_probe_service.hpp).
-                // Here rather than inside `Txn2pcServer`, which would take
-                // a dependency on the FK for a reason 2PC has none of; the
-                // payload is decoded a second time, 24 bytes, on a leg
-                // that already writes the log.
-                //
-                // **After `OnDecide`, not before**: the decision is what
-                // the intent was holding the parent still *for*, so
-                // releasing ahead of it would reopen the window one line
-                // early. Idempotent both sides - a resent decide releases
-                // nothing the first one left.
-                if (!fk_probe_server_.has_value()) return;
-                TxnDecideRequestPayload decide{};
-                if (payload.size() != sizeof(decide)) return;
-                std::memcpy(&decide, payload.data(), sizeof(decide));
-                fk_probe_server_->ReleaseIntents(header.src_core, decide.session_id);
             });
         !s.ok()) {
         return s;
@@ -732,60 +715,6 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     txn_2pc_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
     if (Status s = txn_2pc_client_->RegisterReplyReceivers(); !s.ok()) return s;
     dispatcher_->SetTxn2pc(&*txn_2pc_client_);
-
-    // ---- The foreign key across owners (AH-T2, fk_probe_service.hpp) ----
-    //
-    // **Both halves on every core.** A relation is a foreign parent on one
-    // statement and a child on the next, so unlike the index build's
-    // owner-only server there is no core that only asks or only answers.
-    //
-    // Registered here, beside 2PC, because the two are one mechanism: the
-    // probe's intent is released by the transaction's **decide** and by
-    // nothing else (AH-R5), which is the hook installed just below.
-    fk_probe_server_.emplace(*catalog_, *store_, config_.core_id, fk_intents_, fk_pending_deletes_,
-                             *scheduler_, transport,
-                             txn_manager_.has_value() ? &*txn_manager_ : nullptr, log_,
-                             // F6's lookup on this core too (AK-S2): a reverse
-                             // probe a peer answers can be a Cabin lookup where
-                             // its own store has observed the value.
-                             cabin_store_ ? &*cabin_store_ : nullptr);
-    // AO-S5(b): the graph a parked probe records the child's edge in, and
-    // the participant lookup its check view takes its writer from (C1).
-    fk_probe_server_->SetLockTable(locks_);
-    fk_probe_server_->SetShippedStatements(&*shipped_executor_);
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kFkProbeRequest,
-            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                fk_probe_server_->OnRequest(header, payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    // AJ-T2's direction. **Both halves on every core**, for the reason the
-    // forward's comment gives: a relation is a foreign parent on one
-    // statement and a foreign child on the next, so a core that answered
-    // only one direction would be a core some DELETE cannot complete.
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kFkReverseProbeRequest,
-            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                fk_probe_server_->OnReverseRequest(header, payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    fk_probe_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
-    if (Status s = fk_probe_client_->RegisterReplyReceiver(); !s.ok()) return s;
-    // The receiver first, then the pointer the dispatcher asks through -
-    // in that order, so a reply cannot arrive before there is anything to
-    // deliver it to. R6-5's rule, and the index build's.
-    dispatcher_->SetFkProbes(&*fk_probe_client_);
-    // The parent side's half (AH-T3): a local DELETE consults what foreign
-    // transactions are relying on before it may proceed.
-    dispatcher_->SetFkIntents(&fk_intents_);
-    // AJ-T1's other half: the DELETE registers here before it fans out, and
-    // clears at the end of its own transaction. The dispatcher owns both
-    // ends because both are this core's.
-    dispatcher_->SetFkPendingDeletes(&fk_pending_deletes_);
 
     transport_ = &transport;
 

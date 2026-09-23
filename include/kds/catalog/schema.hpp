@@ -282,6 +282,23 @@ struct TableAccess {
     std::vector<PageId> WalkHeadsFor(std::uint32_t core_id,
                                      PkSpan span = PkSpan::Whole()) const;
 
+    // **Every entry page this relation has**, in `lo` order, whoever owns
+    // the range - the question a check asks when it must see the whole
+    // relation or drop a constraint (`exec/fk_check.cpp`'s reverse walk,
+    // AT-S5f).
+    //
+    // Its own name rather than a `core_id` a caller could pass a sentinel
+    // for: the two are different questions. `WalkHeadsFor` is the read
+    // path's - *walk what you own*, because a fan-in's other stages walk
+    // the rest and the session concatenates them - and this one has no
+    // other stage behind it. Every page is faultable from every core since
+    // AM-S2 step 3, so the difference is what the caller is answering for,
+    // never what it can reach.
+    //
+    // Answers the unsplit relation's one entry, as `WalkHeadsFor` does and
+    // for the same reason: RD3's zero-cost invariant reaching the walk.
+    std::vector<PageId> AllWalkHeads() const;
+
     // Whether every range is `core_id`'s - the question the dispatcher
     // asks before reading locally. True for an unsplit relation by
     // definition: it is one range, owned by `owner_core`.

@@ -20,7 +20,6 @@
 #include "kds/stats/access_batch.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
-#include "kds/server/fk_probe_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"
 #include "kds/server/statement_ship_service.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -497,13 +496,6 @@ public:
     StatementShipClient* statement_ship() noexcept {
         return statement_ship_client_.has_value() ? &*statement_ship_client_ : nullptr;
     }
-    // This core's parent-side half of the foreign-key probe, exposed for
-    // the same reason: a cell reads whether a probe parked (AO-S5(b)).
-    // Null before AttachTransport.
-    FkProbeServer* fk_probe_server() noexcept {
-        return fk_probe_server_.has_value() ? &*fk_probe_server_ : nullptr;
-    }
-
     // This core's coordinator half of the cross-owner commit (R6-3),
     // exposed for the same reason as the two above: a test drives a phase
     // and reads what came back. Null before AttachTransport.
@@ -712,22 +704,6 @@ private:
     std::optional<Txn2pcServer> txn_2pc_server_;
     std::optional<Txn2pcClient> txn_2pc_client_;
 
-    // The foreign key's forward check across owners (AH-T2,
-    // fk_probe_service.hpp). **Both halves on every core**, unlike the
-    // index build's owner-only server: a relation can be a foreign parent
-    // on one statement and a child on the next, and core 0 is not special
-    // here the way it is for DDL.
-    //
-    // `fk_intents_` is declared ahead of the server that fills it and
-    // outlives it, which is what lets a decide arriving after a teardown
-    // find an empty table rather than a dangling one.
-    FkIntentTable fk_intents_;
-    // AJ-T1's mirror, declared beside the intents and ahead of the server
-    // for the same reason: a probe arriving after a teardown must find an
-    // empty table rather than a dangling one.
-    FkPendingDeleteTable fk_pending_deletes_;
-    std::optional<FkProbeServer> fk_probe_server_;
-    std::optional<FkProbeClient> fk_probe_client_;
     // The client listener this core accepts on, when per-core listeners are
     // configured (PW5). It borrows the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so

@@ -298,12 +298,6 @@ public:
         // `kShippedDedupMaxRecords`, whose early eviction is counted.
         if (!participants_.empty()) ship_id_ = 0;
         participants_.clear();
-        // The intent holders end with the transaction for `participants_`'s
-        // reason and one of its own: an intent released by this
-        // transaction's decide must not be released a second time by the
-        // next one's, which would free an intent the next transaction is
-        // relying on.
-        intent_holders_.clear();
         // The class this transaction was begun under, for `home_core_`'s
         // reason: `BEGIN ... DURABILITY strict` binds one transaction, and
         // a session whose next statement is autocommit must fall back to
@@ -398,70 +392,6 @@ public:
     // one participant, and prepares it once.
     void EnrolParticipant(std::uint32_t core_id) { AddUnique(participants_, core_id); }
 
-    // ---- The foreign key's intent holders (work order AI, F4) -----------
-    //
-    // **An intent holder is not a participant**, and the distinction is
-    // what the two lists exist to keep. A participant holds *rows* of this
-    // transaction: it opened a context when a statement shipped to it, it
-    // votes at the prepare, and a missing context there is an abort. A core
-    // that answered a foreign-key probe holds a **reference intent** and
-    // nothing else - no rows, no context, nothing to vote with - so
-    // prepared it is not, and asking it to prepare answers "holds no
-    // transaction for core N's session M" and aborts a transaction that had
-    // no reason to fail.
-    //
-    // What it does need is the **decide**, which is the only thing that
-    // ends an intent (`fk_probe_service.hpp`, AH-R5). So the two lists
-    // differ exactly where the protocol does: the prepare goes to
-    // `participants_`, the decide goes to both. One core can be in both -
-    // a transaction that shipped a write to an owner and also probed it -
-    // and is prepared once and decided once, which is why the decide's
-    // target list is a union and not a concatenation.
-    const std::vector<std::uint32_t>& intent_holders() const noexcept { return intent_holders_; }
-    bool has_intent_holders() const noexcept { return !intent_holders_.empty(); }
-
-    // Idempotent, `EnrolParticipant`'s rule: a statement naming three
-    // parents on one owner leaves one holder.
-    void EnrolIntentHolder(std::uint32_t core_id) { AddUnique(intent_holders_, core_id); }
-
-    // Cleared where the decide has gone out for a statement that was its
-    // own transaction (F1). An explicit transaction's holders end with
-    // `Finish()` beside its participants; an autocommit statement has no
-    // `Finish()` to hang it on, because its transaction was born and died
-    // inside one statement.
-    void ClearIntentHolders() noexcept { intent_holders_.clear(); }
-
-    // **The transaction id an autocommit statement's decide names.** Its
-    // transaction is released inside `EndWrite`, before the decide that
-    // ends its intents is sent, so the id is kept here rather than read
-    // back off a transaction that is gone. Meaningful only between that
-    // release and that send.
-    std::uint64_t last_txn_id() const noexcept { return last_txn_id_; }
-    void set_last_txn_id(std::uint64_t id) noexcept { last_txn_id_ = id; }
-
-    // Every core this transaction must send its decision to: the ones that
-    // hold its rows and the ones that hold an intent on its behalf, each
-    // once.
-    std::vector<std::uint32_t> DecideTargets() const {
-        std::vector<std::uint32_t> targets = participants_;
-        for (std::uint32_t core : intent_holders_) AddUnique(targets, core);
-        return targets;
-    }
-
-    // **Which of the decide's targets hold an intent and no rows.** The
-    // wire carries this per target (`TxnDecideRequestPayload::intent_only`)
-    // so a participant meeting no context can tell the expected case from
-    // the anomaly. A core in both lists is a *participant* - it holds rows,
-    // it prepared, and it must take the ordinary path - which is why this
-    // is a difference and not a copy of `intent_holders_`.
-    std::vector<std::uint32_t> IntentOnlyTargets() const {
-        std::vector<std::uint32_t> only;
-        for (std::uint32_t core : intent_holders_) {
-            if (!HasParticipant(core)) only.push_back(core);
-        }
-        return only;
-    }
-
     // **Whether this transaction has already shipped a statement to
     // `core_id`** (RR0). What the wire's `join` bit is: true means the
     // participant must already hold a context and may not open a second
@@ -528,10 +458,6 @@ private:
     }
 
     std::vector<std::uint32_t> participants_;
-    // Cores holding a reference intent for this transaction (AI, F4). See
-    // `intent_holders()` for why this is not `participants_`.
-    std::vector<std::uint32_t> intent_holders_;
-    std::uint64_t last_txn_id_ = 0;
 };
 
 }  // namespace kds::server

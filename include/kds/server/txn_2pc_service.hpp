@@ -145,25 +145,14 @@ struct TxnDecideRequestPayload {
     // protocol anomaly worth saying so about. Without it the two are one
     // case and the anomaly is invisible.
     std::uint8_t retry;
-    // **This target holds a reference intent and nothing else** (work order
-    // AH's F4, `foreign-keys.md` §2b). An intent holder never prepared and
-    // has no context to hold, so a decide meeting no context there is the
-    // *expected* case rather than the anomaly the branch below it exists to
-    // report - and without this byte the two are one case, which made every
-    // healthy cross-owner foreign-key statement log an error and bump
-    // `decide_refusals`, the counter that means a transaction half is lost.
-    //
-    // Set **per target** rather than per decide: one transaction can have
-    // both kinds, a participant that holds its rows and a holder that holds
-    // an intent on the same row's parent, and they get the same decision by
-    // different routes.
-    //
-    // Not `retry`'s bit reused: a resend that meets no context is
-    // acknowledged with "already applied and released", which for a holder
-    // would be a second false sentence rather than the removal of the
-    // first.
-    std::uint8_t intent_only;
-    std::uint8_t reserved0[5];
+    // **A byte the decide no longer carries** (AT-S5f). It said "this
+    // target holds a reference intent and nothing else", which told a
+    // participant that a decide meeting no context was the expected case
+    // rather than a lost transaction half. Nothing grants a reference
+    // intent now, so every decide meets a context or is the anomaly. The
+    // space stays reserved rather than reclaimed: the payload's size is
+    // asserted, and AU-R4's rule for a struck kind - never renumbered,
+    // never reused - is the same rule for a struck field.
 };
 static_assert(sizeof(TxnDecideRequestPayload) == 24);
 
@@ -488,9 +477,6 @@ public:
         std::uint64_t transaction_id = 0;
         TxnDecision decision = TxnDecision::kUnset;
         bool retry = false;
-        // The wire's `intent_only`: this core holds a reference intent for
-        // the transaction and no rows of it.
-        bool intent_only = false;
     };
     using PrepareFn = std::function<void(PrepareAsk, ReplyFn)>;
     using DecideFn = std::function<void(DecideAsk, ReplyFn)>;
@@ -662,8 +648,7 @@ public:
     // if the decide messages themselves are refused by the ring.
     Status Decide(std::uint64_t request_id, std::uint64_t session_id,
                   std::uint64_t transaction_id, TxnDecision decision,
-                  std::span<const std::uint32_t> participants,
-                  std::span<const std::uint32_t> intent_only = {});
+                  std::span<const std::uint32_t> participants);
 
     // **An ABORT nobody waits for** (R6-8): a `ROLLBACK`'s decide leg.
     //
@@ -688,15 +673,8 @@ public:
     // is not a failed rollback - this core's own half is already unwound -
     // so the caller logs it rather than reporting it.
     //
-    // `intent_only` names the targets that hold a reference intent and
-    // nothing else, per target as `Decide` marks them; over such targets
-    // alone `transaction_id` may be 0, `Decide`'s rule. This is the leg an
-    // autocommit statement's intents end on when the statement had nothing
-    // to park on (`ReleaseIntentsWithoutWaiting`): a waiter opened and
-    // closed at once would count a phase timeout that never happened.
     Status AbortAndForget(std::uint64_t session_id, std::uint64_t transaction_id,
-                          std::span<const std::uint32_t> participants,
-                          std::span<const std::uint32_t> intent_only = {});
+                          std::span<const std::uint32_t> participants);
 
     // The parked coordinator's predicate: every participant answered, the
     // deadline passed, or the waiter is gone. One clock read per turn.

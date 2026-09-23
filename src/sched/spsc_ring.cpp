@@ -42,10 +42,6 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         // switch would have copied the omission.
         case RingMessageKind::kAccessStatsBatch: return "ACCESS_STATS_BATCH";
         case RingMessageKind::kShippedRowDesc: return "SHIPPED_ROW_DESC";
-        case RingMessageKind::kFkProbeRequest: return "FK_PROBE_REQUEST";
-        case RingMessageKind::kFkProbeReply: return "FK_PROBE_REPLY";
-        case RingMessageKind::kFkReverseProbeRequest: return "FK_REVERSE_PROBE_REQUEST";
-        case RingMessageKind::kFkReverseProbeReply: return "FK_REVERSE_PROBE_REPLY";
     }
     return "unknown";
 }
