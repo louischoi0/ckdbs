@@ -323,6 +323,16 @@ public:
         // it at each task boundary. Null leaves the catalog revalidating
         // nothing, which is a fixture's shape.
         std::atomic<std::uint64_t>* schema_word = nullptr;
+
+        // **The instance's Cabin store** (AT-S7), borrowed on the same
+        // terms: `Expeditor` owns one and every core observes into it and
+        // serves from it. It was this core's own until AT-S7, on the rule
+        // that a relation's owner was the core every write to it landed on
+        // and every read of it ran on - which AT-S5 ended for the write and
+        // AT-S6 for the read, leaving each store holding the half its core
+        // happened to write. Null builds this runtime its own, which is a
+        // fixture's shape and the only place a per-core store remains.
+        stats::CabinStore* cabins_store = nullptr;
         // **The instance's object-oid sequence** (AT-S5b), borrowed the same
         // way; null leaves this core's catalog on its own counter, which is
         // a fixture's shape and never a server's.
@@ -518,8 +528,12 @@ public:
     // one id twice, so a rig must carve a peer's block from this one.
     txn::TrxIdSequence& trx_ids() noexcept { return *trx_ids_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
-    // This core's Cabin store, or null under `cabins = off` (AK-S2).
-    stats::CabinStore* cabins() noexcept { return cabin_store_ ? &*cabin_store_ : nullptr; }
+    // **The instance's Cabin store** since AT-S7, or this runtime's own
+    // where nobody handed it one (a fixture), or null under `cabins = off`.
+    stats::CabinStore* cabins() noexcept {
+        if (cabins_ != nullptr) return cabins_;
+        return cabin_store_ ? &*cabin_store_ : nullptr;
+    }
 
     storage::DevicePageStore& store() noexcept { return *store_; }
 
@@ -611,9 +625,12 @@ private:
     // may. Declared before the dispatcher for the reason every other seam
     // here is: the dispatcher holds a pointer to it.
     stats::AccessBatch access_batch_;
-    // This core's Cabin store (AK-S2; the header's rule 3 says why a peer
-    // holds one). Declared ahead of every borrower - the step server just
-    // below, the dispatcher and the probe server further down - so reverse
+    // **The instance's store, borrowed** (AT-S7), and null wherever
+    // `Config::cabins` was: then `cabin_store_` below is this runtime's
+    // own, which only a fixture builds now.
+    stats::CabinStore* cabins_ = nullptr;
+    // Declared ahead of every borrower - the step server just below, the
+    // dispatcher and the probe server further down - so reverse
     // destruction ends them before the store they point into.
     std::optional<stats::CabinStore> cabin_store_;
 

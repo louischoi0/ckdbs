@@ -170,12 +170,12 @@ TEST(CabinOptimizerExecTest, ExtendBuildsEverySeededSetInOneCompleteWalk) {
     }());
     ASSERT_TRUE(aaa.has_value() && zzz.has_value());
 
-    std::vector<stats::CabinEntry>* aaa_set = db.cabins().Find(*aaa);
-    ASSERT_NE(aaa_set, nullptr) << "the seeded value was not observed";
-    EXPECT_EQ(aaa_set->size(), 2u) << "'aaa' has exactly two rows";
-    std::vector<stats::CabinEntry>* zzz_set = db.cabins().Find(*zzz);
-    ASSERT_NE(zzz_set, nullptr) << "the empty value was not observed";
-    EXPECT_TRUE(zzz_set->empty()) << "an observed no-rows value is an *empty* set";
+    const stats::CabinSet aaa_set = db.cabins().Find(*aaa);
+    ASSERT_TRUE(aaa_set.valid()) << "the seeded value was not observed";
+    EXPECT_EQ(aaa_set.size(), 2u) << "'aaa' has exactly two rows";
+    const stats::CabinSet zzz_set = db.cabins().Find(*zzz);
+    ASSERT_TRUE(zzz_set.valid()) << "the empty value was not observed";
+    EXPECT_TRUE(zzz_set.empty()) << "an observed no-rows value is an *empty* set";
 
     // And the served path agrees: the next probe is a Cabin hit.
     const std::string analyzed = db.Run("ANALYZE SELECT * FROM b WHERE sym = 'aaa'");
@@ -227,10 +227,10 @@ TEST(CabinOptimizerExecTest, ExtendWalksEveryChainOfASplitRelation) {
         return v;
     }());
     ASSERT_TRUE(aaa.has_value());
-    std::vector<stats::CabinEntry>* set = db.cabins().Find(*aaa);
-    ASSERT_NE(set, nullptr) << "the seeded value was not observed";
+    const stats::CabinSet set = db.cabins().Find(*aaa);
+    ASSERT_TRUE(set.valid()) << "the seeded value was not observed";
     std::vector<std::uint64_t> pks;
-    for (const stats::CabinEntry& e : *set) pks.push_back(e.pk);
+    for (std::size_t i = 0; i < set.size(); ++i) pks.push_back(set.At(i).pk);
     std::sort(pks.begin(), pks.end());
     EXPECT_EQ(pks, (std::vector<std::uint64_t>{1, 3}))
         << "the build covered one chain, so the set is a subset of its own scope";
@@ -284,9 +284,9 @@ TEST(CabinOptimizerExecTest, ABusyRowDefersTheBuildUntilItSettles) {
         v.str_val = "aaa";
         return v;
     }());
-    std::vector<stats::CabinEntry>* set = db.cabins().Find(*key);
-    ASSERT_NE(set, nullptr);
-    EXPECT_EQ(set->size(), 3u) << "the settled build must see the committed third row";
+    const stats::CabinSet set = db.cabins().Find(*key);
+    ASSERT_TRUE(set.valid());
+    EXPECT_EQ(set.size(), 3u) << "the settled build must see the committed third row";
 }
 
 TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingPks) {
@@ -304,27 +304,34 @@ TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingPks) {
         v.str_val = "aaa";
         return v;
     }());
-    std::vector<stats::CabinEntry>* set = db.cabins().Find(*key);
-    ASSERT_NE(set, nullptr);
-    ASSERT_EQ(set->size(), 2u);
+    {
+        const stats::CabinSet set = db.cabins().Find(*key);
+        ASSERT_TRUE(set.valid());
+        ASSERT_EQ(set.size(), 2u);
 
-    // Break every hint, and plant a dangling pk with a plausible hint.
-    for (stats::CabinEntry& entry : *set) {
-        entry.slot = static_cast<std::uint16_t>(entry.slot + 3);
+        // Break every hint, and plant a dangling pk with a plausible one.
+        // Both go through the store since AT-S7 - `Heal` writes a hint and
+        // `NoteWrite` grows a set, and the handle does neither itself.
+        for (std::size_t i = 0; i < set.size(); ++i) {
+            const stats::CabinEntry entry = set.At(i);
+            set.Heal(i, entry.page_id, static_cast<std::uint16_t>(entry.slot + 3),
+                     entry.page_epoch);
+        }
+        stats::CabinEntry dangling = set.At(0);
+        dangling.pk = 999'999;
+        db.cabins().NoteWrite(*key, dangling);
     }
-    stats::CabinEntry dangling = (*set)[0];
-    dangling.pk = 999'999;
-    set->push_back(dangling);
 
     stats::ActionItem heal = ExtendAction(db, "b", cabin_id);
     heal.action = stats::CabinAction::kHeal;
     heal.reason = stats::ActionReason::kQualityHeal;
     ASSERT_TRUE(executor.Apply({heal}, kAlwaysOn).ok());
 
-    set = db.cabins().Find(*key);
-    ASSERT_NE(set, nullptr);
-    EXPECT_EQ(set->size(), 2u) << "the dangling pk was not erased";
-    for (const stats::CabinEntry& entry : *set) {
+    const stats::CabinSet healed = db.cabins().Find(*key);
+    ASSERT_TRUE(healed.valid());
+    EXPECT_EQ(healed.size(), 2u) << "the dangling pk was not erased";
+    for (std::size_t i = 0; i < healed.size(); ++i) {
+        const stats::CabinEntry entry = healed.At(i);
         exec::VerifiedTuple verified = exec::VerifyTupleAt(db.store(), entry.page_id,
                                                            entry.slot, entry.pk,
                                                            entry.page_epoch);

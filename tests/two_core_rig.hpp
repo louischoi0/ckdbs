@@ -63,6 +63,7 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/sim_waker_table.hpp"
 #include "kds/server/core_runtime.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
@@ -244,6 +245,11 @@ private:
             config.visibility = &*visibility_;
             config.locks = locks_.get();
             config.schema_word = &schema_word_;
+            // **The instance's Cabin store** (AT-S7), as `Expeditor` hands
+            // it: both cores observe into one and serve from one, which is
+            // production's shape and the thing a rig that built two would
+            // stop being able to see.
+            config.cabins_store = &cabins_;
             config.oid_sequence = &oid_sequence_;
             config.mark_counter = &pending_marks_;
             config.assertions = &assertions_;
@@ -312,6 +318,7 @@ private:
     std::optional<sched::RealRingTransport> transport_;
     std::optional<sched::WakerTable> wakers_;
     std::optional<sched::SimWakerTable> sim_;
+    stats::CabinStore cabins_;
     std::unique_ptr<txn::LockTable> locks_;
     std::atomic<std::uint64_t> schema_word_{0};  // AT-S2: one for both cores
     std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b: one for both cores

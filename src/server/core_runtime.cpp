@@ -418,13 +418,18 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // loses speed and the optimizer's input. The Cabin store is this core's
     // own since AK-S2 (the header's rule 3): the owner observes, appends and
     // serves, which is the whole of a Cabin's life at one range per relation.
-    if (config.cabins) runtime->cabin_store_.emplace(config.cabin_limits);
+    // **The instance's store where one was handed** (AT-S7); its own only
+    // where nobody did, which is a fixture.
+    runtime->cabins_ = config.cabins_store;
+    if (config.cabins && runtime->cabins_ == nullptr) {
+        runtime->cabin_store_.emplace(config.cabin_limits);
+    }
     runtime->dispatcher_.emplace(
         runtime->superblock_, *runtime->catalog_, *runtime->store_, log, &clock,
         &*runtime->wal_, config.durability, config.budget,
         /*recorder=*/nullptr, /*replay_enabled=*/false,
         /*access_statistics=*/false,
-        runtime->cabin_store_ ? &*runtime->cabin_store_ : nullptr, &*runtime->txn_manager_,
+        runtime->cabins(), &*runtime->txn_manager_,
         config.isolation, config.core_id);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
@@ -614,7 +619,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         config_.budget,
         // And this core's Cabin store (AK-S2): a stage on a relation this
         // core owns serves from the same sets the dispatcher does.
-        cabin_store_ ? &*cabin_store_ : nullptr,
+        cabins(),
         // And the instance's lock table, so a producer declares the relation
         // it streams (AT-S1).
         locks_);

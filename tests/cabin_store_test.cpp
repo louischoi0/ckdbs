@@ -73,10 +73,10 @@ TEST(CabinStoreTest, DistinctValuesNeverShareASet) {
     const CabinKey int_one = KeyFor(1, Int(1));
 
     EXPECT_TRUE(store.Commit(a, {EntryFor(1)}));
-    EXPECT_NE(store.Find(a), nullptr);
-    EXPECT_EQ(store.Find(b), nullptr);
-    EXPECT_EQ(store.Find(same_text_other_cabin), nullptr);
-    EXPECT_EQ(store.Find(int_one), nullptr);
+    EXPECT_TRUE(store.Find(a).valid());
+    EXPECT_FALSE(store.Find(b).valid());
+    EXPECT_FALSE(store.Find(same_text_other_cabin).valid());
+    EXPECT_FALSE(store.Find(int_one).valid());
 }
 
 TEST(CabinStoreTest, AnObservedEmptySetIsNotTheSameAsUnobserved) {
@@ -85,12 +85,12 @@ TEST(CabinStoreTest, AnObservedEmptySetIsNotTheSameAsUnobserved) {
     // authoritatively".
     CabinStore store;
     const CabinKey key = KeyFor(1, Str("zzz"));
-    EXPECT_EQ(store.Find(key), nullptr);
+    EXPECT_FALSE(store.Find(key).valid());
 
     EXPECT_TRUE(store.Commit(key, {}));
-    std::vector<CabinEntry>* entries = store.Find(key);
-    ASSERT_NE(entries, nullptr);
-    EXPECT_TRUE(entries->empty());
+    const stats::CabinSet entries = store.Find(key);
+    ASSERT_TRUE(entries.valid());
+    EXPECT_TRUE(entries.empty());
 }
 
 TEST(CabinStoreTest, RecordsOnTheSecondSightingAndTheFirstWhenDeclared) {
@@ -141,11 +141,11 @@ TEST(CabinStoreTest, TheWriteHookAppendsOnlyToObservedValues) {
     store.NoteWrite(observed, EntryFor(2));
     store.NoteWrite(unobserved, EntryFor(3));
 
-    ASSERT_NE(store.Find(observed), nullptr);
-    EXPECT_EQ(store.Find(observed)->size(), 2u);
+    ASSERT_TRUE(store.Find(observed).valid());
+    EXPECT_EQ(store.Find(observed).size(), 2u);
     // The common case, and the whole reason the hook is affordable: nothing
     // to invalidate, so nothing recorded.
-    EXPECT_EQ(store.Find(unobserved), nullptr);
+    EXPECT_FALSE(store.Find(unobserved).valid());
     EXPECT_EQ(store.stats().appends, 1u);
 }
 
@@ -158,9 +158,9 @@ TEST(CabinStoreTest, AValueRoundTripDuplicatesAPkAndThatIsExpected) {
     ASSERT_TRUE(store.Commit(v, {EntryFor(1)}));
 
     store.NoteWrite(v, EntryFor(1));  // updated away and back
-    ASSERT_NE(store.Find(v), nullptr);
-    EXPECT_EQ(store.Find(v)->size(), 2u);
-    EXPECT_EQ((*store.Find(v))[0].pk, (*store.Find(v))[1].pk);
+    ASSERT_TRUE(store.Find(v).valid());
+    EXPECT_EQ(store.Find(v).size(), 2u);
+    EXPECT_EQ(store.Find(v).At(0).pk, store.Find(v).At(1).pk);
 }
 
 TEST(CabinStoreTest, APerValueCapRefusesToObserveRatherThanTruncating) {
@@ -174,7 +174,7 @@ TEST(CabinStoreTest, APerValueCapRefusesToObserveRatherThanTruncating) {
     const CabinKey key = KeyFor(1, Str("aaa"));
     std::vector<CabinEntry> four = {EntryFor(1), EntryFor(2), EntryFor(3), EntryFor(4)};
     EXPECT_FALSE(store.Commit(key, four));
-    EXPECT_EQ(store.Find(key), nullptr) << "the value must be unobserved, not partly observed";
+    EXPECT_FALSE(store.Find(key).valid()) << "the value must be unobserved, not partly observed";
     EXPECT_EQ(store.stats().cap_refusals, 1u);
 }
 
@@ -190,7 +190,7 @@ TEST(CabinStoreTest, AnAppendPastTheCapUnobservesRatherThanDroppingTheAppend) {
     ASSERT_TRUE(store.Commit(key, {EntryFor(1), EntryFor(2)}));
     store.NoteWrite(key, EntryFor(3));
 
-    EXPECT_EQ(store.Find(key), nullptr);
+    EXPECT_FALSE(store.Find(key).valid());
     EXPECT_EQ(store.stats().unobserved, 1u);
 }
 
@@ -209,9 +209,9 @@ TEST(CabinStoreTest, APerCabinValueCapRefusesNewValuesAndKeepsTheOldOnes) {
     // Refusing a new value never evicts an existing one: eviction is a
     // policy decision §8 has not made, and this refusal is undone by the
     // next execution.
-    EXPECT_NE(store.Find(a), nullptr);
-    EXPECT_NE(store.Find(b), nullptr);
-    EXPECT_EQ(store.Find(c), nullptr);
+    EXPECT_TRUE(store.Find(a).valid());
+    EXPECT_TRUE(store.Find(b).valid());
+    EXPECT_FALSE(store.Find(c).valid());
 
     // A cap of zero observes nothing, which is the documented way to keep
     // the catalog objects and switch the behaviour off.
@@ -230,9 +230,9 @@ TEST(CabinStoreTest, RecommittingAnObservedValueReplacesItsSet) {
     ASSERT_TRUE(store.Commit(key, {EntryFor(1), EntryFor(2)}));
     ASSERT_TRUE(store.Commit(key, {EntryFor(3)}));
 
-    ASSERT_NE(store.Find(key), nullptr);
-    ASSERT_EQ(store.Find(key)->size(), 1u);
-    EXPECT_EQ((*store.Find(key))[0].pk, 3u);
+    ASSERT_TRUE(store.Find(key).valid());
+    ASSERT_EQ(store.Find(key).size(), 1u);
+    EXPECT_EQ(store.Find(key).At(0).pk, 3u);
     EXPECT_EQ(store.InfoFor(1).values, 1u) << "replacing a set must not double-count it";
 }
 
@@ -244,8 +244,8 @@ TEST(CabinStoreTest, ForgetDropsOneCabinAndLeavesTheOthers) {
     ASSERT_TRUE(store.Commit(theirs, {EntryFor(1)}));
 
     store.Forget(1);
-    EXPECT_EQ(store.Find(mine), nullptr);
-    EXPECT_NE(store.Find(theirs), nullptr);
+    EXPECT_FALSE(store.Find(mine).valid());
+    EXPECT_TRUE(store.Find(theirs).valid());
 }
 
 TEST(CabinStoreTest, DiscardDropsTheSetsAndKeepsTheAccounting) {
@@ -264,9 +264,9 @@ TEST(CabinStoreTest, DiscardDropsTheSetsAndKeepsTheAccounting) {
     store.NoteMiss(1);
 
     EXPECT_EQ(store.Discard(1), 2u) << "the count is value sets, which is what re-observation rebuilds";
-    EXPECT_EQ(store.Find(aaa), nullptr);
-    EXPECT_EQ(store.Find(bbb), nullptr);
-    EXPECT_NE(store.Find(theirs), nullptr) << "another Cabin's sets are not this split's business";
+    EXPECT_FALSE(store.Find(aaa).valid());
+    EXPECT_FALSE(store.Find(bbb).valid());
+    EXPECT_TRUE(store.Find(theirs).valid()) << "another Cabin's sets are not this split's business";
 
     const CabinStore::CabinInfo info = store.InfoFor(1);
     EXPECT_EQ(info.values, 0u);

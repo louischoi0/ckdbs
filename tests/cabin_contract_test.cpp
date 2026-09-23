@@ -309,12 +309,18 @@ TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
             value.str_val = sym;
             auto key = stats::MakeCabinKey(cabin_id, value);
             ASSERT_TRUE(key.has_value());
-            std::vector<stats::CabinEntry>* entries = db.cabins().Find(*key);
-            if (entries == nullptr) continue;
-            for (stats::CabinEntry& entry : *entries) {
+            const stats::CabinSet entries = db.cabins().Find(*key);
+            if (!entries.valid()) continue;
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                const stats::CabinEntry entry = entries.At(i);
                 // A slot that exists and holds someone else's row - the
                 // dangerous corruption, not an obviously broken one.
-                entry.slot = static_cast<std::uint16_t>((entry.slot + 3) % 8);
+                // Written through `Heal`, which is how the engine writes a
+                // hint since AT-S7 - there is no other way in, which is the
+                // point of the handle.
+                entries.Heal(i, entry.page_id,
+                             static_cast<std::uint16_t>((entry.slot + 3) % 8),
+                             entry.page_epoch);
                 ++poisoned;
             }
         }
@@ -364,9 +370,10 @@ TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
             value.str_val = sym;
             auto key = stats::MakeCabinKey(cabin_id, value);
             ASSERT_TRUE(key.has_value());
-            std::vector<stats::CabinEntry>* entries = db.cabins().Find(*key);
-            if (entries == nullptr) continue;
-            for (const stats::CabinEntry& entry : *entries) {
+            const stats::CabinSet entries = db.cabins().Find(*key);
+            if (!entries.valid()) continue;
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                const stats::CabinEntry entry = entries.At(i);
                 if (!entry.hint_valid()) continue;
                 EXPECT_EQ(entry.page_epoch, 1u)
                     << "a hint kept a stale epoch after the resolve (" << sym << ")";
@@ -399,14 +406,17 @@ TEST(CabinContractTest, DanglingPksChangeNoReply) {
         value.str_val = sym;
         auto key = stats::MakeCabinKey(cabin_id, value);
         ASSERT_TRUE(key.has_value());
-        std::vector<stats::CabinEntry>* entries = db.cabins().Find(*key);
-        if (entries == nullptr) continue;
+        const stats::CabinSet entries = db.cabins().Find(*key);
+        if (!entries.valid()) continue;
 
         stats::CabinEntry dangling;
         dangling.pk = 999999;  // issued to nothing, and by K1 never will be
         dangling.page_id = kInvalidPageId;
         dangling.flags = 0;  // no usable hint: the pk is all there is
-        entries->push_back(dangling);
+        // Appended through the store's own write hook, which is what a
+        // write to the relation would do - the handle names entries and
+        // does not grow a set (AT-S7).
+        db.cabins().NoteWrite(*key, dangling);
         ++planted;
     }
     ASSERT_GT(planted, 0u) << "nothing was observed; the test proves nothing";
@@ -493,8 +503,8 @@ TEST(CabinContractTest, AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing) {
     aaa.str_val = "aaa";
     auto key = stats::MakeCabinKey(cabin_id, aaa);
     ASSERT_TRUE(key.has_value());
-    ASSERT_NE(db.cabins().Find(*key), nullptr);
-    const std::size_t before = db.cabins().Find(*key)->size();
+    ASSERT_TRUE(db.cabins().Find(*key).valid());
+    const std::size_t before = db.cabins().Find(*key).size();
 
     // Twenty writes to a row carrying the observed value, none of them
     // touching the key column.
@@ -502,7 +512,7 @@ TEST(CabinContractTest, AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing) {
         ASSERT_EQ(db.Run("UPDATE b SET qty = " + std::to_string(100 + i) + " WHERE id = 1"),
                   "UPDATED 1");
     }
-    EXPECT_EQ(db.cabins().Find(*key)->size(), before) << "an unchanged key column appended";
+    EXPECT_EQ(db.cabins().Find(*key).size(), before) << "an unchanged key column appended";
 
     // And the row is still served, with its new value.
     const std::string served = db.Run("SELECT * FROM b WHERE sym = 'aaa'");
@@ -511,7 +521,7 @@ TEST(CabinContractTest, AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing) {
     // A write that *does* move the key column still appends - the rule is
     // "unchanged does nothing", not "UPDATE does nothing".
     ASSERT_EQ(db.Run("UPDATE b SET sym = 'aaa' WHERE id = 4"), "UPDATED 1");
-    EXPECT_EQ(db.cabins().Find(*key)->size(), before + 1);
+    EXPECT_EQ(db.cabins().Find(*key).size(), before + 1);
 }
 
 TEST(CabinContractTest, AQuotaStoppedWalkCommitsNoObservation) {
@@ -541,14 +551,14 @@ TEST(CabinContractTest, AQuotaStoppedWalkCommitsNoObservation) {
     aaa.str_val = "aaa";
     auto key = stats::MakeCabinKey(access.value()->CabinOn(1).id, aaa);
     ASSERT_TRUE(key.has_value());
-    EXPECT_EQ(db.cabins().Find(*key), nullptr) << "a stopped walk was committed";
+    EXPECT_FALSE(db.cabins().Find(*key).valid()) << "a stopped walk was committed";
 
     // The completed walk answers with every row and is the one that
     // observes; a served execution afterwards - sliced or not - answers
     // the same bytes the walk did.
     const std::string all = db.Run("SELECT id FROM h WHERE sym = 'aaa'");
     EXPECT_EQ(all, "id\\n1\\n3\\n6");
-    EXPECT_NE(db.cabins().Find(*key), nullptr);
+    EXPECT_TRUE(db.cabins().Find(*key).valid());
     EXPECT_EQ(db.Run("SELECT id FROM h WHERE sym = 'aaa'"), all);
     EXPECT_EQ(db.Run("SELECT id FROM h WHERE sym = 'aaa' LIMIT 2"), "id\\n1\\n3");
     EXPECT_EQ(db.Run("SELECT id FROM h WHERE sym = 'aaa' LIMIT 1 OFFSET 2"), "id\\n6");
@@ -862,7 +872,7 @@ TEST(CabinContractTest, ACorrelatedExistsConvergesToObservedSets) {
         v.str_val = sym;
         auto key = stats::MakeCabinKey(cabin_id, v);
         ASSERT_TRUE(key.has_value());
-        EXPECT_NE(db.cabins().Find(*key), nullptr) << sym;
+        EXPECT_TRUE(db.cabins().Find(*key).valid()) << sym;
     }
 
     // And the served executions answer exactly what the first did.
@@ -999,7 +1009,7 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
     v.str_val = "ccc";
     auto key = stats::MakeCabinKey(cabin_id, v);
     ASSERT_TRUE(key.has_value());
-    EXPECT_EQ(db.cabins().Find(*key), nullptr) << "a once-touched key must not record";
+    EXPECT_FALSE(db.cabins().Find(*key).valid()) << "a once-touched key must not record";
 
     // And the literal form is untouched: the operator named this value,
     // and the declaration's n = 1 still records it on the first miss.
@@ -1015,10 +1025,10 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
     lit.str_val = "ddd";
     auto lit_key = stats::MakeCabinKey(cabin_id, lit);
     ASSERT_TRUE(lit_key.has_value());
-    ASSERT_EQ(db.cabins().Find(*lit_key), nullptr);
+    ASSERT_FALSE(db.cabins().Find(*lit_key).valid());
     EXPECT_EQ(db.Run("SELECT * FROM h WHERE sym = 'ddd'"),
               ref.Run("SELECT * FROM h WHERE sym = 'ddd'"));
-    EXPECT_NE(db.cabins().Find(*lit_key), nullptr)
+    EXPECT_TRUE(db.cabins().Find(*lit_key).valid())
         << "the declared literal probe records first-touch";
 }
 

@@ -120,7 +120,7 @@ protected:
         stats::CabinEntry entry;
         entry.pk = pk;
         ASSERT_TRUE(cabins_.Commit(*key, {entry}));
-        ASSERT_NE(cabins_.Find(*key), nullptr);
+        ASSERT_TRUE(cabins_.Find(*key).valid());
     }
 
     stats::CabinStore cabins_;

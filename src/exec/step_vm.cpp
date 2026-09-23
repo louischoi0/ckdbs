@@ -740,21 +740,15 @@ private:
     }
 
     bool CabinScopeCovers(const catalog::TableAccess& access, std::size_t index) const noexcept {
-        // **A set speaks for the core that wrote it, and since AT-S5 that
-        // is not one core** (AT-S6's survey). `NoteCabinWrite` files into
-        // the *writing* core's store and a write runs where the session
-        // is, so a set held here is missing whatever another core wrote -
-        // and an exhausted-set answer is then short, which
-        // `docs/inflight/bugs/a-cabin-set-serves-a-query-short-across-cores.md`
-        // reproduces. That defect is AT-S7's, whose one store for the
-        // instance restores the superset argument §4b rests on.
-        //
-        // **This line is what keeps AT-S6 from widening it.** Making the
-        // read local brought peer-owned relations to this core's store for
-        // the first time; the owner test holds the exposure at the
-        // relations that already had it, and costs the fast path on the
-        // rest until AT-S7 pays it back.
-        if (access.owner_core != catalog_.core_id()) return false;
+        // **The owner test AT-S6 put here is gone** (AT-S7). It read
+        // `access.owner_core != catalog_.core_id()` and declined the
+        // Cabin for every relation this core did not own, because a store
+        // was a core's own and a write ran where the session was - so a
+        // set here was missing whatever another core wrote, and an
+        // exhausted-set answer was short. One store serves every core now,
+        // so a set is again a superset of every pk carrying its value and
+        // the scope question is the one §4b actually asks: does this
+        // walk's span cover the ranges the set speaks for.
         if (access.ranges.empty()) return true;
         if (!access.ServableBy(catalog_.core_id())) return false;
         const catalog::PkSpan span = SpanFor(index);

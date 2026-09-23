@@ -5,11 +5,14 @@
 // is - so two cores write one relation and each store holds half. An
 // exhausted-set answer is then short.
 //
-// `docs/inflight/bugs/a-cabin-set-serves-a-query-short-across-cores.md`
-// carries the finding; this is its reproduction, written during AT-S6's
-// survey and **disabled** because the fix is AT-S7's (one store for the
-// instance, AT-0 item 9). Enable it with that stage - it is the cell it
-// owes.
+// Written during AT-S6's survey as the reproduction of a defect, landed
+// disabled, and **enabled by AT-S7**: one store for the instance, so the
+// set a query is served from holds what every core wrote.
+//
+// **The mutation**: give each core its own store again - drop
+// `config.cabins_store = &cabins_` from `two_core_rig.hpp`, which is the
+// line `Expeditor` has as `core_config.cabins_store` - and the second
+// answer is `id\n17`, one row where two carry the value.
 
 #include "two_core_rig.hpp"
 
@@ -37,7 +40,7 @@ sched::Coro RunOne(CommandDispatcher& d, OneShot& o) {
     co_return Status::OK();
 }
 
-TEST(CabinServeAcrossCores, DISABLED_AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote) {
+TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote) {
     TwoCoreRig::Options options;
     options.wal_drain_interval_ns = 1'000'000;
     auto opened = TwoCoreRig::Open(options);
@@ -79,10 +82,18 @@ TEST(CabinServeAcrossCores, DISABLED_AQueryServedFromThisCoresSetSeesARowAnother
 
     // Core 0 asks again. Two rows carry v=7; a set served from core 0's
     // store holds one.
+    // **Both rows, and the set is what served them.** The separator in a
+    // debug-text response is the two characters `\n`, so the row core 1
+    // wrote is `\n1\n` spelled that way and a real newline would match
+    // nothing here - which is how this cell read as short when it was not.
     const std::string again = d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response;
-    EXPECT_NE(again.find("17"), std::string::npos) << "core 0's own row: " << again;
-    EXPECT_NE(again.find("\n1\n"), std::string::npos)
-        << "the row core 1 wrote is missing from core 0's answer: " << again;
+    EXPECT_EQ(again, "id\\n1\\n17")
+        << "core 0's answer holds its own row and the one core 1 wrote: " << again;
+    // And it was the set: `hits` moves on this statement where the read
+    // above moved `misses` and banked. Without it the assertion above
+    // passes on a walk and says nothing about the store.
+    EXPECT_EQ(rig->core(0).cabins()->stats().hits, 1u)
+        << "the answer above came from a walk, not from the banked set";
     // And the walk agrees there are two, which is what makes the answer
     // above short rather than right.
     const std::string counted = d0.Dispatch("SELECT COUNT(*) FROM r0").response;

@@ -1812,6 +1812,11 @@ Status Expeditor::Start() {
             // and core 0's wake one here.
             core_config.locks = locks_.get();
             core_config.schema_word = &schema_version_;
+            // **The instance's Cabin store** (AT-S7): every peer observes
+            // into core 0's and serves from it, which is what makes a set
+            // a superset of every pk carrying its value again now that two
+            // cores write one relation (AT-S5) and read it (AT-S6).
+            core_config.cabins_store = cabin_store_ ? &*cabin_store_ : nullptr;
             core_config.oid_sequence = &oid_sequence_;
             core_config.mark_counter = &delete_mark_count_;
             core_config.assertions = &*assertions_;
