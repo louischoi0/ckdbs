@@ -78,7 +78,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "indexes",
             "cabin_max_entries_per_value", "cores", "placement",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
-            "join_build_max_rows",   "in_doubt_ceiling_ms",
+            "join_build_max_rows",   "lock_wait_fault_net_ms",
             "max_locks_per_txn",
             "range_size_ids",
             "decay_half_life",       "physical_optimizer",
@@ -383,14 +383,27 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // `kDefaultJoinBuildMaxRows` (exec/budget.hpp).
         join_build_max_rows = static_cast<std::size_t>(v.value());
     }
+    // **The old spelling is refused, and it names its successor** (AT-0
+    // item 7). `in_doubt_ceiling_ms` bounded a writer's wait on a row this
+    // core had prepared and was in doubt about; nothing prepares and
+    // nothing is in doubt since AT-S6, and the quantity the key named -
+    // how long a statement may wait before the engine calls it a fault -
+    // is `lock_wait_fault_net_ms`. Refused rather than ignored, because a
+    // file that still sets it is a file whose author expects it to do
+    // something.
     if (file.Has("in_doubt_ceiling_ms")) {
-        auto v = file.GetUint("in_doubt_ceiling_ms");
+        return Status::InvalidArgument(
+            "in_doubt_ceiling_ms was the cross-owner in-doubt ceiling and there is no "
+            "cross-owner transaction since v3.0.0's M3; the wait it bounded is the lock "
+            "family's fault net, which is 'lock_wait_fault_net_ms'");
+    }
+    if (file.Has("lock_wait_fault_net_ms")) {
+        auto v = file.GetUint("lock_wait_fault_net_ms");
         if (!v.ok()) return v.status();
-        // No zero check: 0 is D5's other branch - a writer refused at once
-        // rather than blocked - and is a value someone sweeping this knob
-        // is entitled to. The semantics have one home, at
-        // `kTxnInDoubtCeilingNs` (server/txn_2pc_service.hpp).
-        in_doubt_ceiling_ns = v.value() * 1'000'000ULL;
+        // No zero check: 0 is "refuse at once rather than wait", which is a
+        // value someone sweeping this knob is entitled to. The semantics
+        // have one home, at `kLockWaitFaultNetNs` (txn/lock_table.hpp).
+        lock_wait_fault_net_ns = v.value() * 1'000'000ULL;
     }
     if (file.Has("range_size_ids")) {
         auto v = file.GetUint("range_size_ids");
@@ -1070,7 +1083,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // D5's ceiling (R6-5). Core 0 is a participant like any other - a
     // peer's client writes core-0-owned relations - so its writers block on
     // an in-doubt row exactly as a peer's do, and both read the same key.
-    expeditor->dispatcher_->set_in_doubt_ceiling_ns(expeditor->config_.in_doubt_ceiling_ns);
+    expeditor->dispatcher_->set_lock_wait_fault_net_ns(
+        expeditor->config_.lock_wait_fault_net_ns);
     // **The instance's assertion registry** (AT-S5d), before the resume
     // below fills it: core 0's dispatcher checks and reserves into the one
     // every peer is handed at `Start`. Armed only where a second reactor can
@@ -1314,25 +1328,13 @@ struct ClearReactorBorrows {
     // line above had just installed. `SHOW META`'s group-accounting block
     // was then empty for the life of every instance. Deleting the copy is
     // what makes that spelling stop compiling rather than stop working.
-    ClearReactorBorrows(CommandDispatcher* d,
-                        std::optional<ShippedStatementExecutor>* e) noexcept
-        : dispatcher(d), executor(e) {}
+    explicit ClearReactorBorrows(CommandDispatcher* d) noexcept : dispatcher(d) {}
     ClearReactorBorrows(const ClearReactorBorrows&) = delete;
     ClearReactorBorrows& operator=(const ClearReactorBorrows&) = delete;
 
     CommandDispatcher* dispatcher;
-    std::optional<ShippedStatementExecutor>* executor;
     ~ClearReactorBorrows() {
         dispatcher->set_scheduler_view(nullptr);
-        dispatcher->SetStatementShip(nullptr);
-        dispatcher->SetShippedStatements(nullptr);
-        dispatcher->SetTxn2pc(nullptr);
-        // R6-5's borrow runs the other way - the executor asks through the
-        // 2PC server, and that server is a *member*, so it outlives the
-        // reactor while holding it by reference. Withdrawn here so the two
-        // directions are undone in one place and nothing asks through a
-        // destroyed reactor.
-        if (executor->has_value()) (*executor)->SetTxn2pcServer(nullptr);
     }
 };
 
@@ -1599,7 +1601,7 @@ Status Expeditor::Start() {
     // one does instead of shipping through a destroyed reactor.
     // (The index-build client was the third of the same shape until AT-S5e
     // retired it.)
-    live.clear_reactor_borrows.emplace(&*dispatcher_, &shipped_executor_);
+    live.clear_reactor_borrows.emplace(&*dispatcher_);
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,
@@ -1750,7 +1752,7 @@ Status Expeditor::Start() {
             core_config.durability = config_.durability;
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
-            core_config.in_doubt_ceiling_ns = config_.in_doubt_ceiling_ns;
+            core_config.lock_wait_fault_net_ns = config_.lock_wait_fault_net_ns;
             core_config.range_size_ids = config_.range_size_ids;
             // CR7: the instance's switch reaches the peers now that they
             // have somewhere to put a shape.
@@ -1897,67 +1899,12 @@ Status Expeditor::Start() {
         // The WAL goes in with it (R6-3): core 0 is a participant like any
         // other - a peer's client writes core-0-owned relations - and a
         // participant's prepare record is written into its own stream.
-        shipped_executor_.emplace(/*core_id=*/0, *dispatcher_, scheduler, clock_, &*logger_,
-                                  &*wal_);
-        // AO-S4b: the graph a shipped statement's coordinator is recorded in.
-        shipped_executor_->SetLockTable(locks_.get());
-        statement_ship_server_.emplace(/*core_id=*/0, scheduler, *transport_,
-                                       shipped_executor_->Seam(), &*logger_);
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kShippedStatementRequest,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    statement_ship_server_->OnRequest(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        statement_ship_client_.emplace(/*core_id=*/0, scheduler, *transport_, clock_,
-                                       &*logger_);
-        if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
-        dispatcher_->SetStatementShip(&*statement_ship_client_);
-        dispatcher_->SetShippedStatements(&*shipped_executor_);
-        // **XG1's answer edge, on core 0 too.** This wiring exists in
-        // `CoreRuntime` for a peer, and core 0 builds its own executor and
-        // its own step server here - so the setter has to be called twice,
-        // once per builder, and the omission is invisible to any test whose
-        // *owner* is a peer. It was: the rig's owner is a `CoreRuntime`, so
-        // every unit cell passed while a real instance answered
-        // `Unsupported` for every typed shipped read to a core-0-owned
-        // relation - which under `placement = creating` is every relation.
-        if (remote_steps_.has_value()) shipped_executor_->SetRemoteSteps(&*remote_steps_);
-
-        // **Core 0's two halves of the cross-owner commit** (R6-3), on the
-        // same wiring rule and in the same order: the participant transport
-        // holds the executor's seams, and the coordinator client is
-        // registered before the dispatcher is told about it so a reply
-        // cannot beat its receiver.
-        txn_2pc_server_.emplace(/*core_id=*/0, scheduler, *transport_,
-                                shipped_executor_->PrepareSeam(),
-                                shipped_executor_->DecideSeam(),
-                                shipped_executor_->ResolveSeam(), &*logger_);
-        // R6-5's ask leg, receiver first (`CoreRuntime::AttachTransport`'s
-        // order, and its reason).
-        if (Status s = txn_2pc_server_->RegisterResolveReplyReceiver(); !s.ok()) return s;
-        shipped_executor_->SetTxn2pcServer(&*txn_2pc_server_);
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kTxnPrepareRequest,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    txn_2pc_server_->OnPrepare(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kTxnDecideRequest,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    txn_2pc_server_->OnDecide(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        txn_2pc_client_.emplace(/*core_id=*/0, scheduler, *transport_, clock_, &*logger_);
-        if (Status s = txn_2pc_client_->RegisterReplyReceivers(); !s.ok()) return s;
-        dispatcher_->SetTxn2pc(&*txn_2pc_client_);
+        // **Core 0 wires neither statement shipping nor 2PC since AT-S6**,
+        // because neither exists: it built its own shipped-statement
+        // executor and ship server here, and both halves of the
+        // cross-owner commit, on the rule that core 0 is an owner and a
+        // coordinator like any other core. A read runs where the session
+        // is now, as a write has since AT-S5.
 
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -
@@ -2170,17 +2117,6 @@ Status Expeditor::Start() {
 
     if (config_.wal_drain_interval_ns > 0) {
         scheduler.SubmitEvery(config_.wal_drain_interval_ns, drain);
-        // R6-2's lifetime ceiling, on **core 0 as well as the peers**. A peer
-        // gets this from `CoreRuntime::Run`; core 0's executor is this
-        // object's, so without a registration here the one core that is a
-        // participant whenever a peer's client writes a core-0-owned
-        // relation would never sweep an abandoned transaction - and that is
-        // the ordinary case under a rotating `AssignOwnerCore`, not an
-        // exotic one. The constant's derivation is in
-        // `shipped_statement_executor.hpp`; this is only where it is driven.
-        scheduler.SubmitEvery(config_.wal_drain_interval_ns, [this] {
-            if (shipped_executor_.has_value()) shipped_executor_->ExpireEnrolled();
-        });
     } else {
         logger_->Warn("wal", "drain cadence disabled; relaxed commits stay unsynced "
                              "until checkpoint or shutdown");
@@ -2233,14 +2169,6 @@ Status Expeditor::RunUntilStopped() {
     auto& workers = live.workers;
 
     scheduler.Run();
-    // R6-2, and the same moment `~CoreRuntime` uses on a peer: the reactor
-    // has stopped, so nothing will decide a cross-owner transaction this
-    // core is a participant in, and one left `active_` outlives the
-    // executor holding its session - pinning `ReadHorizon()` and holding a
-    // slot in the live-transaction table for the rest of the process.
-    // Before `BroadcastShutdown` below, because this is core 0's own state
-    // and the peers' teardown is their own.
-    if (shipped_executor_.has_value()) shipped_executor_->RollbackAllEnrolled();
     // Same teardown rule as CoreRuntime::Run: the audit reads store_, and
     // the pointer must go before the store does.
     exec::UninstallSuspendAudit();

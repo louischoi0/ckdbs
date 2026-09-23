@@ -1,11 +1,14 @@
 // **A transaction cannot read its own uncommitted write to a peer-owned
 // relation**, because the write runs locally and the read still ships.
 //
-// `docs/inflight/bugs/a-shipped-read-cannot-see-its-transactions-own-write.md`
-// carries the finding; this is its reproduction, written during AT-S6's
-// survey and **disabled** because the fix is an operator decision (AT-0
-// item 4 / D18: whether a read still ships at all). Enable it with the
-// fix - it is the cell that fix owes.
+// Written during AT-S6's survey as the reproduction of a defect, landed
+// disabled, and **enabled by AT-S6 itself**: the operator took AT-0
+// item 4 / D18's first shape on 2026-09-23 - a read stops shipping - so
+// both halves of the transaction run on the core the session is on, under
+// one transaction id, and the read sees its own row.
+//
+// **The mutation**: put the ship arm back under `CheckReadAffinity`'s
+// refusal and this cell reads a header and no rows.
 
 #include "two_core_rig.hpp"
 
@@ -40,7 +43,7 @@ sched::Coro WriteThenRead(CommandDispatcher& d, Txn& t) {
     co_return Status::OK();
 }
 
-TEST(ShippedReadOwnWrite, DISABLED_ATransactionReadsItsOwnUncommittedWriteToAPeerOwnedRelation) {
+TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteToAPeerOwnedRelation) {
     TwoCoreRig::Options options;
     options.wal_drain_interval_ns = 1'000'000;
     auto opened = TwoCoreRig::Open(options);

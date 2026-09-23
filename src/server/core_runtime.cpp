@@ -54,7 +54,6 @@ CoreRuntime::~CoreRuntime() {
     // in-process invariant ("no transaction outlives its executor") true
     // rather than merely repaired later. Before the dispatcher's borrows are
     // withdrawn below, because the rollback goes through it.
-    if (shipped_executor_.has_value()) shipped_executor_->RollbackAllEnrolled();
     // Before the reactor goes, because this body inverts declaration order
     // (see the header): `scheduler_` is dropped here, ahead of the
     // dispatcher that holds a view on it. Nothing below dispatches today,
@@ -63,18 +62,6 @@ CoreRuntime::~CoreRuntime() {
     // and a stale reactor pointer is exactly what that argument forbids.
     if (dispatcher_.has_value()) {
         dispatcher_->set_scheduler_view(nullptr);
-        // The two shipping borrows, for the same reason. Both name members
-        // declared **below** `dispatcher_` (see the header), so reverse-
-        // order destruction takes them *first* and the dispatcher spends
-        // the rest of this teardown holding pointers to dead objects.
-        // `Expeditor::Serve`'s `ClearReactorBorrows` withdraws the same
-        // pair at its own exit; this is that guard for the runtime that
-        // sets them in `AttachTransport` instead.
-        dispatcher_->SetStatementShip(nullptr);
-        dispatcher_->SetShippedStatements(nullptr);
-        // R6-3's coordinator borrow, withdrawn on the same terms: the
-        // client is declared below the dispatcher too.
-        dispatcher_->SetTxn2pc(nullptr);
     }
     // RR2's fan-in client is declared *above* `dispatcher_`, so reverse
     // destruction already takes the borrower first and this withdrawal is
@@ -85,12 +72,6 @@ CoreRuntime::~CoreRuntime() {
     if (dispatcher_.has_value()) {
         dispatcher_->SetRemoteReads(nullptr);
     }
-    // R6-5's borrow in the other direction - the executor asks *through*
-    // the 2PC server, which is declared below it, so reverse-order
-    // destruction takes the server first. Nothing asks after this point
-    // (the sweep is a timer on a reactor that has stopped), so this is the
-    // contract rather than a live fix, on `SetStatementShip`'s terms.
-    if (shipped_executor_.has_value()) shipped_executor_->SetTxn2pcServer(nullptr);
     // **`scheduler_.reset()` used to stand here and is deliberately gone.**
     // It inverted declaration order to enforce a contract that declaration
     // order already keeps: `scheduler_` is declared above every borrower,
@@ -453,7 +434,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // and not at `AttachTransport`, because a writer blocked on an in-doubt
     // row is blocked whether or not this core has a transport - the
     // transaction that holds the row is this core's own.
-    runtime->dispatcher_->set_in_doubt_ceiling_ns(config.in_doubt_ceiling_ns);
+    runtime->dispatcher_->set_lock_wait_fault_net_ns(config.lock_wait_fault_net_ns);
     // The wait-for graph and the admission it gates, on every core since
     // AO-S4b - the member's declaration says why that is safe now.
     runtime->dispatcher_->set_locks(runtime->locks_);
@@ -648,73 +629,14 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // not be able to beat its receiver into existence.
     dispatcher_->SetRemoteReads(&*remote_reads_);
 
-    // **Statement shipping, both halves** (SS1's wiring rule,
-    // statement_ship_service.hpp): every core answers requests and every
-    // core receives replies, because a shipped statement crosses in both
-    // directions - core 0 to an owner peer, and a peer to core 0. The
-    // executor is built first: the server holds its seam.
-    // The WAL goes in with it (R6-3): a participant's prepare record is
-    // written into *this* core's stream, and the executor is what writes
-    // it.
-    shipped_executor_.emplace(config_.core_id, *dispatcher_, *scheduler_, scheduler_->clock(),
-                              log_, &*wal_);
-    // AO-S4b: the graph a shipped statement's coordinator is recorded in.
-    shipped_executor_->SetLockTable(locks_);
-    statement_ship_server_.emplace(config_.core_id, *scheduler_, transport,
-                                   shipped_executor_->Seam(), log_);
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kShippedStatementRequest,
-            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                statement_ship_server_->OnRequest(header, payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    statement_ship_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(),
-                                   log_);
-    if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
-    dispatcher_->SetStatementShip(&*statement_ship_client_);
-    // And the owner's half, for this core's `SHOW META` (D7).
-    dispatcher_->SetShippedStatements(&*shipped_executor_);
-    // XG1: where a typed shipped read's rows leave from. Set here, beside
-    // the executor's own wiring, because both halves of the answer are this
-    // core's - the statement runs on the dispatcher and the rows go out on
-    // the step server, and neither exists on a core that serves no peer.
-    if (remote_steps_.has_value()) shipped_executor_->SetRemoteSteps(&*remote_steps_);
-
-    // **The cross-owner commit, both halves** (R6-3), on statement
-    // shipping's wiring rule and for its reason: every core is a
-    // participant, because every core owns relations another core's client
-    // may write, and every core is a coordinator, because every core holds
-    // client sessions. A core registered as one and not the other would
-    // cost a phase its whole deadline before saying so.
-    txn_2pc_server_.emplace(config_.core_id, *scheduler_, transport,
-                            shipped_executor_->PrepareSeam(), shipped_executor_->DecideSeam(),
-                            shipped_executor_->ResolveSeam(), log_);
-    // R6-5: the ask leg, both directions. The receiver, then the pointer
-    // the executor's sweep asks through - in that order, so an answer
-    // cannot arrive before there is anything to deliver it to.
-    if (Status s = txn_2pc_server_->RegisterResolveReplyReceiver(); !s.ok()) return s;
-    shipped_executor_->SetTxn2pcServer(&*txn_2pc_server_);
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kTxnPrepareRequest,
-            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                txn_2pc_server_->OnPrepare(header, payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kTxnDecideRequest,
-            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                txn_2pc_server_->OnDecide(header, payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    txn_2pc_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
-    if (Status s = txn_2pc_client_->RegisterReplyReceivers(); !s.ok()) return s;
-    dispatcher_->SetTxn2pc(&*txn_2pc_client_);
+    // **Statement shipping and 2PC are not wired, because they no longer
+    // exist** (AT-S6). What stood here built this core's shipped-statement
+    // executor and its participant seams, registered the ship request
+    // handler and the reply receiver, and then both halves of the
+    // cross-owner commit - every core a participant and every core a
+    // coordinator. A read runs where the session is now, as a write has
+    // since AT-S5, so no statement crosses and no transaction has a half
+    // to prepare.
 
     transport_ = &transport;
 
@@ -819,7 +741,6 @@ void CoreRuntime::Run() {
         // reason the index-build ceiling is one - an abandoned context is
         // exactly the one nothing arrives for.
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
-            if (shipped_executor_.has_value()) shipped_executor_->ExpireEnrolled();
         });
         // The transaction-id lease rides the same tick (PW1). A peer that
         // has never held a window reads as low, so the first tick asks and

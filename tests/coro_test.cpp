@@ -260,16 +260,19 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
     // Core 1: answers a request by sending one back. The kind is a stand-in
     // - any request/reply kind serves, since this cell registers its own
     // handlers on bare schedulers; it was `kExtentLease` until AT-S2b
-    // struck that kind, and `kIndexBuildRequest` until AT-S5e struck that.
+    // struck that kind, `kIndexBuildRequest` until AT-S5e struck that, and
+    // `kShippedStatementRequest` until AT-S6 struck that. The step pair is
+    // the one AT-0 item 4 has not decided, so it is the least likely of
+    // what is left to be struck next.
     ASSERT_TRUE(core1
                     .RegisterMessageHandler(
-                        RingMessageKind::kShippedStatementRequest,
+                        RingMessageKind::kStepOpen,
                         [&transport](const MessageHeader& h, std::span<const std::byte>) {
                             MessageHeader reply{};
                             reply.src_core = 1;
                             reply.dst_core = h.src_core;
                             reply.request_id = h.request_id;
-                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kShippedStatementReply);
+                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
                             const std::uint64_t granted = 4096;
                             std::byte bytes[sizeof(granted)];
                             std::memcpy(bytes, &granted, sizeof(granted));
@@ -281,7 +284,7 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
     // Core 0: routes the reply into the waiting request's state.
     ASSERT_TRUE(core0
                     .RegisterMessageHandler(
-                        RingMessageKind::kShippedStatementReply,
+                        RingMessageKind::kStepBatch,
                         [&request](const MessageHeader&, std::span<const std::byte> payload) {
                             std::memcpy(&request.answer, payload.data(), sizeof(request.answer));
                             request.replied = true;
@@ -296,7 +299,7 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
         header.src_core = 0;
         header.dst_core = 1;
         header.request_id = 1;
-        header.kind = static_cast<std::uint16_t>(RingMessageKind::kShippedStatementRequest);
+        header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepOpen);
         if (Status s = transport.value().TrySend(header, {}); !s.ok()) co_return s;
 
         co_await WaitFor{&request.replied};

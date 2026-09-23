@@ -6,9 +6,6 @@
 #include "kds/base/crash_point.hpp"  // RP7: the coordinator's three kill points
 #include "kds/base/current_core.hpp"
 
-#include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
-#include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
-#include "kds/server/txn_2pc_service.hpp"  // R6-3: the coordinator's two phases
 #include "kds/server/remote_step_service.hpp"  // RD7: the fan-in ceiling
 
 #include "kds/exec/type_literals.hpp"
@@ -723,279 +720,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // every other statement does: on a row it cannot have yet, through
     // `AwaitStatementWaits` above, and it is re-run rather than resumed.
 
-    if (out->pending_shipped.has_value() && statement_ship_ != nullptr) {
-        // The owner's execution (SS2/SS3, statement_ship_service.hpp). The
-        // predicate re-finds the waiter each poll and reads the clock, so
-        // the deadline ends the park with nothing having to wake it.
-        const PendingShippedStatement shipped = std::move(*out->pending_shipped);
-        out->pending_shipped.reset();
-        const std::function<bool()> settled = [this, id = shipped.request_id] {
-            return statement_ship_->Settled(id);
-        };
-        co_await sched::WaitUntil{&settled};
-
-        // **XG1: the reply is the terminator, and it may outrun the rows.**
-        //
-        // The owner queues its batches and answers; the drain that empties
-        // that queue resumes on each `STEP_CREDIT` this core grants as it
-        // stores one, so the reply can arrive with batches still in flight.
-        // Waiting on `Settled` alone would then forward a short result set
-        // and call it whole - which is the one failure this path may not
-        // have. So a typed read waits for the edge's own EOF as well.
-        //
-        // Bounded by the same deadline the statement itself has, and for
-        // the same reason: an owner that died mid-stream must not park this
-        // statement for the life of the process. On expiry the read is not
-        // `done`, `ForwardAnswerEdge` finds no description or an error, and
-        // the answer is the honest refusal rather than a truncated one.
-        // **Only where the owner says it has rows coming.** A refusal opens
-        // no edge, so waiting for one costs the whole deadline and turns a
-        // 39-microsecond `Unsupported` into a ten-second one - measured,
-        // not theorised: that is exactly what an unwired owner produced
-        // before this check, and the refusal it was answering was itself a
-        // wiring bug on the other side.
-        //
-        // Read through `Find` rather than a flag, because `Settled` is true
-        // for a deadline too, and a deadline has no reply to inspect.
-        const ShippedStatementOutcome* settled_reply = statement_ship_->Find(shipped.request_id);
-        const bool rows_coming = settled_reply != nullptr && settled_reply->arrived &&
-                                 settled_reply->status.ok();
-        if (shipped.typed_answer && rows_coming && remote_reads_ != nullptr) {
-            const sched::MonoTimeNs edge_deadline = NowNs() + kShippedStatementDeadlineNs;
-            const std::function<bool()> answered = [this, tag = shipped.answer_tag,
-                                                    edge_deadline] {
-                const SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
-                return read == nullptr || read->done || NowNs() >= edge_deadline;
-            };
-            co_await sched::WaitUntil{&answered};
-        }
-
-        Session& shipped_session = session != nullptr ? *session : autocommit_session_;
-        *out = FinishShippedStatement(shipped, shipped_session);
-        // **A shipped statement that failed inside an explicit transaction
-        // poisons it, exactly as a local one does** (R6-8 review; txn.md §6
-        // and §10-8). The local path poisons in `EndWrite`, which an
-        // enrolled ship deliberately skips - it has nothing to end here -
-        // so the poison has to be taken where the *owner's* verdict
-        // arrives, which is here and nowhere earlier: at ship time the
-        // statement had not run yet.
-        //
-        // Without it the two halves of one transaction disagree about what
-        // a failed statement means. The owner's failure is per transaction
-        // like every other (`INSERT` of ten rows failing on the seventh
-        // leaves six written in the participant's open transaction), so a
-        // client told `ERR` could `COMMIT` anyway and make those six
-        // durable - where the same statement against a local relation
-        // would have refused every command until `ROLLBACK`. The deadline's
-        // `UnknownOutcome` is the same rule and the sharper case: whether
-        // the statement ran cannot be established, so the one thing the
-        // transaction must not do is commit.
-        //
-        // Autocommit is untouched: `in_explicit_txn()` is false there, and
-        // the scope already unwound.
-        //
-        // **RR1 narrows it to a write**, which is what it always described.
-        // The rule being matched is the *local* one, and locally a failed
-        // `SELECT` does not poison - `Poison()`'s call sites are the write,
-        // DDL and in-doubt paths, and none of them is a read. While only
-        // writes shipped the two agreed by construction; since reads ship,
-        // agreeing takes saying so. A failed shipped read therefore leaves
-        // the transaction open exactly as a failed local read does, and its
-        // participant - enrolled at ship time, whatever the answer - is
-        // still prepared and decided with the rest.
-        if (!shipped.read && shipped_session.in_explicit_txn() &&
-            out->response.rfind("ERR ", 0) == 0) {
-            shipped_session.Poison();
-        }
-    }
-
-    if (out->pending_cross_owner_commit.has_value() && txn_2pc_ != nullptr) {
-        // **D4's two phases, from the coordinator's side** (R6-3). The whole
-        // protocol lives in this block because every step of it is a park,
-        // and a coroutine is the only place in this class that can take one.
-        //
-        // The order is the protocol's and every line of it is load-bearing:
-        // prepare everyone, decide, make the decision durable, and only then
-        // tell the participants. Moving the decide message before the
-        // durability wait would let a crash lose a decision participants had
-        // already applied.
-        const PendingCrossOwnerCommit pending = std::move(*out->pending_cross_owner_commit);
-        out->pending_cross_owner_commit.reset();
-        Session& active = session != nullptr ? *session : autocommit_session_;
-
-        // Phase 1. The predicate re-finds the waiter each poll and reads the
-        // clock, so the deadline ends the park with nothing having to wake
-        // it - `pending_shipped`'s shape, over N respondents instead of one.
-        // **A transaction with no participants took no vote** (AI, F4):
-        // its cross-owner contact was a foreign-key probe, whose holder has
-        // no rows to prepare and nothing to say. There is no waiter to park
-        // on and no leg to time - timing one nobody walked would report a
-        // fast prepare where there was none - so the phase is unanimous by
-        // construction and the decide below is the whole protocol.
-        bool commit = true;
-        Status refusal = Status::OK();
-        if (pending.prepare_request_id != 0) {
-            const std::function<bool()> prepared = [this, id = pending.prepare_request_id] {
-                return txn_2pc_->Settled(id);
-            };
-            co_await sched::WaitUntil{&prepared};
-            // **XF4, leg 1: prepare sent -> every participant settled.**
-            // Taken the instant the park resolves, before the outcome is
-            // even read, so nothing this core does with the answer is
-            // charged to the participants.
-            xowner_commit_.prepare.Note(NowNs() - pending.prepare_sent_ns);
-
-            const TxnPhaseOutcome* phase = txn_2pc_->Find(pending.prepare_request_id);
-            commit = phase != nullptr && phase->AllPrepared();
-            // Built before the close, which frees what it reads.
-            refusal = commit ? Status::OK() : DescribePrepareFailure(phase);
-            txn_2pc_->Close(pending.prepare_request_id);
-        }
-
-        // RP7's third protocol point: every participant has answered - on
-        // this arm as on the refusal arm, since the point fires whatever
-        // `commit` holds - and no decision record exists anywhere. The next
-        // mount finds prepared transactions whose coordinator stream
-        // decided nothing, which D4 resolves as ABORT.
-        base::CrashPointHit("coordinator.prepared_predecide");
-
-        // Phase 2, first half: **the decision, and it is this core's own
-        // COMMIT record** (D4). It lives in exactly one stream, so what
-        // follows is the ordinary local commit - the same `CommitLocal` a
-        // one-owner transaction takes, because a second commit path is how
-        // two commits stop meaning the same thing.
-        wal::Lsn decision_lsn = wal::kNoLsn;
-        // **XF4, leg 2 begins here**: the coordinator's own decision. What
-        // ends it, and why on this arm only, is stated where it ends.
-        const sched::MonoTimeNs decision_began_ns = NowNs();
-        if (commit) {
-            *out = CommitLocal(active, &decision_lsn);
-            if (out->response.rfind("ERR ", 0) == 0) {
-                // The coordinator's own half refused. The decision is
-                // therefore ABORT, and the participants must hear that one
-                // rather than the one this branch set out to make.
-                commit = false;
-                decision_lsn = wal::kNoLsn;
-                // **And this core's half has to be aborted with them.**
-                // `CommitLocal` unwinds on its *second* failure arm (a
-                // failed `Commit`) and deliberately does not on its first
-                // (the assertion enforcer), which leaves the transaction
-                // open so a **local** caller may retry `COMMIT`. A
-                // cross-owner one may not: the ABORT below reaches every
-                // participant, so an open half here would leave the
-                // transaction aborted everywhere but on its coordinator,
-                // and the retry that open state invites cannot succeed -
-                // its participants are already rolled back. The commit's
-                // own error stays the client's answer; only the state
-                // behind it is made to match the decision.
-                if (active.in_explicit_txn()) {
-                    const std::string refused = out->response;
-                    *out = RollbackLocal(active);
-                    out->response = refused;
-                }
-            }
-        } else {
-            *out = RollbackLocal(active);
-            // The client's answer is the refusal, not "ROLLBACK": it asked
-            // to commit and the transaction did not.
-            out->response = ErrorReply(refusal);
-        }
-
-        if (commit && decision_lsn != wal::kNoLsn && wal_ != nullptr) {
-            // **The decision is made durable before anyone is told**, and
-            // whatever the durability class: `relaxed`'s window is a promise
-            // about this stream's own recent commits, not about a record
-            // another core is about to act on. This is the ordinary commit
-            // wait taken early rather than an extra one - `pending_lsn`
-            // below would otherwise take it after the participants had
-            // already committed.
-            wal_->RequestDurable(decision_lsn);
-            const std::function<bool()> durable = [this, decision_lsn] {
-                return wal_->IsDurable(decision_lsn);
-            };
-            co_await sched::WaitUntil{&durable};
-            // Taken here, so the tail stage does not take it again.
-            out->pending_lsn = wal::kNoLsn;
-            pending_commit_lsn_ = wal::kNoLsn;
-        }
-        // **XF4, leg 2 ends here**, and outside the durability arm above
-        // rather than inside it. One rule, stated once: this leg is walked
-        // by every cross-owner transaction that **decided to commit**, so
-        // `decision.count` is the committed population and the difference
-        // from `whole.count` is the aborted one - and `commit` is read
-        // *after* the block above, where a coordinator whose own half
-        // refused has already flipped it.
-        //
-        // Putting it inside the `wal_ != nullptr && lsn` arm instead would
-        // have made a short count mean two different things - an abort, or
-        // an instance with no log - which is exactly the ambiguity a leg
-        // count exists to avoid. An unlogged instance has no record to make
-        // durable, so it walks this leg in very nearly no time, and saying
-        // that is truer than not counting it.
-        if (commit) xowner_commit_.decision.Note(NowNs() - decision_began_ns);
-
-        // RP7's fourth protocol point, and the one the whole protocol
-        // exists for: on the COMMIT arm the decision is durable in this
-        // stream (the park above took the wait); on the ABORT arm it is
-        // durable by absence. Either way no participant has heard it, so
-        // the next mount must settle every participant's half from a record
-        // none of them holds.
-        base::CrashPointHit("coordinator.decided_presend");
-
-        // Phase 2, second half: telling the participants. **This message
-        // carries the decision; it is not the decision** - a lost one costs
-        // a resend (R6-5's resolution ask), never an outcome.
-        const TxnDecision decision = commit ? TxnDecision::kCommit : TxnDecision::kAbort;
-        // **XF4, leg 3 begins**: the decide, from the send to the last ack.
-        const sched::MonoTimeNs decide_began_ns = NowNs();
-        if (Status sent = txn_2pc_->Decide(pending.decide_request_id, pending.session_id,
-                                           pending.transaction_id, decision,
-                                           pending.participants);
-            !sent.ok()) {
-            // Nothing left to do about it here: the outcome is decided and
-            // durable, and the participants that did not hear are in doubt
-            // for D5 to resolve. Logged rather than reported, because the
-            // client's transaction is settled either way.
-            if (logging(LogLevel::kError)) {
-                log_->Error("2pc", "core " + std::to_string(core_id_) +
-                                       " could not send the decision for transaction " +
-                                       std::to_string(pending.transaction_id) + ": " +
-                                       sent.message());
-            }
-        } else {
-            const std::function<bool()> acked = [this, id = pending.decide_request_id] {
-                return txn_2pc_->Settled(id);
-            };
-            co_await sched::WaitUntil{&acked};
-            // **XF4, leg 3 ends.** Only where the decide was actually sent:
-            // the `!sent.ok()` arm above has nobody to wait for, and timing
-            // a leg nobody walked would report a fast decide where in fact
-            // there was none. `decide.count` short of `whole.count` is that
-            // send failing, which is also the log line above it.
-            xowner_commit_.decide.Note(NowNs() - decide_began_ns);
-            const TxnPhaseOutcome* acks = txn_2pc_->Find(pending.decide_request_id);
-            if (acks != nullptr && !acks->AllPrepared() && logging(LogLevel::kWarn)) {
-                // **Not an outcome change**, which is why it is a log line
-                // and not a refusal: the decision is durable and the client's
-                // transaction is settled. What an unacknowledged participant
-                // means is that it is holding locks in doubt until D5's ask
-                // or the next mount reaches it.
-                log_->Warn("2pc", "core " + std::to_string(core_id_) + " decided " +
-                                      (commit ? "COMMIT" : "ABORT") + " for transaction " +
-                                      std::to_string(pending.transaction_id) +
-                                      " and not every participant acknowledged; those that did "
-                                      "not are in doubt until they ask");
-            }
-            txn_2pc_->Close(pending.decide_request_id);
-        }
-        // **XF4, leg 4**: the whole cross-owner commit as the client waited
-        // for it. Not the sum of the three above - it also carries the two
-        // sends, the outcome reads and the refusal arms - so
-        // `whole - (prepare + decision + decide)` is the coordinator's own
-        // unaccounted time, and whether that remainder is small is the
-        // first thing a reader of these six fields should check.
-        xowner_commit_.whole.Note(NowNs() - pending.began_at_ns);
-    }
+    // **The shipped-statement park and the cross-owner commit protocol
+    // went with the ship** (AT-S6). What stood here waited for an owner's
+    // answer to a statement this core had sent, and then ran D4's two
+    // phases over the participants that ship had enrolled - the prepare,
+    // the decision made durable before anyone was told, the decide, and
+    // R6-5's resolution ask for a participant left in doubt.
+    //
+    // Nothing ships, so nothing enrols, so a transaction has no second
+    // half anywhere to prepare or to decide: it is this core's, whole, and
+    // its `COMMIT` is the local one. The remote **step** park below is a
+    // different mechanism and stays - a fan-in stage is a read, not a
+    // transaction half.
 
     if (!out->pending_remote.empty() && remote_reads_ != nullptr) {
         // The remote read (workplan P4c). The predicate re-finds the state
@@ -1133,8 +869,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // relation `IX`, and a write-block re-run would overwrite the outcome
     // and drop the relation's wake without a `DropWake`. The relation
     // re-run re-resolves the parent anyway.
-    if (blocking_writer_ != 0 && !lock_wait_.has_value() &&
-        !outcome.pending_shipped.has_value()) {
+    if (blocking_writer_ != 0 && !lock_wait_.has_value()) {
         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
     }
     // **The refusal, installed where the path that raised it could not
@@ -1221,35 +956,6 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                         "remote read needs the reactor path; retry on a served connection")),
                     false};
         }
-    }
-    if (outcome.pending_shipped.has_value()) {
-        // Unreachable: `MayShip` refuses without `may_park_`, which only
-        // `DispatchAsync` sets. Written as a refusal rather than left to a
-        // null dereference because of *which* refusal it would have to be -
-        // the statement is already on its way to an owner that may commit
-        // it, so nothing retryable is available and `UnknownOutcome` is the
-        // only truthful answer (statement_ship_service.hpp's rule 1).
-        statement_ship_->Close(outcome.pending_shipped->request_id);
-        return {ErrorReply(Status::UnknownOutcome(
-                    "statement shipping: a statement reached core " +
-                    std::to_string(outcome.pending_shipped->owner_core) +
-                    " from a path that cannot await its answer; whether it ran cannot be "
-                    "established from here")),
-                false};
-    }
-    if (outcome.pending_cross_owner_commit.has_value()) {
-        // Unreachable, and for the same reason: `PrepareAcrossOwners`
-        // refuses without `may_park_`, which only `DispatchAsync` sets.
-        // Written as a refusal rather than left to a null dereference -
-        // but a **retryable** one, unlike the arm above, because the two
-        // are opposite cases: a shipped statement has already left, while
-        // a prepare refused before `may_park_` was never sent, so the
-        // transaction is untouched and still open.
-        return {ErrorReply(Status::TxnConflict(
-                    "a cross-owner transaction's COMMIT reached a path that cannot await its "
-                    "participants; nothing was asked of them and the transaction is still "
-                    "open")),
-                false};
     }
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
 
@@ -1774,19 +1480,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         os << ' ' << name << "_n=" << l.count << ' ' << name << "_us=" << l.total_ns / 1000
            << ' ' << name << "_max_us=" << l.max_ns / 1000;
     };
-    if (xowner_commit_.observed()) {
-        leg("xowner_prepare", xowner_commit_.prepare);
-        leg("xowner_decision", xowner_commit_.decision);
-        leg("xowner_decide", xowner_commit_.decide);
-        leg("xowner_commit", xowner_commit_.whole);
-    }
-    if (shipped_statements_ != nullptr && shipped_statements_->commit_phase().observed()) {
-        const ParticipantCommitStats& p = shipped_statements_->commit_phase();
-        leg("xowner_part_prepare", p.prepare_durable);
-        leg("xowner_part_ack", p.decide_ack);
-        leg("xowner_part_durable", p.decide_durable);
-    }
-
     // The cross-core writes this core refused, `crosscore.md` §6's "input
     // the future placement/2PC decision will be made from". Printed
     // unconditionally, zero included: unlike the blocks above it, a zero
@@ -1947,99 +1640,12 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         }
     }
 
-    if (statement_ship_ != nullptr) {
-        os << " shipped_statements=" << statement_ship_->shipped()
-           << " shipped_replies=" << statement_ship_->replies()
-           << " shipped_refusals=" << statement_ship_->refusals()
-           << " shipped_wait_us_max=" << statement_ship_->wait_ns_max() / 1000
-           << " shipped_waiting=" << statement_ship_->waiting()
-           << " shipped_late_executed=" << statement_ship_->late_executed_replies()
-           << " shipped_identity_mismatches=" << statement_ship_->identity_mismatches();
-    }
-    if (shipped_statements_ != nullptr) {
-        // The owner's side. `shipped_executed` against the arrival cores'
-        // `shipped_statements` is what SS-B's claim 3 is read from - whether
-        // the ceiling reached is the owner's execution capacity - and
-        // `shipped_running` is the population doing it right now.
-        // `shipped_early_evictions` (R6-0, `instructions/v2.4.0/2pc.md` §2):
-        // non-zero means outcomes were dropped inside their retention, so a
-        // marked retry for one of them is answered `UnknownOutcome` rather
-        // than from the record - an availability cost, not (since R6-0) a
-        // re-execution risk, provided the sender marks its retries.
-        // `shipped_enrolled` (R6-2) is the population that is *not* free to
-        // sit there: each one is a live local transaction pinning this
-        // core's `ReadHorizon()`. `shipped_enrolment_expiries` counts the
-        // contexts the **lifetime** ceiling rolled back (AN-R14): since the
-        // key became age rather than idleness it names an abandoning
-        // coordinator *and* a transaction that was simply still running at
-        // 60 s, and nothing here separates the two.
-        os << " shipped_executed=" << shipped_statements_->executed()
-           << " shipped_running=" << shipped_statements_->running()
-           << " shipped_deduped=" << shipped_statements_->deduped()
-           << " shipped_unanswerable=" << shipped_statements_->unanswerable()
-           << " shipped_early_evictions=" << shipped_statements_->early_evictions()
-           << " shipped_enrolled=" << shipped_statements_->enrolled()
-           << " shipped_enrolments=" << shipped_statements_->enrolments()
-           << " shipped_enrolment_refusals=" << shipped_statements_->enrolment_refusals()
-           << " shipped_enrolment_expiries=" << shipped_statements_->enrolment_expiries()
-           // RR0: statements that could only join a context and found none.
-           // It is `shipped_enrolment_expiries`' consequence seen from the
-           // other side - the expiry cleaned up, and this is the statement
-           // that arrived afterwards and was refused instead of silently
-           // opening a second transaction for the same one.
-           << " shipped_join_refusals=" << shipped_statements_->join_refusals();
-        // **SA-T0**: prepares this core answered with no record and no
-        // device sync, because the enrolment had written nothing. Printed
-        // only where one happened - a workload with no read-only
-        // participants would otherwise carry a zero that reads as "the
-        // optimisation is off". `txn_prepared` beside it is the whole
-        // population; the difference is the enrolments that wrote.
-        if (shipped_statements_->read_only_prepares() != 0) {
-            os << " shipped_readonly_prepares=" << shipped_statements_->read_only_prepares();
-        }
-        // **The in-doubt population and what became of it** (R6-5, D5).
-        // `txn_in_doubt` is what this core is holding locks for right now
-        // and cannot decide on its own; a non-zero
-        // `txn_in_doubt_unresolved` is the one number here that names a
-        // transaction nothing at runtime can finish - its coordinator no
-        // longer holds the record, so it holds its rows until the next
-        // mount reads that coordinator's stream (R6-4). Printed only where
-        // something has been in doubt, the "absent rather than zeroed" rule
-        // the recovery block follows: on a single-owner instance every one
-        // of these is structurally 0 and saying so every time would make
-        // `SHOW META` longer without making it truer.
-        if (shipped_statements_->in_doubt() != 0 || shipped_statements_->in_doubt_asks() != 0) {
-            os << " txn_in_doubt=" << shipped_statements_->in_doubt()
-               << " txn_in_doubt_asks=" << shipped_statements_->in_doubt_asks()
-               << " txn_in_doubt_committed=" << shipped_statements_->in_doubt_resolved_committed()
-               << " txn_in_doubt_aborted=" << shipped_statements_->in_doubt_resolved_aborted()
-               << " txn_in_doubt_unresolved=" << shipped_statements_->in_doubt_resolved_unknown();
-        }
-    }
-    if (txn_2pc_ != nullptr &&
-        (txn_2pc_->decisions_held() != 0 || txn_2pc_->resolutions_answered() != 0 ||
-         txn_2pc_->resolutions_unknown() != 0 || txn_2pc_->resolve_refusals() != 0 ||
-         txn_2pc_->decisions_forgotten() != 0 || txn_2pc_->decisions_evicted() != 0)) {
-        // **Every counter in the block is in the gate**, including the three
-        // that fire on their own. An ask with R6-0's bit clear returns
-        // before touching a decision record, so gating on the record
-        // counters alone would hide `txn_resolve_refusals` - the field whose
-        // own documentation calls it a protocol anomaly and never a workload
-        // property - on exactly the run that produced one.
-        // The same question from the coordinator's side (R6-5): what this
-        // core has been asked about transactions it decided.
-        // `txn_decisions_unknown` counts participants this core could not
-        // help - the mirror of `txn_in_doubt_unresolved` on the other core -
-        // and `txn_decisions_forgotten` is why: a record the retention
-        // dropped. Absent where nothing has ever asked.
-        os << " txn_decisions_held=" << txn_2pc_->decisions_held()
-           << " txn_decisions_answered=" << txn_2pc_->resolutions_answered()
-           << " txn_decisions_undecided=" << txn_2pc_->resolutions_undecided()
-           << " txn_decisions_unknown=" << txn_2pc_->resolutions_unknown()
-           << " txn_decisions_forgotten=" << txn_2pc_->decisions_forgotten()
-           << " txn_decisions_evicted=" << txn_2pc_->decisions_evicted()
-           << " txn_resolve_refusals=" << txn_2pc_->resolve_refusals();
-    }
+    // **The shipping and 2PC blocks went with the protocols** (AT-S6):
+    // `shipped_*` on both sides, the enrolment counters, the in-doubt
+    // population and the coordinator's decision-record counters. Every one
+    // of them measured a statement crossing to another core or a
+    // transaction half being decided from one, and neither happens: a read
+    // runs where the session is, as a write has since AT-S5.
 
     // Group accounting against wall time (`docs/spec/sched.md` §4's last bullet;
     // `sched/scheduler.hpp`'s accessors carry the argument for why there are
@@ -4910,25 +4516,6 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
 
     DispatchOutcome out = InsertInner(line, scope);
 
-    // Shipped (SS2): this core wrote nothing, so its scope ends without a
-    // commit rather than committing an empty transaction - which on a peer
-    // would also spend a leased transaction id's commit path for a
-    // statement that ran somewhere else. The scope was opened before the
-    // parse that found the relation foreign, which is why there is one to
-    // end at all.
-    if (out.pending_shipped.has_value()) {
-        if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
-            // Not a refusal - the statement is already on its way to its
-            // owner, and the only refusal legal after that is
-            // `UnknownOutcome`. Logged rather than dropped because
-            // `EndWrite`'s abort arm returns without releasing the
-            // transaction when the enforcer fails, which is the leaked-
-            // transaction class the SS3 review already fixed once.
-            log_->Warn("ship", "the local scope of a shipped statement did not end cleanly: " +
-                                   s.message());
-        }
-        return out;
-    }
 
     // The reply is the verdict, which is the same rule Dispatch() itself
     // applies one level up. A statement that answered ERR did not happen as
@@ -4939,541 +4526,6 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
         return {ErrorReply(s), false, 0, s};
     }
     return out;
-}
-
-bool CommandDispatcher::MayShip(const Session& session) const noexcept {
-    return statement_ship_ != nullptr && may_park_ && !session.in_explicit_txn() &&
-           !session.shipped();
-}
-
-bool CommandDispatcher::MayEnrolShip(const Session& session) const noexcept {
-    // Everything `MayShip` asks, with the explicit-transaction test
-    // inverted and one more condition in its place: this core must be able
-    // to run D4's two phases, or the transaction it is about to make
-    // cross-owner would reach `COMMIT` with a participant and no protocol.
-    // `SetTxn2pc` is what arms that, on every core of a multi-core
-    // instance and on none of a single-core one - so a dispatcher never
-    // told keeps the refusal it had, which is what makes `cores = 1`
-    // byte-identical here as everywhere else in the series.
-    return statement_ship_ != nullptr && txn_2pc_ != nullptr && may_park_ &&
-           session.in_explicit_txn() && !session.failed() && !session.shipped();
-}
-
-DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog::Oid oid,
-                                                 std::uint32_t owner_core,
-                                                 std::string_view relation, Session& session,
-                                                 bool read) {
-    // ---- XG1: a typed client's shipped read is answered on an edge ------
-    //
-    // **What this replaces.** Until 2026-09-01 a shipped *read* was refused
-    // outright to any session carrying a result sink, because the ship wire
-    // carries the owner's **rendered reply line** (SS3) and a sink wants
-    // values. Answering through the sink's diagnostic form would have made
-    // one `SELECT` come back as a typed result set or as a block of text
-    // depending on which core owns the relation - invisible from the
-    // statement, and impossible for a client to branch on. Under KWP/1
-    // every session has a sink, so that refusal was every typed client's
-    // foreign read inside a transaction.
-    //
-    // Now the rows cross on an **answer edge** over the step wire
-    // (`docs/spec/crosscore.md` §4a, XG-R1): this core mints the tag,
-    // registers the receiver, and the owner streams `STEP_BATCH` to it. The
-    // reply POD stays what it was and becomes the terminator.
-    //
-    // **Registration precedes the ship and that ordering is load-bearing**:
-    // a batch whose tag matches no open read is discarded silently (§3's
-    // teardown rule), so a receiver created after the request could lose
-    // rows with nothing anywhere saying so.
-    //
-    // A shipped **write** is untouched - its answer *is* a completion tag,
-    // which is what a completion tag is for - and so is the newline
-    // surface, which installs no sink and therefore ships `form = 0` and
-    // gets the rendered line byte-identically.
-    //
-    // **The refusal below is still in place, and this is XG1's half-way
-    // point stated rather than hidden.** The request side is built - the
-    // form byte, the tag on the POD, the receiver registration, the
-    // pending record's carriage - and the *owner's* half is not: nothing
-    // yet installs a batch sink on the shipped session, sends the
-    // description, or streams the rows. Shipping `form = 1` to an owner
-    // that renders text would answer a typed client with a rendered line
-    // on the reply POD, which is the exact failure the original refusal
-    // existed to prevent. So the gate stays until the owner can honour the
-    // form, and `kShippedTypedAnswerBuilt` is the one line that opens it.
-    const bool typed_answer =
-        kShippedTypedAnswerBuilt && read && session.result_sink() != nullptr;
-    if (read && !typed_answer && session.result_sink() != nullptr) {
-        return {ErrorReply(Status::Unsupported(
-                    "a read of relation '" + std::string(relation) + "', which core " +
-                    std::to_string(owner_core) +
-                    " owns, is carried to that core as text and cannot be answered as typed "
-                    "rows; run it on a connection speaking the newline debug surface, or "
-                    "narrow it so a local route answers it")),
-                false};
-    }
-    PipelineTag answer_tag{};
-    if (typed_answer) {
-        if (remote_reads_ == nullptr) {
-            // The one caller-shaped refusal left on this path: a dispatcher
-            // with no step client cannot receive an edge, so it cannot ask
-            // for one. Reached only by a fixture - every served core is
-            // wired - and refused rather than shipped with a tag nothing
-            // would answer, which would cost the statement its whole
-            // deadline before saying `UnknownOutcome` about a read that
-            // never ran.
-            return {ErrorReply(Status::Unsupported(
-                        "a read of relation '" + std::string(relation) + "', which core " +
-                        std::to_string(owner_core) +
-                        " owns, needs the cross-core read path to answer a typed client, and "
-                        "this core has none")),
-                    false};
-        }
-        answer_tag = PipelineTag{next_remote_request_++, core_id_, 0};
-        if (Status s = remote_reads_->RegisterInbound(answer_tag, owner_core, oid); !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
-        }
-    }
-
-    // The identity the owner's dedup record keys on (D4). Minted on the
-    // first ship and kept for the session's life, so a duplicate of *this*
-    // statement is recognisable and the session's next statement is not.
-    if (session.ship_id() == 0) session.set_ship_id(next_ship_session_id_++);
-    const std::uint64_t sequence = session.NextShipSequence();
-    const std::uint64_t request_id = next_remote_request_++;
-
-    // **R6-8: whether this statement belongs to a transaction**, and if so
-    // at which level. Both are read from the session rather than passed in,
-    // because they are properties of the client's connection and not of the
-    // routing decision - and `MayEnrolShip` is what decided the shape is
-    // admissible at all. An autocommit ship carries `in_txn = 0` and no
-    // level, byte-identical to what SS2 sent.
-    const bool in_txn = session.in_explicit_txn();
-    // The transaction this statement ships under, or null in autocommit:
-    // its level and its id are one fact about one object.
-    const txn::Transaction* coordinator = in_txn ? session.transaction() : nullptr;
-    const std::optional<txn::IsolationLevel> isolation =
-        coordinator != nullptr ? std::optional{coordinator->isolation()} : std::nullopt;
-
-    // `Ship` refuses before it sends - an over-long statement, a core this
-    // instance does not have - so this refusal means the statement did not
-    // run, and may say so in an ordinary spelling. After it returns OK the
-    // only refusal left is `UnknownOutcome`.
-    // **RR0: whether this statement may open a context on the owner.** Read
-    // before `EnrolParticipant` below records this ship, so the enrolling
-    // statement carries 0 and every later one of the same transaction to
-    // the same owner carries 1. False on every autocommit ship, which
-    // enrols nobody and whose owner-side shape is unchanged.
-    const bool join = in_txn && session.HasParticipant(owner_core);
-    // **AN-S3: the snapshot this transaction reads at**, for the participant
-    // to adopt (AN-R5). The encoder puts it on the wire under REPEATABLE
-    // READ only; here it is simply what the transaction holds. Under RR the
-    // view was pinned at BEGIN and never re-mints, so every ship of this
-    // transaction carries the same value, and the participant that enrolled
-    // on the first reads it once.
-    const std::uint64_t snapshot_lsn =
-        coordinator != nullptr ? coordinator->view().snapshot_lsn : 0;
-    // **And its id** (AO-S4b): the owner records `coordinator -> participant`
-    // in the instance's wait-for graph while the shipped statement runs, the
-    // one edge a cross-core cycle through a shipped park was missing. Zero
-    // in autocommit, which holds nothing a graph could name.
-    const std::uint64_t coordinator_txn = coordinator != nullptr ? coordinator->id() : 0;
-    if (Status s = statement_ship_->Ship(owner_core, request_id, session.ship_id(), sequence,
-                                         oid, session.role(), line, /*retry=*/false, in_txn,
-                                         isolation, join, typed_answer, answer_tag,
-                                         snapshot_lsn, coordinator_txn);
-        !s.ok()) {
-        // The receiver goes with the request that never left. `Ship`
-        // refuses only *before* it sends (the rule this function's header
-        // states), so there is nothing in flight that could still address
-        // this tag - and a registration left behind would hold its state
-        // for the session's life.
-        if (typed_answer) remote_reads_->Close(answer_tag);
-        return {ErrorReply(s), false, 0, s};
-    }
-
-    // **The enrolment, and it is recorded only once the request is on its
-    // way** (R6-8, D1's "participants are relation owners discovered as the
-    // transaction runs"). After `Ship` returns OK, because every refusal it
-    // makes happens before the send: recording a participant this core
-    // never asked anything of would put a core into the prepare phase that
-    // holds no transaction, and turn a refusal the client can retry into an
-    // aborted transaction.
-    //
-    // Idempotent, so four statements to one owner enrol it once and prepare
-    // it once. What makes the *transaction* cross-owner is the second
-    // distinct owner; a transaction that ships every statement to one peer
-    // has one participant and still runs the full protocol, which is
-    // correct - its writes are in that peer's stream and this core's COMMIT
-    // is the decision for them.
-    if (in_txn) session.EnrolParticipant(owner_core);
-    if (logging(LogLevel::kDebug)) {
-        log_->Debug("ship", "core " + std::to_string(core_id_) + " shipped a statement on '" +
-                                std::string(relation) + "' to core " +
-                                std::to_string(owner_core) + " (request " +
-                                std::to_string(request_id) + ", session " +
-                                std::to_string(session.ship_id()) + " sequence " +
-                                std::to_string(sequence) + ")");
-    }
-    DispatchOutcome pending;
-    pending.pending_shipped =
-        PendingShippedStatement{request_id, owner_core, std::string(relation), read,
-                                /*ddl=*/false, typed_answer, answer_tag};
-    return pending;
-}
-
-// ---- R6-3: the coordinator's cross-owner commit ---------------------------
-
-DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
-    // **Every refusal below happens before the first prepare leaves**, so a
-    // client that sees one knows no participant was asked and its
-    // transaction is still whole and still open - it may COMMIT again or
-    // ROLLBACK. After the first prepare, that is no longer true, which is
-    // why these live here and not in the parked half.
-    if (txn_2pc_ == nullptr || !may_park_) {
-        // The no-reactor arm, taken **before** anything is sent, for
-        // `statement_ship_service.hpp`'s rule 1: a protocol opened from a
-        // path that cannot await its answers would leave participants
-        // prepared with nobody to decide for them. Retryable, because
-        // nothing has happened.
-        return {ErrorReply(Status::TxnConflict(
-                    "a cross-owner transaction's COMMIT needs the reactor path; retry on a "
-                    "served connection")),
-                false};
-    }
-    txn::Transaction* txn = session.transaction();
-    if (session.ship_id() == 0) {
-        // A ship is the one cross-core contact that mints the identity
-        // since AT-S5f took the probe's, so this is the case that cannot
-        // be reached at all rather than the one that was reachable and
-        // unhandled. Refused rather than prepared under id 0, which no
-        // participant's enrolment is keyed on.
-        return {ErrorReply(Status::InvalidArgument(
-                    "a cross-owner transaction has participants but no shipping identity; its "
-                    "participants cannot be addressed")),
-                false};
-    }
-
-    PendingCrossOwnerCommit pending;
-    // XF4's first stamp. Here rather than at the top of the function: every
-    // refusal above returns without a pending record, so a transaction that
-    // never sent a prepare contributes no leg and `xowner_commit_.whole`
-    // counts commits that actually ran the protocol.
-    pending.began_at_ns = NowNs();
-    pending.decide_request_id = next_remote_request_++;
-    pending.session_id = session.ship_id();
-    pending.transaction_id = txn->id();
-    pending.participants = session.participants();
-
-    // **The prepare happens only where something holds rows.** A
-    // transaction with no participant has nothing to vote and no vote to
-    // collect, and `prepare_request_id` stays 0 to say so. Vacuous on the
-    // caller this has today, which reaches here only with participants -
-    // the arm that made it reachable was a transaction whose only
-    // cross-owner contact was a foreign-key probe (AI, F4), and both went
-    // at AT-S5f. Kept as the structural statement of what a prepare is
-    // for rather than as a live branch.
-    if (!pending.participants.empty()) {
-        pending.prepare_request_id = next_remote_request_++;
-        // RP7's first protocol point: the coordinator dies with a
-        // transaction whose participants hold uncommitted writes and have
-        // never been asked for anything. Every participant stream is a
-        // loser at the next mount.
-        base::CrashPointHit("coordinator.before_prepare");
-        if (Status s = txn_2pc_->Prepare(pending.prepare_request_id, pending.session_id,
-                                         pending.transaction_id, pending.participants);
-            !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
-        }
-        // XF4's second stamp: the prepare is on its way. The send itself
-        // sits between the two stamps and so is charged to `whole` and to
-        // no leg - the prepare leg measures what the participants did, not
-        // the ring.
-        pending.prepare_sent_ns = NowNs();
-        if (logging(LogLevel::kDebug)) {
-            log_->Debug("2pc", "core " + std::to_string(core_id_) + " is preparing " +
-                                   std::to_string(pending.participants.size()) +
-                                   " participant(s) for transaction " +
-                                   std::to_string(pending.transaction_id));
-        }
-    }
-    DispatchOutcome pending_out;
-    pending_out.pending_cross_owner_commit = std::move(pending);
-    return pending_out;
-}
-
-Status CommandDispatcher::ForwardAnswerEdge(const PendingShippedStatement& shipped,
-                                            Session& session) {
-    SessionStepClient::RemoteRead* read =
-        remote_reads_ != nullptr ? remote_reads_->Find(shipped.answer_tag) : nullptr;
-    if (read == nullptr) {
-        return Status::IoError("the answer edge for a shipped read vanished before its rows "
-                               "could be delivered");
-    }
-    if (!read->error.ok()) return read->error;
-    if (!read->described()) {
-        // The owner answered OK and its rows are here, but the description
-        // that types them is not - so nothing can be decoded and nothing
-        // may be guessed. A truncated description is `Corruption` on the
-        // receive path; this is the *absent* one, which the deadline arm
-        // reaches when an owner dies between its reply and its chunks.
-        return Status::Corruption(
-            "a shipped read's rows arrived without the description that types them");
-    }
-    auto fields = wire::DecodeRowDescription(read->description);
-    if (!fields.ok()) return fields.status();
-
-    ResultSink* sink = session.result_sink();
-    if (sink == nullptr) {
-        // Unreachable: `ShipStatement` asks for a typed answer only where a
-        // sink is installed, and a session does not lose one mid-statement.
-        // Answered rather than asserted, because the cost of being wrong is
-        // a client with rows nobody delivered.
-        return Status::IoError("a typed shipped read finished on a session with no sink");
-    }
-    // **XG-R1's "without re-encoding", and the predicate that makes it
-    // safe** (`result_sink.hpp`). The rows on the edge are already in the
-    // engine's one row encoding; a sink that says it takes that encoding
-    // gets them byte for byte. A sink that does not - the newline form,
-    // whose `Emit` takes rendered text - would read them as text, which is
-    // a wrong answer rather than an error, so it is refused instead.
-    if (!sink->AcceptsEncodedRows()) {
-        return Status::Unsupported(
-            "a shipped read's rows are carried in the wire encoding and this connection's "
-            "output form does not read it");
-    }
-    const std::size_t field_count = fields.value().size();
-    if (Status described = sink->Describe(std::move(fields.value())); !described.ok()) {
-        return described;
-    }
-    for (const std::vector<std::byte>& batch : read->batches) {
-        std::span<const std::byte> rows;
-        auto header = DecodeStepBatchHeader(batch, rows);
-        if (!header.ok()) return header.status();
-        // The row *boundaries* only - the fields inside are the sink's
-        // business, and this path exists precisely so nothing decodes them
-        // twice (`wire/row_codec.hpp`'s `DecodeRowExtents`).
-        auto extents = wire::DecodeRowExtents(rows, field_count);
-        if (!extents.ok()) return extents.status();
-        for (std::span<const std::byte> row : extents.value()) {
-            if (Status s = sink->Emit(std::string_view(
-                    reinterpret_cast<const char*>(row.data()), row.size()));
-                !s.ok()) {
-                return s;
-            }
-        }
-    }
-    return Status::OK();
-}
-
-Status CommandDispatcher::DescribePrepareFailure(const TxnPhaseOutcome* phase) const {
-    if (phase == nullptr) {
-        return Status::TxnConflict(
-            "cross-owner transaction: the prepare phase ended with no record of its "
-            "participants; the transaction was rolled back and may be retried");
-    }
-    for (const TxnParticipantOutcome& participant : phase->participants) {
-        if (!participant.replied) {
-            // A timeout, which is an **abort** and not an unknown outcome:
-            // no decision was written, so nothing committed anywhere, and a
-            // retry is safe. That is the asymmetry between this leg and the
-            // decide leg, and it is why one deadline serves both.
-            return Status::TxnConflict(
-                "cross-owner transaction: core " + std::to_string(participant.core) +
-                " did not answer prepare within " +
-                std::to_string(kTxnPhaseDeadlineNs / 1'000'000'000ull) +
-                " s; the transaction was rolled back and may be retried");
-        }
-        if (!participant.status.ok()) {
-            // **The participant's own code, not a wrapper's.** What the
-            // client's retry loop reads is the `retryable` bit, and the
-            // participant is the only side that knows whether its refusal
-            // will recur - a full enrolment table clears on its own, an
-            // unsupported shape does not. Wrapping every one in
-            // `TxnConflict` would invite a loop on the second kind; the
-            // message says the transaction rolled back either way.
-            return Status::FromWire(
-                static_cast<std::uint32_t>(participant.status.code()),
-                "cross-owner transaction: core " + std::to_string(participant.core) +
-                    " refused to prepare: " + participant.status.message() +
-                    "; the transaction was rolled back");
-        }
-    }
-    // Unreachable: the caller builds this only where `AllPrepared()` is
-    // false, which is one of the two arms above. Answered rather than
-    // asserted, because the cost of being wrong is a client with no reply.
-    return Status::TxnConflict(
-        "cross-owner transaction: the prepare phase did not complete; the transaction was "
-        "rolled back and may be retried");
-}
-
-DispatchOutcome CommandDispatcher::FinishShippedStatement(
-    const PendingShippedStatement& shipped, Session& session) {
-    // **XG1: the answer edge is closed on every exit of this function.**
-    // A registered receiver nobody drains holds its batches and its
-    // description for the session's life - the leak `FinishRemoteReads`'
-    // own `CloseAll` guard exists to prevent, and this function has five
-    // returns. `Close` also sends `STEP_CANCEL` where the far side is
-    // still open, which is what the deadline arm below needs: an owner
-    // still producing into a receiver that has given up must be told.
-    struct CloseAnswer {
-        SessionStepClient* reads;
-        const PendingShippedStatement& shipped;
-        ~CloseAnswer() {
-            if (shipped.typed_answer && reads != nullptr) reads->Close(shipped.answer_tag);
-        }
-    } close_answer{remote_reads_, shipped};
-
-    const ShippedStatementOutcome* reply = statement_ship_->Find(shipped.request_id);
-    if (reply == nullptr || !reply->arrived) {
-        // The deadline, or a waiter closed under the statement. **Never
-        // retryable**: the statement may have committed on its owner, and
-        // against engine-issued primary keys a retry inserts a second row.
-        // This is the one refusal D4 exists to produce, and the client is
-        // told what to do with it instead of being invited to retry.
-        statement_ship_->Close(shipped.request_id);
-        const std::string waited =
-            std::to_string(kShippedStatementDeadlineNs / 1'000'000'000ull);
-        // **RR1: a read has no outcome to be unknown about.** The words
-        // above are a write's - *read the data back rather than retrying* -
-        // and telling a client that about its own `SELECT` is advice to do
-        // the thing it just failed to do. Whether the read ran changes
-        // nothing on the owner, so this is an ordinary failed statement:
-        // the code stays `UnknownOutcome`, because the answer genuinely did
-        // not arrive and nothing here may invite a retry loop under a
-        // `retryable` bit, and only the sentence that would be false is
-        // dropped. The enrolment stands either way - it was recorded when
-        // the statement left - so the participant is still prepared and
-        // decided with the rest of the transaction.
-        if (shipped.read) {
-            return {ErrorReply(Status::UnknownOutcome(
-                        "core " + std::to_string(shipped.owner_core) +
-                        " did not answer the read of '" + shipped.relation + "' within " +
-                        waited + " s; the read returned nothing and changed nothing")),
-                    false};
-        }
-        return {ErrorReply(Status::UnknownOutcome(
-                    "core " + std::to_string(shipped.owner_core) + " did not answer for '" +
-                    shipped.relation + "' within " + waited +
-                    " s; whether the statement ran cannot be established - read the data back "
-                    "rather than retrying")),
-                false};
-    }
-    // **No watermark check stands here since AN-S2** (AN-R5a, operator).
-    // RR0's per-participant watermark was the participant's
-    // `ReadView::up_to_trx_id`, held by the coordinator and compared with
-    // itself one reply later; the field it was read from is gone with the
-    // trx-id predicate, and the operator took removal over forwarding it
-    // as the snapshot LSN. What delivers "consistent per core" is the
-    // participant's own pinned REPEATABLE READ view plus the `join` bit,
-    // which refuses the one event that could replace it a leg earlier -
-    // the branch this check guarded was unreachable on this tree, and it
-    // stays so. What is *not* delivered, and was not before, is a single
-    // instant across cores: that is AN-R5's other half, the coordinator's
-    // `snapshot_lsn` adopted by the participant (AN-S3), and until it lands
-    // `cross-owner-txn.md` §3's stated-possible case has no check standing
-    // over it at all.
-
-    // The owner's own answer, and on the refusal arm its own spelling: the
-    // code crossed, so `ErrorReply` here reproduces the line the owner
-    // wrote, `retryable` bit included (statement_ship_service.hpp).
-    // ---- XG1: a typed answer's rows go into the session's sink ----------
-    //
-    // **Only on an OK status**, and that is the rule rather than a
-    // convenience: an owner that failed part way has already emitted rows
-    // onto the edge, and a partial result set delivered as a whole one is
-    // the wrong answer this whole path exists to avoid. The refusal below
-    // forwards nothing and the destructor above drops what arrived.
-    if (shipped.typed_answer && reply->status.ok()) {
-        Status forwarded = ForwardAnswerEdge(shipped, session);
-        if (!forwarded.ok()) {
-            return {ErrorReply(forwarded), false, 0, forwarded};
-        }
-    }
-
-    DispatchOutcome out;
-    out.response = reply->status.ok() ? reply->text : ErrorReply(reply->status);
-    // **The carried status too, not only the rendered line** (found by
-    // AO-S4b's cell; `c168acb`'s class). The owner's refusal arrives as a
-    // real `Status` - its code and `retryable` bit recovered at the owner's
-    // `Finish` and carried on the wire - and `KwpSession::OnStatementComplete`
-    // prefers `status`, falling back to `StatusFromErrorReply` on the line.
-    // The fallback recovers `TxnConflict` and its bit, so a deadlock victim
-    // was already told; what it folds is the bare-arm set (`NotFound`,
-    // `Unsupported`, `OutOfRange`, ...), which every shipped refusal in
-    // that set reached a typed client as until this line.
-    if (!reply->status.ok()) out.status = reply->status;
-    // CB6, since AT-S2: a DDL this core shipped bumped the schema word
-    // before core 0 answered, and the client's next statement on this core
-    // revalidates at its head - so it sees its own DDL with nothing dropped
-    // here.
-    statement_ship_->Close(shipped.request_id);
-    return out;
-}
-
-namespace {
-
-// **Every relation a chain reads, in one walk.** Three places hold steps
-// and all three read real pages: the chain's own steps, its *hoisted*
-// sub-chains, and the sub-chains attached to a **step** - which is where
-// `step_compiler.cpp` §3 leaves a correlated sub-chain *and* every
-// value-bearing uncorrelated one (`IN` / `NOT IN` / the scalar form),
-// since their set is row-independent but their comparison is not.
-//
-// Walking only the first two is a **wrong answer, not a missed refusal**:
-// the shared-nothing fault check in `DevicePageStore::ResidentBytes` is
-// `#ifndef NDEBUG`, so in a release build a step reading a relation this
-// core does not own faults the page anyway and judges its visibility
-// against the wrong core's transaction manager. Measured: on a two-core
-// rig `SELECT * FROM peer_rel WHERE v IN (SELECT v FROM core0_rel)`
-// answered an empty result set instead of the matching row.
-//
-// `fn` stops the walk by answering false, which both callers below use as
-// their refusal.
-using StepVisitor = std::function<bool(const exec::Step&)>;
-
-bool VisitRelationSteps(const std::vector<exec::Step>& steps, const StepVisitor& fn) {
-    for (const exec::Step& step : steps) {
-        if (!fn(step)) return false;
-        for (const exec::SubChain& sub : step.sub_chains) {
-            if (!VisitRelationSteps(sub.steps, fn)) return false;
-        }
-    }
-    return true;
-}
-
-bool VisitRelationSteps(const exec::StepChain& chain, const StepVisitor& fn) {
-    for (const exec::SubChain& sub : chain.hoisted) {
-        if (!VisitRelationSteps(sub.steps, fn)) return false;
-    }
-    return VisitRelationSteps(chain.steps, fn);
-}
-
-// `AnySubqueryPredicate` stood here until AT-S5b: it kept a write whose
-// `WHERE` named a second relation off the ship, because an `UPDATE t SET
-// ... WHERE v IN (SELECT v FROM u)` decided its row set on the target's
-// owner by reading `u`'s pages - measured on a two-core rig as `UPDATED 0`
-// where the row matched. AT-S5 deleted the write ship, so nothing calls it
-// and there is no wrong answer left for it to prevent: the statement runs
-// where the session is and reads `u` through the pool every core shares.
-
-}  // namespace
-
-std::optional<std::uint32_t> CommandDispatcher::SoleForeignOwner(const exec::StepChain& chain) {
-    std::optional<std::uint32_t> owner;
-    const bool shippable = VisitRelationSteps(chain, [&](const exec::Step& step) {
-        auto access = catalog_.InitTableAccess(step.rel_oid);
-        if (!access.ok()) return false;
-        const std::uint32_t core = access.value()->owner_core;
-        // A relation this core owns: no other core can read its pages,
-        // so the statement is not shippable whole.
-        if (core == core_id_) return false;
-        // Two foreign owners: R6's multi-owner statement, which stays
-        // refused rather than being split.
-        if (owner.has_value() && *owner != core) return false;
-        owner = core;
-        return true;
-    });
-    return shippable ? owner : std::nullopt;
 }
 
 Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& scope) {
@@ -6047,6 +5099,46 @@ DispatchOutcome CommandDispatcher::FinishRemoteReads(ResultSink* sink_or_null,
     return {text_sink.Take(), false};
 }
 
+namespace {
+
+// **Every relation a chain reads, in one walk.** Three places hold steps
+// and all three read real pages: the chain's own steps, its *hoisted*
+// sub-chains, and the sub-chains attached to a **step** - which is where
+// `step_compiler.cpp` §3 leaves a correlated sub-chain *and* every
+// value-bearing uncorrelated one (`IN` / `NOT IN` / the scalar form),
+// since their set is row-independent but their comparison is not.
+//
+// Walking only the first two is a **wrong answer, not a missed refusal**:
+// the shared-nothing fault check in `DevicePageStore::ResidentBytes` is
+// `#ifndef NDEBUG`, so in a release build a step reading a relation this
+// core does not own faults the page anyway and judges its visibility
+// against the wrong core's transaction manager. Measured: on a two-core
+// rig `SELECT * FROM peer_rel WHERE v IN (SELECT v FROM core0_rel)`
+// answered an empty result set instead of the matching row.
+//
+// `fn` stops the walk by answering false, which both callers below use as
+// their refusal.
+using StepVisitor = std::function<bool(const exec::Step&)>;
+
+bool VisitRelationSteps(const std::vector<exec::Step>& steps, const StepVisitor& fn) {
+    for (const exec::Step& step : steps) {
+        if (!fn(step)) return false;
+        for (const exec::SubChain& sub : step.sub_chains) {
+            if (!VisitRelationSteps(sub.steps, fn)) return false;
+        }
+    }
+    return true;
+}
+
+bool VisitRelationSteps(const exec::StepChain& chain, const StepVisitor& fn) {
+    for (const exec::SubChain& sub : chain.hoisted) {
+        if (!VisitRelationSteps(sub.steps, fn)) return false;
+    }
+    return VisitRelationSteps(chain.steps, fn);
+}
+
+}  // namespace
+
 Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
     // Every step a sub-chain of any kind can reach, through the one walk
     // `VisitRelationSteps` states (above `SoleForeignOwner`). It used to
@@ -6064,22 +5156,18 @@ Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
         // **One rule, asked once** (R4-R/RR1): a statement that reaches
         // here could not take `HandleSelect`'s fan-in route, so it must be
         // served by a local walk or refused - and `ServableBy` is exactly
-        // the route's own predicate, negated. The two used to be written in
-        // different words in different functions and drifted, which is what
-        // made a spread relation unreadable. The arms below choose only
-        // *which* refusal, never *whether*.
+        // the route's own predicate, negated.
+        //
+        // **One arm since AT-S6.** The other refused a relation another
+        // core *owned*, and shipped the statement there when it could;
+        // both went when the read stopped shipping, because a page is a
+        // page from any core and an unsplit relation is walkable from all
+        // of them. What is left is the only way a local walk can still be
+        // wrong: **a split relation whose ranges are not all this
+        // core's**, which `WalkHeadsFor` would walk short - rows silently
+        // missing, success reported, the one ending this row may not leave
+        // open.
         if (access.value()->ServableBy(core_id_)) return true;
-        if (access.value()->owner_core != core_id_) {
-            refusal =
-                CrossCoreReadNotImplemented(core_id_, access.value()->owner_core, step.rel_name);
-            return false;
-        }
-        // **Owned here is not the same as wholly here** (RD7). The walk
-        // covers the ranges this core owns and no others
-        // (`TableAccess::WalkHeadsFor`), so a relation whose `owner_core`
-        // is this core but one of whose ranges is not would be walked
-        // short: rows silently missing, success reported - the one ending
-        // this row may not leave open.
         refusal = Status::NotImplemented(
             "relation '" + step.rel_name +
             "' has ranges on another core and this shape cannot fan in over them; "
@@ -8595,8 +7683,11 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // this after a revision that had it the other way round). A plan or
     // an open the machinery refuses falls through to the honest affinity
     // refusal below, never a worse error.
-    if (remote_reads_ != nullptr && !analyze &&
-        TwoStepPipelineEligible(chain.value()).ok() && !MayEnrolShip(session)) {
+    // **No enrolment test since AT-S6.** It kept the pipeline off a
+    // statement that would ship instead - a read inside a transaction,
+    // which had to reach the owner's own transaction to see its writes.
+    // Nothing ships, so the pipeline is what every eligible shape takes.
+    if (remote_reads_ != nullptr && !analyze && TwoStepPipelineEligible(chain.value()).ok()) {
         auto outer_access = catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
         auto inner_access = catalog_.InitTableAccess(chain.value().steps[1].rel_oid);
         if (outer_access.ok() && inner_access.ok() &&
@@ -8616,46 +7707,26 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         }
     }
     if (Status affinity = CheckReadAffinity(chain.value()); !affinity.ok()) {
-        // D1's read half, and the same mechanism as the write half rather
-        // than a second one. It sits **below** the two pipeline paths
-        // above, which keep their precedence and their measurements; this
-        // catches what falls through them, which on a peer is every plain
-        // read of a foreign relation (pretasks §8c-1 measured that the
-        // pipeline is not reachable from dispatch for one).
+        // **Nothing ships from here since AT-S6.** What stood below this
+        // refusal carried the statement to the relation's owner - the one
+        // arm of statement shipping that survived AT-S5, and the reason a
+        // transaction still had a participant on another core.
         //
-        // **Not under ANALYZE**, for the reason the two pipeline paths
-        // above exclude it and one more: `line` here is the *stripped*
-        // text, so shipping it would send a bare `SELECT` and answer a
-        // request for a plan with a result set. Refused exactly as it was
-        // before shipping existed; shipping the `ANALYZE` spelling itself
-        // is a separate decision, since the owner would then describe a
-        // run this core did not perform.
-        // **RR1: the read half of enrolment**, and the same two gates the
-        // three write sites carry (`HandleInsert`, `HandleUpdate` and
-        // `HandleDelete`, each at its own dispatch fork). Until this
-        // row the read site tested `MayShip` alone, which requires
-        // `!in_explicit_txn()` - so a foreign read *inside* a transaction
-        // could not ship, fell through to the affinity refusal, and the
-        // identical read outside one shipped fine. The asymmetry made the
-        // whole two-phase path unreachable from any realistic workload,
-        // because a booking or ordering transaction reads before it writes
-        // (RP8's B5).
+        // It went because it was **wrong**, not merely unnecessary. The
+        // write it was written beside stopped shipping at AT-S5, so the
+        // two halves of one transaction ran under two transaction ids and
+        // a read could not see its own uncommitted write
+        // (`docs/inflight/bugs/a-shipped-read-cannot-see-its-transactions-own-write.md`,
+        // measured on the two-core rig). The fork's own comment argued for
+        // shipping on exactly that ground - *"only the peer's own
+        // transaction can show it"* - which had become the argument for
+        // the defect.
         //
-        // It is the same mechanism as the write half and not a second one:
-        // `MayEnrolShip` is what decides the shape is admissible, and the
-        // enrolment it produces is the reason the read has to ship at all
-        // rather than be answered from a snapshot. A transaction that wrote
-        // a row on a peer and then reads it back must see its own
-        // uncommitted write, and only the peer's own transaction can show
-        // it - so the read joins that transaction (`join` on the wire) or
-        // opens it.
-        if (!analyze && (MayShip(session) || MayEnrolShip(session))) {
-            if (std::optional<std::uint32_t> owner = SoleForeignOwner(chain.value());
-                owner.has_value() && !chain.value().steps.empty()) {
-                return ShipStatement(line, chain.value().steps[0].rel_oid, *owner,
-                                     chain.value().steps[0].rel_name, session, /*read=*/true);
-            }
-        }
+        // What is left here refuses one shape and one only: a **split**
+        // relation this core does not wholly hold, in a statement the
+        // fan-in cannot take (`CheckReadAffinity` names it). A read of a
+        // relation another core owns is not that shape - it is a walk of
+        // pages every core faults.
         return {ErrorReply(affinity), false, 0, affinity};
     }
 
@@ -9124,20 +8195,6 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         return out;
     }
 
-    // Shipped: HandleInsert's branch, for its reason.
-    if (out.pending_shipped.has_value()) {
-        if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
-            // Not a refusal - the statement is already on its way to its
-            // owner, and the only refusal legal after that is
-            // `UnknownOutcome`. Logged rather than dropped because
-            // `EndWrite`'s abort arm returns without releasing the
-            // transaction when the enforcer fails, which is the leaked-
-            // transaction class the SS3 review already fixed once.
-            log_->Warn("ship", "the local scope of a shipped statement did not end cleanly: " +
-                                   s.message());
-        }
-        return out;
-    }
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
@@ -9947,15 +9004,11 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
         return {"ERR current transaction is aborted; ROLLBACK", false};
     }
 
-    // **D1's fast path, and it is the first thing on the commit path.** A
-    // transaction that touched one owner has no participants and takes the
-    // line below unchanged - no prepare, no message, no branch beyond this
-    // one test on a field the session already has in cache. That is what
-    // R6's "the one-owner path pays nothing" means concretely, and it is
-    // asserted from outside by `Txn2pcClient::prepare_messages()` staying 0.
-    if (session.has_participants()) {
-        return PrepareAcrossOwners(session);
-    }
+    // **One commit path since AT-S6.** D1's fast path forked here on
+    // whether the transaction had enrolled a participant, and took D4's
+    // two phases when it had. A transaction has no half on another core
+    // now - nothing ships and nothing enrols - so what R6 called "the
+    // one-owner path pays nothing" is the only path there is.
     return CommitLocal(session);
 }
 
@@ -10057,48 +9110,14 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     // written, sixty seconds since AN-R14, and on a loop any client can run
     // either way.
     //
-    // **Read off the session before `RollbackLocal`**, because `Finish()`
-    // clears the participant list with the transaction - and the id must be
-    // read while the transaction is still there.
-    std::vector<std::uint32_t> participants;
-    std::uint64_t session_id = 0;
-    std::uint64_t transaction_id = 0;
-    if (session.has_participants() && txn_2pc_ != nullptr && session.ship_id() != 0 &&
-        session.transaction() != nullptr) {
-        participants = session.participants();
-        session_id = session.ship_id();
-        transaction_id = session.transaction()->id();
-    }
-
     DispatchOutcome out = RollbackLocal(session);
 
-    // **After the local half, and unconditionally afterwards.** This core's
-    // transaction is already unwound, so a send that refuses changes no
-    // outcome - it costs the participants their lifetime ceiling instead of a
-    // message, which is exactly what this leg improves on and not something
-    // to report to a client that asked to roll back and did.
-    //
-    // Sent with nobody waiting (`AbortAndForget`): the outcome is abort
-    // whatever a participant answers, and the caller that most needs this
-    // path - the connection-close rollback - runs through the synchronous
-    // `Dispatch()` and could not park for an acknowledgement at all.
-    if (!participants.empty()) {
-        if (Status s = txn_2pc_->AbortAndForget(session_id, transaction_id, participants);
-            !s.ok()) {
-            if (logging(LogLevel::kWarn)) {
-                log_->Warn("2pc", "core " + std::to_string(core_id_) +
-                                      " rolled back transaction " +
-                                      std::to_string(transaction_id) +
-                                      " and could not tell its participants: " + s.message() +
-                                      "; they will be swept by their lifetime ceiling");
-            }
-        } else if (logging(LogLevel::kDebug)) {
-            log_->Debug("2pc", "core " + std::to_string(core_id_) + " told " +
-                                   std::to_string(participants.size()) +
-                                   " participant(s) to abort transaction " +
-                                   std::to_string(transaction_id));
-        }
-    }
+    // **Nothing follows the local half since AT-S6.** A rollback used to
+    // tell its participants - `AbortAndForget`, with nobody waiting,
+    // because the outcome is abort whatever they answer and the
+    // connection-close rollback runs on a path that cannot park. There are
+    // no participants: nothing ships, so nothing enrols.
+
     return out;
 }
 
@@ -10899,20 +9918,6 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
         return out;
     }
 
-    // Shipped: HandleInsert's branch, for its reason.
-    if (out.pending_shipped.has_value()) {
-        if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
-            // Not a refusal - the statement is already on its way to its
-            // owner, and the only refusal legal after that is
-            // `UnknownOutcome`. Logged rather than dropped because
-            // `EndWrite`'s abort arm returns without releasing the
-            // transaction when the enforcer fails, which is the leaked-
-            // transaction class the SS3 review already fixed once.
-            log_->Warn("ship", "the local scope of a shipped statement did not end cleanly: " +
-                                   s.message());
-        }
-        return out;
-    }
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();

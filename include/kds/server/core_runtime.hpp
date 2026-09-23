@@ -20,8 +20,6 @@
 #include "kds/stats/access_batch.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
-#include "kds/server/shipped_statement_executor.hpp"
-#include "kds/server/statement_ship_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/range_alloc.hpp"
@@ -187,15 +185,11 @@ public:
         bool cabins = true;
         stats::CabinLimits cabin_limits;
 
-        // D5's in-doubt ceiling, from core 0's `in_doubt_ceiling_ms`
-        // (R6-5). Copied like every other shared setting, because a peer is
-        // as likely to be a participant as core 0 is - a writer blocked by
-        // an in-doubt row is blocked on whichever core owns the row - and a
-        // peer that used a different ceiling would make the stall a
-        // property of which core a client's relation happened to land on.
-        // The default is `kTxnInDoubtCeilingNs`, spelled at
-        // `Expeditor::Config` where the key is parsed.
-        sched::MonoTimeNs in_doubt_ceiling_ns = 0;
+        // The lock family's fault net, from core 0's
+        // `lock_wait_fault_net_ms` - `kLockWaitFaultNetNs` is the default
+        // and `txn/lock_table.hpp` carries what it means. Zero where
+        // nobody configured one, which is a fixture.
+        sched::MonoTimeNs lock_wait_fault_net_ns = 0;
 
         // RD5's `range_size_ids`, copied from core 0 like every other
         // shared setting. One number sizes both the row-id lease grant and
@@ -487,22 +481,6 @@ public:
     catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
     RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
 
-    // This core's half of statement shipping (SS3), exposed for the same
-    // reason: a test drives a shipped statement and reads what the owner
-    // did with it. Null before AttachTransport.
-    ShippedStatementExecutor* shipped_statements() noexcept {
-        return shipped_executor_.has_value() ? &*shipped_executor_ : nullptr;
-    }
-    StatementShipClient* statement_ship() noexcept {
-        return statement_ship_client_.has_value() ? &*statement_ship_client_ : nullptr;
-    }
-    // This core's coordinator half of the cross-owner commit (R6-3),
-    // exposed for the same reason as the two above: a test drives a phase
-    // and reads what came back. Null before AttachTransport.
-    Txn2pcClient* txn_2pc() noexcept {
-        return txn_2pc_client_.has_value() ? &*txn_2pc_client_ : nullptr;
-    }
-
     // This core's transaction-id lease, exposed for the first of those two
     // reasons only: a test drives a grant without a reactor.
     txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
@@ -689,21 +667,6 @@ private:
     // client ships to a peer's server and a peer's client ships to core
     // 0's.
     //
-    // **Declaration order is load-bearing**, and in the opposite direction
-    // from the usual: the server holds the executor's `Seam()`, which
-    // captures the executor, so the server must be destroyed *first* and is
-    // therefore declared *last* of the two. Both go below `dispatcher_`,
-    // which the executor borrows, and the reactor that owns their tasks is
-    // dropped ahead of every member by `~CoreRuntime`'s body.
-    std::optional<ShippedStatementExecutor> shipped_executor_;
-    std::optional<StatementShipServer> statement_ship_server_;
-    std::optional<StatementShipClient> statement_ship_client_;
-    // R6-3's two halves, on the same terms and in the same order: the
-    // participant transport holds the executor's seams, so it is declared
-    // after the executor and destroyed before it.
-    std::optional<Txn2pcServer> txn_2pc_server_;
-    std::optional<Txn2pcClient> txn_2pc_client_;
-
     // The client listener this core accepts on, when per-core listeners are
     // configured (PW5). It borrows the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so

@@ -28,14 +28,6 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kAnchorWrite: return "ANCHOR_WRITE";
         case RingMessageKind::kTrxIdLease: return "TRXID_LEASE";
         case RingMessageKind::kRowIdLease: return "ROWID_LEASE";
-        case RingMessageKind::kShippedStatementRequest: return "SHIPPED_STATEMENT_REQUEST";
-        case RingMessageKind::kShippedStatementReply: return "SHIPPED_STATEMENT_REPLY";
-        case RingMessageKind::kTxnPrepareRequest: return "TXN_PREPARE_REQUEST";
-        case RingMessageKind::kTxnPrepareReply: return "TXN_PREPARE_REPLY";
-        case RingMessageKind::kTxnDecideRequest: return "TXN_DECIDE_REQUEST";
-        case RingMessageKind::kTxnDecideReply: return "TXN_DECIDE_REPLY";
-        case RingMessageKind::kTxnResolveRequest: return "TXN_RESOLVE_REQUEST";
-        case RingMessageKind::kTxnResolveReply: return "TXN_RESOLVE_REPLY";
         // Both were missing: `kAccessStatsBatch` since CR7 added it, and it
         // read as "unknown" in every log line that named a kind. Added with
         // XG1's own kind rather than left, because the next reader of this

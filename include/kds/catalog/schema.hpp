@@ -299,32 +299,31 @@ struct TableAccess {
     // for the same reason: RD3's zero-cost invariant reaching the walk.
     std::vector<PageId> AllWalkHeads() const;
 
-    // Whether every range is `core_id`'s - the question the dispatcher
-    // asks before reading locally. True for an unsplit relation by
-    // definition: it is one range, owned by `owner_core`.
-    bool WhollyOwnedBy(std::uint32_t core_id) const noexcept {
-        if (ranges.empty()) return owner_core == core_id;
-        for (const RangeTarget& range : ranges) {
-            if (range.owner_core != core_id) return false;
-        }
-        return true;
-    }
-
     // **Whether a walk on `core_id` alone answers this relation whole** —
     // the one question the read path asks, named once because it used to be
     // asked in two places in two different words and they drifted (R4-R
     // §10c). `HandleSelect`'s fan-in route must be taken exactly when this
-    // is false, and `CheckReadAffinity` must refuse exactly then too.
+    // is false.
     //
-    // **A conjunction, not `WhollyOwnedBy` alone.** That helper answers
-    // `owner_core == core_id` for an empty range list, so a relation owned
-    // elsewhere whose ranges had all become this core's would answer true
-    // and be walked locally — where the affinity check refuses it on
-    // `owner_core`. CC9 makes that state unreachable today (the `lo = 0`
-    // anchor is the owner's and no mover exists); a predicate correct only
-    // because of a neighbouring invariant is what this line refuses to be.
+    // **`owner_core` is not part of it since AT-S6.** It was a conjunct,
+    // and the reason was consistency rather than reachability: a relation
+    // owned elsewhere whose ranges were all this core's would have been
+    // walked here while the affinity check refused it on `owner_core`.
+    // That check is gone - every core reads every page through the one
+    // frame table (AM-S2 step 3), so who *owns* a relation says nothing
+    // about who can walk it, and the only question left is whether one
+    // walk here reaches all of it.
+    //
+    // An unsplit relation is therefore servable by every core: it has one
+    // chain and `WalkHeadsFor` answers that chain's head to whoever asks.
+    // A split one is servable by the core that holds every range, which is
+    // what keeps a walk from answering short where a fan-in is owed.
     bool ServableBy(std::uint32_t core_id) const noexcept {
-        return owner_core == core_id && WhollyOwnedBy(core_id);
+        if (ranges.empty()) return true;
+        for (const RangeTarget& range : ranges) {
+            if (range.owner_core != core_id) return false;
+        }
+        return true;
     }
 
     // The chain a row with `id` belongs in. Heap relations only; a btree

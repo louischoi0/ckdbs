@@ -419,18 +419,23 @@ inline constexpr bool IsReadHolder(std::uint64_t holder) noexcept {
 // holder that is stuck - and when it fires it aborts the *waiter* (R1
 // never touches the holder) and is logged as the fault it is.
 //
-// **Its value answers AO-3's finding J.** While 2PC is still in the tree
-// an honest holder can sit inside a coordinator's phase deadline
-// (`kTxnPhaseDeadlineNs`, 10 s, `server/txn_2pc_service.hpp`), so a net
-// below that would fire on a holder doing nothing wrong. 11 s until M3
-// retires 2PC, then D12's 1 s. Written out rather than derived from that
-// header because `txn/` must not depend on `server/`; the derivation is
-// this comment, and M3 moves both.
+// **Its value answered AO-3's finding J and no longer has to.** While 2PC
+// was in the tree an honest holder could sit inside a coordinator's phase
+// deadline - 10 s - so a net below that would have fired on a holder doing
+// nothing wrong, and AO-R8 set 11 s "until M3 retires 2PC, then D12's
+// 1 s". **AT-S6 retired it**, and this is that stage's half: no holder
+// waits on another core for anything now, so the longest honest wait is a
+// local statement's own work and the net is **1 s**.
 //
-// Not a config key in M2: `in_doubt_ceiling_ms` already names a wait
-// ceiling and has two 2PC users, so a second key would be a second name
-// for one quantity (`CLAUDE.md`'s rule). M3 re-scopes and renames it.
-inline constexpr std::uint64_t kLockWaitFaultNetNs = 11ull * 1000 * 1000 * 1000;
+// **The default, and the key that overrides it.** `lock_wait_fault_net_ms`
+// is `in_doubt_ceiling_ms` re-scoped and renamed (AT-0 item 7, AO-R8's own
+// plan): the old key named a wait ceiling with two 2PC users, both gone,
+// and the quantity it named - how long a statement may wait before the
+// engine calls it a fault - is this one. A second key would have been a
+// second name for it (`CLAUDE.md`'s rule), and deleting it would have left
+// an operator's file silently ignored, so the old spelling is **refused at
+// startup naming its successor**.
+inline constexpr std::uint64_t kLockWaitFaultNetNs = 1ull * 1000 * 1000 * 1000;
 
 // What a parked waiter polls. The table owns it and a decide flips it;
 // the waiter holds a `shared_ptr` so the slot outlives the entry it was

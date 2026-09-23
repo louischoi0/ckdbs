@@ -446,14 +446,14 @@ public:
         // exec/budget.hpp).
         std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
 
-        // How long a writer waits for a row held by a transaction this core
-        // prepared and is in doubt about, before it is refused by name
-        // (R6-5, D5's ratified ceiling). Milliseconds in the file, because
-        // the quantity an operator reasons about here is a client-visible
-        // stall and microseconds would be noise on it. The semantics have
-        // one home, at `kTxnInDoubtCeilingNs` (server/txn_2pc_service.hpp),
-        // which also carries the derivation of the default.
-        sched::MonoTimeNs in_doubt_ceiling_ns = kTxnInDoubtCeilingNs;
+        // **How long a statement may wait before the engine calls it a
+        // fault** (AO-R8, re-scoped here at AT-S6 from the in-doubt
+        // ceiling this field used to be). Milliseconds in the file,
+        // because the quantity an operator reasons about is a
+        // client-visible stall and microseconds would be noise on it. The
+        // semantics have one home, at `kLockWaitFaultNetNs`
+        // (txn/lock_table.hpp), which also carries the derivation.
+        sched::MonoTimeNs lock_wait_fault_net_ns = txn::kLockWaitFaultNetNs;
 
         // RD5's `range_size_ids`; `server/range_alloc.hpp` owns what it
         // means, and `kRangeSizeIdsDefault` carries the sweep DA1 took the
@@ -919,22 +919,6 @@ private:
     // and both consumers discard unmatched tags silently.
     std::optional<RemoteStepServer> remote_steps_;
 
-    // **Core 0's two halves of statement shipping** (SS1/SS3), armed with
-    // the transport, beside `remote_reads_` and for its reason. Core 0 is an owner like
-    // any other - a peer's client ships it the statements it owns - and an
-    // arrival core like any other, so it needs both.
-    //
-    // Declared **after** `cores_` would be wrong and **before** it is not
-    // enough to think about: what matters is that the server holds the
-    // executor's seam, so the server is declared last of the two and
-    // destroyed first. Both borrow `dispatcher_`, declared above.
-    std::optional<ShippedStatementExecutor> shipped_executor_;
-    std::optional<StatementShipServer> statement_ship_server_;
-    std::optional<StatementShipClient> statement_ship_client_;
-    // R6-3's two halves, declared and destroyed on the same terms: the
-    // participant transport holds the executor's seams.
-    std::optional<Txn2pcServer> txn_2pc_server_;
-    std::optional<Txn2pcClient> txn_2pc_client_;
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 
     // Sets every peer's stop flag and kicks it awake (AU-S3: write, then

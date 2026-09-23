@@ -95,19 +95,12 @@ enum class RingMessageKind : std::uint16_t {
     // writer's `IX` waits on it from whichever core. **The values are not
     // reused.**
 
-    // arrival core <-> owner core: a single-statement autocommit
-    // transaction executed by the relation's owner and answered through
-    // the core it arrived on (SS1, server/statement_ship_service.hpp).
-    // The request carries `server::ShippedStatementRequestPayload` - the
-    // statement's text and D4's (session, sequence) identity - and the
-    // reply `ShippedStatementReplyPayload`, matched to its waiter by
-    // `request_id`.
-    //
-    // **There is no `done` leg**, where the retired index build had one to
-    // close the owner's write-refusal window: an autocommit statement opens
-    // no window. A shipped statement is one round trip.
-    kShippedStatementRequest = 28,
-    kShippedStatementReply = 29,
+    // 28 and 29 were kShippedStatementRequest / kShippedStatementReply,
+    // struck at AT-S6: a statement no longer crosses to the core that owns
+    // its relation. The write's half went at AT-S5 and the read's here,
+    // and what replaced both is a walk of pages every core faults
+    // (`docs/spec/crosscore.md` §6).
+
 
     // 30, 31 and 32 were the assertion build's request, reply and done -
     // a peer-owned relation's CREATE ASSERTION built by its owner (PW1c-6c)
@@ -115,44 +108,13 @@ enum class RingMessageKind : std::uint16_t {
     // build runs where the session is and adopts into the one directory
     // every core's writes check. **The values are not reused.**
 
-    // coordinator <-> participant: a transaction whose writes touch
-    // relations owned by two or more cores, committed atomically (R6 of
-    // `instructions/v2.4.0/2pc.md`, server/txn_2pc_service.hpp). The
-    // coordinator is the **arrival core** - the one holding the client's
-    // session (D1) - and the participants are relation owners, discovered
-    // as the transaction runs rather than declared up front.
-    //
-    // Two phases, four kinds. Prepare carries
-    // `server::TxnPrepareRequestPayload` and the participant answers
-    // prepared-or-refused in `TxnParticipantReplyPayload`, matched to its
-    // waiter by `request_id`; decide carries `TxnDecideRequestPayload` and
-    // is acknowledged on the same reply payload. **The decision is the
-    // coordinator's COMMIT record, not the decide message** - the message
-    // only carries it, which is why a lost one costs a resend rather than
-    // an outcome.
-    //
-    // Not sent yet: R6-1 is the wire, and the waiter, the durable prepare
-    // and the decision record are R6-3's. Declared here now for the reason
-    // the step kinds were - a subsystem that arrives with an enum of its
-    // own is what central enumeration exists to prevent.
-    kTxnPrepareRequest = 33,
-    kTxnPrepareReply = 34,
-    kTxnDecideRequest = 35,
-    kTxnDecideReply = 36,
+    // 33 to 38 were the two-phase commit's three pairs -
+    // kTxnPrepareRequest / Reply, kTxnDecideRequest / Reply and
+    // kTxnResolveRequest / Reply - struck at AT-S6 with the protocol.
+    // Nothing ships, so no transaction has a half on another core to
+    // prepare, to decide, or to be in doubt about
+    // (`docs/spec/cross-owner-txn.md`).
 
-    // ---- Cross-owner transactions: the in-doubt ask (R6-5, D5) ----------
-    //
-    // The third exchange, and the only one a **participant** opens: a core
-    // that replied prepared and has waited out its ceiling with no decide
-    // asks the coordinator what it decided. The ask carries
-    // `server::TxnResolveRequestPayload` with R6-0's bit **set** - it is a
-    // retry in Finding 1's sense, so a coordinator that no longer holds the
-    // record answers `UnknownOutcome` rather than re-deciding - and the
-    // answer is `TxnResolveReplyPayload`: the decision, or the reason there
-    // is none. The message resolves a participant; it never decides
-    // anything, since the decision is the coordinator's COMMIT record.
-    kTxnResolveRequest = 37,
-    kTxnResolveReply = 38,
 
     // CR7: a peer's folded access statistics, peer -> core 0, one-way.
     // There is no reply and there is deliberately no retry: `sys.access_stats`
@@ -213,14 +175,6 @@ constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
         case RingMessageKind::kAnchorWrite:
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kRowIdLease:
-        case RingMessageKind::kShippedStatementRequest:
-        case RingMessageKind::kShippedStatementReply:
-        case RingMessageKind::kTxnPrepareRequest:
-        case RingMessageKind::kTxnPrepareReply:
-        case RingMessageKind::kTxnDecideRequest:
-        case RingMessageKind::kTxnDecideReply:
-        case RingMessageKind::kTxnResolveRequest:
-        case RingMessageKind::kTxnResolveReply:
         case RingMessageKind::kAccessStatsBatch:
         case RingMessageKind::kShippedRowDesc:
             return true;
@@ -248,11 +202,11 @@ constexpr std::size_t CountKnownRingMessageKinds() noexcept {
     }
     return n;
 }
-static_assert(CountKnownRingMessageKinds() == 19,
+static_assert(CountKnownRingMessageKinds() == 11,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
               "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck), 26 at AT-S5d (30, 31, 32 "
               "struck), 23 at AT-S5e (25, 26, 27 struck), 19 at AT-S5f (41, 42, 43, 44 "
-              "struck)");
+              "struck), 11 at AT-S6 (28, 29 and 33-38 struck)");
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

@@ -31,11 +31,8 @@
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 // CB4: the rig arms core 0's *owner* half of statement shipping, which
 // nothing needed until a peer's DDL was routed there rather than refused.
-#include "kds/server/shipped_statement_executor.hpp"
-#include "kds/server/statement_ship_service.hpp"
 // R6-8: the rig arms core 0 as a coordinator, so a write inside a
 // transaction ships and enrols instead of being refused.
-#include "kds/server/txn_2pc_service.hpp"
 #include "kds/server/session_step_client.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/catalog/well_known.hpp"
@@ -1739,11 +1736,14 @@ TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOt
 
 // ---- P4c: a SELECT against a rotated relation executes remotely ---------
 
-TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
-    // The whole cross-core read path end to end, loopback transport: the
-    // dispatcher compiles, sees owner_core=1, ships the step; the "remote"
-    // server executes it and streams batches; the session finishes the
-    // reply. Everything but the rings.
+TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedHere) {
+    // **The cell that measured the whole cross-core read path end to end**
+    // - compile, see `owner_core = 1`, open the step, stream the batches,
+    // finish the reply - and what it measures since AT-S6 is that none of
+    // that happens: the relation is unsplit, so one walk here answers it
+    // and the pipeline is not opened at all. The rows are the same rows,
+    // which is the point; `APeerReadsASpreadRelationThroughItsOwnFanIn`
+    // keeps the route for the shape that still needs it.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
@@ -1815,10 +1815,14 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
               "id,v\\n1,0\\n2,10\\n3,20\\n4,30");
     EXPECT_EQ(client->open_reads(), 0u);
 
-    // The ineligible shapes keep the refusal: a projection list is not
-    // shipped in P4c and answers the affinity refusal, never wrong rows.
-    auto refused = runtime.value()->dispatcher().Dispatch("SELECT v FROM rotated");
-    EXPECT_EQ(refused.response.rfind("ERR ", 0), 0u);
+    // **The ineligible shapes are answered too since AT-S6.** A projection
+    // list is still not a shape the pipeline takes (P4c), and what it fell
+    // through to was the affinity refusal - which is gone, so it falls
+    // through to a local walk instead. The route's eligibility rules are
+    // untouched; what changed is what being ineligible costs.
+    auto projected = runtime.value()->dispatcher().Dispatch("SELECT v FROM rotated");
+    EXPECT_EQ(projected.response.rfind("ERR ", 0), std::string::npos) << projected.response;
+    EXPECT_EQ(projected.response, "v\\n0\\n10\\n20\\n30") << projected.response;
 }
 
 // ---- RD7: a read of a split relation fans in over its owners ------------
@@ -2429,11 +2433,16 @@ TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
     EXPECT_EQ(split_reply, whole_reply) << "the split changed the answer";
     EXPECT_EQ(split_reply, "id,v\\n1,10\\n2,20\\n4096,30\\n4097,40");
     EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
-    // One stage to the owner for the split relation's low range, one to
-    // itself for its own - and one to the owner for the unsplit twin, which
-    // a peer also reaches only through the pipeline. The self-directed one
-    // is on a **non-zero** core, which is the mechanism RS5 gates.
-    EXPECT_EQ(opens_to_owner, 2) << "the owner's range and the whole twin are both remote stages";
+    // One stage to the owner for the split relation's low range and one to
+    // itself for its own. The self-directed one is on a **non-zero** core,
+    // which is the mechanism RS5 gates.
+    //
+    // **The unsplit twin opens none since AT-S6**: it was a third stage
+    // while a peer reached a foreign relation only through the pipeline,
+    // and a peer walks it here now - one chain, and every core faults its
+    // pages. The split relation still fans in, which is what the equal
+    // answers above are: the route survives for the shape it exists for.
+    EXPECT_EQ(opens_to_owner, 1) << "the owner's range is a remote stage";
     EXPECT_EQ(opens_to_self, 1) << "the peer's own range was not walked by a self-directed stage";
 
     const std::string straddle =
@@ -2654,6 +2663,11 @@ TEST_F(CoreRuntimeTest, AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplit
 // widened read ends at the affinity refusal, which is exactly the evidence
 // wanted: the route declined it, and the count of opens says so.
 TEST_F(CoreRuntimeTest, AWidenedShapeOverASingleOwnerRelationIsNotFannedIn) {
+    // **Still not fanned in, and since AT-S6 neither is the split one in
+    // this shape**: the widened predicate is what the route declines, and
+    // the unsplit relation is now walked here whoever owns it. The
+    // assertions below say which stages opened, and the answer is the
+    // measurement.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/3);
     auto split = catalog2.CreateTable(catalog::kNamespacePublic, "spread", TwoColumnSchema(),
@@ -2752,13 +2766,19 @@ TEST_F(CoreRuntimeTest, AWidenedShapeOverASingleOwnerRelationIsNotFannedIn) {
         runtime.value()->dispatcher().Dispatch("SELECT SUM(v) FROM twin").response;
     EXPECT_EQ(opens_to_owner, 1) << "a single-owner fold was fanned in: " << not_fanned;
     EXPECT_EQ(opens_to_self, 1);
-    EXPECT_EQ(not_fanned.rfind("ERR", 0), 0u) << not_fanned;
+    // **And it is answered rather than refused since AT-S6**: what a
+    // declined route fell through to was the affinity refusal, and a
+    // single-owner unsplit relation is walked here now. The route still
+    // declines it, which is what the counts above say.
+    EXPECT_EQ(not_fanned.rfind("ERR", 0), std::string::npos) << not_fanned;
 
-    // And the star read over that same single-owner relation still fans in,
-    // untouched: P4c's routing is not what this rule narrows.
+    // And the star read over that same single-owner relation is walked
+    // here too - it took the fan-in while a peer could reach a foreign
+    // relation no other way. The rows are unchanged, which is the half
+    // that matters; P4c's routing is not what this rule narrows.
     const std::string star = runtime.value()->dispatcher().Dispatch("SELECT * FROM twin").response;
     EXPECT_EQ(star, "id,v\\n1,10\\n2,20\\n4096,10\\n4097,40") << star;
-    EXPECT_EQ(opens_to_owner, 2) << "the star read stopped taking the fan-in";
+    EXPECT_EQ(opens_to_owner, 1) << "the star read opened a stage for an unsplit relation";
 }
 
 // ---- P4d-4b-3: a two-step join executes as a cross-core pipeline ---------
@@ -3042,6 +3062,7 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
     // stages park on. A tiny batch target (1 row) means every shape
     // crosses the credit gate several times, so the comparison exercises
     // the parked path rather than a single flush.
+    bool crossed_any = false;
     auto shipped = [&](const std::string& sql) {
         DispatchOutcome out;
         const int opened_before = stages_opened;
@@ -3057,8 +3078,14 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
             EXPECT_LT(++rounds, 256) << "the pipeline did not converge: " << sql;
             if (rounds >= 256) break;
         }
-        EXPECT_GT(stages_opened, opened_before)
-            << "nothing was shipped, so this compared two local runs: " << sql;
+        // **Not every shape opens a stage since AT-S6**: an unsplit
+        // relation another core owns is walked here, so the single-step
+        // star reads answer without the pipeline. Asserting a stage per
+        // statement would assert the route rather than the answer, and
+        // the answer - the two sides agree - is the `EXPECT_EQ` at the
+        // call site. `crossed_any` is what keeps the cell from silently
+        // becoming a comparison of two local runs for every shape.
+        if (stages_opened > opened_before) crossed_any = true;
         EXPECT_EQ(client->open_reads(), 0u) << sql;
         EXPECT_EQ(server->open_pipelines(), 0u) << sql;
         EXPECT_TRUE(tasks.empty()) << sql;
@@ -3103,6 +3130,8 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
             << " -> " << local_reply;
         EXPECT_EQ(shipped(sql), local_reply) << sql;
     }
+    EXPECT_TRUE(crossed_any)
+        << "no shape opened a stage, so every comparison above was two local runs";
 
     // And the non-pk join is not vacuous: `tc.tag` {2,1,5,2} against
     // `ta.b_id` {2,1,9,3,1} matches four pairs - one outer row hitting two
@@ -3764,40 +3793,8 @@ struct ForeignIndexRig {
     std::optional<txn::TrxIdSequence> ids;
     std::optional<txn::UndoLog> undo;
     std::optional<txn::TransactionManager> txns;
-    // Core 0's statement-shipping client (SS2), declared before
-    // `dispatcher` deliberately: members die in reverse declaration order,
-    // and the dispatcher holds a pointer to it, so it must outlive the
-    // dispatcher. It is built from `core0`, so it is declared after that and
-    // dies before it - the reason nothing pumps `core0` after this rig
-    // starts unwinding. (The index-build client stood first here until
-    // AT-S5e.)
-    std::optional<StatementShipClient> ship;
-    // Core 0's coordinator half of the cross-owner commit (R6-3/R6-8),
-    // declared with `ship` and for its reason - the dispatcher holds a
-    // pointer to it and must die first.
-    std::optional<Txn2pcClient> txn2pc;
-    // Core 0's Cabin store, so the rig's core 0 is built the way
-    // `Expeditor` builds it (AK-S2's cells read `SHOW CABINS` from it).
-    // Declared ahead of the dispatcher that borrows it.
     std::optional<stats::CabinStore> cabins0;
     std::optional<CommandDispatcher> dispatcher;
-    // **Core 0's owner half of statement shipping** (SS1's wiring rule:
-    // every core answers requests and every core receives replies). The
-    // rig had only the arrival half, because until CR5 nothing shipped
-    // *to* core 0 - a peer's DDL was refused at its own dispatch. Declared
-    // after `dispatcher` so both die before it: the executor holds a
-    // reference to it, and the server holds the executor's seam.
-    std::optional<ShippedStatementExecutor> executor;
-    std::optional<StatementShipServer> ship_server;
-    // **Core 0's participant half of the cross-owner commit** (AI-T2). The
-    // rig had the coordinator half only, because until the foreign-key
-    // probe nothing enrolled core 0 as a *participant* - a peer's write
-    // shipped to core 0 makes core 0 the owner, not a participant of
-    // somebody else's transaction. A cross-owner FK write reverses the
-    // roles: the peer coordinates and core 0 holds the intent, so core 0
-    // has to answer prepare and decide. Declared after `executor`, whose
-    // seams it holds.
-    std::optional<Txn2pcServer> txn2pc_server;
     std::unique_ptr<CoreRuntime> peer;
     catalog::Oid oid = 0;
     catalog::SysTableRow row{};
@@ -3985,65 +3982,10 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
                            exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
                            /*access_statistics=*/false, &*rig.cabins0, &*rig.txns,
                            txn::IsolationLevel::kReadCommitted, /*core_id=*/0);
-    // Core 0's arrival-core half of statement shipping (SS2). The owner's
-    // half is the peer's own, wired by `AttachTransport` above - which is
-    // the production wiring, not a fixture's.
-    rig.ship.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.clock);
-    ASSERT_TRUE(rig.ship->RegisterReplyReceiver().ok());
-    rig.dispatcher->SetStatementShip(&*rig.ship);
-
-    // **And core 0's coordinator half** (R6-8): without it `MayEnrolShip`
-    // refuses and a write inside a transaction keeps the refusal it had,
-    // which is the single-core instance's behaviour rather than this rig's.
-    // The peer's participant half was wired by `AttachTransport` above,
-    // production's own wiring.
-    rig.txn2pc.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.clock);
-    ASSERT_TRUE(rig.txn2pc->RegisterReplyReceivers().ok());
-    rig.dispatcher->SetTxn2pc(&*rig.txn2pc);
-
-    // **Core 0's owner half of statement shipping** (CB4). Production wires
-    // both halves on every core (`CoreRuntime::AttachTransport`); this rig
-    // built core 0 by hand and so has to do the same, or a DDL a peer ships
-    // under CR5 reaches a core that never registered the handler and times
-    // out instead of running.
-    rig.executor.emplace(/*core_id=*/0, *rig.dispatcher, *rig.core0, rig.clock,
-                         /*log=*/nullptr, /*wal=*/nullptr);
-    rig.ship_server.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.executor->Seam(),
-                            /*log=*/nullptr);
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(
-                        sched::RingMessageKind::kShippedStatementRequest,
-                        [&rig](const sched::MessageHeader& header,
-                               std::span<const std::byte> payload) {
-                            rig.ship_server->OnRequest(header, payload);
-                        })
-                    .ok());
-
-    // **Core 0's participant half of 2PC** (AI-T2), production's own wiring
-    // (`CoreRuntime::AttachTransport`) done by hand, **including the FK
-    // release that rides the decide** - which is where the intent ends and
-    // the only thing that ends it (AH-R5).
-    rig.txn2pc_server.emplace(/*core_id=*/0, *rig.core0, rig.ring(),
-                              rig.executor->PrepareSeam(), rig.executor->DecideSeam(),
-                              rig.executor->ResolveSeam(), /*log=*/nullptr);
-    ASSERT_TRUE(rig.txn2pc_server->RegisterResolveReplyReceiver().ok());
-    rig.executor->SetTxn2pcServer(&*rig.txn2pc_server);
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(
-                        sched::RingMessageKind::kTxnPrepareRequest,
-                        [&rig](const sched::MessageHeader& header,
-                               std::span<const std::byte> payload) {
-                            rig.txn2pc_server->OnPrepare(header, payload);
-                        })
-                    .ok());
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(
-                        sched::RingMessageKind::kTxnDecideRequest,
-                        [&rig](const sched::MessageHeader& header,
-                               std::span<const std::byte> payload) {
-                            rig.txn2pc_server->OnDecide(header, payload);
-                        })
-                    .ok());
+    // **The rig wires neither shipping nor 2PC since AT-S6**: core 0's
+    // arrival half and its owner half, the coordinator's client and the
+    // participant's server with its two ring handlers. None of it exists -
+    // a read runs where the session is, as a write has since AT-S5.
 
     // **The owner's group-commit drain**, which `CoreRuntime::Run()`
     // installs and this rig has to install itself, because it pumps
@@ -4310,6 +4252,35 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRow
         << "a shipped read must answer exactly what the owner answers";
 }
 
+// **Ten shipped-read cells went at AT-S6**, with the protocol they
+// measured, each named with what it pinned:
+//   - `ATypedClientsShippedReadComesBackAsRowsOnTheAnswerEdge` and
+//     `AShippedReadToATextClientKeepsTheRenderedLine` (XG1): the two reply
+//     shapes a shipped read could come back in.
+//   - `AReadInsideATransactionShipsAndEnrolsSinceRR1` (RR1): the read half
+//     of enrolment. `ShippedReadOwnWrite` is what stands in its place, and
+//     it asserts the opposite, because the enrolment RR1 added is what
+//     made a transaction unable to read its own write once AT-S5 moved the
+//     write (`docs/inflight/bugs/a-shipped-read-cannot-see-its-transactions-own-write.md`).
+//   - `ARepeatableReadCrossOwnerTransactionReadsOnePinnedViewPerParticipant`
+//     and `...ReadsOneInstantOnEveryCore` (AN-S3): the coordinator's
+//     snapshot riding the wire and each participant adopting it. One core
+//     reads one instant by construction now.
+//   - `AnOverLongShippedReadIsRefusedAndLeavesItsTransactionOpen`: the
+//     968-byte statement cap, which was a property of the wire.
+//   - `TheSameShippedIdentityArrivingTwiceRunsOnceAndAnswersFromTheRecord`
+//     and `AReplyLostAfterTheOwnerCommittedLeavesOneRowAndTheRetryFindsTheRecord`
+//     (SS4): the dedup record, which existed so a lost reply could not
+//     become a second execution.
+//   - `AStormOfRefusedShippedDmlCostsTheOwnerNoPageAndNoMapGrowth` and
+//     `AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetried`: the
+//     owner's cost under refusal, and read-your-own-write across a retry.
+//
+// What survives them is `AReadOfAPeerOwnedRelationIsAnsweredHere` and the
+// fan-in cells: a relation another core owns is read here, and a split one
+// still fans in.
+
+
 // ---- The step pipeline at the ring slot it actually sends through -------
 
 TEST_F(CoreRuntimeTest, AStepBatchWiderThanTheRingSlotStillDeliversEveryRow) {
@@ -4413,10 +4384,9 @@ TEST_F(CoreRuntimeTest, AStepBatchWiderThanTheRingSlotStillDeliversEveryRow) {
         DispatchOutcome out;
         auto statement = rig.Start(sql.c_str(), out);
         ASSERT_TRUE(rig.Drive(*statement, 1024)) << "n=" << n << ": " << out.response;
-        // Nothing shipped as text: this shape takes the pipeline, which
-        // sits above the shipping fork. Without this the test could pass
-        // by measuring the other path.
-        ASSERT_EQ(rig.peer->shipped_statements()->executed(), 0u) << "n=" << n;
+        // The cross-check that this shape took the pipeline was "nothing
+        // shipped as text"; there is no ship path to measure against
+        // since AT-S6, and the rows below are the whole assertion.
         EXPECT_EQ(rows_in(out.response), static_cast<std::size_t>(n))
             << "n=" << n << " reply: " << out.response;
         EXPECT_EQ(out.response, local) << "n=" << n;
@@ -4498,121 +4468,16 @@ void WireRemoteReads(ForeignIndexRig& rig, std::optional<SessionStepClient>& cli
     rig.dispatcher->SetRemoteReads(&*client);
 }
 
-TEST_F(CoreRuntimeTest, ATypedClientsShippedReadComesBackAsRowsOnTheAnswerEdge) {
-    // **XG1 end to end** (`docs/spec/crosscore.md` §4a). Until this row a
-    // shipped read was refused outright to any session carrying a result
-    // sink, which under KWP/1 is every session - so a typed client could
-    // not read foreign data inside a transaction at all.
-    //
-    // **The sink is what makes this test the feature's test.** Without one
-    // the statement takes the text arm and proves nothing about the edge;
-    // every other shipping test in this file is on that arm, and all of
-    // them stayed green while this path did not exist.
-    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "typed_ship");
-    WireRemoteReads(rig, reads);
 
-    ASSERT_EQ(rig.peer->dispatcher()
-                  .Dispatch("INSERT INTO typed_ship VALUES (61)")
-                  .response.rfind("INSERTED", 0),
-              0u);
-    ASSERT_EQ(rig.peer->dispatcher()
-                  .Dispatch("INSERT INTO typed_ship VALUES (62)")
-                  .response.rfind("INSERTED", 0),
-              0u);
+// `RowsWithNoDescriptionAreRefusedRatherThanDecoded` stood here until
+// AT-S6: it pinned that a typed client handed rows with no result
+// description was refused rather than given untyped values. Its own setup
+// records why it cannot stand - it ran the read **inside a transaction**
+// "which is what forces the shipping route", because an autocommit read of
+// an unsplit foreign relation takes the remote-step edge and describes
+// itself from the relation's schema. There is no shipping route, so the
+// undescribed-rows path has no producer left to reach it from.
 
-    // A typed client: a session carrying the wire sink, which is what
-    // `ShipStatement` reads to decide the answer's form.
-    WireResultSink sink;
-    Session session;
-    session.set_result_sink(&sink);
-
-    DispatchOutcome begun;
-    auto begin = rig.Start("BEGIN", begun, &session);
-    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
-
-    DispatchOutcome out;
-    auto read = rig.Start("SELECT * FROM typed_ship", out, &session);
-    ASSERT_TRUE(rig.Drive(*read)) << out.response;
-    EXPECT_NE(out.response.rfind("ERR", 0), 0u)
-        << "a typed client's shipped read was still refused: " << out.response;
-
-    // The description arrived and typed the rows - it is the owner's,
-    // because only the owner compiled the statement.
-    EXPECT_TRUE(sink.described()) << "no description reached the sink";
-    EXPECT_FALSE(sink.fields().empty());
-
-    // **As many rows as the owner's own local read answers**, which is the
-    // property the whole cross-core suite is built on: a statement answered
-    // over an edge and the same statement answered locally are one answer.
-    // Counted from the owner's rendered reply - one `"\n"` section per row -
-    // rather than from a literal, because the rig seeds rows of its own and
-    // a hard-coded count would be asserting the fixture.
-    const std::string local =
-        rig.peer->dispatcher().Dispatch("SELECT * FROM typed_ship").response;
-    std::uint64_t local_rows = 0;
-    for (std::size_t at = local.find("\\n"); at != std::string::npos;
-         at = local.find("\\n", at + 2)) {
-        ++local_rows;
-    }
-    ASSERT_GE(local_rows, 2u) << "the fixture answered nothing to compare against: " << local;
-    EXPECT_EQ(sink.row_count(), local_rows)
-        << "the edge delivered a different number of rows than the owner's own read";
-
-    // And the receiver is gone: an edge left registered holds its batches
-    // for the session's life.
-    EXPECT_EQ(reads->open_reads(), 0u);
-
-    DispatchOutcome rb;
-    auto rollback = rig.Start("ROLLBACK", rb, &session);
-    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
-}
-
-TEST_F(CoreRuntimeTest, RowsWithNoDescriptionAreRefusedRatherThanDecoded) {
-    // **XG3's description cell, end to end.** An owner that died between
-    // its rows and its description leaves the arrival core holding bytes
-    // it cannot type. Decoding them against a guessed shape would produce
-    // plausible field widths - invariant 13's forbidden reading one layer
-    // up - so the forward refuses, and it refuses **before** anything
-    // reaches the sink.
-    std::optional<SessionStepClient> reads;
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "no_desc");
-    WireRemoteReads(rig, reads, /*with_description=*/false);
-
-    ASSERT_EQ(rig.peer->dispatcher()
-                  .Dispatch("INSERT INTO no_desc VALUES (81)")
-                  .response.rfind("INSERTED", 0),
-              0u);
-
-    WireResultSink sink;
-    Session session;
-    session.set_result_sink(&sink);
-
-    // **Inside a transaction, which is what forces the shipping route.** An
-    // autocommit star read of an unsplit foreign relation is served by the
-    // remote-step edge instead and would describe itself from the
-    // relation's schema - passing this test while proving nothing about the
-    // path under it. That is exactly the trap the first draft of this cell
-    // fell into.
-    DispatchOutcome begun;
-    auto begin = rig.Start("BEGIN", begun, &session);
-    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
-
-    DispatchOutcome out;
-    auto read = rig.Start("SELECT * FROM no_desc", out, &session);
-    ASSERT_TRUE(rig.Drive(*read)) << out.response;
-    EXPECT_EQ(out.response.rfind("ERR", 0), 0u)
-        << "rows with no description were delivered anyway: " << out.response;
-    EXPECT_EQ(sink.row_count(), 0u) << "a row reached the sink untyped";
-    EXPECT_FALSE(sink.described());
-    EXPECT_EQ(reads->open_reads(), 0u) << "the receiver outlived its statement";
-
-    DispatchOutcome rb;
-    auto rollback = rig.Start("ROLLBACK", rb, &session);
-    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
-}
 
 TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
     // **A failed read must reach a typed client as a failure and nothing
@@ -4646,271 +4511,10 @@ TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
         << "the answer edge is closed on every exit, refusals included";
 }
 
-TEST_F(CoreRuntimeTest, AShippedReadToATextClientKeepsTheRenderedLine) {
-    // The other arm, asserted beside it: a session with **no** sink ships
-    // `form = 0`, the owner installs no sink, and the answer is the
-    // rendered reply line byte for byte. That arm is what the newline
-    // byte-identity suite rests on, and a change that quietly typed it
-    // would pass every test in this file except this one.
-    std::optional<SessionStepClient> reads;
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "text_ship");
-    WireRemoteReads(rig, reads);
 
-    ASSERT_EQ(rig.peer->dispatcher()
-                  .Dispatch("INSERT INTO text_ship VALUES (71)")
-                  .response.rfind("INSERTED", 0),
-              0u);
 
-    Session session;  // no sink
-    DispatchOutcome begun;
-    auto begin = rig.Start("BEGIN", begun, &session);
-    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
 
-    DispatchOutcome out;
-    auto read = rig.Start("SELECT * FROM text_ship", out, &session);
-    ASSERT_TRUE(rig.Drive(*read)) << out.response;
-    EXPECT_NE(out.response.find(",71"), std::string::npos)
-        << "the text arm stopped answering in a rendered line: " << out.response;
-    EXPECT_EQ(reads->open_reads(), 0u) << "the text arm must register no edge at all";
 
-    DispatchOutcome rb;
-    auto rollback = rig.Start("ROLLBACK", rb, &session);
-    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
-}
-
-TEST_F(CoreRuntimeTest, AReadInsideATransactionShipsAndEnrolsSinceRR1) {
-    // **RR1: the read half of enrolment**, and the mirror of
-    // `AStatementInsideATransactionShipsAndEnrolsSinceR68` above. Until
-    // 2026-08-28 the read site tested `MayShip` alone, which refuses inside
-    // an explicit transaction - so this statement fell through to
-    // `CheckReadAffinity` and was refused, while the identical read outside
-    // a transaction shipped. RP8's B5 is what found it: a realistic
-    // transaction reads before it writes, so the refusal made the whole
-    // two-phase path unreachable from any workload in this tree.
-    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "shipped_txn_read");
-    WireRemoteReads(rig, reads);
-
-    Session session;
-    DispatchOutcome begun;
-    auto begin = rig.Start("BEGIN", begun, &session);
-    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
-
-    DispatchOutcome out;
-    auto read = rig.Start("SELECT * FROM shipped_txn_read", out, &session);
-    ASSERT_TRUE(rig.Drive(*read)) << out.response;
-    EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
-    EXPECT_NE(out.response.find(",10"), std::string::npos) << out.response;
-    // **And it shipped rather than pipelined**, which is the whole claim:
-    // this rig has the pipeline wired, and `SELECT *` on a single foreign
-    // relation is exactly the shape the single-step pipeline takes. Inside
-    // a session that can enrol it is diverted, because the pipeline answers
-    // from a view outside this transaction.
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u) << "it did not reach the owner";
-
-    // **A read enrols**, which is the part that costs something: the owner
-    // holds a transaction open for it and the coordinator's COMMIT will run
-    // two phases over a participant that only read. That is the price of
-    // the read seeing this transaction's own uncommitted writes on that
-    // core (the test below), and it is stated rather than optimised - a
-    // read-only participant reply is a protocol change and out of this
-    // order's scope.
-    EXPECT_TRUE(session.has_participants());
-    EXPECT_EQ(rig.peer->shipped_statements()->enrolled(), 1u);
-
-    DispatchOutcome rb;
-    auto rollback = rig.Start("ROLLBACK", rb, &session);
-    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
-}
-
-// `ACrossOwnerTransactionReadsBackItsOwnUncommittedWriteOnThePeer` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
-
-// `AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsContextIsGone` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
-
-TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionReadsOnePinnedViewPerParticipant) {
-    // **RR0 / D3's promise, with no watermark standing over it** (AN-R5a,
-    // AN-S2). What delivers "consistent per core" is the participant's own
-    // enrolled REPEATABLE READ transaction, which pins its view at its
-    // BEGIN and cannot re-mint it, plus the `join` bit that refuses the one
-    // event that could replace it. The coordinator used to hold that
-    // participant's `up_to_trx_id` and compare it with itself one reply
-    // later; the field went with the trx-id predicate and the operator
-    // took removal over forwarding it. So this cell is the behaviour the
-    // check stood over, asserted directly: a commit on the participant
-    // between two reads of one RR transaction is invisible to the second,
-    // and visible to a READ COMMITTED transaction's next statement.
-    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "watermark_rr");
-    WireRemoteReads(rig, reads);
-
-    Session rr;
-    DispatchOutcome begun;
-    auto begin = rig.Start("BEGIN ISOLATION LEVEL REPEATABLE READ", begun, &rr);
-    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
-
-    DispatchOutcome first;
-    auto read = rig.Start("SELECT * FROM watermark_rr", first, &rr);
-    ASSERT_TRUE(rig.Drive(*read)) << first.response;
-    ASSERT_NE(first.response.rfind("ERR", 0), 0u) << first.response;
-
-    // **What "consistent per core" means, made concrete rather than
-    // asserted**: the participant commits a row of its own between the two
-    // reads, and the second read must not show it. Without the pinned view
-    // the two reads differ by exactly this row, which is what makes the
-    // equality below a statement about isolation and not about a relation
-    // nobody touched.
-    ASSERT_EQ(rig.peer->dispatcher()
-                  .Dispatch("INSERT INTO watermark_rr VALUES (444)")
-                  .response.rfind("INSERTED", 0),
-              0u);
-
-    DispatchOutcome second;
-    auto again = rig.Start("SELECT * FROM watermark_rr", second, &rr);
-    ASSERT_TRUE(rig.Drive(*again)) << second.response;
-    EXPECT_NE(second.response.rfind("ERR", 0), 0u) << second.response;
-    EXPECT_EQ(second.response, first.response)
-        << "two reads of one relation in one RR transaction disagreed";
-    EXPECT_EQ(second.response.find(",444"), std::string::npos)
-        << "a REPEATABLE READ transaction saw a commit that happened after it began: "
-        << second.response;
-
-    DispatchOutcome rb;
-    auto rollback = rig.Start("ROLLBACK", rb, &rr);
-    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
-
-    Session rc;
-    DispatchOutcome rc_begun;
-    auto rc_begin = rig.Start("BEGIN", rc_begun, &rc);
-    ASSERT_TRUE(rig.Drive(*rc_begin)) << rc_begun.response;
-    DispatchOutcome rc_out;
-    auto rc_read = rig.Start("SELECT * FROM watermark_rr", rc_out, &rc);
-    ASSERT_TRUE(rig.Drive(*rc_read)) << rc_out.response;
-    ASSERT_NE(rc_out.response.rfind("ERR", 0), 0u) << rc_out.response;
-    // READ COMMITTED reads the latest committed state, which is the level's
-    // own contract.
-    EXPECT_NE(rc_out.response.find(",444"), std::string::npos) << rc_out.response;
-
-    DispatchOutcome rc_rb;
-    auto rc_rollback = rig.Start("ROLLBACK", rc_rb, &rc);
-    ASSERT_TRUE(rig.Drive(*rc_rollback)) << rc_rb.response;
-}
-
-// **AN-S3, end to end over two cores.** A REPEATABLE READ transaction's
-// snapshot is pinned at its BEGIN on the coordinator; a row the participant
-// commits *after* that and *before* the transaction's first shipped read
-// must be invisible to that read, because the participant adopts the
-// coordinator's snapshot rather than minting its own. Until AN-S3 the
-// participant minted at its own BEGIN - which was after the commit - and
-// the read saw the row: two instants in one transaction, the case
-// `cross-owner-txn.md` §3 stated as possible. READ COMMITTED adopts
-// nothing and sees it.
-TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionReadsOneInstantOnEveryCore) {
-    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "instant_rr");
-    WireRemoteReads(rig, reads);
-
-    Session rr;
-    DispatchOutcome begun;
-    auto begin = rig.Start("BEGIN ISOLATION LEVEL REPEATABLE READ", begun, &rr);
-    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
-
-    // Committed on the participant after the coordinator's BEGIN and before
-    // its first read there.
-    ASSERT_EQ(rig.peer->dispatcher()
-                  .Dispatch("INSERT INTO instant_rr VALUES (444)")
-                  .response.rfind("INSERTED", 0),
-              0u);
-
-    DispatchOutcome first;
-    auto read = rig.Start("SELECT * FROM instant_rr", first, &rr);
-    ASSERT_TRUE(rig.Drive(*read)) << first.response;
-    ASSERT_NE(first.response.rfind("ERR", 0), 0u) << first.response;
-    EXPECT_EQ(first.response.find(",444"), std::string::npos)
-        << "the participant read at its own BEGIN rather than at the coordinator's snapshot: "
-        << first.response;
-
-    DispatchOutcome rb;
-    auto rollback = rig.Start("ROLLBACK", rb, &rr);
-    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
-
-    Session rc;
-    DispatchOutcome rc_begun;
-    auto rc_begin = rig.Start("BEGIN", rc_begun, &rc);
-    ASSERT_TRUE(rig.Drive(*rc_begin)) << rc_begun.response;
-    DispatchOutcome rc_out;
-    auto rc_read = rig.Start("SELECT * FROM instant_rr", rc_out, &rc);
-    ASSERT_TRUE(rig.Drive(*rc_read)) << rc_out.response;
-    ASSERT_NE(rc_out.response.rfind("ERR", 0), 0u) << rc_out.response;
-    EXPECT_NE(rc_out.response.find(",444"), std::string::npos) << rc_out.response;
-    DispatchOutcome rc_rb;
-    auto rc_rollback = rig.Start("ROLLBACK", rc_rb, &rc);
-    ASSERT_TRUE(rig.Drive(*rc_rollback)) << rc_rb.response;
-}
-
-TEST_F(CoreRuntimeTest, AnOverLongShippedReadIsRefusedAndLeavesItsTransactionOpen) {
-    // **The price RR1's gate has, pinned rather than described.** A read
-    // inside a cross-owner transaction ships, and a shipped answer must fit
-    // one ring slot - so past `kShippedStatementReplyTextMax` the client is
-    // refused. Two things about that refusal matter, and this test is for
-    // them rather than for the cap:
-    //
-    // 1. it is a **refusal**, never a truncated answer wearing an OK;
-    // 2. it **does not end the transaction**. A read has no effect, so
-    //    failure atomicity has nothing to protect here, and a local
-    //    `SELECT` that fails leaves its transaction open - the two have to
-    //    agree, and until RR1 they agreed only because reads never shipped.
-    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "big_read");
-    WireRemoteReads(rig, reads);
-
-    // Enough rows that the reply cannot fit. `OpenForeignIndexRig` leaves
-    // three and a 16-id lease, so both are extended.
-    auto more = rig.catalog2->AllocateRowIdRange(rig.oid, 512);
-    ASSERT_TRUE(more.ok()) << more.status().message();
-    rig.peer->row_id_leases().Grant(rig.oid, more.value(), 512);
-    // Ten statements, not three hundred: the rig grants the peer sixteen
-    // transaction ids, and each `INSERT` is one.
-    for (int base = 0; base < 300; base += 30) {
-        std::string ins = "INSERT INTO big_read VALUES ";
-        for (int i = 0; i < 30; ++i) {
-            if (i > 0) ins += ", ";
-            ins += "(" + std::to_string(100000 + base + i) + ")";
-        }
-        const std::string r = rig.peer->dispatcher().Dispatch(ins).response;
-        ASSERT_NE(r.rfind("ERR", 0), 0u) << r;
-    }
-
-    Session session;
-    DispatchOutcome begun;
-    auto begin = rig.Start("BEGIN", begun, &session);
-    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
-
-    DispatchOutcome out;
-    auto read = rig.Start("SELECT * FROM big_read", out, &session);
-    ASSERT_TRUE(rig.Drive(*read)) << out.response;
-    EXPECT_EQ(out.response.rfind("ERR", 0), 0u)
-        << "an answer too long to carry was carried anyway: " << out.response;
-    EXPECT_NE(out.response.find("UNKNOWN_OUTCOME"), std::string::npos) << out.response;
-    EXPECT_EQ(out.response.find("read the data back"), std::string::npos)
-        << "a read was told to read the data back: " << out.response;
-
-    // Still open, and still usable: the write below is the proof, because a
-    // poisoned session refuses everything but ROLLBACK.
-    ASSERT_FALSE(session.failed()) << "a failed read ended its transaction";
-    DispatchOutcome wrote;
-    auto write = rig.Start("INSERT INTO big_read VALUES (99999)", wrote, &session);
-    ASSERT_TRUE(rig.Drive(*write)) << wrote.response;
-    EXPECT_EQ(wrote.response.rfind("INSERTED", 0), 0u) << wrote.response;
-
-    DispatchOutcome rb;
-    auto rollback = rig.Start("ROLLBACK", rb, &session);
-    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
-}
 
 TEST_F(CoreRuntimeTest, TheSameReadOutsideATransactionTakesThePipelineAndHasNoCap) {
     // The other half of the sentence above, and what keeps the gate from
@@ -4941,10 +4545,12 @@ TEST_F(CoreRuntimeTest, TheSameReadOutsideATransactionTakesThePipelineAndHasNoCa
     auto read = rig.Start("SELECT * FROM big_read_auto", out);
     ASSERT_TRUE(rig.Drive(*read)) << out.response;
     ASSERT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
-    EXPECT_GT(out.response.size(), kShippedStatementReplyTextMax)
-        << "the answer fit one slot, so this shape proves nothing about the cap";
-    // The pipeline ran it, not the ship path.
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
+    // **The reply is far past what one ring slot carried**, which is what
+    // made this shape prove something about the ship path's cap until
+    // AT-S6 struck it. Kept as a size floor: the pipeline has no such cap
+    // and the cell is what says so.
+    EXPECT_GT(out.response.size(), std::size_t{1000})
+        << "the answer is too small for this shape to prove anything";
 }
 
 // `ASynchronousDispatchDoesNotShipBecauseItCannotAwaitTheAnswer` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
@@ -4976,96 +4582,7 @@ static int RowsWith(CoreRuntime& owner, const std::string& table, const std::str
                             needle);
 }
 
-TEST_F(CoreRuntimeTest, TheSameShippedIdentityArrivingTwiceRunsOnceAndAnswersFromTheRecord) {
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "shipped_dup");
 
-    // Shipped through the client directly: the dispatcher mints a fresh
-    // sequence per statement, so it cannot produce the duplicate this
-    // exists for - which is exactly why the record is the guard for a
-    // retry path rather than for anything running today.
-    const char* kSql = "INSERT INTO shipped_dup VALUES (41)";
-    ASSERT_TRUE(rig.ship
-                    ->Ship(/*owner_core=*/1, /*request_id=*/100, /*session_id=*/5,
-                           /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
-                    .ok());
-    rig.PumpUntil([&rig] { return rig.ship->Settled(100); });
-    const ShippedStatementOutcome* first = rig.ship->Find(100);
-    ASSERT_NE(first, nullptr);
-    ASSERT_TRUE(first->arrived) << "the first statement never answered";
-    ASSERT_TRUE(first->status.ok()) << first->status.message();
-    const std::string first_text = first->text;
-    rig.ship->Close(100);
-
-    // The same (session, sequence) again, on a new request id - which is
-    // what a retry after a lost reply looks like from the owner's side.
-    ASSERT_TRUE(rig.ship
-                    ->Ship(/*owner_core=*/1, /*request_id=*/101, /*session_id=*/5,
-                           /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
-                    .ok());
-    rig.PumpUntil([&rig] { return rig.ship->Settled(101); });
-    const ShippedStatementOutcome* again = rig.ship->Find(101);
-    ASSERT_NE(again, nullptr);
-    ASSERT_TRUE(again->arrived);
-    EXPECT_TRUE(again->status.ok()) << again->status.message();
-    EXPECT_EQ(again->text, first_text) << "the recorded outcome, not a fresh one";
-
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
-    EXPECT_EQ(rig.peer->shipped_statements()->deduped(), 1u);
-    // The verdict A1 asks for.
-    EXPECT_EQ(RowsWith(*rig.peer, "shipped_dup", ",41"), 1) << "the duplicate inserted a second row";
-    rig.ship->Close(101);
-}
-
-TEST_F(CoreRuntimeTest, AReplyLostAfterTheOwnerCommittedLeavesOneRowAndTheRetryFindsTheRecord) {
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "shipped_lost");
-
-    const char* kSql = "INSERT INTO shipped_lost VALUES (42)";
-    ASSERT_TRUE(rig.ship
-                    ->Ship(/*owner_core=*/1, /*request_id=*/200, /*session_id=*/6,
-                           /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
-                    .ok());
-    // Core 0 turns only far enough to put the request in the ring - `Ship`
-    // submits a send task rather than sending inline - and then stops.
-    for (int i = 0; i < 8; ++i) rig.core0->RunOnce();
-    // **From here only the owner is pumped**, so the statement runs and
-    // commits there while core 0 has drained nothing. This is the window
-    // the whole scheme is written for: the effect stands, and the answer
-    // has not landed.
-    // **Only the owner turns here**, so this is `TurnUntil` over the peer's
-    // reactor alone rather than `PumpUntil` - core 0 drains nothing, which
-    // is the window the cell exists for.
-    rig.TurnUntil([&rig] { rig.peer->scheduler().RunOnce(); },
-                  [&rig] { return rig.peer->shipped_statements()->executed() != 0; }, 256);
-    ASSERT_EQ(rig.peer->shipped_statements()->executed(), 1u) << "the owner never ran it";
-    ASSERT_EQ(RowsWith(*rig.peer, "shipped_lost", ",42"), 1);
-
-    // The reply path dies: the waiter is closed before core 0 ever handles
-    // the answer, which is what a client whose statement was answered
-    // `UnknownOutcome` on its deadline leaves behind.
-    rig.ship->Close(200);
-    rig.Pump(8);
-    EXPECT_EQ(rig.ship->late_executed_replies(), 1u)
-        << "the lost reply must be counted as a result nobody received";
-    EXPECT_EQ(rig.ship->identity_mismatches(), 0u);
-
-    // The retry. It must find the record - not re-run against an
-    // engine-issued pk.
-    ASSERT_TRUE(rig.ship
-                    ->Ship(/*owner_core=*/1, /*request_id=*/201, /*session_id=*/6,
-                           /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
-                    .ok());
-    rig.PumpUntil([&rig] { return rig.ship->Settled(201); });
-    const ShippedStatementOutcome* retry = rig.ship->Find(201);
-    ASSERT_NE(retry, nullptr);
-    ASSERT_TRUE(retry->arrived);
-    EXPECT_TRUE(retry->status.ok()) << retry->status.message();
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
-    EXPECT_EQ(rig.peer->shipped_statements()->deduped(), 1u);
-    EXPECT_EQ(RowsWith(*rig.peer, "shipped_lost", ",42"), 1) << "the retry inserted a second row";
-    rig.ship->Close(201);
-}
 
 // `AReconnectingClientTakesAFreshShipIdSoNoStaleSequenceMatchesIt` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
@@ -5082,188 +4599,15 @@ TEST_F(CoreRuntimeTest, AReplyLostAfterTheOwnerCommittedLeavesOneRowAndTheRetryF
 
 // `AParkedShippedStatementDestroyedUnderItsWaiterLeaksTheWaiter` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
-// ---- A3: the ring at capacity --------------------------------------------
-//
-// Shipped DDL was rare; shipped DML is the high-volume path, so the rings
-// fill in ordinary operation rather than in a corner case. What must hold is
-// that a full ring costs latency and nothing else: no message dropped (the
-// worst outcome available), no answer invented, and no allocation.
+// `EveryStatementSurvivesARingFilledPastItsCapacity` stood here until
+// AT-S6: it filled the ring past its 16 slots with shipped statements and
+// pinned that a full ring costs latency and nothing else - no message
+// dropped, no answer invented, no allocation. Nothing ships, so nothing
+// fills the ring that way; `ring_transport`'s own cells keep the
+// backpressure claim for the kinds that remain.
 
-TEST_F(CoreRuntimeTest, EveryStatementSurvivesARingFilledPastItsCapacity) {
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "shipped_saturate");
 
-    // The rig's ring is 16 slots (`OpenForeignIndexRig`), so 40 statements
-    // shipped before the owner runs once must overflow it by 24. Reads,
-    // because they need no row-id lease and this is about the wire.
-    constexpr int kStatements = 40;
-    const std::uint64_t polls_before = rig.core0->polls_total(sched::SchedulingGroup::kSystem);
-    for (int i = 0; i < kStatements; ++i) {
-        ASSERT_TRUE(rig.ship
-                        ->Ship(/*owner_core=*/1, /*request_id=*/static_cast<std::uint64_t>(300 + i),
-                               /*session_id=*/static_cast<std::uint64_t>(i), /*sequence=*/1,
-                               rig.oid, Role::kReadOnly, "SELECT * FROM shipped_saturate")
-                        .ok())
-            << i;
-    }
-    EXPECT_EQ(rig.ship->shipped(), static_cast<std::uint64_t>(kStatements));
 
-    // Core 0 alone: the ring fills, and the sends past capacity are
-    // refused by `TrySend` and **retried**, never dropped and never
-    // reported upward (`sched/send_retry.hpp`).
-    for (int i = 0; i < 32; ++i) rig.core0->RunOnce();
-    const std::uint64_t polls_after = rig.core0->polls_total(sched::SchedulingGroup::kSystem);
-    EXPECT_GT(polls_after - polls_before, static_cast<std::uint64_t>(kStatements))
-        << "no send was re-polled, so the ring never filled and this test proves nothing";
-
-    // Now both. Every statement answers - which is the B2 class: a dropped
-    // message would leave its waiter to the deadline instead.
-    for (int round = 0; round < 4096; ++round) {
-        bool all = true;
-        for (int i = 0; i < kStatements; ++i) {
-            if (!rig.ship->Settled(static_cast<std::uint64_t>(300 + i))) all = false;
-        }
-        if (all) break;
-        rig.Pump();
-    }
-    int arrived = 0;
-    for (int i = 0; i < kStatements; ++i) {
-        const ShippedStatementOutcome* out = rig.ship->Find(static_cast<std::uint64_t>(300 + i));
-        ASSERT_NE(out, nullptr) << i;
-        EXPECT_TRUE(out->arrived) << "statement " << i << " was never answered";
-        EXPECT_TRUE(out->status.ok()) << i << ": " << out->status.message();
-        if (out->arrived) ++arrived;
-        rig.ship->Close(static_cast<std::uint64_t>(300 + i));
-    }
-    EXPECT_EQ(arrived, kStatements);
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(),
-              static_cast<std::uint64_t>(kStatements));
-    // Nothing was answered from a record, nothing was unanswerable, and no
-    // reply went to the wrong waiter: distinct sessions, so a full ring
-    // must not have reordered one statement's answer onto another.
-    EXPECT_EQ(rig.peer->shipped_statements()->deduped(), 0u);
-    EXPECT_EQ(rig.peer->shipped_statements()->unanswerable(), 0u);
-    EXPECT_EQ(rig.ship->identity_mismatches(), 0u);
-    EXPECT_EQ(rig.ship->late_executed_replies(), 0u);
-    EXPECT_EQ(rig.ship->late_refused_replies(), 0u);
-}
-
-TEST_F(CoreRuntimeTest, AStormOfRefusedShippedDmlCostsTheOwnerNoPageAndNoMapGrowth) {
-    // G2's storm, adapted to DML as A3 asks. G2 was a *conforming* retry
-    // loop that destroyed an instance in 30 seconds because each refusal
-    // allocated pages nothing frees. The shipped DML refusal path is the
-    // same shape at a far higher rate, so its cost is audited by the two
-    // numbers that grew there: the owner's page count and its allocation
-    // map's residency.
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "shipped_storm");
-
-    auto owner_meta = [&] { return rig.peer->dispatcher().Dispatch("SHOW META").response; };
-    auto field = [](const std::string& meta, const std::string& key) -> std::string {
-        const std::size_t at = meta.find(" " + key + "=");
-        if (at == std::string::npos) return "<missing>";
-        const std::size_t from = at + key.size() + 2;
-        return meta.substr(from, meta.find(' ', from) - from);
-    };
-    const std::string before = owner_meta();
-    const std::string map_before = field(before, "map_pages_resident");
-    const std::string regions_before = field(before, "map_regions");
-    ASSERT_NE(map_before, "<missing>") << before;
-
-    // Three refusal shapes a shipped DML client can actually produce,
-    // stormed: a rank that forbids the write, a relation that does not
-    // exist, and a statement the parser rejects. Every one crosses the
-    // ring and is refused on the owner.
-    std::uint64_t request_id = 400;
-    for (int i = 0; i < 60; ++i) {
-        const char* const shapes[] = {
-            "INSERT INTO shipped_storm VALUES (1)",   // refused: readonly rank
-            "UPDATE nosuch SET v = 1 WHERE v = 1",    // refused: no such relation
-            "DELETE FROM shipped_storm WHERE",        // refused: parse
-        };
-        const Role roles[] = {Role::kReadOnly, Role::kReadWrite, Role::kReadWrite};
-        for (int s = 0; s < 3; ++s) {
-            ASSERT_TRUE(rig.ship
-                            ->Ship(/*owner_core=*/1, request_id,
-                                   /*session_id=*/static_cast<std::uint64_t>(1000 + s),
-                                   /*sequence=*/static_cast<std::uint64_t>(i + 1), rig.oid,
-                                   roles[s], shapes[s])
-                            .ok());
-            for (int round = 0; round < 256 && !rig.ship->Settled(request_id); ++round) {
-                rig.Pump();
-            }
-            const ShippedStatementOutcome* out = rig.ship->Find(request_id);
-            ASSERT_NE(out, nullptr);
-            ASSERT_TRUE(out->arrived) << "shape " << s << " was never answered";
-            EXPECT_FALSE(out->status.ok()) << "shape " << s << " was not refused";
-            rig.ship->Close(request_id);
-            ++request_id;
-        }
-    }
-
-    const std::string after = owner_meta();
-    EXPECT_EQ(field(after, "map_pages_resident"), map_before) << "the refusal storm grew the map";
-    EXPECT_EQ(field(after, "map_regions"), regions_before);
-    EXPECT_EQ(rig.ship->refusals(), 180u);
-    EXPECT_EQ(rig.ship->identity_mismatches(), 0u);
-    EXPECT_EQ(rig.peer->shipped_statements()->early_evictions(), 0u);
-}
-
-// ---- A4: per-session ordering across the ship boundary --------------------
-//
-// A session that issues S1 then S2 to the same owner must have them execute
-// in that order. The ring is per-edge FIFO, but retry paths are historically
-// where that is lost, so it is verified rather than inherited - and the
-// visible failure is the one asserted here: a write followed by a read that
-// does not see it.
-
-// `AShippedSessionReadsItsOwnWriteBack` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
-
-TEST_F(CoreRuntimeTest, AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetried) {
-    // The same ordering with a retry in front of it - which is the case the
-    // ring's FIFO does not by itself cover, because the retry is a second
-    // request for the same identity and its answer comes from the record
-    // rather than from an execution.
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "shipped_ryow_retry");
-
-    auto settle = [&](std::uint64_t id) {
-        rig.PumpUntil([&rig, id] { return rig.ship->Settled(id); });
-        const ShippedStatementOutcome* out = rig.ship->Find(id);
-        return out != nullptr && out->arrived ? out->status : Status::IoError("never answered");
-    };
-
-    const char* kInsert = "INSERT INTO shipped_ryow_retry VALUES (49)";
-    ASSERT_TRUE(rig.ship
-                    ->Ship(1, /*request_id=*/500, /*session_id=*/7, /*sequence=*/1, rig.oid,
-                           Role::kReadWrite, kInsert)
-                    .ok());
-    ASSERT_TRUE(settle(500).ok());
-    rig.ship->Close(500);
-
-    // The retry of S1, answered from the record.
-    ASSERT_TRUE(rig.ship
-                    ->Ship(1, /*request_id=*/501, /*session_id=*/7, /*sequence=*/1, rig.oid,
-                           Role::kReadWrite, kInsert)
-                    .ok());
-    ASSERT_TRUE(settle(501).ok());
-    rig.ship->Close(501);
-    ASSERT_EQ(rig.peer->shipped_statements()->deduped(), 1u);
-
-    // S2, the read. It must see S1's row, and exactly one of it.
-    ASSERT_TRUE(rig.ship
-                    ->Ship(1, /*request_id=*/502, /*session_id=*/7, /*sequence=*/2, rig.oid,
-                           Role::kReadOnly, "SELECT * FROM shipped_ryow_retry")
-                    .ok());
-    ASSERT_TRUE(settle(502).ok());
-    const ShippedStatementOutcome* read = rig.ship->Find(502);
-    ASSERT_NE(read, nullptr);
-    EXPECT_NE(read->text.find(",49"), std::string::npos)
-        << "the read did not see the write that preceded it: " << read->text;
-    EXPECT_EQ(RowsWith(*rig.peer, "shipped_ryow_retry", ",49"), 1)
-        << "the retried write inserted a second row";
-    rig.ship->Close(502);
-}
 
 // ---- A5: the shape gates survive the fork ---------------------------------
 //
@@ -5413,13 +4757,6 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) 
     EXPECT_NE(del.find("FK_VIOLATION"), std::string::npos) << del;
     EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
 
-    // **And the healthy path does not read as a lost transaction half.** A
-    // decide reaching a core with no context is `ShippedStatementExecutor`'s
-    // anomaly - an Error line and `decide_refusals`, the counter that means
-    // a participant is missing. An autocommit foreign-key statement sends
-    // no decide at all now, so the counter has nothing to trip it.
-    EXPECT_EQ(rig.executor->decide_refusals(), 0u)
-        << "the parent's owner reported a 2PC anomaly on a healthy crossing";
 }
 
 // `ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsTheIntent` stood
@@ -5585,11 +4922,14 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPredicateChecksEveryRowItMarks)
 //     protected - a parent deleted while another core's transaction writes a
 //     child against it - is the walk's `kBusy` on the uncommitted child row.
 
-TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersIsNotShippedAndKeepsItsRefusal) {
-    // R6's multi-owner statement: `SoleForeignOwner` refuses a chain whose
-    // steps do not all belong to one foreign core, so the statement falls
-    // through to the affinity refusal it always had. Shipping a statement
-    // one owner cannot answer whole is the failure this prevents.
+TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersRunsHere) {
+    // **This cell asserted a refusal until AT-S6.** `SoleForeignOwner`
+    // refused a chain whose steps did not all belong to one foreign core,
+    // and the statement fell through to the affinity refusal - shipping a
+    // statement one owner could not answer whole was the failure it
+    // prevented. Nothing ships, and a join over two unsplit relations is a
+    // walk of pages every core faults, so the shape that had no owner to
+    // send it to is the shape that needs none.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_span");
 
@@ -5610,32 +4950,24 @@ TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersIsNotShippedAndKeepsItsRefusa
         "span_local.v = shipped_span.v",
         out);
     ASSERT_TRUE(rig.Drive(*statement)) << out.response;
-    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
-    // **The affinity refusal specifically**, not any error: a statement that
-    // failed to compile would also answer `ERR` and would prove nothing
-    // about the fork.
-    EXPECT_NE(out.response.find("is owned by core"), std::string::npos) << out.response;
-    // Nothing crossed: the owner ran nothing, and no waiter was opened.
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << out.response;
-    EXPECT_EQ(rig.ship->shipped(), 0u) << out.response;
-    EXPECT_EQ(rig.ship->waiting(), 0u);
+    EXPECT_EQ(out.response.rfind("ERR ", 0), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("is owned by core"), std::string::npos) << out.response;
 }
 
-TEST_F(CoreRuntimeTest, AnalyzeOfAPeerOwnedRelationIsNotShipped) {
+TEST_F(CoreRuntimeTest, AnalyzeOfAPeerOwnedRelationIsPlannedHere) {
     // The read fork runs on the *stripped* text (`ANALYZE` is a dispatcher
-    // prefix, not a parser keyword), so shipping it would send a bare
-    // `SELECT` and answer a request for a plan with a result set. Refused
-    // exactly as it was before shipping existed.
+    // prefix, not a parser keyword), so shipping it would have answered a
+    // request for a plan with a result set - which is why it was excluded
+    // from the ship and then refused by affinity. Neither exists: the plan
+    // describes a run this core performs.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "no_ship_analyze");
 
     DispatchOutcome out;
     auto statement = rig.Start("ANALYZE SELECT * FROM no_ship_analyze", out);
     ASSERT_TRUE(rig.Drive(*statement)) << out.response;
-    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
-    EXPECT_NE(out.response.find("owned by core 1"), std::string::npos) << out.response;
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
-    EXPECT_EQ(rig.ship->waiting(), 0u);
+    EXPECT_EQ(out.response.rfind("ERR ", 0), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("owned by core"), std::string::npos) << out.response;
 }
 
 // `AStatementWhoseSubqueryNamesASecondCoresRelationIsNotShipped` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).

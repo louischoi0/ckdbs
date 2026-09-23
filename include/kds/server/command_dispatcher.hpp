@@ -157,131 +157,7 @@ enum class PhysicalOptimizerMode : std::uint8_t {
     kShadow = 1,
 };
 
-class StatementShipClient;
-class ShippedStatementExecutor;
-// Forward-declared rather than included: this header is included nearly
-// everywhere, and what it needs of the 2PC service is one pointer and one
-// pointer-to-const parameter.
-class Txn2pcClient;
-struct TxnPhaseOutcome;
 
-// A statement this core sent to the core that owns its relation (SS2,
-// statement_ship_service.hpp), between the send and the answer. What the
-// waiter needs to be found again, and what its refusals need to name.
-// **Whether the owner's half of the answer edge exists yet** (XG1).
-//
-// **True since 2026-09-01**, when the owner's half landed: it installs a
-// batch sink on the shipped session, sends the result description on the
-// answer edge, and streams `STEP_BATCH` to the tag the request carries.
-//
-// Kept as a named constant rather than deleted, because it is the one
-// switch that turns the whole path off: a build that needed the pre-XG1
-// behaviour - the refusal - flips this and gets it, with the wire, the
-// receiver and the owner all still compiled and still tested. What it must
-// never be is *half* true; the two halves are one feature, and shipping
-// `form = 1` to an owner that renders text would answer a typed client
-// with a rendered line, which is the failure the refusal existed to
-// prevent.
-inline constexpr bool kShippedTypedAnswerBuilt = true;
-
-struct PendingShippedStatement {
-    std::uint64_t request_id = 0;
-    std::uint32_t owner_core = 0;
-    std::string relation;
-    // **This statement was a read** (RR1). Set only at the read dispatch
-    // fork, so it is a fact about which site sent the statement and not a
-    // guess about what the statement did.
-    //
-    // Two refusals answer differently for one: a read has no effect, so a
-    // failure inside an explicit transaction must not poison it - a local
-    // `SELECT` that fails does not, and the two have to agree - and a lost
-    // answer is not an *unknown outcome*, because there is no outcome to be
-    // unknown about. Both were right while only writes shipped.
-    bool read = false;
-
-    // **This statement was a DDL routed to core 0** (CR5/CB4). Set at the
-    // one site that ships one, so it is a fact about which fork sent the
-    // statement rather than a guess from its text. What it buys is in
-    // `FinishShippedStatement`: this core drops its catalog cache when the
-    // answer is a success, because the invalidation broadcast is a task and
-    // nothing orders it against this reply.
-    bool ddl = false;
-
-    // **XG1: this read's answer is coming on an edge, and this is its
-    // tag.** Set at the read fork alongside `read`, and only where the
-    // session has a result sink - a text client's shipped read is answered
-    // on the reply POD exactly as it always was, and leaves this zeroed.
-    //
-    // Carried on the pending record rather than re-derived, because the
-    // statement parks between the ship and the answer and the tag has to
-    // survive that. `FinishShippedStatement` forwards the edge's rows on an
-    // OK terminator and closes the tag on **every** exit, success or not:
-    // a registered receiver nobody drains holds its batches for the
-    // session's life, which is the leak the fan-in's own `CloseAll` guard
-    // exists to prevent.
-    bool typed_answer = false;
-    PipelineTag answer_tag{};
-};
-
-// A `COMMIT` of a transaction whose writes touched more than one owner
-// (R6-3, D4), between the prepare that just left this core and the answer
-// the client gets. **Carried by value across every park**, like every other
-// pending record here: the statement's coroutine frame is the one thing
-// that survives them, and the session's participant list is cleared by
-// `Finish()` in the middle of this sequence.
-//
-// The two request ids are separate on purpose. One waiter per id is the
-// transport's rule (`Txn2pcClient::OpenPhase`), and reusing prepare's id
-// for decide would let a prepare answer that arrived after its phase timed
-// out be delivered into the decide phase - the identity check cannot catch
-// that one, since both legs of one transaction carry the same session and
-// transaction id.
-struct PendingCrossOwnerCommit {
-    // Zero where **no prepare was sent** - a transaction whose only
-    // cross-owner contact was a probe. The parked half reads it as "there
-    // is no vote to collect", not as "the vote was lost".
-    std::uint64_t prepare_request_id = 0;
-    std::uint64_t decide_request_id = 0;
-    std::uint64_t session_id = 0;
-    std::uint64_t transaction_id = 0;
-    std::vector<std::uint32_t> participants;
-
-    // **XF4's two coordinator-side stamps**, carried here because the
-    // commit's two halves live in two functions: `PrepareAcrossOwners`
-    // sends the prepare and returns, and the parked half in `DispatchAsync`
-    // is where every leg ends. Both are this core's own monotonic clock and
-    // are never compared with another core's.
-    //
-    // `began_at_ns` is taken where the pending record is built - after
-    // every pre-send refusal, so a transaction that never sent a prepare
-    // records no leg at all - and `prepare_sent_ns` immediately after the
-    // prepare is on its way. The gap between them is the send itself, and
-    // it is deliberately outside the prepare leg so that leg measures the
-    // *participants* rather than the ring.
-    sched::MonoTimeNs began_at_ns = 0;
-    sched::MonoTimeNs prepare_sent_ns = 0;
-};
-
-// How a finished fan-in becomes a reply when the chain's own projection or
-// fold is what produces it (R4-A/AG3, `workplan-insert-spreading.md` §12).
-//
-// **Carried by value across the park, because the chain is not.** The
-// compiled `StepChain` dies with `HandleSelect`'s frame while the read
-// completes on the reactor, and `Aggregator::Reset` borrows its spec and
-// its labels - so the fold's whole spec and the projection's headings are
-// *copied* here rather than pointed at. That is also why the aggregator
-// itself is a local of `FinishRemoteReads` and not the dispatcher's
-// hoisted `aggregator_`: a fan-in parks, two aggregated fan-ins on one
-// core would interleave inside that member's one-statement contract, and
-// the failure would be a wrong number rather than a refusal.
-//
-// **Not the same fact as `RemoteRead::column_names`**, which the two-step
-// pipeline fills. That one describes *the rows on the wire* - a projected
-// final edge, rendered straight out. This one describes what the session
-// computes **from whole rows**: the stage ships the relation's row,
-// filtered by the WHERE it was given, and the projection or the fold is
-// applied here. Empty is the P4c star shape, which renders from the
-// relation's schema exactly as it always did.
 struct PendingRemoteRender {
     // The select list, resolved (`StepChain::projection`). Empty for a star
     // read and for a fold, whose output is its items and not chain columns.
@@ -382,31 +258,6 @@ struct DispatchOutcome {
     // What to do with the rows those stages return (AG3). Default-empty is
     // the star read: whole rows, rendered from the relation's schema.
     PendingRemoteRender remote_render = {};
-
-    // A statement shipped to its owner core (SS2): the reply is not in
-    // `response` yet. `DispatchAsync()` parks on the owner's answer under
-    // its deadline and finishes through `FinishShippedStatement()`.
-    //
-    // **The synchronous `Dispatch()` never sees one**, and that is a
-    // correctness statement rather than an accident: shipping is admitted
-    // only where the statement can park, because a send from a path that
-    // cannot wait would leave a statement the owner may have committed with
-    // nowhere to deliver its answer - and the refusal `Dispatch()` would
-    // have to invent could not be retryable (D4).
-    std::optional<PendingShippedStatement> pending_shipped = std::nullopt;
-
-    // A cross-owner `COMMIT` whose prepare phase is in flight (R6-3). The
-    // reply is not in `response` yet: `DispatchAsync()` runs the rest of
-    // the protocol - the prepare park, the decision, the decide park - and
-    // writes the answer at the end.
-    //
-    // **The synchronous `Dispatch()` never sees one**, for the reason
-    // `pending_shipped` never reaches it: the protocol has to park, and a
-    // path that cannot wait has no honest answer to give a client whose
-    // participants are already asked. `HandleCommit` refuses before the
-    // first prepare leaves rather than after, so that refusal is an
-    // ordinary retryable one and the transaction is still whole.
-    std::optional<PendingCrossOwnerCommit> pending_cross_owner_commit = std::nullopt;
 
     // A write this core is holding back because something it needs is held
     // by a transaction that **has not decided yet** (AO-S3; R6-5 and D5 are
@@ -1742,17 +1593,6 @@ public:
     // instrument. `sink` must outlive this.
     void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
 
-    // Arms **statement shipping** (SS2, statement_ship_service.hpp): an
-    // autocommit statement whose relation another core owns is carried
-    // there and answered back, where without this it is refused
-    // (`docs/spec/crosscore.md` §6). Installed on every core of a multi-core
-    // instance; `client` must outlive the dispatcher.
-    //
-    // A dispatcher never told refuses exactly as it did before - which is
-    // every single-core instance and every fixture, and is what keeps
-    // `cores = 1` byte-identical.
-    void SetStatementShip(StatementShipClient* client) noexcept { statement_ship_ = client; }
-
     // **Where this core's access shapes go** (CR7). Unset on core 0, which
     // writes `sys.access_stats` directly because it is the only core that
     // may. Set on a peer, whose accesses are folded here and flushed to
@@ -1775,18 +1615,6 @@ public:
         access_batch_counters_ = counters;
     }
 
-    // Arms the **coordinator's half of the cross-owner commit** (R6-3,
-    // txn_2pc_service.hpp): a `COMMIT` of a transaction that enrolled
-    // participants runs D4's two phases instead of committing straight
-    // away. Installed on every core of a multi-core instance beside
-    // `SetStatementShip`; `client` must outlive the dispatcher.
-    //
-    // A dispatcher never told has no participants to prepare either - a
-    // session enrols one only where a statement shipped inside a
-    // transaction - so a single-core instance and every fixture keep the
-    // path they had, byte for byte. That is D1's fast path stated as a
-    // wiring property rather than as a branch.
-    void SetTxn2pc(Txn2pcClient* client) noexcept { txn_2pc_ = client; }
 
     // ---- R6-5: D5's bounded wait, the one function it is reached through -
     //
@@ -1840,25 +1668,14 @@ public:
     // can name it (AO-S4b).
     const txn::LockTable* locks() const noexcept { return locks_; }
 
-    sched::MonoTimeNs InDoubtCeilingNs() const noexcept { return in_doubt_ceiling_ns_; }
-    void set_in_doubt_ceiling_ns(sched::MonoTimeNs ns) noexcept { in_doubt_ceiling_ns_ = ns; }
-
-    // The **owner's** half, for `SHOW META` only (D7): this core executes
-    // other cores' statements, and nothing else in this class would ever
-    // read that. A pointer rather than a counters struct because the
-    // executor already owns the numbers and a second copy of them is a
-    // second thing to keep true.
-    //
-    // **The borrow is withdrawn, not outlived.** `CoreRuntime` declares the
-    // executor *below* the dispatcher - the server holds the executor's
-    // `Seam()`, which fixes that order - so reverse destruction drops the
-    // executor first and the dispatcher would keep a dangling pointer.
-    // Both holders therefore call this with `nullptr` at teardown:
-    // `~CoreRuntime`'s body, and `Expeditor::Serve`'s `ClearReactorBorrows`
-    // guard. Same rule as `SetStatementShip` beside it.
-    void SetShippedStatements(const ShippedStatementExecutor* executor) noexcept {
-        shipped_statements_ = executor;
+    // **The lock family's fault net**, from `lock_wait_fault_net_ms`. It
+    // was the in-doubt ceiling until AT-S6 retired the thing that could be
+    // in doubt; the quantity is the same one, re-scoped (AT-0 item 7).
+    sched::MonoTimeNs LockWaitFaultNetNs() const noexcept { return lock_wait_fault_net_ns_; }
+    void set_lock_wait_fault_net_ns(sched::MonoTimeNs ns) noexcept {
+        lock_wait_fault_net_ns_ = ns;
     }
+
 
     // The physical optimizer's shadow surface (docs/spec/physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
@@ -2326,9 +2143,6 @@ private:
     catalog::Catalog& catalog_;
     storage::PageStore& page_store_;
 
-    // SS2's client, on every core of a multi-core instance; null wherever
-    // the cross-core refusal still stands (see SetStatementShip).
-    StatementShipClient* statement_ship_ = nullptr;
 
     // `SetAccessBatch`. Null on core 0 and on every dispatcher nobody wired.
     stats::AccessBatch* access_batch_ = nullptr;
@@ -2337,11 +2151,6 @@ private:
     // core 0 the handler's applied counts.
     const stats::AccessBatchCounters* access_batch_counters_ = nullptr;
 
-    // R6-3's coordinator half; null on a single-core instance and every
-    // fixture, which is also where no session ever has a participant.
-    Txn2pcClient* txn_2pc_ = nullptr;
-    // D7's owner-side reporting; null on a core that answers for nobody.
-    const ShippedStatementExecutor* shipped_statements_ = nullptr;
     // Whether the statement running right now can park (set by
     // `DispatchAsync`, never by `Dispatch`). One statement runs at a time
     // per core (sched.md §3), which is what makes a member the right place
@@ -2549,18 +2358,10 @@ private:
     std::optional<DispatchOutcome::LockWait> lock_wait_ = std::nullopt;
     std::size_t statement_trail_mark_ = 0;
 
-    // D5's ceiling for this core, `InDoubtCeilingNs()`'s storage.
-    //
-    // **Zero here, and the number lives in one place** - the constant
-    // `kTxnInDoubtCeilingNs` in `server/txn_2pc_service.hpp`, which this
-    // header deliberately does not include (see the forward declarations
-    // above: it is included nearly everywhere). Every server sets this from
-    // the `in_doubt_ceiling_ms` config key, whose default *is* that
-    // constant, on both the core-0 and the peer dispatcher. A dispatcher
-    // nobody configured therefore does not wait, which is the pre-R6-5
-    // behaviour and the right one for a fixture with no cross-owner
-    // transactions to be in doubt about.
-    sched::MonoTimeNs in_doubt_ceiling_ns_ = 0;
+    // The fault net this dispatcher was configured with, or 0 where
+    // nobody configured one - a fixture, which then does not wait, exactly
+    // as it did before the net existed.
+    sched::MonoTimeNs lock_wait_fault_net_ns_ = 0;
     // See `set_locks`. Null means no detector, which means AO-S3's guard.
     txn::LockTable* locks_ = nullptr;
 
@@ -2703,107 +2504,27 @@ private:
     // This core's reactor, set_scheduler_view(); null off a reactor.
     const sched::Scheduler* scheduler_view_ = nullptr;
 
-    // Refuses a write to a relation this core may not write, and binds the
-    // transaction's home core on the first one that is allowed. See
-    // core_affinity.hpp - the restriction is decided (CC3), not a stand-in
-    // for the pipeline.
-    // ---- Statement shipping's fork (SS2) -------------------------------
-    //
-    // **Whether this statement may be shipped at all** - the single home
-    // of the fork's conditions, because the four call sites used to carry
-    // this argument verbatim and a decision with four homes is a decision
-    // nobody can amend.
-    //
-    // Four questions, each a decision rather than a guard: is shipping
-    // armed (a single-core instance and every fixture: no, on a null
-    // pointer, which is what keeps that path byte-identical); can the
-    // statement park (see `DispatchOutcome::pending_shipped`); is it
-    // autocommit (D1 - nothing crosses transaction state, so an explicit
-    // transaction keeps its refusal); and did it arrive shipped
-    // (session.hpp's hop limit).
-    //
-    // Shipping is **unconditional** where those hold, per D6: whether to
-    // ship or to refuse by load is placement policy (`docs/spec/crosscore.md`
-    // §9's open decision) and does not ride along. What it converts is what
-    // the pretasks measured as refused - 80-92% of an unrouted client's
-    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
-    // §9b).
-    //
-    // Each site adds the one condition only it can ask: a foreign owner, a
-    // predicate that names no second relation, and for reads a chain every
-    // step of which is on one foreign core.
-    bool MayShip(const Session& session) const noexcept;
+    // **Nothing ships since AT-S6.** `MayShip`, `MayEnrolShip`,
+    // `ShipStatement`, `SoleForeignOwner`, `ForwardAnswerEdge`,
+    // `FinishShippedStatement`, `PrepareAcrossOwners` and
+    // `DescribePrepareFailure` stood here: the fork that decided a
+    // statement belonged on another core, the send, the park, the answer
+    // edge's forwarding, and D4's two phases over the participants the
+    // send enrolled. A read runs where the session is now, as a write has
+    // since AT-S5, so there is no statement to send and no participant to
+    // prepare (`docs/spec/cross-owner-txn.md`).
 
-    // Sends `line` to `owner_core` and returns the outcome that parks on
-    // it. Every refusal it can produce happens **before** the send, so a
-    // client that sees one knows the statement did not run.
-    DispatchOutcome ShipStatement(std::string_view line, catalog::Oid oid,
-                                  std::uint32_t owner_core, std::string_view relation,
-                                  Session& session, bool read = false);
-
-    // The parked statement's other end: the owner's answer, its deadline,
-    // or a waiter that vanished.
-    // XG1: puts a typed shipped read's description and rows into the
-    // session's sink. Called on the OK arm alone - a partial result set
-    // must never reach a client as a whole one.
-    Status ForwardAnswerEdge(const PendingShippedStatement& shipped, Session& session);
-
-    DispatchOutcome FinishShippedStatement(const PendingShippedStatement& shipped,
-                                          Session& session);
-
-    // ---- R6-3: the coordinator's commit --------------------------------
-
-    // This core's own half of the transaction, ended. Both are the bodies
-    // `HandleCommit` and `HandleRollback` have always had, lifted out
-    // unchanged so the cross-owner path ends the local transaction through
-    // exactly the code a one-owner one does - a second commit path is how
-    // two commits stop meaning the same thing.
-    //
-    // `commit_lsn` answers the record's LSN whatever the durability class,
-    // which is what the cross-owner path needs and the local one does not:
-    // the decision must be **durable before participants are told**, and
-    // `pending_commit_lsn_` is only set under `group`.
+    // The local commit and rollback - the whole of both since AT-S6,
+    // where they used to be one arm of a fork.
     DispatchOutcome CommitLocal(Session& session, wal::Lsn* commit_lsn = nullptr);
     DispatchOutcome RollbackLocal(Session& session);
 
-    // Opens the prepare phase over the session's participants and returns
-    // the outcome that parks on it. Every refusal here happens **before**
-    // the first prepare leaves, so a client that sees one knows nothing was
-    // asked and the transaction is still whole.
-    DispatchOutcome PrepareAcrossOwners(Session& session);
-
-    // What the client is told when a participant refuses or is unheard
-    // from: one message naming the first participant that did not prepare,
-    // in that participant's own words where it gave any. Built before the
-    // phase is closed, since closing frees what it reads.
-    Status DescribePrepareFailure(const TxnPhaseOutcome* phase) const;
-
-    // The one core that owns every relation this chain reads, when there is
-    // one and it is not this core. Nothing otherwise: a chain touching this
-    // core's relations cannot run anywhere else, and one spanning two
-    // foreign owners is R6's multi-owner statement, which stays refused.
-    std::optional<std::uint32_t> SoleForeignOwner(const exec::StepChain& chain);
-
-    // Ends a write scope that wrote nothing because its statement went to
-    // another core. Autocommit by D1, so this is `EndWrite`'s abort arm:
-    // the transaction holds no page, and the status it carries is never
-    // client-visible - the answer is the owner's.
+    // **The one way an owned write scope ends without committing**: the
+    // statement is not this core's to finish. It kept the rows and the
+    // transaction while a statement parked on a probe or went to another
+    // owner; what reaches it now is the KWP load path's own abandon.
     Status AbandonWriteForShipping(Session& session, WriteScope& scope);
 
-    // **R6-8: the write shape `MayShip` refuses and D4 now admits.** A
-    // statement inside an explicit transaction whose relation another core
-    // owns: shipped to that owner, which runs it under a transaction it
-    // holds open (R6-2), and the owner is recorded as a **participant** so
-    // this session's `COMMIT` runs the two phases over it.
-    //
-    // Separate from `MayShip` rather than folded into it, and the reason is
-    // scope rather than tidiness: this admits *writes* only, and its three
-    // callers are the three write paths. A cross-core **read** inside a
-    // transaction keeps the behaviour it had, because shipping one would
-    // enrol a participant to give a snapshot D3's watermark is what makes
-    // meaningful - and the watermark is not built. Reads are R6-9's
-    // `crosscore.md` question, not this row's.
-    bool MayEnrolShip(const Session& session) const noexcept;
 
     // `target_id`, when present, is the pk of the row this statement is
     // about to place, and it makes the check ask the **range's** owner

@@ -159,18 +159,26 @@ TEST_F(AffinityDispatchTest, TheLocalCoreIsUnaffected) {
 // went with the route - a write runs where the session is (AT-R5), and
 // `ReadBorrowRigTest.ANamedKeyAdmitsOnAPeer` is what the write does instead.
 
-TEST_F(AffinityDispatchTest, AReadOfAnotherCoresRelationSaysWhatIsMissing) {
+TEST_F(AffinityDispatchTest, AReadOfAnotherCoresRelationIsAnsweredHere) {
+    // **This cell asserted a refusal until AT-S6.** A read of a relation
+    // another core owned was refused by name - the message told the client
+    // which core to ask and that the pipeline was what was missing - and
+    // the shipping arm below it carried the statement there when it could.
+    // Both went with the route: a page is a page from any core since AM-S2
+    // step 3, and an unsplit relation has one chain that every core walks.
     CommandDispatcher core0 = DispatcherOn(0);
     Session setup;
     ASSERT_EQ(core0.Dispatch("CREATE TABLE t (id INT64, v INT64)", &setup).response.rfind("ERR", 0),
               std::string::npos);
+    ASSERT_EQ(core0.Dispatch("INSERT INTO t VALUES (11)", &setup).response.rfind("INSERTED", 0),
+              0u);
 
     CommandDispatcher core1 = DispatcherOn(1);
     Session session;
-    const std::string reply = core1.Dispatch("SELECT * FROM t", &session).response;
-    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-    EXPECT_NE(reply.find("pipeline"), std::string::npos)
-        << "a cross-core read should name what is missing: " << reply;
+    const std::string reply = core1.Dispatch("SELECT v FROM t", &session).response;
+    EXPECT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    EXPECT_NE(reply.find("11"), std::string::npos)
+        << "core 1 did not read core 0's relation: " << reply;
 }
 
 // `ADeleteIsAWriteAndIsCheckedAsOne` stood here until AT-S5: its whole
