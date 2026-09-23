@@ -174,7 +174,7 @@ def start_server(binary, workdir, tag, cores, port, range_size_ids):
     stderr_path = os.path.join(workdir, f"{tag}.stderr")
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {cores}\n"
-                f"placement = rotate\npeer_listeners = on\n"
+                f"placement = rotate\n"
                 f"range_size_ids = {range_size_ids}\n"
                 f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = info\n")
     with open(stderr_path, "w") as err:

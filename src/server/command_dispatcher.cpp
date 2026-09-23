@@ -1289,7 +1289,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " wal_topology=single"
        << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
        // The core serving this session (PW6, docs/inflight/in-progress/workplan-peer-writer.md).
-       // Under `peer_listeners = on` the kernel picks the accepting core and
+       // Every core listens (AT-S8), so the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -
        // the per-core writer benchmark, an operator reading a refusal - must
        // be able to ask. Constant per session, by M3: a session never moves.
@@ -1404,7 +1404,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         //
         // Per core, like every other row in this reply: `SHOW META` answers
         // from the dispatcher the session is on, so reading a peer's batch
-        // needs a session there (`peer_listeners = on`) - said out loud
+        // needs a session there (the kernel picks which core) - said out loud
         // because the same limitation is what stopped `wal_syncs` from
         // answering this question, and it has not gone away.
         os << " wal_group_commits=" << wal_stats.group_commits

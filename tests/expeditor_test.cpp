@@ -438,11 +438,11 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
 
     EXPECT_TRUE(peer.listening()) << "the peer accepts nothing on the instance's port";
 
-    const CoreRuntime::Config& handed = peer.config();
+    const StatementLimits& handed = peer.config().statement_limits;
     EXPECT_FALSE(handed.indexes);
     EXPECT_EQ(handed.max_insert_rows, 9u);
-    EXPECT_EQ(handed.aggregate_limits.max_groups, 11u);
-    EXPECT_EQ(handed.aggregate_limits.max_distinct, 13u);
+    EXPECT_EQ(handed.aggregate.max_groups, 11u);
+    EXPECT_EQ(handed.aggregate.max_distinct, 13u);
     EXPECT_EQ(handed.sort_max_rows, 7u);
     EXPECT_EQ(handed.join_build_max_rows, 17u);
 }

@@ -622,7 +622,7 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
         // read, and a dirty flag the loser carried is still owed: a create
         // path reaching this would be a bug caught elsewhere, but a miss
         // path that faulted for a write must not leave the winner clean.
-        if (dirty) resident->second.MarkDirty();
+        if (dirty) resident->second.MarkDirty(++dirty_gens_);
         if (warm && resident->second.usage < kClockUsageCap) ++resident->second.usage;
         return std::span<std::byte, kPageSize>(*resident->second.bytes);
     }
@@ -644,6 +644,9 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
     // assertion would fire on correct single-threaded traffic.
     std::span<std::byte, kPageSize> view(*bytes);
     Frame frame{std::move(bytes), dirty};
+    // A fresh generation, never 0: a frame re-faulted for a page a stale
+    // writeback copied must not match the generation that copy recorded.
+    frame.dirty_gen = ++dirty_gens_;
     // An ordinary miss starts warm (usage 1), not cold: the inline sweep
     // MG06 wires onto the fault path must never reclaim the page whose
     // fault triggered it, and one usage point is exactly one sweep rotation
@@ -725,7 +728,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
         // mutation stays dirty however many readers touch it afterwards.
-        if (mark_dirty) it->second.MarkDirty();
+        if (mark_dirty) it->second.MarkDirty(++dirty_gens_);
         // §3.1-2: a saturating bump on every hit, including a read -
         // "recently used" is about access, not about mutation. A *ring*
         // fetch is the one exception (§5): a scan's touch is not heat.
@@ -1303,7 +1306,7 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
         SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
                            StreamStampFor(CurrentCore()));
     }
-    it->second.MarkDirty();
+    it->second.MarkDirty(++dirty_gens_);
     // First record since the frame was last written back wins: recLSN is
     // the *oldest* LSN redo must replay to make the page whole, so a later
     // record must never overwrite it (wal.md section 11-1).
@@ -1444,8 +1447,8 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         for (std::size_t k = 0; k < run; ++k) {
             const PageId page_id = ordered[i + k];
             CopiedPage& page = copied[k];
-            // Outside the structure latch, PinFrame's order. On the fault
-            // path a held frame ends the run here: the prefix goes out, the
+            // Outside the structure latch, PinFrame's order. In the background
+            // drain a held frame ends the run here: the prefix goes out, the
             // rest keep their dirty marks, and their pins are returned.
             if (held == HeldFrames::kWait) {
                 AcquirePageLatch(page_id, *page.frame, PinMode::kShared);
@@ -2230,6 +2233,21 @@ void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mod
         // this thread is still waiting for.
         if (mode == PinMode::kShared) SharedHoldsHere().insert(page_id);
 #endif
+        // **An exclusive hold marks the frame again once it has the latch**
+        // (AT-S8 step 1b's review). The fetch marks it before the page latch
+        // is taken, so another core's writeback can copy in the gap - the
+        // old bytes, under the generation the fetch already moved - and clean
+        // the frame this holder is about to write. A logged write re-marks
+        // through its stamp; an unlogged one (page 0's anchor and
+        // transaction-id ceiling) would leave its bytes in a clean frame no
+        // flush writes. After the acquire, no foreign copy can fall between
+        // this mark and the write. Every exclusive hold is a write fetch
+        // (`Get`, the creates), so this adds no dirtiness of its own; its
+        // cost is one structure-latch hold per exclusive fetch, armed only.
+        if (mode == PinMode::kExclusive) {
+            LatchGuard structure(structure_latch());
+            frame.MarkDirty(++dirty_gens_);
+        }
     }
 }
 
@@ -2319,7 +2337,7 @@ void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
     // one that could be measured rather than waiting for a cell of its own.
     LatchGuard structure(structure_latch());
     auto it = frames_.find(page_id);
-    if (it != frames_.end()) it->second.MarkDirty();
+    if (it != frames_.end()) it->second.MarkDirty(++dirty_gens_);
 }
 
 Status DevicePageStore::LatchFrameForTest(PageId page_id, PinMode mode, std::uint32_t core) {

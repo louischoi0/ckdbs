@@ -423,6 +423,21 @@ struct TupleLocation {
     // page_id. Deleted with its one producer 2026-08-13.
 };
 
+// **The statement limits a config file sets, as one value** (AT-S8). Every
+// core accepts sessions, so every core's dispatcher must run under the same
+// ones; while they travelled as five separate arguments and setters, a
+// peer's dispatcher was handed none of them and ran under the defaults. One
+// struct, built once from the config and applied by one call on every core,
+// is what keeps the next limit from missing the peers the same way. Each
+// default is the dispatcher's own.
+struct StatementLimits {
+    bool indexes = true;
+    std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows;
+    exec::AggregateLimits aggregate;
+    std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
+    std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
+};
+
 class CommandDispatcher {
 public:
     // `log` and `clock` are optional and independently so: a null logger
@@ -1557,6 +1572,16 @@ public:
     // dispatcher needs no member of its own for it.
     void set_join_build_max_rows(std::size_t rows) noexcept {
         budget_.set_join_build_max_rows(rows);
+    }
+
+    // All five at once, as an instance hands them to each core (AT-S8,
+    // `StatementLimits`).
+    void set_statement_limits(const StatementLimits& limits) noexcept {
+        indexes_enabled_ = limits.indexes;
+        max_insert_rows_ = limits.max_insert_rows;
+        set_aggregate_limits(limits.aggregate);
+        set_sort_max_rows(limits.sort_max_rows);
+        set_join_build_max_rows(limits.join_build_max_rows);
     }
 
     // Arms the remote-read path (workplan P4c): a single-step star SELECT

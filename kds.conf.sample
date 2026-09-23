@@ -106,18 +106,13 @@ cores = 1
 # key range costs a single entry however many rows it touches.
 # max_locks_per_txn = 65536
 
-# Per-core listeners (docs/inflight/in-progress/workplan-peer-writer.md PW5). `on` binds the
-# text port on every core with SO_REUSEPORT and the kernel distributes
-# connections; a session lives on the core that accepted it, forever. A
-# peer-accepted session serves relations its core owns and refuses the
-# rest - the per-core benchmark shape, and a cliff for a general workload
-# (clients cannot choose their core). Needs cores > 1, and is refused in
-# combination with tls or auth until the credential store and TLS context
-# can be shared across cores immutably. The `placement = rotate`
-# requirement this line used to state was retired with the refusal itself
-# (expeditor.cpp's CheckPeerListenerConfig): statement shipping serves a
-# peer-accepted session under any placement. Off by default.
-# peer_listeners = off
+# Listeners. Every core accepts on `port` - with SO_REUSEPORT when
+# cores > 1, so the kernel distributes connections - and a session runs to
+# completion on the core that accepted it, under the same tls, auth and
+# statement limits as on any other core. There is no key for it:
+# `peer_listeners` was retired in v3.0.0's M3 (AT-S8) and a file that sets
+# it is refused. Note what SO_REUSEPORT costs: another process running as
+# the same user can bind the same port and take a share of the connections.
 
 # Relation placement (docs/inflight/in-progress/workplan-crosscore.md P6c,
 # docs/spec/namespace.md NS10).

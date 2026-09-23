@@ -161,8 +161,8 @@
 //     before it writes any byte. It takes each page's latch shared for the
 //     copy since AT-S8 step 1b, one page at a time and released before the
 //     gate, so no frame of its own is latched across the wait - waiting for
-//     a foreign exclusive holder on a flush, trying once and skipping on the
-//     fault path, where the faulting task holds other frames; but the sweep that reached
+//     a foreign exclusive holder on a flush, trying once and skipping in the
+//     background drain (`WriteBack`'s `HeldFrames`); but the sweep that reached
 //     WriteBack runs inside a fault, and the faulting task may hold *other*
 //     frames latched while it waits. Sound, because the writer thread takes
 //     no page latch; a latency cost under a shared pool, and AM-S3's to
@@ -337,8 +337,16 @@ public:
     // to do about a frame another core holds exclusive: `kWait` waits out
     // the writer - which is running, since no task parks holding a pin - and
     // is what a flush owes, `Sync()` being a durability barrier; `kSkip`
-    // leaves it dirty for a later pass, and is the fault path's, whose
-    // faulting task may hold other frames and must not wait on a page here.
+    // leaves it dirty for a later pass, and is the background drain's
+    // (`DrainDirtyEvictionQueue`, on core 0's cadence), which owes no
+    // barrier and so has no reason to wait.
+    //
+    // **What `kWait` rests on, stated because nothing enforces it**: no flush
+    // caller holds a page latch across the flush. Waiting while holding X(Q)
+    // on a writer of P that then wants Q is a cycle; today every caller
+    // releases first (the anchor publish, `PersistSuperBlock`, the
+    // checkpointer, SYNC), and "no task parks holding a pin" - audited in
+    // debug builds only - is what keeps the writer it waits for running.
     //
     // Returns how many pages it wrote.
     enum class HeldFrames : std::uint8_t { kWait, kSkip };
@@ -804,19 +812,24 @@ private:
         // express, and which is the whole of EV1's "no LRU lists".
         std::uint8_t usage = 0;
 
-        // **Bumped at every dirty mark** (AT-S8, step 1b), under the
-        // structure latch like `dirty` itself. A writeback records it at the
-        // copy and cleans the frame only if it has not moved: a write
-        // fetched after the copy marks the frame again, and its bytes are
-        // not in what went out. 32 bits, because the window it spans is one
-        // device write and a hot page can be fetched for write 65,536 times
-        // inside that.
+        // **Moved at every dirty mark** (AT-S8, step 1b), under the
+        // structure latch like `dirty` itself, to the next value of the
+        // store's `dirty_gens_` - store-wide, so a frame evicted and
+        // re-faulted never repeats a generation a stale writeback copied. A
+        // writeback records it at the copy and cleans the frame only if it
+        // has not moved: a write fetched after the copy marks the frame
+        // again, and its bytes are not in what went out. The fetch's mark
+        // precedes the page latch, so an exclusive hold marks the frame once
+        // more on acquiring it (`AcquirePageLatch`) - a write fetched
+        // *before* the copy and latched after it is covered too. 32 bits: a
+        // wrap back to one copied value inside a single device write would
+        // need four billion marks in it.
         std::uint32_t dirty_gen = 0;
 
-        // Every dirty mark goes through here, so none can miss the bump.
-        void MarkDirty() noexcept {
+        // Every dirty mark goes through here, so none can miss the move.
+        void MarkDirty(std::uint32_t gen) noexcept {
             dirty = true;
-            ++dirty_gen;
+            dirty_gen = gen;
         }
     };
     // The latch word landed in existing padding at AM-S1; `dirty_gen` did
@@ -1412,6 +1425,9 @@ private:
     PageId clock_hand_ = 0;
     std::size_t frame_budget_ = 0;  // 0 = unbounded (pre-eviction behaviour)
     std::size_t live_pins_ = 0;
+    // The source of every `Frame::dirty_gen` (AT-S8 step 1b), under the
+    // structure latch.
+    std::uint32_t dirty_gens_ = 0;
     // `kPinCeiling` scaled by how many threads may pin this store at once
     // (`SetLatchArmed`). One operation's bound times the operations in
     // flight; unscaled it is the per-operation number and the assert below

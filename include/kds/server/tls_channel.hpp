@@ -20,7 +20,9 @@
 // accommodate and no downgrade surface worth carrying.
 //
 // Lock/atomic protocol: none. A context is immutable after creation and
-// safe to share across channels on one core; a channel belongs to one
+// safe to share across channels **on every core** - since AT-S8 every
+// core's listener calls `NewChannel` on the one context, and `SSL_new` on a
+// shared `SSL_CTX` is thread-safe from OpenSSL 1.1; a channel belongs to one
 // connection on one reactor thread, like the connection buffers it
 // feeds (docs/rules/rules.md §3).
 //

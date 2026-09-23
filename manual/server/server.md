@@ -62,6 +62,16 @@ authentication — a development/inspection surface, not a production API.
 The binary wire protocol (KWP/1, `docs/spec/protocol.md`) is specified with a
 handshake and auth stages, but only its frame codec exists in code.
 
+**Every core accepts on the port.** With `cores > 1` each core binds `port`
+with `SO_REUSEPORT` and the kernel decides which core accepts a connection;
+the session then runs to completion on that core, under the same `tls`,
+`auth` and statement limits as on any other. A client cannot choose its
+core. `SO_REUSEPORT` has one cost worth knowing: another process running as
+the same user can bind the same port and silently take a share of the
+connections, so do not start two instances on one port. With `cores = 1`
+the port is bound exclusively. The `peer_listeners` key that used to switch
+this is retired and refused at startup.
+
 Shutdown: send `STOP` (what `scripts/stop.sh` does), which flushes and
 persists pages before exiting — the clean path. A kill signal is a crash by
 definition; see §6 for what that loses.

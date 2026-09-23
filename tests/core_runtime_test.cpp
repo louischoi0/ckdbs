@@ -869,7 +869,7 @@ TEST_F(CoreRuntimeTest, APeersDispatcherRunsUnderTheStatementLimitsItIsHanded) {
     // siblings, so a peer-accepted session could sort a million rows where
     // the operator had capped it at three.
     CoreRuntime::Config config = ConfigFor(1);
-    config.sort_max_rows = 1;
+    config.statement_limits.sort_max_rows = 1;
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
     // Funded as the grant cell above funds it, so the peer can write.

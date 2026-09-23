@@ -355,19 +355,24 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // and encoding it whole would erase any anchor a checkpoint had
         // written to the page since - silently, the symptom being a later
         // mount replaying from the head of the log. Nothing writes page 0
-        // beside this on a core-0 runtime today (its `AttachTransport`
-        // builds no anchor and a rig drops the peer's), and the shape is
-        // what keeps that from being load-bearing. The store's sync alone:
-        // page 0 is unlogged, so there is no record to make durable first.
-        auto page = runtime->store_->Get(kSuperBlockPageId);
-        if (!page.ok()) return page.status();
-        auto on_disk = SuperBlock::Decode(page.value().bytes());
-        if (!on_disk.ok()) return on_disk.status();
-        if (Status s = on_disk.value().SetNextTrxId(runtime->superblock_.next_trx_id());
-            !s.ok()) {
-            return s;
+        // beside this on a core-0 runtime today (a core-0 runtime is handed
+        // no anchor, AT-S8), and the shape is what keeps that from being
+        // load-bearing. The store's sync alone: page 0 is unlogged, so
+        // there is no record to make durable first - and **after the page
+        // is released**, because a flush waits out every exclusive holder
+        // it meets (`DevicePageStore::WriteBack`'s `kWait`), and no flush
+        // caller may hold a page latch across one.
+        {
+            auto page = runtime->store_->Get(kSuperBlockPageId);
+            if (!page.ok()) return page.status();
+            auto on_disk = SuperBlock::Decode(page.value().bytes());
+            if (!on_disk.ok()) return on_disk.status();
+            if (Status s = on_disk.value().SetNextTrxId(runtime->superblock_.next_trx_id());
+                !s.ok()) {
+                return s;
+            }
+            on_disk.value().Encode(page.value().bytes());
         }
-        on_disk.value().Encode(page.value().bytes());
         return runtime->store_->Sync();
     });
     // Transaction ids come from a leased block on a peer, exactly as row
@@ -431,12 +436,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // gone with the ring kind that flushed it.
         config.access_statistics,
         runtime->cabins(), &*runtime->txn_manager_,
-        config.isolation, config.core_id, config.indexes, config.max_insert_rows);
+        config.isolation, config.core_id);
     // Core 0's statement limits, the ones `Expeditor::Open` sets on its own
-    // dispatcher (AT-S8; `Config::indexes` says what went wrong without them).
-    runtime->dispatcher_->set_aggregate_limits(config.aggregate_limits);
-    runtime->dispatcher_->set_sort_max_rows(config.sort_max_rows);
-    runtime->dispatcher_->set_join_build_max_rows(config.join_build_max_rows);
+    // dispatcher (AT-S8; `Config::statement_limits` says what went wrong
+    // without them).
+    runtime->dispatcher_->set_statement_limits(config.statement_limits);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.

@@ -1125,5 +1125,59 @@ TEST(WritebackUnderAWriterTest, AWriteFetchedAfterTheCopyKeepsTheFrameDirty) {
     ASSERT_TRUE(device.value()->ReadPage(page, on_device).ok());
     EXPECT_EQ(on_device[kPageBodyOffset], std::byte{0xBB}) << "the later write never went out";
 }
+
+TEST(WritebackUnderAWriterTest, AWriteFetchedBeforeTheCopyAndLatchedAfterItKeepsTheFrameDirty) {
+    // The fetch marks the frame before the page latch is taken. Core 1
+    // fetches for write and is kept from its exclusive hold by core 2's
+    // share; core 0's flush copies in that gap - the old bytes, under the
+    // generation core 1's fetch already moved - and is held in the device
+    // write while core 1 takes the page, writes it, and lets it go without
+    // any further mark (an unlogged write, page 0's shape). **Mutation**:
+    // without the mark at the exclusive release the clean drops the frame's
+    // mark and the write reaches no device.
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    HeldWriteDevice held(*device.value());
+    auto opened = DevicePageStore::Open(held, /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    DevicePageStore& store = *opened.value();
+    store.SetLatchArmed(true, /*concurrent_pinners=*/3);
+    SetCurrentCore(0);
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.Release();
+    ASSERT_TRUE(store.Flush().ok());
+    ASSERT_TRUE(store.DirtyPageIds().empty());
+
+    ASSERT_TRUE(store.LatchFrameForTest(page, PinMode::kShared, /*core=*/2).ok());
+    std::thread writer([&] {
+        SetCurrentCore(1);
+        auto ref = store.Get(page);  // marks, then waits on core 2's share
+        ASSERT_TRUE(ref.ok());
+        ref.value().bytes()[kPageBodyOffset] = std::byte{0xCC};
+    });
+    while (store.DirtyPageIds().empty()) std::this_thread::yield();
+
+    held.HoldWritesOf(page);
+    std::thread flusher([&] {
+        SetCurrentCore(0);
+        EXPECT_TRUE(store.Flush().ok());
+    });
+    while (!held.writing()) std::this_thread::yield();
+    ASSERT_TRUE(store.UnlatchFrameForTest(page, /*core=*/2).ok());
+    writer.join();
+    held.Release();
+    flusher.join();
+
+    const std::vector<PageId> dirty = store.DirtyPageIds();
+    EXPECT_NE(std::find(dirty.begin(), dirty.end(), page), dirty.end())
+        << "the flush cleaned a frame whose write was latched after its copy";
+    ASSERT_TRUE(store.Flush().ok());
+    std::array<std::byte, kPageSize> on_device{};
+    ASSERT_TRUE(device.value()->ReadPage(page, on_device).ok());
+    EXPECT_EQ(on_device[kPageBodyOffset], std::byte{0xCC}) << "the write never went out";
+}
 }  // namespace
 }  // namespace kds::storage

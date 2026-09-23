@@ -568,6 +568,15 @@ public:
         // when log_file is empty, which means "do not log to a file".
         std::string LogPath() const;
 
+        // The five statement limits above as the one value every core's
+        // dispatcher is handed (AT-S8, `StatementLimits`).
+        StatementLimits Limits() const {
+            return StatementLimits{indexes, max_insert_rows,
+                                   exec::AggregateLimits{aggregate_max_groups,
+                                                         aggregate_max_distinct},
+                                   sort_max_rows, join_build_max_rows};
+        }
+
         // Every key a config file may set (config_file.hpp). Kept next to
         // the fields it fills so adding a field and forgetting the key is
         // one edit away from being noticed.

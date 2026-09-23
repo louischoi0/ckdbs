@@ -202,11 +202,7 @@ public:
         // `sort_max_rows` and the rest simply did not reach it. Each
         // default is the dispatcher's own, so a fixture's peer is built as
         // an unconfigured instance's is.
-        bool indexes = true;
-        std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows;
-        exec::AggregateLimits aggregate_limits;
-        std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
-        std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
+        StatementLimits statement_limits;
 
         // RD5's `range_size_ids`, copied from core 0 like every other
         // shared setting. One number sizes both the row-id lease grant and

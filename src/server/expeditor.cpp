@@ -1032,11 +1032,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
         &*expeditor->txn_manager_, expeditor->config_.isolation, /*core_id=*/0,
         expeditor->config_.indexes, expeditor->config_.max_insert_rows);
-    expeditor->dispatcher_->set_aggregate_limits(
-        exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
-                              expeditor->config_.aggregate_max_distinct});
-    expeditor->dispatcher_->set_sort_max_rows(expeditor->config_.sort_max_rows);
-    expeditor->dispatcher_->set_join_build_max_rows(expeditor->config_.join_build_max_rows);
+    // The same value every peer is handed (AT-S8, `StatementLimits`).
+    expeditor->dispatcher_->set_statement_limits(expeditor->config_.Limits());
     // The lock family's fault net, from `lock_wait_fault_net_ms` (AT-0
     // item 7). Core 0's dispatcher waits by the same bound a peer's does,
     // which is why both read one key.
@@ -1674,12 +1671,7 @@ Status Expeditor::Start() {
             core_config.lock_wait_fault_net_ns = config_.lock_wait_fault_net_ns;
             // The statement limits core 0's dispatcher got in `Open` (AT-S8):
             // a session accepted here runs here, under the same config file.
-            core_config.indexes = config_.indexes;
-            core_config.max_insert_rows = config_.max_insert_rows;
-            core_config.aggregate_limits =
-                exec::AggregateLimits{config_.aggregate_max_groups, config_.aggregate_max_distinct};
-            core_config.sort_max_rows = config_.sort_max_rows;
-            core_config.join_build_max_rows = config_.join_build_max_rows;
+            core_config.statement_limits = config_.Limits();
             core_config.range_size_ids = config_.range_size_ids;
             // CR7: the instance's switch reaches the peers now that they
             // have somewhere to put a shape.

@@ -242,7 +242,8 @@ ruled out. It does not touch the read side the grouping exists to
 accelerate, and it is never a correctness cost. `SHOW META`'s
 `wal_mean_group_batch` is the core-local observable: `1.000` means every
 commit on this core paid its own device sync, and reading a *peer's* needs
-a session there (`peer_listeners = on`).
+a session there - every core accepts on the port since AT-S8, and the
+kernel picks which.
 
 **The best practice is the point, not a footnote.** Relations that are
 joined, foreign-keyed or read together belong in one namespace, so the

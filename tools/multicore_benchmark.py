@@ -163,7 +163,9 @@ def start_server(binary, workdir, tag, cores, port, placement="creating",
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {cores}\n"
                 f"placement = {placement}\n"
-                f"peer_listeners = {'on' if peer_listeners else 'off'}\n"
+                # No `peer_listeners` line: every core listens since AT-S8
+                # and the server refuses the retired key. `peer_listeners`
+                # here now only picks the driver's per-owner session hunt.
                 + (f"durability = {durability}\n" if durability else "")
                 + f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
     with open(stderr_path, "w") as err:
@@ -546,9 +548,9 @@ def main():
                          "`bench/af_namespace_grouping_probe.py` to measure what `namespace` "
                          "actually does.")
     ap.add_argument("--peer-listeners", action="store_true",
-                    help="run the multi-core configuration with `peer_listeners = on` "
-                         "(PW5) and one writer session per relation on its owner core "
-                         "(PW6). Needs --placement rotate.")
+                    help="drive one writer session per relation on its owner core (PW6). "
+                         "Every core listens since AT-S8, so this selects the driver's "
+                         "session hunt, not a server key. Needs --placement rotate.")
     ap.add_argument("--max-connects", type=int, default=256,
                     help="how many connections to open while hunting for sessions on "
                          "the needed cores before giving up (the kernel distributes)")
@@ -571,16 +573,16 @@ def main():
                          "before it is recorded as an error and a `<phase>-gave-up`")
     args = ap.parse_args()
     if args.peer_listeners and args.placement != "rotate":
-        ap.error("--peer-listeners needs --placement rotate (the server refuses the "
-                 "pairing too: with creating-core placement a peer serves nothing)")
+        ap.error("--peer-listeners needs --placement rotate: it hunts a session on each "
+                 "relation's owner core, and creating-core placement has one owner")
 
     shutil.rmtree(args.workdir, ignore_errors=True)
     os.makedirs(args.workdir, exist_ok=True)
     binary = os.path.abspath(args.server)
 
     results = {}
-    # The baseline never carries peer listeners: `cores = 1` has no peer to
-    # listen, and the server refuses the pairing.
+    # The baseline never hunts for per-owner sessions: `cores = 1` has one
+    # core to accept on.
     configs = [("single-core", 1, args.port, False),
                ("multi-core", args.cores, args.port + 1, args.peer_listeners)]
     if args.only == "single":
@@ -599,10 +601,10 @@ def main():
                                                for n, c in owners.items()))
             print("   NOT RUN - the relations cannot be written from this connection:")
             print(f"     {phases}")
-            print("   A rotated relation is written only from a session on its owner\n"
-                  "   core (crosscore.md CC3; DML shipping is unbuilt), and without\n"
-                  "   `peer_listeners = on` only core 0 accepts. Pass --peer-listeners\n"
-                  "   for the per-core writer shape (workplan-peer-writer.md PW6).")
+            print("   This driver writes a rotated relation only from a session on its\n"
+                  "   owner core, and the connection it got landed elsewhere. Pass\n"
+                  "   --peer-listeners to hunt per-owner sessions (the per-core writer\n"
+                  "   shape, workplan-peer-writer.md PW6).")
             results[tag] = None
             continue
         results[tag] = summarize(tag, cores, wall, phases, owners,
