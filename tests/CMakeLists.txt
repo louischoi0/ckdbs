@@ -11,6 +11,7 @@ add_executable(kds_tests
     lock_wake_rig_test.cpp
     deadlock_rig_test.cpp
     fk_cross_core_rig_test.cpp
+    shipped_read_own_write_test.cpp
     read_borrow_rig_test.cpp
     current_core_test.cpp
     alloc_race_test.cpp
