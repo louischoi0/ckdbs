@@ -1,6 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -64,8 +68,23 @@ class OptimizerSignals;
 // invariant (K1), which is what makes a stored pk a name that can dangle but
 // can never mis-attribute.
 //
-// Concurrency: core-local, no synchronization (rules.md #3). One store per
-// core; every table below is that core's own.
+// **Concurrency: one store for the instance, partitioned by `cabin_id`**
+// (AT-S7; AR1 §11's second shape, marked as AT-0 item 9 on 2026-09-23).
+// Every core observes into it and serves from it, so the tables below are
+// shared and each partition carries its own latch. `cabin_id` is AR1's
+// named partition prefix, which also keeps a cabin's whole state - its
+// values, its sightings and its `CabinInfo` - inside one partition, so a
+// per-cabin operation takes one latch rather than all of them.
+//
+// **What a reader holds while it works is a `CabinSet`, never a pointer
+// into a table.** Until AT-S7 `Find` returned `std::vector<CabinEntry>*`
+// and the serve iterated it in place, which was sound for the stated
+// reason - *"the store is core-local, so the caller is the only thing
+// running"* - and is exactly what one store removes: another core's
+// append would reallocate the vector under the loop, and an `Unobserve`
+// would erase it. The handle holds the set alive through a `shared_ptr`
+// and reads each entry under its partition's latch, so nothing is held
+// across the page reads the serve makes.
 //
 // It **never fails a statement**: every policy path returns void or a bool,
 // exactly as `TrailRecorder` does. A Cabin that cannot record is a Cabin
@@ -172,8 +191,80 @@ struct CabinLimits {
     std::size_t max_entries_per_value = 4096;
 };
 
-class CabinStore {
+// The storage one value's entries live in. A `deque` rather than a
+// `vector` because an append must not move the entries a reader is walking
+// (`NoteWrite` appends while a serve runs on another core), and a `deque`
+// never relocates an element it already holds.
+using CabinEntrySet = std::deque<CabinEntry>;
+
+class CabinStore;
+
+// **A reader's stable view of one value's set** (AT-S7). It is what `Find`
+// answers with, and it is the engine's own `InnerBuild::Bucket` contract
+// applied to the Cabin: a handle that names entries rather than pointing at
+// them, so nothing another core does to the store can invalidate it.
+//
+// Three things make it stable, and each is load-bearing:
+//
+//   - **The set outlives its removal.** The handle holds a `shared_ptr` to
+//     the entry storage, so an `Unobserve`, a `Discard` or the cap's
+//     un-observe may drop the store's reference while this reader walks on.
+//   - **The count is fixed when the handle is taken.** An entry appended
+//     after that is outside the view, which is not a missed row: the
+//     appending write is younger than this reader's snapshot, so its row is
+//     invisible to this reader's view whatever the set says.
+//   - **Each entry is read under the partition's latch**, by value. The
+//     fields a heal writes are plain integers, so an unlatched read beside
+//     a concurrent heal would be a data race rather than a stale hint.
+class CabinSet {
 public:
+    CabinSet() = default;
+
+    bool valid() const noexcept { return entries_ != nullptr; }
+    std::size_t size() const noexcept { return count_; }
+    bool empty() const noexcept { return count_ == 0; }
+
+    // Entry `i`, by value, under the partition's latch. Out of range is a
+    // default entry rather than a refusal: the count is this handle's own
+    // and a caller past it is a caller bug, which an empty entry makes
+    // visible at the hint check rather than by undefined behaviour.
+    CabinEntry At(std::size_t i) const;
+
+    // **The heal, by index** (C6). The reader proved the hint wrong and has
+    // a better one; the store writes it under the partition's latch, where
+    // the matching read above takes it. A no-op past the count, for `At`'s
+    // reason.
+    void Heal(std::size_t i, PageId page_id, std::uint16_t slot, std::uint32_t page_epoch) const;
+
+private:
+    friend class CabinStore;
+    CabinSet(CabinStore* store, std::size_t partition,
+             std::shared_ptr<CabinEntrySet> entries, std::size_t count) noexcept
+        : store_(store), entries_(std::move(entries)), count_(count), partition_(partition) {}
+
+    CabinStore* store_ = nullptr;
+    std::shared_ptr<CabinEntrySet> entries_;
+    std::size_t count_ = 0;
+    std::size_t partition_ = 0;
+};
+
+class CabinStore {
+    // The handle reads and heals an entry under its partition's latch, so
+    // it reaches `partitions_` - and nothing else does.
+    friend class CabinSet;
+
+public:
+    // **How many partitions the instance's store has.** One latch each, and
+    // a cabin's whole state lives in exactly one of them (`cabin_id` is the
+    // index's input), so a per-cabin operation takes one latch.
+    //
+    // 16 rather than a core count: the store is not per core and the
+    // contention it spreads is per *cabin*, so the number to beat is how
+    // many cabins are written at once, which no measurement has yet named
+    // (AO-S7's "no contender" finding rested on a relation's writes running
+    // on its owner core, which AT-S5 removed).
+    static constexpr std::size_t kPartitions = 16;
+
     // Sightings held before the table is cleared. `TrailRecorder`'s policy
     // verbatim, including the crudest-possible eviction: overflow clears the
     // whole table, which merely restarts counting - a value loses a sighting
@@ -244,10 +335,11 @@ public:
     // empty set is an authoritative "no rows", and nullptr means "scan, this
     // Cabin knows nothing about that value".
     //
-    // Non-const, and returning a mutable set, because the reader heals a
-    // stale hint in place (C6). The store is core-local, so there is no
-    // aliasing question - the caller is the only thing running.
-    std::vector<CabinEntry>* Find(const CabinKey& key);
+    // **A handle, not a pointer** (AT-S7): `CabinSet` says what it
+    // guarantees and why. An invalid handle is the nullptr this used to
+    // answer with - `valid()` is the test - and the two answers stay as
+    // different as they were.
+    CabinSet Find(const CabinKey& key);
 
     // Counts a probe that was served / that fell through. Split from Find()
     // so a caller may look without being counted (tests, inspection), and so
@@ -297,25 +389,20 @@ public:
     // The entry cap cannot be asked here - a set's size is only known
     // mid-walk - so the recording path bounds that one itself. A false is
     // never an error: the value simply stays unobserved (rule 2).
-    bool MayObserve(const CabinKey& key) const {
-        if (observed_.contains(key)) return true;  // a heal replaces in place
-        if (entry_capped_.contains(key)) return false;
-        auto info = info_.find(key.cabin_id);
-        return info == info_.end() || info->second.values < limits_.max_values;
-    }
+    bool MayObserve(const CabinKey& key) const;
 
     // Counts a value refused ahead of its walk (MayObserve's value-cap
     // half) - the same `cap_refusals` Commit counts, so `SHOW CABINS`'
     // signal does not go dark because the refusal moved earlier. It is
     // printed there beside `unbankable_views`, the store-wide pair that
     // answers "why is this Cabin not filling".
-    void NoteCapRefusal() { ++stats_.cap_refusals; }
+    void NoteCapRefusal();
 
     // A recording walk declined because its view is not one a set may be
     // banked from: an in-flight transaction can still make a row it could
     // not see live, and its own transaction's uncommitted DELETE can be
     // rolled back under it (§6a, and the header's authority rule above).
-    void NoteUnbankableView() { ++stats_.unbankable_views; }
+    void NoteUnbankableView();
 
     // A key whose set outgrew the per-value entry cap mid-recording. The
     // mark is **sticky**: sets only grow under append-only maintenance, so
@@ -327,11 +414,7 @@ public:
     // shrink a future set below the cap with no hook firing for the old
     // value - the mark outliving that is a performance conservatism §8's
     // open budget policy owns, never a wrong answer.
-    void NoteEntryCapRefusal(const CabinKey& key) {
-        entry_capped_.insert(key);
-        sightings_.erase(key);
-        ++stats_.cap_refusals;
-    }
+    void NoteEntryCapRefusal(const CabinKey& key);
 
     // The per-value entry cap, for the recording path's mid-walk bound.
     std::size_t max_entries_per_value() const noexcept {
@@ -397,9 +480,12 @@ public:
     // because the router's answer is two functions away.
     void NoteScopeDecline(std::uint64_t cabin_id);
 
-    const Stats& stats() const noexcept { return stats_; }
+    // **By value since AT-S7**: the counters are read under their latch,
+    // so a caller cannot hold a reference into them while another core
+    // writes. Every reader copied the fields it printed anyway.
+    Stats stats() const;
     CabinInfo InfoFor(std::uint64_t cabin_id) const;
-    std::size_t observed_value_count() const noexcept { return observed_.size(); }
+    std::size_t observed_value_count() const;
 
     // The cabin optimizer's two worklists (workplan PHY04), sorted for
     // deterministic builds. `SightedUnobservedOf` is EXTEND's seed - the
@@ -415,16 +501,50 @@ private:
     // maintained in one place rather than at each of the four sites that can
     // create or drop one. An *append* is not a set and does not go through
     // here - it moves `entries` alone.
-    void AddSet(std::uint64_t cabin_id, std::size_t entries);
-    void RemoveSet(std::uint64_t cabin_id, std::size_t entries);
+    struct Partition {
+        mutable std::mutex latch;
+        std::unordered_map<CabinKey, std::shared_ptr<CabinEntrySet>, CabinKeyHash> observed;
+        std::unordered_map<CabinKey, std::uint8_t, CabinKeyHash> sightings;
+        // Keys past the per-value entry cap - see NoteEntryCapRefusal.
+        std::unordered_set<CabinKey, CabinKeyHash> entry_capped;
+        std::unordered_map<std::uint64_t, CabinInfo> info;
+    };
+
+    // Called from inside a partition's latch and taking neither: the
+    // `Locked` suffix is the contract (AT-S7).
+    void AddSetLocked(Partition& part, std::uint64_t cabin_id, std::size_t entries);
+    void RemoveSetLocked(Partition& part, std::uint64_t cabin_id, std::size_t entries);
+
+    // **One partition's whole state, under one latch.** Everything keyed
+    // by a `cabin_id` that hashes here lives here, which is what makes a
+    // per-cabin operation - `Discard`, `Forget`, `InfoFor` - one latch
+    // rather than sixteen.
+    //
+    // `observed_` holds a `shared_ptr` per value so a reader's `CabinSet`
+    // can outlive the erase that removes it from the map. The extra
+    // indirection is one allocation per *observed value*, not per entry
+    // and not per probe.
+
+    // Which partition a cabin's state lives in. A cabin id is issued by the
+    // catalog and dense, so the low bits spread; the multiply is there so
+    // two cabins on one relation do not land together by construction.
+    static std::size_t PartitionOf(std::uint64_t cabin_id) noexcept {
+        return static_cast<std::size_t>((cabin_id * 0x9E3779B97F4A7C15ULL) >> 60) % kPartitions;
+    }
+    Partition& PartitionFor(std::uint64_t cabin_id) noexcept {
+        return partitions_[PartitionOf(cabin_id)];
+    }
+    const Partition& PartitionFor(std::uint64_t cabin_id) const noexcept {
+        return partitions_[PartitionOf(cabin_id)];
+    }
+
+    // The counters, under their own latch rather than a partition's: they
+    // are the instance's totals and every partition writes them, so folding
+    // them into one partition would make that partition every core's.
+    mutable std::mutex stats_latch_;
 
     CabinLimits limits_;
-
-    std::unordered_map<CabinKey, std::vector<CabinEntry>, CabinKeyHash> observed_;
-    std::unordered_map<CabinKey, std::uint8_t, CabinKeyHash> sightings_;
-    // Keys past the per-value entry cap - see NoteEntryCapRefusal.
-    std::unordered_set<CabinKey, CabinKeyHash> entry_capped_;
-    std::unordered_map<std::uint64_t, CabinInfo> info_;
+    std::array<Partition, kPartitions> partitions_;
     Stats stats_;
     OptimizerSignals* signals_ = nullptr;
 };

@@ -84,20 +84,68 @@ std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstVa
     return key;
 }
 
-std::vector<CabinEntry>* CabinStore::Find(const CabinKey& key) {
-    auto it = observed_.find(key);
-    return it == observed_.end() ? nullptr : &it->second;
+// ---- The handle ---------------------------------------------------------
+
+CabinEntry CabinSet::At(std::size_t i) const {
+    if (store_ == nullptr || entries_ == nullptr || i >= count_) return CabinEntry{};
+    // The partition's latch, for the entry's own fields: a heal writes them
+    // and a plain read beside it would be a data race. The `shared_ptr` is
+    // what keeps the set alive if the store has dropped it meanwhile, which
+    // is why this is safe to take at all.
+    std::lock_guard<std::mutex> hold(store_->partitions_[partition_].latch);
+    return (*entries_)[i];
+}
+
+void CabinSet::Heal(std::size_t i, PageId page_id, std::uint16_t slot,
+                    std::uint32_t page_epoch) const {
+    if (store_ == nullptr || entries_ == nullptr || i >= count_) return;
+    std::lock_guard<std::mutex> hold(store_->partitions_[partition_].latch);
+    CabinEntry& entry = (*entries_)[i];
+    entry.page_id = page_id;
+    entry.slot = slot;
+    entry.page_epoch = page_epoch;
+    entry.flags |= kCabinHintValid;
+}
+
+// ---- The store ----------------------------------------------------------
+
+CabinSet CabinStore::Find(const CabinKey& key) {
+    const std::size_t index = PartitionOf(key.cabin_id);
+    Partition& part = partitions_[index];
+    std::lock_guard<std::mutex> hold(part.latch);
+    auto it = part.observed.find(key);
+    if (it == part.observed.end()) return CabinSet{};
+    // The count is fixed here; `CabinSet`'s declaration says why an entry
+    // appended after it is not a row this reader missed.
+    return CabinSet{this, index, it->second, it->second->size()};
 }
 
 void CabinStore::NoteHit(std::uint64_t cabin_id) {
-    ++stats_.hits;
-    ++info_[cabin_id].hits;
+    {
+        Partition& part = PartitionFor(cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
+        ++part.info[cabin_id].hits;
+    }
+    {
+        std::lock_guard<std::mutex> hold(stats_latch_);
+        ++stats_.hits;
+    }
+    // Outside both latches: the signals sink is another structure with its
+    // own rules, and calling into it under ours would order two latches
+    // nothing else orders.
     if (signals_ != nullptr) signals_->NoteCabinLookup(cabin_id, /*served=*/true);
 }
 
 void CabinStore::NoteMiss(std::uint64_t cabin_id) {
-    ++stats_.misses;
-    ++info_[cabin_id].misses;
+    {
+        Partition& part = PartitionFor(cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
+        ++part.info[cabin_id].misses;
+    }
+    {
+        std::lock_guard<std::mutex> hold(stats_latch_);
+        ++stats_.misses;
+    }
     if (signals_ != nullptr) signals_->NoteCabinLookup(cabin_id, /*served=*/false);
 }
 
@@ -105,71 +153,161 @@ void CabinStore::NoteHint(std::uint64_t cabin_id, bool ok) {
     if (signals_ != nullptr) signals_->NoteCabinHint(cabin_id, ok);
 }
 
+bool CabinStore::MayObserve(const CabinKey& key) const {
+    const Partition& part = PartitionFor(key.cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    if (part.observed.contains(key)) return true;  // a heal replaces in place
+    if (part.entry_capped.contains(key)) return false;
+    auto info = part.info.find(key.cabin_id);
+    return info == part.info.end() || info->second.values < limits_.max_values;
+}
+
+void CabinStore::NoteCapRefusal() {
+    std::lock_guard<std::mutex> hold(stats_latch_);
+    ++stats_.cap_refusals;
+}
+
+void CabinStore::NoteUnbankableView() {
+    std::lock_guard<std::mutex> hold(stats_latch_);
+    ++stats_.unbankable_views;
+}
+
+void CabinStore::NoteEntryCapRefusal(const CabinKey& key) {
+    {
+        Partition& part = PartitionFor(key.cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
+        part.entry_capped.insert(key);
+        part.sightings.erase(key);
+    }
+    std::lock_guard<std::mutex> hold(stats_latch_);
+    ++stats_.cap_refusals;
+}
+
+CabinStore::Stats CabinStore::stats() const {
+    std::lock_guard<std::mutex> hold(stats_latch_);
+    return stats_;
+}
+
+std::size_t CabinStore::observed_value_count() const {
+    std::size_t n = 0;
+    for (const Partition& part : partitions_) {
+        std::lock_guard<std::mutex> hold(part.latch);
+        n += part.observed.size();
+    }
+    return n;
+}
+
 std::uint8_t CabinStore::Observe(const CabinKey& key) {
-    if (sightings_.size() >= kMaxSightings && sightings_.find(key) == sightings_.end()) {
-        // Wholesale, exactly as TrailRecorder does it: eviction here
-        // restarts counting and nothing else, so the crudest policy is the
-        // right one until something measures otherwise.
-        sightings_.clear();
-        // The entry-cap marks ride the same crude eviction: a wholesale
-        // reset is the store's one "the world may have changed" signal.
-        entry_capped_.clear();
+    bool cleared = false;
+    std::uint8_t count = 0;
+    {
+        Partition& part = PartitionFor(key.cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
+        if (part.sightings.size() >= kMaxSightings &&
+            part.sightings.find(key) == part.sightings.end()) {
+            // Wholesale, exactly as TrailRecorder does it: eviction here
+            // restarts counting and nothing else, so the crudest policy is
+            // the right one until something measures otherwise.
+            //
+            // **Per partition since AT-S7**, which is the same policy at a
+            // sixteenth of the blast radius: the cap it answers is this
+            // partition's table, and clearing every partition's would evict
+            // cabins that are not near it.
+            part.sightings.clear();
+            // The entry-cap marks ride the same crude eviction: a wholesale
+            // reset is the store's one "the world may have changed" signal.
+            part.entry_capped.clear();
+            cleared = true;
+        }
+        std::uint8_t& held = part.sightings[key];
+        if (held != std::numeric_limits<std::uint8_t>::max()) ++held;
+        count = held;
+    }
+    if (cleared) {
+        std::lock_guard<std::mutex> hold(stats_latch_);
         ++stats_.sighting_clears;
     }
-    std::uint8_t& count = sightings_[key];
-    if (count != std::numeric_limits<std::uint8_t>::max()) ++count;
     return count;
 }
 
 bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
-    // Re-observing a value that is already observed replaces its set. That
-    // is the **heal** path (spec §4's heap fallback), and it is sound for
-    // the same reason the first recording is: the set comes from a completed
-    // authoritative walk, so it is a superset of what is visible.
-    if (auto existing = observed_.find(key); existing != observed_.end()) {
-        RemoveSet(key.cabin_id, existing->second.size());
-        observed_.erase(existing);
-    } else if (info_[key.cabin_id].values >= limits_.max_values) {
-        // At the per-cabin value cap. **Refuse to observe** - never observe
-        // a partial set, and never evict some other value to make room: the
-        // second would be a policy decision §8 has not made, and this one is
-        // reversible by the next execution.
-        ++stats_.cap_refusals;
-        return false;
-    }
+    enum class Counted { kNone, kCapRefusal, kRecording };
+    Counted counted = Counted::kNone;
+    bool accepted = false;
+    {
+        Partition& part = PartitionFor(key.cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
 
-    if (entries.size() > limits_.max_entries_per_value) {
-        ++stats_.cap_refusals;
-        // Deliberately *not* truncated. A truncated set marked observed is
-        // missing qualifying pks, which is the one thing the invariant
-        // forbids outright (header rule 2).
-        sightings_.erase(key);
-        return false;
-    }
+        // Re-observing a value that is already observed replaces its set.
+        // That is the **heal** path (spec §4's heap fallback), and it is
+        // sound for the same reason the first recording is: the set comes
+        // from a completed authoritative walk, so it is a superset of what
+        // is visible. A reader holding the old set walks on over it - the
+        // `shared_ptr` keeps it alive - and what it walks is a superset
+        // too, which is the only property a reader depends on.
+        if (auto existing = part.observed.find(key); existing != part.observed.end()) {
+            RemoveSetLocked(part, key.cabin_id, existing->second->size());
+            part.observed.erase(existing);
+        } else if (part.info[key.cabin_id].values >= limits_.max_values) {
+            // At the per-cabin value cap. **Refuse to observe** - never
+            // observe a partial set, and never evict some other value to
+            // make room: the second would be a policy decision §8 has not
+            // made, and this one is reversible by the next execution.
+            counted = Counted::kCapRefusal;
+        } else if (entries.size() > limits_.max_entries_per_value) {
+            // Deliberately *not* truncated. A truncated set marked observed
+            // is missing qualifying pks, which is the one thing the
+            // invariant forbids outright (header rule 2).
+            part.sightings.erase(key);
+            counted = Counted::kCapRefusal;
+        }
 
-    const std::size_t n = entries.size();
-    observed_.emplace(key, std::move(entries));
-    AddSet(key.cabin_id, n);
-    ++stats_.recordings;
-    ++info_[key.cabin_id].recordings;
-    // The value is observed now, so its sighting count has no further use -
-    // and leaving it would hold a slot in a table bounded by burst width.
-    sightings_.erase(key);
-    return true;
+        if (counted == Counted::kNone) {
+            if (entries.size() > limits_.max_entries_per_value) {
+                part.sightings.erase(key);
+                counted = Counted::kCapRefusal;
+            } else {
+                const std::size_t n = entries.size();
+                auto set = std::make_shared<CabinEntrySet>(entries.begin(), entries.end());
+                part.observed.emplace(key, std::move(set));
+                AddSetLocked(part, key.cabin_id, n);
+                ++part.info[key.cabin_id].recordings;
+                // The value is observed now, so its sighting count has no
+                // further use - and leaving it would hold a slot in a table
+                // bounded by burst width.
+                part.sightings.erase(key);
+                counted = Counted::kRecording;
+                accepted = true;
+            }
+        }
+    }
+    std::lock_guard<std::mutex> hold(stats_latch_);
+    if (counted == Counted::kCapRefusal) ++stats_.cap_refusals;
+    if (counted == Counted::kRecording) ++stats_.recordings;
+    return accepted;
 }
 
 void CabinStore::Unobserve(const CabinKey& key) {
-    auto it = observed_.find(key);
-    if (it == observed_.end()) return;
-    RemoveSet(key.cabin_id, it->second.size());
-    observed_.erase(it);
-    // The sighting count goes too. A value that was just un-observed for a
-    // failure should have to earn its way back through the same n=2 the
-    // first recording paid, rather than re-recording on the next execution.
-    // The entry-cap mark goes with it: the heal path is the one signal the
-    // world changed under this key.
-    sightings_.erase(key);
-    entry_capped_.erase(key);
+    bool dropped = false;
+    {
+        Partition& part = PartitionFor(key.cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
+        auto it = part.observed.find(key);
+        if (it != part.observed.end()) {
+            RemoveSetLocked(part, key.cabin_id, it->second->size());
+            part.observed.erase(it);
+            dropped = true;
+        }
+        if (!dropped) return;
+        // The sighting count goes too. A value that was just un-observed
+        // for a failure should have to earn its way back through the same
+        // n=2 the first recording paid, rather than re-recording on the
+        // next execution. The entry-cap mark goes with it: the heal path is
+        // the one signal the world changed under this key.
+        part.sightings.erase(key);
+        part.entry_capped.erase(key);
+    }
+    std::lock_guard<std::mutex> hold(stats_latch_);
     ++stats_.unobserved;
 }
 
@@ -187,9 +325,11 @@ bool CabinKeyLess(const CabinKey& a, const CabinKey& b) noexcept {
 
 std::vector<CabinKey> CabinStore::SightedUnobservedOf(std::uint64_t cabin_id) const {
     std::vector<CabinKey> keys;
-    for (const auto& [key, count] : sightings_) {
+    const Partition& part = PartitionFor(cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    for (const auto& [key, count] : part.sightings) {
         if (key.cabin_id != cabin_id) continue;
-        if (observed_.find(key) != observed_.end()) continue;
+        if (part.observed.find(key) != part.observed.end()) continue;
         keys.push_back(key);
     }
     std::sort(keys.begin(), keys.end(), CabinKeyLess);
@@ -198,7 +338,9 @@ std::vector<CabinKey> CabinStore::SightedUnobservedOf(std::uint64_t cabin_id) co
 
 std::vector<CabinKey> CabinStore::ObservedValuesOf(std::uint64_t cabin_id) const {
     std::vector<CabinKey> keys;
-    for (const auto& [key, entries] : observed_) {
+    const Partition& part = PartitionFor(cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    for (const auto& [key, entries] : part.observed) {
         if (key.cabin_id == cabin_id) keys.push_back(key);
     }
     std::sort(keys.begin(), keys.end(), CabinKeyLess);
@@ -207,25 +349,27 @@ std::vector<CabinKey> CabinStore::ObservedValuesOf(std::uint64_t cabin_id) const
 
 std::size_t CabinStore::Discard(std::uint64_t cabin_id) {
     std::size_t sets = 0;
-    for (auto it = observed_.begin(); it != observed_.end();) {
+    Partition& part = PartitionFor(cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    for (auto it = part.observed.begin(); it != part.observed.end();) {
         if (it->first.cabin_id != cabin_id) {
             ++it;
             continue;
         }
         ++sets;
-        it = observed_.erase(it);
+        it = part.observed.erase(it);
     }
-    for (auto it = sightings_.begin(); it != sightings_.end();) {
-        it = it->first.cabin_id == cabin_id ? sightings_.erase(it) : std::next(it);
+    for (auto it = part.sightings.begin(); it != part.sightings.end();) {
+        it = it->first.cabin_id == cabin_id ? part.sightings.erase(it) : std::next(it);
     }
-    for (auto it = entry_capped_.begin(); it != entry_capped_.end();) {
-        it = it->cabin_id == cabin_id ? entry_capped_.erase(it) : std::next(it);
+    for (auto it = part.entry_capped.begin(); it != part.entry_capped.end();) {
+        it = it->cabin_id == cabin_id ? part.entry_capped.erase(it) : std::next(it);
     }
     // Every one of this Cabin's sets has gone, so the two live figures are
     // zero exactly - not decremented set by set, which would be the same
     // arithmetic done in a way that can drift. `RemoveSet`'s saturation
     // exists for counters that have drifted; this one cannot.
-    if (auto info = info_.find(cabin_id); info != info_.end()) {
+    if (auto info = part.info.find(cabin_id); info != part.info.end()) {
         info->second.values = 0;
         info->second.entries = 0;
     }
@@ -234,52 +378,81 @@ std::size_t CabinStore::Discard(std::uint64_t cabin_id) {
 
 void CabinStore::Forget(std::uint64_t cabin_id) {
     Discard(cabin_id);
-    info_.erase(cabin_id);
+    Partition& part = PartitionFor(cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    part.info.erase(cabin_id);
 }
 
 void CabinStore::NoteScopeDecline(std::uint64_t cabin_id) {
+    {
+        Partition& part = PartitionFor(cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
+        ++part.info[cabin_id].scope_declines;
+    }
+    std::lock_guard<std::mutex> hold(stats_latch_);
     ++stats_.scope_declines;
-    ++info_[cabin_id].scope_declines;
 }
 
 void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
-    auto it = observed_.find(key);
-    // **The common case, and the whole reason the hook is affordable**: the
-    // value is not observed, so there is nothing this write can invalidate.
-    // One hash probe per cabin per write.
-    if (it == observed_.end()) return;
+    enum class Counted { kNone, kAppend, kCap };
+    Counted counted = Counted::kNone;
+    {
+        Partition& part = PartitionFor(key.cabin_id);
+        std::lock_guard<std::mutex> hold(part.latch);
+        auto it = part.observed.find(key);
+        // **The common case, and the whole reason the hook is affordable**:
+        // the value is not observed, so there is nothing this write can
+        // invalidate. One hash probe per cabin per write.
+        if (it == part.observed.end()) return;
 
-    if (it->second.size() >= limits_.max_entries_per_value) {
-        // Un-observe rather than drop the append. Dropping it would leave a
-        // set marked authoritative that is missing a row - the exact break
-        // C1 forbids - where un-observing costs a scan (§1's corollary).
-        RemoveSet(key.cabin_id, it->second.size());
-        observed_.erase(it);
-        sightings_.erase(key);
+        if (it->second->size() >= limits_.max_entries_per_value) {
+            // Un-observe rather than drop the append. Dropping it would
+            // leave a set marked authoritative that is missing a row - the
+            // exact break C1 forbids - where un-observing costs a scan
+            // (§1's corollary).
+            RemoveSetLocked(part, key.cabin_id, it->second->size());
+            part.observed.erase(it);
+            part.sightings.erase(key);
+            counted = Counted::kCap;
+        } else {
+            // **Appended, and a reader walking this set is unharmed**: a
+            // `deque` never moves an entry it already holds, and a
+            // `CabinSet`'s count was fixed before this append, so the
+            // reader neither sees a moved entry nor a row younger than its
+            // own snapshot.
+            it->second->push_back(entry);
+            ++part.info[key.cabin_id].entries;
+            ++part.info[key.cabin_id].appends;
+            counted = Counted::kAppend;
+        }
+    }
+    std::lock_guard<std::mutex> hold(stats_latch_);
+    if (counted == Counted::kAppend) ++stats_.appends;
+    if (counted == Counted::kCap) {
         ++stats_.unobserved;
         ++stats_.cap_refusals;
-        return;
     }
-
-    it->second.push_back(entry);
-    ++info_[key.cabin_id].entries;
-    ++stats_.appends;
-    ++info_[key.cabin_id].appends;
 }
 
 CabinStore::CabinInfo CabinStore::InfoFor(std::uint64_t cabin_id) const {
-    auto it = info_.find(cabin_id);
-    return it == info_.end() ? CabinInfo{} : it->second;
+    const Partition& part = PartitionFor(cabin_id);
+    std::lock_guard<std::mutex> hold(part.latch);
+    auto it = part.info.find(cabin_id);
+    return it == part.info.end() ? CabinInfo{} : it->second;
 }
 
-void CabinStore::AddSet(std::uint64_t cabin_id, std::size_t entries) {
-    CabinInfo& info = info_[cabin_id];
+// **`Locked` in the name, and it is the contract**: both are called from
+// inside a partition's latch and take neither, which is how the one place
+// that maintains `values`/`entries` stays one place now that every caller
+// holds a latch of its own (AT-S7).
+void CabinStore::AddSetLocked(Partition& part, std::uint64_t cabin_id, std::size_t entries) {
+    CabinInfo& info = part.info[cabin_id];
     ++info.values;
     info.entries += entries;
 }
 
-void CabinStore::RemoveSet(std::uint64_t cabin_id, std::size_t entries) {
-    CabinInfo& info = info_[cabin_id];
+void CabinStore::RemoveSetLocked(Partition& part, std::uint64_t cabin_id, std::size_t entries) {
+    CabinInfo& info = part.info[cabin_id];
     if (info.values > 0) --info.values;
     // Saturating, so a counter that has somehow drifted cannot wrap into a
     // gigantic number and make a Cabin look full. These are inspection

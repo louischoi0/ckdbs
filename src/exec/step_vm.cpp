@@ -790,10 +790,10 @@ private:
         }
         if (!key.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
 
-        if (std::vector<stats::CabinEntry>* entries = cabins_->Find(*key); entries != nullptr) {
+        if (const stats::CabinSet set = cabins_->Find(*key); set.valid()) {
             cabins_->NoteHit(step.cabin->cabin_id);
             ++stats_.For(step.step_id).cabin_hits;
-            co_return co_await ServeFromCabin(steps, index, step, access, *key, *entries);
+            co_return co_await ServeFromCabin(steps, index, step, access, *key, set);
         }
 
         cabins_->NoteMiss(step.cabin->cabin_id);
@@ -1485,7 +1485,7 @@ private:
     // before the first row goes out.
     sched::Coro ServeFromCabin(const std::vector<Step>& steps, std::size_t index, const Step& step,
                           const catalog::TableAccess& access, const stats::CabinKey& key,
-                          std::vector<stats::CabinEntry>& entries) {
+                          const stats::CabinSet& entries) {
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
         StepStats& step_stats = stats_.For(step.step_id);
 
@@ -1493,7 +1493,10 @@ private:
         seen_pks_.clear();
 
         for (std::size_t i = 0; i < entries.size(); ++i) {
-            stats::CabinEntry& entry = entries[i];
+            // By value, under the partition's latch (AT-S7): the set is
+            // the instance's since one store serves every core, and another
+            // core may be healing this entry while this loop reads it.
+            const stats::CabinEntry entry = entries.At(i);
 
             // **Duplicates are expected, not damage.** A value round trip
             // (v→v′→v) appends the same pk twice under append-only
@@ -1545,11 +1548,14 @@ private:
             // lives in CurrentRelayoutEpoch, beside the check that reads
             // it). One extra fetch, on the heal path only, which
             // storage-stability makes rare.
-            entry.page_id = found.value().page_id;
-            entry.slot = found.value().slot;
-            entry.page_epoch = CurrentRelayoutEpoch(store_, entry.page_id);
-            entry.flags |= stats::kCabinHintValid;
-            serve_scratch_.push_back(Located{entry.pk, entry.page_id, entry.slot});
+            // **The heal, by index** (AT-S7): the store writes it under
+            // the partition's latch, so the descent above never ran under
+            // one.
+            const PageId healed_page = found.value().page_id;
+            const std::uint16_t healed_slot = found.value().slot;
+            entries.Heal(i, healed_page, healed_slot,
+                         CurrentRelayoutEpoch(store_, healed_page));
+            serve_scratch_.push_back(Located{entry.pk, healed_page, healed_slot});
         }
 
         // Moved out of the member for phase 2, for the reason spelled out in

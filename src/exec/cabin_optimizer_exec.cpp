@@ -343,45 +343,72 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
         access.value()->clustered_type == catalog::ClusteredType::kBtree;
 
     for (const stats::CabinKey& key : cabins_.ObservedValuesOf(action.cabin_id)) {
-        std::vector<stats::CabinEntry>* entries = cabins_.Find(key);
-        if (entries == nullptr) continue;
+        const stats::CabinSet set = cabins_.Find(key);
+        if (!set.valid()) continue;
 
-        for (std::size_t i = 0; i < entries->size();) {
-            stats::CabinEntry& entry = (*entries)[i];
+        // **Rebuilt and committed, not edited in place** (AT-S7). This loop
+        // held a `std::vector<CabinEntry>*` and healed, erased and appended
+        // through it, which one store for the instance forbids: the set is
+        // another core's to read while this runs. What it does instead is
+        // what `Commit`'s own header calls the heal path - walk the set,
+        // build the set it should be, and replace it wholesale - and the
+        // replacement is sound for the reason a first recording is, since
+        // every entry in it came from this set or from a descent.
+        //
+        // A reader holding the old set walks on over it, which is safe for
+        // the same reason: what it holds is still a superset.
+        std::vector<stats::CabinEntry> rebuilt;
+        rebuilt.reserve(set.size());
+        bool unobserve = false;
+        for (std::size_t i = 0; i < set.size(); ++i) {
+            stats::CabinEntry entry = set.At(i);
             if (!entry.hint_valid()) {
-                ++i;
+                rebuilt.push_back(entry);
                 continue;
             }
             VerifiedTuple verified =
                 VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch);
             if (verified.ok()) {
-                ++i;
+                rebuilt.push_back(entry);
                 continue;
             }
             if (!is_btree) {
                 // No descent to heal with: the whole value un-observes,
                 // §5's heap answer, and this key's loop is over.
-                cabins_.Unobserve(key);
+                unobserve = true;
                 break;
             }
             auto found = btree::BtreeLookup(store_, access.value()->desc_page_id, entry.pk);
             if (!found.ok()) {
-                if (found.status().code() == StatusCode::kNotFound) {
-                    // Dangling: by K1 dead forever, droppable on sight.
-                    entries->erase(entries->begin() + static_cast<std::ptrdiff_t>(i));
-                    continue;
-                }
+                // Dangling: by K1 dead forever, droppable on sight - which
+                // here means leaving it out of the set being rebuilt.
+                if (found.status().code() == StatusCode::kNotFound) continue;
                 return found.status();
             }
             entry.page_id = found.value().page_id;
             entry.slot = found.value().slot;
             // The healed page's current epoch, through the one producer the
-            // read path's in-place heal also uses - a stamp of 0 against a
-            // bumped page misses on every later resolve and re-heals forever.
+            // read path's heal also uses - a stamp of 0 against a bumped
+            // page misses on every later resolve and re-heals forever.
             entry.page_epoch = CurrentRelayoutEpoch(store_, entry.page_id);
             entry.flags |= stats::kCabinHintValid;
-            ++i;
+            rebuilt.push_back(entry);
         }
+        if (unobserve) {
+            cabins_.Unobserve(key);
+            continue;
+        }
+        // Nothing changed is the common case, and committing then would
+        // spend a recording and an allocation to write back what is
+        // already there.
+        bool same = rebuilt.size() == set.size();
+        for (std::size_t i = 0; same && i < rebuilt.size(); ++i) {
+            const stats::CabinEntry held = set.At(i);
+            same = held.pk == rebuilt[i].pk && held.page_id == rebuilt[i].page_id &&
+                   held.slot == rebuilt[i].slot && held.page_epoch == rebuilt[i].page_epoch &&
+                   held.flags == rebuilt[i].flags;
+        }
+        if (!same) cabins_.Commit(key, std::move(rebuilt));
     }
     ++counters_.heals;
     return Status::OK();

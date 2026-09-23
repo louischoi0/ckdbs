@@ -184,8 +184,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     }
 
     if (key.has_value()) {
-        if (std::vector<stats::CabinEntry>* entries = options.cabins->Find(*key);
-            entries != nullptr) {
+        if (const stats::CabinSet set = options.cabins->Find(*key); set.valid()) {
             options.cabins->NoteHit(options.cabin_id);
 
             // An observed value's set is a **superset** of the pks that
@@ -197,7 +196,11 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             std::unordered_set<std::uint64_t> seen;
             std::vector<parser::AstValue> scratch;
 
-            for (stats::CabinEntry& entry : *entries) {
+            for (std::size_t i = 0; i < set.size(); ++i) {
+                // By value, under the partition's latch (AT-S7): the set is
+                // the instance's, and another core may be healing this
+                // entry while this loop reads it.
+                const stats::CabinEntry entry = set.At(i);
                 if (!seen.insert(entry.pk).second) continue;  // v→v′→v round trip
 
                 PageId at_page = kInvalidPageId;
@@ -228,14 +231,8 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                         if (found.status().code() == StatusCode::kNotFound) continue;
                         return found.status();
                     }
-                    entry.page_id = found.value().page_id;
-                    entry.slot = found.value().slot;
-                    // Stamped from the fetch below - a heal that wrote 0
-                    // against a bumped page would miss and re-heal forever.
-                    entry.page_epoch = 0;
-                    entry.flags |= stats::kCabinHintValid;
-                    at_page = entry.page_id;
-                    at_slot = entry.slot;
+                    at_page = found.value().page_id;
+                    at_slot = found.value().slot;
                 }
 
                 if (budget != nullptr) {
@@ -245,10 +242,15 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 auto bytes = store.GetForRead(at_page);
                 if (!bytes.ok()) return bytes.status();
                 heap::PageView page(bytes.value().bytes());
-                // The hint's epoch tracks the page it names. A no-op for a
-                // verified entry (equality was just checked); the real
-                // stamp for a healed one.
-                entry.page_epoch = static_cast<std::uint32_t>(page.RelayoutEpoch());
+                // **The heal, by index** (AT-S7): the store writes the
+                // hint under its partition's latch, so a page read never
+                // happens under one. A no-op in substance for a verified
+                // entry - the location it writes back is the location that
+                // just verified - and the real heal for a descended one,
+                // whose epoch has to come from the page this fetch just
+                // read rather than from a 0 that would miss forever.
+                set.Heal(i, at_page, at_slot,
+                         static_cast<std::uint32_t>(page.RelayoutEpoch()));
                 auto tuple = page.ReadTuple(at_slot);
                 if (!tuple.ok()) {
                     if (tuple.status().code() == StatusCode::kNotFound) continue;
