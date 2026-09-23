@@ -17,6 +17,7 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/txn/lock_table.hpp"
 #include "kds/stats/access_batch.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
@@ -71,10 +72,16 @@
 //      the Cabin** (AK-S2, 2026-09-02): a peer holds its own
 //      `stats::CabinStore`. It reads no catalog page and writes none -
 //      observation is memory-resident on the core whose writes append to
-//      it - and a relation's one owner is exactly the core every write to
-//      it lands on and every shipped read of it runs on, so the owner's
-//      store is the only one that can observe a value *and* stay a
-//      superset through the writes that follow (`cabin.md` §4b).
+//      it. **What made that sound was an invariant that is gone**: a
+//      relation's one owner used to be exactly the core every write to it
+//      landed on and every shipped read of it ran on, so the owner's
+//      store was the only one that could observe a value *and* stay a
+//      superset through the writes that follow (`cabin.md` §4b). A write
+//      runs where the session is since AT-S5 and a read since AT-S6, so a
+//      store here is missing whatever another core wrote - a live defect
+//      with an owner (`docs/inflight/bugs/a-cabin-set-serves-a-query-short-across-cores.md`,
+//      AT-S7's). What holds it where it already was is `CabinScopeCovers`'
+//      owner test, not this paragraph.
 //
 // ---- Why a peer records nothing (P6's known cost) -----------------------
 //
@@ -186,10 +193,13 @@ public:
         stats::CabinLimits cabin_limits;
 
         // The lock family's fault net, from core 0's
-        // `lock_wait_fault_net_ms` - `kLockWaitFaultNetNs` is the default
-        // and `txn/lock_table.hpp` carries what it means. Zero where
-        // nobody configured one, which is a fixture.
-        sched::MonoTimeNs lock_wait_fault_net_ns = 0;
+        // `lock_wait_fault_net_ms`; `txn/lock_table.hpp` carries what it
+        // means. **Defaulted to the constant, not to 0**: 0 is a value an
+        // operator may set - refuse at once instead of waiting - so a
+        // field that used it for "nobody said" would turn every
+        // unconfigured peer into that policy. The dispatcher's own member
+        // carries the same default for the same reason.
+        sched::MonoTimeNs lock_wait_fault_net_ns = txn::kLockWaitFaultNetNs;
 
         // RD5's `range_size_ids`, copied from core 0 like every other
         // shared setting. One number sizes both the row-id lease grant and
@@ -653,20 +663,11 @@ private:
     // registered no edge, the shipped-statement park - so the dispatcher
     // kept AO-S3's narrow rule above one core. AO-S4b records that edge
     // where it can be recorded, on the owner at enrolment
-    // (`shipped_statement_executor.hpp`), and lifts the rule. The FK probe
+    // (`docs/spec/cross-owner-txn.md, retired`), and lifts the rule. The FK probe
     // park registers none and waits on nothing yet; AO-S5(b) owes both.
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
 
-    // **Statement shipping, both halves, on every core** (SS1's rule: an
-    // owner with no request handler and an arrival core with no reply
-    // receiver each cost a shipped statement a full deadline and a false
-    // `UnknownOutcome`, and from the arrival core the two are
-    // indistinguishable from a slow owner). Armed at AttachTransport,
-    // peer or not, because shipping runs in both directions - core 0's
-    // client ships to a peer's server and a peer's client ships to core
-    // 0's.
-    //
     // The client listener this core accepts on, when per-core listeners are
     // configured (PW5). It borrows the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so

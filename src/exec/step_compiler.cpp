@@ -1025,7 +1025,7 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
 // **Why it is a re-derivation and not a decode.** The owner does not
 // reconstruct what the session compiled; it compiles the step again,
 // against **its own** catalog, and gets whatever *it* can serve. That is
-// the same argument `statement_ship_service.hpp` makes for shipping text
+// the same argument statement shipping made for carrying text, before AT-S6 retired it
 // rather than a plan - binding on the owner is the only authoritative
 // resolution - applied to the one part of a step that is core-local.
 //

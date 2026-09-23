@@ -182,14 +182,20 @@
 //     its hold at the *next* `Fetch`, so the Cabin build's spill fetches
 //     (`cabin_optimizer_exec.cpp`, phase 2) run inside it, `S(leaf)` then
 //     `S(var-heap page)`. Shares never block shares, so a cycle needs an
-//     exclusive waiter on both, and today there can be none: the Cabin
-//     build runs on the relation's owner core (`cabin_optimizer_exec.cpp`,
-//     `ServableBy`) and every write to that relation routes to the same
-//     owner, so the ring's consumer and the only writer of both pages are
-//     one thread. **That is the invariant keeping this pair safe, and
-//     nothing enforces it** - it dissolves the day a cross-core write path
-//     lands, which is the shape to check when the order below is finally
-//     stated rather than one to leave unlisted.
+//     exclusive waiter on both. What ruled that out was an invariant
+//     nothing enforced: the Cabin build ran on the relation's owner core
+//     and every write to that relation routed to the same owner, so the
+//     ring's consumer and the only writer of both pages were one thread -
+//     and the paragraph said it "dissolves the day a cross-core write
+//     path lands". **That day was AT-S5** (a write runs where the session
+//     is), so the invariant is gone and the pair is still taken.
+//
+//     What is left holding it is narrower and is worth stating as what it
+//     is: `CabinScopeCovers` keeps the build on the relation's owner
+//     (AT-S6), and the only two users of `OpenScanRing` are that build and
+//     the relayout planner, which SUS-1 leaves dark for every relation
+//     created since 2026-09-05. So the exposure is small and unreached
+//     rather than closed, and the order below is owed.
 //     A descent holds one at a time, its handle dying per
 //     iteration; through M1 one core
 //     owns its pool, so no two holders of different pages can ever wait on

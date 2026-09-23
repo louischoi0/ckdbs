@@ -133,7 +133,7 @@ StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in);
 // All three fields are the coordinator's, and all three are load-bearing:
 //
 //   - `core` because a session id is minted per core, so two cores mint
-//     the same one (`statement_ship_service.hpp`'s dedup key, one level
+//     the same one (the shipped-statement dedup key, retired at AT-S6, one level
 //     down) - a record keyed on the id alone would resolve one
 //     coordinator's transaction against another's stream;
 //   - `session_id` because that pair is what the participant's enrolment

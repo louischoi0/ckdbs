@@ -3910,7 +3910,7 @@ struct ForeignIndexRig {
 
 void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* table) {
     // The full payload, not 256: a shipped statement's request and reply
-    // each fill exactly one slot (statement_ship_service.hpp's
+    // each fill exactly one slot (the retired ship service's
     // static_asserts), so a narrower ring cannot carry one.
     auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16,
                                                       sched::kCoreRingPayloadBytes);
@@ -4230,7 +4230,7 @@ TEST_F(CoreRuntimeTest, ADropIndexOnAPeerRelationIsAdmittedInsideATransactionAnd
 
 // `AShippedStatementTheOwnerRefusesPoisonsTheTransactionThatSentIt` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
-TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRows) {
+TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
     // D1's read half. This rig installs no pipeline (`SetRemoteReads` is
     // never called), which is the peer's own situation as the pretasks
     // measured it: a plain statement cannot reach P4 from dispatch, so the
@@ -4249,7 +4249,7 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRow
     EXPECT_NE(out.response.find(",30"), std::string::npos) << out.response;
     EXPECT_EQ(out.response,
               rig.peer->dispatcher().Dispatch("SELECT * FROM shipped_read").response)
-        << "a shipped read must answer exactly what the owner answers";
+        << "a read of a peer-owned relation must answer exactly what its owner would";
 }
 
 // **Ten shipped-read cells went at AT-S6**, with the protocol they
@@ -4261,7 +4261,7 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRow
 //     of enrolment. `ShippedReadOwnWrite` is what stands in its place, and
 //     it asserts the opposite, because the enrolment RR1 added is what
 //     made a transaction unable to read its own write once AT-S5 moved the
-//     write (`docs/inflight/bugs/a-shipped-read-cannot-see-its-transactions-own-write.md`).
+//     write, which `ShippedReadOwnWrite` measured and now pins.
 //   - `ARepeatableReadCrossOwnerTransactionReadsOnePinnedViewPerParticipant`
 //     and `...ReadsOneInstantOnEveryCore` (AN-S3): the coordinator's
 //     snapshot riding the wire and each participant adopting it. One core

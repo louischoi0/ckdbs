@@ -244,7 +244,7 @@ enum class ErrorCategory : std::uint16_t {
     // arguments, so folding it into kInvalidArgument would misdirect.
     kResourceExhausted,
     // Appended for StatusCode::kUnknownOutcome (SS1,
-    // server/statement_ship_service.hpp). It earns a category more
+    // docs/spec/crosscore.md §6 (the ship it names is retired)). It earns a category more
     // clearly than either above it: every other category in this list
     // means the statement did not take effect, and this one means nobody
     // can say whether it did. A client that cannot tell it apart cannot

@@ -48,7 +48,7 @@ CoreRuntime::~CoreRuntime() {
     // R6-2: any cross-owner transaction this core was a participant in ends
     // here, rolled back. The worker has joined, so nothing will decide one
     // now, and a transaction left `active_` outlives the executor holding
-    // its session - which is the shape `shipped_statement_executor.hpp`
+    // its session - which is the shape `docs/spec/cross-owner-txn.md` (retired)
     // refuses an autocommit statement for. Recovery would unwind these as
     // losers at the next mount either way; doing it here is what keeps the
     // in-process invariant ("no transaction outlives its executor") true
@@ -733,16 +733,15 @@ void CoreRuntime::Run() {
     // `system` work, and a second timer for a check that is one integer
     // comparison would cost more than it measures.
     if (transport_ != nullptr && config_.wal_drain_interval_ns > 0) {
-        // R6-2's lifetime ceiling on a cross-owner transaction this core is a
-        // participant in. **On every core, not only a peer**: the
-        // coordinator is whichever core holds the client's session, so core
-        // 0 is a participant whenever a peer's client writes a relation core
-        // 0 owns. It has to be a timer rather than a lazy sweep for the same
-        // reason the index-build ceiling is one - an abandoned context is
-        // exactly the one nothing arrives for.
-        scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
-        });
-        // The transaction-id lease rides the same tick (PW1). A peer that
+        // **R6-2's lifetime-ceiling sweep stood here and went with the
+        // protocol** (AT-S6): it expired a cross-owner participant context
+        // nobody decided. Its registration was left behind with an empty
+        // body - a task submitted on every drain tick doing nothing - until
+        // this line removed it. What the removal leaves is recorded as a
+        // gap: no transaction has a lifetime ceiling any more
+        // (`docs/inflight/known-gaps.md`).
+        //
+        // The transaction-id lease rides the drain tick (PW1). A peer that
         // has never held a window reads as low, so the first tick asks and
         // a peer is ready to write before a client arrives - which is the
         // point, since `TrxIdSequence::Next()` cannot await a grant.

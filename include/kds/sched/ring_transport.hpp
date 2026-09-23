@@ -199,7 +199,7 @@ private:
 // statement fills exactly one slot - so raising it widens the longest
 // shippable statement with it, and lowering it narrows one. That coupling
 // is deliberate and asserted at the struct rather than left to be
-// discovered (server/statement_ship_service.hpp).
+// discovered (docs/spec/crosscore.md §6).
 inline constexpr std::size_t kCoreRingSlots = 256;
 inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
 

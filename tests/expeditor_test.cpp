@@ -414,6 +414,49 @@ TEST_F(ExpeditorTest, AtOneCoreTheDispatcherHoldsTheInstancesLockTable) {
         << "core 0's dispatcher records its edges in some other table, or none";
 }
 
+// ---- AT-0 item 7: the fault net's key sets the fault net ----------------
+//
+// `in_doubt_ceiling_ms` was re-scoped and renamed to
+// `lock_wait_fault_net_ms` rather than deleted, which is only worth doing
+// if the key reaches the wait. **The AT-S6 review found it did not**: the
+// value was parsed, range-checked and threaded to every dispatcher while
+// the four wait sites read the `constexpr`, so a file setting it changed
+// nothing and three documents said otherwise. This cell is what makes the
+// key's promise checkable from outside.
+//
+// **The mutation**: point a wait site back at `txn::kLockWaitFaultNetNs`
+// and the second expectation reads 1000.
+TEST_F(ExpeditorTest, TheFaultNetsKeyReachesTheDispatcherThatWaits) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    // Unset, every dispatcher carries the constant - which is what keeps a
+    // fixture behaving as it did when the sites read it directly.
+    {
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        ASSERT_TRUE(opened.value()->Start().ok());
+        EXPECT_EQ(opened.value()->dispatcher().LockWaitFaultNetNs(), txn::kLockWaitFaultNetNs);
+    }
+    // Set, the dispatcher waits by it. Milliseconds in, nanoseconds held.
+    config.lock_wait_fault_net_ns = 250ULL * 1'000'000ULL;
+    {
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        ASSERT_TRUE(opened.value()->Start().ok());
+        EXPECT_EQ(opened.value()->dispatcher().LockWaitFaultNetNs(), 250ULL * 1'000'000ULL)
+            << "the key was threaded to the dispatcher and not read by the wait";
+    }
+    // **And 0 is a value, not an absence** - the other policy, which the
+    // key's documentation promises: refuse at once instead of waiting.
+    config.lock_wait_fault_net_ns = 0;
+    {
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        ASSERT_TRUE(opened.value()->Start().ok());
+        EXPECT_EQ(opened.value()->dispatcher().LockWaitFaultNetNs(), 0u)
+            << "0 was read as 'nobody configured one' and replaced by the default";
+    }
+}
+
 TEST_F(ExpeditorTest, AtOneCoreThereIsNoWakeRegistryAndNoTransportToAskIt) {
     // The other half of the two-core wiring cell, and guideline 2's
     // "zero messages, zero allocations" read literally: a single-core

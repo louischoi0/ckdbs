@@ -226,11 +226,12 @@ public:
     // first run minted, and where the walk stopped.
     //
     // **The scope is the reason this exists.** Every other park in the
-    // dispatcher ends its scope and re-runs the statement whole
-    // (`AbandonWriteForShipping`); this one cannot, because a statement
-    // that has written rows is not re-runnable - there are no savepoints,
-    // so an explicit transaction's rows cannot be rolled back to a
-    // statement boundary.
+    // dispatcher re-runs the statement whole; this one cannot, because a
+    // statement that has written rows is not re-runnable - there are no
+    // savepoints, so an explicit transaction's rows cannot be rolled back
+    // to a statement boundary. (`AbandonWriteForShipping` was the other
+    // ending - a scope closed without committing for a statement that
+    // would run elsewhere - and it went with the ship at AT-S6.)
     struct ParkedWrite {
         txn::Transaction* txn = nullptr;
         // The scope owned the transaction (autocommit). Carried because
@@ -272,32 +273,6 @@ public:
         // list is the same fact one level out (R6-3): the cores this
         // transaction enrolled are not the next one's.
         home_core_ = kUnbound;
-        // **And the shipping identity, where this transaction enrolled
-        // anyone** (R6-8 review). A participant's transaction context is
-        // keyed on `(coordinator core, session_id)` alone
-        // (`ShippedStatementExecutor::DedupKey`) - the statement leg carries
-        // no transaction id, so two consecutive transactions of one session
-        // are indistinguishable there. With the id stable for the
-        // connection's life, a *second* transaction's first shipped
-        // statement joined the *first* transaction's context whenever that
-        // context outlived its coordinator - which every `ROLLBACK` leaves
-        // it doing, since nothing tells a participant about a transaction
-        // that never reached prepare. The rolled-back writes then committed
-        // with the next transaction's: a wrong answer, and the one this
-        // clearing removes.
-        //
-        // Conditioned on `participants_`, so it costs exactly the sessions
-        // that ran a cross-owner transaction: an autocommit session's id is
-        // still minted once and kept for its life (SS2's dedup record is
-        // per `(core, session)`, and the measured autocommit path is
-        // untouched), and a one-owner transaction never enrolled anyone and
-        // never had a participant context to leave behind. What it costs
-        // the population it does apply to is one more dedup record per
-        // cross-owner transaction on each participant - retention-bounded
-        // at `kShippedDedupRetentionNs` and capped by
-        // `kShippedDedupMaxRecords`, whose early eviction is counted.
-        if (!participants_.empty()) ship_id_ = 0;
-        participants_.clear();
         // The class this transaction was begun under, for `home_core_`'s
         // reason: `BEGIN ... DURABILITY strict` binds one transaction, and
         // a session whose next statement is autocommit must fall back to
@@ -338,71 +313,13 @@ public:
         return home_core_ == kUnbound || home_core_ == core_id;
     }
 
-    // ---- Statement shipping (SS2, server/statement_ship_service.hpp) ---
-    //
-    // **The identity a shipped statement carries.** The owner keeps the
-    // last outcome per `(arrival core, session)` so a duplicate is answered
-    // rather than run twice, which against engine-issued primary keys is
-    // the difference between an answer and a second row. The id is minted
-    // by the dispatcher on this session's first ship; the sequence counts
-    // the statements this session has shipped.
-    // Zero means "never shipped", which is why the dispatcher mints from 1.
-    //
-    // **Stable for the session's life, with one exception**: a transaction
-    // that enrolled a participant drops it at `Finish()`, so the next
-    // transaction ships under a fresh id. The reason is at that clearing -
-    // the participant's context is keyed on this id and nothing else, so a
-    // reused id lets one transaction inherit another's half.
-    std::uint64_t ship_id() const noexcept { return ship_id_; }
-    void set_ship_id(std::uint64_t id) noexcept { ship_id_ = id; }
-    std::uint64_t NextShipSequence() noexcept { return ++ship_sequence_; }
-
-    // **This session is running a statement that arrived shipped**, set by
-    // the owner's executor on the session it mints (SS3). A shipped
-    // statement never ships again: two cores whose catalogs disagree about
-    // an owner would otherwise pass one statement back and forth, each hop
-    // a fresh identity the dedup record cannot recognise, until a deadline
-    // fired on every one of them. One hop, and the second core refuses as
-    // it always did.
-    bool shipped() const noexcept { return shipped_; }
-    void mark_shipped() noexcept { shipped_ = true; }
-
-    // ---- Cross-owner participants (R6-3, D1) ---------------------------
-    //
-    // **The cores this transaction has enrolled as participants**, in the
-    // order it discovered them - D1's "participants are relation owners,
-    // discovered as the transaction runs rather than declared up front". A
-    // transaction becomes cross-owner at the moment its second owner is
-    // touched, and this vector is empty until then, which is what makes the
-    // fast path a test on `empty()` rather than a lookup.
-    //
-    // Not the home core, and not a replacement for it: `home_core_` is
-    // where *this* core's half of the transaction lives, and these are the
-    // other cores' halves. A one-owner transaction has a home and no
-    // participants, and takes the single-core path unchanged.
-    //
-    // Cleared by `Finish()` with the transaction, for `home_core_`'s
-    // reason: an enrolment belongs to the transaction that opened it, and a
-    // list carried into the next one would prepare cores that transaction
-    // never touched.
-    const std::vector<std::uint32_t>& participants() const noexcept { return participants_; }
-    bool has_participants() const noexcept { return !participants_.empty(); }
-
-    // Idempotent: a transaction that ships four statements to one owner has
-    // one participant, and prepares it once.
-    void EnrolParticipant(std::uint32_t core_id) { AddUnique(participants_, core_id); }
-
-    // **Whether this transaction has already shipped a statement to
-    // `core_id`** (RR0). What the wire's `join` bit is: true means the
-    // participant must already hold a context and may not open a second
-    // one. Read before `EnrolParticipant` records the ship, so the
-    // enrolling statement itself answers false.
-    bool HasParticipant(std::uint32_t core_id) const noexcept {
-        for (std::uint32_t core : participants_) {
-            if (core == core_id) return true;
-        }
-        return false;
-    }
+    // **Statement shipping's identity and the participant list stood here
+    // until AT-S6**, and went with the protocols: `ship_id_` and its
+    // sequence keyed a shipped statement's dedup record and a
+    // participant's context; `shipped_` kept a statement that arrived
+    // shipped from shipping on; `participants_` was what a `COMMIT`
+    // prepared and decided. No statement crosses, so a session is one
+    // core's and holds none of it (`docs/spec/cross-owner-txn.md`).
 
     // Which commands a poisoned session still answers (section 10-8).
     // Deliberately a whitelist rather than a blacklist: a new statement
@@ -440,24 +357,6 @@ private:
     // is every session almost all of the time.
     std::optional<ParkedWrite> parked_write_ = std::nullopt;
     std::uint32_t home_core_ = kUnbound;
-    std::uint64_t ship_id_ = 0;
-    std::uint64_t ship_sequence_ = 0;
-    bool shipped_ = false;
-    // R6-3. A vector rather than a set: the count is bounded by the core
-    // count, which is small, and the discovery order is worth keeping - it
-    // is the order the prepare messages go out in and the order a log line
-    // names them in.
-    // The one "linear scan, push if absent" these three lists share. A
-    // participant list is at most `kMaxParticipants` long, so a scan is the
-    // right shape and a set would be a second concept for the same thing.
-    static void AddUnique(std::vector<std::uint32_t>& into, std::uint32_t core_id) {
-        for (std::uint32_t core : into) {
-            if (core == core_id) return;
-        }
-        into.push_back(core_id);
-    }
-
-    std::vector<std::uint32_t> participants_;
 };
 
 }  // namespace kds::server

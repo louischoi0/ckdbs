@@ -69,16 +69,11 @@ TEST(SessionHomeCoreTest, TheBindingBelongsToTheTransactionNotTheConnection) {
 // refusal it pinned, `CrossCoreWriteRefused`, went with the route - a write
 // runs where the session is, and no core refuses another's relation.
 
-TEST(CoreAffinityTest, AReadRefusalIsNotRetryable) {
-    // Retrying changes nothing, and telling a client to retry a statement
-    // that can never run here costs it a loop.
-    Status s = CrossCoreReadNotImplemented(/*this_core=*/0, /*target=*/1, "trades");
-    EXPECT_EQ(s.code(), StatusCode::kNotImplemented);
-    EXPECT_NE(s.message().find("trades"), std::string::npos) << s.message();
-    EXPECT_NE(s.message().find("pipeline"), std::string::npos)
-        << "the message should name the route that could not take this "
-           "statement: " << s.message();
-}
+// `AReadRefusalIsNotRetryable` stood here until AT-S6: it pinned that the
+// cross-core read refusal was `NotImplemented` and named the pipeline. The
+// refusal and its helper went with the route - a read of another core's
+// relation is answered here, which `AReadOfAnotherCoresRelationIsAnsweredHere`
+// above is what says.
 
 // ---- §6's counters -----------------------------------------------------
 

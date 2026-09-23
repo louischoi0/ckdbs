@@ -109,9 +109,14 @@ target of an `INSERT`/`UPDATE`/`DELETE`, or the relation a remote step is
 streaming on another core, holds the `IS` for the whole statement - from
 the bind, or on a remote stage from its own resolve, to the end - where only
 a scan's outermost walk held it before. Under a
-continuous stream of such statements a drop reaches the lock family's 11 s
-net and is refused where it used to succeed, which is the sentence above
-with a larger population of readers behind it.
+continuous stream of such statements a drop reaches the lock family's
+fault net and is refused where it used to succeed, which is the sentence
+above with a larger population of readers behind it. **The net is 1 s
+since AT-S6** - it was 11 s while a holder could sit inside a
+coordinator's phase deadline, and no holder waits on another core now -
+so that refusal is roughly eleven times easier to reach than when this
+paragraph was written, and `lock_wait_fault_net_ms` is what an operator
+who wants the old bound sets.
 
 **And it is not only readers.** A relation `X` is refused by the `IX`
 every writer of the relation holds, so a drop also waits for a transaction

@@ -402,7 +402,7 @@ owned**, and it is retired in two halves:
   unnecessary: the write it was written beside had stopped shipping, so
   the two halves of one transaction ran under two transaction ids and the
   read could not see its own uncommitted row
-  (`docs/inflight/bugs/a-shipped-read-cannot-see-its-transactions-own-write.md`).
+  (`tests/shipped_read_own_write_test.cpp` is the cell that measured it and now pins the fix).
   The two-phase commit protocol lost its last traffic with it
   (`cross-owner-txn.md`, retired).
 

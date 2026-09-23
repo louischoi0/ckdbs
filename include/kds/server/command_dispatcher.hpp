@@ -34,7 +34,6 @@
 #include "kds/server/core_affinity.hpp"
 #include "kds/server/range_alloc.hpp"
 #include "kds/stats/trace.hpp"
-#include "kds/server/commit_phase_stats.hpp"
 #include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/session.hpp"
@@ -370,12 +369,12 @@ struct DispatchOutcome {
 // surface, can be pinned by a test that owns no socket and no dispatcher.
 std::string ErrorReply(const Status& status);
 
-// **The inverse**, and it exists for exactly one caller: a statement
-// executed on its owner core answers in a rendered line, and what has to
-// cross back to the arrival core is the *code* - because the arrival core
-// re-renders through `ErrorReply` and the `retryable` bit a client's retry
-// loop reads must be the bit the owner meant (SS3,
-// server/shipped_statement_executor.hpp).
+// **The inverse**, for the paths that hold a rendered `ERR` line and need
+// the *code* back out of it: the KWP session and the KWP load server, four
+// call sites. It was written for one caller that no longer exists - a
+// statement executed on its owner core answered in a rendered line, and
+// the `retryable` bit a client's retry loop read had to be the bit the
+// owner meant - which went with statement shipping at AT-S6.
 //
 // A dispatcher's outcome carries no `Status`: every handler renders one at
 // its own return, and threading a code back out would touch every write
@@ -1705,10 +1704,6 @@ public:
     }
     bool cabin_optimizer_enabled() const noexcept { return cabin_optimizer_enabled_; }
 
-    // XF4's coordinator legs, for `SHOW META` and for the tests that assert
-    // a one-owner commit records nothing. Read-only: nothing outside the
-    // parked commit block may write them.
-    const CoordinatorCommitStats& xowner_commit_stats() const noexcept { return xowner_commit_; }
 
     // What the mount's recovery did, for `SHOW META` (RC09). A pointer into
     // the report the mount owns - `Expeditor::recovery_`, which outlives this
@@ -2358,10 +2353,14 @@ private:
     std::optional<DispatchOutcome::LockWait> lock_wait_ = std::nullopt;
     std::size_t statement_trail_mark_ = 0;
 
-    // The fault net this dispatcher was configured with, or 0 where
-    // nobody configured one - a fixture, which then does not wait, exactly
-    // as it did before the net existed.
-    sched::MonoTimeNs lock_wait_fault_net_ns_ = 0;
+    // **The fault net every wait in this file is bounded by**, and the
+    // one thing `lock_wait_fault_net_ms` sets. Defaulted to the constant
+    // rather than to 0, which is what makes a dispatcher nobody
+    // configured - every fixture - behave exactly as it did when the four
+    // wait sites read the constant directly. **0 is a value, not an
+    // absence**: it is the other policy, a statement refused at once
+    // instead of waiting, and the key's documentation promises it.
+    sched::MonoTimeNs lock_wait_fault_net_ns_ = txn::kLockWaitFaultNetNs;
     // See `set_locks`. Null means no detector, which means AO-S3's guard.
     txn::LockTable* locks_ = nullptr;
 
@@ -2440,14 +2439,6 @@ private:
     // A refusal, never a truncation.
     std::uint64_t max_insert_rows_ = parser::kDefaultMaxInsertRows;
 
-    // **The coordinator's per-leg commit times** (XF4,
-    // `commit_phase_stats.hpp`). A plain member rather than an injected
-    // pointer, unlike the lease refills beside it in `SHOW META`: those are
-    // stamped by `CoreRuntime` and the ring handlers and so must live where
-    // both can reach them, while every one of these four legs begins and
-    // ends inside this class's own parked commit block. Nothing else writes
-    // it and nothing off this core reads it.
-    CoordinatorCommitStats xowner_commit_;
     // The physical optimizer's mode and R1 half-life (workplan PX06).
     // Shadow costs nothing at rest - the planner is pull-only, computed
     // when `SHOW RELAYOUT` asks - so shadow is the default here as it is
@@ -2519,11 +2510,6 @@ private:
     DispatchOutcome CommitLocal(Session& session, wal::Lsn* commit_lsn = nullptr);
     DispatchOutcome RollbackLocal(Session& session);
 
-    // **The one way an owned write scope ends without committing**: the
-    // statement is not this core's to finish. It kept the rows and the
-    // transaction while a statement parked on a probe or went to another
-    // owner; what reaches it now is the KWP load path's own abandon.
-    Status AbandonWriteForShipping(Session& session, WriteScope& scope);
 
 
     // `target_id`, when present, is the pk of the row this statement is

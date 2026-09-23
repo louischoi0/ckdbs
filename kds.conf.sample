@@ -573,7 +573,7 @@ sort_max_rows = 1048576
 # measuring it.
 join_build_max_rows = 65536
 
-# ---- Cross-owner transactions ----------------------------------------------
+# ---- Waits -----------------------------------------------------------------
 
 # How long a statement may wait for what it needs before the engine calls
 # the wait a **fault** and refuses the waiter (`lock_wait_fault_net_ms`).

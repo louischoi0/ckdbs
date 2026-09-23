@@ -193,7 +193,7 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // must not see the message arrive as a bare "ERR ..." in the meantime.
     {StatusCode::kAssertionViolation, "ASSERTION_VIOLATION retryable=0 "},
     // A shipped statement whose reply never came (SS1,
-    // server/statement_ship_service.hpp). Its own spelling because it is the
+    // docs/spec/crosscore.md §6). Its own spelling because it is the
     // one refusal here that does **not** mean "nothing happened": the
     // statement may have committed on its owner. A client must be able to
     // tell it from the bare `ERR` it would otherwise wear, because the
@@ -326,7 +326,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
         // - a shape whose total is the net times the number of rounds.
         if (*statement_deadline_ns == 0) {
             *statement_deadline_ns =
-                NowNs() + static_cast<sched::MonoTimeNs>(txn::kLockWaitFaultNetNs);
+                NowNs() + lock_wait_fault_net_ns_;
         }
         const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
         // **The waiter's identity for the wait-for graph** (AO-S4a). Only
@@ -504,8 +504,8 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
                 Status::TxnConflict(
                     held + " is held by transaction " +
                     std::to_string(block.trx_id) + ", which has not decided after " +
-                    std::to_string(txn::kLockWaitFaultNetNs / 1'000'000'000) +
-                    " s; the write hit the lock-wait fault net and was refused. " + why));
+                    std::to_string(lock_wait_fault_net_ns_ / 1'000'000) +
+                    " ms; the write hit the lock-wait fault net and was refused. " + why));
         }
     }
     co_return Status::OK();
@@ -572,7 +572,7 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // a statement that waits for a row and then for a relation has waited
     // once (AO-S6d, item 16).
     if (*statement_deadline_ns == 0) {
-        *statement_deadline_ns = NowNs() + static_cast<sched::MonoTimeNs>(txn::kLockWaitFaultNetNs);
+        *statement_deadline_ns = NowNs() + lock_wait_fault_net_ns_;
     }
     const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
 
@@ -628,8 +628,8 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
         // once, at the site that knew what it asked for.
         if (logging(LogLevel::kWarn)) {
             log_->Warn("lock", "core " + std::to_string(core_id_) + " refused a statement after " +
-                                   std::to_string(txn::kLockWaitFaultNetNs / 1'000'000'000) +
-                                   " s waiting for " + txn::LockUnitName(wait.key.unit) + " oid " +
+                                   std::to_string(lock_wait_fault_net_ns_ / 1'000'000) +
+                                   " ms waiting for " + txn::LockUnitName(wait.key.unit) + " oid " +
                                    std::to_string(wait.key.rel_oid) + ", held by " +
                                    HolderName(wait.holder));
         }
@@ -1457,29 +1457,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     refill_block("trxid", trx_id_refill_stats_);
     refill_block("rowid", row_id_refill_stats_);
 
-    // **What each leg of a cross-owner commit costs** (XF4,
-    // `commit_phase_stats.hpp`). Three results files billed for this and
-    // each had to reason about the chain from its total alone; these are
-    // the legs.
-    //
-    // **Absent until this core has walked one**, the same rule the recovery
-    // and in-doubt blocks keep: on a single-owner instance every field here
-    // is structurally zero, and printing zeroes would read as "the protocol
-    // ran and cost nothing" rather than "the protocol did not run". The
-    // coordinator's block and the participant's are independent, because a
-    // core can be one without ever being the other - a coordinator that
-    // owns no relation the transaction touched, a participant whose own
-    // clients never open a cross-owner transaction.
-    //
-    // Microseconds on the wire and nanoseconds inside, which is the refill
-    // block's convention immediately above. `_n` is the leg's walk count
-    // and it is not the same on every leg by design: `decision_n` short of
-    // `commit_n` counts the commits that aborted, `part_durable_n` short of
-    // `part_ack_n` counts the records that never made the device.
-    const auto leg = [&os](const char* name, const PhaseLeg& l) {
-        os << ' ' << name << "_n=" << l.count << ' ' << name << "_us=" << l.total_ns / 1000
-           << ' ' << name << "_max_us=" << l.max_ns / 1000;
-    };
+    // **XF4's per-leg renderer stood here and went with its callers**
+    // (AT-S6). It printed what each leg of a cross-owner commit cost -
+    // the coordinator's four and the participant's three - and the four
+    // call sites went with the protocol two hunks above. Left as a
+    // `set but not used` warning by that deletion until this line.
     // The cross-core writes this core refused, `crosscore.md` §6's "input
     // the future placement/2PC decision will be made from". Printed
     // unconditionally, zero included: unlike the blocks above it, a zero
@@ -4528,36 +4510,6 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     return out;
 }
 
-Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& scope) {
-    if (scope.txn != nullptr && !scope.owned) {
-        // **R6-8: an enrolled ship, and there is nothing here to end.** The
-        // scope is the client's own open transaction, which this core goes
-        // on running - the statement went to another owner, this half wrote
-        // nothing, and nothing failed. Ending it the way an autocommit
-        // scope is ended would take `EndWrite`'s failure arm, which
-        // **poisons the session**: a cross-owner transaction would be
-        // aborted by its own first shipped statement, and the client would
-        // be told to ROLLBACK a transaction that is intact.
-        //
-        // The verdict a shipped statement's owner returns still poisons,
-        // and `DispatchAsync` takes it where that verdict arrives - here
-        // there is no verdict yet.
-        //
-        // **`scope.txn != nullptr` is load-bearing, not defence** (R6-8
-        // review): a dispatcher with no transaction manager also produces
-        // an unowned scope, and its end is `EndWrite`'s no-manager arm
-        // settling the statement's assertion reservations under
-        // `kBootstrapXid`. That arm is the autocommit ship's on such a
-        // configuration and predates this row, so the test is what keeps
-        // R6-8 to the shape it claims - an explicit transaction, which is
-        // the only unowned scope that has a transaction behind it.
-        return Status::OK();
-    }
-    return EndWrite(session, scope,
-                    Status::Unsupported("the statement was shipped to the core that owns its "
-                                        "relation; this core wrote nothing"));
-}
-
 Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                                              Session& session,
                                              std::optional<std::uint64_t> target_id) {
@@ -5108,13 +5060,20 @@ namespace {
 // value-bearing uncorrelated one (`IN` / `NOT IN` / the scalar form),
 // since their set is row-independent but their comparison is not.
 //
-// Walking only the first two is a **wrong answer, not a missed refusal**:
-// the shared-nothing fault check in `DevicePageStore::ResidentBytes` is
-// `#ifndef NDEBUG`, so in a release build a step reading a relation this
-// core does not own faults the page anyway and judges its visibility
-// against the wrong core's transaction manager. Measured: on a two-core
-// rig `SELECT * FROM peer_rel WHERE v IN (SELECT v FROM core0_rel)`
-// answered an empty result set instead of the matching row.
+// **What this walk is for has changed, and the old reason is worth
+// recording because it is now false.** It was: a step reading a relation
+// this core does not own faults the page anyway in a release build and
+// judges its visibility against the wrong core's transaction manager -
+// measured, on a two-core rig, as an empty result set where a row
+// matched. Visibility is the instance's shared window since AN-R1, and
+// reading another core's pages is what every statement does since AM-S2
+// step 3, so that answer is no longer wrong and this walk no longer
+// prevents it.
+//
+// What it prevents now is narrower and still worth the walk: a **split**
+// relation reached through a sub-chain would be walked short by
+// `WalkHeadsFor`, which is `CheckReadAffinity`'s one refusal, and a
+// sub-chain that never reached this visitor would slip past it.
 //
 // `fn` stops the walk by answering false, which both callers below use as
 // their refusal.
@@ -5141,7 +5100,7 @@ bool VisitRelationSteps(const exec::StepChain& chain, const StepVisitor& fn) {
 
 Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
     // Every step a sub-chain of any kind can reach, through the one walk
-    // `VisitRelationSteps` states (above `SoleForeignOwner`). It used to
+    // `VisitRelationSteps` states (just above). It used to
     // scan the hoisted sub-chains and the chain's own steps only, which
     // left `WHERE x IN (SELECT ... FROM <another core's relation>)` and
     // every correlated sub-chain unchecked - and a release build does not
@@ -7716,8 +7675,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // write it was written beside stopped shipping at AT-S5, so the
         // two halves of one transaction ran under two transaction ids and
         // a read could not see its own uncommitted write
-        // (`docs/inflight/bugs/a-shipped-read-cannot-see-its-transactions-own-write.md`,
-        // measured on the two-core rig). The fork's own comment argued for
+        // (`tests/shipped_read_own_write_test.cpp`,
+        // which measured it on the two-core rig and now pins the fix). The fork's own comment argued for
         // shipping on exactly that ground - *"only the peer's own
         // transaction can show it"* - which had become the argument for
         // the defect.

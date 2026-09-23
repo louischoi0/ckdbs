@@ -74,12 +74,13 @@ namespace kds::server {
 //     convert, which is a statement inside an explicit transaction and a
 //     statement spanning two owners.
 //
-// That residue is the better evidence base, not a worse one: it is exactly
-// the population 2PC would address, with the population a routing layer
-// already handles taken out of it. What shipping converts is counted
-// separately by `ShippedStatementExecutor` and `StatementShipClient`
-// (`SHOW META`'s `shipped_*` fields). A reading of this counter must say
-// which era it was taken in; the field name does not.
+// **All of that is history, and the counter outlived it** (AT-S5, AT-S6).
+// Nothing is shipped and nothing is refused for ownership: a write runs
+// where the session is and so does a read. What the counter records now is
+// cross-core writes that **ran** - `crosscore.md` §6 - so the name is the
+// one thing about it that is still pre-route, and the prose sweep renames
+// it. A reading must say which era it was taken in; the field name does
+// not.
 class CrossCoreWriteCounters {
 public:
     struct Key {
@@ -115,17 +116,11 @@ private:
 };
 
 
-// The refusal a **read** spanning cores gets when the step pipeline cannot
-// take it (R4-R/RS0). The pipeline itself is built and lives on every core
-// since RR2 - what this refusal reports is a *shape* outside the class
-// `HandleSelect`'s fan-in route serves, which the message spells out.
-//
-// `Unsupported`, deliberately not retryable: retrying changes nothing, and
-// telling a client to retry a statement that can never run here would be a
-// lie that costs it a loop. The message names the relation and both cores,
-// because the operator's next question is always "so where should it run?".
-Status CrossCoreReadNotImplemented(std::uint32_t this_core, std::uint32_t target_core,
-                                std::string_view relation);
+// `CrossCoreReadNotImplemented` stood here until AT-S6: the refusal a read
+// spanning cores got when the pipeline could not take it, naming both
+// cores and the relation. A read runs where the session is now, and the
+// one shape still refused - a split relation this core does not wholly
+// hold - is named by `CheckReadAffinity` in its own words.
 
 
 // `IndexBuildPending` and `PendingIndexBuilds` stood here until AT-S5e:

@@ -1080,9 +1080,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                               expeditor->config_.aggregate_max_distinct});
     expeditor->dispatcher_->set_sort_max_rows(expeditor->config_.sort_max_rows);
     expeditor->dispatcher_->set_join_build_max_rows(expeditor->config_.join_build_max_rows);
-    // D5's ceiling (R6-5). Core 0 is a participant like any other - a
-    // peer's client writes core-0-owned relations - so its writers block on
-    // an in-doubt row exactly as a peer's do, and both read the same key.
+    // The lock family's fault net, from `lock_wait_fault_net_ms` (AT-0
+    // item 7). Core 0's dispatcher waits by the same bound a peer's does,
+    // which is why both read one key.
     expeditor->dispatcher_->set_lock_wait_fault_net_ns(
         expeditor->config_.lock_wait_fault_net_ns);
     // **The instance's assertion registry** (AT-S5d), before the resume
@@ -1886,19 +1886,6 @@ Status Expeditor::Start() {
         }
         dispatcher_->SetRemoteReads(&*remote_reads_);
 
-        // **Core 0's two halves of statement shipping** (SS1/SS3): the
-        // owner's, because a peer ships core 0 every statement against a
-        // relation core 0 owns, and the arrival core's, because core 0's
-        // own clients name peer-owned relations. Registered before the
-        // dispatcher is told about the client, for `remote_reads_`' reason -
-        // a reply must never beat its receiver.
-        //
-        // The executor is built first: the server holds its seam. Both
-        // borrow this function's `scheduler`, exactly as `index_builds_`
-        // does, and nothing pumps them after `Serve` returns.
-        // The WAL goes in with it (R6-3): core 0 is a participant like any
-        // other - a peer's client writes core-0-owned relations - and a
-        // participant's prepare record is written into its own stream.
         // **Core 0 wires neither statement shipping nor 2PC since AT-S6**,
         // because neither exists: it built its own shipped-statement
         // executor and ship server here, and both halves of the
