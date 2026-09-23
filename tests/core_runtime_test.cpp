@@ -974,7 +974,7 @@ TEST_F(CoreRuntimeTest, APeersCheckpointSkipsWhileAnotherCoresRuns) {
     ASSERT_EQ(anchor.publishes(), 1u) << "the completion checkpoint is ungated and runs at Open";
 
     {
-        const wal::CheckpointGate::Hold other_core(gate);
+        const wal::CheckpointGate::Hold other_core(&gate);
         ASSERT_TRUE(other_core.entered());
         ASSERT_TRUE(peer.value()->Checkpoint().ok()) << "a skip is not a failure";
         EXPECT_EQ(anchor.publishes(), 1u) << "the peer checkpointed while the run was held";
@@ -996,7 +996,7 @@ TEST(CheckpointGateTest, TwoThreadsNeverHoldTheRunAtOnce) {
     std::atomic<std::uint64_t> entered{0};
     const auto contend = [&] {
         for (int i = 0; i < 20000; ++i) {
-            const wal::CheckpointGate::Hold run(gate);
+            const wal::CheckpointGate::Hold run(&gate);
             if (!run.entered()) continue;
             entered.fetch_add(1, std::memory_order_relaxed);
             const int now = inside.fetch_add(1) + 1;

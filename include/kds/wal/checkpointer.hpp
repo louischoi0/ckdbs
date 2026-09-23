@@ -246,7 +246,6 @@ public:
               entered_(gate == nullptr || !gate->running_.exchange(true, std::memory_order_acquire)) {
             if (!entered_) gate_->skipped_.fetch_add(1, std::memory_order_relaxed);
         }
-        explicit Hold(CheckpointGate& gate) noexcept : Hold(&gate) {}
         ~Hold() {
             if (entered_ && gate_ != nullptr) gate_->running_.store(false, std::memory_order_release);
         }
@@ -336,6 +335,15 @@ public:
     // need the checkpoint spread across reactor iterations (tests, and
     // shutdown).
     Status RunToCompletion();
+
+    // **The cadence's one body, core 0's and every peer's** (AT-S8): one
+    // attempt at `gate` (null runs ungated), then `RunToCompletion`, with the
+    // only log lines a timer-driven checkpoint has - it has no caller to
+    // return a status to, so a failure unlogged is a silently widening loss
+    // window. A skip returns OK. `core_id` names the core in those lines.
+    // Not fatal and it disarms nothing: pages a failed run did not flush
+    // stay dirty and the next tick retries them.
+    Status RunGated(CheckpointGate* gate, std::uint32_t core_id);
 
 private:
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,

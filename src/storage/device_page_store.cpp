@@ -622,7 +622,7 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
         // read, and a dirty flag the loser carried is still owed: a create
         // path reaching this would be a bug caught elsewhere, but a miss
         // path that faulted for a write must not leave the winner clean.
-        if (dirty) resident->second.dirty = true;
+        if (dirty) resident->second.MarkDirty();
         if (warm && resident->second.usage < kClockUsageCap) ++resident->second.usage;
         return std::span<std::byte, kPageSize>(*resident->second.bytes);
     }
@@ -725,7 +725,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
         // mutation stays dirty however many readers touch it afterwards.
-        if (mark_dirty) it->second.dirty = true;
+        if (mark_dirty) it->second.MarkDirty();
         // §3.1-2: a saturating bump on every hit, including a read -
         // "recently used" is about access, not about mutation. A *ring*
         // fetch is the one exception (§5): a scan's touch is not heat.
@@ -1303,7 +1303,7 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
         SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
                            StreamStampFor(CurrentCore()));
     }
-    it->second.dirty = true;
+    it->second.MarkDirty();
     // First record since the frame was last written back wins: recLSN is
     // the *oldest* LSN redo must replay to make the page whole, so a later
     // record must never overwrite it (wal.md section 11-1).
@@ -1360,7 +1360,8 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
     return Status::OK();
 }
 
-StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids) {
+StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids,
+                                                  HeldFrames held) {
     // Ascending and unique: id order is file order (page.md section 13),
     // and the queue this drains may name a page twice across sweeps.
     std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
@@ -1384,11 +1385,33 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // phases - no eraser removes a dirty frame; `EvictClean` refuses one
     // outright, `ReleaseScanSlot` abandons it, the sweep only queues it -
     // and it is what makes the third phase's `find` certain to hit.
+    //
+    // **And each page is copied under its own page latch, shared** (AT-S8,
+    // step 1b). The structure latch orders the table, not the bytes: a
+    // writer holds a frame's page latch exclusive while it mutates, and the
+    // frame is marked dirty at the *fetch*, before the mutation. A copy taken
+    // under the structure latch alone could therefore be half of another
+    // core's write - persisted with a valid checksum - and the clean below
+    // then dropped the dirty mark and the recLSN of a frame whose last write
+    // had not gone out: a committed change the next checkpoint's dirty table
+    // no longer names and the redo start may pass, and one a clean eviction
+    // discards outright. Found by AT-S8's review, present since AM-S2 step 3
+    // made one pool serve every core. The share waits out a foreign
+    // exclusive holder, which is running rather than parked - no task parks
+    // holding a pin (the header's page-latch section) - and one page latch is
+    // held at a time, so writeback adds no page-against-page pair. The clean
+    // is then conditional on what the copy saw (`CopiedPage`).
+    struct CopiedPage {
+        Frame* frame = nullptr;
+        std::uint32_t dirty_gen = 0;  // the frame's generation at the copy
+    };
     std::size_t written = 0;
     std::vector<std::byte> scratch;
+    std::vector<CopiedPage> copied;
     for (std::size_t i = 0; i < ordered.size();) {
         std::size_t run = 0;
         std::uint64_t run_lsn = wal::kNoLsn;
+        copied.clear();
         {
             LatchGuard structure(structure_latch());
             auto it = frames_.find(ordered[i]);
@@ -1407,46 +1430,83 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 ++run;
             }
 
-            // (2) checksum, the last thing that touches a page before it
-            // goes out (page.md section 8) - skipped for a headerless page,
-            // which has no field to put one in.
+            // Pinned here, under the hold that found them: a concurrent
+            // writeback may clean one of these, after which the dirty
+            // invariant no longer keeps it resident, and a pin does.
             for (std::size_t k = 0; k < run; ++k) {
-                auto& frame = frames_.find(ordered[i + k])->second;
-                StampIfHeadered(ordered[i + k], std::span<std::byte, kPageSize>(*frame.bytes));
+                Frame& frame = frames_.find(ordered[i + k])->second;
+                CountPin(frame);
+                copied.push_back(CopiedPage{&frame});
             }
+        }
 
-            // **Copied under the hold, always, and that is what makes the
-            // gate below mean anything** (AM-S3). The batch gate above runs
-            // once for the batch maximum, and with one table a stamper on
-            // another core can raise a page's `page_lsn` between that call
-            // and this write - so the bytes going out would be described by
-            // a log record the gate never covered. Measured before this
-            // copy: **34 pages** reached the device past the durable point
-            // in one run of
-            // `EvictionWritebackTest.FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage`.
-            //
-            // The copy freezes the bytes *and* the LSN together, so the
-            // number gated on below is the number in what is written. The
-            // single-page arm used to skip this, safe because the stamper
-            // and the writeback were one thread; that is what sharing ends,
-            // and the memcpy is the cost AM-S3 exists to price.
-            scratch.resize(run * kPageSize);
-            for (std::size_t k = 0; k < run; ++k) {
-                const auto& frame = frames_.find(ordered[i + k])->second;
-                std::memcpy(scratch.data() + k * kPageSize, frame.bytes->data(), kPageSize);
-                // **Skipped for a headerless page**, for the reason
-                // `AwaitWalGate` and the stamping loop skip it: there is no
-                // page_lsn field there, so the bytes at that offset are
-                // payload and read back as an arbitrary number. Found by the
-                // simulation corpus, which failed on nine seeds with
-                // `lsn 18446744073709551615 is at or past the append point`
-                // - a var-heap body's bytes, gated on as though they were a
-                // record.
-                if (IsHeaderless(ordered[i + k])) continue;
-                const std::uint64_t lsn = GetPageLsn(std::span<const std::byte, kPageSize>(
-                    scratch.data() + k * kPageSize, kPageSize));
-                if (lsn > run_lsn) run_lsn = lsn;
+        scratch.resize(run * kPageSize);
+        for (std::size_t k = 0; k < run; ++k) {
+            const PageId page_id = ordered[i + k];
+            CopiedPage& page = copied[k];
+            // Outside the structure latch, PinFrame's order. On the fault
+            // path a held frame ends the run here: the prefix goes out, the
+            // rest keep their dirty marks, and their pins are returned.
+            if (held == HeldFrames::kWait) {
+                AcquirePageLatch(page_id, *page.frame, PinMode::kShared);
+            } else if (!TryAcquirePageLatchShared(page_id, *page.frame)) {
+                LatchGuard structure(structure_latch());
+                for (std::size_t rest = k; rest < run; ++rest) UncountPin(*copied[rest].frame);
+                run = k;
+                break;
             }
+            {
+                LatchGuard structure(structure_latch());
+                // Our share excludes every other core's exclusive hold, so the
+                // bytes are whole. One exclusive hold can coexist with it -
+                // this core's own, a task that holds the frame for write and
+                // reached this flush - and a write through that handle after
+                // the flush is the caller's own sequencing, exactly as on an
+                // unarmed store; the generation is what covers every other
+                // core.
+                page.dirty_gen = page.frame->dirty_gen;
+
+                // (2) checksum, the last thing that touches a page before it
+                // goes out (page.md section 8) - skipped for a headerless
+                // page, which has no field to put one in.
+                StampIfHeadered(page_id, std::span<std::byte, kPageSize>(*page.frame->bytes));
+
+                // **Copied under the hold, always, and that is what makes the
+                // gate below mean anything** (AM-S3). The batch gate above runs
+                // once for the batch maximum, and with one table a stamper on
+                // another core can raise a page's `page_lsn` between that call
+                // and this write - so the bytes going out would be described by
+                // a log record the gate never covered. Measured before this
+                // copy: **34 pages** reached the device past the durable point
+                // in one run of
+                // `EvictionWritebackTest.FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage`.
+                //
+                // The copy freezes the bytes *and* the LSN together, so the
+                // number gated on below is the number in what is written. The
+                // single-page arm used to skip this, safe because the stamper
+                // and the writeback were one thread; that is what sharing ends,
+                // and the memcpy is the cost AM-S3 exists to price.
+                std::memcpy(scratch.data() + k * kPageSize, page.frame->bytes->data(), kPageSize);
+            }
+            UnpinFrame(page_id);  // the share and the pin, one page at a time
+
+            // **Skipped for a headerless page**, for the reason
+            // `AwaitWalGate` and the stamping loop skip it: there is no
+            // page_lsn field there, so the bytes at that offset are
+            // payload and read back as an arbitrary number. Found by the
+            // simulation corpus, which failed on nine seeds with
+            // `lsn 18446744073709551615 is at or past the append point`
+            // - a var-heap body's bytes, gated on as though they were a
+            // record.
+            if (IsHeaderless(page_id)) continue;
+            const std::uint64_t lsn = GetPageLsn(std::span<const std::byte, kPageSize>(
+                scratch.data() + k * kPageSize, kPageSize));
+            if (lsn > run_lsn) run_lsn = lsn;
+        }
+
+        if (run == 0) {  // the run's first frame was held: nothing to write
+            ++i;
+            continue;
         }
 
         // **The gate, on exactly what is about to go out.** `AwaitWalGate`
@@ -1482,12 +1542,19 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         }
 
         // (4) clean, only now: a failure above leaves the frame dirty and
-        // its recLSN intact, so the next writeback retries it.
+        // its recLSN intact, so the next writeback retries it. **And only
+        // what the copy covered** (step 1b): a generation that moved since
+        // the copy is a write fetched after it, whose bytes did not go out;
+        // that frame stays dirty with its recLSN, and a later writeback
+        // carries it.
         {
             LatchGuard structure(structure_latch());
             for (std::size_t k = 0; k < run; ++k) {
                 auto cleaned = frames_.find(ordered[i + k]);
                 if (cleaned == frames_.end()) continue;
+                if (cleaned->second.dirty_gen != copied[k].dirty_gen) {
+                    continue;
+                }
                 cleaned->second.dirty = false;
                 cleaned->second.rec_lsn = wal::kNoLsn;  // nothing to replay into it
                 if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
@@ -1504,7 +1571,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
 StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue() {
     const std::vector<PageId> queued = TakeDirtyEvictionQueue();
     if (queued.empty()) return std::size_t{0};
-    auto written = WriteBack(queued);
+    auto written = WriteBack(queued, HeldFrames::kSkip);
     if (written.ok() && written.value() > 0 && log_ != nullptr &&
         log_->enabled(LogLevel::kDebug)) {
         log_->Debug("pagestore", "writeback drained " + std::to_string(written.value()) +
@@ -2219,11 +2286,30 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
         // `am_s2_pin_protocol_test.cpp` passes with the pair split, which is
         // how that was established rather than assumed. This is the original
         // semantics kept because they are right, not a live defect fixed.
-        if (frame->pins != 0) {
-            --frame->pins;
-            if (live_pins_ != 0) --live_pins_;
-        }
+        UncountPin(*frame);
     }
+}
+
+void DevicePageStore::UncountPin(Frame& frame) noexcept {
+    if (frame.pins != 0) {
+        --frame.pins;
+        if (live_pins_ != 0) --live_pins_;
+    }
+}
+
+bool DevicePageStore::TryAcquirePageLatchShared(PageId page_id, Frame& frame) noexcept {
+#ifdef NDEBUG
+    (void)page_id;
+#endif
+    if (!latch_armed_) return true;
+    if (PageLatch::TryAcquire(frame.latch, PageLatchMode::kShared, CurrentCore()) ==
+        PageLatchOutcome::kBusy) {
+        return false;
+    }
+#ifndef NDEBUG
+    SharedHoldsHere().insert(page_id);
+#endif
+    return true;
 }
 
 void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
@@ -2233,7 +2319,7 @@ void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
     // one that could be measured rather than waiting for a cell of its own.
     LatchGuard structure(structure_latch());
     auto it = frames_.find(page_id);
-    if (it != frames_.end()) it->second.dirty = true;
+    if (it != frames_.end()) it->second.MarkDirty();
 }
 
 Status DevicePageStore::LatchFrameForTest(PageId page_id, PinMode mode, std::uint32_t core) {

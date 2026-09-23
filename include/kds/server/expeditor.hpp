@@ -839,6 +839,13 @@ private:
     // core (`SuperBlockCheckpointAnchor::SetLatch`). `checkpoint_gate_` is
     // what lets at most one of the instance's checkpointers run
     // (`wal::CheckpointGate`); every peer is handed both.
+    //
+    // **Acquisition order** (`rules.md` §3): the superblock latch is taken
+    // holding nothing and is **outer to page 0's page latch** - both writers
+    // take it, then `Get(0)` - and it is released before the store sync, so
+    // it is never held across device I/O and nothing reached from a sync
+    // takes it. The gate is not a latch: a failed attempt skips, so it
+    // orders against nothing.
     Latch superblock_latch_;
     wal::CheckpointGate checkpoint_gate_;
 
@@ -904,6 +911,14 @@ private:
     // and both consumers discard unmatched tags silently.
     std::optional<RemoteStepServer> remote_steps_;
 
+    // Core 0's checkpoint target, and **the instance's anchor**, which every
+    // peer's checkpointer publishes into since AT-S8 - so declared above
+    // `cores_`: reverse-order destruction takes the peers first, and the
+    // teardown sequence that clears `cores_` early is no longer what keeps a
+    // peer from outliving the anchor it holds.
+    std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
+    std::optional<SuperBlockCheckpointAnchor> checkpoint_anchor_;
+
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 
     // Sets every peer's stop flag and kicks it awake (AU-S3: write, then
@@ -918,8 +933,6 @@ private:
     // and nothing to checkpoint.
     void StopStartedCores();
 
-    std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
-    std::optional<SuperBlockCheckpointAnchor> checkpoint_anchor_;
     // The live set a checkpoint records now comes from the transaction
     // manager, which implements wal::ActiveTransactions. `NoActiveTransactions`
     // was correct only while nothing could be live.

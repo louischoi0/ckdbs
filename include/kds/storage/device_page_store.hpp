@@ -158,8 +158,11 @@
 //     included; a reader of that page elsewhere spins, then yields.
 //   - **Held across a durability wait only on the fault path.** WriteBack
 //     takes the WAL gate (EnsureDurable, a wait on the writer thread)
-//     before it writes any byte, and it takes no page latch at all today,
-//     so no frame is latched across the wait; but the sweep that reached
+//     before it writes any byte. It takes each page's latch shared for the
+//     copy since AT-S8 step 1b, one page at a time and released before the
+//     gate, so no frame of its own is latched across the wait - waiting for
+//     a foreign exclusive holder on a flush, trying once and skipping on the
+//     fault path, where the faulting task holds other frames; but the sweep that reached
 //     WriteBack runs inside a fault, and the faulting task may hold *other*
 //     frames latched while it waits. Sound, because the writer thread takes
 //     no page latch; a latency cost under a shared pool, and AM-S3's to
@@ -329,8 +332,18 @@ public:
     // because frames are separate heap allocations; the zero-copy run
     // arrives with page.md §9's preallocated slab, not here.
     //
+    // Each page is copied under its page latch, shared (AT-S8, step 1b), so
+    // what goes out is never half of another core's write. `held` says what
+    // to do about a frame another core holds exclusive: `kWait` waits out
+    // the writer - which is running, since no task parks holding a pin - and
+    // is what a flush owes, `Sync()` being a durability barrier; `kSkip`
+    // leaves it dirty for a later pass, and is the fault path's, whose
+    // faulting task may hold other frames and must not wait on a page here.
+    //
     // Returns how many pages it wrote.
-    StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids);
+    enum class HeldFrames : std::uint8_t { kWait, kSkip };
+    StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids,
+                                    HeldFrames held = HeldFrames::kWait);
 
     // Pages one coalesced run may span, and so the scratch bound: 8 pages
     // = 64 KiB, chosen as the largest single write the background task
@@ -790,10 +803,28 @@ private:
         // touched five times outlives one touched once - which a bit cannot
         // express, and which is the whole of EV1's "no LRU lists".
         std::uint8_t usage = 0;
+
+        // **Bumped at every dirty mark** (AT-S8, step 1b), under the
+        // structure latch like `dirty` itself. A writeback records it at the
+        // copy and cleans the frame only if it has not moved: a write
+        // fetched after the copy marks the frame again, and its bytes are
+        // not in what went out. 32 bits, because the window it spans is one
+        // device write and a hot page can be fetched for write 65,536 times
+        // inside that.
+        std::uint32_t dirty_gen = 0;
+
+        // Every dirty mark goes through here, so none can miss the bump.
+        void MarkDirty() noexcept {
+            dirty = true;
+            ++dirty_gen;
+        }
     };
-    // The latch word landed in existing padding: the frame is the size it
-    // was before AM-S1, and the first assert on it is this one.
-    static_assert(sizeof(Frame) == 32, "Frame grew; the latch word was meant to fill padding");
+    // The latch word landed in existing padding at AM-S1; `dirty_gen` did
+    // not, and grew the frame 32 -> 40 bytes at AT-S8 step 1b - 8 bytes per
+    // 8 KiB page. A 16-bit generation would have fitted the padding and can
+    // wrap inside one device write on a hot page, which is the one failure
+    // the field exists to rule out.
+    static_assert(sizeof(Frame) == 40, "Frame grew; say why beside this assert");
     static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(Frame),
                   "std::atomic_ref needs the word aligned inside the frame");
 
@@ -1094,6 +1125,12 @@ private:
     // other (PinFrame's comment says why).
     void CountPin(Frame& frame) noexcept;
     void AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept;
+    // `CountPin`'s mirror, under the structure latch, for a pin that holds
+    // no page latch (a writeback that met a held frame and skipped it).
+    void UncountPin(Frame& frame) noexcept;
+    // One attempt at a shared hold, with the debug bookkeeping
+    // `AcquirePageLatch` keeps. Always true on an unarmed store.
+    bool TryAcquirePageLatchShared(PageId page_id, Frame& frame) noexcept;
 
     // **The pin tail, with `hold` held on entry** (AM-S2). One copy, because
     // `FetchPinned`'s hit and miss arms had grown into the same seven lines

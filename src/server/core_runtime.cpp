@@ -764,8 +764,21 @@ void CoreRuntime::Run() {
     // PW3 - core 0 has run one since RC08 and a peer ran none, so a peer
     // that wrote left an anchor that never advanced and a stream every
     // later mount replayed whole. A no-op where `checkpointer_` is unset.
+    //
+    // **Staggered by core** (AT-S8): the run is the instance's
+    // (`wal::CheckpointGate`), and every core arms this within milliseconds
+    // of the others with one period, so unstaggered ticks meet each period -
+    // and whenever a run outlasts the start-up skew, the same core wins each
+    // time and the rest skip for good, holding the fold, and so the anchor,
+    // at their completion checkpoints. Core `k` of `n` starts `k/n` of a
+    // period late; core 0's cadence, `Expeditor`'s, starts at phase 0.
     if (checkpointer_.has_value() && config_.checkpoint_interval_ns > 0) {
-        scheduler_->SubmitEvery(config_.checkpoint_interval_ns, [this] { (void)Checkpoint(); });
+        const sched::MonoTimeNs period = config_.checkpoint_interval_ns;
+        const sched::MonoTimeNs phase =
+            period / std::max<std::uint32_t>(config_.core_count, 1) * config_.core_id;
+        scheduler_->SubmitAt(scheduler_->clock().Now() + phase, [this, period] {
+            scheduler_->SubmitEvery(period, [this] { (void)Checkpoint(); });
+        });
     }
 
     // Per core, on the thread that will run the statements - the audit's
@@ -951,43 +964,7 @@ Status CoreRuntime::Checkpoint() {
     // Nothing to do on a core that has no checkpointer: core 0, whose one
     // lives on `Expeditor`, and any runtime handed no anchor.
     if (!checkpointer_.has_value()) return Status::OK();
-
-    // At most one of the instance's checkpointers runs (AT-S8).
-    const wal::CheckpointGate::Hold run(config_.checkpoint_gate);
-    if (!run.entered()) {
-        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-            log_->Debug("checkpoint", "core " + std::to_string(config_.core_id) +
-                                          ": skipped: another core's checkpoint is running");
-        }
-        return Status::OK();
-    }
-
-    // Cumulative counters, so this checkpoint's contribution is the delta -
-    // `Expeditor::Checkpoint`'s reason: logging the running total would read
-    // as "this checkpoint flushed 5 pages" on every tick after the first one
-    // that did.
-    const std::uint64_t flushed_before = checkpointer_->stats().pages_flushed;
-
-    if (Status s = checkpointer_->RunToCompletion(); !s.ok()) {
-        // The one place this becomes visible. It runs on a timer with no
-        // caller to return to, so without the log it is a silently widening
-        // loss window. Not fatal and it does not disarm the cadence: the
-        // pages it did not flush stay dirty and the next tick retries them.
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("checkpoint", "core " + std::to_string(config_.core_id) +
-                                          ": checkpoint failed: " + s.message());
-        }
-        return s;
-    }
-
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("checkpoint",
-                    "core " + std::to_string(config_.core_id) +
-                        ": checkpoint complete: redo_start=" +
-                        std::to_string(checkpointer_->redo_start_lsn()) + " pages_flushed=" +
-                        std::to_string(checkpointer_->stats().pages_flushed - flushed_before));
-    }
-    return Status::OK();
+    return checkpointer_->RunGated(config_.checkpoint_gate, config_.core_id);
 }
 
 Status CoreRuntime::ShutdownCheckpoint() {

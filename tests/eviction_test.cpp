@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdlib>
 #include <atomic>
 #include <memory>
@@ -969,5 +971,159 @@ TEST(EvictionArmedEquivalenceTest, AFaultLeavesAFrameEquallyWarmArmedAndUnarmed)
            "its own fault";
 }
 
+
+// ---- AT-S8 step 1b: writeback against a writer on another core ----------
+//
+// The frame is marked dirty when a writer fetches it, before the writer
+// mutates it, and until step 1b a writeback copied the bytes under the
+// structure latch alone and then cleared the mark and the recLSN whatever
+// had happened meanwhile. Two interleavings, each forced rather than hoped
+// for, and each the one a mutation of the fix fails.
+
+// A device that holds one page's write until released - the window between
+// a writeback's copy and its clean, made as wide as a cell needs.
+class HeldWriteDevice final : public PageDevice {
+public:
+    explicit HeldWriteDevice(PageDevice& inner) : inner_(inner) {}
+
+    void HoldWritesOf(PageId id) { held_.store(id, std::memory_order_release); }
+    void Release() { released_.store(true, std::memory_order_release); }
+    bool writing() const { return writing_.load(std::memory_order_acquire); }
+
+    std::uint32_t page_capacity() const noexcept override { return inner_.page_capacity(); }
+    Status ReadPage(PageId id, std::span<std::byte, kPageSize> out) override {
+        return inner_.ReadPage(id, out);
+    }
+    Status WritePage(PageId id, std::span<const std::byte, kPageSize> in) override {
+        if (id == held_.load(std::memory_order_acquire)) {
+            writing_.store(true, std::memory_order_release);
+            while (!released_.load(std::memory_order_acquire)) std::this_thread::yield();
+        }
+        return inner_.WritePage(id, in);
+    }
+    Status WritePageRun(PageId first, std::uint32_t nr, std::span<const std::byte> in) override {
+        for (std::uint32_t k = 0; k < nr; ++k) {
+            if (Status s = WritePage(first + k, std::span<const std::byte, kPageSize>(
+                                                    in.data() + k * kPageSize, kPageSize));
+                !s.ok()) {
+                return s;
+            }
+        }
+        return Status::OK();
+    }
+    Status EnsureCapacity(std::uint32_t nr_pages) override {
+        return inner_.EnsureCapacity(nr_pages);
+    }
+    Status Sync() override { return inner_.Sync(); }
+
+private:
+    PageDevice& inner_;
+    std::atomic<PageId> held_{kInvalidPageId};
+    std::atomic<bool> released_{false};
+    std::atomic<bool> writing_{false};
+};
+
+constexpr auto kWriterWindow = std::chrono::milliseconds(50);
+
+TEST(WritebackUnderAWriterTest, AFlushWaitsOutAnotherCoresWriteAndCarriesAllOfIt) {
+    // Core 1 holds the page for write and has changed its first body byte
+    // and not yet its last; core 0 flushes. The flush must not copy until
+    // the write is whole. **Mutation**: the copy without the page latch
+    // writes the half-changed image and cleans the frame, so the device
+    // holds the first byte alone.
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    auto opened = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    DevicePageStore& store = *opened.value();
+    store.SetLatchArmed(true, /*concurrent_pinners=*/2);
+    SetCurrentCore(0);
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.Release();
+    ASSERT_TRUE(store.Flush().ok());
+
+    constexpr std::size_t kLast = kPageSize - 1;
+    std::atomic<bool> holding{false};
+    std::atomic<bool> finish{false};
+    std::thread writer([&] {
+        SetCurrentCore(1);
+        auto ref = store.Get(page);
+        ASSERT_TRUE(ref.ok());
+        ref.value().bytes()[kPageBodyOffset] = std::byte{0xAA};
+        holding.store(true, std::memory_order_release);
+        while (!finish.load(std::memory_order_acquire)) std::this_thread::yield();
+        ref.value().bytes()[kLast] = std::byte{0xAA};
+    });
+    while (!holding.load(std::memory_order_acquire)) std::this_thread::yield();
+
+    std::atomic<bool> flushed{false};
+    std::thread flusher([&] {
+        SetCurrentCore(0);
+        EXPECT_TRUE(store.Flush().ok());
+        flushed.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(kWriterWindow);
+    EXPECT_FALSE(flushed.load(std::memory_order_acquire))
+        << "the flush finished while another core held the page for write";
+    finish.store(true, std::memory_order_release);
+    writer.join();
+    flusher.join();
+
+    std::array<std::byte, kPageSize> on_device{};
+    ASSERT_TRUE(device.value()->ReadPage(page, on_device).ok());
+    EXPECT_EQ(on_device[kPageBodyOffset], std::byte{0xAA});
+    EXPECT_EQ(on_device[kLast], std::byte{0xAA})
+        << "the device holds half of the write, and the frame was cleaned";
+}
+
+TEST(WritebackUnderAWriterTest, AWriteFetchedAfterTheCopyKeepsTheFrameDirty) {
+    // Core 0's flush has copied the page and is inside the device write;
+    // core 1 fetches the page for write, changes it and lets it go. The
+    // clean that follows must leave the frame dirty - its last write is not
+    // what went out. **Mutation**: the clean without the generation check
+    // drops the mark, and the change reaches no device until something
+    // dirties the page again.
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    HeldWriteDevice held(*device.value());
+    auto opened = DevicePageStore::Open(held, /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    DevicePageStore& store = *opened.value();
+    store.SetLatchArmed(true, /*concurrent_pinners=*/2);
+    SetCurrentCore(0);
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.Release();
+
+    held.HoldWritesOf(page);
+    std::thread flusher([&] {
+        SetCurrentCore(0);
+        EXPECT_TRUE(store.Flush().ok());
+    });
+    while (!held.writing()) std::this_thread::yield();
+
+    std::thread writer([&] {
+        SetCurrentCore(1);
+        auto ref = store.Get(page);
+        ASSERT_TRUE(ref.ok());
+        ref.value().bytes()[kPageBodyOffset] = std::byte{0xBB};
+    });
+    writer.join();
+    held.Release();
+    flusher.join();
+
+    const std::vector<PageId> dirty = store.DirtyPageIds();
+    EXPECT_NE(std::find(dirty.begin(), dirty.end(), page), dirty.end())
+        << "the flush cleaned a frame written after its copy";
+    ASSERT_TRUE(store.Flush().ok());
+    std::array<std::byte, kPageSize> on_device{};
+    ASSERT_TRUE(device.value()->ReadPage(page, on_device).ok());
+    EXPECT_EQ(on_device[kPageBodyOffset], std::byte{0xBB}) << "the later write never went out";
+}
 }  // namespace
 }  // namespace kds::storage

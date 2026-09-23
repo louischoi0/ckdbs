@@ -293,4 +293,32 @@ Status Checkpointer::RunToCompletion() {
     return Complete();
 }
 
+Status Checkpointer::RunGated(CheckpointGate* gate, std::uint32_t core_id) {
+    const std::string who = "core " + std::to_string(core_id) + ": ";
+    const CheckpointGate::Hold run(gate);
+    if (!run.entered()) {
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("checkpoint", who + "skipped: another core's checkpoint is running");
+        }
+        return Status::OK();
+    }
+
+    // The stats are cumulative over the process, so this run's contribution
+    // is the delta: logging the total would read as "this checkpoint flushed
+    // 5 pages" on every tick after the first one that did.
+    const std::uint64_t flushed_before = stats_.pages_flushed;
+    if (Status s = RunToCompletion(); !s.ok()) {
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("checkpoint", who + "checkpoint failed: " + s.message());
+        }
+        return s;
+    }
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("checkpoint", who + "checkpoint complete: redo_start=" +
+                                      std::to_string(redo_start_lsn()) + " pages_flushed=" +
+                                      std::to_string(stats_.pages_flushed - flushed_before));
+    }
+    return Status::OK();
+}
+
 }  // namespace kds::wal

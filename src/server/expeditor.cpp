@@ -1194,34 +1194,9 @@ Status Expeditor::PersistSuperBlock() {
 }
 
 Status Expeditor::Checkpoint() {
-    // At most one of the instance's checkpointers runs (AT-S8,
-    // `wal::CheckpointGate`); a tick that finds a peer's running skips.
-    const wal::CheckpointGate::Hold run(checkpoint_gate_);
-    if (!run.entered()) {
-        logger_->Debug("checkpoint", "skipped: another core's checkpoint is running");
-        return Status::OK();
-    }
-
-    // CheckpointStats counters are cumulative over the process, so this
-    // one's contribution is the delta. Logging the running total would
-    // read as "this checkpoint flushed 5 pages" on every tick after the
-    // first one that did.
-    const std::uint64_t flushed_before = checkpointer_->stats().pages_flushed;
-
-    Status s = checkpointer_->RunToCompletion();
-    if (!s.ok()) {
-        // The one place a checkpoint failure becomes visible. It runs on a
-        // timer with no caller to return to, so without this it is a
-        // silently widening loss window.
-        logger_->Error("checkpoint", "checkpoint failed: " + s.message());
-        return s;
-    }
-
-    const std::uint64_t flushed = checkpointer_->stats().pages_flushed - flushed_before;
-    logger_->Debug("checkpoint", "checkpoint complete: redo_start=" +
-                                     std::to_string(checkpointer_->redo_start_lsn()) +
-                                     " pages_flushed=" + std::to_string(flushed));
-    return Status::OK();
+    // Under the instance's gate, as every peer's (AT-S8): a tick that finds
+    // another core's checkpoint running skips.
+    return checkpointer_->RunGated(&checkpoint_gate_, /*core_id=*/0);
 }
 
 namespace {
