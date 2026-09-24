@@ -383,7 +383,9 @@ there is no second core's registration to be answered by.
   (`heap-and-tuple.md` §4.1a). A heap relation that has one chain takes ids
   only above its tail page's `min_key` (`ChainInsert`), so once core 0's
   own inserts have opened a tail page above a peer's block, that block's
-  ids are refused. A refusal and never a wrong answer. Insert spreading
+  ids are refused. **The same holds on a relation split before AT-S9**:
+  every leased block lands in its top range, whose chain refuses the same
+  way (found by AT-S9's review). A refusal and never a wrong answer. Insert spreading
   existed to give each core a chain of its own, and AT-S9 retired it on the
   operator's ruling; a heap relation is creatable only before SUS-1, and a
   btree relation - the default since - places each id by descent and is
