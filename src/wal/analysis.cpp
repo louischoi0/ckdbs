@@ -108,8 +108,8 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // entries. With one log the erase would speak for **every core's**
         // records while the flush still speaks for one core's frames - and
         // a handoff is appended by a core that need not be the page's
-        // writer at all (`range_alloc.cpp` appends one from core 0 for a
-        // range head another core will own). It would drop that peer's
+        // writer at all (the retired range allocator appended one from core 0
+        // for a range head another core would own). It would drop that peer's
         // entry and redo's not-dirty filter would skip its record: a lost
         // update, not slow work. Keeping the entry costs redo re-applying
         // what the durable image may already hold, which the `page_lsn`

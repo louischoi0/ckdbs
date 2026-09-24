@@ -1794,7 +1794,8 @@ Status Expeditor::Start() {
         if (Status s = WireStepEndpoints(scheduler, *remote_reads_, *remote_steps_); !s.ok()) {
             return s;
         }
-        dispatcher_->SetRemoteReads(&*remote_reads_);
+        // Not handed to the dispatcher since AT-S9: no statement opens a
+        // stage, so the endpoints have no producer until AT-S10/S11.
 
         // **Core 0 wires neither statement shipping nor 2PC since AT-S6**,
         // because neither exists: it built its own shipped-statement
@@ -2096,9 +2097,7 @@ Status Expeditor::RunUntilStopped() {
     // be undefined to call. Nothing calls one here (every reactor has
     // stopped by this line, which is why the old ordering never bit), but
     // teardown that is correct only because nothing exercises it is the
-    // shape this file has already been caught by once. The dispatcher's
-    // raw borrow is dropped first, in the same spirit.
-    if (dispatcher_.has_value()) dispatcher_->SetRemoteReads(nullptr);
+    // shape this file has already been caught by once.
     remote_steps_.reset();
     remote_reads_.reset();
     transport_.reset();

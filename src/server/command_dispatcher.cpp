@@ -664,14 +664,9 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
 
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
                                              DispatchOutcome* out, CommitAck commit_ack) {
-    // Today this never suspends: every statement runs on the core that owns
-    // its relations, or is refused (core_affinity.hpp). The coroutine is
-    // here so that when a step *can* reach another core, the suspension
-    // point goes inside the executor and nothing above it changes.
-    //
-    // That it never suspends is also what makes this change verifiable: the
-    // whole suite has to behave exactly as it did, because nothing about
-    // when a reply is produced has moved yet.
+    // Every statement runs on the core its session is on (AT-S9). What
+    // suspends here is a statement's own wait - a lock, a blocking writer,
+    // the group commit - never a stage on another core.
     // **The statement may park from here**, which is the whole difference
     // between this entry point and `Dispatch()` - and the condition
     // statement shipping is admitted under (SS2). Set and cleared around
@@ -729,37 +724,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     //
     // Nothing ships, so nothing enrols, so a transaction has no second
     // half anywhere to prepare or to decide: it is this core's, whole, and
-    // its `COMMIT` is the local one. The remote **step** park below is a
-    // different mechanism and stays - a fan-in stage is a read, not a
-    // transaction half.
-
-    if (!out->pending_remote.empty() && remote_reads_ != nullptr) {
-        // The remote read (workplan P4c). The predicate re-finds the state
-        // each poll, so a torn-down read wakes the waiter instead of
-        // dangling a flag address (the reads vector may reallocate).
-        //
-        // **Every stage, one park** (RD7): a fan-in over a split relation
-        // opens one stage per range, and the statement is finished when
-        // the last of them is. One `WaitUntil` over a predicate that ands
-        // them rather than k sequential parks - k parks would serialise on
-        // whichever stage the loop happened to name first, turning a
-        // fan-out into a fan-out-then-queue.
-        const std::vector<PipelineTag> tags = out->pending_remote;
-        // Moved off the outcome for the reason `tags` is copied off it: the
-        // finish **overwrites** `*out`, so anything it reads has to be the
-        // coroutine frame's rather than the object being assigned to.
-        const PendingRemoteRender render = std::move(out->remote_render);
-        const std::function<bool()> finished = [this, tags] {
-            for (const PipelineTag& tag : tags) {
-                SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
-                if (read != nullptr && !read->done) return false;
-            }
-            return true;
-        };
-        co_await sched::WaitUntil{&finished};
-        *out = FinishRemoteReads(session != nullptr ? session->result_sink() : nullptr,
-                                 tags, render);
-    }
+    // its `COMMIT` is the local one. The remote **step** park that stood below
+    // went at AT-S9 with the fan-in and the two-step pipeline, the last two
+    // routes that opened a stage.
 
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
@@ -926,37 +893,6 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
 
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     DispatchOutcome outcome = DispatchAndStage(line, session);
-    if (!outcome.pending_remote.empty()) {
-        // With no reactor there is nothing to pump the reply through, so
-        // the synchronous path can only finish reads that are already
-        // complete - the in-process loopback arrangement tests use. An
-        // incomplete one closes **every** stage and refuses retryably
-        // rather than spinning: a wait with nothing to run the other side
-        // is a hang, and a half-closed fan-in leaks the rest.
-        bool all_done = remote_reads_ != nullptr;
-        if (all_done) {
-            for (const PipelineTag& tag : outcome.pending_remote) {
-                SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
-                if (read == nullptr || !read->done) {
-                    all_done = false;
-                    break;
-                }
-            }
-        }
-        if (all_done) {
-            const PendingRemoteRender render = std::move(outcome.remote_render);
-            outcome = FinishRemoteReads(
-                session != nullptr ? session->result_sink() : nullptr,
-                outcome.pending_remote, render);
-        } else {
-            if (remote_reads_ != nullptr) {
-                for (const PipelineTag& tag : outcome.pending_remote) remote_reads_->Close(tag);
-            }
-            return {ErrorReply(Status::TxnConflict(
-                        "remote read needs the reactor path; retry on a served connection")),
-                    false};
-        }
-    }
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
 
     // Inline, on this thread: the batch is whatever happened to be staged
@@ -3108,9 +3044,9 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
                << " delete_marked=" << report.survey->delete_marked
                << " tuples_per_page=" << report.survey->tuples_per_page;
             // **Absent when the survey covered the whole relation** (H3),
-            // which is every relation on an instance that has not armed
-            // `range_size_ids` - the absent-rather-than-zeroed rule C3's
-            // counters follow, for its reason: a field that reads
+            // which is every relation since AT-S9 made the survey walk
+            // every range - the absent-rather-than-zeroed rule, for its
+            // reason: a field that reads
             // `1/1` forever teaches a reader to skip it, and then it is
             // not read on the one relation where it matters.
             if (report.survey->surveyed_ranges != report.survey->relation_ranges) {
@@ -4140,8 +4076,8 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         }
 
         // The constraints, now that there is a child relation to hang them on.
-        // What can still fail here is the colocation check (F5), which needs the
-        // child's assigned owner core, and catalog I/O. Since D2 the ERR
+        // What can still fail here is catalog I/O (F5's colocation check
+        // retired with owner cores at AT-S9). Since D2 the ERR
         // makes FinishDdlStatement abort the statement's transaction, so
         // the relation's own rows are taken back - the message must not
         // claim otherwise (review B2). What the abort does NOT take back
@@ -4407,8 +4343,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     return out;
 }
 
-Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access,
-                                              Session& session) {
+Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access) {
     // **What is left of the write-affinity check since AT-S9**, and why it
     // is renamed: nothing here asks about a core. It resolved whose range a
     // write landed in and counted a write to another core's range
@@ -4436,9 +4371,6 @@ Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access
             "admitting the write would leave the constraint unchecked; the mount log "
             "names why (docs/spec/assertion.md 6.1)");
     }
-    // The session's home is the core its writes run on - this one, since
-    // AT-S5.
-    session.BindHomeCore(core_id_);
     return Status::OK();
 }
 
@@ -4599,247 +4531,6 @@ StarDescription DescribeStar(std::span<const catalog::SysColumnRow> columns) {
 
 }  // namespace
 
-DispatchOutcome CommandDispatcher::FinishRemoteReads(ResultSink* sink_or_null,
-                                                     const std::vector<PipelineTag>& tags,
-                                                     const PendingRemoteRender& render) {
-    // Every stage is closed on every exit, success or not: a read left
-    // open holds its batches for the session's life, and with a fan-in an
-    // early return would leak the k-1 the failing one did not name.
-    struct CloseAll {
-        SessionStepClient* reads;
-        const std::vector<PipelineTag>& tags;
-        ~CloseAll() {
-            for (const PipelineTag& tag : tags) reads->Close(tag);
-        }
-    } close_all{remote_reads_, tags};
-
-    // **The first stage decides the layout, and the rest must agree by
-    // construction rather than by check.** Siblings of one fan-in are one
-    // step's stages: the session plans one projection and encloses it in
-    // every sibling's open, so a differing layout would be a mis-plan
-    // rather than a data condition - and the per-field decode below is
-    // what catches a wire that disagrees anyway (invariant 13 one level
-    // up), on every sibling, not just the first.
-    SessionStepClient::RemoteRead* head = remote_reads_->Find(tags.front());
-    if (head == nullptr) {
-        return {ErrorReply(Status::IoError("remote read state vanished before completion")),
-                false};
-    }
-
-    std::vector<catalog::SysColumnRow> layout = std::move(head->output_layout);
-    std::vector<std::string> names = std::move(head->column_names);
-    std::vector<std::uint32_t> types = std::move(head->projection_types);
-    if (layout.empty()) {
-        // One renderer for both read shapes (P4d-4b-3): what varies is only
-        // where the layout, the headings and the types come from - planned
-        // by the session (the projected pipeline) or the relation's schema
-        // (the P4c star read, whose layout the read leaves empty). Resolved
-        // once, then one loop - a second formatter is exactly how the local
-        // renderer's own warning says `projection_types` gets forgotten.
-        auto access = catalog_.InitTableAccess(head->rel_oid);
-        if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
-        layout = access.value()->schema.columns;
-        names.reserve(layout.size());
-        types.reserve(layout.size());
-        for (const auto& col : layout) {
-            names.emplace_back(catalog::NameView(col.name));
-            types.push_back(col.type_val);
-        }
-    }
-
-    // **The chain's own output, when the statement named one** (AG3). The
-    // wire rows are the relation's, so the headings are not: a fold labels
-    // its items (`sum(cbm)`) and a projection its columns, both resolved at
-    // compile and copied onto the outcome because the chain does not
-    // survive the park.
-    const bool chain_rendered = render.chain_rendered();
-    const std::vector<std::string>& headings = chain_rendered ? render.column_names : names;
-
-    // Byte-identical to the local reply, because it is emitted through the
-    // same sink: the description, then one row per match.
-    TextResultSink text_sink;
-    ResultSink& sink =
-        sink_or_null != nullptr ? *sink_or_null : static_cast<ResultSink&>(text_sink);
-
-    // The three shapes' types, resolved where the headings are. A star
-    // read describes from the relation's schema - the same description the
-    // owner encoded its rows against - and the two chain-rendered shapes
-    // from what the session planned and carried across the park.
-    std::vector<std::uint32_t> desc_types;
-    std::vector<std::uint32_t> desc_mods;
-    StarDescription star;
-    if (!chain_rendered) {
-        // The same builder the local walk's star read uses, so one
-        // `SELECT *` is described identically whichever route answers it -
-        // including the keystone flag, which the fan-in used to omit
-        // because it passed no projection.
-        star = DescribeStar(layout);
-        desc_types = star.types;
-        desc_mods = star.type_mods;
-    } else if (render.aggregate.has_value()) {
-        desc_types = AggregateOutputTypes(*render.aggregate);
-        desc_mods = AggregateOutputTypeMods(*render.aggregate);
-    } else {
-        desc_types = render.projection_types;
-        desc_mods = render.projection_type_mods;
-    }
-    const std::span<const exec::ColumnRef> desc_projection =
-        !chain_rendered ? std::span<const exec::ColumnRef>(star.projection)
-                        : (render.aggregate.has_value()
-                               ? std::span<const exec::ColumnRef>()
-                               : std::span<const exec::ColumnRef>(render.projection));
-    if (Status described =
-            sink.Describe(DescribeFields(headings, desc_types, desc_mods, desc_projection));
-        !described.ok()) {
-        return {ErrorReply(described), false, 0, described};
-    }
-
-    // The frame a projection or a fold reads through - the same type the
-    // local walk fills, so the two consumers are one consumer. One step,
-    // which the route's gate requires (no join, no sub-chain, nothing
-    // hoisted), so every compiled reference is `{up=0, rel_slot=0}` and the
-    // buffer is this relation's columns.
-    catalog::Schema wire_schema;
-    exec::ChainFrame frame;
-    std::string row_scratch;
-    // Reused across rows for `row_scratch`'s reason: a star read decodes
-    // every column of every row, and allocating a vector per row is the
-    // cost this whole path is built to avoid.
-    std::vector<parser::AstValue> star_values;
-    std::optional<exec::Aggregator> fold;
-    if (chain_rendered) {
-        wire_schema.columns = layout;
-        const std::vector<const catalog::Schema*> schemas{&wire_schema};
-        frame.Open(schemas, nullptr);
-
-        // **Checked once, not per row.** A reference the frame cannot
-        // resolve is a malformed chain, and the compiler's bound is what
-        // makes that unreachable - but `Get` indexes without checking, so
-        // the difference between a reported error and a read past the end
-        // of a vector is this loop. `CanResolve` is the same answer the
-        // executor's own frame gives.
-        auto unresolvable = [&](const exec::ColumnRef& ref) { return !frame.CanResolve(ref); };
-        bool bad = std::any_of(render.projection.begin(), render.projection.end(), unresolvable);
-        // One heading per emitted value, which is what makes the header
-        // line and the row lines the same width. The compiler resolves both
-        // together; a disagreement here is a reply whose columns do not
-        // line up, reported rather than sent.
-        if (!render.projection.empty() &&
-            (render.column_names.size() != render.projection.size() ||
-             render.projection_types.size() != render.projection.size())) {
-            bad = true;
-        }
-        if (render.aggregate.has_value()) {
-            for (const exec::AggregateItem& item : render.aggregate->items) {
-                if (!item.star_arg && unresolvable(item.ref)) bad = true;
-            }
-            bad = bad || std::any_of(render.aggregate->group_keys.begin(),
-                                     render.aggregate->group_keys.end(), unresolvable);
-            bad = bad || render.column_names.size() != render.aggregate->items.size();
-        }
-        if (bad) {
-            return {ErrorReply(Status::InvalidArgument(
-                        "a remote read's output does not describe the rows its stages "
-                        "returned")),
-                    false};
-        }
-
-        if (render.aggregate.has_value()) {
-            // **The aggregator is this statement's, not the dispatcher's.**
-            // `aggregator_` is hoisted to save ~4 us per statement under a
-            // contract that holds only while nothing parks between `Reset`
-            // and `Finish`, and a fan-in parks; the saving is noise against
-            // a stage's wire cost, so the fold is built here and dies here.
-            // Through `Reset`, which is the one way a fold is pointed at a
-            // statement - the local path's too.
-            fold.emplace();
-            if (Status s = fold->Reset(*render.aggregate, render.column_names,
-                                       aggregate_limits_);
-                !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
-            }
-        }
-    }
-
-    // **In `tags` order, which is range order** - the same order the local
-    // walk emits a split relation in (`step_vm.cpp`), so the two answers
-    // are one answer. An error anywhere fails the whole statement rather
-    // than truncating: a fan-in that rendered the stages it could would be
-    // a short answer reported as a complete one.
-    //
-    // The order is what makes a *fold* one answer too, and not only a row
-    // stream: `Finish` emits groups in first-seen order (AG6), so the
-    // groups of a split relation are founded in the order its unsplit twin
-    // founds them.
-    for (const PipelineTag& tag : tags) {
-        SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
-        if (read == nullptr) {
-            return {ErrorReply(Status::IoError("remote read state vanished before completion")),
-                    false};
-        }
-        if (!read->error.ok()) return {ErrorReply(read->error), false};
-
-        for (const auto& batch : read->batches) {
-            std::span<const std::byte> rows;
-            auto header = DecodeStepBatchHeader(batch, rows);
-            if (!header.ok()) return {ErrorReply(header.status()), false, 0, header.status()};
-            auto decoded = wire::DecodeRowBatch(rows, layout.size());
-            if (!decoded.ok()) return {ErrorReply(decoded.status()), false, 0, decoded.status()};
-            for (const auto& row : decoded.value()) {
-                if (!chain_rendered) {
-                    // The star read, through the value-row encoder: the
-                    // wire rows *are* the relation's columns, so decoding
-                    // them into a row of values and handing that to the
-                    // sink is what the inline loop did, minus the second
-                    // formatter.
-                    star_values.resize(layout.size());
-                    for (std::size_t i = 0; i < layout.size(); ++i) {
-                        auto value = wire::FieldToValueChecked(layout[i], row[i]);
-                        if (!value.ok()) return {ErrorReply(value.status()), false, 0, value.status()};
-                        star_values[i] = std::move(value.value());
-                    }
-                    if (Status s = sink.EncodeValueRow(desc_types, star_values, row_scratch);
-                        !s.ok()) {
-                        return {ErrorReply(s), false, 0, s};
-                    }
-                    if (Status s = sink.Emit(row_scratch); !s.ok()) {
-                        return {ErrorReply(s), false, 0, s};
-                    }
-                    continue;
-                }
-                std::span<parser::AstValue> slots = frame.SlotsFor(0);
-                for (std::size_t i = 0; i < layout.size(); ++i) {
-                    auto value = wire::FieldToValueChecked(layout[i], row[i]);
-                    if (!value.ok()) return {ErrorReply(value.status()), false, 0, value.status()};
-                    slots[i] = std::move(value.value());
-                }
-                if (fold.has_value()) {
-                    if (Status s = fold->Accumulate(frame); !s.ok()) return {ErrorReply(s), false, 0, s};
-                    continue;
-                }
-                if (Status s = sink.EncodeProjectedRow(render.projection,
-                                                      render.projection_types, frame,
-                                                      row_scratch);
-                    !s.ok()) {
-                    return {ErrorReply(s), false, 0, s};
-                }
-                if (Status s = sink.Emit(row_scratch); !s.ok()) {
-                    return {ErrorReply(s), false, 0, s};
-                }
-            }
-        }
-    }
-
-    if (fold.has_value()) {
-        Status emitted = fold->Finish([&](std::span<const parser::AstValue> row) -> Status {
-            if (Status s = sink.EncodeValueRow(desc_types, row, row_scratch); !s.ok()) return s;
-            return sink.Emit(row_scratch);
-        });
-        if (!emitted.ok()) return {ErrorReply(emitted), false, 0, emitted};
-    }
-    return {text_sink.Take(), false};
-}
-
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
     // H6 step 2: the parse leg. One of `observability.md` §10's three
     // request-level spans, and the cheapest to attribute wrongly - a
@@ -4946,7 +4637,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
 
     // Before anything is written, once per statement - every row goes to
     // the one relation.
-    if (Status admitted = CheckWriteAdmission(*ta, *scope.session); !admitted.ok()) {
+    if (Status admitted = CheckWriteAdmission(*ta); !admitted.ok()) {
         // ErrorReply, not a bare "ERR ": what the gate refuses
         // (`CannotEnforce`) must reach the wire with its code.
         return {ErrorReply(admitted), false, 0, admitted};
@@ -5918,8 +5609,8 @@ Status CommandDispatcher::VisitRelation(
         case catalog::ClusteredType::kHeap:
             // RD6: **one chain per range** (CC8), so a walk is one walk per
             // range in `lo` order - which is the order RD7 concatenates in,
-            // established here so the local and the remote answer agree by
-            // construction rather than by two implementations matching.
+            // established here once rather than by two implementations
+            // matching.
             //
             // The unsplit path is the single `ChainVisit` it always was,
             // reached by one branch on a cached field.
@@ -5929,9 +5620,8 @@ Status CommandDispatcher::VisitRelation(
                 // Narrowing is sound because a row's id decides its range
                 // (invariant 3 per range), so a pk outside `span` cannot be
                 // in a range outside it either - and it is what lets a
-                // `WHERE pk = k` write run on the core owning k's range
-                // instead of meeting the refusal below over ranges it was
-                // never going to touch.
+                // `WHERE pk = k` write walk the one chain k can be in rather
+                // than every range's.
                 auto touched = catalog::ResolveRanges(access.ranges, span);
                 if (!touched.ok()) return touched.status();
                 // **Every range's chain is walked here** (AT-S5). The refusal
@@ -5940,8 +5630,8 @@ Status CommandDispatcher::VisitRelation(
                 // false since one frame table serves every core (AM-S2 step
                 // 3); it kept a walk from skipping a foreign range silently,
                 // and walking every range keeps that property better than
-                // refusing did. A read's *placement* is a different fork
-                // (`CheckReadAffinity`, D18) and is not decided here.
+                // refusing did. Nothing chooses another core for a read
+                // since AT-S9 (D18).
                 std::vector<PageId> heads;
                 heads.reserve(touched.value().size());
                 for (const catalog::RangeTarget& range : touched.value()) {
@@ -7448,7 +7138,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // - the refusal went stale when `VisitRelation` began walking every
     // range, and both went with ownership. This write walks every range
     // here, on the core its session is on.
-    if (Status admitted = CheckWriteAdmission(ta, *scope.session); !admitted.ok()) {
+    if (Status admitted = CheckWriteAdmission(ta); !admitted.ok()) {
         return {ErrorReply(admitted), false, 0, admitted};
     }
 
@@ -9132,7 +8822,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // Before anything is marked: UPDATE's rule and UPDATE's reason (no
     // destination and no multi-owner refusal since AT-S9). A delete-mark is
     // a write.
-    if (Status admitted = CheckWriteAdmission(ta, *scope.session); !admitted.ok()) {
+    if (Status admitted = CheckWriteAdmission(ta); !admitted.ok()) {
         return {ErrorReply(admitted), false, 0, admitted};
     }
 

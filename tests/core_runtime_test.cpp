@@ -1355,42 +1355,9 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedHere) {
     auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
 
-    // The loopback pair: the "owner" executes over the fixture's
-    // unrestricted store; sends cross-deliver in process.
-    std::optional<RemoteStepServer> server;
-    std::optional<SessionStepClient> client;
-    server.emplace(
-        catalog2, *core0_store_, /*core_id=*/1,
-        StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
-                         std::vector<std::byte> payload) {
-            switch (kind) {
-                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-                default: ADD_FAILURE() << "unexpected server send";
-            }
-            return Status::OK();
-        }});
-    client.emplace(
-        /*core_id=*/0,
-        [&](std::uint32_t, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            sched::MessageHeader h{};
-            h.src_core = 0;
-            h.dst_core = 1;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen: server->OnStepOpen(h, payload); break;
-                case sched::RingMessageKind::kStepCredit: server->OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepCancel: server->OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected client send";
-            }
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
-
     auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM rotated");
     EXPECT_EQ(out.response,
               "id,v\\n1,0\\n2,10\\n3,20\\n4,30");
-    EXPECT_EQ(client->open_reads(), 0u);
 
     // **The ineligible shapes are answered too since AT-S6.** A projection
     // list is still not a shape the pipeline takes (P4c), and what it fell
@@ -2714,10 +2681,8 @@ TEST_F(CoreRuntimeTest, ADropIndexOnAPeerRelationIsAdmittedInsideATransactionAnd
 // `AShippedStatementTheOwnerRefusesPoisonsTheTransactionThatSentIt` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
 TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
-    // D1's read half. This rig installs no pipeline (`SetRemoteReads` is
-    // never called), which is the peer's own situation as the pretasks
-    // measured it: a plain statement cannot reach P4 from dispatch, so the
-    // read either ships or is refused.
+    // D1's read half: a relation another core created is read here, a
+    // local walk of pages every core faults.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_read");
 
@@ -2771,74 +2736,6 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
 
 // `AStatementInsideATransactionShipsAndEnrolsSinceR68` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
 
-// **The pipeline, wired exactly as `Expeditor::Serve` wires it**
-// (`src/server/expeditor.cpp`) - the send is a `SendRetryTask` on the real
-// transport and the three consumer kinds are registered on core 0's
-// reactor.
-//
-// It exists because `ForeignIndexRig` deliberately installs no pipeline,
-// and for a **read** that omission is not neutral: the two remote-read fast
-// paths in `HandleSelect` sit *above* the shipping fork and take
-// `SELECT * FROM <peer relation>` whole, so a rig without them measures a
-// route production does not take. Every RR1 test below wires it, which is
-// what makes "the read ships" a statement about the server rather than
-// about the fixture.
-// `with_description = false` is XG3's fault injection: the arrival core
-// never receives a `kShippedRowDesc`, which is what an owner dying
-// between its rows and its description looks like from here.
-void WireRemoteReads(ForeignIndexRig& rig, std::optional<SessionStepClient>& client,
-                     bool with_description = true) {
-    client.emplace(/*core_id=*/0,
-                   [&rig](std::uint32_t dst, sched::RingMessageKind kind,
-                          std::vector<std::byte> payload) {
-                       sched::MessageHeader out{};
-                       out.src_core = 0;
-                       out.dst_core = dst;
-                       out.session_core = 0;
-                       out.kind = static_cast<std::uint16_t>(kind);
-                       out.sched_group =
-                           static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
-                       rig.core0->Submit(sched::MakeSendRetryTask(rig.ring(), out, payload));
-                       return Status::OK();
-                   });
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kStepBatch,
-                                             [&client](const sched::MessageHeader&,
-                                                       std::span<const std::byte> payload) {
-                                                 client->OnStepBatch(payload);
-                                             })
-                    .ok());
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kStepEof,
-                                             [&client](const sched::MessageHeader&,
-                                                       std::span<const std::byte> payload) {
-                                                 client->OnStepEof(payload);
-                                             })
-                    .ok());
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kStepError,
-                                             [&client](const sched::MessageHeader&,
-                                                       std::span<const std::byte> payload) {
-                                                 client->OnStepError(payload);
-                                             })
-                    .ok());
-    // XG1: a shipped read's answer edge carries its description on its own
-    // kind, and this rig wires the endpoints by hand rather than through
-    // `WireStepEndpoints`. Missing it would leave a typed read's rows
-    // arriving with nothing to type them - which is exactly what
-    // `ForwardAnswerEdge` refuses, so the omission would have shown up as a
-    // refusal rather than a wrong answer.
-    if (with_description) {
-        ASSERT_TRUE(rig.core0
-                        ->RegisterMessageHandler(sched::RingMessageKind::kShippedRowDesc,
-                                                 [&client](const sched::MessageHeader&,
-                                                           std::span<const std::byte> payload) {
-                                                     client->OnShippedRowDesc(payload);
-                                                 })
-                        .ok());
-    }
-    rig.dispatcher->SetRemoteReads(&*client);
-}
 
 
 // `RowsWithNoDescriptionAreRefusedRatherThanDecoded` stood here until
@@ -2862,10 +2759,8 @@ TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
     // failing part way through a result it has already begun sending. That
     // case needs a process kill at `shipped.answer_batch_sent:1`, which is
     // why that crash point exists; it is not reachable from this rig.
-    std::optional<SessionStepClient> reads;
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "refused_read");
-    WireRemoteReads(rig, reads);
 
     WireResultSink sink;
     Session session;
@@ -2879,8 +2774,6 @@ TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
     EXPECT_EQ(sink.row_count(), 0u);
     EXPECT_FALSE(sink.described())
         << "a refused statement described a result set it does not have";
-    EXPECT_EQ(reads->open_reads(), 0u)
-        << "the answer edge is closed on every exit, refusals included";
 }
 
 
@@ -2888,15 +2781,13 @@ TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
 
 
 
-TEST_F(CoreRuntimeTest, TheSameReadOutsideATransactionTakesThePipelineAndHasNoCap) {
-    // The other half of the sentence above, and what keeps the gate from
-    // reading as a general regression: the pipeline is untouched for every
-    // session that cannot enrol, which is every autocommit one. Same
-    // relation, same rows, same statement - answered whole.
-    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+TEST_F(CoreRuntimeTest, AReadFarWiderThanOneRingSlotIsAnsweredWhole) {
+    // A read whose reply is far past what one ring slot carried is answered
+    // whole. It took the remote-step pipeline until AT-S9 retired the route
+    // with ownership; it is a local walk now, and the size floor below is
+    // what keeps the cell about a wide answer.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "big_read_auto");
-    WireRemoteReads(rig, reads);
 
     auto more = rig.catalog2->AllocateRowIdRange(rig.oid, 512);
     ASSERT_TRUE(more.ok()) << more.status().message();
@@ -2917,10 +2808,8 @@ TEST_F(CoreRuntimeTest, TheSameReadOutsideATransactionTakesThePipelineAndHasNoCa
     auto read = rig.Start("SELECT * FROM big_read_auto", out);
     ASSERT_TRUE(rig.Drive(*read)) << out.response;
     ASSERT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
-    // **The reply is far past what one ring slot carried**, which is what
-    // made this shape prove something about the ship path's cap until
-    // AT-S6 struck it. Kept as a size floor: the pipeline has no such cap
-    // and the cell is what says so.
+    // **The reply is far past what one ring slot carried** - the size floor
+    // that keeps this cell about a wide answer.
     EXPECT_GT(out.response.size(), std::size_t{1000})
         << "the answer is too small for this shape to prove anything";
 }

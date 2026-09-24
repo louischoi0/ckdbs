@@ -155,7 +155,9 @@ struct StepOpenUpstream {
 // spread relation's readable size - `kMaxFanInUpstreams x range_size_ids`
 // rows (`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`
 // §6). Since DA1 and DA3 that arithmetic is 255 x 65,536 ~ **16.7 M rows**,
-// which is **not measured**: §6's numbers are the 64 x 4,096 form.
+// which is **not measured**: §6's numbers are the 64 x 4,096 form. **Moot
+// since AT-S9**: nothing opens a fan-in and `range_size_ids` is refused;
+// this file goes at AT-S10/S11.
 // A **self-directed** run costs a slot like any other (R4-R §10b).
 //
 // **One constant, two quantities**, and they are different questions: the

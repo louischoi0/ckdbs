@@ -273,8 +273,8 @@ constraint reporting success, which §1 names as the one degraded mode a
 constraint may not have.
 
 **So the check sees all of them.** `CheckNoChildReferences` walks every
-chain the child relation has — `TableAccess::AllWalkHeads`, one entry per
-range whoever owns it, or `desc_page_id` unsplit — and a btree child is
+chain the child relation has — `TableAccess::WalkHeads`, one entry per
+range, or `desc_page_id` unsplit — and a btree child is
 descended whole. Two things stood in the way and both are gone: the
 refusal for a child with a range this core did not own, and the fan-out
 that replaced it (one `kFkReverseProbeRequest` per child owner, a
@@ -286,10 +286,10 @@ There is nothing to hoist: a check that asks nobody needs no answer in
 hand before the walk starts, and a DELETE on the synchronous path runs
 exactly as it does on a served one.
 
-**`WalkHeadsFor` is the read path's rule and not this one.** A fan-in
-stage covers the ranges it owns because the session concatenates the
-other stages; a constraint check has no other stage behind it, so the two
-questions are spelled by two methods rather than one with a flag.
+**The read path asks the same question since AT-S9.** It walked only the
+ranges its core owned while a fan-in concatenated the rest, under a second
+method (`WalkHeadsFor`); ranges have no owners and the fan-in is retired,
+so a read and this check both call `WalkHeads`.
 
 Verdicts are the local check's: no visible child → clear; a committed
 visible child → `kFkViolation` (terminal); a row with an in-flight

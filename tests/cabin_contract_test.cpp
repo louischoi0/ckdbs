@@ -1039,10 +1039,10 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
 // the step's own span is the whole relation - a set covering every range
 // would hand a step assigned a slice rows outside it.
 //
-// The fixture splits a relation by writing the directory rows directly
-// rather than through `OpenRangeOnSystemCore`, which is the allocator's
-// job and has its own file: what is under test here is what a *reader*
-// does with the directory once it exists.
+// The fixture splits a relation by writing the directory rows directly,
+// as a pre-AT volume carries them: nothing opens a range since AT-S9, and
+// what is under test here is what a *reader* does with the directory once
+// it exists.
 
 // Splits `name` at `lo`. Returns the relation's oid.
 catalog::Oid SplitRelation(Instance& db, const char* name, std::uint64_t lo) {

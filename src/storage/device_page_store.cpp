@@ -1761,9 +1761,10 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // every step. The contract above already tolerates the same shape for
     // *pages*: "something else may have flushed them since the snapshot".
     //
-    // The two callers that reach no anchor publish - `range_alloc.cpp`'s
-    // handoff flush and `expeditor.cpp`'s catalog flush - do not have that
-    // cover, and the skip is unchanged in shape from before AM-S3, where
+    // The one caller that reaches no anchor publish - `expeditor.cpp`'s
+    // catalog flush, since AT-S9 retired the range allocator's handoff
+    // flush - does not have that cover, and the skip is unchanged in shape
+    // from before AM-S3, where
     // `maps_dirty()` read false in the same window. `PersistMaps` syncs
     // unconditionally for exactly this reason and this does not; the
     // asymmetry is deliberate, because a checkpoint step that synced on

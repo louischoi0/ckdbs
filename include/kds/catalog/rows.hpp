@@ -154,8 +154,9 @@ static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOid
 static_assert(offsetof(SysTableRow, name) == SysTableRow::kNameOffset);
 static_assert(offsetof(SysTableRow, desc_page_id) == SysTableRow::kDescPageIdOffset);
 static_assert(offsetof(SysTableRow, clustered_type) == SysTableRow::kClusteredTypeOffset);
-// `key_order` gets no offsetof assert, for the same reason `next_id`,
-// `varheap_page_id` and `owner_core` have none: everything from `next_id`
+// `key_order` gets no offsetof assert, for the same reason `next_id` and
+// `varheap_page_id` have none (and the reserved word has no member):
+// everything from `next_id`
 // on sits behind the compiler's alignment padding, so its in-memory offset
 // and its on-disk offset are different numbers by design. Encode/Decode
 // address the buffer through the constants above, field by field, which is
@@ -885,8 +886,8 @@ static_assert(SysFkeyRow::kOnDiskSize == 28);
 // ---- sys.ranges -------------------------------------------------------
 //
 // One row per range of a **split** relation (`docs/spec/crosscore.md` CC9,
-// RD2). A relation with no rows here is one range owned by
-// `sys.tables.owner_core`, which is every relation today - so the common
+// RD2). A relation with no rows here is one range, its own chain, which is
+// every relation created since AT-S9 - so the common
 // case is the *absence* of rows, and that is what keeps the unsplit path
 // free (RD3's zero-cost invariant).
 //
@@ -908,7 +909,7 @@ static_assert(SysFkeyRow::kOnDiskSize == 28);
 //      partition the whole id space or they are not a partition, and a
 //      first range starting above 0 would leave the ids below it owned by
 //      nothing - while a *non-empty* directory has already contradicted
-//      the "one range owned by `sys.tables.owner_core`" answer that would
+//      the "one range, the relation's own chain" answer that would
 //      otherwise cover them;
 //   2. the `lo`s of one relation are **distinct and ascending**, which is
 //      what lets `hi` be *derived* as the next row's `lo` rather than

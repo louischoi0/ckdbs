@@ -151,19 +151,14 @@ public:
     // callers that never store a varchar (the bootstrap catalog itself,
     // and tests).
     //
-    // **No core count since AT-S9**: it was here for `CreateTable` to
-    // assign `sys.tables.owner_core`, and nothing is assigned. The core id
-    // is `SetCoreId`'s rather than a third argument, deliberately: a
-    // three-argument call written against the old signature would
-    // otherwise have compiled with its core count taken as a core id.
+    // **No core count and no core id since AT-S9**: the count was here for
+    // `CreateTable` to assign `sys.tables.owner_core`, and the id for the
+    // executor's walk-what-you-own rule and an anchor refusal keyed on
+    // ownership - all three are gone. Two arguments, so a call written
+    // against the old four-argument signature does not compile.
     explicit Catalog(storage::PageStore& store,
                      std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth) noexcept
         : store_(store), inline_cell_width_(inline_cell_width) {}
-
-    // The core this catalog runs on, for the logs and the anchor judgment
-    // below (`core_id_`). Defaulted to the system core; set once, before
-    // any DDL.
-    void SetCoreId(std::uint32_t core_id) noexcept { core_id_ = core_id; }
 
     // Diagnostic log, null (discard) by default. `log` must outlive the
     // catalog. Set rather than constructed with, because bootstrap builds
@@ -286,39 +281,6 @@ public:
     // (the default) is core 0's arrangement and the path that always
     // existed. `leases` must outlive the catalog.
     void SetRowIdLeases(RowIdLeaseTable* leases) noexcept { row_id_leases_ = leases; }
-
-    // R4/IS1: this core wants ids for `table_oid` and is not going to ask
-    // for one now. `RowIdLeaseTable::NoteDemand` states what that is for;
-    // here because the lease table is this object's, and the dispatcher
-    // reaches leases through no other route. A no-op on core 0, which has
-    // no lease table and needs none - it bumps the mark directly.
-    void NoteRowIdDemand(Oid table_oid) {
-        if (row_id_leases_ != nullptr) row_id_leases_->NoteDemand(table_oid);
-    }
-
-    // R4/IS2: the id `AllocateRowId` would issue next, without issuing it -
-    // which is the id whose *range* decides where the row may be written.
-    //
-    // **Both allocators answer, and core 0's answer is the one that was
-    // missed.** A leased core reads its block's cursor. Core 0 has no lease
-    // table and bumps `sys.tables.next_id` directly, so *its* next id is the
-    // mark - and the mark sits above every block core 0 has ever leased out,
-    // which on a spread relation puts it in the **top** range, owned by
-    // whichever core asked last. Answering `nullopt` here left core 0
-    // routing to itself and then refusing its own row at placement, which
-    // is a relation its owner could no longer insert into at all.
-    //
-    // The page read is the cost, and it is paid only where the question can
-    // change an answer: the dispatcher asks solely when ranges are armed
-    // *and* the relation already has a directory, so an unsplit relation -
-    // every relation on a default instance - never reaches this line, and
-    // the read is the one `AllocateRowId` is about to make anyway.
-    std::optional<std::uint64_t> PeekRowId(Oid table_oid) {
-        if (row_id_leases_ != nullptr) return row_id_leases_->Peek(table_oid);
-        auto row = GetSysTableRow(table_oid);
-        if (!row.ok()) return std::nullopt;
-        return row.value().next_id;
-    }
 
     // Drops every cached fact without bumping anything. Its callers are
     // the mount's post-redo drops - `Expeditor`'s and the sim harness's -
@@ -1094,9 +1056,9 @@ public:
     // catalog wrote, and no caller can handle it.
     //
     // **An empty answer is the ordinary answer** and is not an error: a
-    // relation with no rows here is one range owned by
-    // `sys.tables.owner_core`, which is every relation until RD5 allocates
-    // a second one. Callers on the unsplit path must not reach this at all
+    // relation with no rows here is one range, its own chain, which is
+    // every relation created since AT-S9 (nothing opens a second range).
+    // Callers on the unsplit path must not reach this at all
     // — RD3's zero-cost invariant is that they read the cached field and
     // stop — so this is the allocation and inspection surface, never the
     // resolver.
@@ -1129,8 +1091,10 @@ public:
     // caller has to interpose between them: step 1 flushes the head page,
     // step 2 logs its `PAGE_HANDOFF` and waits for durability, and only
     // step 3 may write the boundary that names it. A single call would
-    // have to publish before the page it names is durable or handed off,
-    // and `server/range_alloc.hpp` is where the interposed half lives.
+    // have to publish before the page it names is durable or handed off.
+    // **No production caller since AT-S9** retired range opening with insert
+    // spreading; the pair stays for the cells that build a split relation,
+    // which a pre-AT volume can still carry.
     //
     // The head page is fresh, formatted, empty and carries **`min_key =
     // lo`**, which is what makes CC10's page-boundary rule vacuous here
@@ -1167,10 +1131,8 @@ public:
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name,
                             std::uint64_t trx_id = kBootstrapXid,
                             CatalogRowRef* where = nullptr);
-    // `owner_core` defaults to kSystemCore because every caller but
-    // CreateTable() is bootstrap writing a system relation, and M5 puts
-    // those on core 0 by definition - it owns the catalog pages they live
-    // on. There is no key-mode parameter to default: the row's `key_order`
+    // There is no owner-core parameter since AT-S9 (the row's word is
+    // reserved and written 0), and no key-mode parameter: the row's `key_order`
     // is an observation set to kAscending here and moved only by
     // AdmitExplicitRowId, never passed in.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
@@ -1436,20 +1398,6 @@ private:
     // constructor. Every RowLayout in the cache was built for this value.
     std::uint32_t inline_cell_width_ = storage::kDefaultInlineCellWidth;
 
-    // Which core this catalog runs on (`SetCoreId`). Read by the anchor
-    // judgment in `ResolveRoot` (PW2-3, the f5686f8 review's C1) and the logs.
-    std::uint32_t core_id_ = kSystemCore;
-
-  public:
-    // Which core this catalog belongs to. Read by the executor to know
-    // **which ranges are its to walk** (RD7): a stage covers the ranges it
-    // owns, and the catalog is already the thing every executor holds that
-    // knows where it is running. Exposed rather than threaded through the
-    // executor's constructors, which would have been the same fact copied
-    // into a second place to disagree from.
-    std::uint32_t core_id() const noexcept { return core_id_; }
-
-  private:
 
     Logger* log_ = nullptr;
     // Armed by the `CommandDispatcher` constructor, so it is null for

@@ -7,8 +7,8 @@
 // both halves of the transaction run on the core the session is on, under
 // one transaction id, and the read sees its own row.
 //
-// **The mutation**: put the ship arm back under `CheckReadAffinity`'s
-// refusal and this cell reads a header and no rows.
+// **The mutation**: put back AT-S6's ship arm for a read of a relation
+// another core owned and this cell reads a header and no rows.
 
 #include "two_core_rig.hpp"
 

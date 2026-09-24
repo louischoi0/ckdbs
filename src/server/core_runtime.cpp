@@ -60,15 +60,6 @@ CoreRuntime::~CoreRuntime() {
     if (dispatcher_.has_value()) {
         dispatcher_->set_scheduler_view(nullptr);
     }
-    // RR2's fan-in client is declared *above* `dispatcher_`, so reverse
-    // destruction already takes the borrower first and this withdrawal is
-    // a no-op today. Kept, and kept out of the block above whose members
-    // are the other way round: it is what stops the borrow from dangling
-    // if that declaration order is ever changed, which is the one way this
-    // pairing has been got wrong before.
-    if (dispatcher_.has_value()) {
-        dispatcher_->SetRemoteReads(nullptr);
-    }
     // **`scheduler_.reset()` used to stand here and is deliberately gone.**
     // It inverted declaration order to enforce a contract that declaration
     // order already keeps: `scheduler_` is declared above every borrower,
@@ -304,7 +295,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // AT-S5 and asks the instance's schema word at its task boundaries
     // (AT-S2), so the memo here is this core's cache of shared rows.
     runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width);
-    runtime->catalog_->SetCoreId(config.core_id);
     runtime->catalog_->SetLogger(log);
     runtime->catalog_->SetSchemaWord(config.schema_word);  // AT-S2
     runtime->catalog_->SetOidSequence(config.oid_sequence);  // AT-S5b
@@ -664,10 +654,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     if (Status s = WireStepEndpoints(*scheduler_, *remote_reads_, *remote_steps_); !s.ok()) {
         return s;
     }
-    // **After the receivers, never before**: the dispatcher learning about
-    // the client is what lets a statement open a stage, and a reply must
-    // not be able to beat its receiver into existence.
-    dispatcher_->SetRemoteReads(&*remote_reads_);
+    // **The dispatcher is not handed the client since AT-S9**: no statement
+    // opens a stage (the fan-in and the two-step pipeline retired with
+    // ownership), so the services above are wired and have no producer
+    // until AT-S10/S11 delete them.
 
     // **Statement shipping and 2PC are not wired, because they no longer
     // exist** (AT-S6). What stood here built this core's shipped-statement
@@ -822,14 +812,12 @@ void CoreRuntime::MaybeRefillRowIds() {
     const auto neediest = row_id_leases_.NeediestRelation();
     if (!neediest.has_value()) return;
 
-    const std::uint64_t count = kRowIdLeasePerGrant;
-
     row_id_refill_in_flight_ = true;
     row_id_refill_.stats.NoteSubmit(scheduler_->clock().Now(), scheduler_->iterations());
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
-        RequestRowIdLease(*transport_, row_id_refill_, *neediest, count, config_.core_id,
-                          /*system_core=*/0, log_, &*scheduler_),
+        RequestRowIdLease(*transport_, row_id_refill_, *neediest, kRowIdLeasePerGrant,
+                          config_.core_id, /*system_core=*/0, log_, &*scheduler_),
         [this](const Status& s) {
             row_id_refill_in_flight_ = false;
             row_id_refill_.stats.Complete(scheduler_->clock().Now(), scheduler_->iterations());

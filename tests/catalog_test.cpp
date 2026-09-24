@@ -1223,7 +1223,6 @@ TEST_F(CatalogTest, AReaderDropsOnlyAtItsBoundaryNeverInsideARead) {
     ASSERT_TRUE(a.ok() && b.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     auto held = reader.InitTableAccess(a.value());
@@ -1255,7 +1254,6 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
@@ -1288,7 +1286,6 @@ TEST_F(CatalogTest, AKeyOrderFlipBumpsTheWordAndKeepsTheWritersOwnEntry) {
     ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
@@ -1321,7 +1318,6 @@ TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
-    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());

@@ -1147,8 +1147,8 @@ Status Catalog::WriteRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowR
 Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary) {
     // **`<= 1`, and it is a different question from the router's.**
     // `range_directory.hpp` branches on `ranges.empty()` because a
-    // one-row directory still has to be *resolved* - CC10's migration
-    // writes one whose owner and entry page differ from `sys.tables`. This
+    // one-row directory still has to be *resolved*, its entry page being
+    // the directory's rather than `sys.tables`'. This
     // gate asks whether the relation is *partitioned*, and one range is
     // not. The shape is reachable: a crash between `OpenRangeRows`' two
     // writes leaves exactly it, and refusing every index, Cabin, assertion

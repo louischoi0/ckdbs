@@ -49,7 +49,6 @@ add_library(kds
     src/server/mount_recovery.cpp
     src/server/stop_signal.cpp
     src/exec/assertion_recover.cpp
-    src/server/core_affinity.cpp
     src/server/row_id_lease_service.cpp
     src/server/trx_id_lease_service.cpp
     src/server/step_descriptor.cpp

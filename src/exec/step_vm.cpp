@@ -1711,11 +1711,11 @@ private:
         // meaningful for a split heap relation; `ranges.size()` is the
         // terminating value for every other shape.
         std::size_t range_index = prefixed ? prefix->resume.range : 0;
-        // The chain heads this core walks, in `lo` order (RD7,
-        // `TableAccess::WalkHeadsFor`): a stage of a fan-in covers the
-        // ranges it owns and no others, because the rest are another
-        // stage's and the session concatenates them. One entry - the
-        // relation's own head - for every unsplit relation.
+        // The chain heads this walk covers, in `lo` order
+        // (`TableAccess::WalkHeads`): every range the step's span meets,
+        // which is every range since AT-S9 retired the fan-in's per-owner
+        // stages. One entry - the relation's own head - for every unsplit
+        // relation.
         std::vector<PageId> walk_heads;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read

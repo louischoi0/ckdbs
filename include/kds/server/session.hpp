@@ -158,7 +158,7 @@ public:
     //
     // `txn_durability_` is cleared by `Finish()` with everything else the
     // transaction owned: a class chosen for one transaction is not the
-    // next one's, exactly as `home_core_` and the participant list are not.
+    // next one's.
     std::optional<wal::DurabilityClass> durability() const noexcept { return durability_; }
     void set_durability(wal::DurabilityClass durability) noexcept { durability_ = durability; }
 
@@ -267,14 +267,8 @@ public:
         txn::Transaction* ended = txn_;
         txn_ = nullptr;
         state_ = State::kIdle;
-        // The home core belongs to the transaction, not the connection: the
-        // next one is free to write wherever it likes, and carrying the
-        // binding forward would restrict it for no reason. The participant
-        // list is the same fact one level out (R6-3): the cores this
-        // transaction enrolled are not the next one's.
-        home_core_ = kUnbound;
-        // The class this transaction was begun under, for `home_core_`'s
-        // reason: `BEGIN ... DURABILITY strict` binds one transaction, and
+        // The class this transaction was begun under belongs to the
+        // transaction, not the connection: `BEGIN ... DURABILITY strict` binds one transaction, and
         // a session whose next statement is autocommit must fall back to
         // its own default rather than inherit a stricter class silently -
         // or, worse, a laxer one.
@@ -282,36 +276,10 @@ public:
         return ended;
     }
 
-    // ---- The transaction's home core (crosscore.md §6, CC3) ------------
-    //
-    // **A transaction's writes bind to one core.** The first write picks it;
-    // any later write to a relation owned by a different core is refused,
-    // retryably. That restriction is what keeps commit single-stream and the
-    // 2PC door closed - LSNs are stream-local and are never compared across
-    // cores (workplan guideline 3), so a transaction whose writes landed in
-    // two streams could not be recovered as one.
-    //
-    // `kUnbound` until the first write, so a read-only transaction never
-    // acquires a home and never restricts anything - reads pipeline freely
-    // under §5.
-    static constexpr std::uint32_t kUnbound = 0xFFFFFFFFu;
-
-    std::uint32_t home_core() const noexcept { return home_core_; }
-    bool home_bound() const noexcept { return home_core_ != kUnbound; }
-
-    // Binds the home core on the first write. Idempotent for the core
-    // already bound; a caller must check `MayWriteOn()` first rather than
-    // rely on this to refuse, because the refusal is a client-visible error
-    // with a message, not a silent no-op.
-    void BindHomeCore(std::uint32_t core_id) noexcept {
-        if (home_core_ == kUnbound) home_core_ = core_id;
-    }
-
-    // Whether a write to a relation owned by `core_id` is admissible.
-    // Always true before the first write and for the bound core itself.
-    bool MayWriteOn(std::uint32_t core_id) const noexcept {
-        return home_core_ == kUnbound || home_core_ == core_id;
-    }
+    // **No home core since AT-S9.** A transaction's writes bound to the
+    // core of its first write, and a write to a relation owned elsewhere was
+    // refused (CC3); a transaction is one core's whole since AT-S6 and no
+    // relation is owned since AT-S9, so there is nothing to bind or refuse.
 
     // **Statement shipping's identity and the participant list stood here
     // until AT-S6**, and went with the protocols: `ship_id_` and its
@@ -356,7 +324,6 @@ private:
     // AO-S3b. Absent on every session that is not parked mid-walk, which
     // is every session almost all of the time.
     std::optional<ParkedWrite> parked_write_ = std::nullopt;
-    std::uint32_t home_core_ = kUnbound;
 };
 
 }  // namespace kds::server

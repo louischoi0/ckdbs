@@ -97,10 +97,9 @@ struct RelationSurvey {
     // Reported rather than refused, and reported rather than left implicit:
     // a partial survey that says it is partial is worth more than none, and
     // one that does not say so is exactly the wrong-reading-with-nothing-
-    // logged shape this row exists to end. Equal on every unsplit relation,
-    // which is every relation on an instance that has not armed
-    // `range_size_ids`, so a reader who has never split anything sees
-    // `1`/`1` and can ignore both.
+    // logged shape this row exists to end. Equal on every relation since
+    // AT-S9 made the survey walk every range, and `1`/`1` on every unsplit
+    // one.
     std::uint32_t surveyed_ranges = 1;
     std::uint32_t relation_ranges = 1;
 };

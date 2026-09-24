@@ -358,15 +358,20 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
         else:
             setup = Conn(port)
         names = [f"bench{i}" for i in range(tables)]
+        # **The writer's core, not an owner** (AT-S9 retired `owner_core` and
+        # dropped it from DESCRIBE). Under peer listeners each relation's
+        # writer is hunted on core `i % cores`, round-robin - the spread the
+        # per-owner shape used to produce - and every write runs where its
+        # session is. The name stays for the report's column.
         owner_cores = {}
-        for name in names:
+        for i, name in enumerate(names):
             r = setup.cmd(f"CREATE TABLE {name} (id int64, owner varchar, balance int64) BTREE")
             if r.startswith("ERR"):
                 raise RuntimeError(f"{name}: {r}")
-            owner_cores[name] = field(setup.cmd(f"DESCRIBE {name}"), "owner_core")
+            owner_cores[name] = i % cores if peer_listeners else 0
 
-        # Which connection writes which relation: its owner core's, under
-        # peer listeners; a core-0 session otherwise.
+        # Which connection writes which relation: the core chosen above,
+        # under peer listeners; a core-0 session otherwise.
         if peer_listeners:
             needed = collections.Counter(owner_cores.values())
             per_core, writer_attempts = collect_connections(port, needed, max_connects)

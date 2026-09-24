@@ -65,7 +65,6 @@ add_executable(kds_tests
     step_descriptor_test.cpp
     remote_step_service_test.cpp
     session_step_client_test.cpp
-    core_affinity_test.cpp
     coro_test.cpp
     spsc_ring_test.cpp
     ring_transport_test.cpp

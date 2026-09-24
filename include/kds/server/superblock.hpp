@@ -372,10 +372,10 @@ static_assert(offsetof(SuperBlockFields, inline_cell_width) == kInlineCellWidthO
 // Indexed directly by `core_id`, so no id is stored in the entry: a fixed
 // table in the superblock page is what makes an anchor update a single
 // page write, and a page write is the only kind of update that cannot land
-// half-applied. Recovery under a *different* core count than the run that
-// wrote these is [OPEN] (wal.md section 3), so `wal_anchor_count` records
-// what the last run used and leaves the policy to whoever settles it -
-// this file must not decide it by silently reindexing.
+// half-applied. Under one stream (AR0 M0) only slot 0 is published, which
+// is what lets a mount run at a different core count than the run that
+// wrote them (AT-S9 unpinned it); `wal_anchor_count` still records the
+// highest slot ever published, and this file never silently reindexes.
 //
 // An all-zero entry means "this core has never completed a checkpoint":
 // redo_start_lsn 0 is not a legal record LSN (offset 0 of segment 0 is the
@@ -524,9 +524,9 @@ public:
     // ---- Per-core WAL anchors (wal.md section 14-3) ---------------------
 
     // How many anchor slots the last run used - `core_id + 1` of the
-    // highest core that ever published. Recovery compares it against this
-    // run's core count; what to do when they differ is [OPEN] (wal.md
-    // section 3) and is not decided here.
+    // highest core that ever published. Under one stream only slot 0 is
+    // ever published, so a mount at another core count (unpinned since
+    // AT-S9) reads the same anchor; this file still never reindexes.
     std::uint32_t wal_anchor_count() const noexcept { return fields_.wal_anchor_count; }
 
     // The anchor for `core_id`, or an all-zero one (no checkpoint yet) for

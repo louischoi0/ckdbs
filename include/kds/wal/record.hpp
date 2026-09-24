@@ -167,10 +167,10 @@ enum class RecordType : std::uint8_t {
     //
     // **Nothing reads it any more.** Its consumer was the receiver's write
     // grant, struck at AW-S1b; analysis neither erases nor seeds on it and
-    // redo skips it (AM-S4(d)). `range_alloc.cpp` is the one site still
-    // appending one, and the flush it pays for is a cost with no reader -
-    // filed in `docs/inflight/known-gaps.md` rather than retired here,
-    // because removing a record type is a format decision of its own.
+    // redo skips it (AM-S4(d)). Its last writer, the range allocator,
+    // retired at AT-S9, so nothing appends one either; the type stays
+    // because a pre-AT log can carry it and removing a record type is a
+    // format decision of its own (`docs/inflight/known-gaps.md`).
     //
     // Redo applies nothing for it and must not even load the page - it
     // describes no mutation, so faulting the page to discover that is

@@ -32,7 +32,7 @@
 #include "kds/stats/trail_store.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
-#include "kds/server/core_affinity.hpp"
+
 
 #include "kds/stats/trace.hpp"
 #include "kds/server/lease_refill_stats.hpp"
@@ -158,36 +158,6 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 };
 
 
-struct PendingRemoteRender {
-    // The select list, resolved (`StepChain::projection`). Empty for a star
-    // read and for a fold, whose output is its items and not chain columns.
-    std::vector<exec::ColumnRef> projection;
-
-    // The reply's headings: the projected columns' names, or the fold's
-    // labels (`count(*)`, `sum(v)`). Empty means "the relation's columns",
-    // which is the star shape.
-    std::vector<std::string> column_names;
-
-    // One per projected column, in the same order - the reason a DATE
-    // renders as a date rather than an epoch day.
-    std::vector<std::uint32_t> projection_types;
-
-    // And the same columns' `type_mod`, for `StepChain`'s reason: a typed
-    // reply states a decimal's scale once, in the description, and a
-    // fan-in's description is built here rather than from a chain that did
-    // not survive the park.
-    std::vector<std::uint32_t> projection_type_mods;
-
-    // The fold, or nothing (AG1's spec, copied whole).
-    std::optional<exec::AggregateSpec> aggregate;
-
-    // Whether anything here changes how the reply is built. Both empty is
-    // the star read, which is every fan-in before AG3.
-    bool chain_rendered() const noexcept {
-        return aggregate.has_value() || !projection.empty();
-    }
-};
-
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
@@ -236,28 +206,6 @@ struct DispatchOutcome {
     // not a smaller statement or a slower client, but a shorter
     // transaction - which is the whole reason it has a number of its own.
     std::uint16_t resource_detail = wire::kNoDetail;
-
-    // A remote read this statement opened (workplan P4c): the reply is not
-    // in `response` yet - the caller awaits the read and finishes through
-    // `FinishRemoteRead()`. `DispatchAsync()` parks on it; the synchronous
-    // `Dispatch()` can finish one only when it already completed (the
-    // in-process loopback case), because with no reactor there is nothing
-    // to pump the reply through.
-    // **A group since RD7** (§5's third cost). A read of a split relation
-    // opens one stage per range, so the statement parks on k tags rather
-    // than one and completes only when every one of them has. In **range
-    // order** (CC9's ascending `lo`), which is the order their rows are
-    // concatenated in - the same order the local walk emits in, so a
-    // split relation read remotely and read locally answer alike.
-    //
-    // Empty is "no remote read", which is what `std::optional`'s absence
-    // used to say; one element is every read before RD7 and every read of
-    // an unsplit relation after it.
-    std::vector<PipelineTag> pending_remote = {};
-
-    // What to do with the rows those stages return (AG3). Default-empty is
-    // the star read: whole rows, rendered from the relation's schema.
-    PendingRemoteRender remote_render = {};
 
     // A write this core is holding back because something it needs is held
     // by a transaction that **has not decided yet** (AO-S3; R6-5 and D5 are
@@ -1437,8 +1385,8 @@ private:
 
     // The namespace a `CREATE TABLE ns.t` names, or `kNamespacePublic` for
     // an unqualified name (AF-T3). The one qualifier in the grammar that
-    // decides rather than asserts: through AF-T2 it decides the relation's
-    // owner core. An unknown namespace is refused with its byte and is
+    // decides rather than asserts: it decides the namespace the relation is
+    // created in (and until AT-S9 its owner core). An unknown namespace is refused with its byte and is
     // **not** created - see `ast.hpp`'s namespace-qualifier rule.
     StatusOr<catalog::Oid> ResolveCreateNamespace(std::string_view qualifier,
                                                   std::uint32_t byte_offset,
@@ -1605,11 +1553,6 @@ public:
         set_join_build_max_rows(limits.join_build_max_rows);
     }
 
-    // Arms the remote-read path (workplan P4c): a single-step star SELECT
-    // of a relation another core owns ships to that core instead of taking
-    // the affinity refusal. `client` must outlive the dispatcher. With
-    // this never called, every statement behaves exactly as before.
-    void SetRemoteReads(SessionStepClient* client) noexcept { remote_reads_ = client; }
 
     // H6: the core-local trace ring this dispatcher records into when a
     // session has asked for it (`TRACE ON`). A dispatcher never told
@@ -2122,21 +2065,6 @@ private:
     // place, rather than at every return of every handler.
     DispatchOutcome DispatchInner(std::string_view line, Session& session);
 
-    // Formats a completed remote read into the exact reply the local path
-    // would have produced (workplan P4c) - same header, same row shape -
-    // and closes the read. Call only when the read is done.
-    // Frames the reply for a whole fan-in: the header once, then every
-    // stage's rows in `tags` order. Closes each read whatever the outcome,
-    // because a read left open holds its batches for the session's life.
-    // `render` says whether the chain's own projection or fold produces the
-    // reply (AG3); default-empty is the star read this began as.
-    // `sink` is the session's (`Session::result_sink`), passed rather than
-    // read off a member: this runs **after a park**, and a per-dispatcher
-    // pointer would by then be whichever connection's statement ran while
-    // this one waited.
-    DispatchOutcome FinishRemoteReads(ResultSink* sink, const std::vector<PipelineTag>& tags,
-                                      const PendingRemoteRender& render);
-
     bool logging(LogLevel level) const noexcept {
         return log_ != nullptr && log_->enabled(level);
     }
@@ -2385,14 +2313,6 @@ private:
     // build ever has, so every pre-multicore construction site is unchanged.
     std::uint32_t core_id_ = 0;
 
-    // The session side of remote reads (workplan P4c), null until the
-    // Expeditor wires it - with it null every cross-core chain keeps the
-    // affinity refusal it always had.
-    SessionStepClient* remote_reads_ = nullptr;
-    // Per-statement pipeline ids: sequential, never pointer-derived
-    // (crosscore.md §3, sched.md §7's determinism rule).
-    std::uint64_t next_remote_request_ = 1;
-
     // the borrow cap's refusal counter; the accessor above states its contract.
     std::uint64_t borrow_cap_stops_ = 0;
 
@@ -2513,9 +2433,9 @@ private:
     // **The one refusal left before a write touches a page** (AT-S9, which
     // renamed it from `CheckWriteAffinity` when the last question about a
     // core left it): a relation under an assertion the instance cannot
-    // enforce refuses its writes on every core. Binds the session's home
-    // core. Every write verb asks it once per statement.
-    Status CheckWriteAdmission(const catalog::TableAccess& access, Session& session);
+    // enforce refuses its writes on every core. Every write verb asks it
+    // once per statement.
+    Status CheckWriteAdmission(const catalog::TableAccess& access);
 
     txn::IsolationLevel default_isolation_ = txn::IsolationLevel::kReadCommitted;
 

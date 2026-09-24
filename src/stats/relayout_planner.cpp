@@ -264,10 +264,9 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
     // `workplan-range-directory.md` §14e named this instance rather than
     // closing it.
     //
-    // `WalkHeadsFor` answers `desc_page_id` for an unsplit relation off
-    // one branch on a cached field, so this is the walk it always was
-    // wherever no directory exists - which is every relation on an
-    // instance that has not armed `range_size_ids`.
+    // `WalkHeads` answers `desc_page_id` for an unsplit relation off one
+    // branch on a cached field, so this is the walk it always was wherever
+    // no directory exists - every relation created since AT-S9.
     //
     // **Every range, since AT-S9.** This took this core's heads alone and
     // reported the rest missing through `surveyed_ranges`, because a range

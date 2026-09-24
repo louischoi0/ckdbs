@@ -39,12 +39,11 @@ inline constexpr Oid kNamespacePublic = 1;
 // not be moved back to `public` either.
 // (AF-P3, `instructions/v2.8.0/ratification-af-namespace.md`.)
 //
-// **A gate wants the opposite failure and must not call this** -
-// `server/range_alloc.cpp` keeps `!= kNamespacePublic`, and carries the
-// argument for the divergence at its own site. The two spellings are two
-// different questions that happened to share an answer while there were
-// only two namespaces; this helper exists so the one about identity stops
-// borrowing the one about permission.
+// **A gate wants the opposite failure and must not call this**: a
+// permission question keeps `!= kNamespacePublic` at its own site. The two
+// spellings are two different questions that happened to share an answer
+// while there were only two namespaces; this helper exists so the one about
+// identity stops borrowing the one about permission.
 constexpr bool IsSystemNamespace(Oid namespace_oid) noexcept {
     return namespace_oid == kNamespaceSys;
 }
@@ -244,9 +243,10 @@ inline constexpr Oid kSysCabinsTable = 131;
 inline constexpr Oid kSysFkeysTable = 132;
 
 // sys.ranges (docs/spec/crosscore.md CC9): one row per range of a split
-// relation - rel oid, lo, owner core, entry page per CC9's cell; hi is the
-// next row's lo. A relation with no rows here is one range owned by
-// sys.tables.owner_core, which is every relation today.
+// relation - rel oid, lo, a reserved word (the owner core until AT-S9),
+// entry page per CC9's cell; hi is the next row's lo. A relation with no
+// rows here is one range, its own chain, which is every relation created
+// since AT-S9.
 //
 // **Created empty at bootstrap (RD1); its row is `SysRangeRow` (RD2,
 // 2026-08-28).** Fixed-offset and typed, as RD1 predicted it would be:
