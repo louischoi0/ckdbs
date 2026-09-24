@@ -27,13 +27,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/index_ddl.hpp"
 #include "kds/parser/parser.hpp"
-#include "kds/server/remote_step_service.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
-// CB4: the rig arms core 0's *owner* half of statement shipping, which
-// nothing needed until a peer's DDL was routed there rather than refused.
-// R6-8: the rig arms core 0 as a coordinator, so a write inside a
-// transaction ships and enrols instead of being refused.
-#include "kds/server/session_step_client.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/sched/clock.hpp"

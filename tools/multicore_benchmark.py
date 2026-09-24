@@ -3,31 +3,27 @@
 connection each, INSERT / point-SELECT / UPDATE / DELETE / scan per
 relation, run concurrently. Compares `cores = 1` against `cores = N`.
 
-Two shapes, and which one runs is decided by the flags:
+Two shapes, and which one runs is decided by `--peer-listeners`:
 
-* `--placement creating` (default): every relation is core 0's and core 0
-  serves every statement whatever `cores` says (docs/inflight/in-progress/workplan-crosscore.md
-  P6c), so the honest expectation is parity. The harness's original shape,
-  kept as the control.
+* default: one connection per relation, each landing on whichever core
+  the kernel accepted it on - every core listens since AT-S8 - and every
+  statement runs on its session's core. The driver reads each writer's
+  core off `SHOW META` and reports it rather than assuming it.
 
-* `--placement rotate --peer-listeners`: the per-core writer shape
-  (docs/inflight/in-progress/workplan-peer-writer.md PW6). Relations rotate over the peer cores,
-  every core listens (`peer_listeners = on`, PW5), and each relation is
-  written from a connection **the kernel accepted on its owner core** - a
-  client cannot choose its core under SO_REUSEPORT (docs/inflight/in-progress/workplan-peer-writer.md
-  §5, kds.conf.sample), so the driver opens connections until every needed
-  core has enough, asks each one `SHOW META` for its `core=`, and reports
-  how many it had to open. DDL still runs on core 0 only, so the setup
-  connection is found the same way.
+* `--peer-listeners`: the per-core writer shape. Relation `i`'s writer is
+  a session **the kernel accepted on core `i % cores`** - a client cannot
+  choose its core under SO_REUSEPORT (kds.conf.sample), so the driver opens
+  connections until every needed core has enough, asks each one
+  `SHOW META` for its `core=`, and reports how many it had to open.
 
-  `rotate` without `--peer-listeners` is probed and reported as NOT RUN:
-  the relations sit on peers and core 0's connection may not write them.
+No relation has an owner core since AT-S9, so the relation-placement
+flag this driver used to take (`--placement`) is gone with it.
 
 Usage:
     tools/multicore_benchmark.py --server build-release/kds_server \
         --cores 2 --tables 4 --rows 2000 --workdir ~/mcbench
     tools/multicore_benchmark.py --server build-release/kds_server \
-        --cores 3 --tables 2 --rows 2000 --placement rotate --peer-listeners
+        --cores 3 --tables 2 --rows 2000 --peer-listeners
 
 Starts two fresh server instances itself (cores=1, then cores=N), each on
 its own data file and port, and prints one comparison table. The data file
@@ -147,10 +143,9 @@ def wait_for_port(port, stderr_path, deadline_s=15):
     raise TimeoutError(f"server did not listen on {port}" + (f":\n{tail}" if tail else ""))
 
 
-def start_server(binary, workdir, tag, cores, port, placement="creating",
-                 peer_listeners=False, durability=None):
-    """Fresh data file + config, returns the process. `cores` is pinned into
-    the superblock at bootstrap, so each configuration needs its own file.
+def start_server(binary, workdir, tag, cores, port, durability=None):
+    """Fresh data file + config, returns the process. Each configuration
+    gets its own file, so neither run reads the other's data.
 
     `durability` None leaves the key out, so the server takes its own default
     (`group`, D2) and every caller written before this parameter existed is
@@ -163,9 +158,7 @@ def start_server(binary, workdir, tag, cores, port, placement="creating",
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {cores}\n"
                 # No `placement` or `peer_listeners` line: both keys are
-                # retired (AT-S9, AT-S8) and the server refuses them. The
-                # `placement` and `peer_listeners` arguments here now only
-                # label the run and pick the driver's session hunt.
+                # retired (AT-S9, AT-S8) and the server refuses them.
                 + (f"durability = {durability}\n" if durability else "")
                 + f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
     with open(stderr_path, "w") as err:
@@ -228,9 +221,7 @@ def collect_connections(port, needed, max_attempts):
 
 
 # The engine's refusals that mean "again, later" (docs/spec/protocol.md §11): the
-# wire's `retryable=1` - except CC3's cross-core write refusal, which carries
-# the bit and is permanent for a session on the wrong core
-# (docs/inflight/in-progress/workplan-peer-writer.md §5: it repeats forever) - and the three lease
+# wire's `retryable=1` - and the three lease
 # exhaustions a peer answers until its refill grant lands: the row-id lease
 # on a relation's first INSERT (PW1b), the trx-id lease, and the extent lease
 # (a btree insert that could not allocate). Those three carry the bit since
@@ -240,13 +231,10 @@ def collect_connections(port, needed, max_attempts):
 # to them at v2.0.0-48-g314a06d.
 RETRY_TEXTS = ("retry after the refill grant lands",
                "a refill must be granted before it can allocate again")
-PERMANENT_TEXTS = ("writes are bound to core",)
 
 
 def is_retryable(reply):
     if not reply.startswith("ERR"):
-        return False
-    if any(t in reply for t in PERMANENT_TEXTS):
         return False
     return "retryable=1" in reply or any(t in reply for t in RETRY_TEXTS)
 
@@ -339,58 +327,51 @@ def worker(conn, table, rows, phases, barrier, retries, counts=None, insert_fmt=
         conn.close()
 
 
-def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creating",
+def run_config(binary, workdir, tag, cores, port, tables, rows,
                peer_listeners=False, max_connects=256,
                retry_deadline_s=DEFAULT_RETRY_DEADLINE_S, force=False):
-    """Returns (wall, all_phases, owner_cores, report) - or
-    (None, reason, owner_cores, None) when the configuration cannot run."""
+    """Returns (wall, all_phases, writer_cores, report) - or
+    (None, reason, writer_cores, None) when the configuration cannot run."""
     # The host guard sits on the measuring path, not only under main(): the
     # wrapper that produced the PW6 numbers calls this directly.
     fs, load1 = check_host(workdir, force)
-    proc = start_server(binary, workdir, tag, cores, port, placement, peer_listeners)
+    proc = start_server(binary, workdir, tag, cores, port)
     try:
-        # DDL is core 0's alone (PW4), and under peer listeners the kernel
-        # may hand this connection to any core - so the setup session is
-        # collected like the writers, by asking.
-        if peer_listeners:
-            got, ddl_attempts = collect_connections(port, {0: 1}, max_connects)
-            setup = got[0][0]
-        else:
-            setup = Conn(port)
+        # A DDL runs where its session is since AT-S5, so the setup
+        # connection is whichever core the kernel hands it.
+        setup = Conn(port)
         names = [f"bench{i}" for i in range(tables)]
-        # **The writer's core, not an owner** (AT-S9 retired `owner_core` and
-        # dropped it from DESCRIBE). Under peer listeners each relation's
-        # writer is hunted on core `i % cores`, round-robin - the spread the
-        # per-owner shape used to produce - and every write runs where its
-        # session is. The name stays for the report's column.
-        owner_cores = {}
-        for i, name in enumerate(names):
+        # Every write runs where its session is; no relation has an owner
+        # (AT-S9), so the report names each writer's core.
+        for name in names:
             r = setup.cmd(f"CREATE TABLE {name} (id int64, owner varchar, balance int64) BTREE")
             if r.startswith("ERR"):
                 raise RuntimeError(f"{name}: {r}")
-            owner_cores[name] = i % cores if peer_listeners else 0
 
-        # Which connection writes which relation: the core chosen above,
-        # under peer listeners; a core-0 session otherwise.
+        # Which connection writes which relation. Under peer listeners each
+        # relation's writer is hunted on core `i % cores`, round-robin over
+        # every core, core 0 included. Otherwise a plain connection lands
+        # wherever the kernel puts it - every core accepts since AT-S8 - so
+        # the core is read off the session rather than assumed to be 0.
         if peer_listeners:
-            needed = collections.Counter(owner_cores.values())
+            writer_cores = {name: i % cores for i, name in enumerate(names)}
+            needed = collections.Counter(writer_cores.values())
             per_core, writer_attempts = collect_connections(port, needed, max_connects)
-            writers = {name: per_core[owner_cores[name]].pop() for name in names}
-            sessions = (f"ddl session on core 0 after {ddl_attempts} connection(s); "
-                        f"{len(names)} writer session(s) on cores {sorted(needed)} "
+            writers = {name: per_core[writer_cores[name]].pop() for name in names}
+            sessions = (f"{len(names)} writer session(s) on cores {sorted(needed)} "
                         f"after {writer_attempts} connection(s)")
         else:
             writers = {name: Conn(port) for name in names}
-            sessions = "every session on core 0"
+            writer_cores = {name: session_core(w) for name, w in writers.items()}
+            sessions = (f"writer sessions on cores {sorted(set(writer_cores.values()))}, "
+                        f"as the kernel accepted them")
         setup.close()
 
         # **Can this configuration run the workload at all?** One probe row
         # from the first relation's own writer, in both arms so they stay
-        # the same workload: with `placement = rotate` and no peer listener
-        # the relation sits on a core no session reaches, and core 0's
-        # session is refused (crosscore.md CC3). Reported as a finding in
-        # the engine's own words, because an error storm from N threads x
-        # rows says the same thing far less clearly.
+        # the same workload. A refusal is reported as a finding in the
+        # engine's own words, because an error storm from N threads x rows
+        # says the same thing far less clearly.
         # Retried like any statement: on a peer the first INSERT is refused
         # until the row-id refill lands, and that is the contract, not the
         # finding this probe exists to make. Timed into the first relation's
@@ -410,7 +391,7 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
             for w in writers.values():
                 w.close()
             stop_server(port)   # owed even on the early out, or the wait below hangs
-            return None, probe, owner_cores, None
+            return None, probe, writer_cores, None
 
         barrier = threading.Barrier(tables)
         threads = [threading.Thread(target=worker,
@@ -470,7 +451,7 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
                   # reads them off the report's tail, and a quoted server
                   # reply above carries `key=<int>` fields of its own.
                   retry_line(retries.values())]
-        return wall, all_phases, owner_cores, report
+        return wall, all_phases, writer_cores, report
     finally:
         # A driver failure above never sent STOP; the server must not
         # outlive the run that started it (the next run wants the port).
@@ -488,12 +469,12 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
                 proc.wait(timeout=15)
 
 
-def summarize(tag, cores, wall, all_phases, owner_cores, tables, rows, report):
+def summarize(tag, cores, wall, all_phases, writer_cores, tables, rows, report):
     total_stmts = sum(len(ph.latencies) for phases in all_phases.values()
                       for ph in phases.values())
     errors = sum(ph.errors for phases in all_phases.values() for ph in phases.values())
     print(f"\n== {tag}: cores={cores}, {tables} relations x {rows} rows ==")
-    print("   placement: " + "  ".join(f"{n} owner_core={c}" for n, c in owner_cores.items()))
+    print("   writers: " + "  ".join(f"{n} core={c}" for n, c in writer_cores.items()))
     for line in report:
         print(f"   {line}")
     print(f"   wall={wall:.2f}s  aggregate={total_stmts / wall:,.0f} stmt/s  errors={errors}")
@@ -522,7 +503,7 @@ def summarize(tag, cores, wall, all_phases, owner_cores, tables, rows, report):
         "tag": tag, "cores": cores, "tables": tables, "rows": rows,
         "wall_s": wall, "statements": total_stmts, "errors": errors,
         "throughput_stmts_s": total_stmts / wall,
-        "owner_cores": {str(n): c for n, c in owner_cores.items()},
+        "writer_cores": {str(n): c for n, c in writer_cores.items()},
         "phases": phase_stats,
     }
 
@@ -540,22 +521,10 @@ def main():
     ap.add_argument("--port", type=int, default=15460)
     ap.add_argument("--workdir", default=os.path.expanduser("~/mcbench"),
                     help="where the data files go - a block device, never tmpfs")
-    ap.add_argument("--placement", choices=("creating", "rotate", "namespace"),
-                    default="creating",
-                    help="relation placement policy (docs/inflight/in-progress/workplan-crosscore.md P6c, "
-                         "docs/spec/namespace.md NS10). "
-                         "`rotate` puts relations on peer cores; with --peer-listeners "
-                         "each is written from a session on its owner core, without it "
-                         "the driver probes and reports NOT RUN. `namespace` is the "
-                         "shipped default and is indistinguishable from `creating` here: "
-                         "this driver creates every relation unqualified, so they all land "
-                         "in `public`, which is never rotated. Use "
-                         "`bench/af_namespace_grouping_probe.py` to measure what `namespace` "
-                         "actually does.")
     ap.add_argument("--peer-listeners", action="store_true",
-                    help="drive one writer session per relation on its owner core (PW6). "
-                         "Every core listens since AT-S8, so this selects the driver's "
-                         "session hunt, not a server key. Needs --placement rotate.")
+                    help="drive relation i's writer from a session on core i %% cores, "
+                         "hunted by reconnecting. Every core listens since AT-S8, so this "
+                         "selects the driver's session hunt, not a server key.")
     ap.add_argument("--max-connects", type=int, default=256,
                     help="how many connections to open while hunting for sessions on "
                          "the needed cores before giving up (the kernel distributes)")
@@ -577,16 +546,13 @@ def main():
                     help="seconds a statement is retried while the engine says retry "
                          "before it is recorded as an error and a `<phase>-gave-up`")
     args = ap.parse_args()
-    if args.peer_listeners and args.placement != "rotate":
-        ap.error("--peer-listeners needs --placement rotate: it hunts a session on each "
-                 "relation's owner core, and creating-core placement has one owner")
 
     shutil.rmtree(args.workdir, ignore_errors=True)
     os.makedirs(args.workdir, exist_ok=True)
     binary = os.path.abspath(args.server)
 
     results = {}
-    # The baseline never hunts for per-owner sessions: `cores = 1` has one
+    # The baseline never hunts for per-core sessions: `cores = 1` has one
     # core to accept on.
     configs = [("single-core", 1, args.port, False),
                ("multi-core", args.cores, args.port + 1, args.peer_listeners)]
@@ -597,19 +563,14 @@ def main():
     for tag, cores, port, listeners in configs:
         wall, phases, owners, report = run_config(
             binary, args.workdir, tag, cores, port, args.tables, args.rows,
-            args.placement, listeners, args.max_connects, args.retry_deadline, args.force)
+            listeners, args.max_connects, args.retry_deadline, args.force)
         if wall is None:
             # The write-capability probe refused: this configuration cannot
             # run the workload, and saying so is the result.
-            print(f"\n== {tag}: cores={cores}, placement={args.placement} ==")
-            print("   placement: " + "  ".join(f"{n} owner_core={c}"
-                                               for n, c in owners.items()))
-            print("   NOT RUN - the relations cannot be written from this connection:")
+            print(f"\n== {tag}: cores={cores} ==")
+            print("   writers: " + "  ".join(f"{n} core={c}" for n, c in owners.items()))
+            print("   NOT RUN - the probe INSERT was refused:")
             print(f"     {phases}")
-            print("   This driver writes a rotated relation only from a session on its\n"
-                  "   owner core, and the connection it got landed elsewhere. Pass\n"
-                  "   --peer-listeners to hunt per-owner sessions (the per-core writer\n"
-                  "   shape, workplan-peer-writer.md PW6).")
             results[tag] = None
             continue
         results[tag] = summarize(tag, cores, wall, phases, owners,
@@ -618,7 +579,7 @@ def main():
     if args.json:
         with open(args.json, "w") as fh:
             json.dump({"only": args.only, "cores": args.cores, "tables": args.tables,
-                       "rows": args.rows, "placement": args.placement,
+                       "rows": args.rows,
                        "peer_listeners": bool(args.peer_listeners),
                        "configs": results}, fh, indent=2)
 
@@ -638,15 +599,6 @@ def main():
         return
     print(f"\n== comparison ==\n   multi-core / single-core throughput: "
           f"{multi['throughput_stmts_s'] / single['throughput_stmts_s']:.3f}x")
-    if args.placement == "creating":
-        print("   (expected ~1.0x at placement=creating whatever the pipeline can do:\n"
-              "    every relation is on core 0, so no statement ships - "
-              "docs/inflight/in-progress/workplan-crosscore.md P6c)")
-    elif args.cores == 2:
-        print("   (rotation skips the system core, so at cores=2 every relation is\n"
-              "    core 1's: this compares the peer write path against core 0's at\n"
-              "    equal parallelism - a cost, not a scaling number; cores >= 3 is\n"
-              "    where two writer cores exist)")
 
 
 if __name__ == "__main__":

@@ -3,10 +3,7 @@
 
 #include "kds/txn/lock_table.hpp"
 
-#include "kds/base/crash_point.hpp"  // RP7: the coordinator's three kill points
 #include "kds/base/current_core.hpp"
-
-#include "kds/server/remote_step_service.hpp"  // RD7: the fan-in ceiling
 
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
@@ -668,8 +665,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
     // **The statement may park from here**, which is the whole difference
-    // between this entry point and `Dispatch()` - and the condition
-    // statement shipping is admitted under (SS2). Set and cleared around
+    // between this entry point and `Dispatch()` - and the condition every
+    // wait below is admitted under. Set and cleared around
     // the synchronous half, which takes no suspension point, so it never
     // spans a park and never describes another statement.
     {
@@ -4376,11 +4373,10 @@ Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access
 
 namespace {
 
-// **One renderer per output shape, shared by the local path and the fan-in**
-// (R4-A/AG3). A remotely-fetched row and a locally-walked one reach the same
-// `ChainFrame` and the same values, so a second formatter here would be
-// exactly the drift the local renderer's own warning names: a sorted reply
-// rendering a DATE as an epoch day because one of two copies forgot
+// **One renderer per output shape** (R4-A/AG3; the fan-in that shared it
+// retired at AT-S9). A second formatter here would be exactly the drift
+// the local renderer's own warning names: a sorted reply rendering a DATE
+// as an epoch day because one of two copies forgot
 // `projection_types`. The fold's output row has the same trap in its
 // `type_val` lookup, which is why both live here rather than one.
 
@@ -6289,10 +6285,8 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         return {ErrorReply(ran), false, 0, ran};
     }
 
-    // Through the one sink the fan-in's fold also emits by: a locally
-    // folded row and a remotely fetched one are the same output row, and
-    // two formatters for it is how one of them comes to forget an item's
-    // `type_val`.
+    // Through the one sink every row path emits by: two formatters for a
+    // folded row is how one of them comes to forget an item's `type_val`.
     std::string row_scratch;
     const std::vector<std::uint32_t> out_types = AggregateOutputTypes(*chain.aggregate);
     Status emitted = aggregator_.Finish(
@@ -6752,7 +6746,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // building the same `{0, 0, i}` reference the projected arm was handed
     // - which meant the two shapes were formatted by two loops that had to
     // stay in step. Resolving the projection here instead leaves exactly
-    // one row path below, and it is the same one the fan-in takes.
+    // one row path below.
     StarDescription star;
     if (star_access != nullptr) star = DescribeStar(star_access->schema.columns);
     const std::span<const exec::ColumnRef> projection =
@@ -8065,11 +8059,10 @@ StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
     }
 
     // Autocommit: a view over the committed state, owned by no
-    // transaction - the same one every shipped pipeline stage mints, and
-    // leased because that seam leases (manager.hpp says why, and says
-    // plainly that *this* holder's statement never parks with it: the
-    // dispatch path is synchronous, and a statement that ships a read
-    // drops this object at its `pending_remote` return, before the wait).
+    // transaction - the same one a step service's stage mints, and leased
+    // because that seam leases (manager.hpp says why, and says plainly that
+    // *this* holder's statement never parks with it: the dispatch path is
+    // synchronous, and the statement drops this object before any wait).
     return txn::AutocommitSnapshot(txn_);
 }
 

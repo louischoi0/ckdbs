@@ -845,9 +845,8 @@ struct LeasedSnapshot {
 // **The dispatcher's autocommit snapshot does not currently outlive its
 // statement**, and its lease is structural rather than load-bearing:
 // `DispatchInner` is synchronous throughout (`exec::Execute`, not
-// `ExecuteAsync`), and a statement that ships a read returns its
-// `pending_remote` outcome - dropping this object - *before*
-// `DispatchAsync` awaits anything. So that reader is today the
+// `ExecuteAsync`), and the statement returns its outcome - dropping
+// this object - *before* `DispatchAsync` awaits anything. So that reader is today the
 // synchronous one txn.md section 4.1 exempts by proof. Kept leased
 // anyway because the exemption is an invariant to re-check whenever the
 // session-side executor gains a suspension point (P4d-3's page-boundary

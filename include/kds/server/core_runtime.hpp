@@ -644,15 +644,11 @@ private:
     // destruction ends them before the store they point into.
     std::optional<stats::CabinStore> cabin_store_;
 
-    // The remote step server (P4b), armed at AttachTransport: this core
-    // answers STEP_OPENs for relations it owns.
+    // The remote step server (P4b) and its client half (R4-R/RR2), armed
+    // at AttachTransport. **No producer since AT-S9**: nothing opens a
+    // stage and the dispatcher borrows neither; both stay wired until
+    // AT-S10/S11 delete them.
     std::optional<RemoteStepServer> remote_steps_;
-
-    // **And the client half** (R4-R/RR2), armed beside it: before it every
-    // core could *serve* a fan-in stage and only core 0 could *open* one,
-    // so which reads a session could answer depended on which core
-    // `SO_REUSEPORT` had accepted it on. Declared above `dispatcher_`,
-    // which borrows it.
     std::optional<SessionStepClient> remote_reads_;
 
     // The target this core's checkpointer flushes through (PW3), built at

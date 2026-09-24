@@ -56,8 +56,9 @@ static_assert(sizeof(PipelineTag) == 16);
 // overloading `step_id` would have changed what a Waystone trail is keyed
 // on. What changed is the premise. §5 assumed one `request_id` for the
 // whole statement, so siblings could differ only inside the tag; the
-// dispatcher mints `next_remote_request_++` **per stage**, so they differ
-// already and every exact-tag site tells them apart with no new field.
+// dispatcher minted a request id **per stage** until AT-S9 retired the
+// fan-in, so they differed already and every exact-tag site told them
+// apart with no new field.
 //
 // A field that is never written is worse than absent: it reads as the
 // discriminator while something else discriminates, so the next planner

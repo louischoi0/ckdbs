@@ -268,8 +268,9 @@ public:
         txn_ = nullptr;
         state_ = State::kIdle;
         // The class this transaction was begun under belongs to the
-        // transaction, not the connection: `BEGIN ... DURABILITY strict` binds one transaction, and
-        // a session whose next statement is autocommit must fall back to
+        // transaction, not the connection: `BEGIN ... DURABILITY strict`
+        // binds one transaction, and a session whose next statement is
+        // autocommit must fall back to
         // its own default rather than inherit a stricter class silently -
         // or, worse, a laxer one.
         txn_durability_.reset();

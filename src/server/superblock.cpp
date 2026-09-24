@@ -198,7 +198,8 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
 }
 
 std::vector<WalAnchorFields> SuperBlock::wal_anchors() const {
-    // Sized by the pinned core count rather than by `wal_anchor_count`,
+    // Sized by the recorded core count (the running one, since AT-S9
+    // unpinned it) rather than by `wal_anchor_count`,
     // which is only the highest core that ever *published*: a core that has
     // not checkpointed yet still exists, and its all-zero anchor is the
     // right answer for it ("no checkpoint yet", so nothing to fall short

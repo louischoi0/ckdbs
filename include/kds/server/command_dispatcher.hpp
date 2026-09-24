@@ -21,7 +21,6 @@
 #include "kds/exec/fk_check.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
-#include "kds/server/session_step_client.hpp"
 #include "kds/exec/cabin_ddl.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/exec/index_maintain.hpp"
