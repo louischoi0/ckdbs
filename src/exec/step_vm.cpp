@@ -715,25 +715,15 @@ private:
     // and the reason an unsplit relation's probe is byte-identical to what
     // it was before this rule existed.
     //
-    // For a split relation the test is `ServableBy` plus a whole span, and
-    // both halves are load-bearing. `ServableBy` is the router's own
-    // predicate - `HandleSelect` fans out exactly when it is false - asked
-    // here rather than inherited, because a serve that is correct only
-    // because of a routing decision two functions away is correct by
-    // accident, which `schema.hpp` refuses in the same words for the same
-    // reason. The span is the second half: a fan-in stage covers one
-    // maximal run of its core's ranges, and a set covering *all* of them
-    // would hand that stage rows another stage is also sending.
-    //
-    // **Live since AK-S2 (2026-09-02)**: every stage and every core holds
-    // a Cabin store, so this predicate is what stands between an answer
-    // and a silent subset on a relation not wholly this core's - the one
-    // rule `cabin.md` §11 and `range_alloc.cpp` cite for a store's safety
-    // under a split. (Before AK-S2 no stage had a store and it declined
-    // nothing.)
+    // For a split relation the test is a whole span. It was `ServableBy`
+    // too until AT-S9 retired the fan-in with ownership: every walk here
+    // covers every range now, so the one way a set could answer a step
+    // short is a step assigned a slice - a remote stage's, which nothing
+    // opens any more - and a set covering *all* of the relation would hand
+    // that stage rows outside its slice.
     // The slice step `index` walks: RD7's stage assignment on the chain's
     // own first step, the whole space for every step below it. **One
-    // spelling**, because the walk asks it too (`WalkHeadsFor`, below) and
+    // spelling**, because the walk asks it too (`WalkHeads`, below) and
     // the agreement between the two is the entire correctness argument for
     // `CabinScopeCovers` - written twice, they could stop agreeing.
     catalog::PkSpan SpanFor(std::size_t index) const noexcept {
@@ -750,7 +740,6 @@ private:
         // so a set is a superset of every pk carrying its value whoever
         // wrote it, and what is left to ask is the step's own span.
         if (access.ranges.empty()) return true;
-        if (!access.ServableBy(catalog_.core_id())) return false;
         const catalog::PkSpan span = SpanFor(index);
         return span.lo == 0 && span.hi == catalog::kIdSpaceEnd;
     }
@@ -1962,7 +1951,7 @@ private:
         // `prefix->complete` - a partial map reported as total, which is
         // the one thing a prefix may not conclude.
         //
-        // Only when split, because `WalkHeadsFor` answers an unsplit
+        // Only when split, because `WalkHeads` answers an unsplit
         // relation with a one-element vector: that is a heap allocation on
         // every walk - and a walk runs once per outer row under a
         // correlated sub-chain - where RD3's zero-cost invariant is one
@@ -1971,8 +1960,7 @@ private:
             // The span applies to the outermost relation, which is what a
             // stage is assigned; an inner step reads a different relation
             // and the assignment says nothing about it.
-            walk_heads = access.WalkHeadsFor(
-                catalog_.core_id(), SpanFor(index));
+            walk_heads = access.WalkHeads(SpanFor(index));
         }
         PageId cur = kInvalidPageId;
         if (resume_page != kInvalidPageId) {

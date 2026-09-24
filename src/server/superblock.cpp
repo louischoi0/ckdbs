@@ -253,4 +253,10 @@ void SuperBlock::MarkMounted(std::uint64_t now_unix_seconds) noexcept {
     fields_.last_mount_time = now_unix_seconds;
 }
 
+Status SuperBlock::SetCoreCount(std::uint32_t cores) noexcept {
+    if (Status s = CheckCoreCount(cores); !s.ok()) return s;
+    fields_.core_count = cores;
+    return Status::OK();
+}
+
 }  // namespace kds::server

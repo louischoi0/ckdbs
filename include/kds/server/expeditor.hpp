@@ -24,7 +24,7 @@
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/mount_recovery.hpp"
-#include "kds/server/range_alloc.hpp"
+
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/stop_signal.hpp"
@@ -432,49 +432,6 @@ public:
         // (txn/lock_table.hpp), which also carries the derivation.
         sched::MonoTimeNs lock_wait_fault_net_ns = txn::kLockWaitFaultNetNs;
 
-        // RD5's `range_size_ids`; `server/range_alloc.hpp` owns what it
-        // means, and `kRangeSizeIdsDefault` carries the sweep DA1 took the
-        // *size* on.
-        //
-        // **Ships OFF since the 2026-08-31 operator amendment, which
-        // reverses DA1's arming.** Insert spreading becomes a **per-relation
-        // option the user decides**, default off, and the two halves of it
-        // are now separate facts: *whether* a relation spreads is the
-        // relation's, and *how big a range is* stays this key. Until the
-        // relation-level flag exists (see below), "the user has not asked"
-        // is every relation, so the honest instance default is
-        // `kRangeSizeOff` and an operator who wants the DA1 engine sets
-        // `range_size_ids = 65536` explicitly.
-        //
-        // **What the amendment says about ids, and it is not new
-        // behaviour**: with spreading **off** a relation's pk is an
-        // identity *and* a sequence - monotonic and gapless in issue order,
-        // which is what one core issuing from one chain has always given.
-        // With it **on** the pk is an identity and nothing more: each core
-        // issues from its own leased block, so ids do not ascend in issue
-        // order across the relation (invariant 11's §4.1a amendment states
-        // the mechanism). What changes is that this stops being an
-        // emergent property of a configuration and becomes a **promise a
-        // relation carries**, which is why the switch belongs on the
-        // relation.
-        //
-        // **What is not built, named rather than implied**: the per-relation
-        // flag itself. It has no room on `SysTableRow` - every offset there
-        // is fixed and `Decode` refuses any size but the exact one - so it
-        // is a format-version event (superblock 15 -> 16, the
-        // `anchor_page_id` precedent), and it has no syntax, because
-        // `WITH (...)` table options are V11 and unbuilt
-        // (`docs/spec/parser-v2.md`). Neither is invented here.
-        //
-        // **Armed means armed on peers.** This field reaches a dispatcher
-        // through `CoreRuntime::Open` alone (`core_runtime.cpp`'s
-        // `set_range_size_ids`, its only caller), so **core 0's dispatcher
-        // keeps `kRangeSizeOff` at every `cores`** - which is right rather
-        // than an oversight, since core 0 holds no row-id lease and the R4
-        // pump it gates would record demand nothing could satisfy. At
-        // `cores = 1` there is no other dispatcher, so this value reaches
-        // none and no range ever opens.
-        std::uint64_t range_size_ids = kRangeSizeOff;
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
@@ -510,22 +467,10 @@ public:
         // threaded into catalog::RowLayout, never a compiled-in constant.
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth;
 
-        // How many reactor cores this instance runs
-        // (docs/inflight/in-progress/workplan-crosscore.md M6). Pinned into the superblock at
-        // the bootstrap of a *new* database and validated against it on
-        // every mount after, exactly as `inline_cell_width` is - and for a
-        // reason of the same weight: WAL streams are per core, so the count
-        // decides how many streams the database has, and recovery under a
-        // changed count is [OPEN] (wal.md §3).
-        //
-        // **1 is the default and today it is also the only count that does
-        // anything.** The multicore workplan's P0 and P1 record ownership
-        // and build the cross-core transport; nothing spawns a second
-        // reactor yet (P2), so a value above 1 pins the superblock and
-        // sizes the ring matrix and changes nothing else. It is a real
-        // configuration rather than a placeholder because the pinning has
-        // to happen at bootstrap - a database created single-core cannot
-        // later be told it has four streams.
+        // How many reactor cores this instance runs. **Not pinned since
+        // AT-S9**: a mount records the running count in the superblock, one
+        // WAL stream (AM-S4(d)) and no `owner_core` (D17) having left nothing
+        // on the volume that names a core.
         //
         // Bounded above by server::kMaxWalCores (the superblock's anchor
         // table is indexed by core_id) and validated against
@@ -534,28 +479,6 @@ public:
         // this engine's cooperative, never-blocking task model survives.
         std::uint32_t cores = 1;
 
-        // Relation placement (workplan P6c, `placement` config key):
-        // `creating` pins every relation to the creating core; `rotate`
-        // spreads user relations over the non-system cores; `namespace`
-        // places a relation on its **namespace's** core.
-        //
-        // **`creating` was the ratified default** (DA2, 2026-08-31,
-        // `instructions/v2.7.0/ratification-da.md`), on the measurement in
-        // `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
-        // §6: rotation's crossover is a step at the first core to take a
-        // second session, and past it rotation is **negative at seven
-        // writer cores (0.51x)**. It is also the arrangement DA1's sweep
-        // was run under, so DA1's numbers are numbers for that policy.
-        //
-        // **`namespace` is the default since AF-T2** (2026-09-02) and DA2
-        // is not reversed by it: a relation in `public` - every relation
-        // until somebody writes `CREATE NAMESPACE` - gets `creating`'s
-        // answer unchanged, because `AssignOwnerCore` rotates only a
-        // namespace somebody declared. What changes is that a declared
-        // group of relations gets a core of its own, which is the input
-        // whose absence produced DA2's 0.51x. `creating` and `rotate` both
-        // stay configurable.
-        catalog::PlacementPolicy placement = catalog::PlacementPolicy::kNamespace;
 
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to
         // wherever the process runs"; the two are joined into one path, so

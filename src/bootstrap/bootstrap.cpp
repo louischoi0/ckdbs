@@ -60,22 +60,20 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
             return mismatch;
         }
 
-        // The pinned-core-count check (docs/inflight/in-progress/workplan-crosscore.md M6). Both
-        // numbers are named for the reason the width's message gives, and
-        // the message says what the operator's actual options are - because
-        // unlike the width, this one has a legitimate fix that is not a
-        // rebuild: run with the count the database was created for.
+        // **The core count is not pinned since AT-S9** (E9's withdrawal gave
+        // AT the question). Two reasons pinned it and both are gone: WAL
+        // streams were per core until AM-S4(d), and `owner_core` named cores
+        // until D17 dropped it. Nothing on the volume names a core now, so a
+        // mount at another count records the running one and says so - the
+        // mount is not a refusal and not silent.
         if (sb.core_count() != cores) {
-            Status mismatch = Status::InvalidArgument(
-                "cores " + std::to_string(cores) + " does not match the " +
-                std::to_string(sb.core_count()) +
-                " this database was created with; WAL streams are per core, so mounting under a "
-                "different count would leave streams with nothing to replay them - restart with "
-                "cores = " + std::to_string(sb.core_count()) + ", or create a new database");
-            if (log != nullptr && log->enabled(LogLevel::kError)) {
-                log->Error("bootstrap", mismatch.message());
+            const std::uint32_t was = sb.core_count();
+            if (Status s = sb.SetCoreCount(cores); !s.ok()) return s;
+            if (log != nullptr && log->enabled(LogLevel::kInfo)) {
+                log->Info("bootstrap", "core count changed from " + std::to_string(was) +
+                                           " to " + std::to_string(cores) +
+                                           " at this mount; nothing on the volume names a core");
             }
-            return mismatch;
         }
 
         sb.MarkMounted(now_unix_seconds);
@@ -92,7 +90,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
         // already be there. Catalog::Bootstrap() is deliberately NOT
         // called here - see the file-level comment on why running it
         // again would be destructive.
-        catalog::Catalog catalog(store, sb.inline_cell_width(), sb.core_count());
+        catalog::Catalog catalog(store, sb.inline_cell_width());
         catalog.SetLogger(log);
         return BootstrapResult{sb, std::move(catalog)};
     }
@@ -129,7 +127,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
                                    std::to_string(cores) + ", one WAL stream)");
     }
 
-    catalog::Catalog catalog(store, inline_cell_width, cores);
+    catalog::Catalog catalog(store, inline_cell_width);
     catalog.SetLogger(log);
     if (Status s = catalog.Bootstrap(); !s.ok()) {
         return s;

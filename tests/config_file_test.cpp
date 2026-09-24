@@ -130,75 +130,6 @@ TEST(ExpeditorConfigTest, DefaultsAreUsedForKeysTheFileOmits) {
     EXPECT_EQ(config.log_file, "kdb.log");
 }
 
-TEST(ExpeditorConfigTest, TheTwoRatifiedDefaultsAreWhatAnOmittedKeyLeaves) {
-    // **The shipped values, asserted where they ship from.** Both are
-    // defaults on `Expeditor::Config`, and `Expeditor::Config` is
-    // instantiated nowhere else in the suite - so without this test the
-    // engine's shipped `range_size_ids` and `placement` have no coverage at
-    // all and a re-edit of either initialiser passes 3,000 green tests.
-    //
-    // **`range_size_ids` ships OFF since the 2026-08-31 operator
-    // amendment**, which reverses DA1's arming: insert spreading is a
-    // per-relation option the user decides, default off, so no relation
-    // spreads until one asks. This assertion changed with that amendment
-    // and it is *supposed* to - it is the guard DA1 put here precisely so
-    // the default could not move without somebody saying so, and this is
-    // somebody saying so.
-    //
-    // `kRangeSizeIdsDefault` is unchanged and is no longer a default: it is
-    // the **size** a range measures once something asks for one, which is
-    // still DA1's swept number and still the lease grant (D6). The two
-    // halves - whether, and how big - are different facts now, and only the
-    // first moved.
-    Expeditor::Config config;
-    ASSERT_TRUE(config.ApplyFile(ParseOk("port = 6000\n")).ok());
-    EXPECT_EQ(config.range_size_ids, kRangeSizeOff)
-        << "spreading ships off; a relation opts in, not an instance";
-    EXPECT_EQ(config.range_size_ids, 0u) << "the value, not just the name";
-    // **AF-T2 moved this default and DA2 survives it.** `kNamespace`
-    // answers exactly what `kCreatingCore` answers for a relation in
-    // `public`, which is every relation until somebody writes
-    // `CREATE NAMESPACE` - so what DA2 ratified is still what an instance
-    // that declares nothing does. The cell below proves that half.
-    EXPECT_EQ(config.placement, catalog::PlacementPolicy::kNamespace)
-        << "AF-T2 ships namespace placement";
-    EXPECT_EQ(catalog::AssignOwnerCore(config.placement, catalog::kSystemCore, /*core_count=*/8,
-                                       /*relation_seq=*/7),
-              catalog::kSystemCore)
-        << "the shipped default moved a relation nobody declared a namespace for";
-
-    // The DA1 engine stays reachable, explicitly, which is what an operator
-    // sets to get the measured configuration back - every
-    // `bench/v2.7.0/results-ratification-da-*` and scenario-2-cores number
-    // was taken under it, and they are now numbers for a configuration
-    // rather than for a default.
-    Expeditor::Config armed;
-    ASSERT_TRUE(armed.ApplyFile(ParseOk("range_size_ids = 65536\n")).ok());
-    EXPECT_EQ(armed.range_size_ids, kRangeSizeIdsDefault);
-    EXPECT_EQ(armed.range_size_ids, 65536u);
-}
-
-// AF-T2: three spellings, and a wrong one that names all three back.
-TEST(ExpeditorConfigTest, EveryPlacementPolicyHasASpellingAndAWrongOneIsNamed) {
-    const std::pair<const char*, catalog::PlacementPolicy> cases[] = {
-        {"creating", catalog::PlacementPolicy::kCreatingCore},
-        {"rotate", catalog::PlacementPolicy::kRotate},
-        {"namespace", catalog::PlacementPolicy::kNamespace},
-    };
-    for (const auto& [text, policy] : cases) {
-        Expeditor::Config config;
-        ASSERT_TRUE(config.ApplyFile(ParseOk("placement = " + std::string(text) + "\n")).ok())
-            << text;
-        EXPECT_EQ(config.placement, policy) << text;
-    }
-
-    Expeditor::Config wrong;
-    Status refused = wrong.ApplyFile(ParseOk("placement = affinity\n"));
-    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument) << refused.message();
-    EXPECT_NE(refused.message().find("namespace"), std::string::npos)
-        << "the refusal did not offer the policy that ships: " << refused.message();
-}
-
 TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {
     Expeditor::Config config;
     ASSERT_TRUE(config
@@ -570,6 +501,19 @@ TEST(ExpeditorConfigTest, ARetiredKeyIsRefusedByNameWithWhatReplacedIt) {
     EXPECT_EQ(in_doubt.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(in_doubt.message().find("lock_wait_fault_net_ms"), std::string::npos)
         << in_doubt.message();
+
+    // AT-S9. `placement` chose the core that owned a relation and nothing
+    // owns one; `range_size_ids` armed insert spreading, which went with
+    // range ownership. The cells that pinned their shipped defaults and
+    // their spellings went with them.
+    Status placement = config.ApplyFile(ParseOk("placement = namespace\n"));
+    EXPECT_EQ(placement.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(placement.message().find("nothing to place"), std::string::npos)
+        << placement.message();
+    Status range_size = config.ApplyFile(ParseOk("range_size_ids = 65536\n"));
+    EXPECT_EQ(range_size.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(range_size.message().find("insert spreading"), std::string::npos)
+        << range_size.message();
 
     // Neither is a key a file may set, and none of the known keys is retired.
     for (const auto& [key, why] : Expeditor::Config::RetiredConfigKeys()) {

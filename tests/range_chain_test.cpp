@@ -65,11 +65,11 @@ protected:
 
     // The cut: CC10's two halves with nothing between them, because on one
     // core there is no page to hand off and no peer to tell.
-    void SplitAt(std::uint64_t lo, std::uint32_t owner_core = 0) {
+    void SplitAt(std::uint64_t lo) {
         const catalog::Oid oid = TableOid();
         auto head = boot_->catalog.CreateRangeEntryPage(oid, lo);
         ASSERT_TRUE(head.ok()) << head.status().message();
-        ASSERT_TRUE(boot_->catalog.OpenRangeRows(oid, lo, owner_core, head.value()).ok());
+        ASSERT_TRUE(boot_->catalog.OpenRangeRows(oid, lo, head.value()).ok());
     }
 
     std::vector<catalog::SysRangeRow> RangesOfTable() {
@@ -132,20 +132,16 @@ TEST_F(RangeChainTest, APostSplitInsertLandsInTheRangeItsIdNames) {
     EXPECT_EQ(lower_ids.size(), 2u) << "a row belonging above the boundary landed below it";
 }
 
-// ---- R4/IS2: the range's owner is who may write it ----------------------
+// ---- A named key above the boundary, and the omitted one after it -----
 //
-// A **named** pk is the one route that reaches a range without this core's
-// lease naming it (the omitted-pk route is routed by id before anything is
-// written, R4/IS3), so it is where the placement check is reachable and
-// where it is pinned. The refusal is by name, at the id, and not the
-// store's `MayWrite` naming a page number after the fact.
-TEST_F(RangeChainTest, AnInsertWhoseIdFallsInAnotherCoresRangeIsWrittenHere) {
-    // Until AT-S5 this insert was refused by name, retryable, because the
-    // range was another core's to write. A range's owner is a statistic
-    // now (D18); the write runs where the session is, and lands.
+// Until AT-S5 the named insert was refused because the range was another
+// core's to write; since AT-S9 no range has an owner. What stays is where
+// the rows land: the named key in its range's chain, and the next omitted
+// key - which the mark's advance put above the boundary - in that range too.
+TEST_F(RangeChainTest, ANamedKeyAboveTheBoundaryAndTheOmittedKeyAfterItLandInTheUpperRange) {
     Run("INSERT INTO t VALUES (1)");
     Run("INSERT INTO t VALUES (2)");
-    SplitAt(kBoundary, /*owner_core=*/2);
+    SplitAt(kBoundary);
 
     const std::string written =
         Run("INSERT INTO t VALUES (" + std::to_string(kBoundary) + ", 7)");
@@ -153,59 +149,40 @@ TEST_F(RangeChainTest, AnInsertWhoseIdFallsInAnotherCoresRangeIsWrittenHere) {
 
     auto ranges = RangesOfTable();
     ASSERT_EQ(ranges.size(), 2u);
-    // The row went into the range core 2 "owns", from this core.
     EXPECT_EQ(IdsInChain(ranges[1].entry_page).size(), 1u)
         << "the named key was not placed in its range's chain";
     EXPECT_EQ(IdsInChain(ranges[0].entry_page).size(), 2u);
 
-    // And the next omitted key, which the mark's advance put above the
-    // boundary too, lands in that range as well: no routing, no backstop.
     const std::string after = Run("INSERT INTO t VALUES (3)");
     EXPECT_EQ(after.rfind("INSERTED", 0), 0u) << after;
     EXPECT_EQ(IdsInChain(ranges[1].entry_page).size(), 2u);
 }
 
-// ---- R4/IS4: a predicate-shaped write goes to its range's owner ---------
+// ---- A pk-named write reaches whichever range holds its key -------------
 //
-// On a relation whose ranges have different "owners", a write that names a
-// primary key runs here whichever range it touches (AT-S5: the owner is a
-// statistic), and a write that names none is still **refused by name** -
-// it could touch every range, and multi-range transactions do not exist.
-TEST_F(RangeChainTest, APkNamedWriteRunsHereAndAnUnnamedOneIsStillRefused) {
+// R4/IS4's refusal of a write naming no pk on a relation with two range
+// owners went with ownership at AT-S9 (the unnamed write walks every range,
+// which the cell below pins); what stays is that a pk-named write is never
+// answered "0 rows" for a key in either range.
+TEST_F(RangeChainTest, APkNamedWriteReachesTheRangeItsKeyIsIn) {
     Run("INSERT INTO t VALUES (1)");
     Run("INSERT INTO t VALUES (2)");
-    SplitAt(kBoundary, /*owner_core=*/2);
+    SplitAt(kBoundary);
 
-    // A pk in **this** core's range: it runs, and the walk never reaches
-    // the range core 2 owns.
     const std::string updated = Run("UPDATE t SET v = 9 WHERE id = 1");
     EXPECT_EQ(updated, "UPDATED 1") << updated;
     const std::string deleted = Run("DELETE FROM t WHERE id = 2");
     EXPECT_EQ(deleted, "DELETED 1") << deleted;
 
-    // A pk in core 2's range: written here since AT-S5, and never answered
-    // "0 rows" - the walk reaches the range whichever core "owns" it.
     Run("INSERT INTO t VALUES (" + std::to_string(kBoundary) + ", 0)");
-    const std::string foreign =
+    const std::string upper =
         Run("UPDATE t SET v = 9 WHERE id = " + std::to_string(kBoundary));
-    EXPECT_EQ(foreign, "UPDATED 1") << foreign;
-
-    // No pk at all: the statement could touch every range, so it spans two
-    // owners and is refused naming R6. **Not** retryable - retrying changes
-    // nothing until multi-range writes exist.
-    const std::string spanning = Run("UPDATE t SET v = 9 WHERE v = 0");
-    EXPECT_EQ(spanning.rfind("ERR ", 0), 0u) << spanning;
-    EXPECT_NE(spanning.find("several owners"), std::string::npos) << spanning;
-    EXPECT_EQ(spanning.find("retryable=1"), std::string::npos)
-        << "a refusal that no retry can clear carried the retry bit: " << spanning;
-
-    const std::string spanning_delete = Run("DELETE FROM t WHERE v = 0");
-    EXPECT_NE(spanning_delete.find("several owners"), std::string::npos) << spanning_delete;
+    EXPECT_EQ(upper, "UPDATED 1") << upper;
 }
 
-// The same relation with every range on **this** core keeps every write it
-// had: a split is not by itself a restriction, two owners are.
-TEST_F(RangeChainTest, ASplitRelationWithOneOwnerKeepsItsUnnamedWrites) {
+// A split relation keeps every write it had: a split is not by itself a
+// restriction, and since AT-S9 there are no owners to span.
+TEST_F(RangeChainTest, ASplitRelationKeepsItsUnnamedWrites) {
     Run("INSERT INTO t VALUES (1)");
     SplitAt(kBoundary);
     Run("INSERT INTO t VALUES (" + std::to_string(kBoundary) + ", 7)");
@@ -397,7 +374,7 @@ protected:
         auto head = boot_->catalog.CreateRangeEntryPage(oid.value(), kBoundary);
         ASSERT_TRUE(head.ok()) << head.status().message();
         ASSERT_TRUE(
-            boot_->catalog.OpenRangeRows(oid.value(), kBoundary, 0, head.value()).ok());
+            boot_->catalog.OpenRangeRows(oid.value(), kBoundary, head.value()).ok());
 
         for (std::uint64_t id : Ids()) {
             const std::string v = std::to_string(id * 2);
@@ -769,9 +746,8 @@ TEST_F(RangeEquivalenceTest, TheRemainingComparisonOperatorsAreByteIdenticalAcro
 
 TEST_F(RangeEquivalenceTest, AnUnpredicatedWriteAcrossTheBoundaryAgrees) {
     // The write half covered a pk-named `UPDATE` and `DELETE`. The
-    // unpredicated forms are the ones that must touch **every** range,
-    // and they are legal here because every range is one core's (§7b: a
-    // split is not by itself a restriction, two owners are).
+    // unpredicated forms are the ones that must touch **every** range
+    // (§7b: a split is not by itself a restriction).
     ExpectSame("UPDATE t SET v = 5");
     ExpectSame("SELECT * FROM t");
     // Straddling, and **narrow on purpose**: it takes one row from each

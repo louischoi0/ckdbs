@@ -91,9 +91,6 @@ public:
         // a cell that wants production's refill path over the ring turns
         // it on.
         sched::MonoTimeNs wal_drain_interval_ns = 0;
-        // Where core 0's DDL places a relation. Rotate at two cores puts
-        // every relation on core 1, which is what a cross-owner cell wants.
-        catalog::PlacementPolicy placement = catalog::PlacementPolicy::kRotate;
     };
 
     static StatusOr<std::unique_ptr<TwoCoreRig>> Open() { return Open(Options{}); }
@@ -285,17 +282,11 @@ private:
             !s.ok()) {
             return s;
         }
-        if (Status s = RegisterRowIdGrantHandler(
-                core0.scheduler(), *transport_, core0.catalog(), /*log=*/nullptr,
-                store_.get(), &core0.wal(), &core0.dispatcher().assertions(), core0.cabins(),
-                &core0.dispatcher().cabin_split_discards());
+        if (Status s = RegisterRowIdGrantHandler(core0.scheduler(), *transport_,
+                                                 core0.catalog());
             !s.ok()) {
             return s;
         }
-        // Placement. The DDL choke point needs no wiring since AT-S2: both
-        // cores' catalogs share `schema_word_` through their configs, and
-        // the peer revalidates at its next task boundary.
-        core0.catalog().SetPlacementPolicy(options_.placement);
         // The peer's first transaction-id block, carved from the one
         // sequence - which persists page 0 through core 0's runtime - so
         // the peer can write before its tick has asked for anything.

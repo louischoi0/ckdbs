@@ -48,7 +48,6 @@ TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
     auto rig = std::move(opened.value());
 
     CommandDispatcher& d0 = rig->core(0).dispatcher();
-    rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
     auto oid = rig->core(0).catalog().FindTableOidByName("r0");

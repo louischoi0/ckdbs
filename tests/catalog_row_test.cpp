@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "kds/catalog/core_placement.hpp"
 #include "kds/parser/fingerprint.hpp"
 
 // Pure codec tests for sys.patterns rows (docs/spec/waystone-concpets.md
@@ -237,8 +236,9 @@ TEST(SysPatternRowTest, CatalogConstantsDoNotCollide) {
 //
 // Covered here rather than only through catalog_test.cpp for the reason
 // this file's header gives: a round trip through the same code hides an
-// offset collision. `owner_core` was appended past `varheap_page_id`, so
-// the fields either side of it are the ones worth pinning.
+// offset collision. The retired `owner_core` word sits past
+// `varheap_page_id` (`kReservedOffset` since AT-S9), so the fields either
+// side of it are the ones worth pinning.
 
 SysTableRow SampleTableRow() {
     SysTableRow row{};
@@ -249,7 +249,6 @@ SysTableRow SampleTableRow() {
     row.clustered_type = ClusteredType::kBtree;
     row.next_id = 0x2122232425262728ull;
     row.varheap_page_id = 0xB1B2B3B4u;
-    row.owner_core = 0xC1C2C3C4u;
     // kUnordered rather than the default, so a codec that dropped the field
     // fails the round trip instead of passing on a zero that happens to be
     // the right answer.
@@ -338,7 +337,7 @@ TEST(SysIndexRowTest, AWrongSizedPayloadIsRefusedNeverInterpreted) {
     EXPECT_FALSE(out.ok());
 }
 
-TEST(SysTableRowTest, RoundTripsEveryFieldIncludingTheOwnerCore) {
+TEST(SysTableRowTest, RoundTripsEveryField) {
     const SysTableRow in = SampleTableRow();
     auto out = SysTableRow::Decode(in.Encode());
     ASSERT_TRUE(out.ok()) << out.status().message();
@@ -350,12 +349,11 @@ TEST(SysTableRowTest, RoundTripsEveryFieldIncludingTheOwnerCore) {
     EXPECT_EQ(out.value().clustered_type, in.clustered_type);
     EXPECT_EQ(out.value().next_id, in.next_id);
     EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
-    EXPECT_EQ(out.value().owner_core, in.owner_core);
     EXPECT_EQ(out.value().key_order, in.key_order);
 }
 
 TEST(SysTableRowTest, TheKeyOrderOccupiesItsOwnByte) {
-    // Same check `owner_core` gets, for the same reason: a round trip
+    // Same check the retired word gets, for the same reason: a round trip
     // through one codec cannot catch an offset that overlaps a neighbour,
     // because both halves make the same mistake.
     SysTableRow row = SampleTableRow();
@@ -370,32 +368,34 @@ TEST(SysTableRowTest, TheKeyOrderOccupiesItsOwnByte) {
     }
 }
 
-TEST(SysTableRowTest, TheOwnerCoreOccupiesItsOwnBytes) {
-    // Changing it must move nothing else - the check that catches an
-    // offset overlap, which a round trip through one codec cannot.
-    SysTableRow row = SampleTableRow();
-    const auto baseline = row.Encode();
-
-    row.owner_core = 0;
-    const auto zeroed = row.Encode();
-
-    for (std::size_t i = 0; i < SysTableRow::kOnDiskSize; ++i) {
-        const bool in_field = i >= SysTableRow::kOwnerCoreOffset &&
-                              i < SysTableRow::kOwnerCoreOffset + sizeof(std::uint32_t);
-        if (in_field) continue;
-        EXPECT_EQ(baseline[i], zeroed[i]) << "owner_core disturbed byte " << i;
+TEST(SysTableRowTest, TheRetiredOwnerCoreWordIsWrittenZeroAndNeverRead) {
+    // AT-S9 retired `owner_core` and kept its four bytes, so a pre-AT row
+    // decodes where it lies: the word is written 0 and a non-zero value in
+    // it - what a pre-AT volume holds - changes nothing the decoder returns.
+    const SysTableRow in = SampleTableRow();
+    auto bytes = in.Encode();
+    for (std::size_t i = 0; i < sizeof(std::uint32_t); ++i) {
+        EXPECT_EQ(bytes[SysTableRow::kReservedOffset + i], std::byte{0}) << "byte " << i;
+        bytes[SysTableRow::kReservedOffset + i] = std::byte{0xC1};
     }
+    auto out = SysTableRow::Decode(bytes);
+    ASSERT_TRUE(out.ok()) << out.status().message();
+    EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
+    EXPECT_EQ(out.value().key_order, in.key_order);
+    EXPECT_EQ(out.value().Encode(), in.Encode()) << "the old word leaked into the decoded row";
 }
 
 TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
-    // The row grew by four bytes for `owner_core`, one for the key-order byte (`key_mode` when it was added), and
-    // four for `anchor_page_id` (PW2-1), each a format-version event - the
-    // superblock bumps to 10, 14 and 15 are the other halves. Pinned so
-    // the next person to add a field cannot do so quietly.
-    EXPECT_EQ(SysTableRow::kOwnerCoreOffset,
+    // The row grew by four bytes for `owner_core` (retired at AT-S9, its
+    // bytes kept as `kReservedOffset`), one for the key-order byte
+    // (`key_mode` when it was added), and four for `anchor_page_id`
+    // (PW2-1), each a format-version event - the superblock bumps to 10, 14
+    // and 15 are the other halves. Pinned so the next person to add a field
+    // cannot do so quietly.
+    EXPECT_EQ(SysTableRow::kReservedOffset,
               SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
     EXPECT_EQ(SysTableRow::kKeyOrderOffset,
-              SysTableRow::kOwnerCoreOffset + sizeof(std::uint32_t));
+              SysTableRow::kReservedOffset + sizeof(std::uint32_t));
     EXPECT_EQ(SysTableRow::kAnchorPageIdOffset,
               SysTableRow::kKeyOrderOffset + sizeof(std::uint8_t));
     EXPECT_EQ(SysTableRow::kOnDiskSize,
@@ -410,35 +410,6 @@ TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {
 
     EXPECT_FALSE(SysTableRow::Decode(short_row).ok());
     EXPECT_FALSE(SysTableRow::Decode(long_row).ok());
-}
-
-// ---- Placement (core_placement.hpp) ----------------------------------
-
-TEST(CorePlacementTest, TheDefaultPolicyOwnsARelationByItsCreatingCore) {
-    // The invariant placement has to satisfy: ownership names the core that
-    // may run statements against a relation, and a relation owned by a core
-    // that cannot reach its pages is not a placement, it is an unreachable
-    // relation. Under the default policy that means the creating core,
-    // whatever the count and whatever the sequence.
-    for (std::uint32_t cores : {1u, 2u, 4u}) {
-        for (std::uint64_t seq = 0; seq < 8; ++seq) {
-            EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kCreatingCore, kSystemCore, cores, seq),
-                      kSystemCore);
-        }
-    }
-}
-
-TEST(CorePlacementTest, TheRotationIsOptInAndNeverTheDefault) {
-    // M1's round-robin was once applied unconditionally, from P0 until the
-    // affinity guard existed, and every statement on a two-core instance
-    // failed - placement said core 1, execution ran on core 0. Since CC7
-    // the rotation is *legal* (the publish handoff grants the owner fault
-    // rights, workplan P6b/P6c) but statements still all run on core 0, so
-    // it stays behind the `placement = rotate` key and the default answers
-    // exactly as it did before the policy existed.
-    EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kCreatingCore, kSystemCore, 4, 0), kSystemCore);
-    EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kRotate, kSystemCore, 4, 0), 1u);
-    EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kRotate, kSystemCore, 4, 1), 2u);
 }
 
 // ---- decimal(p, s) packed into `len` (TY02) -----------------------------

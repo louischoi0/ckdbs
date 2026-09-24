@@ -210,10 +210,15 @@ The flag is read off `key_order` rather than off the storage type, and that is t
 
 Tests: `tests/supplied_key_test.cpp` end to end, the admission cases in `tests/catalog_test.cpp`, the leaf-division cases in `tests/btree_test.cpp`.
 
-### 4.1a Monotonicity is per **range** once inserts spread
+### 4.1a Monotonicity when more than one core inserts
 
-§4.1's own argument one level down. Everything above holds; what changes is
-the scope over which "ascending" is a claim.
+**Insert spreading is retired (AT-S9)**, with range ownership: no range is
+opened, and `range_size_ids` is refused by name. What this section says
+about ranges is true of a relation split before it; what it says about
+cores is true of every relation since AT-S5, because a peer's omitted-pk
+`INSERT` runs on the peer and issues from that core's leased block (until
+AT-S4 replaces the leases with shared allocators). §4.1's own argument one
+level down; what changes is the scope over which "ascending" is a claim.
 
 **A relation's ids do not ascend in issue order once more than one core
 inserts into it.** Under id-block-aligned insert spreading each core issues
@@ -249,13 +254,17 @@ orders them in the *id space*, never in time. That inference is unavailable
 across relations and across histories (§4.1); it is unavailable within one
 relation once a second core has taken a block of it.
 
-**Spreading is off by default.** `range_size_ids` ships as `kRangeSizeOff`
-(0); `kRangeSizeIdsDefault` (65,536) is the size a range measures once
-spreading is on, not a default (`include/kds/server/range_alloc.hpp`). With
-spreading off — every relation until an operator sets it — the pk is an
-identity **and a sequence**, monotonic in issue order, and a client may rely
-on it; with it on, the pk is an identity and nothing more. A single-core
-instance never produces the spread case.
+**What a client may rely on.** While one core inserts into a relation the
+pk is an identity **and a sequence**, monotonic in issue order; once a
+second core inserts omitting the pk, it is an identity and nothing more -
+the blocks interleave, and the later row may carry the lower id. On a
+btree relation that is the whole consequence, the descent placing each id
+where it sorts. **On an unsplit heap relation it is also a refusal**: one
+chain takes ids only above its tail's `min_key`, so a peer's block that
+the chain has passed is refused `OutOfRange` (`ChainInsert`) - spreading was
+the mechanism that gave each core a chain of its own, and a heap relation
+is creatable only before SUS-1 (`docs/inflight/known-gaps.md`). A
+single-core instance never produces either case.
 
 ## 5. Indexing
 

@@ -193,16 +193,13 @@ StatusOr<std::vector<RelationReport>> PlanAllRelations(catalog::Catalog& catalog
 // (budget-charged per slot examined; a spent budget fails the call with
 // the budget's own error). A btree relation gets shapes and no survey.
 //
-// `core_id` is the core doing the surveying, and it exists because a
-// relation is **one chain per range** since RD6 (H3): the walk covers the
-// ranges this core owns, and `RelationSurvey::surveyed_ranges` /
-// `relation_ranges` say how much of the relation that was. Not defaulted -
-// a caller that does not know which core it is on is a caller that would
-// silently survey the lo = 0 range and call it the relation, which is the
-// defect this parameter closes.
+// A relation is **one chain per range** since RD6 (H3), and the walk
+// covers every range (AT-S9: ranges have no owners, so there is no longer
+// a core whose share it is). `RelationSurvey::surveyed_ranges` /
+// `relation_ranges` still say how much of the relation was surveyed.
 StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageStore& store,
                                       catalog::Oid rel_oid, exec::Budget& budget,
                                       const sched::Clock* clock,
-                                      sched::MonoTimeNs half_life_ns, std::uint32_t core_id);
+                                      sched::MonoTimeNs half_life_ns);
 
 }  // namespace kds::stats

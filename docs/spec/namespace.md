@@ -1,9 +1,10 @@
 # Namespaces — logical grouping over one global oid space
 
-Decisions NS1–NS10. **A namespace selects the core that owns the relations
-created in it** (NS10), and that is the whole of what it adds to a name: a
-qualifier **declares placement, never identity** — relation names stay
-instance-global (NS5, NS6).
+Decisions NS1–NS10. **A namespace is a name, and it declares the affinity
+of the relations created in it** (NS10) — a statement about which relations
+belong together, which since AT-S9 nothing reads: no relation is owned by a
+core, so a qualifier **declares grouping, never identity and never
+placement** — relation names stay instance-global (NS5, NS6).
 
 This spec **ratifies and completes** something the engine already carries
 rather than introducing it: `kNamespaceSys` (0) and `kNamespacePublic` (1)
@@ -22,12 +23,11 @@ one word for both.
 
 ---
 
-## NS1 — A namespace is a name and a placement declaration, and nothing else
+## NS1 — A namespace is a name and an affinity declaration, and nothing else
 
-A namespace groups objects for naming, and it selects the owner core of
-the relations created in it (NS10). It is **not**
-a physical boundary, **not** an execution boundary, and **not** a unit of
-recovery or backup.
+A namespace groups objects for naming, and it declares that the relations
+created in it belong together (NS10). It is **not** a physical boundary,
+**not** an execution boundary, and **not** a unit of recovery or backup.
 
 Stated as exclusions, because each one is a thing other engines bind to this
 layer and this engine deliberately does not:
@@ -35,18 +35,18 @@ layer and this engine deliberately does not:
 - It does not select a file, extent, or device. Physical placement is the
   free map's and (if multi-file ever lands) the file model's concern, on an
   axis orthogonal to this one.
-- It is **not a unit of ownership**. The owning unit stays the relation; a
-  namespace only decides what a relation's `owner_core` is set to at
-  CREATE (NS10). Two relations in one namespace sit on one core under the
-  shipped policy and may not under `placement = creating` or `rotate`.
+- It is **not a unit of ownership, and nothing is one** since AT-S9: a
+  statement runs on the core its session is on, whatever namespace its
+  relations are in. It selected an owner core until then (NS10's history).
 - It does not scope the WAL, a checkpoint, or a snapshot. The instance has
-  one log (`docs/spec/wal.md` §3) and checkpoints are per core; nothing about
-  namespaces changes either.
+  one log (`docs/spec/wal.md` §3); checkpoints are per core and one runs at
+  a time; nothing about namespaces changes either.
 - It does not create a query boundary. See NS4.
 
 The one-line test for anything else proposed for this layer: **if removing
 every namespace and renaming objects to be unique would change the answer,
-it does not belong here** — placement (NS10) is the one declared exception.
+it does not belong here** — and since AT-S9 the affinity declaration passes
+that test too, because nothing reads it.
 
 ## NS2 — Oids are globally unique; the namespace never enters the identity
 
@@ -94,14 +94,10 @@ one catalog, so the restriction would buy nothing. The two things users
 actually want from separation are name-collision avoidance and access
 control — refusing queries serves neither while breaking legitimate joins.
 
-**What still refuses is about cores, not names.** A transaction writing
-two relations owned by different cores is refused with its existing CC3
-spelling and its retryable bit; that refusal must continue to name the
-*relation and its owner*, never the namespace, because a message that
-blamed the namespace would be false — the same two relations in one
-namespace refuse identically, and in two namespaces on one core they do
-not refuse at all. Autocommit single-relation statements are shipped
-(SS1–SS5) regardless of namespace.
+**Nothing refuses on cores any more, and a refusal never names a
+namespace.** A transaction writing two relations in two namespaces is one
+core's transaction like any other (AT-S5, AT-S6), and no statement is sent
+anywhere by the namespace its relations are in (AT-S9).
 
 ## NS5 — Resolution
 
@@ -113,13 +109,13 @@ and a relation's name is **instance-global**:
 - Qualified: resolves the same relation and then **verifies** the
   qualifier against the relation's stored `namespace_oid`. A disagreement
   is `NotFound` naming both parts *and the namespace the relation is
-  actually in* — the useful answer to a wrong placement assertion is the
-  placement. `Catalog::CheckRelationQualifier` is the one implementation;
+  actually in* — the useful answer to a wrong qualifier is the right
+  one. `Catalog::CheckRelationQualifier` is the one implementation;
   `parser/ast.hpp`'s namespace-qualifier rule is the one statement of the
   rule.
 - `CREATE TABLE ns.t` is the exception and the only place a qualifier
   *decides* rather than asserts: it selects the namespace, and through
-  NS10 the core. An unknown namespace is refused with its byte and is
+  NS10 the relation's declared affinity. An unknown namespace is refused with its byte and is
   **never created by being named**: a typo must not be indistinguishable
   from an intent.
 
@@ -152,17 +148,17 @@ name is free for reuse — the same rule DROP TABLE already follows.
 
 - `CREATE NAMESPACE <name>` — allocates an oid, writes one `sys.objects`
   row with `type_oid = kTypeNamespace`. No pages, no relations. It is the
-  placement declaration (NS10), but the namespace's core is fixed by its
-  first relation, not by this statement. Refused if the name is live, and
+  affinity declaration (NS10), and nothing reads it. Refused if the name is
+  live, and
   refused for the two reserved spellings `sys` and `public`
   (`well_known.hpp` says why each).
 - `DROP NAMESPACE <name>` — permitted **only when empty**; no `CASCADE`,
-  because a cascade is a multi-relation DDL whose relations may be owned
-  by different cores. The refusal **names the relation** that blocked it,
-  because the user's next act is to drop or move that relation. The row
-  is **retyped to `kTypeDroppedNamespace` and never retired**: it is
-  `GenerateUserOid()`'s floor evidence and the evidence a namespace's rank
-  is derived from (NS10), so retiring it could move a namespace's core.
+  a cascade being a multi-relation DDL nobody has specified. The refusal
+  **names the relation** that blocked it, because the user's next act is to
+  drop or move that relation. The row is **retyped to
+  `kTypeDroppedNamespace` and never retired**: it is `GenerateUserOid()`'s
+  floor evidence. (It was also the evidence a namespace's placement rank was
+  derived from until AT-S9 retired placement.)
 - `CREATE TABLE [ns.]name` — unqualified creates in `public`, there being
   no session current namespace (NS8). A named namespace must already
   exist.
@@ -181,8 +177,8 @@ name is free for reuse — the same rule DROP TABLE already follows.
   `SELECT` shape, and one `CommandDispatcher::QualifierRefusal` per other
   statement.
 
-DDL stays system-core-only; a namespace is a catalog row and core 0 writes
-catalog rows.
+A namespace DDL runs where its session is, as every DDL has since AT-S5:
+every core writes the catalog's pages under the page latch.
 
 ## NS8 — Session state: none
 
@@ -190,68 +186,40 @@ catalog rows.
 (NS5, NS6) there is nothing for one to select between: an unqualified name
 already reaches exactly one relation, and a "current namespace" that
 changed which relation a name reached would be the session-state-dependent
-meaning NS5 declines. A shipped statement therefore always carries a name
-that means the same thing on every core.
+meaning NS5 declines. A name therefore means the same thing on every
+core.
 
-## NS10 — The namespace selects the owner core
+## NS10 — The namespace declares the affinity of its relations
 
-**The rule.** A relation created in a namespace is owned by the core that
-owns that namespace, and a namespace's core is fixed by its **first**
-relation and never rebalanced. Implemented as
-`PlacementPolicy::kNamespace` in `include/kds/catalog/core_placement.hpp`,
-the **shipped default**.
+**The rule, since AT-S9** (AR0-5 D17 and D18, AR2 E8's verb). A relation
+created in a namespace is *declared* to belong with the namespace's other
+relations, and that declaration is all a namespace says about execution.
+**Nothing reads it today**: D18 keeps affinity as a statistic and an
+optimizer hint at weight 0 (AR0 D10) until AS-E, and no statistic is
+stored — `sys.tables.owner_core`, the column that carried the placement
+this rule used to make, was dropped at AT-S9 (its bytes are reserved,
+written 0 and ignored on read, so a pre-AT volume mounts unchanged). When a
+consumer arrives, the declaration it reads is the namespace a relation was
+created in, which is already on the relation's row.
 
-**How the core is derived, and why it is derived rather than stored.**
-`Catalog::DeriveNamespacePlacement` reads three facts off catalog rows and
-`AssignOwnerCore` decides from them; no row gains a field, so a file
-written before the policy existed mounts unchanged and means what it meant.
+**What it was, and why it went.** Until AT-S9 this read *"the namespace
+selects the owner core"*: `PlacementPolicy::kNamespace`, the shipped default,
+placed a relation on its namespace's core — fixed by the namespace's first
+relation, rotated on declaration order before that — and every write to it
+ran there. AT-S5 made a write run where its session is and AT-S6 a read, so
+the owner stopped deciding where anything ran; AT-S9 retired the owner, the
+policy (`core_placement.hpp`, the `placement` config key, refused by name
+now) and the derivation (`DeriveNamespacePlacement`). The write-side cost
+co-location was measured to carry (against the `bench/` tree at `1769487`)
+went with it, and so did the reason relations had to be grouped to make a
+join or a foreign key core-local: every core reads every page.
 
-1. **`sys` and `public` are never rotated.** The test is
-   `namespace_oid >= kUserOidStart` — "did anybody declare this?" — and it
-   is deliberately *not* `IsSystemNamespace`, which answers the different
-   question of whether a row may be renamed or dropped. A relation nobody
-   declared a namespace for is placed exactly where `placement = creating`
-   places it, so an instance that writes no `CREATE NAMESPACE` sees no
-   change.
-2. **A namespace with relations answers with its lowest-oid relation's
-   `owner_core`.** The answer is a function of rows that exist rather than
-   a cached number that could drift from them, and it is what makes an
-   existing file's placement survive a changed core count.
-3. **A namespace with none rotates on its declaration order** — how many
-   `kTypeNamespace`/`kTypeDroppedNamespace` rows on `sys.objects` precede
-   it, modulo the current core count. Dropped rows are counted precisely
-   because they are never retired, which makes the rank immutable and is
-   how the rule survives someone emptying a namespace and refilling it.
-   Because the rank is taken modulo the *current* count, an **empty**
-   namespace's core can move across a mount that changes `cores`; a
-   populated one's cannot (clause 2). A core the operator *states* at
-   `CREATE NAMESPACE` is not the mechanism.
-
-**What this does not claim.** It introduces no second unit of ownership:
-the owning unit stays the relation (NS1). It does not make a namespace a
-transaction boundary — two namespaces are two cores and a transaction over
-both crosses and commits under 2PC exactly as before (NS4). It does not
-rebalance. And it does not reopen the range split: the parallelism a split
-would have found inside one relation is found between groups of relations
-instead, with the grouping declared by the person who knows it.
-
-**The write side.** Co-locating groups on one core has a measured
-write-side throughput cost (measured against the `bench/` tree at
-`1769487`) whose mechanism is not established; group-commit batching is
-ruled out. It does not touch the read side the grouping exists to
-accelerate, and it is never a correctness cost. `SHOW META`'s
-`wal_mean_group_batch` is the core-local observable: `1.000` means every
-commit on this core paid its own device sync, and reading a *peer's* needs
-a session there - every core accepts on the port since AT-S8, and the
-kernel picks which.
-
-**The best practice is the point, not a footnote.** Relations that are
-joined, foreign-keyed or read together belong in one namespace, so the
-wiring is core-local; relations that have nothing to do with each other
-belong in different ones, so their work runs at the same time. A foreign
-key across namespaces is admitted and costs what one inside a namespace
-costs: since AT-S5f neither crosses, because both of its checks read every
-core's pages (`foreign-keys.md` §2a, §3a).
+**The best practice survives as a statement of intent, not a performance
+rule.** Relations that are joined, foreign-keyed or read together belong in
+one namespace: that is the grouping a future affinity consumer will read,
+and it is the grouping a reader of the catalog sees. A foreign key across
+namespaces is admitted and costs what one inside a namespace costs
+(`foreign-keys.md` §2a, §3a).
 
 ## NS9 — What the catalog stores, and what it does not
 
@@ -273,5 +241,5 @@ and the design is wrong.
 ## Open, and deliberately not decided here
 
 Privileges, `DROP NAMESPACE CASCADE`, a search path, namespace-scoped
-names, an empty namespace's core across a changed `cores`, and renaming a
+names, what an affinity consumer reads (D18, AS-E), and renaming a
 namespace are undecided; the decisions are not recorded here.

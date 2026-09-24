@@ -47,26 +47,21 @@ CREATE NAMESPACE <name>;
 DROP   NAMESPACE <name>;
 ```
 
-**A namespace decides which core owns the relations created in it, and
-nothing else.** It is not a separate storage area, it does not scope a
-transaction, and it does not scope a *name* — see "Qualified names" below.
-Two relations in one namespace are on one core, so a join between them
-never crosses; two relations in different namespaces are on different
-cores, so their work runs at the same time. (A foreign key never crosses
-either way - both of its checks read every core's pages since v3.0.0's
-M3.)
+**A namespace groups relations that belong together, and nothing else.**
+It is not a separate storage area, it does not scope a transaction, it does
+not scope a *name* — see "Qualified names" below — and since v3.0.0's M3 it
+decides nothing about cores: every statement runs on the core its session
+is on, whatever namespaces its relations are in. (Until then a namespace
+chose the core that owned its relations.)
 
-**The best practice is the whole feature.** Put relations that are joined,
-foreign-keyed or read together in one namespace. Put groups that have
-nothing to do with each other in different namespaces.
+**Put relations that are joined, foreign-keyed or read together in one
+namespace.** That is the grouping the engine records for a future use
+(the relation's declared affinity) and the grouping a reader of the catalog
+sees; today it changes no answer and no cost.
 
-- A namespace's core is fixed by the **first relation created in it** and
-  never changes afterwards — not by dropping every relation in it, and not
-  by dropping and recreating the namespace.
 - `sys` and `public` are reserved and cannot be created or dropped. `sys`
   names the catalog views; `public` is where an unqualified `CREATE TABLE`
-  lands, and a relation in `public` is owned by core 0 exactly as it was
-  before namespaces existed.
+  lands.
 - `DROP NAMESPACE` is **RESTRICT**: a namespace holding any relation is
   refused, and the refusal names one of the relations that blocked it.
   There is no `CASCADE`.
@@ -96,8 +91,7 @@ does not change which relation a name reaches.** Two namespaces cannot hold
 two relations called `orders`. What a qualifier does depends on where it is
 written:
 
-- at `CREATE TABLE ns.t` it **chooses** the namespace, and therefore the
-  core;
+- at `CREATE TABLE ns.t` it **chooses** the namespace;
 - everywhere else it is **checked**. A qualifier that disagrees with where
   the relation actually lives is refused, and the refusal says where it is:
 
@@ -392,12 +386,11 @@ DROP CABIN ON accounts(owner);
 - Refused on the primary key and on a `NO CABIN` column, whoever asks.
 - `SHOW CABINS` lists them. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
-- **On a relation spread across cores a Cabin is admitted and serves
-  nothing** (2026-09-01). A set speaks for the ranges its core owns, and a
-  spread relation is read by fanning out to every owner — where no entry
-  set lives — so every probe walks. Correct, and no faster: `SHOW CABINS`'
-  `scope_declines` is the count, and it is the field to read before
-  concluding a Cabin is not earning its keep.
+- **A Cabin serves a relation split into ranges** as it serves any other,
+  since v3.0.0's M3: every read walks every range on the core it runs on,
+  so a set speaks for the whole relation. (A relation can only have been
+  split before M3; nothing splits one now.) `SHOW CABINS`' `scope_declines`
+  counts the probes that fell through to a walk instead.
 
 ### CREATE PATTERN / DROP PATTERN — withdrawn
 

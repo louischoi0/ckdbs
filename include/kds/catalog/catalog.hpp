@@ -9,7 +9,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
-#include "kds/catalog/core_placement.hpp"
+
 #include "kds/catalog/row_id_lease.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
@@ -151,27 +151,19 @@ public:
     // callers that never store a varchar (the bootstrap catalog itself,
     // and tests).
     //
-    // `core_count` is the instance-pinned `cores`
-    // (docs/inflight/in-progress/workplan-crosscore.md M6), and is here for the same reason and
-    // under the same rule: it is fixed for the life of the database, and
-    // CreateTable() needs it to assign `sys.tables.owner_core`. The catalog
-    // does not *decide* placement - catalog/core_placement.hpp does - it
-    // only supplies the two inputs that policy takes.
-    // `core_id` exists for one judgment (PW2-3, the f5686f8 review's C1):
-    // whether an unresolvable anchor page belongs to a *foreign* relation
-    // - whose root is never walked here, so the row's value is a harmless
-    // stand-in - or to one of **this core's own**, where a silent
-    // fall-through would serve a CREATE-time root once roots move
-    // (reachable the day PW2-4 lifts the btree gate). Defaulted to the
-    // system core: every pre-existing construction site is core 0's.
+    // **No core count since AT-S9**: it was here for `CreateTable` to
+    // assign `sys.tables.owner_core`, and nothing is assigned. The core id
+    // is `SetCoreId`'s rather than a third argument, deliberately: a
+    // three-argument call written against the old signature would
+    // otherwise have compiled with its core count taken as a core id.
     explicit Catalog(storage::PageStore& store,
-                     std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
-                     std::uint32_t core_count = 1,
-                     std::uint32_t core_id = kSystemCore) noexcept
-        : store_(store),
-          inline_cell_width_(inline_cell_width),
-          core_count_(core_count),
-          core_id_(core_id) {}
+                     std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth) noexcept
+        : store_(store), inline_cell_width_(inline_cell_width) {}
+
+    // The core this catalog runs on, for the logs and the anchor judgment
+    // below (`core_id_`). Defaulted to the system core; set once, before
+    // any DDL.
+    void SetCoreId(std::uint32_t core_id) noexcept { core_id_ = core_id; }
 
     // Diagnostic log, null (discard) by default. `log` must outlive the
     // catalog. Set rather than constructed with, because bootstrap builds
@@ -285,28 +277,6 @@ public:
         return schema_word_ == nullptr ||
                schema_word_->load(std::memory_order_acquire) == cache_built_at_;
     }
-
-    // Called at the end of a CreateTable whose owner is **not** the system
-    // core (workplan P6c). It was the send side of CC7's flush-then-grant
-    // handoff: the system core's installer flushed the relation's pages and
-    // sent the owner its grants.
-    //
-    // **Nothing installs it in production since AW-S1b**, which deleted
-    // that installer with the grants. One test installs it
-    // (`tests/core_runtime_test.cpp`), and `MaterializeIndexDefinition`
-    // keys a refusal on its presence - see the note there, because that
-    // predicate's meaning inverted when this became test-only.
-    //
-    // Arguments: the relation's oid, its owner core, its root page, its
-    // var-heap root (kInvalidPageId when none), and its anchor page (PW2-1).
-    using RelationPublishHook =
-        std::function<void(Oid, std::uint32_t, PageId, PageId, PageId)>;
-    void SetRelationPublishHook(RelationPublishHook hook) { on_publish_ = std::move(hook); }
-
-    // The placement rule CreateTable hands to catalog::AssignOwnerCore()
-    // (workplan P6c, the `placement` config key). Default kCreatingCore;
-    // set once at startup, before any DDL.
-    void SetPlacementPolicy(PlacementPolicy policy) noexcept { placement_ = policy; }
 
     // Row-id leases for a core that may not write the catalog (P5's shape;
     // catalog/row_id_lease.hpp). With a table installed, AllocateRowId()
@@ -1175,22 +1145,20 @@ public:
     // **Writes the relation's opening row too, when there is none.** A
     // directory describes the whole id space or it is not a partition, so
     // opening one means recording the range that already exists —
-    // `{lo = 0, sys.tables.owner_core, desc_page_id}` — and only then the
-    // split. `InsertRangeRow`'s note names the shape that would otherwise
-    // be reachable: rows and no `lo = 0` row, permanent Corruption for
-    // that relation. Both rows are `kBootstrapXid` and the `lo = 0` row is
-    // written **first**, which is what closes it: a crash between the two
-    // leaves a one-row directory, which is a legal partition, and nothing
-    // undoes either row so no rollback can invert the pair.
+    // `{lo = 0, desc_page_id}` — and only then the split. `InsertRangeRow`'s
+    // note names the shape that would otherwise be reachable: rows and no
+    // `lo = 0` row, permanent Corruption for that relation. Both rows are
+    // `kBootstrapXid` and the `lo = 0` row is written **first**, which is
+    // what closes it: a crash between the two leaves a one-row directory,
+    // which is a legal partition, and nothing undoes either row so no
+    // rollback can invert the pair.
     //
-    // **This call does not gate.** Whether the relation may take a second
-    // range is `exec::RangeEligible`'s question and is authoritative only
-    // on the owner core (workplan §9c), which is not where this runs; the
-    // caller asks there, and `server/range_alloc.hpp` re-checks what core
-    // 0's own catalog can see before reaching this. Core 0 only, like
-    // every catalog write.
-    Status OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core,
-                         PageId entry_page);
+    // **No production caller since AT-S9**, which retired insert spreading
+    // with ownership: nothing opens a range any more. A pre-AT volume can
+    // still hold a split relation, and this is how a cell builds one; the
+    // engine serves such a relation by walking every range where the
+    // session is. It does not gate.
+    Status OpenRangeRows(Oid rel_oid, std::uint64_t lo, PageId entry_page);
 
     // The `trx_id` on these three is the row's MVCC stamp (DT2). It
     // defaults to `kBootstrapXid` because every caller that does not pass
@@ -1232,7 +1200,6 @@ public:
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
                               PageId varheap_page_id,
-                              std::uint32_t owner_core = kSystemCore,
                               PageId anchor_page_id = kInvalidPageId,
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr);
@@ -1463,29 +1430,15 @@ private:
     // this function's; publication is the only difference.
     Status WriteRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where);
 
-    // The three facts `AssignOwnerCore` needs about a namespace, read off
-    // the catalog's own rows (AF-T2, `core_placement.hpp`'s
-    // `NamespacePlacement`). `existing` is the `sys.tables` scan
-    // `CreateTable` already makes for the rotation counter, passed in
-    // rather than re-taken - one scan answers both questions.
-    //
-    // The second scan, of `sys.objects` for the namespace's rank, is taken
-    // **only** when the namespace holds no relation yet, which is once per
-    // namespace for the life of the file.
-    StatusOr<NamespacePlacement> DeriveNamespacePlacement(
-        Oid namespace_oid, const std::vector<SysTableRow>& existing);
-
     storage::PageStore& store_;
 
     // Instance-pinned, never mutated after construction - see the
     // constructor. Every RowLayout in the cache was built for this value.
     std::uint32_t inline_cell_width_ = storage::kDefaultInlineCellWidth;
 
-    // Instance-pinned, never mutated after construction, same as the width.
-    // Read only by CreateTable(), to hand catalog::AssignOwnerCore() the
-    // core count it takes.
-    std::uint32_t core_count_ = 1;
-    std::uint32_t core_id_ = kSystemCore;  // see the constructor's comment
+    // Which core this catalog runs on (`SetCoreId`). Read by the anchor
+    // judgment in `ResolveRoot` (PW2-3, the f5686f8 review's C1) and the logs.
+    std::uint32_t core_id_ = kSystemCore;
 
   public:
     // Which core this catalog belongs to. Read by the executor to know
@@ -1529,12 +1482,6 @@ private:
     std::uint64_t pending_marks_ = 0;
     std::atomic<std::uint64_t>* mark_counter_ = nullptr;
 
-    RelationPublishHook on_publish_;
-    // The engine's default is `kNamespace` (`Expeditor::Config`, AF-T2);
-    // a bare Catalog - bootstrap, recovery, a test over a store - keeps
-    // `kCreatingCore`, which is what every one of those wants and what
-    // `kNamespace` answers for them anyway, `public` being undeclared.
-    PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;
     RowIdLeaseTable* row_id_leases_ = nullptr;
     // Unset until the first GenerateUserOid() recovers it from the catalog.
     // An optional rather than a sentinel value, because every integer in

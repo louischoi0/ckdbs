@@ -207,22 +207,14 @@ struct TableAccess {
     // through the pages' own links, never by moving the root.
     PageId varheap_page_id = kInvalidPageId;
 
-    // The core that owns this relation (docs/inflight/in-progress/workplan-crosscore.md M1),
-    // from sys.tables. Cacheable by this struct's own admission test:
-    // ownership is assigned at CREATE and never rebalanced (M3 observes
-    // skew and deliberately does not act on it), so it cannot change
-    // without DDL.
-    //
-    // This is what the statement planner reads to pick crosscore.md §2's
-    // fast path over the pipeline. Defaulting to 0 is not a placeholder -
-    // it is the correct answer on a single-core instance and the system
-    // core's id everywhere else.
-    std::uint32_t owner_core = 0;
+    // **No `owner_core` since AT-S9** (D17): nothing reads a relation's
+    // core any more, because every read and write runs where its session is
+    // and every page is every core's to fault.
 
     // This relation's ranges, as `sys.ranges` describes them (CC9, RD3),
     // filled from `Catalog::RangesOf` through `RangeTargetsFrom`.
-    // **Empty is the ordinary value** and means one range owned by
-    // `owner_core` above and headed by `desc_page_id`, which is the branch
+    // **Empty is the ordinary value** and means one range headed by
+    // `desc_page_id`, which is the branch
     // RD3's zero-cost invariant is read from - `range_directory.hpp` owns
     // that argument and the resolver that enforces it.
     //
@@ -264,67 +256,19 @@ struct TableAccess {
         PageId* tail_hint = nullptr;
     };
 
-    // The entry pages this **core** must walk, in `lo` order (RD7).
-    //
-    // A stage of a fan-in covers the ranges it owns and no others: the
-    // rest are another stage's, and the session concatenates them. That
-    // makes the rule uniform rather than conditional - *walk what you
-    // own* is true of a lone local reader too, because the dispatcher
-    // sends the statement to a fan-in whenever any range is somebody
-    // else's, so a core that reads locally owns all of them.
+    // **The entry pages a walk of `span` covers, in `lo` order** - every
+    // range the span meets, on whichever core asks (AT-S9). It was
+    // *walk what you own* until ranges stopped having owners: a fan-in's
+    // stages each walked their owner's ranges and the session concatenated
+    // them, and a check that had to see the whole relation asked a second
+    // function. With the fan-in retired, the read path and a constraint
+    // check ask the same question, and one walk here reaches all of it.
     //
     // Empty `ranges` answers the one entry it always did, which is the
     // unsplit path and RD3's zero-cost invariant reaching the walk.
-    // `span` is the slice this stage was assigned (RD7): a read of a split
-    // relation opens one stage per maximal contiguous run of ranges on one
-    // core, and a stage covers its run alone. `PkSpan::Whole()` - the
-    // default and every pre-RD7 caller's meaning - is the whole relation.
-    std::vector<PageId> WalkHeadsFor(std::uint32_t core_id,
-                                     PkSpan span = PkSpan::Whole()) const;
-
-    // **Every entry page this relation has**, in `lo` order, whoever owns
-    // the range - the question a check asks when it must see the whole
-    // relation or drop a constraint (`exec/fk_check.cpp`'s reverse walk,
-    // AT-S5f).
-    //
-    // Its own name rather than a `core_id` a caller could pass a sentinel
-    // for: the two are different questions. `WalkHeadsFor` is the read
-    // path's - *walk what you own*, because a fan-in's other stages walk
-    // the rest and the session concatenates them - and this one has no
-    // other stage behind it. Every page is faultable from every core since
-    // AM-S2 step 3, so the difference is what the caller is answering for,
-    // never what it can reach.
-    //
-    // Answers the unsplit relation's one entry, as `WalkHeadsFor` does and
-    // for the same reason: RD3's zero-cost invariant reaching the walk.
-    std::vector<PageId> AllWalkHeads() const;
-
-    // **Whether a walk on `core_id` alone answers this relation whole** —
-    // the one question the read path asks, named once because it used to be
-    // asked in two places in two different words and they drifted (R4-R
-    // §10c). `HandleSelect`'s fan-in route must be taken exactly when this
-    // is false.
-    //
-    // **`owner_core` is not part of it since AT-S6.** It was a conjunct,
-    // and the reason was consistency rather than reachability: a relation
-    // owned elsewhere whose ranges were all this core's would have been
-    // walked here while the affinity check refused it on `owner_core`.
-    // That check is gone - every core reads every page through the one
-    // frame table (AM-S2 step 3), so who *owns* a relation says nothing
-    // about who can walk it, and the only question left is whether one
-    // walk here reaches all of it.
-    //
-    // An unsplit relation is therefore servable by every core: it has one
-    // chain and `WalkHeadsFor` answers that chain's head to whoever asks.
-    // A split one is servable by the core that holds every range, which is
-    // what keeps a walk from answering short where a fan-in is owed.
-    bool ServableBy(std::uint32_t core_id) const noexcept {
-        if (ranges.empty()) return true;
-        for (const RangeTarget& range : ranges) {
-            if (range.owner_core != core_id) return false;
-        }
-        return true;
-    }
+    // `span` is a remote stage's assigned slice (RD7); `PkSpan::Whole()` -
+    // the default and every local caller's - is the whole relation.
+    std::vector<PageId> WalkHeads(PkSpan span = PkSpan::Whole()) const;
 
     // The chain a row with `id` belongs in. Heap relations only; a btree
     // relation descends and has no chain.
@@ -336,20 +280,11 @@ struct TableAccess {
     // an id outside the 40-bit space is a caller that computed one.
     StatusOr<HeapChain> HeapChainFor(std::uint64_t id) const;
 
-    // The core that owns the range a row with `id` falls in - the question
-    // the write path asks once spreading exists (R4/IS2), where it used to
-    // read `owner_core` and be right only because every range had one
-    // owner. Unsplit, it *is* `owner_core`, off the same branch
-    // `HeapChainFor` takes.
-    StatusOr<std::uint32_t> RangeOwnerFor(std::uint64_t id) const;
-
     // The directory row an `id` falls in, or **null on an unsplit
     // relation**, where there is no row and the answer is `sys.tables`'s
-    // own two fields. One resolution behind both questions above - which
-    // chain, and whose core - because two resolutions are two chances for
-    // a row to be placed in a chain whose owner refused it. Not private
-    // only because this struct is an aggregate and an access specifier
-    // would stop it being one.
+    // own fields. The resolution behind `HeapChainFor`, and the refusal of
+    // an id in no range. Not private only because this struct is an
+    // aggregate and an access specifier would stop it being one.
     StatusOr<const RangeTarget*> RangeFor(std::uint64_t id) const;
 
     // Whether an id has ever landed on this relation out of order

@@ -28,8 +28,8 @@
 // ---- Two rules this file holds, each stated once ---------------------
 //
 // **The zero-cost invariant.** CC9: *a relation with no rows in the
-// directory is one range owned by `sys.tables.owner_core`*; §2a: *a
-// one-range relation on its owner core must add zero instructions over
+// directory is one range headed by `sys.tables.desc_page_id`*; §2a: *a
+// one-range relation must add zero instructions over
 // today*. So the unsplit path must not reach this file at all - it reads
 // `access.ranges.empty()`, one load from an entry it is already holding
 // and one predictable branch, and runs the code it ran before.
@@ -67,10 +67,10 @@ namespace kds::catalog {
 inline constexpr std::uint64_t kIdSpaceEnd = kMaxKeystoneId + 1;
 
 // One range, resolved: the half-open id span `[lo, hi)` CC8 defines, plus
-// the two facts routing needs about it.
+// where its own sub-structure starts.
 //
-// `owner_core` and `entry_page` are the row's, unchanged - the core that
-// owns the span, and where its own sub-structure starts (CC8: a heap
+// `entry_page` is the row's, unchanged - where the span's own
+// sub-structure starts (CC8: a heap
 // range's chain head, a btree range's subtree entry). What a
 // `SysRangeRow` does not carry and this does is `hi`.
 struct RangeTarget {
@@ -79,7 +79,6 @@ struct RangeTarget {
     // what makes the rows a partition of the whole space rather than of
     // the ids that happen to exist.
     std::uint64_t hi = kIdSpaceEnd;
-    std::uint32_t owner_core = 0;
     PageId entry_page = kInvalidPageId;
 
     // Where this range's chain last placed a tuple - RD6's per-range half

@@ -89,7 +89,7 @@ out-of-range values, each naming the file and line.
 | `data_file` | `kds.db` | Data file path (also the positional argument). |
 | `port` | `15432` | TCP port, loopback only. |
 | `wal_dir` | `<data_file>.wal` | WAL segment directory. |
-| `cores` | `1` | Reactor cores, pinned one per CPU. **Pinned into the superblock at bootstrap**; a later mount under a different count refuses to start, naming both numbers. Above 1 the cores share one WAL stream and one log: core 0 owns it, peers append through it, and every `fdatasync` is issued once (`docs/spec/wal.md` §3). |
+| `cores` | `1` | Reactor cores, pinned one per CPU. **Not pinned since v3.0.0's M3**: a mount under a different count records the new one in the superblock and logs the change. Above 1 the cores share one WAL stream and one log: core 0 owns it, peers append through it, and every `fdatasync` is issued once (`docs/spec/wal.md` §3). |
 | `inline_cell_width` | `64` | Bytes every `varchar` occupies inside a tuple. **Pinned at bootstrap**, mount-checked; changing it for existing data is a rebuild, no migration. Range 16..4096. |
 | `isolation` | `read committed` | The level a connection starts at; overridable per session (`SET ISOLATION LEVEL`) and per transaction (`BEGIN ISOLATION LEVEL`). |
 | `durability` | `group` | `strict`/`d1`, `group`/`d2`, `relaxed`/`d3` — applied at COMMIT for every logged statement (INSERT/UPDATE/DELETE). Instance-wide; the per-transaction class is a KWP/1 field, not wired. |
@@ -109,13 +109,13 @@ out-of-range values, each naming the file and line.
 | `aggregate_max_groups` / `aggregate_max_distinct` | `65536` / `1048576` | Aggregation caps. A cap fails the statement, never truncates. |
 | `sort_max_rows` | `1048576` | How many rows one `ORDER BY` may hold. Fails the statement naming the key; never truncates, never spills. A `LIMIT` caps what is held at `offset + limit`, so this binds only an unlimited sort — and `ORDER BY <pk>` ascending is elided rather than sorted, so it is never bound at all. |
 | `lock_wait_fault_net_ms` | `1000` | **How long a statement may wait before the engine calls the wait a fault.** Not the ordinary end of a wait: a statement waiting for a row, a range or a relation is woken by the holder's decide whenever that comes, and this bound is for the case where no decide comes — a detector that missed a cycle, or a holder that is stuck. It aborts the **waiter**, never the holder, and logs the fault as one. `0` refuses at once instead of waiting, which is the other policy rather than an off-switch. **This key was `in_doubt_ceiling_ms`, and a file that still sets that name is refused at startup naming this one** (AO-R8's plan, taken at M3's AT-S6): the old key bounded a wait on a row held by a transaction this core had prepared for a cross-owner commit, and there is no cross-owner transaction. The default was 11 s while two-phase commit was in the tree, because an honest holder could sit inside a coordinator's 10 s phase deadline; nothing waits on another core now. |
-| `range_size_ids` | `65536` | How many primary-key ids one **range** of a relation covers, and — because they are one quantity — how many ids a non-zero core leases at a time. A range is an engine-owned unit of ownership: nothing in SQL names one, and the engine decides which relations get one and when. A range opens only where a core that does **not** own the relation writes to it, so a single-core server never opens one and this key changes nothing there but the lease block. The engine declines to split any relation carrying an index, a Cabin, a foreign key, an assertion, a spillable column, or a `BTREE` clustering. `0` turns splitting off entirely. Refused above the 40-bit id ceiling. **Two limits arrive with a relation that has been split across cores**: an `UPDATE`/`DELETE` whose predicate names no primary key is refused retryably, and a read is refused once the relation exceeds 255 ranges. |
 | `log_dir` / `log_file` / `log_level` | — / `kdb.log` / `info` | Log destination and level (`trace`..`off`). Empty `log_file` disables file logging. |
 
-The two superblock-pinned keys (`cores`, `inline_cell_width`) are the ones
-that can refuse a mount: they are read once when a *new* database is
-bootstrapped, and every later start validates the running value against the
-pinned one.
+`inline_cell_width` is the one superblock-pinned key and the one that can
+refuse a mount: it is read once when a *new* database is bootstrapped, and
+every later start validates the running value against it. Four keys are
+retired and refused by name - `peer_listeners`, `in_doubt_ceiling_ms`,
+`placement` and `range_size_ids` - each refusal saying what replaced it.
 
 ## 4. Connecting
 
@@ -167,8 +167,9 @@ tags and per-level detail: `docs/spec/client-manual.md` §1.
 [VALUES]` (page-level debugging). Full list: `manual/sql/sql.md` §6.
 
 **Multi-core.** `cores > 1` spawns one pinned reactor thread per core.
-Relations are owned by a core (a namespace selects it, `docs/spec/namespace.md`),
-and a statement runs where the session is rather than reaching that owner.
+No relation is owned by a core, and every statement runs on the core its
+session is on; a namespace groups relations and decides nothing about cores
+(`docs/spec/namespace.md`).
 The cores share **one WAL stream** — core 0 opens the log and every peer
 appends through it — so a peer's `SHOW META` WAL block reads zero syncs by
 construction and the instance's durability cost is read on core 0

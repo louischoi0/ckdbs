@@ -246,7 +246,7 @@ TEST(RelayoutPlannerTest, TheSurveyedFormMeasuresAndPredicts) {
     db.store().ResetFetches();
     auto report =
         stats::PlanRelation(db.catalog(), db.store(), h_oid, budget, /*clock=*/nullptr,
-                            kHalfLife, /*core_id=*/0);
+                            kHalfLife);
     ASSERT_TRUE(report.ok()) << report.status().message();
     EXPECT_TRUE(db.store().Fetched(access.value()->desc_page_id))
         << "the surveyed form is supposed to walk the chain, and did not";
@@ -297,7 +297,7 @@ TEST(RelayoutPlannerTest, TheSurveyCoversEveryRangeOfASplitRelation) {
     const catalog::Oid h_oid = OidOf(db, "h");
     exec::Budget whole_budget;
     auto whole = stats::PlanRelation(db.catalog(), db.store(), h_oid, whole_budget,
-                                     /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+                                     /*clock=*/nullptr, kHalfLife);
     ASSERT_TRUE(whole.ok()) << whole.status().message();
     ASSERT_TRUE(whole.value().survey.has_value());
     const stats::RelationSurvey before = *whole.value().survey;
@@ -309,11 +309,11 @@ TEST(RelayoutPlannerTest, TheSurveyCoversEveryRangeOfASplitRelation) {
     // assertion - it pins that opening a boundary changes no count.
     auto head = db.catalog().CreateRangeEntryPage(h_oid, /*lo=*/1'000'000);
     ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(db.catalog().OpenRangeRows(h_oid, 1'000'000, /*owner_core=*/0, head.value()).ok());
+    ASSERT_TRUE(db.catalog().OpenRangeRows(h_oid, 1'000'000, head.value()).ok());
 
     exec::Budget split_budget;
     auto split = stats::PlanRelation(db.catalog(), db.store(), h_oid, split_budget,
-                                     /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+                                     /*clock=*/nullptr, kHalfLife);
     ASSERT_TRUE(split.ok()) << split.status().message();
     ASSERT_TRUE(split.value().survey.has_value());
     EXPECT_EQ(split.value().survey->live_tuples, before.live_tuples);
@@ -332,7 +332,7 @@ TEST(RelayoutPlannerTest, TheSurveyCoversEveryRangeOfASplitRelation) {
 
     exec::Budget after_budget;
     auto after = stats::PlanRelation(db.catalog(), db.store(), h_oid, after_budget,
-                                     /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+                                     /*clock=*/nullptr, kHalfLife);
     ASSERT_TRUE(after.ok()) << after.status().message();
     ASSERT_TRUE(after.value().survey.has_value());
     EXPECT_EQ(after.value().survey->live_tuples, before.live_tuples + 5)
@@ -347,7 +347,7 @@ TEST(RelayoutPlannerTest, TheSurveyRespectsTheRowBudget) {
 
     exec::Budget budget(10);  // 400 slots to walk: refused, not truncated
     auto report = stats::PlanRelation(db.catalog(), db.store(), OidOf(db, "h"), budget,
-                                      /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+                                      /*clock=*/nullptr, kHalfLife);
     ASSERT_FALSE(report.ok());
     EXPECT_EQ(report.status().code(), StatusCode::kResourceExhausted)
         << report.status().message();
@@ -359,14 +359,14 @@ TEST(RelayoutPlannerTest, ABtreeRelationSurveysNothingAndPlansNothing) {
 
     exec::Budget budget;
     auto report = stats::PlanRelation(db.catalog(), db.store(), OidOf(db, "b"), budget,
-                                      /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+                                      /*clock=*/nullptr, kHalfLife);
     ASSERT_TRUE(report.ok()) << report.status().message();
     EXPECT_FALSE(report.value().survey.has_value());
     EXPECT_TRUE(report.value().plans.empty());
     EXPECT_EQ(budget.touched(), 0u) << "a btree relation must not be walked";
 
     auto missing = stats::PlanRelation(db.catalog(), db.store(), /*rel_oid=*/999999, budget,
-                                       /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+                                       /*clock=*/nullptr, kHalfLife);
     ASSERT_FALSE(missing.ok());
     EXPECT_EQ(missing.status().code(), StatusCode::kNotFound);
 }

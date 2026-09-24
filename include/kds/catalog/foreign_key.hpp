@@ -56,14 +56,5 @@ namespace kds::catalog {
 Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow& child_column,
                                   std::uint16_t child_column_pos);
 
-// The colocation half (F5): parent and child must be owned by the same
-// core. Fails with Unsupported naming both cores.
-//
-// v1 rejects a cross-core foreign key outright rather than growing a slow
-// path for it, because both checks are reads injected into a writing
-// statement and a write already binds to one home core (crosscore.md CC3).
-// The FK graph becomes an input to placement policy - a decision for
-// `AssignOwnerCore()`, which is why nothing here tries to *place* anything.
-Status CheckForeignKeyColocation(const TableAccess& parent, const TableAccess& child);
 
 }  // namespace kds::catalog

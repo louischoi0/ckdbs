@@ -180,10 +180,6 @@ protected:
         // (`protocol.md` §12) and `STOP` is how this test stops an instance
         // the way an operator does rather than by tearing one down.
         config.debug_text_port = ports.second;
-        // A relation per core: `kNamespace` fixes every relation in `public`
-        // to one core, and what these cells need is one that lands on the
-        // peer.
-        config.placement = catalog::PlacementPolicy::kRotate;
         return config;
     }
 
@@ -614,10 +610,10 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
         ASSERT_TRUE(running.Run());
         const int c = running.client();
 
-        // `kRotate` at two cores places every relation on core 1, so this is
-        // the peer's - which is what makes the assertion the peer's own, and
-        // an assertion this core merely knows about would reproduce neither
-        // defect the same way.
+        // Placed on core 1 by `kRotate` until AT-S9, which made the assertion
+        // the peer's own; no core owns a relation since, and the registry is
+        // the instance's (AT-S5d), so the cell now pins the mount of a volume
+        // with one assertion on it, whichever core a statement arrives on.
         const std::string made = SendLine(c, "CREATE TABLE cap (id int64, v int64)");
         ASSERT_EQ(made.rfind("ERR", 0), std::string::npos) << made;
         const std::string declared =
@@ -656,9 +652,9 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
 
     // And the enforcement itself, which is the reading that does not depend
     // on a counter being named correctly: the second row in group 7 is
-    // refused by the assertion - **arriving on core 0's listener**, for a
-    // relation `kRotate` placed on core 1, which is D1 exactly: until AT-S5d
-    // core 0's registry held no directory for it and admitted the row.
+    // refused by the assertion - **arriving on core 0's listener**, which
+    // was D1 exactly while the relation was core 1's: until AT-S5d core 0's
+    // registry held no directory for it and admitted the row.
     RunningInstance running(db, config.debug_text_port);
     ASSERT_TRUE(running.Run());
     const std::string violating = SendLineRetrying(running.client(), "INSERT INTO cap VALUES (7)");

@@ -338,32 +338,6 @@ TEST_F(ForeignKeyTest, TheCatalogRefusesADeclarationTheDdlSurfaceWouldHaveCaught
               StatusCode::kNotFound);
 }
 
-// ---- Colocation (F5), converted at AH-T4 ---------------------------------
-//
-// F5 read "parent and child must be owned by the same core" and refused
-// otherwise, because the forward check descended the parent locally and had
-// nowhere else to ask. It has somewhere now (§2a), so the pair is admitted
-// and colocation is advice - the cheaper shape, asked for with a namespace
-// (AF-P5) - rather than a gate.
-//
-// This cell is the conversion itself, kept where the refusal was: it fails
-// the day something re-refuses a cross-owner pair without amending F5.
-TEST(ForeignKeyColocation, AdmitsRelationsOnDifferentCores) {
-    catalog::TableAccess parent{};
-    parent.oid = 4001;
-    parent.owner_core = 0;
-    catalog::TableAccess child{};
-    child.oid = 4002;
-    child.owner_core = 1;
-
-    EXPECT_TRUE(catalog::CheckForeignKeyColocation(parent, child).ok())
-        << "a cross-owner foreign key was refused after AH-T4 converted F5";
-
-    child.owner_core = 0;
-    EXPECT_TRUE(catalog::CheckForeignKeyColocation(parent, child).ok());
-}
-
-
 // ---- FK-M2 / FK-M3 / FK-M5: the checks -----------------------------------
 //
 // A second fixture, with a transaction manager and a Cabin store, because
@@ -721,65 +695,27 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
 // stood here was `CheckNoChildReferences`' scope guard - a child with a
 // range this core did not own was refused `NotImplemented`, fail-closed,
 // because the walk covered this core's chains alone. The walk covers every
-// chain of the relation now (`AllWalkHeads`), so the range's owner changes
-// nothing about the answer, which is what these two cells say.
+// chain of the relation now (`WalkHeads`), and since AT-S9 no range has an
+// owner, which is why one cell remains where there were two.
 
-// Splits `name` at `lo`, giving the upper range to `owner`.
-void SplitChild(catalog::Catalog& catalog, const char* name, std::uint64_t lo,
-                std::uint32_t owner) {
+// Splits `name` at `lo`.
+void SplitChild(catalog::Catalog& catalog, const char* name, std::uint64_t lo) {
     auto oid = catalog.FindTableOidByName(name, nullptr);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto head = catalog.CreateRangeEntryPage(oid.value(), lo);
     ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog.OpenRangeRows(oid.value(), lo, owner, head.value()).ok());
-}
-
-TEST_F(ForeignKeyCheckTest, AChildInARangeAnotherCoreOwnsStillBlocksTheParent) {
-    // `AChildInASecondOwnedRangeStillBlocksTheParent` below, with the
-    // second range given to **core 1** - and that is the whole cell: the
-    // owner of the range the child sits in changes nothing, where until
-    // AT-S5f it turned the answer into a `NotImplemented` refusal.
-    //
-    // The child is heap: D1 declines every btree relation a directory, so
-    // a btree child could never reach this arm. **Spelled `HEAP` since the
-    // AT-S5f review**: SUS-1 made BTREE the storage default, which turned
-    // this cell's child into a btree relation whose reverse check takes
-    // `BtreeVisit` and reads no directory at all - so the cell passed
-    // without ever reaching `AllWalkHeads`, and the mutant that walks this
-    // core's heads alone survived it. The suspension is lifted in the test
-    // binary (`HeapStorageAllowedForTest`), so the word is all it takes.
-    ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
-                  "qty int64) HEAP")
-                  .substr(0, 7),
-              "CREATED");
-    // Ids 1 and 2, both below the boundary, neither referencing account 1,
-    // so the chain this core would have walked alone finds nothing.
-    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 100)").substr(0, 8), "INSERTED");
-    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 200)").substr(0, 8), "INSERTED");
-
-    SplitChild(boot_->catalog, "trades_h", /*lo=*/3, /*owner=*/1);
-
-    // Id 3: the first row of the second chain - the range core 1 owns - and
-    // the only reference to account 1 anywhere. Named rather than issued,
-    // so the cell says which chain the row is in rather than deriving it.
-    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (3, 1, 300)").substr(0, 8), "INSERTED");
-
-    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1").substr(0, 16), "ERR FK_VIOLATION");
-    EXPECT_EQ(RowCount("SELECT * FROM accounts WHERE id = 1"), 1u);
-
-    // The converse, so the cell is not passing by refusing everything: a
-    // parent nothing references anywhere is deleted, and the walk that
-    // reads core 1's chain is what establishes it.
-    ASSERT_EQ(Run("INSERT INTO accounts VALUES ('unreferenced')").substr(0, 8), "INSERTED");
-    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 3"), "DELETED 1");
+    ASSERT_TRUE(catalog.OpenRangeRows(oid.value(), lo, head.value()).ok());
 }
 
 TEST_F(ForeignKeyCheckTest, AChildInASecondOwnedRangeStillBlocksTheParent) {
-    // The cell that bites. Every range is this core's, so the check may
-    // answer - but the referencing row lives in the **second** chain, and
+    // The cell that bites. The referencing row lives in the **second** chain, and
     // `desc_page_id` alone is the first. A walk that stopped there would
     // report "no children", delete the parent, and leave a dangling
     // foreign key with nothing logged.
+    //
+    // The child is heap: D1 declines every btree relation a directory, so
+    // a btree child could never reach this arm, and SUS-1 made BTREE the
+    // default - the word `HEAP` is what keeps the directory walk under test.
     ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
                   "qty int64) HEAP")
                   .substr(0, 7),
@@ -789,7 +725,7 @@ TEST_F(ForeignKeyCheckTest, AChildInASecondOwnedRangeStillBlocksTheParent) {
     ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 100)").substr(0, 8), "INSERTED");
     ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 200)").substr(0, 8), "INSERTED");
 
-    SplitChild(boot_->catalog, "trades_h", /*lo=*/3, /*owner=*/0);
+    SplitChild(boot_->catalog, "trades_h", /*lo=*/3);
 
     // Id 3: the first row of the second chain, and the only reference to
     // account 1 anywhere.
@@ -866,14 +802,12 @@ TEST_F(ForeignKeyCheckTest, ANullableForeignKeyColumnShowsNullableYes) {
 class ForeignKeyPlacementTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Four cores, so two namespaces can be two cores. Namespace
-        // placement is the shipped default (`Expeditor::Config`), but a
-        // bare bootstrap builds a bare Catalog, so it is set here.
+        // Four cores, which named the namespaces' cores until AT-S9 retired
+        // placement; a namespace declares nothing about a core since.
         auto boot = bootstrap::BootstrapDatabase(store_, 1000,
                                                  storage::kDefaultInlineCellWidth, /*cores=*/4);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
-        boot_->catalog.SetPlacementPolicy(catalog::PlacementPolicy::kNamespace);
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_);
     }
 
@@ -923,19 +857,6 @@ TEST_F(ForeignKeyPlacementTest, AForeignKeyInsideOneNamespaceIsSilent) {
         Run("CREATE TABLE ledger.trades (id int64, account_id int64 REFERENCES accounts) BTREE");
     ASSERT_EQ(out.substr(0, 7), "CREATED") << out;
     EXPECT_EQ(out.find("WARN"), std::string::npos) << out;
-
-    // And the reason it is silent: NS10 put them on one core.
-    auto parent = boot_->catalog.FindTableOidByName("accounts");
-    auto child = boot_->catalog.FindTableOidByName("trades");
-    ASSERT_TRUE(parent.ok());
-    ASSERT_TRUE(child.ok());
-    auto parent_row = boot_->catalog.GetSysTableRow(parent.value());
-    auto child_row = boot_->catalog.GetSysTableRow(child.value());
-    ASSERT_TRUE(parent_row.ok());
-    ASSERT_TRUE(child_row.ok());
-    EXPECT_EQ(parent_row.value().owner_core, child_row.value().owner_core);
-    EXPECT_NE(parent_row.value().owner_core, catalog::kSystemCore)
-        << "a declared namespace stayed on the system core, so this proves nothing";
 }
 
 }  // namespace

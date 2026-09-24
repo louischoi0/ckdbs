@@ -48,8 +48,6 @@ TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote
     auto rig = std::move(opened.value());
 
     CommandDispatcher& d0 = rig->core(0).dispatcher();
-    // Core 0's own relation, so nothing about this probe is about routing.
-    rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
     ASSERT_EQ(d0.Dispatch("CREATE CABIN ON r0(v)").response.substr(0, 3), "CRE");
@@ -118,7 +116,6 @@ TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
     auto rig = std::move(opened.value());
 
     CommandDispatcher& d0 = rig->core(0).dispatcher();
-    rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
     ASSERT_EQ(d0.Dispatch("CREATE CABIN ON r0(v)").response.substr(0, 3), "CRE");

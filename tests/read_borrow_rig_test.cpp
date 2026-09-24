@@ -224,21 +224,13 @@ TEST(ReadBorrowRigTest, ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer) {
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
 
-    // `r` on core 1, by the recipe every cross-owner cell here uses: one
-    // relation placed on the creating core, then the rotation puts the next
-    // on the peer.
+    // No core owns `r` since AT-S9; "on a peer" is the reader's core, which
+    // is where `HoldPosition` below is submitted.
     CommandDispatcher& d0 = rig->core(0).dispatcher();
-    rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
-    ASSERT_EQ(d0.Dispatch("CREATE TABLE anchor (id int64, v int64) BTREE").response.rfind("CRE", 0),
-              0u);
-    rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r (id int64, v int64) BTREE").response.rfind("CRE", 0), 0u);
 
     auto oid = rig->core(0).catalog().FindTableOidByName("r");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
-    auto row = rig->core(0).catalog().GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok()) << row.status().message();
-    ASSERT_EQ(row.value().owner_core, 1u) << "r is not the peer's, so no reader of it is either";
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
 
     Reader reader;

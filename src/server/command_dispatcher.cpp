@@ -1462,123 +1462,46 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // the coordinator's four and the participant's three - and the four
     // call sites went with the protocol two hunks above. Left as a
     // `set but not used` warning by that deletion until this line.
-    // The cross-core writes this core refused, `crosscore.md` §6's "input
-    // the future placement/2PC decision will be made from". Printed
-    // unconditionally, zero included: unlike the blocks above it, a zero
-    // here is an answer - *this workload asked for no cross-core write* -
-    // and that is exactly the reading the before-shipping era is recorded
-    // for.
+    // **Three counter blocks retired at AT-S9**, each with the event it
+    // counted: `cross_core_write_refusal` (a write to a relation another
+    // core owned - there are no owners), `range_split_decline` (a range
+    // opening a gate refused - nothing opens a range) and
+    // `cabin_split_discard` (a Cabin's sets discarded at a split - nothing
+    // splits). A client reading any of them reads its absence, which is
+    // this section's absent-rather-than-zeroed rule applied to a counter
+    // whose event cannot happen.
     //
-    // **The undercount, stated where it is read.** The key is
-    // (home core, target core, relation oid), so a refusal that never
-    // resolves a relation cannot appear:
-    //
-    //   - **DDL on a peer** was the named case until AT-S5: refused by
-    //     verb before anything was parsed (`PeerDdlRefused`), so never a
-    //     relation-keyed write and never counted. There is no such
-    //     refusal now - a peer's DDL is a statement like any other - and
-    //     `crosscore.md` CC10 says so in the same words.
-    //   - A statement refused **before resolution** for any other reason -
-    //     a parse error, `max_insert_rows`, the multi-row-without-a-
-    //     transaction refusal - never reaches the affinity check.
-    //
-    // `docs/inflight/in-progress/workplan-peer-writer.md` §8's pre-parse DML guard - the class
-    // §6 names as invisible to a relation-keyed counter - was removed at
-    // PW1c-5, so at this commit a peer's foreign write is refused by
-    // `CheckWriteAffinity` and *is* counted. The list above is the
-    // undercount that is real now.
-    PrintRefusalCounters(os, "cross_core_write_refusal", cross_core_writes_.counts(),
-                         [](std::ostream& out, const CrossCoreWriteCounters::Key& key) {
-                             out << key.home_core << '>' << key.target_core << ':' << key.rel_oid;
-                         },
-                         /*even_when_zero=*/true);
-
-    // **Declined range openings** (RD5's C3,
-    // `workplan-range-directory.md` §9e), in the triple above's form with
-    // one deliberate difference: the whole block is absent at zero rather
-    // than printing `=0`, which is this section's absent-rather-than-
-    // zeroed rule. The cross-core triple predates that rule and keeps its
-    // unconditional print so its series does not break.
-    //
-    // The reading is aggregate: **which gate declines how often on which
-    // relation is the evidence for which owning decision to lift first** -
-    // the index (`index.md` §13), the Cabin (`cabin.md` §11), the var-heap
-    // partition, FK or assertion placement. The per-event log line beside
-    // it is bounded to first sightings, so this is where the volume is.
-    PrintRefusalCounters(os, "range_split_decline", range_split_declines_.counts(),
-                         [](std::ostream& out, const RangeSplitDeclineCounters::Key& key) {
-                             out << key.rel_oid << ':' << exec::RangeGateName(key.gate);
-                         },
-                         /*even_when_zero=*/false);
-
-    // **The Cabin's two numbers under a split** (SB-R4,
-    // `docs/spec/cabin.md` §4c), printed here and adjacent because they
-    // are one reading: what the pre-grant discard cost, and whether
-    // anything was served afterwards. Split apart they answer nothing —
-    // a discard with no fall-throughs after it is a Cabin that rebuilt,
-    // and a discard followed by fall-throughs on the same relation is a
-    // Cabin the read path cannot reach.
-    //
-    // `cabin_split_discard` is keyed by relation and counts **value
-    // sets**; it is written on core 0, which is where a split runs, so a
-    // peer's block is empty by construction rather than by policy.
-    // `cabin_scope_fallthroughs` is store-wide here and per Cabin on
-    // `SHOW CABINS`, which is where the per-Cabin figures already live.
-    // Both absent at zero, this section's rule.
-    PrintRefusalCounters(os, "cabin_split_discard", cabin_split_discards_.counts(),
-                         [](std::ostream& out, const catalog::Oid& oid) { out << oid; },
-                         /*even_when_zero=*/false);
+    // What a pre-AT split still costs a Cabin, `cabin_scope_fallthroughs`,
+    // is store-wide here and per Cabin on `SHOW CABINS`. Absent at zero.
     if (cabins_ != nullptr && cabins_->stats().scope_declines != 0) {
         os << " cabin_scope_fallthroughs=" << cabins_->stats().scope_declines;
     }
 
-    // **How many ranges each split relation actually has** (R4-R §7's
-    // instrument gap, added with RR1). Nothing reported this from outside
-    // the process: `sys.ranges` has no column definitions, so
-    // `SELECT * FROM ranges` answers *"no columns for this rel_id"*, and
-    // the block above carries only *declines*. R4-M could measure the count
-    // only where the fan-in refusal names it - above 64 stages - and had to
-    // estimate it as `ids issued / range_size_ids` everywhere below, which
-    // is wrong by construction wherever IS5's suppression fires.
+    // **How many ranges each split relation has** (R4-R §7's instrument
+    // gap, added with RR1): `sys.ranges` has no column definitions, so
+    // nothing else reports it from outside the process. Absent when nothing
+    // is split - `SHOW META`'s absent-rather-than-zeroed rule, and since
+    // AT-S9 retired range opening, the reading of every volume created
+    // since: only a pre-AT split relation can print here.
     //
-    // **Absent when nothing is split**, which is `SHOW META`'s
-    // absent-rather-than-zeroed rule and also the honest reading: an
-    // instance that has never armed `range_size_ids` has no ranges to
-    // report, not zero of them. So a single-core instance and every
-    // unarmed one print nothing here, and this field cannot be read as a
-    // behaviour change on either.
-    //
-    // Keyed `oid:ranges@stages`, and **the second number is stages and not
-    // owners** because stages is the one the ceiling counts: a read opens
-    // one upstream per maximal contiguous run of same-owner ranges, so
-    // `owners <= stages <= ranges` and only the middle term is what
-    // `kMaxFanInUpstreams` is compared against. Reporting owners would have
-    // replaced R4-M's estimate with a different estimate.
-    //
-    // Counting it needs no set and no sort: ranges partition the id space
-    // and `RangesOf` returns them in ascending `lo`, so a run ends exactly
-    // where consecutive owners differ - which is the same walk
-    // `HandleSelect` does to build the stages themselves.
+    // Keyed `oid:ranges`. It was `oid:ranges@stages`, the second number the
+    // count of same-owner runs a fan-in read opened one upstream per; the
+    // fan-in and the owners are gone, and every range is walked here.
     {
-        std::map<catalog::Oid, std::pair<std::size_t, std::size_t>> split;
+        std::map<catalog::Oid, std::size_t> split;
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& row : tables.value()) {
                 auto ranges = catalog_.RangesOf(row.oid);
                 if (!ranges.ok() || ranges.value().size() < 2) continue;
-                const std::vector<catalog::SysRangeRow>& rows = ranges.value();
-                std::size_t stages = 1;
-                for (std::size_t i = 1; i < rows.size(); ++i) {
-                    if (rows[i].owner_core != rows[i - 1].owner_core) ++stages;
-                }
-                split.emplace(row.oid, std::make_pair(rows.size(), stages));
+                split.emplace(row.oid, ranges.value().size());
             }
         }
         if (!split.empty()) {
             os << " split_relations=" << split.size() << " split_relation_detail=";
             bool first = true;
-            for (const auto& [oid, counts] : split) {
+            for (const auto& [oid, count] : split) {
                 if (!first) os << ',';
-                os << oid << ':' << counts.first << '@' << counts.second;
+                os << oid << ':' << count;
                 first = false;
             }
         }
@@ -2244,7 +2167,6 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
        // of a walk here" - is the one it now answers.
        << " key_order=" << catalog::KeyOrderName(table_row.value().key_order)
        << " next_id=" << table_row.value().next_id
-       << " owner_core=" << table_row.value().owner_core
        << " columns=" << schema.columns.size();
 
     // K4's lifetime budget, beside the sequence it is derived from. Here as
@@ -3158,7 +3080,7 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
         // rather than serving a half-count.
         exec::Budget budget(budget_.limit());
         auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
-                                       decay_half_life_ns_, core_id_);
+                                       decay_half_life_ns_);
         if (!one.ok()) return {ErrorReply(one.status()), false, 0, one.status()};
         reports.push_back(std::move(one.value()));
     }
@@ -4228,26 +4150,12 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // reach the trail - the orphan the review named, pre-existing on
         // the explicit-transaction path and recorded in
         // workplan-rv3-catalog-recovery.md's remainder.
-        // **AF-T4's notice is gone with the cost it named** (AT-S5f).
-        // A cross-owner foreign key is admitted - AH-T4 converted
-        // `CheckForeignKeyColocation` from a constraint to a
-        // recommendation - and this is where the recommendation was
-        // spoken, because this is where a user is choosing. What it said
-        // was that "every write of this relation pays one cross-core probe
-        // round, and a DELETE of a referenced parent row is refused until
-        // the reverse fan-out is built".
-        //
-        // **Both halves are now false and there is no third to put in
-        // their place.** The forward check descends the parent here and
-        // the reverse check walks the child here, through the one frame
-        // table AM-S2 step 3 made the instance's, so a cross-owner
-        // foreign key costs the page faults a colocated one costs and
-        // nothing else - there is no round to pay and no refusal to warn
-        // about. A notice invented to keep the shape would be the defect
-        // this one had: a client told a cost the engine does not charge.
-        // The placement advice itself stands and `namespace.md` NS8 is
-        // where it lives, because it is about joins and reads, which do
-        // still cross.
+        // **No notice about where the parent is** (AT-S5f, and AT-S9 made
+        // it permanent). AF-T4 printed one here - a cross-owner foreign
+        // key's cost, one probe round per write and a refused parent
+        // `DELETE` - and both went at AT-S5f when the checks went local;
+        // the owners themselves went at AT-S9. A notice invented to keep
+        // the shape would tell a client a cost the engine does not charge.
         for (const PendingForeignKey& fk : pending_fkeys) {
             auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
             if (!created.ok()) {
@@ -4499,145 +4407,37 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     return out;
 }
 
-Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
-                                             Session& session,
-                                             std::optional<std::uint64_t> target_id) {
-    // **Whose write this is** (R4/IS2). Ownership was `sys.tables`'s field
-    // and is now the *range's*, and the difference only exists once a
-    // relation's ranges have different owners - which is exactly what
-    // insert spreading produces and what nothing else does. On an unsplit
-    // relation `RangeOwnerFor` returns `owner_core` off the same
-    // `ranges.empty()` branch every other range question takes, so this is
-    // the field it always was plus one predictable test.
+Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access,
+                                              Session& session) {
+    // **What is left of the write-affinity check since AT-S9**, and why it
+    // is renamed: nothing here asks about a core. It resolved whose range a
+    // write landed in and counted a write to another core's range
+    // (`cross_core_write_refusal`, the evidence D18 kept of ownership); the
+    // owners are gone with `owner_core` (D17), and with them the counter and
+    // the range resolution it needed. An id outside every range is still
+    // refused, by `TableAccess::HeapChainFor` where the row is placed. Its
+    // history - PW1c-5's shape gate on peers, the btree, indexed, key-mode,
+    // assertion, foreign-key and Cabin arms lifting one by one - is
+    // `workplan-peer-writer.md` §4's and git's.
     //
-    // Asked only when the caller knows the id, because only then is there
-    // a range to ask about: an UPDATE or DELETE names rows by predicate,
-    // not by the row it is about to place, and routing those is IS4's
-    // (until it lands they read the relation's owner, exactly as before).
-    std::uint32_t target_core = access.owner_core;
-    if (target_id.has_value() && !access.ranges.empty()) {
-        auto owner = access.RangeOwnerFor(*target_id);
-        if (!owner.ok()) return owner.status();
-        target_core = owner.value();
-    }
-    // **A write to a range this core does not own is done here** (AT-S5).
-    // The refusal that stood here answered a frame table one core owned;
-    // one table serves every core (AM-S2 step 3), the row's tuple `X` and
-    // the relation `IX` are the instance's (AO-S5), and the transaction is
-    // this core's by construction since nothing ships. `target_core` is
-    // read for the counter, which is what D18 keeps of ownership.
-    if (target_core != core_id_) {
-        cross_core_writes_.Record(session.home_bound() ? session.home_core() : core_id_,
-                                  target_core, access.oid);
-    }
-    // The CC3 arm - a transaction bound to another core's stream - stood
-    // here and was unreachable by R6-8's CP3; at AT-S5 a transaction has no
-    // other core to be bound to, and the arm is gone with the route.
-    // PW1c-5's shape gate, a **whitelist**: on a peer, a write is admitted
-    // only where the PW1c-4 grants and this core's own extent lease make it
-    // sound - any relation, clustered either way (the btree arm lifted at
-    // PW2-4), whose secondary structures were owner-built until AT-S5d and
-    // AT-S5e: an index (PW1c-6b-4) and, since 2026-08-26, a Bound Cabin
-    // (PW1c-6c). The key-mode arm lifted with the mode (2026-08-25) and
-    // its refusal is per row in `InsertOneRow`, so this gate no longer says
-    // anything about keys at all. The interim guard this
-    // replaced indicted its own blacklist shape ("a page-writing verb
-    // added later is admitted by omission"), and the first form of this
-    // gate repeated it one level down - it missed assertions, whose entry
-    // pages are the system core's (the 25059bf review's C-3). Each named
-    // refusal cites the task that lifts it. The tail refusal - what made a
-    // *future* secondary structure refuse rather than slip through - went
-    // with the Cabin arm (AK-S2, 2026-09-02): an Observational Cabin is
-    // owner-held since every core has a store, so nothing a peer-owned
-    // relation can carry is built or held anywhere but on its owner, and
-    // the one arm left is `CannotEnforce`'s. None poisons the session; the
-    // backstop below every admitted shape is the store's every-build
-    // MayWrite (device_page_store.cpp).
-    {
-        // **On every core since AT-S5**, where this block ran on peers alone
-        // as PW1c-5's shape gate; what survives in it survives everywhere.
-        // The btree arm lifted 2026-08-24 (PW2-4) and the indexed arm
-        // 2026-08-25 (PW1c-6b-4). The indexed arm's argument - a peer-owned
-        // relation's index was owner-built, so every index page was the
-        // owner's own and maintenance a local write - went with the per-core
-        // pool and then with the owner-built path itself (AT-S5e): every
-        // core builds and maintains every relation's indexes through the one
-        // frame table, under the page latch, and a build fences the
-        // relation's writers with its `X`.
-        //
-        // **The key-mode arm lifted 2026-08-25** with the mode itself
-        // (heap-and-tuple.md §4.1). What it was really refusing was the
-        // catalog write `AdmitExplicitRowId` makes, and that is a property of
-        // the *row*, not of the relation: a row omitting its pk draws from
-        // this core's lease and writes no catalog page at all. So the
-        // refusal moved to `InsertOneRow`, where the supplied id is in hand -
-        // which admits every peer write this gate used to refuse for having
-        // the wrong mode declared, and refuses exactly the rows that would
-        // have needed the system core's page.
-        //
-        // **The assertion arm lifted 2026-08-26 (PW1c-6c)**, and what is
-        // left in its place is the narrower question it should always have
-        // asked: an assertion the instance knows of and cannot enforce
-        // (`CannotEnforce`). Reading `AnyOn` for it was the defect - `AnyOn`
-        // was false on a core whose registry never heard of the assertion,
-        // which is exactly the core that had to refuse
-        // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
-        // Finding 2: a shipped write put a second row in a group under
-        // `CHECK COUNT(*) <= 1`). There is one registry since AT-S5d, so
-        // no core's answer differs from another's. What reaches
-        // `CannotEnforce` is a revive that failed or a checkpoint whose
-        // snapshots do not cover the base (`server/mount_recovery.cpp`).
-        // **The foreign-key arm lifted 2026-09-01 (AH-T4, operator's
-        // ratification).** It refused a write to any FK-linked relation on
-        // any core but 0, and its reason was *"validation reads the linked
-        // relation, which this core may not fault"* - which was true, and
-        // is the exact defect `foreign-keys.md` §2a removed. Both
-        // directions are now either funded on this core's own pages or
-        // refused by name, and neither faults a page it may not:
-        //
-        //   - **forward** (`fkeys_out`): the check is hoisted out of the
-        //     write scope to the dispatch fork (§2a). A parent this core
-        //     owns descends this core's own pages; a parent it does not is
-        //     **probed on its owner** - one round per owner, an answer, and
-        //     a reference intent left behind. No local read of a foreign
-        //     relation remains on this path.
-        //   - **reverse** (`fkeys_in`): only a `DELETE` runs it, and
-        //     `CheckNoChildReferences` refuses `NotImplemented` the moment
-        //     `child.owner_core != core_id` (§3a). A child this core owns
-        //     is walked on its own chains; one it does not is not walked at
-        //     all. RESTRICT degrades to refusing the delete, which is
-        //     fail-closed.
-        //
-        // The Cabin arm lifted 2026-09-02 (AK-S2): every core holds a
-        // `stats::CabinStore`, so the owner observes, appends and serves,
-        // and the arm had nothing left to guard. The tail went with it -
-        // every secondary structure a relation can carry was then owner-built
-        // or owner-held, and is built under the relation `X` by any core
-        // since AT-S5e; a new one must be added here rather than admitted by
-        // omission. `workplan-peer-writer.md` §4
-        // has the account. **`CannotEnforce` stays** with its *measured*
-        // failure (`bench/v2.2.0/results-shipping-part-a-*` Finding 2, a
-        // shipped write putting a second row in a group under
-        // `CHECK COUNT(*) <= 1`); AK-S10 is its stage.
-        if (enforcer_->CannotEnforce(access.oid)) {
-            return Status::NotImplemented(
-                "a relation under an assertion this core cannot enforce cannot take "
-                "writes on core " +
-                std::to_string(core_id_) +
-                ": the assertion's Bound Cabin could not be revived at this mount, so "
-                "admitting the write would leave the constraint unchecked; the mount log "
-                "names why (docs/spec/assertion.md 6.1)");
-        }
-        // **PW1c-7's rights probe went with the grants** (AW-S1b). It asked
-        // the store whether this core could write a relation's creation
-        // pages or its range head, and recorded a re-delivery demand where
-        // the answer was no - a question a shared frame table cannot ask,
-        // since `MayWrite` now answers for the system range alone. The
-        // refusal it produced, `RelationWriteRightsPending`, went with it:
-        // no path reaches it.
+    // **`CannotEnforce` stays**, with its *measured* failure
+    // (`bench/v2.2.0/results-shipping-part-a-*` Finding 2, a shipped write
+    // putting a second row in a group under `CHECK COUNT(*) <= 1`): an
+    // assertion the instance knows of and could not revive at this mount
+    // refuses the relation's writes on every core, there being one registry
+    // since AT-S5d. What reaches it is a revive that failed or a checkpoint
+    // whose snapshots do not cover the base (`server/mount_recovery.cpp`).
+    if (enforcer_->CannotEnforce(access.oid)) {
+        return Status::NotImplemented(
+            "a relation under an assertion this core cannot enforce cannot take "
+            "writes on core " +
+            std::to_string(core_id_) +
+            ": the assertion's Bound Cabin could not be revived at this mount, so "
+            "admitting the write would leave the constraint unchecked; the mount log "
+            "names why (docs/spec/assertion.md 6.1)");
     }
     // The session's home is the core its writes run on - this one, since
-    // AT-S5 - and it is read for the cross-core counter's "from" alone.
+    // AT-S5.
     session.BindHomeCore(core_id_);
     return Status::OK();
 }
@@ -5040,91 +4840,6 @@ DispatchOutcome CommandDispatcher::FinishRemoteReads(ResultSink* sink_or_null,
     return {text_sink.Take(), false};
 }
 
-namespace {
-
-// **Every relation a chain reads, in one walk.** Three places hold steps
-// and all three read real pages: the chain's own steps, its *hoisted*
-// sub-chains, and the sub-chains attached to a **step** - which is where
-// `step_compiler.cpp` §3 leaves a correlated sub-chain *and* every
-// value-bearing uncorrelated one (`IN` / `NOT IN` / the scalar form),
-// since their set is row-independent but their comparison is not.
-//
-// **What this walk is for has changed, and the old reason is worth
-// recording because it is now false.** It was: a step reading a relation
-// this core does not own faults the page anyway in a release build and
-// judges its visibility against the wrong core's transaction manager -
-// measured, on a two-core rig, as an empty result set where a row
-// matched. Visibility is the instance's shared window since AN-R1, and
-// reading another core's pages is what every statement does since AM-S2
-// step 3, so that answer is no longer wrong and this walk no longer
-// prevents it.
-//
-// What it prevents now is narrower and still worth the walk: a **split**
-// relation reached through a sub-chain would be walked short by
-// `WalkHeadsFor`, which is `CheckReadAffinity`'s one refusal, and a
-// sub-chain that never reached this visitor would slip past it.
-//
-// `fn` stops the walk by answering false, which both callers below use as
-// their refusal.
-using StepVisitor = std::function<bool(const exec::Step&)>;
-
-bool VisitRelationSteps(const std::vector<exec::Step>& steps, const StepVisitor& fn) {
-    for (const exec::Step& step : steps) {
-        if (!fn(step)) return false;
-        for (const exec::SubChain& sub : step.sub_chains) {
-            if (!VisitRelationSteps(sub.steps, fn)) return false;
-        }
-    }
-    return true;
-}
-
-bool VisitRelationSteps(const exec::StepChain& chain, const StepVisitor& fn) {
-    for (const exec::SubChain& sub : chain.hoisted) {
-        if (!VisitRelationSteps(sub.steps, fn)) return false;
-    }
-    return VisitRelationSteps(chain.steps, fn);
-}
-
-}  // namespace
-
-Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
-    // Every step a sub-chain of any kind can reach, through the one walk
-    // `VisitRelationSteps` states (just above). It used to
-    // scan the hoisted sub-chains and the chain's own steps only, which
-    // left `WHERE x IN (SELECT ... FROM <another core's relation>)` and
-    // every correlated sub-chain unchecked - and a release build does not
-    // refuse that fault, it performs it.
-    Status refusal = Status::OK();
-    VisitRelationSteps(chain, [&](const exec::Step& step) {
-        auto access = catalog_.InitTableAccess(step.rel_oid);
-        if (!access.ok()) {
-            refusal = access.status();
-            return false;
-        }
-        // **One rule, asked once** (R4-R/RR1): a statement that reaches
-        // here could not take `HandleSelect`'s fan-in route, so it must be
-        // served by a local walk or refused - and `ServableBy` is exactly
-        // the route's own predicate, negated.
-        //
-        // **One arm since AT-S6.** The other refused a relation another
-        // core *owned*, and shipped the statement there when it could;
-        // both went when the read stopped shipping, because a page is a
-        // page from any core and an unsplit relation is walkable from all
-        // of them. What is left is the only way a local walk can still be
-        // wrong: **a split relation whose ranges are not all this
-        // core's**, which `WalkHeadsFor` would walk short - rows silently
-        // missing, success reported, the one ending this row may not leave
-        // open.
-        if (access.value()->ServableBy(core_id_)) return true;
-        refusal = Status::NotImplemented(
-            "relation '" + step.rel_name +
-            "' has ranges on another core and this shape cannot fan in over them; "
-            "reading it here would answer short");
-        return false;
-    });
-    return refusal;
-}
-
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
     // H6 step 2: the parse leg. One of `observability.md` §10's three
     // request-level spans, and the cheapest to attribute wrongly - a
@@ -5212,168 +4927,30 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // refreshed by InsertOneRow when a root repoint invalidates it.
     const catalog::TableAccess* ta = access.value();
 
-    // ---- R4/IS1: the pump ----------------------------------------------
-    //
-    // This core is about to give a foreign INSERT away - shipped just
-    // below, or refused by the affinity check under it - and giving it
-    // away is what keeps this relation single-writer forever. A range is a
-    // lease grant (`server/range_alloc.hpp`), the grant is asked for by
-    // whichever core recorded demand, and core 0 opens the range **owned
-    // by the core that asked** (`row_id_lease_service.cpp`). So the one
-    // thing missing between a mechanism that is entirely built and a
-    // second owner is a core saying it wants ids for a relation it does
-    // not own. That is this call, and it writes nothing: a map entry on
-    // this core, read by the drain tick.
-    //
-    // **The statement itself is untouched** - it still ships, or still
-    // takes the affinity refusal with the spelling and the wire bit it has
-    // always had - so an armed instance's *first* foreign INSERT behaves
-    // exactly as it did, and the second one finds a range of its own.
-    //
-    // Narrow on purpose, and each clause earns itself:
-    //   - `range_size_ids_` armed: with ranges off the grant would open no
-    //     range, so the block would be ids burnt for a statement that runs
-    //     somewhere else.
-    //   - heap: D1 declines every btree relation, and §6b says a btree
-    //     relation with caller-named keys spreads without any of this.
-    //   - some row omits its pk: a row that names one draws from no lease
-    //     at all (it writes the mark, which is core 0's page), so a lease
-    //     would go unused.
-    //
-    // **Not conditioned on "this core owns no range yet", which is the
-    // wrong question and was a livelock.** Owning a range and holding a
-    // lease are different facts, and a restart separates them: `sys.ranges`
-    // is durable and `RowIdLeaseTable` is memory-resident, so a restarted
-    // core owns its range and has no ids for it. Skipping the demand there
-    // left `Peek` empty forever - the statement ships to the relation's
-    // owner, the owner refuses it because the id lands in *this* core's
-    // range, and nothing ever asks for the block that would break the
-    // cycle. `NoteDemand` is idempotent (an existing entry, live or spent,
-    // is left exactly as it is), so asking unconditionally costs one map
-    // lookup on an armed instance and nothing at all on an unarmed one.
-    //
-    // Eligibility is deliberately **not** asked here. The tick asks it,
-    // core 0 re-checks it against the durable rows, and both record the
-    // decline where §9e put the counter; a third opinion on this path
-    // would be a second place for the answer to differ. The cost of being
-    // wrong is one lease block for one relation on one core - the grant
-    // arrives, no range opens, and `low_water()` is false thereafter.
-    // Which rows omit their pk, counted **once** for the two questions that
-    // ask it: R4's routing below wants "any", and T3's sorted fill further
-    // down wants "every". Hoisted here rather than computed twice, which is
-    // what the first form of this row did - one extra pass over `stmt.rows`
-    // on every INSERT, for a fact the statement already had to derive.
+    // Whether every row omits its pk, the question T3's sorted fill further
+    // down asks.
     const std::size_t fill_arity = ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
     std::size_t rows_omitting_pk = 0;
     for (const std::vector<parser::AstValue>& r : stmt.rows) {
         if (r.size() == fill_arity) ++rows_omitting_pk;
     }
-    const bool any_row_omits_pk = rows_omitting_pk > 0;
     const bool every_row_omits_pk = rows_omitting_pk == stmt.rows.size();
 
-    // **Two gates, and they are deliberately not the same one** (the R4
-    // review's C3). The *pump* asks the runtime knob, because what it
-    // decides is whether a grant would open a boundary - a question about
-    // configuration. The *routing* asks the durable directory, because a
-    // relation that already has ranges has them whatever the knob says
-    // now: `HeapChainFor` and `VisitRelation` honour those rows
-    // unconditionally, and a router that stopped honouring them when the
-    // knob was turned off would send every INSERT to `owner_core` to be
-    // refused at placement, forever. Disarming the key must stop new
-    // boundaries opening; it cannot un-split what is on disk.
-    const bool heap_omitting_pk =
-        ta->clustered_type == catalog::ClusteredType::kHeap && any_row_omits_pk;
-    const bool pump = range_size_ids_ != kRangeSizeOff && heap_omitting_pk;
-    const bool route_by_range = heap_omitting_pk && !ta->ranges.empty();
+    // **No routing, since AT-S9.** R4/IS3's block stood here: it peeked the
+    // row id this core would issue, asked which core owned the range that
+    // id fell in, and pumped lease demand so core 0 would open a range for
+    // this core - insert spreading. Spreading retired with ownership (the
+    // operator's ruling at AT-S9): no range is opened, and a row lands in
+    // whichever existing range its id falls in (`TableAccess::HeapChainFor`,
+    // which refuses an id in no range), on the core the session is on.
 
-    // ---- R4/IS3: which core this INSERT belongs on ----------------------
-    //
-    // **The id decides, and this core already knows it.** An omitted pk is
-    // issued from this core's own row-id lease, a range *is* a lease grant
-    // (`server/range_alloc.hpp`), and `Peek` reads the id `AllocateRowId`
-    // will hand out without handing it out - so the range, and therefore
-    // the owner, is knowable before anything is encoded. That is the whole
-    // of insert spreading: a core with a block of its own does not send the
-    // statement to the relation's owner, it appends to its own range's tail
-    // locally (`crosscore.md` §6b).
-    //
-    // **Routing is by id and never by "this core holds a lease"**, and the
-    // difference is load-bearing. Core 0 grants ids whether or not it opens
-    // a range - a gated relation gets the block and no boundary, and so
-    // does a carve at `first_id == 0` - so a lease can perfectly well name
-    // ids that fall inside *another* core's range. Asking the directory
-    // sends those where they belong instead of writing them here.
-    //
-    // The multi-row case needs no separate answer: a lease block cannot
-    // outrun the range it opened, since a spent block refuses retryably
-    // rather than issuing past its end, and a contiguous top-up extends the
-    // same core's own run. So every id this statement issues resolves to
-    // the range the first one did. That is an argument, not a proof, which
-    // is why the placement check refuses each row's landing range rather
-    // than trusting it.
-    //
-    // **The pump is the peek's other half, not a second question** (the
-    // review's S1). "No id to issue" *is* the demand, and it is the exact
-    // condition `RowIdLeaseTable::Next()` records demand on - so writing it
-    // as one branch is what keeps the two sites from drifting, and it costs
-    // one map descent instead of two on the common path. Asking
-    // unconditionally, as an earlier form did, was also the fix for a
-    // livelock: owning a range is durable and holding a lease is not, so a
-    // restart leaves a core owning a range with no block and nothing to
-    // record the demand that would refill it.
-    std::optional<std::uint64_t> target_id;
-    if (pump || route_by_range) {
-        target_id = catalog_.PeekRowId(ta->oid);
-        if (!target_id.has_value()) {
-            // No block here. On a peer that is demand; on core 0 it is a
-            // relation whose `sys.tables` row could not be read, and
-            // `NoteRowIdDemand` is a no-op there either way.
-            if (pump) catalog_.NoteRowIdDemand(ta->oid);
-        } else if (route_by_range) {
-            // **Asked for the refusal, not for the answer** (AT-S5b). The
-            // core this returned was the ship's destination until AT-S5;
-            // nothing reads it now and the compiler said so. The call
-            // stays because it is also what refuses an id that maps to no
-            // range at all, which is a wrong write and not a routing
-            // question.
-            if (auto owner = ta->RangeOwnerFor(*target_id); !owner.ok()) {
-                return {ErrorReply(owner.status()), false, 0, owner.status()};
-            }
-        }
+    // Before anything is written, once per statement - every row goes to
+    // the one relation.
+    if (Status admitted = CheckWriteAdmission(*ta, *scope.session); !admitted.ok()) {
+        // ErrorReply, not a bare "ERR ": what the gate refuses
+        // (`CannotEnforce`) must reach the wire with its code.
+        return {ErrorReply(admitted), false, 0, admitted};
     }
-
-    // **The fork** (SS2), whose conditions and their reasons are stated
-    // once, on `MayShip` (command_dispatcher.hpp). Here because this is
-    // after the shape resolution and before the affinity check, so every
-    // refusal that is not about ownership keeps its exact spelling and its
-    // exact wire bit.
-    // **R6-8 adds the second gate**, and it is a second gate rather than a
-    // widened first one because the two admit different shapes for
-    // different reasons: `MayShip` is SS2's autocommit routing,
-    // `MayEnrolShip` is D4's cross-owner transaction. A statement that
-    // satisfies neither falls through to the affinity check exactly as it
-    // did, with its refusal's spelling and wire bit untouched (HP4).
-    //
-    // The destination is the **range's** owner since R4/IS3, which on every
-    // relation that has no directory is `owner_core` and the statement this
-    // fork always sent.
-    // The fork shipped a write to the range's owner until AT-S5; a write
-    // runs where the session is, and `target_core` is a statistic (D18).
-
-    // Before anything is written: a relation this core does not own, or a
-    // transaction already bound to another core, is refused retryably
-    // (crosscore.md CC3, core_affinity.hpp). Once per statement - every
-    // row goes to the one relation.
-    if (Status affinity = CheckWriteAffinity(*ta, *scope.session, target_id);
-        !affinity.ok()) {
-        // ErrorReply, not a bare "ERR ": what the gate still refuses
-        // (`CannotEnforce`) must reach the wire with its code, and a
-        // retryable refusal's `TXN_CONFLICT retryable=1` is what a client
-        // retries on - all three write sites spelled it without until
-        // PW1c-7's test asked for the bit.
-        return {ErrorReply(affinity), false, 0, affinity};
-    }
-
     // ---- The relation's intention, before anything is admitted (AT-S5e,
     // AT-0 item 13) ---------------------------------------------------------
     //
@@ -5630,25 +5207,6 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
     if (!ta.ranges.empty()) {
-        // **R4/IS2, and this path needs it in its own words.** The fill does
-        // not go through `InsertIntoRelation`, so the placement check that
-        // refuses a row landing in a range this core does not own has to be
-        // made here too - it was missing, and the case is reachable rather
-        // than theoretical: `AllocateRowIdRange` draws from
-        // `sys.tables.next_id`, which sits above every block core 0 has
-        // leased out, so on a spread relation core 0's carve lands in the
-        // **top** range, which is whichever core asked last. Without this
-        // the batch is appended to that core's chain through its entry
-        // page, and core 0 holds no extent lease, so `MayWrite` admits it -
-        // two cores with divergent images of one page and nothing logged.
-        //
-        // Before the straddle test below because this is the safety
-        // question and that one is an implementation limit (§14f): a run
-        // that both straddles a boundary and starts in a foreign range
-        // should name the ownership first.
-        if (Status s = CheckRangePlacement(ta, first.value()); !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
-        }
         auto last = ta.HeapChainFor(first.value() + payloads.size() - 1);
         if (!last.ok()) {
             return {ErrorReply(last.status()), false, 0, last.status()};
@@ -6103,17 +5661,6 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     return std::nullopt;
 }
 
-Status CommandDispatcher::CheckRangePlacement(const catalog::TableAccess& access,
-                                              std::uint64_t id) const {
-    // The backstop refused a row whose range another core "owned" until
-    // AT-S5 - "the insert was routed to the wrong core". A range's owner is
-    // a statistic (D18) and the write runs here; what remains is the
-    // resolve, so an id outside every range is still a caller's error.
-    auto range_owner = access.RangeOwnerFor(id);
-    if (!range_owner.ok()) return range_owner.status();
-    return Status::OK();
-}
-
 StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
     const catalog::TableAccess& access, std::uint64_t id, std::span<const std::byte> payload,
     std::uint64_t trx_id) {
@@ -6129,22 +5676,8 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // RD6: the head is the *range's*, not the relation's
             // (`TableAccess::HeapChainFor` owns the argument). On an
             // unsplit relation it is `desc_page_id` and `heap_tail_hint`,
-            // byte for byte what this line was.
-            //
-            // **R4/IS2: and the range it names must be this core's**
-            // (`CheckRangePlacement` carries the argument). The routing
-            // above says it is - the id came from this core's lease, and a
-            // range is a lease grant - but "by construction" is what the
-            // RD6 defect was also true of, so it is checked.
-            //
-            // The `ranges.empty()` test is here and not inside the check
-            // because CD1's zero-cost invariant is measured on this exact
-            // line: an unsplit relation must reach `ChainInsert` having
-            // paid one predictable branch on a field already in a register,
-            // never an out-of-line call beside `HeapChainFor`'s.
-            if (!access.ranges.empty()) {
-                if (Status s = CheckRangePlacement(access, id); !s.ok()) return s;
-            }
+            // byte for byte what this line was. An id in no range is
+            // refused by the resolve inside it.
             auto chain = access.HeapChainFor(id);
             if (!chain.ok()) return chain.status();
             auto placed = heap::ChainInsert(page_store_, chain.value().head, id, payload, trx_id,
@@ -6437,10 +5970,8 @@ std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAc
     // literal in `val`: its *low bound*.** Without this line
     // `WHERE id BETWEEN 2 AND 5` reads as `WHERE id = 2`, and the callers
     // then act on it: the point-lookup fast path applies an UPDATE/DELETE
-    // to the low bound's row alone and reports `UPDATED 1`, and
-    // `WriteTargetCore` narrows the write's `PkSpan` to that row's range
-    // so a split relation never walks the ranges above it. Both are silent
-    // wrong answers; the read path is unaffected because
+    // to the low bound's row alone and reports `UPDATED 1` - a silent
+    // wrong answer; the read path is unaffected because
     // `exec::CompileWhere` lowers a `kBetween` into two conjuncts before
     // anything executes, and the consumers of the *raw* condition are what
     // this function exists to keep honest.
@@ -6474,56 +6005,6 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
     const parser::Condition& cond = where.front();
     if (cond.op != parser::CompareOp::kEq) return std::nullopt;
     return PkLiteral(access, cond);
-}
-
-StatusOr<std::uint32_t> CommandDispatcher::WriteTargetCore(
-    const catalog::TableAccess& access, const std::vector<parser::Condition>& where,
-    std::optional<std::uint64_t>* target_id) const {
-    // The zero-cost branch: no directory, no question. Every relation on a
-    // single-core instance and every one whose ranges never opened - which
-    // since DA1 is a statement about contention rather than about the
-    // default, because `range_size_ids` now ships armed
-    // (`server/range_alloc.hpp`) and a range opens only where a second core
-    // asks.
-    if (access.ranges.empty()) return access.owner_core;
-
-    // A bare pk equality names one id, one range, one owner - the OLTP
-    // shape, and the only predicate this engine can reduce to a pk window
-    // without evaluating it. `PkEqualityTarget` is the point-statement
-    // fast path's own test, reused rather than re-derived: two answers to
-    // "is this a point statement" is two chances to route a statement the
-    // scan then handles differently.
-    //
-    // **A literal above the 40-bit space is not a routing question** (the
-    // review's C4). `PkEqualityTarget` admits any non-negative `int64`, and
-    // `ResolveRanges` refuses a span above `kIdSpaceEnd` as a caller that
-    // computed a bound wrong - which a user typing `WHERE id = 2^40` has
-    // not. Such an id names no row, so it names no range either; falling
-    // through leaves the statement answered by the rule below rather than
-    // turned into an `InvalidArgument` where it used to say `UPDATED 0`.
-    if (std::optional<std::uint64_t> pk = PkEqualityTarget(access, where);
-        pk.has_value() && *pk <= kMaxKeystoneId) {
-        auto owner = access.RangeOwnerFor(*pk);
-        if (!owner.ok()) return owner.status();
-        *target_id = pk;
-        return owner.value();
-    }
-
-    // Otherwise the statement can touch every range, so it belongs on the
-    // core that owns every range - if one does.
-    const std::uint32_t sole = access.ranges.front().owner_core;
-    for (const catalog::RangeTarget& range : access.ranges) {
-        if (range.owner_core == sole) continue;
-        return Status::NotImplemented(
-            "relation oid " + std::to_string(access.oid) +
-            " is split across cores and this statement names no primary key, so it would "
-            "write ranges owned by core " + std::to_string(sole) + " and core " +
-            std::to_string(range.owner_core) +
-            "; a write spanning several owners is refused until multi-range transactions "
-            "exist (docs/inflight/in-progress/blueprint-range-ownership.md R6). Name a "
-            "primary key, or issue one statement per range");
-    }
-    return sole;
 }
 
 CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
@@ -7411,272 +6892,24 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
 
-    // The plan is resolved; now ask whether this core may run it
-    // (crosscore.md §2's fast-path-versus-pipeline decision). Every
-    // relation local is the fast path; a single-step star read of a
-    // relation another core owns ships to that core (workplan P4c) - and
-    // everything else that spans cores keeps the affinity refusal below.
+    // **Every read runs where the session is, walking every range** (AT-S9,
+    // AT-0 item 4 answered "struck"). Two routes stood here and both chose
+    // a core by ownership: the single-step fan-in sent a split relation's
+    // ranges to the cores that owned them, and the two-step pipeline sent a
+    // join to its relations' owners. Ownership is gone with `owner_core`
+    // (D17), and neither route had a reason left that was not ownership:
+    // one frame table serves every core (AM-S2 step 3), so every page is
+    // this core's to fault, and a walk here reaches the whole relation
+    // (`TableAccess::WalkHeads`).
     //
-    // The eligible class is deliberately narrow and each exclusion is a
-    // correctness statement, not a shortcut: an aggregate would fold on
-    // the wrong core's sink; a quota (LIMIT/OFFSET) applies at emission
-    // and the remote side emits everything; **a sort applies at emission
-    // too** (OB4) - the remote reply is the owning core's emission order,
-    // and the local sink the sorter decorates is never reached, so shipping
-    // a sorted statement would answer it unordered; ANALYZE describes a
-    // local run it did not perform; a projection list needs the projection
-    // types the remote whole-row batch does not carry yet. Every excluded
-    // shape is refused exactly as before, never mis-run.
-    //
-    // `sorted()` and not `stmt.order_by.empty()`: an `ORDER BY <pk> ASC`
-    // the compiler elided asks for the order this path already returns, so
-    // it stays eligible - **except** when the elision leaned on
-    // `emit_in_key_order`. That flag is how an out-of-order-keyed relation's walk
-    // is made to emit in key order (heap-and-tuple.md §4.1), and
-    // `EncodeStepDescriptor` does not carry it, so a shipped step would
-    // walk in slot order and answer the clause wrongly. Refused here rather
-    // than encoded: the wire format is versioned, and an honest affinity
-    // refusal beats a reordered reply.
-    //
-    // **RR1: and not inside a transaction that can enrol.** The pipeline
-    // answers from the owning core's *latest-committed* view, outside any
-    // transaction this session holds (§5's CC4 rule). Inside a cross-owner
-    // transaction that is not the documented weakening it is inside an
-    // autocommit statement - it is a **wrong answer**: this transaction's
-    // own writes on that owner live in the transaction the owner is holding
-    // for it, and no view the pipeline can take shows them. So a session
-    // that may enrol takes the ship path below, where the read joins that
-    // transaction and sees them.
-    //
-    // **The exclusion is `in_explicit_txn()`, not `MayEnrolShip`**, which
-    // was a proxy for it and stopped being one at R4-R. The proxy held
-    // while a session that could not enrol could not have written to any
-    // relation this route serves; RR1 pointed the route at relations this
-    // core **owns** and RR2 armed it on every core, and the session that
-    // then falls through is the enrolled participant itself - a statement
-    // shipped inside a cross-owner transaction carries `in_explicit_txn()`
-    // *and* `shipped()`, so `MayEnrolShip` is false for exactly the reader
-    // whose own uncommitted writes the pipeline's view cannot show. The
-    // condition the paragraph above states is *inside a transaction*, so
-    // that is what is asked.
-    //
-    // **Last in the chain, not first**, which is the same ordering argument
-    // the paragraph above makes about `InitTableAccess`: the shape tests
-    // are free and this one is a call, so a local read - which is every
-    // read on a single-core instance and most reads on any other - reaches
-    // its answer without ever asking. CP2's "free at the instruction level"
-    // is a claim about that path and this row does not spend it.
-    //
-    // **The shape gate is three shapes wide since AG3** (R4-A,
-    // `workplan-insert-spreading.md` §12): the star read P4c shipped, a
-    // **projection**, and a **fold** - grouped or not. All three read the
-    // same batches, because what a stage ships does not change: whole rows
-    // of the relation, filtered by the residual the descriptor carries
-    // (`ShippedForm` preserves it). The widening is on the session side
-    // alone - `FinishRemoteReads` feeds the decoded row into the same
-    // `ChainFrame` the local walk fills, and then projects it or folds it.
-    //
-    // What stays refused, and each because it is a correctness statement
-    // rather than an oversight: a **quota** (`LIMIT`/`OFFSET`) and a
-    // **sort** both apply at emission, and the remote side emits
-    // everything in its own order; `ANALYZE` would describe a local run it
-    // did not perform; a **join** needs a spread relation planned as a
-    // stage, which is the two-step pipeline's and not a shape gate at all.
-    if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 1 &&
-        chain.value().hoisted.empty() && !chain.value().sorted() &&
-        !chain.value().limit.has_value() && chain.value().offset == 0 &&
-        !session.in_explicit_txn()) {
-        const exec::Step& step = chain.value().steps[0];
-        auto owner_access = catalog_.InitTableAccess(step.rel_oid);
-        // **The question is "can a local walk serve this", not "is this
-        // relation someone else's"** (R4-R/RR1, the answer
-        // `workplan-range-directory.md` §15d deferred; the reasoning is
-        // `workplan-insert-spreading.md` §10, the predicate itself is
-        // `TableAccess::ServableBy`).
-        //
-        // It was `owner_core != core_id_` from the row that introduced the
-        // route, when the route meant *ship this read to the owner*. RD7
-        // generalised it to one stage per contiguous run of same-owner
-        // ranges and left the predicate alone, so a relation this core
-        // **owns** but does not wholly **hold** fell through - and under
-        // `placement = creating`, where every relation is core 0's, that is
-        // every spread relation, unreadable from every core in every shape
-        // (`bench/v2.6.0/` §6a measured it at 395 rows).
-        const bool servable_locally =
-            owner_access.ok() && owner_access.value()->ServableBy(core_id_);
-        if (owner_access.ok() && !servable_locally && step.sub_chains.empty() &&
-            !step.emit_in_key_order) {
-            // **One stage per maximal contiguous run of ranges on one
-            // core** (RD7, corrected by this row's review), never one per
-            // owner core: grouping by core emits `A₁, A₃, B₂` where
-            // ownership interleaves, and interleaving is not a corner case
-            // - it is exactly what R4's id-block-aligned insert spreading
-            // produces (`crosscore.md` §6b), which is also why the width
-            // there is the range count rather than the core count
-            // (`kMaxFanInUpstreams`, and `workplan-insert-spreading.md`
-            // §3).
-            //
-            // The directory is in `lo` order, so the runs are too, and the
-            // concatenation `FinishRemoteReads` performs is range order -
-            // the same order the local walk emits in (`step_vm.cpp`), which
-            // is what makes a split relation read remotely and read locally
-            // one answer rather than two, byte-identical to the unsplit one
-            // (§8 test 9).
-            //
-            // Unsplit is `owner_core` and one stage, which is every
-            // relation nothing has split - since DA1 armed
-            // `range_size_ids` by default, that is every relation on a
-            // single-core instance and every uncontended one, rather than
-            // every relation. **This row's producer arrived at R4**
-            // (2026-08-29): a core that does not own a relation now
-            // records lease demand, so core 0 opens a range owned by that
-            // core and a second *owner* is an ordinary state rather than a
-            // hand-written fixture. The ceiling that arrives with it is
-            // `kMaxFanInUpstreams` below, and it is no longer unreachable.
-            //
-            // A run is also why a stage needs its span: two runs on one
-            // core would otherwise each walk both, and the reply would
-            // carry every row of that core twice.
-            struct Stage {
-                std::uint32_t owner;
-                catalog::PkSpan span;
-            };
-            std::vector<Stage> stages;
-            for (const catalog::RangeTarget& range : owner_access.value()->ranges) {
-                if (!stages.empty() && stages.back().owner == range.owner_core &&
-                    stages.back().span.hi == range.lo) {
-                    stages.back().span.hi = range.hi;  // the run continues
-                    continue;
-                }
-                stages.push_back(Stage{range.owner_core, catalog::PkSpan{range.lo, range.hi}});
-            }
-            if (stages.empty()) {
-                stages.push_back(
-                    Stage{owner_access.value()->owner_core, catalog::PkSpan::Whole()});
-            }
-            if (stages.size() > kMaxFanInUpstreams) {
-                DispatchOutcome refused;
-                refused.response = ErrorReply(Status::Unsupported(
-                    "relation '" + step.rel_name + "' needs " + std::to_string(stages.size()) +
-                    " stages, above the fan-in ceiling of " +
-                    std::to_string(kMaxFanInUpstreams)));
-                return refused;
-            }
-
-            // **A widened shape takes this route only when no single core
-            // can answer the statement** (AG3). One stage means one owner
-            // holds every range, and such a statement **ships as text** a
-            // few lines below - parsed and folded on that owner, which
-            // sends back the fold's one row instead of every row it read.
-            // Pulling the rows here to fold them would be the same answer
-            // over the whole relation's worth of wire, so the fall-through
-            // is the point rather than a gap. The star read keeps P4c's
-            // routing untouched: it has no owner-side reduction to lose.
-            const bool widened = !chain.value().star();
-            if (!widened || stages.size() > 1) {
-                DispatchOutcome pending;
-                // Copied, not borrowed: the chain dies with this frame and
-                // the read finishes after a park (`PendingRemoteRender`'s
-                // header says why). Left empty for a star read, which
-                // renders from the relation's schema as it always has.
-                if (widened) {
-                    pending.remote_render.projection = chain.value().projection;
-                    pending.remote_render.column_names = chain.value().column_names;
-                    pending.remote_render.projection_types = chain.value().projection_types;
-                    pending.remote_render.projection_type_mods =
-                        chain.value().projection_type_mods;
-                    pending.remote_render.aggregate = chain.value().aggregate;
-                }
-                bool opened_all = true;
-                for (const Stage& stage : stages) {
-                    auto tag = remote_reads_->Open(step, stage.owner, next_remote_request_++,
-                                                   stage.span);
-                    if (!tag.ok()) {
-                        opened_all = false;
-                        break;
-                    }
-                    pending.pending_remote.push_back(tag.value());
-                }
-                if (opened_all) return pending;
-                // **A partial fan-in is closed, not served.** The stages
-                // that did open would otherwise hold their batches for the
-                // session's life and the reply would be short by whatever
-                // the unopened one held - a wrong answer with nothing
-                // logged.
-                for (const PipelineTag& tag : pending.pending_remote) {
-                    remote_reads_->Close(tag);
-                }
-            }
-            // A step the descriptor refuses falls through to the honest
-            // refusal rather than a worse error. An index or Cabin probe
-            // is no longer in that class - the session ships it as the
-            // walk it would fall back to (ShippedForm) - so what
-            // remains here is the genuinely unshippable.
-        }
-    }
-
-    // The two-step pipeline (P4d-4b-3, widened by 4c's gated inner walk).
-    // **What may ship is stated once, in `TwoStepPipelineEligible`** -
-    // every shape rule, and the reason each is a correctness statement
-    // rather than a shortcut, lives beside the plan it governs. What is
-    // left here is the two questions it cannot answer: whether this
-    // dispatcher can ship at all, and whether anything is actually on
-    // another core.
-    //
-    // **Order matters, and it is measured.** The eligibility test is
-    // chain-only and free; the two `InitTableAccess` calls below are not.
-    // Asking the cheap question first is what keeps a local two-step
-    // statement - one that will never ship - from paying two catalog
-    // lookups to be told so (`bench/results-p4d-executor.md` §10.8 named
-    // this after a revision that had it the other way round). A plan or
-    // an open the machinery refuses falls through to the honest affinity
-    // refusal below, never a worse error.
-    // **No enrolment test since AT-S6.** It kept the pipeline off a
-    // statement that would ship instead - a read inside a transaction,
-    // which had to reach the owner's own transaction to see its writes.
-    // Nothing ships, so the pipeline is what every eligible shape takes.
-    if (remote_reads_ != nullptr && !analyze && TwoStepPipelineEligible(chain.value()).ok()) {
-        auto outer_access = catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
-        auto inner_access = catalog_.InitTableAccess(chain.value().steps[1].rel_oid);
-        if (outer_access.ok() && inner_access.ok() &&
-            (outer_access.value()->owner_core != core_id_ ||
-             inner_access.value()->owner_core != core_id_)) {
-            auto plan = BuildTwoStepPipeline(
-                chain.value(), outer_access.value()->schema, inner_access.value()->schema,
-                outer_access.value()->owner_core, inner_access.value()->owner_core, core_id_,
-                next_remote_request_++);
-            if (plan.ok()) {
-                if (auto tag = remote_reads_->OpenPipeline(std::move(plan.value())); tag.ok()) {
-                    DispatchOutcome pending;
-                    pending.pending_remote.push_back(tag.value());
-                    return pending;
-                }
-            }
-        }
-    }
-    if (Status affinity = CheckReadAffinity(chain.value()); !affinity.ok()) {
-        // **Nothing ships from here since AT-S6.** What stood below this
-        // refusal carried the statement to the relation's owner - the one
-        // arm of statement shipping that survived AT-S5, and the reason a
-        // transaction still had a participant on another core.
-        //
-        // It went because it was **wrong**, not merely unnecessary. The
-        // write it was written beside stopped shipping at AT-S5, so the
-        // two halves of one transaction ran under two transaction ids and
-        // a read could not see its own uncommitted write
-        // (`tests/shipped_read_own_write_test.cpp`,
-        // which measured it on the two-core rig and now pins the fix). The fork's own comment argued for
-        // shipping on exactly that ground - *"only the peer's own
-        // transaction can show it"* - which had become the argument for
-        // the defect.
-        //
-        // What is left here refuses one shape and one only: a **split**
-        // relation this core does not wholly hold, in a statement the
-        // fan-in cannot take (`CheckReadAffinity` names it). A read of a
-        // relation another core owns is not that shape - it is a walk of
-        // pages every core faults.
-        return {ErrorReply(affinity), false, 0, affinity};
-    }
+    // **The two-step route was also wrong**, which is why it goes whole
+    // rather than behind a guard. Its stages read under their own
+    // autocommit snapshot, so inside `BEGIN` a join could not see the
+    // transaction's own uncommitted writes, and outside one its two
+    // relations were read at two instants - AT-S6 closed exactly this for
+    // the single-step route (`shipped_read_own_write_test.cpp`) and removed
+    // the enrolment test that had kept the two-step route off transactions,
+    // leaving it open here until the route itself went.
 
     // Same one-line-per-response contract as SHOW PAGE: a header line of
     // column names, then one "\n"-escaped section per matching row
@@ -8209,29 +7442,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // statement, including across AllocateRowId() (catalog.hpp).
     const catalog::TableAccess& ta = *access.value();
 
-    // **The fork** (SS2): `MayShip` states the conditions and why each is
-    // one. Here, after the shape resolution and before the affinity check,
-    // so every refusal that is not about ownership keeps its spelling and
-    // its wire bit. A `WHERE` naming a second relation was refused here
-    // until AT-S5, this fork having resolved nothing about it; the write
-    // runs where the session is now and reads that relation through the
-    // one pool.
-    // R4/IS4: the destination is the **range's** owner, and a write that
-    // would span several is refused here rather than half-applied by the
-    // walk. On every relation without a directory this is `owner_core` and
-    // one branch, which is what this fork read before.
-    std::optional<std::uint64_t> target_id;
-    auto target = WriteTargetCore(ta, stmt.where, &target_id);
-    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
-
-    // The fork shipped this write to the range's owner until AT-S5.
-
-    // Before anything is written: a relation this core does not own, or a
-    // transaction already bound to another core, is refused retryably
-    // (crosscore.md CC3, core_affinity.hpp).
-    if (Status affinity = CheckWriteAffinity(ta, *scope.session, target_id);
-        !affinity.ok()) {
-        return {ErrorReply(affinity), false, 0, affinity};  // the retryable spelling, as INSERT's site says
+    // **No destination and no multi-owner refusal, since AT-S9.** R4/IS4
+    // resolved the range owner a predicate-shaped write belonged on, and
+    // refused one that would span several owners rather than half-apply it
+    // - the refusal went stale when `VisitRelation` began walking every
+    // range, and both went with ownership. This write walks every range
+    // here, on the core its session is on.
+    if (Status admitted = CheckWriteAdmission(ta, *scope.session); !admitted.ok()) {
+        return {ErrorReply(admitted), false, 0, admitted};
     }
 
     // Resolve the SET list before touching storage, so a bad target fails
@@ -8805,11 +8023,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             if (parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
-        // R4/IS4: the pk window this statement can touch. Whole unless the
-        // predicate is a bare pk equality, in which case one range holds
-        // every row it can match and the rest are somebody else's.
-        target_id.has_value() ? catalog::PkSpan::Equality(*target_id)
-                              : catalog::PkSpan::Whole(),
+        // R4/IS4: the pk window this statement can touch.
+        WriteWalkSpan(ta, stmt.where),
         &walk_cursor);
     if (!scan.ok()) {
         // Partial **within the statement**, which is section 6's stated
@@ -9914,23 +9129,11 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
     const catalog::TableAccess& ta = *access.value();
 
-    // **The fork** (SS2): `MayShip` states the conditions and why each is
-    // one. Here, after the shape resolution and before the affinity check,
-    // so every refusal that is not about ownership keeps its spelling and
-    // its wire bit. A `WHERE` naming a second relation was refused here
-    // until AT-S5, this fork having resolved nothing about it.
-    // R4/IS4, and UPDATE's site states the argument.
-    std::optional<std::uint64_t> target_id;
-    auto target = WriteTargetCore(ta, stmt.where, &target_id);
-    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
-
-    // The fork shipped this write to the range's owner until AT-S5.
-
-    // Before anything is marked: same rule as INSERT and UPDATE
-    // (crosscore.md CC3). A delete-mark is a write.
-    if (Status affinity = CheckWriteAffinity(ta, *scope.session, target_id);
-        !affinity.ok()) {
-        return {ErrorReply(affinity), false, 0, affinity};  // the retryable spelling, as INSERT's site says
+    // Before anything is marked: UPDATE's rule and UPDATE's reason (no
+    // destination and no multi-owner refusal since AT-S9). A delete-mark is
+    // a write.
+    if (Status admitted = CheckWriteAdmission(ta, *scope.session); !admitted.ok()) {
+        return {ErrorReply(admitted), false, 0, admitted};
     }
 
     // The same WHERE compilation UPDATE uses, so a DELETE's predicate means
@@ -10187,9 +9390,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             if (parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
-        // R4/IS4, and UPDATE's site states the argument.
-        target_id.has_value() ? catalog::PkSpan::Equality(*target_id)
-                              : catalog::PkSpan::Whole(),
+        // R4/IS4: the pk window this statement can touch.
+        WriteWalkSpan(ta, stmt.where),
         &walk_cursor);
     if (!scan.ok()) return {ErrorReply(scan), false, 0, scan};
 

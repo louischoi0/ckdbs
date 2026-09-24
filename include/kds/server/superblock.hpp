@@ -495,10 +495,16 @@ public:
     // relation's row size in this database was computed from it.
     std::uint32_t inline_cell_width() const noexcept { return fields_.inline_cell_width; }
 
-    // The pinned `cores` (see SuperBlockFields). There is deliberately no
-    // setter: the count is chosen once, at bootstrap, and a mount that
-    // disagrees is refused rather than reconciled.
+    // **The `cores` this volume was last mounted with**, no longer pinned
+    // (AT-S9, E9's withdrawal handing it the question). It was pinned
+    // because WAL streams were per core and then because `owner_core`
+    // named cores; one stream (AM-S4(d)) and no owners (D17) left nothing
+    // on the volume that names a core, so a mount at another count sets it
+    // (`SetCoreCount`) and everything sized by it - the anchor fold's
+    // warm-up, the lock table, the page latch - is sized from the running
+    // count. Validated by `CheckCoreCount`, as at creation.
     std::uint32_t core_count() const noexcept { return fields_.core_count; }
+    Status SetCoreCount(std::uint32_t cores) noexcept;
 
     // ---- The transaction id ceiling (docs/spec/txn.md section 4.2) -----------
     //

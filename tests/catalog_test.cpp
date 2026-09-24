@@ -86,7 +86,7 @@ TEST_F(CatalogTest, BootstrapMakesSysTablesFindableByName) {
 // from bootstrap and is empty. Empty is the whole product at this version
 // - the row format is RD2's - so what this pins is the relation's
 // existence on its fixed root and the emptiness every path relies on: a
-// relation with no rows here is one range owned by sys.tables.owner_core
+// relation with no rows here is one range, walked from `desc_page_id`
 // (docs/spec/crosscore.md CC9).
 TEST_F(CatalogTest, SysRangesExistsAndIsEmptyAtBootstrap) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
@@ -116,7 +116,6 @@ TEST_F(CatalogTest, ARangeRowRoundTripsThroughItsCodec) {
     row.range_id = 77;
     row.lo = 0x00FF'FFFF'FFFFull;  // a 40-bit Keystone id at its ceiling
     row.rel_oid = 4000;
-    row.owner_core = 3;
     row.entry_page = 987;
 
     const auto bytes = row.Encode();
@@ -125,7 +124,8 @@ TEST_F(CatalogTest, ARangeRowRoundTripsThroughItsCodec) {
     EXPECT_EQ(back.value().range_id, row.range_id);
     EXPECT_EQ(back.value().lo, row.lo);
     EXPECT_EQ(back.value().rel_oid, row.rel_oid);
-    EXPECT_EQ(back.value().owner_core, row.owner_core);
+    // The retired `owner_core` word (AT-S9): written 0, never read.
+    EXPECT_EQ(back.value().reserved, 0u);
     EXPECT_EQ(back.value().entry_page, row.entry_page);
 
     // Short bytes are refused rather than read past, like every other row.
@@ -136,9 +136,8 @@ TEST_F(CatalogTest, AnUnsplitRelationHasNoRangeRowsAndThatIsNotAnError) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
     // The ordinary answer for every relation in this engine today: empty,
-    // ok. A relation with no rows here is one range owned by
-    // `sys.tables.owner_core`, and an empty *error* would make the unsplit
-    // path handle a failure that never happens.
+    // ok. A relation with no rows here is one range, and an empty *error*
+    // would make the unsplit path handle a failure that never happens.
     auto ranges = catalog_.RangesOf(4000);
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
     EXPECT_TRUE(ranges.value().empty());
@@ -153,7 +152,6 @@ TEST_F(CatalogTest, TheFirstRangeRowMustDescribeTheWholeIdSpace) {
     SysRangeRow above{};
     above.rel_oid = 4000;
     above.lo = 4096;
-    above.owner_core = 1;
     above.entry_page = 500;
     Status refused = catalog_.InsertRangeRow(above);
     EXPECT_FALSE(refused.ok());
@@ -168,7 +166,6 @@ TEST_F(CatalogTest, TheFirstRangeRowMustDescribeTheWholeIdSpace) {
     SysRangeRow first{};
     first.rel_oid = 4000;
     first.lo = 0;
-    first.owner_core = 0;
     first.entry_page = 400;
     ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
     ASSERT_TRUE(catalog_.InsertRangeRow(above).ok()) << "the second row was refused";
@@ -184,7 +181,6 @@ TEST_F(CatalogTest, RangeRowsComeBackInLoOrderWhateverOrderTheyWereWritten) {
         SysRangeRow row{};
         row.rel_oid = 4000;
         row.lo = los[i];
-        row.owner_core = static_cast<std::uint32_t>(i);
         row.entry_page = static_cast<PageId>(400 + i);
         ASSERT_TRUE(catalog_.InsertRangeRow(row).ok()) << "row " << i;
     }
@@ -192,7 +188,6 @@ TEST_F(CatalogTest, RangeRowsComeBackInLoOrderWhateverOrderTheyWereWritten) {
     SysRangeRow other{};
     other.rel_oid = 4001;
     other.lo = 0;
-    other.owner_core = 2;
     other.entry_page = 600;
     ASSERT_TRUE(catalog_.InsertRangeRow(other).ok());
 
@@ -207,7 +202,7 @@ TEST_F(CatalogTest, RangeRowsComeBackInLoOrderWhateverOrderTheyWereWritten) {
     auto theirs = catalog_.RangesOf(4001);
     ASSERT_TRUE(theirs.ok());
     ASSERT_EQ(theirs.value().size(), 1u);
-    EXPECT_EQ(theirs.value()[0].owner_core, 2u);
+    EXPECT_EQ(theirs.value()[0].entry_page, 600u);
 }
 
 TEST_F(CatalogTest, TwoRangesMayNotClaimOneBoundary) {
@@ -216,12 +211,10 @@ TEST_F(CatalogTest, TwoRangesMayNotClaimOneBoundary) {
     SysRangeRow first{};
     first.rel_oid = 4000;
     first.lo = 0;
-    first.owner_core = 0;
     first.entry_page = 400;
     ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
 
     SysRangeRow dup = first;
-    dup.owner_core = 1;
     dup.entry_page = 401;
     Status refused = catalog_.InsertRangeRow(dup);
     EXPECT_FALSE(refused.ok());
@@ -250,7 +243,6 @@ TEST_F(CatalogTest, ADirectoryWithNoLoZeroRowIsCorruptionAndNotAnAnswer) {
     orphan.range_id = 1;
     orphan.rel_oid = 4000;
     orphan.lo = 4096;
-    orphan.owner_core = 1;
     orphan.entry_page = 500;
     {
         auto bytes = store_.Get(kCatalogPageRanges);
@@ -271,7 +263,6 @@ TEST_F(CatalogTest, ADirectoryWithNoLoZeroRowIsCorruptionAndNotAnAnswer) {
     SysRangeRow ok_row{};
     ok_row.rel_oid = 4001;
     ok_row.lo = 0;
-    ok_row.owner_core = 0;
     ok_row.entry_page = 600;
     ASSERT_TRUE(catalog_.InsertRangeRow(ok_row).ok());
     auto healthy = catalog_.RangesOf(4001);
@@ -288,14 +279,12 @@ TEST_F(CatalogTest, ARangeBoundaryAboveTheKeystoneCeilingIsRefused) {
     SysRangeRow first{};
     first.rel_oid = 4000;
     first.lo = 0;
-    first.owner_core = 0;
     first.entry_page = 400;
     ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
 
     SysRangeRow beyond{};
     beyond.rel_oid = 4000;
     beyond.lo = kMaxKeystoneId + 1;
-    beyond.owner_core = 1;
     beyond.entry_page = 401;
     Status refused = catalog_.InsertRangeRow(beyond);
     EXPECT_FALSE(refused.ok());
@@ -320,7 +309,6 @@ TEST_F(CatalogTest, TheReaderRefusesAnAboveCeilingBoundaryTheWriterNeverWrote) {
     SysRangeRow first{};
     first.rel_oid = 4000;
     first.lo = 0;
-    first.owner_core = 0;
     first.entry_page = 400;
     ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
 
@@ -328,7 +316,6 @@ TEST_F(CatalogTest, TheReaderRefusesAnAboveCeilingBoundaryTheWriterNeverWrote) {
     beyond.range_id = 99;
     beyond.rel_oid = 4000;
     beyond.lo = kMaxKeystoneId + 4;
-    beyond.owner_core = 1;
     beyond.entry_page = 401;
     {
         auto bytes = store_.Get(kCatalogPageRanges);
@@ -354,7 +341,6 @@ TEST_F(CatalogTest, EveryRangeRowCarriesAnIdOfItsOwnInTheIdentitySlot) {
     SysRangeRow a{};
     a.rel_oid = 4000;
     a.lo = 0;
-    a.owner_core = 0;
     a.entry_page = 400;
     ASSERT_TRUE(catalog_.InsertRangeRow(a).ok());
 
@@ -384,19 +370,16 @@ TEST_F(CatalogTest, DroppingARelationRetiresItsRangeRowsAndNoOthers) {
     SysRangeRow mine{};
     mine.rel_oid = doomed.value();
     mine.lo = 0;
-    mine.owner_core = 0;
     mine.entry_page = 400;
     ASSERT_TRUE(catalog_.InsertRangeRow(mine).ok());
     SysRangeRow second = mine;
     second.lo = 4096;
-    second.owner_core = 1;
     second.entry_page = 401;
     ASSERT_TRUE(catalog_.InsertRangeRow(second).ok());
 
     SysRangeRow survivor{};
     survivor.rel_oid = doomed.value() + 1;
     survivor.lo = 0;
-    survivor.owner_core = 2;
     survivor.entry_page = 500;
     ASSERT_TRUE(catalog_.InsertRangeRow(survivor).ok());
 
@@ -564,120 +547,6 @@ TEST_F(CatalogTest, TheTwoReservedNamespacesCannotBeDropped) {
     }
 }
 
-// ---- AF-T2: the namespace picks the core ---------------------------------
-//
-// `instructions/v2.8.0/ratification-af-namespace.md` AF-T2/AF-P1/AF-P4.
-// Four cells, one per claim the policy makes, all against a four-core
-// catalog because a one-core instance cannot tell the three policies apart.
-
-class NamespacePlacementTest : public ::testing::Test {
-protected:
-    storage::InMemoryPageStore store_{128};
-    // Four cores, so kSystemCore + 1..3 are the rotation's targets.
-    Catalog catalog_{store_, storage::kDefaultInlineCellWidth, /*core_count=*/4};
-
-    void SetUp() override {
-        ASSERT_TRUE(catalog_.Bootstrap().ok());
-        catalog_.SetPlacementPolicy(PlacementPolicy::kNamespace);
-    }
-
-    StatusOr<std::uint32_t> OwnerOf(Oid rel_oid) {
-        auto row = catalog_.GetSysTableRow(rel_oid);
-        if (!row.ok()) return row.status();
-        return row.value().owner_core;
-    }
-
-    Oid CreateIn(Oid ns_oid, const char* name) {
-        auto oid = catalog_.CreateTable(ns_oid, name, MinimalPkSchema(), ClusteredType::kHeap);
-        EXPECT_TRUE(oid.ok()) << name << ": " << oid.status().message();
-        return oid.ok() ? oid.value() : 0;
-    }
-};
-
-// DA2's half: a relation nobody declared a namespace for is placed exactly
-// where `kCreatingCore` would place it, which is what makes `kNamespace`
-// shippable as the default.
-TEST_F(NamespacePlacementTest, AnUndeclaredNamespaceKeepsTheCreatingCoresAnswer) {
-    for (const char* name : {"a", "b", "c", "d", "e"}) {
-        auto owner = OwnerOf(CreateIn(kNamespacePublic, name));
-        ASSERT_TRUE(owner.ok()) << owner.status().message();
-        EXPECT_EQ(owner.value(), kSystemCore)
-            << "a relation in `public` was rotated off the creating core";
-    }
-}
-
-// AF-4's half: two declared namespaces are two cores, and every relation
-// in one lands on that one - which is the whole mechanism.
-TEST_F(NamespacePlacementTest, ADeclaredNamespaceTakesACoreAndItsRelationsFollow) {
-    auto orders = catalog_.CreateNamespace("orders");
-    ASSERT_TRUE(orders.ok()) << orders.status().message();
-    auto ledger = catalog_.CreateNamespace("ledger");
-    ASSERT_TRUE(ledger.ok()) << ledger.status().message();
-
-    auto first = OwnerOf(CreateIn(orders.value(), "orders_head"));
-    ASSERT_TRUE(first.ok()) << first.status().message();
-    EXPECT_NE(first.value(), kSystemCore) << "a declared namespace stayed on the system core";
-
-    // AF-P1: the first relation fixed it, and every later one derives that
-    // same answer off the rows rather than re-rotating.
-    for (const char* name : {"orders_line", "orders_note"}) {
-        auto owner = OwnerOf(CreateIn(orders.value(), name));
-        ASSERT_TRUE(owner.ok()) << owner.status().message();
-        EXPECT_EQ(owner.value(), first.value())
-            << name << " left the namespace's core, so a join inside the group would cross";
-    }
-
-    // A second namespace is a second core: the parallelism AE-8 asked for,
-    // and the reason the grouping is the user's to declare.
-    auto other = OwnerOf(CreateIn(ledger.value(), "ledger_entry"));
-    ASSERT_TRUE(other.ok()) << other.status().message();
-    EXPECT_NE(other.value(), first.value())
-        << "two independent namespaces landed on one core, so nothing runs in parallel";
-}
-
-// AF-P4: placement is decided once and never rebalanced, and the case
-// somebody will reach for is the one this asserts - "the namespace is
-// empty again, so it may move now". It may not.
-TEST_F(NamespacePlacementTest, EmptyingANamespaceDoesNotFreeItToMove) {
-    auto orders = catalog_.CreateNamespace("orders");
-    ASSERT_TRUE(orders.ok()) << orders.status().message();
-
-    const Oid first_rel = CreateIn(orders.value(), "orders_head");
-    auto before = OwnerOf(first_rel);
-    ASSERT_TRUE(before.ok()) << before.status().message();
-
-    std::vector<std::uint64_t> dropped_cabins;
-    ASSERT_TRUE(catalog_.DropTable(first_rel, dropped_cabins).ok());
-
-    // The namespace holds nothing now, so the derivation falls back to the
-    // rank - which counts dropped namespace rows precisely so that it
-    // cannot move.
-    auto after = OwnerOf(CreateIn(orders.value(), "orders_head2"));
-    ASSERT_TRUE(after.ok()) << after.status().message();
-    EXPECT_EQ(after.value(), before.value())
-        << "an emptied namespace was re-rotated onto a different core";
-}
-
-// The policy is the config's, not the namespace's: declaring a namespace
-// under `creating` changes nothing, which is what keeps a file placed by
-// some other history readable as that history.
-TEST_F(NamespacePlacementTest, TheOtherTwoPoliciesIgnoreTheNamespace) {
-    catalog_.SetPlacementPolicy(PlacementPolicy::kCreatingCore);
-    auto orders = catalog_.CreateNamespace("orders");
-    ASSERT_TRUE(orders.ok()) << orders.status().message();
-
-    auto pinned = OwnerOf(CreateIn(orders.value(), "orders_head"));
-    ASSERT_TRUE(pinned.ok()) << pinned.status().message();
-    EXPECT_EQ(pinned.value(), kSystemCore) << "`creating` consulted the namespace";
-
-    // And `rotate` keeps rotating on the relation count, which is what it
-    // has always done and what DA2 measured.
-    catalog_.SetPlacementPolicy(PlacementPolicy::kRotate);
-    auto rotated = OwnerOf(CreateIn(orders.value(), "orders_line"));
-    ASSERT_TRUE(rotated.ok()) << rotated.status().message();
-    EXPECT_NE(rotated.value(), kSystemCore) << "`rotate` stopped rotating";
-}
-
 TEST_F(CatalogTest, ACachedAccessCarriesTheRelationsRangesAndTheyRepublishOnInsert) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
@@ -694,12 +563,10 @@ TEST_F(CatalogTest, ACachedAccessCarriesTheRelationsRangesAndTheyRepublishOnInse
     SysRangeRow first{};
     first.rel_oid = oid.value();
     first.lo = 0;
-    first.owner_core = unsplit.value()->owner_core;
     first.entry_page = unsplit.value()->desc_page_id;
     ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
     SysRangeRow second = first;
     second.lo = 4096;
-    second.owner_core = 1;
     second.entry_page = 900;
     ASSERT_TRUE(catalog_.InsertRangeRow(second).ok());
 
@@ -718,7 +585,6 @@ TEST_F(CatalogTest, ACachedAccessCarriesTheRelationsRangesAndTheyRepublishOnInse
     auto routed = ResolveRanges(split.value()->ranges, PkSpan::Equality(5000));
     ASSERT_TRUE(routed.ok()) << routed.status().message();
     ASSERT_EQ(routed.value().size(), 1u);
-    EXPECT_EQ(routed.value()[0].owner_core, 1u);
     EXPECT_EQ(routed.value()[0].entry_page, 900u);
 }
 
@@ -740,7 +606,6 @@ TEST_F(CatalogTest, ARelationWhoseDirectoryIsTornCannotBeOpenedAtAll) {
     orphan.range_id = 1;
     orphan.rel_oid = torn.value();
     orphan.lo = 4096;
-    orphan.owner_core = 1;
     orphan.entry_page = 401;
     {
         auto bytes = store_.Get(kCatalogPageRanges);
@@ -751,7 +616,7 @@ TEST_F(CatalogTest, ARelationWhoseDirectoryIsTornCannotBeOpenedAtAll) {
     }
 
     // Fatal to opening *that* relation: an empty `ranges` means "one range
-    // at owner_core" by CC9, so serving the fill would route every
+    // at desc_page_id" by CC9, so serving the fill would route every
     // statement to the lower range's chain head and answer from there - a
     // wrong answer with nothing logged.
     auto refused = catalog_.InitTableAccess(torn.value());
@@ -1357,7 +1222,8 @@ TEST_F(CatalogTest, AReaderDropsOnlyAtItsBoundaryNeverInsideARead) {
     auto b = catalog_.CreateTable(kNamespacePublic, "b", MinimalPkSchema(), ClusteredType::kBtree);
     ASSERT_TRUE(a.ok() && b.ok());
 
-    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    Catalog reader(store_, storage::kDefaultInlineCellWidth);
+    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     auto held = reader.InitTableAccess(a.value());
@@ -1388,7 +1254,8 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
     auto oid = catalog_.CreateTable(kNamespacePublic, "s", MinimalPkSchema(), ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok());
 
-    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    Catalog reader(store_, storage::kDefaultInlineCellWidth);
+    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
@@ -1420,7 +1287,8 @@ TEST_F(CatalogTest, AKeyOrderFlipBumpsTheWordAndKeepsTheWritersOwnEntry) {
     for (int i = 0; i < 3; ++i) ASSERT_TRUE(catalog_.AllocateRowId(oid.value()).ok());
     ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
 
-    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    Catalog reader(store_, storage::kDefaultInlineCellWidth);
+    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
@@ -1452,7 +1320,8 @@ TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
     auto oid = catalog_.CreateTable(kNamespacePublic, "r", MinimalPkSchema(), ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok());
 
-    Catalog reader(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2, /*core_id=*/1);
+    Catalog reader(store_, storage::kDefaultInlineCellWidth);
+    reader.SetCoreId(1);
     reader.SetSchemaWord(&word);
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
@@ -1883,9 +1752,16 @@ TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
     EXPECT_EQ(row.value().last_seen, 0u);
 }
 
-// ---- Relation ownership (docs/inflight/in-progress/workplan-crosscore.md M1) ---------------
+// ---- Key order (docs/spec/heap-and-tuple.md §4.1) -----------------------------
+//
+// There is no key *mode* to test any more - `CreateTable` takes no such
+// parameter and refuses no storage pairing for one. What replaced it is an
+// **observation**: every relation starts ascending and stays there until an
+// id is admitted below its high-water mark, which only a btree relation can
+// do. So these tests are about what `AdmitExplicitRowId` admits, what it
+// refuses, and what the flag says afterwards.
 
-class OwnerCoreTest : public ::testing::Test {
+class KeyOrderTest : public ::testing::Test {
 protected:
     Schema OneColumnSchema() {
         Schema schema;
@@ -1902,99 +1778,11 @@ protected:
     storage::InMemoryPageStore store_{128};
 };
 
-TEST_F(OwnerCoreTest, ASingleCoreInstancePutsEveryRelationOnCoreZero) {
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
-    ASSERT_TRUE(catalog.Bootstrap().ok());
-
-    auto oid = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
-                                    ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-
-    auto row = catalog.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().owner_core, 0u);
-}
-
-TEST_F(OwnerCoreTest, CreateTableRecordsAnOwnerAndTableAccessCarriesIt) {
-    // The path that matters: the planner reads TableAccess, not the row, so
-    // an owner recorded on disk and lost on the way into the cache would be
-    // invisible until something compared it against execution.
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
-    ASSERT_TRUE(catalog.Bootstrap().ok());
-
-    auto oid = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
-                                    ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-
-    auto row = catalog.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    // The system core, even at cores=4: DDL allocates the relation's pages
-    // from the system core's free map, and a relation must be owned by the
-    // core that can fault its pages (core_placement.hpp).
-    EXPECT_EQ(row.value().owner_core, kSystemCore);
-
-    auto access = catalog.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok()) << access.status().message();
-    EXPECT_EQ(access.value()->owner_core, row.value().owner_core);
-}
-
-TEST_F(OwnerCoreTest, EveryRelationIsReachableFromTheCoreThatCreatedIt) {
-    // The property the round-robin broke, and which nothing checked until
-    // the affinity guard existed: placement and execution have to agree, or
-    // the relation cannot be read by anyone.
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/3);
-    ASSERT_TRUE(catalog.Bootstrap().ok());
-
-    for (int i = 0; i < 6; ++i) {
-        auto oid = catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
-                                        OneColumnSchema(), ClusteredType::kHeap);
-        ASSERT_TRUE(oid.ok()) << oid.status().message();
-        auto row = catalog.GetSysTableRow(oid.value());
-        ASSERT_TRUE(row.ok());
-        EXPECT_EQ(row.value().owner_core, kSystemCore)
-            << "relation t" << i << " was placed where nothing can reach it";
-    }
-}
-
-TEST_F(OwnerCoreTest, OwnershipSurvivesAReopen) {
-    // It is a catalog fact, so it has to come back off the page - not be
-    // re-derived, which workplan guideline 4 forbids outright.
-    std::uint32_t assigned = 0;
-    Oid oid = 0;
-    {
-        Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
-        ASSERT_TRUE(catalog.Bootstrap().ok());
-        auto created = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
-                                            ClusteredType::kHeap);
-        ASSERT_TRUE(created.ok());
-        oid = created.value();
-        auto row = catalog.GetSysTableRow(oid);
-        ASSERT_TRUE(row.ok());
-        assigned = row.value().owner_core;
-    }
-
-    Catalog reopened(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
-    auto row = reopened.GetSysTableRow(oid);
-    ASSERT_TRUE(row.ok()) << row.status().message();
-    EXPECT_EQ(row.value().owner_core, assigned);
-}
-
-// ---- Key order (docs/spec/heap-and-tuple.md §4.1) -----------------------------
-//
-// There is no key *mode* to test any more - `CreateTable` takes no such
-// parameter and refuses no storage pairing for one. What replaced it is an
-// **observation**: every relation starts ascending and stays there until an
-// id is admitted below its high-water mark, which only a btree relation can
-// do. So these tests are about what `AdmitExplicitRowId` admits, what it
-// refuses, and what the flag says afterwards.
-
-using KeyOrderTest = OwnerCoreTest;
-
 TEST_F(KeyOrderTest, EveryNewRelationStartsAscendingAndSurvivesAReopen) {
     Oid heap_oid = 0;
     Oid btree_oid = 0;
     {
-        Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+        Catalog catalog(store_, storage::kDefaultInlineCellWidth);
         ASSERT_TRUE(catalog.Bootstrap().ok());
 
         auto h = catalog.CreateTable(kNamespacePublic, "chained", OneColumnSchema(),
@@ -2010,7 +1798,7 @@ TEST_F(KeyOrderTest, EveryNewRelationStartsAscendingAndSurvivesAReopen) {
         btree_oid = b.value();
     }
 
-    Catalog reopened(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    Catalog reopened(store_, storage::kDefaultInlineCellWidth);
 
     auto h_row = reopened.GetSysTableRow(heap_oid);
     ASSERT_TRUE(h_row.ok()) << h_row.status().message();
@@ -2027,7 +1815,7 @@ TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
     // its chain's tail append, its page-wise ordering and its tail-page-only
     // duplicate check are all the ascent (§3.1b), and the mark is the ascent
     // written as one number.
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto oid = catalog.CreateTable(kNamespacePublic, "chained", OneColumnSchema(),
@@ -2057,7 +1845,7 @@ TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
 }
 
 TEST_F(KeyOrderTest, ABtreeRelationTakesABelowMarkKeyAndTurnsUnordered) {
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto oid = catalog.CreateTable(kNamespacePublic, "clustered", OneColumnSchema(),
@@ -2093,7 +1881,7 @@ TEST_F(KeyOrderTest, ATableAccessCarriesTheOrderAndIsInvalidatedByTheFlip) {
     // left saying kAscending after the flip would let an ORDER BY <pk> be
     // discarded on a relation whose pages are no longer in key order - a
     // wrong answer, which is why the flip bumps the catalog version.
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto oid = catalog.CreateTable(kNamespacePublic, "clustered", OneColumnSchema(),
@@ -2118,7 +1906,7 @@ TEST_F(KeyOrderTest, AnIssuedIdRisesAboveEverySuppliedOne) {
     // The two id sources share one mark, which is what keeps them from
     // colliding: AllocateRowId used to refuse an explicit relation outright,
     // and now both run on every relation.
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto oid = catalog.CreateTable(kNamespacePublic, "mixed", OneColumnSchema(),
@@ -2142,7 +1930,7 @@ TEST_F(KeyOrderTest, ACatalogRelationStartsAscending) {
     // Not a tautology worth skipping: sys.tables rows for the bootstrap
     // relations go through InsertRelationRow, which sets the field rather
     // than taking it, so this is the check that it sets what it claims.
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto row = catalog.GetSysTableRow(kSysTablesTable);

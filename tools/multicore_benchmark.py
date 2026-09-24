@@ -162,10 +162,10 @@ def start_server(binary, workdir, tag, cores, port, placement="creating",
     stderr_path = os.path.join(workdir, f"{tag}.stderr")
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {cores}\n"
-                f"placement = {placement}\n"
-                # No `peer_listeners` line: every core listens since AT-S8
-                # and the server refuses the retired key. `peer_listeners`
-                # here now only picks the driver's per-owner session hunt.
+                # No `placement` or `peer_listeners` line: both keys are
+                # retired (AT-S9, AT-S8) and the server refuses them. The
+                # `placement` and `peer_listeners` arguments here now only
+                # label the run and pick the driver's session hunt.
                 + (f"durability = {durability}\n" if durability else "")
                 + f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
     with open(stderr_path, "w") as err:

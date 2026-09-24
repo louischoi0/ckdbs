@@ -9,7 +9,6 @@ add_executable(kds_tests
     sim_waker_table_test.cpp
     two_core_rig_test.cpp
     lock_wake_rig_test.cpp
-    deadlock_rig_test.cpp
     fk_cross_core_rig_test.cpp
     shipped_read_own_write_test.cpp
     access_stats_across_cores_test.cpp
@@ -87,9 +86,7 @@ add_executable(kds_tests
     waystone_dir_test.cpp
     trace_test.cpp
     range_scan_test.cpp
-    range_eligible_test.cpp
     range_directory_test.cpp
-    range_alloc_test.cpp
     range_chain_test.cpp
     access_stats_test.cpp
     decay_test.cpp

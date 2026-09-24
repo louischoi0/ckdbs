@@ -220,7 +220,7 @@ StatusOr<std::vector<RelationReport>> PlanAllRelations(catalog::Catalog& catalog
 StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageStore& store,
                                       catalog::Oid rel_oid, exec::Budget& budget,
                                       const sched::Clock* clock,
-                                      sched::MonoTimeNs half_life_ns, std::uint32_t core_id) {
+                                      sched::MonoTimeNs half_life_ns) {
     auto tables = catalog.ListTables();
     if (!tables.ok()) return tables.status();
     const auto object =
@@ -269,14 +269,12 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
     // wherever no directory exists - which is every relation on an
     // instance that has not armed `range_size_ids`.
     //
-    // **Ownership is deliberately not checked**, unlike `VisitRelation`'s
-    // pass. A survey is a read, it runs on core 0's optimizer tick, and a
-    // range another core owns is one this core may not *fault* - so the
-    // heads are taken for this core and a foreign range's absence is
-    // reported by `surveyed_ranges` below rather than by refusing the
-    // whole survey. A partial survey that says it is partial is worth
-    // more than none; one that does not say so is the defect.
-    const std::vector<PageId> heads = access.value()->WalkHeadsFor(core_id);
+    // **Every range, since AT-S9.** This took this core's heads alone and
+    // reported the rest missing through `surveyed_ranges`, because a range
+    // another core owned was one this core could not fault. Ranges have no
+    // owners and every page is every core's to fault, so the survey is
+    // whole; `surveyed_ranges` equals `relation_ranges` and still says so.
+    const std::vector<PageId> heads = access.value()->WalkHeads();
     survey.surveyed_ranges = static_cast<std::uint32_t>(heads.size());
     survey.relation_ranges = static_cast<std::uint32_t>(
         access.value()->ranges.empty() ? 1 : access.value()->ranges.size());

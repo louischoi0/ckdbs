@@ -73,11 +73,10 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
             "indexes",
-            "cabin_max_entries_per_value", "cores", "placement",
+            "cabin_max_entries_per_value", "cores",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
             "join_build_max_rows",   "lock_wait_fault_net_ms",
             "max_locks_per_txn",
-            "range_size_ids",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -137,6 +136,18 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
          "peer_listeners is retired since v3.0.0's M3: every core accepts on the port "
          "(SO_REUSEPORT above one core) and a session runs on the core that accepted it; "
          "remove the key"},
+        // AT-S9 (D17, D18). Placement chose the core that owned a relation,
+        // and nothing owns one.
+        {"placement",
+         "placement is retired since v3.0.0's M3: no relation is owned by a core, so there "
+         "is nothing to place - every statement runs on the core its session is on, and a "
+         "namespace is a name; remove the key"},
+        // AT-S9, on the operator's ruling: insert spreading retired with
+        // ownership, and this key was its arming bit.
+        {"range_size_ids",
+         "range_size_ids is retired since v3.0.0's M3: insert spreading went with range "
+         "ownership, so no range is opened; a relation split before it is still read and "
+         "written whole; remove the key"},
     };
 }
 
@@ -366,32 +377,6 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // have one home, at `kLockWaitFaultNetNs` (txn/lock_table.hpp).
         lock_wait_fault_net_ns = v.value() * 1'000'000ULL;
     }
-    if (file.Has("range_size_ids")) {
-        auto v = file.GetUint("range_size_ids");
-        if (!v.ok()) return v.status();
-        // No zero check: 0 is `kRangeSizeOff`, the off-switch an operator
-        // sets to get the pre-DA1 engine back; the shipped default is
-        // `kRangeSizeIdsDefault`.
-        // One key sizes the range and the row-id lease grant, because
-        // `workplan-range-directory.md`'s D6 makes them one quantity; the
-        // semantics have one home, in `server/range_alloc.hpp`.
-        //
-        // **A ceiling, though, and it buys an honest error message.** A
-        // value at or above the 40-bit id space makes every carve fail the
-        // exhaustion check, which answers a zero-count grant, which the
-        // lease reports as "the relation has no sys.tables row, or its
-        // 40-bit id space is exhausted" - true of neither, and pointing at
-        // the relation instead of at this key.
-        if (v.value() > kMaxKeystoneId) {
-            return Status::InvalidArgument(
-                "range_size_ids = " + std::to_string(v.value()) +
-                " is at or above the 40-bit Keystone id space (" +
-                std::to_string(kMaxKeystoneId) +
-                "); no relation could carve one block that size, and every insert would be "
-                "refused as an exhausted relation");
-        }
-        range_size_ids = v.value();
-    }
     if (file.Has("physical_optimizer")) {
         auto v = file.GetString("physical_optimizer");
         if (!v.ok()) return v.status();
@@ -610,21 +595,6 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         inline_cell_width = width;
     }
-    if (file.Has("placement")) {
-        auto v = file.GetString("placement");
-        if (!v.ok()) return v.status();
-        if (v.value() == "creating") {
-            placement = catalog::PlacementPolicy::kCreatingCore;
-        } else if (v.value() == "rotate") {
-            placement = catalog::PlacementPolicy::kRotate;
-        } else if (v.value() == "namespace") {
-            placement = catalog::PlacementPolicy::kNamespace;
-        } else {
-            return Status::InvalidArgument(file.origin() + ": placement '" + v.value() +
-                                            "' is not a policy; use creating, rotate or "
-                                            "namespace");
-        }
-    }
     if (file.Has("cores")) {
         auto v = file.GetUint("cores");
         if (!v.ok()) return v.status();
@@ -777,10 +747,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->database_->catalog.SetSchemaWord(&expeditor->schema_version_);  // AT-S2
     expeditor->database_->catalog.SetOidSequence(&expeditor->oid_sequence_);  // AT-S5b
     expeditor->database_->catalog.SetMarkCounter(&expeditor->delete_mark_count_);  // AT-S5b
-    // The placement rule, before any DDL can run (workplan P6c). At
-    // cores = 1 rotate degrades to the creating core by the formula, so no
-    // validation couples the two keys.
-    expeditor->database_->catalog.SetPlacementPolicy(expeditor->config_.placement);
 
     // The WAL stack, before the dispatcher: INSERT logs through it, so the
     // dispatcher cannot be built until it exists.
@@ -1687,7 +1653,6 @@ Status Expeditor::Start() {
             // a session accepted here runs here, under the same config file.
             core_config.statement_limits = config_.Limits();
             core_config.optimizer = Optimizer();
-            core_config.range_size_ids = config_.range_size_ids;
             // CR7: the instance's switch reaches the peers now that they
             // have somewhere to put a shape.
             core_config.access_statistics = config_.access_statistics;
@@ -1841,27 +1806,10 @@ Status Expeditor::Start() {
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -
         // the bulk-INSERT primitive, already ceiling-checked. Core 0 is the
-        // one core that may write the sequence page, which is the whole
-        // reason this service exists.
-        // The WAL and the enforcer are RD5's: a request that also asks for
-        // a range needs the head page's handoff record and the
-        // eligibility re-check §9b's admission windows call for. Core 0's
-        // enforcer is deliberately not the fifth gate's authority here -
-        // `OpenRangeOnSystemCore` asks `sys.assertions` for that, because
-        // this registry is silent about a peer-owned relation.
-        // The Cabin store and the discard counter are SB1's, and they are
-        // this core's own: `OpenRangeOnSystemCore` drops the relation's
-        // Observational sets before the reply that grants the range, on
-        // this task, so no grant can precede the discard. **Passing core
-        // 0's store is no longer passing every core's** (AK-S2 gave each
-        // core one): the discard reaches only this store, and a peer-owned
-        // relation's sets are its owner's. `range_alloc.cpp` says what
-        // makes that sufficient today and what it owes the day a range
-        // opens.
-        if (Status s = RegisterRowIdGrantHandler(
-                scheduler, *transport_, database_->catalog, &*logger_, store_.get(), wal_.get(),
-                &dispatcher_->assertions(), cabin_store_ ? &*cabin_store_ : nullptr,
-                &dispatcher_->cabin_split_discards());
+        // reason this service exists - until AT-S4 makes the sequence a
+        // shared allocator. Ids only since AT-S9: no grant opens a range.
+        if (Status s = RegisterRowIdGrantHandler(scheduler, *transport_, database_->catalog,
+                                                 &*logger_);
             !s.ok()) {
             return s;
         }

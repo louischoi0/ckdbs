@@ -1038,7 +1038,7 @@ StatusOr<std::vector<SysRangeRow>> Catalog::RangesOf(Oid rel_oid) {
         if (row.rel_oid == rel_oid) mine.push_back(row);
     }
     // The ordinary answer, and not an error: every relation is one range
-    // owned by `sys.tables.owner_core` until something allocates a second.
+    // headed by `sys.tables.desc_page_id` unless a pre-AT split gave it more.
     if (mine.empty()) return mine;
 
     // Page order is insertion order, and neither is `lo` order.
@@ -1194,7 +1194,7 @@ StatusOr<PageId> Catalog::CreateRangeEntryPage(Oid rel_oid, std::uint64_t lo) {
     return entry_page;
 }
 
-Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core,
+Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo,
                               PageId entry_page) {
     if (lo == 0) {
         return Status::InvalidArgument(
@@ -1212,9 +1212,8 @@ Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner
     auto access = InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
     // Copied out, not held: the publication below frees the entry this
-    // pointer names. Two fields taken before any write is the whole of
+    // pointer names. One field taken before any write is the whole of
     // what this call needs from it.
-    const std::uint32_t relation_owner = access.value()->owner_core;
     const PageId relation_head = access.value()->desc_page_id;
 
     // The opening row first, and only if the directory is empty. Read
@@ -1228,7 +1227,6 @@ Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner
         SysRangeRow opening{};
         opening.rel_oid = rel_oid;
         opening.lo = 0;
-        opening.owner_core = relation_owner;
         opening.entry_page = relation_head;
         if (Status s = WriteRangeRow(opening, kBootstrapXid, nullptr); !s.ok()) return s;
     }
@@ -1236,7 +1234,6 @@ Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner
     SysRangeRow split{};
     split.rel_oid = rel_oid;
     split.lo = lo;
-    split.owner_core = owner_core;
     split.entry_page = entry_page;
     if (Status s = WriteRangeRow(split, kBootstrapXid, nullptr); !s.ok()) return s;
 
@@ -1302,7 +1299,7 @@ Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
 
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                                    PageId desc_page_id, ClusteredType clustered_type,
-                                   PageId varheap_page_id, std::uint32_t owner_core,
+                                   PageId varheap_page_id,
                                    PageId anchor_page_id, std::uint64_t trx_id,
                                    CatalogRowRef* where) {
     SysTableRow row{};
@@ -1313,7 +1310,6 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
-    row.owner_core = owner_core;
     // Every relation starts ascending: it holds no ids at all, so no id has
     // landed out of order. Nothing may pass this in - it is an observation,
     // and the only writer is AdmitExplicitRowId.
@@ -1485,29 +1481,6 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         }
     }
 
-    // Placement (docs/inflight/in-progress/workplan-crosscore.md M1). The rotation counter is
-    // how many relations already exist, read off the page rather than
-    // derived from the oid. That was originally because the oid restarted
-    // at kUserOidStart every boot; it no longer does, but the reason still
-    // holds and is a better one - an oid counts objects *ever created*,
-    // including columns, where placement wants relations that exist now.
-    // Nothing here decides the policy - AssignOwnerCore does, and it is
-    // `[PROPOSED]`.
-    auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
-    if (!existing_relations.ok()) return existing_relations.status();
-    // AF-T2: what this relation's namespace already decided, or the rank
-    // that decides it now. Read from the same scan, and read on every
-    // policy rather than only on `kNamespace` - a branch here would put
-    // half the policy back in the catalog.
-    auto ns_placement = DeriveNamespacePlacement(namespace_oid, existing_relations.value());
-    if (!ns_placement.ok()) return ns_placement.status();
-    // DDL runs on the system core and allocates from its free map, so the
-    // relation's pages are the system core's - and a relation must be owned
-    // by the core that can fault its pages (core_placement.hpp).
-    const std::uint32_t owner_core =
-        AssignOwnerCore(placement_, kSystemCore, core_count_,
-                        existing_relations.value().size(), ns_placement.value());
-
     // All three rows of a relation carry the *same* stamp: a reader that
     // could see the sys.tables row but not its sys.columns rows would see
     // a relation with no schema, which is worse than not seeing it at all.
@@ -1528,7 +1501,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     ref.oid = new_oid;
     note(ref);
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
-                                      varheap_root, owner_core, anchor_id, trx_id,
+                                      varheap_root, anchor_id, trx_id,
                                       &ref);
         !s.ok()) {
         return s;
@@ -1558,13 +1531,6 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
                                   std::to_string(schema.columns.size()));
     }
 
-    // The send side of CC7's handoff (workplan P6c): a relation placed on a
-    // core other than the creator's needs that core granted fault rights,
-    // or it is unreachable - the pre-CC7 defect, now closed at the one site
-    // that knows a non-creating owner was chosen.
-    if (owner_core != kSystemCore && on_publish_) {
-        on_publish_(new_oid, owner_core, root_id, varheap_root, anchor_id);
-    }
     return new_oid;
 }
 
@@ -1756,45 +1722,6 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
 }
 
 // ---- Namespaces (AF-T1) ---------------------------------------------------
-
-StatusOr<NamespacePlacement> Catalog::DeriveNamespacePlacement(
-    Oid namespace_oid, const std::vector<SysTableRow>& existing) {
-    NamespacePlacement out;
-    // The oid-range idiom, not `IsSystemNamespace`: that predicate answers
-    // an *identity* question (may this row be renamed, dropped, altered)
-    // and is true of `sys` alone, while what placement needs to know is
-    // whether anybody declared this namespace - which excludes `public`
-    // too. Two questions, two tests, said here so the next reader does not
-    // converge them.
-    out.declared = namespace_oid >= kUserOidStart;
-    if (!out.declared) return out;
-
-    // AF-P1: the lowest-oid relation already in the namespace is the one
-    // that fixed its core.
-    bool found = false;
-    Oid lowest = 0;
-    for (const SysTableRow& row : existing) {
-        if (row.namespace_oid != namespace_oid) continue;
-        if (found && row.oid >= lowest) continue;
-        lowest = row.oid;
-        out.settled_core = row.owner_core;
-        found = true;
-    }
-    if (found) return out;
-
-    // Nothing has fixed it, so this relation will - on the namespace's
-    // declaration order. Dropped namespace rows are counted with the live
-    // ones: they are never retired, so the rank of a given namespace can
-    // never change, which is the whole of AF-P4's immutability. Emptying a
-    // namespace and refilling it therefore lands on the same core.
-    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
-    if (!objects.ok()) return objects.status();
-    for (const SysObjectRow& row : objects.value()) {
-        if (row.type_oid != kTypeNamespace && row.type_oid != kTypeDroppedNamespace) continue;
-        if (row.oid < namespace_oid) ++out.rank;
-    }
-    return out;
-}
 
 StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name,
                                               const txn::ReadView* view) {
@@ -2343,7 +2270,6 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;
-    access.owner_core = table_row.value().owner_core;
     access.key_order = table_row.value().key_order;
     access.anchor_page_id = table_row.value().anchor_page_id;
 
@@ -2536,7 +2462,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     //
     // Fatal, and for the index list's reason rather than the Cabin's. A
     // directory this call cannot read leaves `access.ranges` empty, which
-    // by CC9 *means* "one range at `owner_core`, headed by
+    // by CC9 *means* "one range, headed by
     // `desc_page_id`" - so a split relation whose rows are unreadable
     // would route every statement to the core and the chain head of its
     // lower range and answer from there. That is a wrong answer with
@@ -3347,9 +3273,6 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
         !s.ok()) {
         return s.WithContext("catalog");
     }
-    if (Status s = CheckForeignKeyColocation(*parent.value(), *child.value()); !s.ok()) {
-        return s.WithContext("catalog");
-    }
 
     // One foreign key per (child, column). A second would mean a column
     // referencing two parents, which under F1 - the value *is* a parent's
@@ -3498,41 +3421,6 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
         return s;
     }
     const Schema& schema = access.value()->schema;
-
-    // The owner refusal lives here, not only in the dispatcher (the
-    // 96b0343 review's C4): since PW2-3's anchor seed, CreateIndex writes
-    // a *relation* page, and this core writing a peer-owned relation's
-    // anchor would make it the second writer of a page whose handoff
-    // already granted the peer - PL §9 rule 5's mount refusal. This is
-    // the door every non-DDL caller comes through, this file's own
-    // doctrine. Keyed on the publish hook's presence beside ownership:
-    // an installed publisher is what makes ownership a *handoff* fact -
-    // the P4e harness builds indexed fixtures on rotated relations
-    // through a hook-less catalog, where nothing was ever granted away
-    // and core 0 is still the only writer (PW4's predicate-on-incapacity
-    // rule, one layer down).
-    //
-    // **That predicate inverted at AW-S1b and this refusal is now off in
-    // production.** The hook was `Expeditor`'s and absent in the harness;
-    // the deletion of CC7's publish took the installer, so the only catalog
-    // that carries one is a test's. Left keyed this way rather than re-keyed
-    // on ownership alone, because re-keying would refuse the harness this
-    // arm was written to admit, and because what it guarded - a page
-    // already granted away - is a fact that no longer exists. **And since
-    // AT-S5e it contradicts the statement path**: `CREATE INDEX` builds a
-    // peer-owned relation's index where its session is and seeds the anchor
-    // itself, and the dispatcher's own PW1c-6 refusal is gone with the ship
-    // - so a catalog with a publisher installed would refuse the ruled
-    // build. Left for the open decision it is filed under:
-    // `docs/inflight/bugs/publish-hook-gate-is-test-only.md`.
-    if (access.value()->owner_core != core_id_ && on_publish_) {
-        return Status::NotImplemented(
-            "catalog: relation oid " + std::to_string(def.table_oid) + " is owned by core " +
-            std::to_string(access.value()->owner_core) + " and core " +
-            std::to_string(core_id_) +
-            " may not seed its anchor (workplan-peer-writer.md PW1c-6)");
-    }
-
     // A heap relation has no pk index, so resolving an entry's pk would be a
     // chain scan and an index over it would turn one full scan into N
     // partial ones. The same rule and the same argument as

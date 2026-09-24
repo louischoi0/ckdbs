@@ -165,18 +165,23 @@ TEST(BootstrapTest, AFreshDatabasePinsTheConfiguredCoreCount) {
     EXPECT_EQ(result.value().superblock.core_count(), 4u);
 }
 
-TEST(BootstrapTest, RemountingWithADifferentCoreCountIsRefusedNamingBoth) {
+TEST(BootstrapTest, RemountingWithADifferentCoreCountRecordsTheRunningOne) {
+    // A refusal naming both counts until AT-S9: nothing on the volume names
+    // a core since `owner_core` went, so the mount records the count it
+    // runs at instead of refusing it.
     storage::InMemoryPageStore store(server::kFirstUserPageId);
     ASSERT_TRUE(BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/1).ok());
 
     auto second = BootstrapDatabase(store, 2000, storage::kDefaultInlineCellWidth, /*cores=*/2);
-    ASSERT_FALSE(second.ok());
-    EXPECT_EQ(second.status().code(), StatusCode::kInvalidArgument);
+    ASSERT_TRUE(second.ok()) << second.status().message();
+    EXPECT_EQ(second.value().superblock.core_count(), 2u);
 
-    EXPECT_NE(second.status().message().find("cores 2"), std::string::npos)
-        << second.status().message();
-    EXPECT_NE(second.status().message().find("the 1"), std::string::npos)
-        << second.status().message();
+    // And it is on the page, not only in the returned image.
+    auto page = store.Get(server::kSuperBlockPageId);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    auto on_page = server::SuperBlock::Decode(page.value().bytes());
+    ASSERT_TRUE(on_page.ok()) << on_page.status().message();
+    EXPECT_EQ(on_page.value().core_count(), 2u);
 }
 
 TEST(BootstrapTest, RemountingWithTheSameCoreCountIsFine) {
@@ -195,21 +200,6 @@ TEST(BootstrapTest, AnIllegalCoreCountIsRefusedBeforeAnythingIsCreated) {
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.status().code(), StatusCode::kInvalidArgument);
     EXPECT_FALSE(store.Get(server::kSuperBlockPageId).ok());
-}
-
-TEST(BootstrapTest, SystemRelationsAreOwnedByTheSystemCore) {
-    // M5: core 0 owns the superblock, the free map, file growth and the
-    // catalog pages, so every relation that lives on those pages is its.
-    storage::InMemoryPageStore store(server::kFirstUserPageId);
-    auto result = BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/4);
-    ASSERT_TRUE(result.ok()) << result.status().message();
-
-    for (const catalog::Oid oid : {catalog::kSysTablesTable, catalog::kSysColumnsTable,
-                                    catalog::kSysObjectsTable, catalog::kSysTypesTable}) {
-        auto row = result.value().catalog.GetSysTableRow(oid);
-        ASSERT_TRUE(row.ok()) << row.status().message();
-        EXPECT_EQ(row.value().owner_core, catalog::kSystemCore) << "oid " << oid;
-    }
 }
 
 }  // namespace

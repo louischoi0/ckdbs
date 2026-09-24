@@ -114,24 +114,10 @@ cores = 1
 # it is refused. Note what SO_REUSEPORT costs: another process running as
 # the same user can bind the same port and take a share of the connections.
 
-# Relation placement (docs/inflight/in-progress/workplan-crosscore.md P6c,
-# docs/spec/namespace.md NS10).
-# `creating` pins every relation to the creating core - which is core 0,
-# since DDL is core 0's. `rotate` spreads user relations over the
-# non-system cores. `namespace` places a relation on its namespace's core,
-# fixed by that namespace's first relation. At cores = 1 both rotate and
-# namespace degrade to creating.
-#
-# `namespace` is the default since AF-T2 (2026-09-02), and it does not
-# reverse DA2: a relation in `public` - every relation until somebody
-# writes CREATE NAMESPACE - gets `creating`'s answer unchanged, because
-# only a declared namespace rotates. DA2's measurement stands for what it
-# measured: blind rotation's crossover is a step at the first core to take
-# a second session, and past it rotation is negative at seven writer cores
-# (0.51x) - bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md
-# section 6. What `namespace` supplies is the grouping whose absence
-# produced that number.
-placement = namespace
+# Relation placement is retired (v3.0.0's M3, AT-S9): no relation is owned
+# by a core, so there is nothing to place, and a file that sets `placement`
+# is refused. A namespace declares which relations belong together
+# (docs/spec/namespace.md NS10) and decides nothing about cores.
 
 # ---- Network ---------------------------------------------------------------
 
@@ -597,37 +583,10 @@ join_build_max_rows = 65536
 # can be measured against each other.
 lock_wait_fault_net_ms = 1000
 
-# How many primary-key ids one **range** of a relation covers - and, because
-# D6 makes them one quantity, how many ids a non-core-0 core leases at a
-# time. A range is an engine-owned unit of ownership; nothing in SQL names
-# one, and the engine decides which relations get one and when.
-#
-# 65,536 is the ratified value (DA1, 2026-08-31) and it comes off a sweep:
-# bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md
-# section 6d, k = 4, both durability arms. It gives up 9% of the group
-# arm's gain against 4,096's throughput optimum (1.339 against 1.470) and
-# takes 16x the read ceiling; the relaxed arm prefers it outright (1.031,
-# the sweep's high). Below 4,096 is a loss on every axis - a block that
-# small is spent as fast as it is granted, and the relaxed arm falls to
-# 0.434x at 256.
-#
-# **A range opens only where a core that does not own the relation writes
-# to it.** A single-core server never opens one, and neither does a
-# relation only one peer ever writes, so on those this key sizes the lease
-# block and nothing else. The engine also declines to split any relation
-# carrying an index, a Cabin, a foreign key, an assertion, a spillable
-# column, or a BTREE clustering.
-#
-# Two limits arrive with a relation that has actually been split across
-# cores: an UPDATE/DELETE whose predicate names no primary key is refused
-# retryably (until R6), and a read is refused once the relation exceeds 255
-# ranges. The burn is the other cost - a core that stops inserting burns
-# the rest of its block and a restart burns every live block, so up to
-# 65,535 ids per (relation, core, mount) out of a 40-bit space.
-#
-# `range_size_ids = 0` turns splitting off entirely and returns the
-# pre-2026-08-31 engine. Refused at or above the 40-bit id ceiling.
-range_size_ids = 65536
+# Insert spreading and `range_size_ids` are retired (v3.0.0's M3, AT-S9):
+# no range of a relation is opened any more, and a file that sets the key
+# is refused. A relation split before it keeps its ranges and is read and
+# written whole on whichever core the session is on.
 
 # ---- Logging ---------------------------------------------------------------
 

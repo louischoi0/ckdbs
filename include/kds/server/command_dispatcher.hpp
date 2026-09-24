@@ -33,7 +33,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/server/core_affinity.hpp"
-#include "kds/server/range_alloc.hpp"
+
 #include "kds/stats/trace.hpp"
 #include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/result_sink.hpp"
@@ -1611,26 +1611,6 @@ public:
     // this never called, every statement behaves exactly as before.
     void SetRemoteReads(SessionStepClient* client) noexcept { remote_reads_ = client; }
 
-    // Whether this core's catalog belongs to another core (see
-    // `catalog_read_only_`). Called by CoreRuntime::Open for every
-    // non-system core, before the first statement can arrive; a
-    // dispatcher never told behaves exactly as it did before PW4.
-
-    // Where CheckWriteAffinity records that a relation this core owns has
-    // no write rights here (PW1c-7, core_affinity.hpp). Installed by
-    // CoreRuntime::Open on every non-system core, beside
-    // SetCatalogReadOnly; a dispatcher never told skips the probe. `demand`
-    // must outlive this.
-
-    // RD5's `range_size_ids`, which is the same key as "are ranges armed"
-    // because a range **is** a lease grant (`server/range_alloc.hpp` says
-    // why one key sizes both, and why a second name for it is forbidden).
-    // The dispatcher reads it for one question only - whether a foreign
-    // INSERT should leave a demand behind it (R4/IS1) - and an instance
-    // that never sets it keeps `kRangeSizeOff`, which is every dispatcher
-    // built outside `CoreRuntime::Open`.
-    void set_range_size_ids(std::uint64_t ids) noexcept { range_size_ids_ = ids; }
-
     // H6: the core-local trace ring this dispatcher records into when a
     // session has asked for it (`TRACE ON`). A dispatcher never told
     // collects nothing, which is every configuration that does not want the
@@ -1799,16 +1779,6 @@ public:
         }
     }
 
-    // RD5's decline counters, written on the drain tick (CoreRuntime) and
-    // printed by `SHOW META`. Non-const because the one writer is not a
-    // statement, so it cannot go through a statement path.
-    RangeSplitDeclineCounters& range_split_declines() noexcept { return range_split_declines_; }
-
-    // SB-R4: what CC10's pre-grant Cabin discard dropped, keyed by
-    // relation. Filled by core 0's row-id lease handler, which is where
-    // the split runs, and read here because `SHOW META` is where its
-    // sibling counters are.
-    CabinSplitDiscardCounters& cabin_split_discards() noexcept { return cabin_split_discards_; }
 
     // The view's two sources (workplan PHY06), a setter for
     // `set_optimizer_signals`'s reason. Both null - every construction
@@ -1954,21 +1924,6 @@ private:
                                                           std::span<const std::byte> payload,
                                                           std::uint64_t trx_id);
 
-    // **R4/IS2: a row may only be placed in a range this core owns**, asked
-    // at the id rather than left to the store's `MayWrite` backstop naming
-    // a page number. Two heap insert paths reach a chain head and neither
-    // goes through the other - the per-row `InsertIntoRelation` and
-    // `SortedFillInner`'s batch - so both ask, and they ask through one
-    // function because two spellings of this refusal is two chances for
-    // one of them to be forgotten (it was: the fill wrote a batch into the
-    // top range, which on a spread relation is the last core to have
-    // leased a block).
-    //
-    // **Every caller keeps it behind `ranges.empty()`** and this function
-    // does not re-test it, because CD1's zero-cost invariant is measured on
-    // the unsplit insert line: it must reach the chain having paid one
-    // predictable branch on a cached field, never an out-of-line call.
-    Status CheckRangePlacement(const catalog::TableAccess& access, std::uint64_t id) const;
 
     // A full ordered scan of the relation, whichever storage it uses. Both
     // walk sibling/next links left to right, so the row order is identical.
@@ -2145,6 +2100,18 @@ private:
     std::optional<std::uint64_t> PkEqualityTarget(
         const catalog::TableAccess& access,
         const std::vector<parser::Condition>& where) const;
+
+    // The pk window a predicate-shaped write walks (R4/IS4): one id when
+    // the WHERE is a bare pk equality inside the 40-bit space, so a split
+    // relation's walk visits the one range that can hold it, and the whole
+    // relation otherwise. A literal above the space names no row and walks
+    // whole, answering `0 rows` rather than a resolve error.
+    catalog::PkSpan WriteWalkSpan(const catalog::TableAccess& access,
+                                  const std::vector<parser::Condition>& where) const {
+        const std::optional<std::uint64_t> pk = PkEqualityTarget(access, where);
+        return pk.has_value() && *pk <= kMaxKeystoneId ? catalog::PkSpan::Equality(*pk)
+                                                       : catalog::PkSpan::Whole();
+    }
 
     // Diagnostics. Levels are chosen so the default (info) is quiet under
     // load: DDL and SYNC are Info because they are rare and consequential,
@@ -2507,13 +2474,6 @@ private:
     // never constructed (`cabins = off`, or a test that wired neither).
     const stats::CabinOptimizer* cabin_controller_ = nullptr;
     const exec::CabinOptimizerExecutor* cabin_executor_ = nullptr;
-    CrossCoreWriteCounters cross_core_writes_;
-    // C3 (workplan-range-directory.md §9e): declined range openings, per
-    // relation and gate. Written by the *runtime's* drain tick rather than
-    // by any statement - RD5's allocator is the one caller - and it lives
-    // here because this is where `SHOW META` reads its counters from, and
-    // because it is `cross_core_writes_`'s neighbour in form and purpose:
-    // per core, aggregate, the evidence a placement decision is made from.
     // ---- H6: per-request tracing (`observability.md` §10 steps 1-3) -----
     //
     // `traces_` is the core-local ring; `tracing_` is the session's
@@ -2530,11 +2490,6 @@ private:
     stats::TraceContext* trace_ = nullptr;
     bool tracing_ = false;
 
-    RangeSplitDeclineCounters range_split_declines_;
-    CabinSplitDiscardCounters cabin_split_discards_;
-    // `set_range_size_ids`; `kRangeSizeOff` means no range ever opens and this
-    // dispatcher's write path is the one it always was.
-    std::uint64_t range_size_ids_ = kRangeSizeOff;
     // This core's reactor, set_scheduler_view(); null off a reactor.
     const sched::Scheduler* scheduler_view_ = nullptr;
 
@@ -2555,47 +2510,12 @@ private:
 
 
 
-    // `target_id`, when present, is the pk of the row this statement is
-    // about to place, and it makes the check ask the **range's** owner
-    // rather than the relation's (R4/IS2). Absent - every caller but the
-    // INSERT path - the two are the same question, and on an unsplit
-    // relation they are the same question either way, off `ranges.empty()`.
-    //
-    // Only the INSERT path passes one because only it knows the id before
-    // the row is written: it comes from this core's own lease, and a range
-    // **is** a lease grant, which is the whole of why an insert can be
-    // routed to a core that does not own the relation.
-    // Not defaulted, for `VisitRelation`'s reason: every caller knows
-    // whether it has a row id, and a default would make "no id" the answer
-    // a fourth write path gave by forgetting to think about it.
-    Status CheckWriteAffinity(const catalog::TableAccess& access,
-                              Session& session, std::optional<std::uint64_t> target_id);
-
-    // **Which core a predicate-shaped write belongs on** (R4/IS4), for the
-    // two verbs that name their rows by WHERE rather than by the row they
-    // are about to place. Sets `*target_id` when the predicate is a bare pk
-    // equality, which is what lets the affinity check and the walk narrow
-    // to that one range.
-    //
-    // Three answers, and the third is a refusal rather than a core:
-    //   - no directory: `owner_core`, off `ranges.empty()`, which is the
-    //     field this was before ranges existed and costs one branch;
-    //   - a pk equality, or a relation whose every range has one owner:
-    //     that owner, and the statement ships there or runs here;
-    //   - anything else over a **multi-owner** relation: `NotImplemented`,
-    //     naming R6. That is the cost of arming spreading and it is stated
-    //     rather than discovered - a non-pk-predicate UPDATE or DELETE on a
-    //     spread relation stops working until multi-range writes exist.
-    //     Refused before a single page is written, never half-applied.
-    StatusOr<std::uint32_t> WriteTargetCore(const catalog::TableAccess& access,
-                                            const std::vector<parser::Condition>& where,
-                                            std::optional<std::uint64_t>* target_id) const;
-
-    // Refuses a read whose chain touches a relation owned by another core.
-    // Temporary in a way the write check is not: this is what the step
-    // pipeline will replace, and it exists so the refusal names the reason
-    // instead of surfacing as a page-store fault.
-    Status CheckReadAffinity(const exec::StepChain& chain);
+    // **The one refusal left before a write touches a page** (AT-S9, which
+    // renamed it from `CheckWriteAffinity` when the last question about a
+    // core left it): a relation under an assertion the instance cannot
+    // enforce refuses its writes on every core. Binds the session's home
+    // core. Every write verb asks it once per statement.
+    Status CheckWriteAdmission(const catalog::TableAccess& access, Session& session);
 
     txn::IsolationLevel default_isolation_ = txn::IsolationLevel::kReadCommitted;
 

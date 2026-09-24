@@ -4,20 +4,15 @@
 #include <string>
 
 #include "kds/sched/send_retry.hpp"
-#include "kds/server/range_alloc.hpp"
 
 namespace kds::server {
 
 Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, catalog::Catalog& catalog,
-                                 Logger* log, storage::DevicePageStore* store,
-                                 wal::WalManager* wal,
-                                 const exec::AssertionEnforcer* enforcer,
-                                 stats::CabinStore* cabins,
-                                 CabinSplitDiscardCounters* discards) {
+                                 Logger* log) {
     return system_scheduler.RegisterMessageHandler(
         sched::RingMessageKind::kRowIdLease,
-        [&system_scheduler, &transport, &catalog, log, store, wal, enforcer, cabins, discards](
+        [&system_scheduler, &transport, &catalog, log](
             const sched::MessageHeader& header, std::span<const std::byte> payload) {
             RowIdLeaseRequestPayload request{};
             if (payload.size() != sizeof(request)) {
@@ -33,26 +28,6 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
 
             RowIdLeaseGrantPayload grant{};
             grant.table_oid = request.table_oid;
-            grant.entry_page = kInvalidPageId;
-            // **`count == 0` and `open_range` are incompatible, and the
-            // refusal is D6's one-key rule enforced on the wire.** The
-            // substitution below is a courtesy for a requester that does
-            // not care how many ids it gets; a requester asking for a
-            // *range* does care, because the range's width is this carve's
-            // width, and letting the substitution stand would open a range
-            // of `kRowIdLeasePerGrant` for a core that believes it asked
-            // for `range_size_ids`. Unreachable from `MaybeRefillRowIds`,
-            // which is exactly why it is checked here rather than assumed
-            // there.
-            if (request.open_range != 0 && request.count == 0) {
-                if (log != nullptr && log->enabled(LogLevel::kError)) {
-                    log->Error("range", "core " + std::to_string(header.src_core) +
-                                            " asked for a range with no block size for oid " +
-                                            std::to_string(request.table_oid) +
-                                            "; a range is its grant, so the two cannot differ");
-                }
-                request.open_range = 0;
-            }
             const std::uint64_t count =
                 request.count == 0 ? kRowIdLeasePerGrant : request.count;
             auto first = catalog.AllocateRowIdRange(
@@ -60,42 +35,6 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
             if (first.ok()) {
                 grant.first_id = first.value();
                 grant.count = count;
-                // RD5. **After the carve and never instead of it**: the ids
-                // are what the requester's statements are waiting on, and a
-                // range that cannot be opened must not cost them. Every
-                // failure below leaves `entry_page` invalid, which the
-                // receiver reads as "no range", which is the relation
-                // exactly as it was.
-                //
-                // `first_id == 0` cannot open a range - `OpenRange` refuses
-                // `lo = 0` because that boundary *is* the relation - so a
-                // relation whose very first ids are being leased opens its
-                // directory at the second grant. Left as the arithmetic
-                // rather than special-cased: a first block that is also the
-                // whole relation has nothing to partition yet.
-                //
-                // `wal` is deliberately **not** required: a null one is an
-                // unlogged store, `LogPageHandoff` answers `kNoLsn`, and an
-                // unlogged store recovers nothing - so there is no handoff
-                // to protect and nothing for the requirement to buy. The
-                // store and the enforcer are required, because without
-                // either the page could not be handed over or the gate not
-                // asked.
-                if (request.open_range != 0 && store != nullptr && enforcer != nullptr &&
-                    grant.first_id != 0) {
-                    auto opened = OpenRangeOnSystemCore(
-                        catalog, *store, wal, *enforcer,
-                        static_cast<catalog::Oid>(request.table_oid), grant.first_id,
-                        header.src_core, log, cabins, discards);
-                    if (opened.ok()) {
-                        grant.entry_page = opened.value();
-                    } else if (log != nullptr && log->enabled(LogLevel::kError)) {
-                        log->Error("range", "core 0 could not open a range for oid " +
-                                                std::to_string(request.table_oid) + " at " +
-                                                std::to_string(grant.first_id) + ": " +
-                                                opened.status().message());
-                    }
-                }
             } else if (log != nullptr && log->enabled(LogLevel::kError)) {
                 // The zero-count grant goes out regardless - the requester
                 // is waiting, and "none" is an answer where silence is a
@@ -139,7 +78,6 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
                 // malformed grant that leaves the waiter parked hangs the
                 // core. It wakes, sees count 0, and reports.
                 refill.count = 0;
-                refill.entry_page = kInvalidPageId;
                 refill.granted = true;
                 // No run arrived, so the relation still reads as low water
                 // and the drain tick would ask again every cadence. The
@@ -152,10 +90,6 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
             refill.table_oid = fields.table_oid;
             refill.first_id = fields.first_id;
             refill.count = fields.count;
-            // Recorded, not admitted: the page's write rights land on the
-            // caller's tick, which is the one place this core's store and
-            // WAL are in reach (RowIdRefill's note).
-            refill.entry_page = static_cast<PageId>(fields.entry_page);
             refill.stats.NoteGrant(scheduler.clock().Now(), scheduler.iterations());
             if (fields.count > 0) {
                 leases.Grant(static_cast<catalog::Oid>(fields.table_oid), fields.first_id,
@@ -178,16 +112,15 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
 sched::Coro RequestRowIdLease(sched::RingTransport& transport, RowIdRefill& refill,
                               std::uint64_t table_oid, std::uint64_t count,
                               std::uint32_t core_id, std::uint32_t system_core, Logger* log,
-                              const sched::Scheduler* sched, bool open_range) {
+                              const sched::Scheduler* sched) {
     refill.granted = false;
     refill.table_oid = table_oid;
     refill.first_id = 0;
     refill.count = 0;
-    refill.entry_page = kInvalidPageId;
     refill.stats.NoteSent(sched != nullptr ? sched->clock().Now() : 0,
                           sched != nullptr ? sched->iterations() : 0);
 
-    RowIdLeaseRequestPayload request{table_oid, count, open_range ? 1u : 0u};
+    RowIdLeaseRequestPayload request{table_oid, count};
     std::byte bytes[sizeof(request)];
     std::memcpy(bytes, &request, sizeof(request));
 

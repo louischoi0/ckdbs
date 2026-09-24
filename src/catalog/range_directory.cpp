@@ -14,7 +14,7 @@ std::vector<RangeTarget> RangeTargetsFrom(std::span<const SysRangeRow> rows) {
         // last one. Derived here and nowhere else.
         targets.push_back(RangeTarget{rows[i].lo,
                                       i + 1 < rows.size() ? rows[i + 1].lo : kIdSpaceEnd,
-                                      rows[i].owner_core, rows[i].entry_page});
+                                      rows[i].entry_page});
     }
     return targets;
 }
@@ -24,8 +24,8 @@ StatusOr<std::span<const RangeTarget>> ResolveRanges(std::span<const RangeTarget
     // The zero-cost invariant, enforced rather than answered (header).
     if (ranges.empty()) {
         return Status::InvalidArgument(
-            "ResolveRanges: this relation has no sys.ranges rows, so it is one range owned by "
-            "sys.tables.owner_core (CC9) - the caller reads that cached field and stops rather "
+            "ResolveRanges: this relation has no sys.ranges rows, so it is one range headed by "
+            "sys.tables.desc_page_id (CC9) - the caller reads that cached field and stops rather "
             "than resolving");
     }
     if (span.lo >= span.hi) {

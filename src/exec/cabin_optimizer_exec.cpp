@@ -76,23 +76,17 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     const catalog::TableAccess& access, std::uint16_t col_pos, std::uint64_t cabin_id,
     const std::function<bool()>& enabled, bool* aborted) {
     *aborted = false;
-    // **§4b's span rule, asked here as well as at the serve site**
-    // (`step_vm.cpp`'s `CabinScopeCovers`), and not because a caller is
-    // expected to get it wrong: this is the *other* place a set is banked,
-    // and a set banked from fewer ranges than it will speak for is a
-    // subset served as authoritative - recorded once, wrong forever after.
+    // **§4b's span rule holds here by construction** since AT-S9: the walk
+    // below covers every range of the relation (`WalkHeads`), so the set
+    // this banks speaks for exactly what it read. It declined a relation
+    // this core did not wholly hold until ranges stopped having owners - a
+    // set banked from fewer ranges than it will speak for is a subset
+    // served as authoritative, recorded once and wrong forever after.
     //
     // **This path does not announce** (AT-S7), so a write landing during
     // its walk is lost where the serve site's build would have kept it.
     // Sound only because the controller is off by default and its walks
-    // run on core 0's tick; `known-gaps.md` carries it. Unreachable
-    // today, and only by two facts that live in other files (the serve
-    // site declines before `Observe`, so no sightings accrue on a
-    // non-servable relation, and `Discard` clears the sightings pre-grant),
-    // which is precisely the inheritance this engine's rules refuse.
-    // Declining to build is always legal - §1's corollary - so the answer
-    // is zero committed, never an error.
-    if (!access.ranges.empty() && !access.ServableBy(catalog_.core_id())) return std::size_t{0};
+    // run on core 0's tick; `known-gaps.md` carries it.
     const std::vector<stats::CabinKey> seeds = cabins_.SightedUnobservedOf(cabin_id);
     if (seeds.empty()) return std::size_t{0};
 
@@ -117,18 +111,18 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     // A btree leaf is a heap page, so one loop serves both clustered forms
     // - only the first leaf differs (the assertion builder's shape).
     //
-    // **RD6: one chain per range, so this is one walk per chain this core
-    // owns** - `WalkHeadsFor`, the same rule `VisitRelation` and a fan-in
-    // stage take, rather than a third spelling of it. A build that walked
+    // **RD6: one chain per range, so this is one walk per chain** -
+    // `WalkHeads`, the same rule `VisitRelation` takes, rather than a
+    // second spelling of it. A build that walked
     // `desc_page_id` alone would cover the `lo = 0` range and stop, then
     // commit the result as an **observed** set: a subset served as
     // authoritative, which is the C1 break `cabin_store.hpp` forbids and
     // the one this build could make permanent. It became reachable when
     // SB3 admitted `CREATE CABIN` on a split relation, the optimizer's
-    // automatic path included. Unsplit, `WalkHeadsFor` answers the one
+    // automatic path included. Unsplit, `WalkHeads` answers the one
     // head this always walked. A btree relation never splits (D1), so its
     // arm needs no range handling and says so by taking `desc_page_id`.
-    std::vector<PageId> heads = access.WalkHeadsFor(catalog_.core_id());
+    std::vector<PageId> heads = access.WalkHeads();
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);
         if (!first.ok()) return first.status();

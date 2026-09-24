@@ -80,28 +80,13 @@ struct SysTableRow {
     // says may not be cached, and this one is cached on every TableAccess.
     PageId varheap_page_id;
 
-    // The core that owns this relation (docs/inflight/in-progress/workplan-crosscore.md M1).
-    //
-    // **Ownership is a catalog fact and nothing else.** No code may derive
-    // it from a page id, a hash, or the topology - that is workplan
-    // guideline 4, and the reason is that page/extent hashing was rejected
-    // outright: a btree descent and a heap-chain walk cannot cross cores
-    // per hop, so ownership has to be per relation and it has to be
-    // recorded.
-    //
-    // What this field does *not* need to say is where the relation's
-    // auxiliaries live. Unique indexes, the Cabin, the Waystone pages and
-    // the var-heap are write-coupled and therefore always co-located
-    // (crosscore.md section 6) - and they are co-located structurally,
-    // because they hang off this same row rather than carrying an owner of
-    // their own. There is no way to spell a relation whose var-heap is
-    // somewhere else.
-    //
-    // Assigned once, at CREATE, by catalog/core_placement.hpp; never
-    // rebalanced (M3 observes skew and does not act on it), which is what
-    // makes it cacheable on TableAccess - a fact that cannot change without
-    // DDL.
-    std::uint32_t owner_core;
+    // **No `owner_core` since AT-S9** (D17). The four bytes after
+    // `varheap_page_id` held the core that owned this relation and are
+    // `kReservedOffset` now: written 0, never read, so a pre-AT volume's
+    // value is ignored where it lies and the row keeps its size. Catalog
+    // rows are fixed-length tuples (invariant 13), so removing the bytes
+    // would have been a rewrite of every row at mount rather than a format
+    // event. Nothing on this row names a core any more.
 
     // Whether an id has ever landed here out of order (well_known.hpp's
     // KeyOrder, docs/spec/heap-and-tuple.md section 4.1).
@@ -142,14 +127,27 @@ struct SysTableRow {
     // streams read through memcpy, never overlaid on the buffer.
     static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kVarHeapPageIdOffset = kNextIdOffset + sizeof(std::uint64_t);
-    static constexpr std::size_t kOwnerCoreOffset = kVarHeapPageIdOffset + sizeof(PageId);
-    static constexpr std::size_t kKeyOrderOffset = kOwnerCoreOffset + sizeof(std::uint32_t);
+    static constexpr std::size_t kReservedOffset = kVarHeapPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kKeyOrderOffset = kReservedOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kAnchorPageIdOffset = kKeyOrderOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kOnDiskSize = kAnchorPageIdOffset + sizeof(PageId);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
 };
+
+// **The on-disk layout, pinned** (AT-S9, AT-R7). The row is a packed byte
+// stream, not a mirror struct, so `offsetof` cannot check it; these do.
+// They were absent, which is how the one place a layout mistake would show
+// had nothing to show it. A change here is a format event.
+static_assert(SysTableRow::kDescPageIdOffset == 80);
+static_assert(SysTableRow::kClusteredTypeOffset == 84);
+static_assert(SysTableRow::kNextIdOffset == 85);
+static_assert(SysTableRow::kVarHeapPageIdOffset == 93);
+static_assert(SysTableRow::kReservedOffset == 97, "the retired owner_core word; its bytes stay");
+static_assert(SysTableRow::kKeyOrderOffset == 101);
+static_assert(SysTableRow::kAnchorPageIdOffset == 102);
+static_assert(SysTableRow::kOnDiskSize == 106);
 
 static_assert(offsetof(SysTableRow, oid) == SysTableRow::kOidOffset);
 static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOidOffset);
@@ -948,11 +946,10 @@ struct SysRangeRow {
     // on it.
     Oid rel_oid;
 
-    // The core that owns `[lo, hi)`. Not a duplicate of
-    // `sys.tables.owner_core`: that field is the whole relation's owner and
-    // stays the answer for a relation with no rows here, which is what lets
-    // the unsplit path read one cached field and stop.
-    std::uint32_t owner_core;
+    // **The retired `owner_core` word** (AT-S9, D17): the core that owned
+    // `[lo, hi)`. Kept as a named member so this mirror struct keeps its
+    // offsets and a pre-AT row decodes where it lies; written 0, never read.
+    std::uint32_t reserved = 0;
 
     // Where this range's own sub-structure starts (CC8): the chain head for
     // a heap range, that range's subtree entry for a btree one. **The field
@@ -964,7 +961,7 @@ struct SysRangeRow {
     static constexpr std::size_t kRangeIdOffset = 0;
     static constexpr std::size_t kLoOffset = 8;
     static constexpr std::size_t kRelOidOffset = 16;
-    static constexpr std::size_t kOwnerCoreOffset = 24;
+    static constexpr std::size_t kReservedOffset = 24;
     static constexpr std::size_t kEntryPageOffset = 28;
     static constexpr std::size_t kOnDiskSize = kEntryPageOffset + sizeof(PageId);
 
@@ -975,7 +972,7 @@ struct SysRangeRow {
 static_assert(offsetof(SysRangeRow, range_id) == SysRangeRow::kRangeIdOffset);
 static_assert(offsetof(SysRangeRow, lo) == SysRangeRow::kLoOffset);
 static_assert(offsetof(SysRangeRow, rel_oid) == SysRangeRow::kRelOidOffset);
-static_assert(offsetof(SysRangeRow, owner_core) == SysRangeRow::kOwnerCoreOffset);
+static_assert(offsetof(SysRangeRow, reserved) == SysRangeRow::kReservedOffset);
 static_assert(offsetof(SysRangeRow, entry_page) == SysRangeRow::kEntryPageOffset);
 static_assert(SysRangeRow::kOnDiskSize == 32);
 

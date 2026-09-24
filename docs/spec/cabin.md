@@ -281,23 +281,25 @@ both directions:
 
 Both are one predicate, asked once at the serve site
 (`CabinScopeCovers`): the relation has one range, or this step's walk
-spans the whole key space and `TableAccess::ServableBy` holds for this
-core. A one-range relation — every relation created since insert
-spreading went off — takes `ranges.empty()` and pays one predictable
-branch. When the predicate does not hold the probe **falls through to the
-walk** — always legal, §1's corollary, a performance event and never an
-answer — and §4c's counter reads it.
+spans the whole key space. A one-range relation — every relation created
+since AT-S9 retired insert spreading — takes `ranges.empty()` and pays one
+predictable branch. **A split relation is served too since AT-S9**: every
+local walk covers every range (`TableAccess::WalkHeads`), so a set banked
+from one is a superset of the whole relation, and the predicate's
+`ServableBy` conjunct - which declined a relation whose ranges were not all
+this core's - went with range ownership. What still declines is a step
+assigned a partial slice, which only a remote stage was and none is opened.
+When the predicate does not hold the probe **falls through to the walk** —
+always legal, §1's corollary, a performance event and never an answer — and
+§4c's counter reads it.
 
-**The transition rule is the discard**, and it is `crosscore.md` CC10's:
-sets banked while the relation was whole were banked from a walk that
-reached all of it, and nothing in a set records what walk made it. They
-are therefore dropped before the grant that creates the second owner, not
-after. See CC10's pre-grant window; the two halves are one rule and the
-sequence is where it lives.
+**The transition rule was the discard**, `crosscore.md` CC10's pre-grant
+drop of sets banked while a relation was whole. No relation is split since
+AT-S9, so there is no transition to guard.
 
 ### 4c. What the serve path reports
 
-Two counters, because a Cabin whose savings cannot be seen cannot be
+One counter, because a Cabin whose savings cannot be seen cannot be
 measured and an unmeasured saving is not claimed:
 
 - **`cabin_scope_fallthroughs`** on `SHOW META`, and `scope_declines` per
@@ -306,10 +308,8 @@ measured and an unmeasured saving is not claimed:
   not hold. It is the one number that distinguishes "this Cabin is not
   earning its write hook" from "this Cabin cannot be reached from where
   the read runs", which no other counter can tell apart.
-- **`cabin_split_discard`** on `SHOW META`, keyed by relation, in the
-  refusal-counter form and absent at zero — sets dropped by CC10's
-  pre-grant discard. Its reading is the cost of the transition rule:
-  re-observation, priced in misses that follow.
+- **`cabin_split_discard` is retired** (AT-S9) with the discard it
+  counted: nothing splits a relation.
 
 ## 5. Write path — the witness
 

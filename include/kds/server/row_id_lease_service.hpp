@@ -6,15 +6,10 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/catalog/row_id_lease.hpp"
-#include "kds/exec/assertion_check.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/lease_refill_stats.hpp"
-#include "kds/server/refusal_counters.hpp"
-#include "kds/stats/cabin_store.hpp"
-#include "kds/storage/device_page_store.hpp"
-#include "kds/wal/manager.hpp"
 
 // The row-id lease over the ring (`RingMessageKind::kRowIdLease`): how a
 // peer that may not write the catalog obtains blocks of Keystone ids for
@@ -36,30 +31,18 @@ inline constexpr std::uint64_t kRowIdLeasePerGrant = 4096;
 struct RowIdLeaseRequestPayload {
     std::uint64_t table_oid;
     std::uint64_t count;
-    // RD5: the owner asks for the granted block to become a **range** of
-    // this relation, owned by this core, at the block's first id. Set only
-    // where the owner's own `RangeEligible` said yes - the one core whose
-    // answer is authoritative (§9c) - and honoured only where core 0's
-    // re-check agrees. A request core 0 declines is still granted its ids:
-    // the relation stays one range and the insert path is unchanged, which
-    // is what makes the decline a refusal rather than a wrong answer.
-    std::uint64_t open_range;
+    // **No `open_range` since AT-S9**: a block no longer asks to become a
+    // range. Spreading retired with ownership, so a grant is ids and
+    // nothing else.
 };
-static_assert(sizeof(RowIdLeaseRequestPayload) == 24);
+static_assert(sizeof(RowIdLeaseRequestPayload) == 16);
 
 struct RowIdLeaseGrantPayload {
     std::uint64_t table_oid;
     std::uint64_t first_id;
     std::uint64_t count;  // 0 = none available; the id space is exhausted
-    // The head page of the range core 0 opened at `first_id`, or
-    // `kInvalidPageId` where none was opened - because the request did not
-    // ask, or because the re-check declined. **The grant of that page's
-    // write rights is this field**: core 0 formatted it and logged the
-    // handoff before replying (CC10 steps 2-4), so the receiver admits it
-    // exactly as it admits a relation write grant.
-    std::uint64_t entry_page;
 };
-static_assert(sizeof(RowIdLeaseGrantPayload) == 32);
+static_assert(sizeof(RowIdLeaseGrantPayload) == 24);
 
 // Installs core 0's responder: a peer's request is answered with a block
 // carved by `Catalog::AllocateRowIdRange()` - the bulk-INSERT primitive,
@@ -67,24 +50,12 @@ static_assert(sizeof(RowIdLeaseGrantPayload) == 32);
 // fails replies with a zero-count grant rather than silently dropping,
 // for the extent service's reason: the requester is waiting, and a reply
 // it can read as "none" is what lets it fail a statement honestly.
-// `store`, `wal` and `enforcer` are RD5's: a request that asks for a range needs
-// the handoff record and the eligibility re-check, and **a handler given
-// no store or enforcer simply grants the ids and opens nothing** - which is what every
-// fixture is, and what makes the range half additive rather than a new
-// precondition on the lease.
-// `cabins` and `discards` are SB1's, and they are core 0's own: the
-// pre-grant Cabin discard runs inside `OpenRangeOnSystemCore`, on the same
-// task, so the grant this handler replies with can never precede it. Both
-// nullable on the same terms as `store` and `enforcer` above — a handler
-// given no store grants the ids and discards nothing.
+// RD5's range half - a request asking for its block to become a range,
+// opened here with the handoff, the eligibility re-check and SB1's
+// pre-grant Cabin discard - retired at AT-S9 with insert spreading.
 Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, catalog::Catalog& catalog,
-                                 Logger* log = nullptr,
-                                 storage::DevicePageStore* store = nullptr,
-                                 wal::WalManager* wal = nullptr,
-                                 const exec::AssertionEnforcer* enforcer = nullptr,
-                                 stats::CabinStore* cabins = nullptr,
-                                 CabinSplitDiscardCounters* discards = nullptr);
+                                 Logger* log = nullptr);
 
 // One core's refill state, owned by the caller for the coroutine's reason:
 // it must outlive the wait.
@@ -93,12 +64,6 @@ struct RowIdRefill {
     std::uint64_t table_oid = 0;
     std::uint64_t first_id = 0;
     std::uint64_t count = 0;
-    // RD5: the head page of the range core 0 opened at `first_id`, or
-    // `kInvalidPageId` where it opened none. Read by the *caller* of the
-    // coroutine rather than by the receiver, because admitting the page
-    // needs this core's store and WAL, which the lease table has no
-    // business holding.
-    PageId entry_page = kInvalidPageId;
     LeaseRefillStats stats;  // requests, grants, and what each cost
 };
 
@@ -113,14 +78,9 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
 // The coroutine that asks for a block for one relation. Submit on spent or
 // low lease; one in flight per core, the extent refill's rule.
 //
-// `open_range` asks for the block to become a range (RD5). The caller sets
-// it only where **this core's own** `RangeEligible` said yes, which is the
-// only core whose answer is authoritative; core 0 re-checks and may
-// decline, and the ids arrive either way.
 sched::Coro RequestRowIdLease(sched::RingTransport& transport, RowIdRefill& refill,
                               std::uint64_t table_oid, std::uint64_t count,
                               std::uint32_t core_id, std::uint32_t system_core = 0,
-                              Logger* log = nullptr, const sched::Scheduler* sched = nullptr,
-                              bool open_range = false);
+                              Logger* log = nullptr, const sched::Scheduler* sched = nullptr);
 
 }  // namespace kds::server

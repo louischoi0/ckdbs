@@ -223,12 +223,10 @@ protected:
     // peer runs redo only under per-core streams.
     void PeerPagesSurviveARestart(bool flush_before_restart, const std::string& name);
 
-    // A cross-owner foreign key pair, funded: `<base>p` on core 0 and
-    // `<base>c` on the peer, the child referencing the parent. The two
-    // placement policies are how a two-core rig puts one relation on each
-    // side - `kRotate` at two cores places *everything* on core 1, so the
-    // parent takes `kCreatingCore` for the length of its CREATE and nothing
-    // else (AH-T6).
+    // A foreign key pair, funded for the peer: `<base>p` and `<base>c`, the
+    // child referencing the parent. Until AT-S9 a placement policy put the
+    // parent on core 0 and the child on the peer (AH-T6); no core owns a
+    // relation since, and the peer is funded for the child it writes.
     void OpenCrossOwnerFkPair(struct ForeignIndexRig& rig, const std::string& base);
 
     static inline int counter_ = 0;
@@ -593,128 +591,6 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
 // of row ids, exactly like the page-id lease - and
 // `docs/rules/keystoneid-invariant.md` K-M2's bump-ahead allocator is the same
 // mechanism.
-
-// ---- P6c: placement -----------------------------------------------------
-
-TEST(CorePlacementTest, RotationSkipsTheSystemCoreAndCreatingStaysPut) {
-    using catalog::AssignOwnerCore;
-    using catalog::PlacementPolicy;
-    // The default policy pins to the creating core whatever the count.
-    static_assert(AssignOwnerCore(PlacementPolicy::kCreatingCore, 0, 4, 7) == 0);
-    // Rotation walks the non-system cores in relation order...
-    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 0) == 1);
-    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 1) == 2);
-    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 2) == 3);
-    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 3) == 1);
-    // ...never lands on core 0...
-    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 2, 5) == 1);
-    // ...and degrades to the creating core when there is nowhere to rotate.
-    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 1, 5) == 0);
-
-    // AF-T2's seam, the shipped default. An undeclared namespace - `public`,
-    // which is every relation until somebody writes CREATE NAMESPACE - is
-    // `kCreatingCore`'s answer whatever the relation count, which is what
-    // keeps DA2 true under the new default.
-    using catalog::NamespacePlacement;
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 7) == 0);
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 7,
-                                  NamespacePlacement{}) == 0);
-    // A declared namespace nothing has placed rotates on its **declaration
-    // order**, not on the relation count - two relations in one namespace
-    // must not land on two cores.
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
-                                  NamespacePlacement{catalog::kUnplacedNamespace, 0, true}) == 1);
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
-                                  NamespacePlacement{catalog::kUnplacedNamespace, 1, true}) == 2);
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
-                                  NamespacePlacement{catalog::kUnplacedNamespace, 3, true}) == 1);
-    // A namespace its first relation already fixed answers that, and the
-    // rank is not consulted - AF-P4's "never rebalanced".
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
-                                  NamespacePlacement{3, 0, true}) == 3);
-    // Including back onto core 0, which is a legal answer and the reason
-    // absence needs a sentinel rather than a zero.
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
-                                  NamespacePlacement{0, 2, true}) == 0);
-    // One core has nowhere to rotate, exactly as `rotate` degrades.
-    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 1, 0,
-                                  NamespacePlacement{catalog::kUnplacedNamespace, 5, true}) == 0);
-    SUCCEED();
-}
-
-TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
-    // The catalog half of P6c end to end: rotation chooses a peer, and the
-    // peer resolves the relation.
-    //
-    // **The publish hook this drives has no production installer since
-    // AW-S1b**, which deleted CC7's publish with the grants. What the hook
-    // half of this cell still pins is the *catalog*'s contract - it fires
-    // once, at the end of a CreateTable whose owner is not core 0, with the
-    // oid, owner, root, var-heap root and anchor, and with the root's
-    // creation `PageRef` already dropped - and that contract is load-bearing
-    // beyond this cell: `MaterializeIndexDefinition` keys its PW1c-6
-    // refusal on the hook's presence, so a catalog with one behaves
-    // differently from a catalog without
-    // (`docs/inflight/bugs/publish-hook-gate-is-test-only.md`).
-    //
-    // A two-core catalog over the same store, because the fixture's was
-    // bootstrapped at core_count = 1 and rotation correctly degrades to
-    // the creating core there - which the placement unit test pins.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-
-    struct Published {
-        catalog::Oid oid = 0;
-        std::uint32_t owner = 0;
-        PageId root = kInvalidPageId;
-        PageId varheap = kInvalidPageId;
-        int calls = 0;
-    } published;
-    // The evict runs *inside* the hook - CreateTable is still on the stack -
-    // which is what pins the 25059bf review's C-1: the root's creation
-    // `PageRef` must have dropped by publish time, or any hook that touches
-    // the frame fails on every peer CREATE TABLE. Flush first; eviction
-    // refuses dirty frames. The production hook that did exactly this is
-    // gone (AW-S1b), so what this holds now is the catalog's guarantee
-    // about the stack it calls out from.
-    Status evict_at_publish = Status::OK();
-    catalog2.SetRelationPublishHook(
-        [&](catalog::Oid oid, std::uint32_t owner, PageId root, PageId varheap, PageId anchor) {
-            published = {oid, owner, root, varheap, published.calls + 1};
-            EXPECT_NE(anchor, kInvalidPageId) << "a user relation always gets an anchor (PW2-1)";
-            const PageId departed[] = {root};
-            evict_at_publish = core0_store_->FlushPages(departed);
-            if (evict_at_publish.ok()) {
-                evict_at_publish = core0_store_->EvictClean(departed);
-            }
-        });
-
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
-                                    TwoColumnSchema(), catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-
-    // The catalog recorded the rotated owner, and the hook saw the same
-    // facts the row carries.
-    auto row = catalog2.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().owner_core, 1u);
-    EXPECT_EQ(published.calls, 1);
-    EXPECT_EQ(published.oid, oid.value());
-    EXPECT_EQ(published.owner, 1u);
-    EXPECT_EQ(published.root, row.value().desc_page_id);
-
-    EXPECT_TRUE(evict_at_publish.ok())
-        << "the root must be unpinned when the publish hook fires: "
-        << evict_at_publish.message();
-
-    // The grant the hook's installer would send reaches the peer, and the
-    // relation resolves there - CC7's whole point, driven by placement.
-    ASSERT_TRUE(core0_store_->Sync().ok());
-    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-    EXPECT_TRUE(peer.value()->catalog().InitTableAccess(oid.value()).ok());
-}
 
 // ---- Row-id leases (P5's shape) ----------------------------------------
 
@@ -1332,392 +1208,11 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
         << "core 0's next id sits inside the block it granted the peer";
 }
 
-// RD5's ring half, which nothing else exercises: the owner core asks on
-// its own tick, core 0 opens the range and hands its head page over, and
-// the owner ends up able to write it (work order
-// `instructions/v2.5.0/range-directory.md` RB2; `crosscore.md` CC10).
-//
-// This is HD5's demonstration as well - `RangeEligible` gets its first
-// caller on a real relation here, and the gate that fires is the one the
-// counter records.
-TEST_F(CoreRuntimeTest, APeersLeaseBlockBecomesARangeItCanWrite) {
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "spread",
-                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-    // The store and the enforcer are what turn the range half on at core
-    // 0; without them the handler grants ids and opens nothing, which is
-    // the arm every other test in this file takes.
-    exec::AssertionEnforcer core0_enforcer;
-    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
-                                          core0_store_.get(), nullptr, &core0_enforcer)
-                    .ok());
-
-    // The owner core, with ranges armed. One key sizes the grant and the
-    // range, so the boundary below is this number.
-    CoreRuntime::Config cfg = ConfigFor(1);
-    cfg.range_size_ids = 4096;
-    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-
-    // A statement names the relation, which is what records the demand.
-    auto dry = peer.value()->catalog().AllocateRowId(oid.value());
-    ASSERT_FALSE(dry.ok());
-    ASSERT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value());
-
-    peer.value()->MaybeRefillRowIds();
-    for (int i = 0; i < 40; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
-    }
-    ASSERT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
-
-    // The directory core 0 wrote: the opening row plus the boundary at the
-    // granted block's first id, owned by the core that asked.
-    auto ranges = core0_->catalog.RangesOf(oid.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    ASSERT_EQ(ranges.value().size(), 2u) << "the lease block did not become a range";
-    EXPECT_EQ(ranges.value()[0].lo, 0u);
-    EXPECT_EQ(ranges.value()[1].lo, peer.value()->row_id_refill().first_id);
-    EXPECT_EQ(ranges.value()[1].owner_core, 1u);
-
-    // **And the owner can write the head**, which is the half that was
-    // wrong the first time this row was built: core 0 formatted the page in
-    // its own frame and never flushed it, so the admission faulted an
-    // unwritten id and the range had a head no core could touch.
-    const PageId head = ranges.value()[1].entry_page;
-    ASSERT_NE(head, kInvalidPageId);
-    EXPECT_TRUE(peer.value()->store().MayWrite(head))
-        << "the owner holds no write rights over its own range's head page";
-    auto faulted = peer.value()->store().GetForRead(head);
-    ASSERT_TRUE(faulted.ok()) << faulted.status().message();
-    heap::PageView view(faulted.value().bytes());
-    // Invariant 3 made structural: nothing below the boundary can land in
-    // this page even by mistake.
-    EXPECT_EQ(view.min_key(), ranges.value()[1].lo);
-
-    // ---- R4/IS5: the second block opens no second boundary --------------
-    //
-    // The same core asking again lands in the range it already owns - ids
-    // only ascend and that range runs to the end of the space - so a
-    // boundary there would cut this core's own chain in two for nothing,
-    // and spend a fan-in stage per lease block forever.
-    for (std::uint64_t i = 0; i < cfg.range_size_ids; ++i) {
-        ASSERT_TRUE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
-    }
-    ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value())
-        << "a spent block did not read as demand";
-    peer.value()->MaybeRefillRowIds();
-    for (int i = 0; i < 40; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
-    }
-    ASSERT_EQ(peer.value()->row_id_refill().stats.grants, 2u) << "the second block never arrived";
-
-    auto after = core0_->catalog.RangesOf(oid.value());
-    ASSERT_TRUE(after.ok()) << after.status().message();
-    EXPECT_EQ(after.value().size(), 2u)
-        << "a second block by the same core opened a second boundary";
-}
-
 // `AForeignInsertLeavesTheDemandThatBecomesThisCoresRange` stood here until AT-S5: it pinned the row-id demand a shipped insert left on this core; nothing ships, and the demand path is AT-S4's.
 
 // `AForeignInsertLeavesNoDemandWhenRangesAreOff` stood here until AT-S5: it pinned the row-id demand a shipped insert left on this core; nothing ships, and the demand path is AT-S4's.
 
 // `AForeignInsertThatNamesItsKeyLeavesNoDemand` stood here until AT-S5: it pinned the row-id demand a shipped insert left on this core; nothing ships, and the demand path is AT-S4's.
-
-// ---- R4/IS2 + IS3: the spreading itself ---------------------------------
-//
-// §8 test 12's core, at two cores: the same statement that was refused
-// runs **here** once this core has a range, its rows land in that range's
-// own chain, and nothing was shipped to do it. The whole route is
-// exercised through `Dispatch`, because the class R4 closes is a statement
-// going to the wrong core rather than a function answering wrongly.
-TEST_F(CoreRuntimeTest, APeerInsertsIntoItsOwnRangeInsteadOfShippingToTheOwner) {
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "spread",
-                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-    exec::AssertionEnforcer core0_enforcer;
-    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
-                                          core0_store_.get(), nullptr, &core0_enforcer)
-                    .ok());
-
-    CoreRuntime::Config cfg = ConfigFor(1);
-    cfg.range_size_ids = 4096;
-    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-    auto block = core0_ids.Carve(64);
-    ASSERT_TRUE(block.ok());
-    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
-
-    // The relation is core 0's, so this is refused - and leaves the demand.
-    const auto before =
-        peer.value()->dispatcher().Dispatch("INSERT INTO spread VALUES (7)").response;
-    ASSERT_EQ(before.rfind("ERR ", 0), 0u) << before;
-
-    peer.value()->MaybeRefillRowIds();
-    for (int i = 0; i < 40; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
-    }
-    // Since AT-S2 nothing is sent: the peer's next cached read compares the
-    // schema word core 0 bumped and drops its memo. The flush stays only
-    // because these pages are unlogged.
-    FlushCatalog();
-
-    auto ranges = core0_->catalog.RangesOf(oid.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    ASSERT_EQ(ranges.value().size(), 2u) << "the pump did not turn the demand into a range";
-    ASSERT_EQ(ranges.value()[1].owner_core, 1u);
-    const std::uint64_t boundary = ranges.value()[1].lo;
-
-    // **The same statement, and now it runs here.** The id is the range's
-    // first, which is what "the block is the range" means from outside.
-    const auto after =
-        peer.value()->dispatcher().Dispatch("INSERT INTO spread VALUES (7)").response;
-    ASSERT_EQ(after.rfind("INSERTED", 0), 0u) << after;
-    EXPECT_NE(after.find("id=" + std::to_string(boundary)), std::string::npos) << after;
-
-    // In the range's **own** chain, not the relation's - the page it named
-    // is the entry page core 0 handed over, or one this core grew from it.
-    const PageId head = ranges.value()[1].entry_page;
-    auto walked = peer.value()->store().GetForRead(head);
-    ASSERT_TRUE(walked.ok()) << walked.status().message();
-    heap::PageView view(walked.value().bytes());
-    EXPECT_EQ(view.min_key(), boundary) << "invariant 3 does not hold on this range's head";
-    EXPECT_GT(view.slot_count(), 0u) << "the row did not land in this core's own range";
-
-    // And the ids stay disjoint from core 0's, which is K1 across cores:
-    // core 0's next issue sits above the block it granted.
-    auto on_core0 = core0_->catalog.AllocateRowId(oid.value());
-    ASSERT_TRUE(on_core0.ok()) << on_core0.status().message();
-    EXPECT_GE(on_core0.value(), boundary + cfg.range_size_ids)
-        << "core 0 issued an id inside the block it leased to core 1";
-}
-
-// ---- R4/IS6: `crosscore.md` §8 test 12, at k = 2 writers ----------------
-//
-// *"k cores inserting concurrently each land in their own range's tail;
-// ids ascend per range; ids stay globally unique (K1's issue-once contract
-// across cores); invariant 3 holds per range."* All four, over two peers
-// and the relation's own owner, through `Dispatch`.
-TEST_F(CoreRuntimeTest, TwoPeersEachInsertIntoTheirOwnRangesTail) {
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "fanout",
-                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/3, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-    exec::AssertionEnforcer core0_enforcer;
-    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
-                                          core0_store_.get(), nullptr, &core0_enforcer)
-                    .ok());
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-
-    std::vector<std::unique_ptr<CoreRuntime>> peers;
-    for (std::uint32_t id : {1u, 2u}) {
-        CoreRuntime::Config cfg = ConfigFor(id);
-        cfg.range_size_ids = 4096;
-        auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
-        ASSERT_TRUE(peer.ok()) << peer.status().message();
-        ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-        auto block = core0_ids.Carve(64);
-        ASSERT_TRUE(block.ok());
-        peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
-        peers.push_back(std::move(peer.value()));
-    }
-
-    // Round 1: both are refused and both leave a demand. **Interleaved on
-    // purpose** - the two blocks are carved by one core in the order the
-    // requests arrive, so the ranges alternate owners, which is the
-    // arrangement §6b calls interleaved and RD7 opens one stage per.
-    for (auto& peer : peers) {
-        const auto out = peer->dispatcher().Dispatch("INSERT INTO fanout VALUES (1)").response;
-        ASSERT_EQ(out.rfind("ERR ", 0), 0u) << out;
-        peer->MaybeRefillRowIds();
-    }
-    for (int i = 0; i < 80; ++i) {
-        for (auto& peer : peers) peer->scheduler().RunOnce();
-        core0.RunOnce();
-    }
-    FlushCatalog();
-
-    auto ranges = core0_->catalog.RangesOf(oid.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    // The lo = 0 anchor CC9 requires, plus one range per writer core.
-    ASSERT_EQ(ranges.value().size(), 3u) << "two writers did not produce two ranges";
-    EXPECT_EQ(ranges.value()[0].lo, 0u);
-    EXPECT_EQ(ranges.value()[0].owner_core, 0u);
-    EXPECT_NE(ranges.value()[1].owner_core, ranges.value()[2].owner_core)
-        << "both blocks were granted to one core";
-
-    // Round 2: each runs **locally**, and the reply names an id inside that
-    // core's own range.
-    std::vector<std::uint64_t> issued;
-    for (std::size_t k = 0; k < peers.size(); ++k) {
-        for (int rep = 0; rep < 3; ++rep) {
-            const auto out =
-                peers[k]->dispatcher().Dispatch("INSERT INTO fanout VALUES (1)").response;
-            ASSERT_EQ(out.rfind("INSERTED", 0), 0u)
-                << "core " << (k + 1) << " did not insert into its own range: " << out;
-            // " id=" with the space: the reply opens with `oid=`, which
-            // contains `id=` and would be parsed instead.
-            const std::size_t at = out.find(" id=");
-            ASSERT_NE(at, std::string::npos) << out;
-            issued.push_back(std::strtoull(out.c_str() + at + 4, nullptr, 10));
-        }
-    }
-
-    // **Globally unique** (K1 across cores): the blocks are carved from one
-    // `sys.tables.next_id`, so no two cores can name the same id.
-    std::vector<std::uint64_t> sorted = issued;
-    std::sort(sorted.begin(), sorted.end());
-    EXPECT_EQ(std::adjacent_find(sorted.begin(), sorted.end()), sorted.end())
-        << "two cores issued the same id";
-
-    // **Ascending per range, and in each range's own chain** - which is
-    // also invariant 3 per range, since the head's `min_key` is `lo`. The
-    // row count is asserted and not inferred: without it the ascent runs
-    // over whichever rows happen to be present, so writes landing in the
-    // wrong range would leave every remaining check trivially true.
-    auto each_range_ascends = [&](std::uint16_t expected_rows, const char* when) {
-        for (std::size_t r = 1; r < ranges.value().size(); ++r) {
-            const catalog::SysRangeRow& row = ranges.value()[r];
-            auto& owner = peers[row.owner_core - 1];
-            auto page = owner->store().GetForRead(row.entry_page);
-            ASSERT_TRUE(page.ok()) << page.status().message();
-            heap::PageView view(page.value().bytes());
-            EXPECT_EQ(view.min_key(), row.lo);
-            EXPECT_EQ(view.slot_count(), expected_rows)
-                << "range at lo " << row.lo << " owned by core " << row.owner_core
-                << " did not take its owner's rows " << when;
-            std::uint64_t previous = 0;
-            for (std::uint16_t slot = 0; slot < view.slot_count(); ++slot) {
-                auto tuple = view.ReadTuple(slot);
-                ASSERT_TRUE(tuple.ok()) << tuple.status().message();
-                auto id = KeystoneIdOfPayload(tuple.value().payload);
-                ASSERT_TRUE(id.ok());
-                EXPECT_GE(id.value(), row.lo) << "invariant 3 broken " << when;
-                EXPECT_GT(id.value(), previous) << "ids did not ascend inside one range " << when;
-                previous = id.value();
-            }
-        }
-    };
-    // Round 2's three, and nothing from round 1, which was refused before
-    // it wrote.
-    each_range_ascends(3, "in round 2");
-
-    // ---- RB5's second review item, answered where it is reachable ------
-    //
-    // **Round 3 interleaves the two writers**, which round 2 did not: it
-    // ran each core's three inserts together, so the issue sequence
-    // happened to ascend and nothing said whether it had to. It does not,
-    // and that is R4's amendment to invariant 11 (§4.1a) as an assertion
-    // rather than a sentence - each core issues from its **own leased
-    // block**, carved above the mark once and never consulted again, so
-    // alternating writers descend every time the turn passes back down.
-    //
-    // This is the falsifier `range_chain_test.cpp`'s
-    // `AnOutOfOrderInsertIsRefusedSoOneCoreCannotBreakTheByteIdentity`
-    // cannot construct: on one core the below-the-mark refusal forbids
-    // exactly this sequence, and two leased blocks are what get past it.
-    std::vector<std::uint64_t> interleaved;
-    for (int rep = 0; rep < 3; ++rep) {
-        for (auto& peer : peers) {
-            const auto out = peer->dispatcher().Dispatch("INSERT INTO fanout VALUES (2)").response;
-            ASSERT_EQ(out.rfind("INSERTED", 0), 0u) << out;
-            const std::size_t at = out.find(" id=");
-            ASSERT_NE(at, std::string::npos) << out;
-            interleaved.push_back(std::strtoull(out.c_str() + at + 4, nullptr, 10));
-        }
-    }
-    EXPECT_FALSE(std::is_sorted(interleaved.begin(), interleaved.end()))
-        << "two interleaved writers issued an ascending sequence, so this host produced no "
-           "second block and the test proves nothing";
-    std::vector<std::uint64_t> unique = interleaved;
-    std::sort(unique.begin(), unique.end());
-    EXPECT_EQ(std::adjacent_find(unique.begin(), unique.end()), unique.end())
-        << "interleaving cost uniqueness, which it must not";
-
-    // **The ascent moved down a level, it was not given up**: round 2's
-    // three rows plus round 3's three, still ascending inside each range.
-    each_range_ascends(6, "after round 3's interleaving");
-}
-
-// The other arm, and the one every existing relation takes: a gated
-// relation is declined, the ids arrive anyway, and the decline is readable
-// from outside the process (C3, workplan §9e).
-TEST_F(CoreRuntimeTest, AGatedRelationIsDeclinedAndTheDeclineIsCounted) {
-    // A btree relation - D1's decline, the gate that actually fires today.
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "tree", TwoColumnSchema(),
-                                           catalog::ClusteredType::kBtree);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-    exec::AssertionEnforcer core0_enforcer;
-    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
-                                          core0_store_.get(), nullptr, &core0_enforcer)
-                    .ok());
-
-    CoreRuntime::Config cfg = ConfigFor(1);
-    cfg.range_size_ids = 4096;
-    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-
-    ASSERT_FALSE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
-    peer.value()->MaybeRefillRowIds();
-    for (int i = 0; i < 40; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
-    }
-
-    // The ids arrived: a decline must not cost the statements waiting on
-    // them, which is what makes it a refusal rather than a failure.
-    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
-    EXPECT_TRUE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
-
-    // And nothing was written: the relation is still the one range CC8
-    // says it starts as.
-    auto ranges = core0_->catalog.RangesOf(oid.value());
-    ASSERT_TRUE(ranges.ok());
-    EXPECT_TRUE(ranges.value().empty()) << "a gated relation got a directory";
-
-    // C3's surface, from outside the process. Absent-rather-than-zeroed is
-    // why the assertion is on the presence of the field, not on a `=0`.
-    const auto meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
-    EXPECT_NE(meta.find("range_split_declines=1"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("range_split_decline_detail=" + std::to_string(oid.value()) + ":btree-clustered=1"),
-              std::string::npos)
-        << meta;
-}
 
 TEST(RowIdLeaseTableTest, AContiguousTopUpKeepsTheWindowAtTheRunInHand) {
     // PW1b review. `window` is what `low_water()` takes its quarter of, so
@@ -1827,11 +1322,9 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedHere) {
     // finish the reply - and what it measures since AT-S6 is that none of
     // that happens: the relation is unsplit, so one walk here answers it
     // and the pipeline is not opened at all. The rows are the same rows,
-    // which is the point; `APeerReadsASpreadRelationThroughItsOwnFanIn`
-    // keeps the route for the shape that still needs it.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    // which is the point. Since AT-S9 no relation has an owner and no read
+    // opens the pipeline, split or not.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated", TwoColumnSchema(),
                                     catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
@@ -1855,7 +1348,6 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedHere) {
 
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
-    ASSERT_EQ(row.value().owner_core, 1u);
 
     // The session core's runtime. Its store is lease-bound, so schema
     // resolution needs CC7's grant exactly as a real session core would
@@ -1910,403 +1402,28 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedHere) {
     EXPECT_EQ(projected.response, "v\\n0\\n10\\n20\\n30") << projected.response;
 }
 
-// ---- RD7: a read of a split relation fans in over its owners ------------
+// ---- RD7: a read of a split relation walks every range (AT-S9) ---------
 
-TEST_F(CoreRuntimeTest, ASelectAgainstARelationSplitAcrossTwoCoresFansInInRangeOrder) {
-    // RB4's substance, and the first statement in this engine to consume
-    // more than one producer. The directory is written by hand, and since
-    // R4 that is a **fixture choice rather than a necessity**: insert
-    // spreading now produces a second owner through the ordinary route
-    // (`TwoPeersEachInsertIntoTheirOwnRangesTail` drives it), and this
-    // test keeps the hand-written split because what it is about is the
-    // fan-in's ordering, which wants a boundary at a known id and rows
-    // placed on both sides of it without a lease block's arithmetic in
-    // the way.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "split", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-
-    // The cut: [0, 4096) stays with the relation's owner, [4096, end)
-    // goes to another core. **The other core is read off the relation, not
-    // written down**: rotation counts the relations that already exist, so
-    // a bootstrap relation added or removed moves which core `CreateTable`
-    // picks - which is exactly what withdrawing `sys.pattern_defs` did on
-    // 2026-08-31, and what a hard-coded 2 was silently depending on.
-    auto owner = catalog2.InitTableAccess(oid.value());
-    ASSERT_TRUE(owner.ok()) << owner.status().message();
-    const std::uint32_t other_core = owner.value()->owner_core == 1 ? 2 : 1;
-
-    auto upper_head = catalog2.CreateRangeEntryPage(oid.value(), 4096);
-    ASSERT_TRUE(upper_head.ok()) << upper_head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, other_core, upper_head.value()).ok());
-
-    auto ranges = catalog2.RangesOf(oid.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    ASSERT_EQ(ranges.value().size(), 2u);
-    ASSERT_NE(ranges.value()[0].owner_core, ranges.value()[1].owner_core)
-        << "the fixture did not produce a two-owner relation";
-
-    // Two rows in each range's own chain, placed directly: what RB4 is
-    // being tested on is the read, and RB3 already owns the write half.
-    auto access = catalog2.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok());
-    auto place = [&](std::uint64_t id, std::int64_t v, PageId head) {
-        parser::AstValue value;
-        value.type = parser::ValueType::kInt;
-        value.int_val = v;
-        value.raw_int_text = std::to_string(v);
-        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout, id,
-                                       {value});
-        ASSERT_TRUE(payload.ok());
-        ASSERT_TRUE(heap::ChainInsert(*core0_store_, head, id, payload.value(), 1,
-                                      access.value()->oid)
-                        .ok());
-    };
-    place(1, 10, ranges.value()[0].entry_page);
-    place(2, 20, ranges.value()[0].entry_page);
-    place(4096, 30, ranges.value()[1].entry_page);
-    place(4097, 40, ranges.value()[1].entry_page);
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto row = catalog2.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
-    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-
-    // One server per owner core, and the client routes by the core the
-    // stage names - which is what a fan-in is, and what the single-server
-    // loopback above could not express.
-    std::optional<SessionStepClient> client;
-    auto make_seam = [&] {
-        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
-                                std::vector<std::byte> payload) {
-            switch (kind) {
-                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-                default: ADD_FAILURE() << "unexpected server send";
-            }
-            return Status::OK();
-        }};
-    };
-    //
-    // **One catalog per core, which is what production has**: a stage
-    // walks the ranges *it* owns (`TableAccess::WalkHeadsFor`), and the
-    // executor learns which core it is on from the catalog it was built
-    // with. Sharing one catalog across two servers would make both stages
-    // believe they were core 0 and answer nothing - the fixture would be
-    // lying about the one fact the fan-in turns on.
-    catalog::Catalog catalog_lo(*core0_store_, storage::kDefaultInlineCellWidth,
-                                /*core_count=*/3, ranges.value()[0].owner_core);
-    catalog::Catalog catalog_hi(*core0_store_, storage::kDefaultInlineCellWidth,
-                                /*core_count=*/3, ranges.value()[1].owner_core);
-    std::optional<RemoteStepServer> owner_lo;
-    std::optional<RemoteStepServer> owner_hi;
-    owner_lo.emplace(catalog_lo, *core0_store_, ranges.value()[0].owner_core, make_seam());
-    owner_hi.emplace(catalog_hi, *core0_store_, ranges.value()[1].owner_core, make_seam());
-    client.emplace(
-        /*core_id=*/0,
-        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            RemoteStepServer& to =
-                dst == ranges.value()[0].owner_core ? *owner_lo : *owner_hi;
-            sched::MessageHeader h{};
-            h.src_core = 0;
-            h.dst_core = dst;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
-                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected client send";
-            }
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
-
-    // **Range order, and every range.** A fan-in that dropped a sibling
-    // would answer two rows and report success - §3's silent discard,
-    // which the plural `InputEdge` exists to end - and one that
-    // concatenated out of order would disagree with the local walk over
-    // the same rows.
-    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM split");
-    EXPECT_EQ(out.response, "id,v\\n1,10\\n2,20\\n4096,30\\n4097,40");
-    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
-}
-
-TEST_F(CoreRuntimeTest, ASelectAgainstARelationWithARangeOnAnotherCoreIsRefusedNotAnsweredShort) {
-    // The other half of RD7's ownership question, and the one that decides
-    // a *wrong answer* rather than a route. `sys.tables.owner_core` names
-    // one core; a range of the same relation may name another. The walk
-    // covers the ranges this core owns and no others
-    // (`TableAccess::WalkHeadsFor`), so a read that runs locally over a
-    // relation owned here but not *wholly* here returns the rows of one
-    // range and reports success - two rows where four exist, with nothing
-    // logged. The fan-in cannot take this statement, because its gate is
-    // "somebody else owns the relation" and here nobody else does.
-    //
-    // A refusal is therefore the only honest ending, and this test is what
-    // says so: an answer of any kind here is the defect.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
+TEST_F(CoreRuntimeTest, ASelectAgainstASplitRelationIsAnsweredWholeNotShort) {
+    // The wrong answer RD7's ownership question decided. Until AT-S9 the
+    // walk covered the ranges this core owned and no others, so a read of a
+    // relation owned here but not *wholly* here returned one range's rows
+    // and reported success - two rows where four exist - and this cell
+    // pinned the refusal that stood in for it. No range has an owner since
+    // AT-S9 and the walk covers every range (`TableAccess::WalkHeads`), so
+    // the cell pins the answer itself: every row, from both ranges.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "half_here", TwoColumnSchema(),
                                     catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     auto upper_head = catalog2.CreateRangeEntryPage(oid.value(), 4096);
     ASSERT_TRUE(upper_head.ok()) << upper_head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, /*owner_core=*/2, upper_head.value())
-                    .ok());
+    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, upper_head.value()).ok());
 
     auto ranges = catalog2.RangesOf(oid.value());
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
     ASSERT_EQ(ranges.value().size(), 2u);
-    // The default placement is the creating core, so the relation is core
-    // 0's - which is exactly what keeps the fan-in from firing.
-    ASSERT_EQ(ranges.value()[0].owner_core, 0u);
-    ASSERT_EQ(ranges.value()[1].owner_core, 2u);
-
-    auto access = catalog2.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok());
-    auto place = [&](std::uint64_t id, std::int64_t v, PageId head) {
-        parser::AstValue value;
-        value.type = parser::ValueType::kInt;
-        value.int_val = v;
-        value.raw_int_text = std::to_string(v);
-        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout, id,
-                                       {value});
-        ASSERT_TRUE(payload.ok());
-        ASSERT_TRUE(heap::ChainInsert(*core0_store_, head, id, payload.value(), 1,
-                                      access.value()->oid)
-                        .ok());
-    };
-    place(1, 10, ranges.value()[0].entry_page);
-    place(4096, 30, ranges.value()[1].entry_page);
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto row = catalog2.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
-    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-
-    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM half_here");
-    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
-    EXPECT_NE(out.response.find("answer short"), std::string::npos) << out.response;
-}
-
-TEST_F(CoreRuntimeTest, AFanInOverInterleavedOwnershipStillAnswersInRangeOrder) {
-    // **The case grouping by owner core gets wrong**, and the reason RB4's
-    // stages are per contiguous *run*: ownership A,B,A emits A's two runs
-    // adjacent if the fan-in groups by core, so the answer comes back
-    // `1,2, 8192,8193, 4096,4097` where the same rows unsplit on one core
-    // read `1,2, 4096,4097, 8192,8193`. §8 test 9 asks for byte-identical,
-    // and interleaving is not a corner case - it is what R4's
-    // id-block-aligned spreading produces (`crosscore.md` §6b).
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "woven", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-
-    // [0,4096) -> the relation's owner, [4096,8192) -> another core,
-    // [8192, end) -> back to the owner. Two runs on one core. Both cores
-    // are read off the relation rather than written down, for the reason
-    // the two-owner test above states: rotation counts existing relations,
-    // so a bootstrap relation removed moves which core CreateTable picks.
-    auto owner = catalog2.InitTableAccess(oid.value());
-    ASSERT_TRUE(owner.ok()) << owner.status().message();
-    const std::uint32_t own_core = owner.value()->owner_core;
-    const std::uint32_t other_core = own_core == 1 ? 2 : 1;
-    for (auto [lo, owner] : std::vector<std::pair<std::uint64_t, std::uint32_t>>{
-             {4096, other_core}, {8192, own_core}}) {
-        auto head = catalog2.CreateRangeEntryPage(oid.value(), lo);
-        ASSERT_TRUE(head.ok()) << head.status().message();
-        ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), lo, owner, head.value()).ok());
-    }
-    auto ranges = catalog2.RangesOf(oid.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    ASSERT_EQ(ranges.value().size(), 3u);
-    ASSERT_EQ(ranges.value()[0].owner_core, ranges.value()[2].owner_core)
-        << "the fixture did not interleave ownership";
-    ASSERT_NE(ranges.value()[0].owner_core, ranges.value()[1].owner_core);
-
-    auto access = catalog2.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok());
-    auto place = [&](std::uint64_t id, std::int64_t v, PageId head) {
-        parser::AstValue value;
-        value.type = parser::ValueType::kInt;
-        value.int_val = v;
-        value.raw_int_text = std::to_string(v);
-        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout, id,
-                                       {value});
-        ASSERT_TRUE(payload.ok());
-        ASSERT_TRUE(heap::ChainInsert(*core0_store_, head, id, payload.value(), 1,
-                                      access.value()->oid)
-                        .ok());
-    };
-    place(1, 10, ranges.value()[0].entry_page);
-    place(4096, 20, ranges.value()[1].entry_page);
-    place(8192, 30, ranges.value()[2].entry_page);
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto row = catalog2.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
-    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-
-    std::optional<SessionStepClient> client;
-    auto make_seam = [&] {
-        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
-                                std::vector<std::byte> payload) {
-            switch (kind) {
-                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-                default: ADD_FAILURE() << "unexpected server send";
-            }
-            return Status::OK();
-        }};
-    };
-    const std::uint32_t core_a = ranges.value()[0].owner_core;
-    const std::uint32_t core_b = ranges.value()[1].owner_core;
-    catalog::Catalog catalog_a(*core0_store_, storage::kDefaultInlineCellWidth, 3, core_a);
-    catalog::Catalog catalog_b(*core0_store_, storage::kDefaultInlineCellWidth, 3, core_b);
-    std::optional<RemoteStepServer> server_a;
-    std::optional<RemoteStepServer> server_b;
-    server_a.emplace(catalog_a, *core0_store_, core_a, make_seam());
-    server_b.emplace(catalog_b, *core0_store_, core_b, make_seam());
-    client.emplace(
-        /*core_id=*/0,
-        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            RemoteStepServer& to = dst == core_a ? *server_a : *server_b;
-            sched::MessageHeader h{};
-            h.src_core = 0;
-            h.dst_core = dst;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
-                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected client send";
-            }
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
-
-    // Three stages, not two: core A's two runs are two stages, each
-    // walking its own span. Grouping by core would give two stages and
-    // this order wrong; a stage without its span would give core A's rows
-    // twice.
-    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM woven");
-    EXPECT_EQ(out.response, "id,v\\n1,10\\n4096,20\\n8192,30");
-    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
-}
-
-TEST_F(CoreRuntimeTest, AFanInWiderThanTheCeilingIsRefusedRatherThanAnsweredShort) {
-    // **The ceiling as a refusal, which is the half that had no test.** The
-    // wire's own guard cannot be it: the STEP_OPEN upstream count is one
-    // byte, so since DA3 raised `kMaxFanInUpstreams` to 255 the byte cannot
-    // spell a count above the ceiling and the decoder's check is
-    // unreachable. The ceiling that binds is the *dispatcher's stage
-    // count*, which is not a wire quantity at all - each stage is its own
-    // pipeline carrying zero upstreams - and refusing there is what keeps a
-    // relation too wide to fan in from being read as the stages that did
-    // fit.
-    //
-    // One range past the ceiling, alternating owners so every range is its
-    // own run (`crosscore.md` section 6b's interleave, which is what
-    // spreading produces).
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "toowide", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-
-    auto owner = catalog2.InitTableAccess(oid.value());
-    ASSERT_TRUE(owner.ok()) << owner.status().message();
-    const std::uint32_t own_core = owner.value()->owner_core;
-    const std::uint32_t other_core = own_core == 1 ? 2 : 1;
-
-    // The lo = 0 range exists implicitly and is the owner's, so opening
-    // `kMaxFanInUpstreams` more with strictly alternating owners leaves
-    // `kMaxFanInUpstreams + 1` runs - one past the ceiling, and the
-    // smallest relation that is.
-    for (std::size_t i = 1; i <= kMaxFanInUpstreams; ++i) {
-        const std::uint64_t lo = static_cast<std::uint64_t>(i) * 4096;
-        const std::uint32_t core = (i % 2 == 1) ? other_core : own_core;
-        auto head = catalog2.CreateRangeEntryPage(oid.value(), lo);
-        ASSERT_TRUE(head.ok()) << head.status().message();
-        ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), lo, core, head.value()).ok());
-    }
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto ranges = catalog2.RangesOf(oid.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    ASSERT_EQ(ranges.value().size(), kMaxFanInUpstreams + 1);
-
-    auto row = catalog2.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
-    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-
-    // A client must exist for the route to be considered at all; nothing is
-    // ever sent through it, because the refusal is decided before the first
-    // stage opens - which is the property under test.
-    SessionStepClient client(
-        /*core_id=*/0, [](std::uint32_t, sched::RingMessageKind, std::vector<std::byte>) {
-            ADD_FAILURE() << "a refused fan-in opened a stage";
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&client);
-
-    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM toowide");
-    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
-    EXPECT_NE(out.response.find("above the fan-in ceiling of"), std::string::npos)
-        << out.response;
-    EXPECT_NE(out.response.find(std::to_string(kMaxFanInUpstreams)), std::string::npos)
-        << out.response;
-    EXPECT_EQ(client.open_reads(), 0u) << "a refused fan-in left a stage open";
-}
-
-// ---- R4-R/RR5: the equivalence case that did not exist until RR1 --------
-//
-// **A relation the reading core *owns* but does not wholly hold**, which
-// is what `placement = creating` produces the moment R4's spreading opens
-// a peer's range - and which, before RR1, no core could read in any shape
-// (`bench/v2.6.0/` §6a measured that at 395 rows). The route's predicate
-// asked *"is this relation someone else's"*; it now asks *"can a local
-// walk serve this"*, and this is the case where the two answers differ.
-//
-// Byte-identical against the same rows unsplit, **straddling the
-// boundary**, which is RB5's discipline: every defect this line has found
-// returned a right answer for data that stayed on one side of the cut.
-TEST_F(CoreRuntimeTest, ACoreReadsARelationItOwnsButDoesNotWhollyHold) {
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
-    // **`creating`, not `rotate`** - the arrangement spreading produces and
-    // the one the old predicate could not serve: core 0 owns both
-    // relations, and one of them has a range elsewhere.
-    auto split = catalog2.CreateTable(catalog::kNamespacePublic, "held", TwoColumnSchema(),
-                                      catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(split.ok()) << split.status().message();
-    auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "wholly", TwoColumnSchema(),
-                                      catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(whole.ok()) << whole.status().message();
-    ASSERT_EQ(catalog2.InitTableAccess(split.value()).value()->owner_core, 0u)
-        << "the fixture did not place both relations on core 0";
-
-    // One cut, and the range above it is **core 2's** - so core 0 owns the
-    // relation and holds only the range below.
-    auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
-    ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
-    auto ranges = catalog2.RangesOf(split.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    ASSERT_EQ(ranges.value().size(), 2u);
-    ASSERT_EQ(ranges.value()[0].owner_core, 0u);
-    ASSERT_EQ(ranges.value()[1].owner_core, 2u) << "the fixture did not put a range elsewhere";
 
     auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
         auto access = catalog2.InitTableAccess(oid);
@@ -2320,8 +1437,59 @@ TEST_F(CoreRuntimeTest, ACoreReadsARelationItOwnsButDoesNotWhollyHold) {
         ASSERT_TRUE(payload.ok());
         ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
     };
-    // **Rows on both sides**, and the same rows in the same order into the
-    // unsplit twin, so the two replies differ in the split and nothing else.
+    place(oid.value(), 1, 10, ranges.value()[0].entry_page);
+    place(oid.value(), 4096, 30, ranges.value()[1].entry_page);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+
+    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM half_here");
+    EXPECT_EQ(out.response, "id,v\\n1,10\\n4096,30") << "a range was left unwalked";
+}
+
+// ---- R4-R/RR5: the equivalence case that did not exist until RR1 --------
+//
+// **A split relation**, which before RR1 no core could read in any shape
+// (`bench/v2.6.0/` §6a measured that at 395 rows) and which, since AT-S9,
+// every core reads by walking every range.
+//
+// Byte-identical against the same rows unsplit, **straddling the
+// boundary**, which is RB5's discipline: every defect this line has found
+// returned a right answer for data that stayed on one side of the cut.
+TEST_F(CoreRuntimeTest, ACoreReadsASplitRelationAsItsUnsplitTwin) {
+    // What RR1 measured as "a relation this core owns but does not wholly
+    // hold", and what is left of it since AT-S9 retired the owner: a split
+    // relation read here answers byte for byte what the same rows unsplit
+    // answer. The fan-in RR1 routed it through is gone; every range is
+    // walked here.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
+    auto split = catalog2.CreateTable(catalog::kNamespacePublic, "held", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "wholly", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(whole.ok()) << whole.status().message();
+
+    auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, head.value()).ok());
+    auto ranges = catalog2.RangesOf(split.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u);
+
+    auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
+        auto access = catalog2.InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload =
+            exec::EncodeRow(access.value()->schema, access.value()->layout, id, {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
+    };
     const PageId whole_head = catalog2.GetSysTableRow(whole.value()).value().desc_page_id;
     for (auto [id, v] : std::vector<std::pair<std::uint64_t, std::int64_t>>{
              {1, 10}, {2, 20}, {4096, 30}, {4097, 40}}) {
@@ -2333,57 +1501,17 @@ TEST_F(CoreRuntimeTest, ACoreReadsARelationItOwnsButDoesNotWhollyHold) {
 
     auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    std::optional<SessionStepClient> client;
-    std::optional<RemoteStepServer> server_0;
-    std::optional<RemoteStepServer> server_2;
-    auto make_seam = [&] {
-        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
-                                std::vector<std::byte> payload) {
-            switch (kind) {
-                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-                default: ADD_FAILURE() << "unexpected server send";
-            }
-            return Status::OK();
-        }};
-    };
-    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
-    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
-    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
-    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
-    client.emplace(
-        /*core_id=*/0,
-        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            // **A stage directed at core 0 itself is served here**, which is
-            // the self-directed stage RR0 answered: the same protocol, a
-            // self-send, and no second path
-            // (`workplan-insert-spreading.md` §10a).
-            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
-            sched::MessageHeader h{};
-            h.src_core = 0;
-            h.dst_core = dst;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
-                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected client send";
-            }
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
 
     const std::string split_reply =
         runtime.value()->dispatcher().Dispatch("SELECT * FROM held").response;
     const std::string whole_reply =
         runtime.value()->dispatcher().Dispatch("SELECT * FROM wholly").response;
     ASSERT_EQ(split_reply.rfind("ERR", 0), std::string::npos)
-        << "a relation this core owns but does not wholly hold was refused: " << split_reply;
+        << "a split relation was refused: " << split_reply;
     // A star reply's header carries column names and not the relation's, so
     // these compare whole rather than modulo a substitution.
     EXPECT_EQ(split_reply, whole_reply) << "the split changed the answer";
     EXPECT_EQ(split_reply, "id,v\\n1,10\\n2,20\\n4096,30\\n4097,40");
-    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
 
     // **The straddle, and the half that would pass on one side alone.** A
     // predicate matching rows in both ranges is what a walk stopping at the
@@ -2398,45 +1526,27 @@ TEST_F(CoreRuntimeTest, ACoreReadsARelationItOwnsButDoesNotWhollyHold) {
 
 // ---- RS5: the same equivalence, from a **non-zero** core ----------------
 //
-// RR5's case above reads from core 0, which is where the fan-in client has
-// always lived. RR2 put a client on every core, and **that is the case no
-// unit test covered**: a peer session opening a fan-in of its own, one
-// stage of which is *self-directed* - core 2 asking core 2 - and one of
-// which is remote.
-//
-// The distinction is not cosmetic. Before RR2 a peer had no client at all,
-// so this read fell through to statement shipping and was answered (or
-// lost) by core 0; the route exercised here did not exist. RB5's
-// discipline applies to it unchanged: byte-identical against the same rows
-// unsplit, **straddling the boundary**, because every defect this line has
-// found returned a right answer for data on one side of the cut.
-//
-// Vacuity matrix (`workplan-insert-spreading.md` §11): reverting
-// `ServableBy` to `owner_core == core_id_` alone, re-pinning the route to
-// `owner_core != core_id_`, and dropping the peer's client each fail this
-// test - which is what makes it a gate rather than a second spelling of
-// RR5's.
-TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
-    // `creating` again: core 0 owns both relations. The reader below is
-    // core **2**, which owns neither - and holds one range of one of them.
+// RS5 pinned a peer opening a fan-in of its own, one stage self-directed
+// and one remote. The fan-in went with ownership at AT-S9; what stays is
+// the equivalence from a core that is not core 0, byte-identical against
+// the same rows unsplit and **straddling the boundary**, because every
+// defect this line has found returned a right answer for data on one side
+// of the cut.
+TEST_F(CoreRuntimeTest, APeerReadsASplitRelationAsItsUnsplitTwin) {
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto split = catalog2.CreateTable(catalog::kNamespacePublic, "spread", TwoColumnSchema(),
                                       catalog::ClusteredType::kHeap);
     ASSERT_TRUE(split.ok()) << split.status().message();
     auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "twin", TwoColumnSchema(),
                                       catalog::ClusteredType::kHeap);
     ASSERT_TRUE(whole.ok()) << whole.status().message();
-    ASSERT_EQ(catalog2.InitTableAccess(split.value()).value()->owner_core, 0u);
 
     auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
     ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
+    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, head.value()).ok());
     auto ranges = catalog2.RangesOf(split.value());
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
     ASSERT_EQ(ranges.value().size(), 2u);
-    ASSERT_EQ(ranges.value()[0].owner_core, 0u) << "the low range must be the owner's";
-    ASSERT_EQ(ranges.value()[1].owner_core, 2u) << "the high range must be the reader's own";
 
     auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
         auto access = catalog2.InitTableAccess(oid);
@@ -2459,76 +1569,20 @@ TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
     }
     ASSERT_TRUE(core0_store_->Sync().ok());
 
-    // **The reader is core 2.** Everything below is RR5's rig with that one
-    // substitution, which is the whole of what RS5 adds.
+    // **The reader is core 2.**
     CoreRuntime::Config peer_config = ConfigFor(2);
     peer_config.core_count = 3;
     auto runtime = CoreRuntime::Open(peer_config, *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    std::optional<SessionStepClient> client;
-    std::optional<RemoteStepServer> server_0;
-    std::optional<RemoteStepServer> server_2;
-    auto make_seam = [&] {
-        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
-                                std::vector<std::byte> payload) {
-            switch (kind) {
-                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-                default: ADD_FAILURE() << "unexpected server send";
-            }
-            return Status::OK();
-        }};
-    };
-    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
-    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
-    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
-    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
-    // Counted, because "the peer opened a fan-in" and "the peer walked the
-    // whole thing locally" produce the same rows and only one of them is
-    // this test's subject.
-    int opens_to_self = 0;
-    int opens_to_owner = 0;
-    client.emplace(
-        /*core_id=*/2,
-        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
-            sched::MessageHeader h{};
-            h.src_core = 2;
-            h.dst_core = dst;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen:
-                    (dst == 2 ? opens_to_self : opens_to_owner)++;
-                    to.OnStepOpen(h, payload);
-                    break;
-                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected client send";
-            }
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
 
     const std::string split_reply =
         runtime.value()->dispatcher().Dispatch("SELECT * FROM spread").response;
     const std::string whole_reply =
         runtime.value()->dispatcher().Dispatch("SELECT * FROM twin").response;
     ASSERT_EQ(split_reply.rfind("ERR", 0), std::string::npos)
-        << "a peer could not read a relation one of whose ranges is its own: " << split_reply;
+        << "a peer could not read a split relation: " << split_reply;
     EXPECT_EQ(split_reply, whole_reply) << "the split changed the answer";
     EXPECT_EQ(split_reply, "id,v\\n1,10\\n2,20\\n4096,30\\n4097,40");
-    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
-    // One stage to the owner for the split relation's low range and one to
-    // itself for its own. The self-directed one is on a **non-zero** core,
-    // which is the mechanism RS5 gates.
-    //
-    // **The unsplit twin opens none since AT-S6**: it was a third stage
-    // while a peer reached a foreign relation only through the pipeline,
-    // and a peer walks it here now - one chain, and every core faults its
-    // pages. The split relation still fans in, which is what the equal
-    // answers above are: the route survives for the shape it exists for.
-    EXPECT_EQ(opens_to_owner, 1) << "the owner's range is a remote stage";
-    EXPECT_EQ(opens_to_self, 1) << "the peer's own range was not walked by a self-directed stage";
 
     const std::string straddle =
         runtime.value()->dispatcher().Dispatch("SELECT * FROM spread WHERE v > 15").response;
@@ -2536,64 +1590,6 @@ TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
         straddle,
         runtime.value()->dispatcher().Dispatch("SELECT * FROM twin WHERE v > 15").response);
     EXPECT_EQ(straddle, "id,v\\n2,20\\n4096,30\\n4097,40");
-}
-
-// **And the wiring, which the loopback rig above cannot gate.** That test
-// hands the dispatcher a client it built itself, so it would pass on a
-// tree where `CoreRuntime` never constructs one - which is exactly the
-// state every peer was in before RR2, and the state that made a spread
-// relation unreadable from a peer in any shape.
-//
-// So this one asserts the thing the rig assumes: a peer's **own**
-// dispatcher, on a peer's **own** transport, *plans* a fan-in instead of
-// refusing.
-//
-// **The evidence is which refusal comes back**, because the synchronous
-// `Dispatch` cannot finish a fan-in either way - it has no reactor to run
-// the other side on, so it closes every stage it opened and answers
-// `TxnConflict("remote read needs the reactor path")`. That refusal is
-// reached only *after* the route has resolved the ranges and opened the
-// stages, so it is proof the plan was made. Without RR2's
-// `remote_reads_.emplace(...)` and the `SetRemoteReads` that follows it,
-// the route is skipped entirely and the answer is `CheckReadAffinity`'s
-// `NotImplemented` - `CrossCoreReadNotImplemented`'s "relation 'spread2' is owned
-// by core 0 and this statement is running on core 1", which is what every
-// peer answered before RR2. **Not** the "cannot fan in over them" arm: that
-// one is reached only when `owner_core == core_id_`, and this fixture reads
-// from a core that owns nothing, so asserting its absence would assert
-// nothing. Completing the read is the test above's subject; reaching the
-// route is this one's.
-TEST_F(CoreRuntimeTest, APeersOwnDispatcherPlansAFanInRatherThanRefusing) {
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "spread2", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_EQ(catalog2.InitTableAccess(oid.value()).value()->owner_core, 0u);
-    auto head = catalog2.CreateRangeEntryPage(oid.value(), 4096);
-    ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, /*owner_core=*/1, head.value()).ok());
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    // `max_payload` wide enough for a STEP_OPEN: the seam refuses an
-    // oversize message rather than truncating it, and that refusal would
-    // fall through to the very affinity error this test distinguishes
-    // itself from - a pass and a fail arriving as the same reply.
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 8192);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-
-    CoreRuntime::Config cfg = ConfigFor(1);
-    cfg.core_count = 2;
-    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-
-    const DispatchOutcome out = peer.value()->dispatcher().Dispatch("SELECT * FROM spread2");
-    EXPECT_EQ(out.response.find("is owned by core 0"), std::string::npos)
-        << "the peer took CheckReadAffinity's refusal, so its dispatcher has no fan-in "
-           "client: " << out.response;
-    EXPECT_NE(out.response.find("remote read needs the reactor path"), std::string::npos)
-        << "the peer did not open a fan-in at all: " << out.response;
 }
 
 // ---- R4-A/AG3: the fold and the projection over a spread relation -------
@@ -2605,32 +1601,30 @@ TEST_F(CoreRuntimeTest, APeersOwnDispatcherPlansAFanInRatherThanRefusing) {
 // `SELECT SUM(cbm) ... WHERE operation_id = ?`, in the hot path and not in
 // a verification pass (`workplan-insert-spreading.md` §12a).
 //
-// The widening is on the session side alone - a stage ships the same whole
-// rows, filtered by the same residual - so **the oracle is the local walk**:
-// `wholly` is this core's entirely and is folded by `RunAggregated` off a
-// `ChainFrame` the executor filled, while `held` is folded by
-// `FinishRemoteReads` off a `ChainFrame` filled from the wire. A difference
-// between the two is the defect this test exists to catch.
+// **The oracle is the unsplit twin**: `wholly` is one chain, `held` is two
+// ranges, and both are folded here since AT-S9 retired the fan-in that
+// folded `held` off the wire. A difference between the two is the defect
+// this test exists to catch.
 //
 // **Straddling the boundary**, per RB5's discipline, and with duplicate
 // group keys on both sides of the cut: `GROUP BY` emits in first-seen order
-// (AG6), so a fan-in that concatenated its stages in any order but range
-// order would answer the same *groups* in a different order - a wrong reply
-// that every per-group assertion would still pass.
+// (AG6), so a walk that visited the ranges in any order but range order
+// would answer the same *groups* in a different order - a wrong reply that
+// every per-group assertion would still pass.
 TEST_F(CoreRuntimeTest, AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplitTwinDoes) {
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
+    // `10` appears once on each side of the cut, so a group founded in the
+    // low range is folded into again from the high one.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto split = catalog2.CreateTable(catalog::kNamespacePublic, "held", TwoColumnSchema(),
                                       catalog::ClusteredType::kHeap);
     ASSERT_TRUE(split.ok()) << split.status().message();
     auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "wholly", TwoColumnSchema(),
                                       catalog::ClusteredType::kHeap);
     ASSERT_TRUE(whole.ok()) << whole.status().message();
-    ASSERT_EQ(catalog2.InitTableAccess(split.value()).value()->owner_core, 0u);
 
     auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
     ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
+    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, head.value()).ok());
     auto ranges = catalog2.RangesOf(split.value());
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
     ASSERT_EQ(ranges.value().size(), 2u);
@@ -2647,8 +1641,6 @@ TEST_F(CoreRuntimeTest, AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplit
         ASSERT_TRUE(payload.ok());
         ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
     };
-    // `10` appears once on each side of the cut, so a group founded in the
-    // low range is folded into again from the high one.
     const PageId whole_head = catalog2.GetSysTableRow(whole.value()).value().desc_page_id;
     for (auto [id, v] : std::vector<std::pair<std::uint64_t, std::int64_t>>{
              {1, 10}, {2, 20}, {4096, 10}, {4097, 40}}) {
@@ -2660,46 +1652,10 @@ TEST_F(CoreRuntimeTest, AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplit
 
     auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    std::optional<SessionStepClient> client;
-    std::optional<RemoteStepServer> server_0;
-    std::optional<RemoteStepServer> server_2;
-    auto make_seam = [&] {
-        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
-                                std::vector<std::byte> payload) {
-            switch (kind) {
-                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-                default: ADD_FAILURE() << "unexpected server send";
-            }
-            return Status::OK();
-        }};
-    };
-    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
-    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
-    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
-    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
-    client.emplace(
-        /*core_id=*/0,
-        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
-            sched::MessageHeader h{};
-            h.src_core = 0;
-            h.dst_core = dst;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
-                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected client send";
-            }
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
 
-    // Each shape twice: over the split relation through the fan-in, and
-    // over the unsplit twin through the local walk. The expected text is
-    // pinned as well as compared, so a change that broke *both* paths the
-    // same way would not read as agreement.
+    // Each shape twice: over the split relation and over the unsplit twin.
+    // The expected text is pinned as well as compared, so a change that
+    // broke *both* the same way would not read as agreement.
     struct Case {
         const char* shape;
         const char* expected;
@@ -2724,592 +1680,11 @@ TEST_F(CoreRuntimeTest, AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplit
         const std::string whole_reply =
             runtime.value()->dispatcher().Dispatch(on_whole).response;
         ASSERT_NE(split_reply.rfind("ERR", 0), 0u)
-            << "the fan-in refused `" << on_split << "`: " << split_reply;
+            << "the split relation refused `" << on_split << "`: " << split_reply;
         EXPECT_EQ(split_reply, whole_reply)
             << "the split changed the answer to `" << on_split << "`";
         EXPECT_EQ(split_reply, c.expected) << "`" << on_split << "`";
-        EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
     }
-}
-
-// ---- AG3's routing rule: one owner keeps the ship path -------------------
-//
-// A widened shape takes the fan-in **only when no single core can answer
-// the statement whole**. One stage means one owner holds every range, and
-// such a statement ships as text to that owner, which folds it there and
-// sends back the fold's one row instead of every row it read; pulling the
-// rows here to fold them would be the same answer over the whole
-// relation's worth of wire.
-//
-// Read from a **peer**, because that is where the two cases sit side by
-// side: `spread` has a range of its own and a range of the owner's - two
-// stages, one of them self-directed - while `twin` is the owner's
-// entirely. The rig has no statement-ship service wired, so `twin`'s
-// widened read ends at the affinity refusal, which is exactly the evidence
-// wanted: the route declined it, and the count of opens says so.
-TEST_F(CoreRuntimeTest, AWidenedShapeOverASingleOwnerRelationIsNotFannedIn) {
-    // **Still not fanned in, and since AT-S6 neither is the split one in
-    // this shape**: the widened predicate is what the route declines, and
-    // the unsplit relation is now walked here whoever owns it. The
-    // assertions below say which stages opened, and the answer is the
-    // measurement.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/3);
-    auto split = catalog2.CreateTable(catalog::kNamespacePublic, "spread", TwoColumnSchema(),
-                                      catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(split.ok()) << split.status().message();
-    auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "twin", TwoColumnSchema(),
-                                      catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(whole.ok()) << whole.status().message();
-
-    auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
-    ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
-    auto ranges = catalog2.RangesOf(split.value());
-    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
-    ASSERT_EQ(ranges.value().size(), 2u);
-
-    auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
-        auto access = catalog2.InitTableAccess(oid);
-        ASSERT_TRUE(access.ok());
-        parser::AstValue value;
-        value.type = parser::ValueType::kInt;
-        value.int_val = v;
-        value.raw_int_text = std::to_string(v);
-        auto payload =
-            exec::EncodeRow(access.value()->schema, access.value()->layout, id, {value});
-        ASSERT_TRUE(payload.ok());
-        ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
-    };
-    const PageId whole_head = catalog2.GetSysTableRow(whole.value()).value().desc_page_id;
-    for (auto [id, v] : std::vector<std::pair<std::uint64_t, std::int64_t>>{
-             {1, 10}, {2, 20}, {4096, 10}, {4097, 40}}) {
-        place(split.value(), id, v,
-              id < 4096 ? ranges.value()[0].entry_page : ranges.value()[1].entry_page);
-        place(whole.value(), id, v, whole_head);
-    }
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    CoreRuntime::Config peer_config = ConfigFor(2);
-    peer_config.core_count = 3;
-    auto runtime = CoreRuntime::Open(peer_config, *device_, clock_, nullptr);
-    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-    std::optional<SessionStepClient> client;
-    std::optional<RemoteStepServer> server_0;
-    std::optional<RemoteStepServer> server_2;
-    auto make_seam = [&] {
-        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
-                                std::vector<std::byte> payload) {
-            switch (kind) {
-                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-                default: ADD_FAILURE() << "unexpected server send";
-            }
-            return Status::OK();
-        }};
-    };
-    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
-    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
-    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
-    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
-    int opens_to_self = 0;
-    int opens_to_owner = 0;
-    client.emplace(
-        /*core_id=*/2,
-        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
-            sched::MessageHeader h{};
-            h.src_core = 2;
-            h.dst_core = dst;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen:
-                    (dst == 2 ? opens_to_self : opens_to_owner)++;
-                    to.OnStepOpen(h, payload);
-                    break;
-                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected client send";
-            }
-            return Status::OK();
-        });
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
-
-    // Two owners: the fan-in answers it, one stage to each, the peer's own
-    // being the self-directed one.
-    const std::string folded =
-        runtime.value()->dispatcher().Dispatch("SELECT SUM(v) FROM spread").response;
-    EXPECT_EQ(folded, "sum(v)\\n80") << folded;
-    EXPECT_EQ(opens_to_owner, 1);
-    EXPECT_EQ(opens_to_self, 1) << "the peer's own range was not walked by a self-directed stage";
-    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
-
-    // One owner: no stage is opened at all. The refusal that comes back is
-    // the affinity one, because this rig ships nothing - what is asserted
-    // is that the route declined, not what the ship path would have said.
-    const std::string not_fanned =
-        runtime.value()->dispatcher().Dispatch("SELECT SUM(v) FROM twin").response;
-    EXPECT_EQ(opens_to_owner, 1) << "a single-owner fold was fanned in: " << not_fanned;
-    EXPECT_EQ(opens_to_self, 1);
-    // **And it is answered rather than refused since AT-S6**: what a
-    // declined route fell through to was the affinity refusal, and a
-    // single-owner unsplit relation is walked here now. The route still
-    // declines it, which is what the counts above say.
-    EXPECT_EQ(not_fanned.rfind("ERR", 0), std::string::npos) << not_fanned;
-
-    // And the star read over that same single-owner relation is walked
-    // here too - it took the fan-in while a peer could reach a foreign
-    // relation no other way. The rows are unchanged, which is the half
-    // that matters; P4c's routing is not what this rule narrows.
-    const std::string star = runtime.value()->dispatcher().Dispatch("SELECT * FROM twin").response;
-    EXPECT_EQ(star, "id,v\\n1,10\\n2,20\\n4096,10\\n4097,40") << star;
-    EXPECT_EQ(opens_to_owner, 1) << "the star read opened a stage for an unsplit relation";
-}
-
-// ---- P4d-4b-3: a two-step join executes as a cross-core pipeline ---------
-
-TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) {
-    // The engine's first multi-step cross-core statement, end to end in
-    // loopback: the dispatcher compiles a scan-feeding-probe join, plans
-    // the edge, ships the chained open; the "remote" core opens the
-    // consuming stage, forwards the enclosed leaf open to itself
-    // (self-sends are the same protocol), streams the join under credit;
-    // the session's typed decode renders the projected reply.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-
-    auto make_schema = [&](const char* second) {
-        catalog::Schema schema;
-        catalog::SysColumnRow id{};
-        id.pos = 0;
-        catalog::SetName(id.name, "id");
-        id.type_val = catalog::kTypeValInt64;
-        id.len = 8;
-        id.notnull = true;
-        catalog::SysColumnRow other{};
-        other.pos = 1;
-        catalog::SetName(other.name, second);
-        other.type_val = catalog::kTypeValInt64;
-        other.len = 8;
-        other.notnull = true;
-        schema.columns = {id, other};
-        return schema;
-    };
-    auto outer_oid = catalog2.CreateTable(catalog::kNamespacePublic, "ta", make_schema("b_id"),
-                                          catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(outer_oid.ok()) << outer_oid.status().message();
-    auto inner_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tb", make_schema("qty"),
-                                          catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(inner_oid.ok()) << inner_oid.status().message();
-
-    auto insert = [&](catalog::Oid oid, std::int64_t second) {
-        auto access = catalog2.InitTableAccess(oid);
-        ASSERT_TRUE(access.ok());
-        auto id = catalog2.AllocateRowId(oid);
-        ASSERT_TRUE(id.ok());
-        parser::AstValue v;
-        v.type = parser::ValueType::kInt;
-        v.int_val = second;
-        v.raw_int_text = std::to_string(second);
-        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
-                                       id.value(), {v});
-        ASSERT_TRUE(payload.ok());
-        auto placed = heap::ChainInsert(*core0_store_, access.value()->desc_page_id,
-                                        id.value(), payload.value(), 1, access.value()->oid);
-        ASSERT_TRUE(placed.ok()) << placed.status().message();
-    };
-    // ta: (1, b_id=2) (2, b_id=1) (3, b_id=9 -> miss) (4, b_id=3);
-    // tb: (1, 100) (2, 200) (3, 300).
-    insert(outer_oid.value(), 2);
-    insert(outer_oid.value(), 1);
-    insert(outer_oid.value(), 9);
-    insert(outer_oid.value(), 3);
-    insert(inner_oid.value(), 100);
-    insert(inner_oid.value(), 200);
-    insert(inner_oid.value(), 300);
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    // Rotation at core_count=2 places every relation on core 1: both
-    // stages of the pipeline live on one peer, which is exactly the
-    // stage-to-stage self-send shape.
-    auto outer_row = catalog2.GetSysTableRow(outer_oid.value());
-    auto inner_row = catalog2.GetSysTableRow(inner_oid.value());
-    ASSERT_TRUE(outer_row.ok());
-    ASSERT_TRUE(inner_row.ok());
-    ASSERT_EQ(outer_row.value().owner_core, 1u);
-    ASSERT_EQ(inner_row.value().owner_core, 1u);
-
-    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
-    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
-
-    // The loopback pair, streaming this time: a consuming stage needs a
-    // reactor, so the server's tasks land in `tasks` and Pump() is one
-    // reactor pass. Sends route by destination core - core 1's traffic
-    // (the chained forward, the leaf's batches to its consumer, credits
-    // and cancels between the stages) re-enters the server itself.
-    std::optional<RemoteStepServer> server;
-    std::optional<SessionStepClient> client;
-    std::vector<std::unique_ptr<sched::Task>> tasks;
-    auto pump = [&] {
-        for (auto& task : tasks) {
-            if (task != nullptr && task->Poll() == sched::PollResult::kDone) task.reset();
-        }
-        std::erase(tasks, nullptr);
-    };
-    auto deliver = [&](std::uint32_t dst, sched::RingMessageKind kind,
-                       std::vector<std::byte> payload) {
-        if (dst == 1) {
-            sched::MessageHeader h{};
-            h.src_core = 1;
-            h.dst_core = 1;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen: server->OnStepOpen(h, payload); break;
-                case sched::RingMessageKind::kStepCredit: server->OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepBatch: server->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: server->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepCancel: server->OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected kind to core 1";
-            }
-            return Status::OK();
-        }
-        switch (kind) {
-            case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-            case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-            case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-            default: ADD_FAILURE() << "unexpected kind to core 0";
-        }
-        return Status::OK();
-    };
-    server.emplace(catalog2, *core0_store_, /*core_id=*/1, StepSendSeam{deliver}, nullptr,
-                   /*batch_target_bytes=*/1,
-                   [&](std::unique_ptr<sched::Task> task) { tasks.push_back(std::move(task)); });
-    client.emplace(/*core_id=*/0, deliver);
-    runtime.value()->dispatcher().SetRemoteReads(&*client);
-
-    // The statement path itself parks on the read, so it runs as the
-    // coroutine the reactor would poll, interleaved with the server's
-    // producer and consumer tasks.
-    DispatchOutcome out;
-    auto statement = sched::MakeCoroTask(
-        sched::SchedulingGroup::kForeground,
-        runtime.value()->dispatcher().DispatchAsync(
-            "SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id", nullptr, &out));
-    int rounds = 0;
-    while (statement->Poll() != sched::PollResult::kDone) {
-        pump();
-        ASSERT_LT(++rounds, 64) << "the pipeline did not converge";
-    }
-
-    // The joined rows, typed-decoded and rendered by the session: outer
-    // walk order, the miss dropped, headings the chain's own - the
-    // qualified spelling a local join answers with.
-    EXPECT_EQ(out.response, "a.id,b.qty\\n1,200\\n2,100\\n4,300");
-    EXPECT_EQ(client->open_reads(), 0u);
-    EXPECT_EQ(server->open_pipelines(), 0u);
-    EXPECT_TRUE(tasks.empty());
-}
-
-// ---- P4e: the pipeline's reply is the local reply, byte for byte --------
-
-TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers) {
-    // The equivalence pass (workplan P4e). **One dataset, two
-    // dispatchers differing only in `core_id`**: the relations are owned
-    // by core 1, so a dispatcher that calls itself core 1 runs every
-    // statement locally, and one that calls itself core 0 ships it. Both
-    // read the same pages through the same catalog, so any difference
-    // between the two replies is the pipeline's doing and nothing else.
-    // That is a stronger claim than an expected-string test, which can
-    // only be as right as the string somebody typed.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-
-    auto make_schema = [&](const char* second) {
-        catalog::Schema schema;
-        catalog::SysColumnRow id{};
-        id.pos = 0;
-        catalog::SetName(id.name, "id");
-        id.type_val = catalog::kTypeValInt64;
-        id.len = 8;
-        id.notnull = true;
-        catalog::SysColumnRow other{};
-        other.pos = 1;
-        catalog::SetName(other.name, second);
-        other.type_val = catalog::kTypeValInt64;
-        other.len = 8;
-        other.notnull = true;
-        schema.columns = {id, other};
-        return schema;
-    };
-    auto outer_oid = catalog2.CreateTable(catalog::kNamespacePublic, "ta", make_schema("b_id"),
-                                          catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(outer_oid.ok()) << outer_oid.status().message();
-    auto inner_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tb", make_schema("qty"),
-                                          catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(inner_oid.ok()) << inner_oid.status().message();
-    // A third relation whose *non-pk* column overlaps `ta.b_id`, so a join
-    // on it matches real rows. Without the overlap the non-pk cases below
-    // would compare two empty answers and prove nothing.
-    auto tag_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tc", make_schema("tag"),
-                                        catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(tag_oid.ok()) << tag_oid.status().message();
-
-    auto insert = [&](catalog::Oid oid, std::int64_t second) {
-        auto access = catalog2.InitTableAccess(oid);
-        ASSERT_TRUE(access.ok());
-        auto id = catalog2.AllocateRowId(oid);
-        ASSERT_TRUE(id.ok());
-        parser::AstValue v;
-        v.type = parser::ValueType::kInt;
-        v.int_val = second;
-        v.raw_int_text = std::to_string(second);
-        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
-                                       id.value(), {v});
-        ASSERT_TRUE(payload.ok());
-        auto placed = heap::ChainInsert(*core0_store_, access.value()->desc_page_id,
-                                        id.value(), payload.value(), 1, access.value()->oid);
-        ASSERT_TRUE(placed.ok()) << placed.status().message();
-    };
-    // Deliberately includes a key that matches nothing (b_id=9) and a
-    // duplicated key (two outer rows probing tb 1), so the comparison
-    // covers a miss and a fan-in rather than only clean one-to-one rows.
-    for (std::int64_t b_id : {2, 1, 9, 3, 1}) insert(outer_oid.value(), b_id);
-    for (std::int64_t qty : {100, 200, 300}) insert(inner_oid.value(), qty);
-    // tc.tag: 2 matches two outer rows, 1 matches two, 5 matches none -
-    // so the non-pk join covers fan-out on both sides and a dead value.
-    for (std::int64_t tag : {2, 1, 5, 2}) insert(tag_oid.value(), tag);
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    ASSERT_EQ(catalog2.GetSysTableRow(outer_oid.value()).value().owner_core, 1u);
-    ASSERT_EQ(catalog2.GetSysTableRow(inner_oid.value()).value().owner_core, 1u);
-    ASSERT_EQ(catalog2.GetSysTableRow(tag_oid.value()).value().owner_core, 1u);
-
-    // The local side: core 1 owns both relations, so this dispatcher's
-    // affinity check passes and nothing is shipped.
-    CommandDispatcher local(core0_->superblock, catalog2, *core0_store_, /*log=*/nullptr,
-                            /*clock=*/nullptr, /*wal=*/nullptr,
-                            wal::DurabilityClass::kGroup, exec::Budget(),
-                            /*recorder=*/nullptr, /*replay_enabled=*/false,
-                            /*access_statistics=*/false, /*cabins=*/nullptr, /*txn=*/nullptr,
-                            txn::IsolationLevel::kReadCommitted, /*core_id=*/1);
-
-    // The pipeline side: core 0 owns nothing here, so every eligible
-    // shape ships to the loopback server standing in for core 1.
-    CommandDispatcher session(core0_->superblock, catalog2, *core0_store_, /*log=*/nullptr,
-                              /*clock=*/nullptr, /*wal=*/nullptr,
-                              wal::DurabilityClass::kGroup, exec::Budget(),
-                              /*recorder=*/nullptr, /*replay_enabled=*/false,
-                              /*access_statistics=*/false, /*cabins=*/nullptr, /*txn=*/nullptr,
-                              txn::IsolationLevel::kReadCommitted, /*core_id=*/0);
-
-    std::optional<RemoteStepServer> server;
-    std::optional<SessionStepClient> client;
-    std::vector<std::unique_ptr<sched::Task>> tasks;
-    // Counts the stages actually opened on the far core. Without it this
-    // test could degrade into comparing two local runs and still pass -
-    // the one way an equivalence test lies.
-    int stages_opened = 0;
-    auto deliver = [&](std::uint32_t dst, sched::RingMessageKind kind,
-                       std::vector<std::byte> payload) {
-        if (dst == 1) {
-            sched::MessageHeader h{};
-            h.src_core = 1;
-            h.dst_core = 1;
-            switch (kind) {
-                case sched::RingMessageKind::kStepOpen:
-                    ++stages_opened;
-                    server->OnStepOpen(h, payload);
-                    break;
-                case sched::RingMessageKind::kStepCredit: server->OnStepCredit(payload); break;
-                case sched::RingMessageKind::kStepBatch: server->OnStepBatch(payload); break;
-                case sched::RingMessageKind::kStepEof: server->OnStepEof(payload); break;
-                case sched::RingMessageKind::kStepCancel: server->OnStepCancel(payload); break;
-                default: ADD_FAILURE() << "unexpected kind to core 1";
-            }
-            return Status::OK();
-        }
-        switch (kind) {
-            case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
-            case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
-            case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
-            default: ADD_FAILURE() << "unexpected kind to core 0";
-        }
-        return Status::OK();
-    };
-    server.emplace(catalog2, *core0_store_, /*core_id=*/1, StepSendSeam{deliver}, nullptr,
-                   /*batch_target_bytes=*/1,
-                   [&](std::unique_ptr<sched::Task> task) { tasks.push_back(std::move(task)); });
-    client.emplace(/*core_id=*/0, deliver);
-    session.SetRemoteReads(&*client);
-
-    // Runs one statement through the pipeline, pumping the reactor the
-    // stages park on. A tiny batch target (1 row) means every shape
-    // crosses the credit gate several times, so the comparison exercises
-    // the parked path rather than a single flush.
-    bool crossed_any = false;
-    auto shipped = [&](const std::string& sql) {
-        DispatchOutcome out;
-        const int opened_before = stages_opened;
-        auto statement = sched::MakeCoroTask(
-            sched::SchedulingGroup::kForeground,
-            session.DispatchAsync(sql, nullptr, &out));
-        int rounds = 0;
-        while (statement->Poll() != sched::PollResult::kDone) {
-            for (auto& task : tasks) {
-                if (task != nullptr && task->Poll() == sched::PollResult::kDone) task.reset();
-            }
-            std::erase(tasks, nullptr);
-            EXPECT_LT(++rounds, 256) << "the pipeline did not converge: " << sql;
-            if (rounds >= 256) break;
-        }
-        // **Not every shape opens a stage since AT-S6**: an unsplit
-        // relation another core owns is walked here, so the single-step
-        // star reads answer without the pipeline. Asserting a stage per
-        // statement would assert the route rather than the answer, and
-        // the answer - the two sides agree - is the `EXPECT_EQ` at the
-        // call site. `crossed_any` is what keeps the cell from silently
-        // becoming a comparison of two local runs for every shape.
-        if (stages_opened > opened_before) crossed_any = true;
-        EXPECT_EQ(client->open_reads(), 0u) << sql;
-        EXPECT_EQ(server->open_pipelines(), 0u) << sql;
-        EXPECT_TRUE(tasks.empty()) << sql;
-        return out.response;
-    };
-
-    for (const std::string& sql : {
-             // The P4c shape: a single-step star read.
-             std::string("SELECT * FROM ta"),
-             std::string("SELECT * FROM tb"),
-             // The 4b-3 shape: scan feeding probe, projected.
-             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id"),
-             // Projection order reversed, and the inner column alone -
-             // the output spec is what carries this, so it is exactly
-             // what a wrong spec would scramble.
-             std::string("SELECT b.qty, a.id FROM ta AS a JOIN tb AS b ON b.id = a.b_id"),
-             std::string("SELECT b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id"),
-             // A residual on the leaf (outer relation) ...
-             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
-                         "WHERE a.b_id > 1"),
-             // ... and one on the consuming stage (inner relation).
-             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
-                         "WHERE b.qty > 150"),
-             // Both at once, and an empty answer.
-             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
-                         "WHERE a.b_id > 1 AND b.qty > 150"),
-             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
-                         "WHERE b.qty > 100000"),
-             // A join on a **non-pk** column: no descent is possible, so
-             // the inner step stays a walk filtered by the join residual -
-             // the shape P4d-4c's gated inner walk exists to bound, and
-             // the shape refused outright until it did.
-             std::string("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id"),
-             std::string("SELECT c.id, a.b_id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
-                         "WHERE a.b_id > 1"),
-             std::string("SELECT a.id, c.tag FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
-                         "WHERE c.tag > 1"),
-         }) {
-        const std::string local_reply = local.Dispatch(sql).response;
-        ASSERT_EQ(local_reply.rfind("ERR ", 0), std::string::npos)
-            << "the local side refused, so the comparison would prove nothing: " << sql
-            << " -> " << local_reply;
-        EXPECT_EQ(shipped(sql), local_reply) << sql;
-    }
-    EXPECT_TRUE(crossed_any)
-        << "no shape opened a stage, so every comparison above was two local runs";
-
-    // And the non-pk join is not vacuous: `tc.tag` {2,1,5,2} against
-    // `ta.b_id` {2,1,9,3,1} matches four pairs - one outer row hitting two
-    // inner rows, two outer rows hitting the same inner row, and two outer
-    // rows hitting none. Spelled out because "the two sides agree" is only
-    // worth having if they agreed about something.
-    EXPECT_EQ(local.Dispatch("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id")
-                  .response,
-              "a.id,c.id\\n1,1\\n1,4\\n2,2\\n5,2");
-
-    // ---- And the local side of that shape really does build (JB7) -------
-    //
-    // The three `tc.tag` statements above are the walked join, which is
-    // the shape the statement-local inner build serves
-    // (docs/spec/join-inner-build.md): locally the inner step builds a map
-    // on its first outer row and probes it thereafter, while the shipped
-    // side gets `ShippedForm`'s walk with the annotation cleared. So the
-    // equivalence those rows assert is **build against shipped walk**, not
-    // walk against walk - and it is worth exactly as much as that claim is
-    // true, which is why it is checked here rather than assumed. Same
-    // argument as `stages_opened` above: an equivalence test that quietly
-    // stopped comparing two different things would still pass.
-    {
-        const std::string plan =
-            local.Dispatch("ANALYZE SELECT a.id, c.id FROM ta AS a JOIN tc AS c "
-                           "ON c.tag = a.b_id")
-                .response;
-        EXPECT_NE(plan.find("build on=col1"), std::string::npos) << plan;
-        EXPECT_NE(plan.find("inner_built=1"), std::string::npos) << plan;
-    }
-
-    // ---- The structure-served shapes ship as their walk -----------------
-    //
-    // docs/inflight/known-gaps.md's closed entry named its own blind spot: "no
-    // cross-core test declares an index, which is why no suite catches
-    // it." This block is that test. An index or Cabin probe cannot cross
-    // the descriptor; before the ship-time downgrade every shape below
-    // fell out of the remote path and answered the affinity ERR - so
-    // declaring an index on a peer relation's join column stopped the
-    // join answering. Now each ships as the walk it would fall back to,
-    // and the reply must equal the local one byte for byte, through the
-    // same shipped() guard that proves something actually crossed.
-    //
-    // `td` is created through the dispatcher rather than the catalog
-    // helper because an index needs a BTREE relation (IX3) and the
-    // dispatcher's insert path is what maintains it.
-    ASSERT_EQ(local.Dispatch("CREATE TABLE td (id int64, tag int64) BTREE")
-                  .response.substr(0, 7),
-              "CREATED");
-    for (std::int64_t tag : {2, 1, 5, 2}) {
-        ASSERT_EQ(local.Dispatch("INSERT INTO td VALUES (" + std::to_string(tag) + ")")
-                      .response.substr(0, 8),
-                  "INSERTED");
-    }
-    ASSERT_EQ(local.Dispatch("CREATE INDEX td_tag ON td (tag)").response.substr(0, 7),
-              "CREATED");
-    // Cabins on both sides of the join, so the downgrade is exercised at
-    // the leaf (outer) as well as the consuming stage (inner).
-    ASSERT_EQ(local.Dispatch("CREATE CABIN ON tc(tag)").response.substr(0, 7), "CREATED");
-    ASSERT_EQ(local.Dispatch("CREATE CABIN ON ta(b_id)").response.substr(0, 7), "CREATED");
-
-    for (const std::string& sql : {
-             // The single-step seam: a literal IndexProbe, an IndexRange,
-             // and a CabinProbe, each a star read of a peer relation.
-             std::string("SELECT * FROM td WHERE tag = 2"),
-             std::string("SELECT * FROM td WHERE tag BETWEEN 1 AND 2"),
-             std::string("SELECT * FROM tc WHERE tag = 2"),
-             // The consuming stage: IX17's correlated probe (no literal
-             // anywhere), the literal probe propagation derives, and a
-             // cabined inner.
-             std::string("SELECT a.id, d.id FROM ta AS a JOIN td AS d ON d.tag = a.b_id"),
-             std::string("SELECT a.id, d.id FROM ta AS a JOIN td AS d ON d.tag = a.b_id "
-                         "WHERE d.tag = 2"),
-             std::string("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
-                         "WHERE c.tag = 2"),
-             // The leaf: the outer relation's cabined column, single-step
-             // and inside a join.
-             std::string("SELECT * FROM ta WHERE b_id = 1"),
-             std::string("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
-                         "WHERE a.b_id = 1"),
-         }) {
-        const std::string local_reply = local.Dispatch(sql).response;
-        ASSERT_EQ(local_reply.rfind("ERR ", 0), std::string::npos)
-            << "the local side refused, so the comparison would prove nothing: " << sql
-            << " -> " << local_reply;
-        EXPECT_EQ(shipped(sql), local_reply) << sql;
-    }
-
-    // Not vacuous either: the indexed join matches the same four pairs
-    // the tc join does, through the index this time.
-    EXPECT_EQ(local.Dispatch("SELECT a.id, d.id FROM ta AS a JOIN td AS d ON d.tag = a.b_id")
-                  .response,
-              "a.id,d.id\\n1,1\\n1,4\\n2,2\\n5,2");
 }
 
 TEST_F(CoreRuntimeTest, APeerOnASharedPoolTakesNoBudgetOfItsOwn) {
@@ -3339,15 +1714,12 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
     // funding piece - fault grant, write grant (rule 6's acquisition
     // restamp inside it), a row-id block, a trx-id block - runs a
     // single-row INSERT into its own heap relation and reads it back.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "owned", TwoColumnSchema(),
                                     catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
-    ASSERT_EQ(row.value().owner_core, 1u);
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
@@ -3398,9 +1770,7 @@ TEST_F(CoreRuntimeTest, ASpentLeaseRefusesWithTheWiresRetryableBit) {
     // **Two of PW6's three leases survive AW-S1b** (`base/status.hpp`): the
     // page-id lease went, the transaction-id and row-id leases did not, and
     // this is the cell that says each names itself.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "spent", TwoColumnSchema(),
                                     catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
@@ -3450,15 +1820,12 @@ TEST_F(CoreRuntimeTest, ASpentLeaseRefusesWithTheWiresRetryableBit) {
 void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
                                                const std::string& name) {
     {
-        catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                                  /*core_count=*/2);
-        catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+        catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
         auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
                                         catalog::ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto row = catalog2.GetSysTableRow(oid.value());
         ASSERT_TRUE(row.ok());
-        ASSERT_EQ(row.value().owner_core, 1u);
         ASSERT_TRUE(core0_store_->Sync().ok());
         const PageId root = row.value().desc_page_id;
 
@@ -3548,15 +1915,12 @@ TEST_F(CoreRuntimeTest, AFundedPeerGrowsItsOwnBtreeWritingNoCatalogPage) {
     // PW2-4's proof: a peer INSERTs into its own btree relation far enough
     // to divide leaves - every split page from its own lease, every root
     // move in its own granted anchor - and the sys.tables row never moves.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema(),
                                     catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
-    ASSERT_EQ(row.value().owner_core, 1u);
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
@@ -3638,8 +2002,7 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
                                             row.value().anchor_page_id)
                     .ok());
 
-    catalog::Catalog fresh(*core0_store_, storage::kDefaultInlineCellWidth,
-                           /*core_count=*/1);
+    catalog::Catalog fresh(*core0_store_, storage::kDefaultInlineCellWidth);
     auto access = fresh.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();
     EXPECT_EQ(access.value()->desc_page_id, moved_root)
@@ -3651,14 +2014,12 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
 }
 
 TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerOwnedRelationBuildsWhereItRuns) {
-    // **AT-S5e.** A core-0 runtime opened bare, and a relation `kRotate`
-    // placed on core 1. This was refused by name until AT-S5e - the build
+    // **AT-S5e.** A core-0 runtime opened bare, and a relation placed on
+    // core 1 until AT-S9 retired placement. This was refused by name until AT-S5e - the build
     // was the owner's, shipped to it, and a dispatcher with no index-build
     // client had nothing to reach it with. `CREATE INDEX` builds where its
     // session is now, whoever the relation's owner is.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix", TwoColumnSchema(),
                                     catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
@@ -3736,9 +2097,7 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
 
     // A relation owned by core 1 (the :417 test's arrangement), and one
     // owned by core 0 as the foreign control.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto rotated = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
                                         TwoColumnSchema(), catalog::ClusteredType::kHeap);
     ASSERT_TRUE(rotated.ok()) << rotated.status().message();
@@ -3752,7 +2111,6 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
     ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
     auto row = catalog2.GetSysTableRow(rotated.value());
     ASSERT_TRUE(row.ok());
-    ASSERT_EQ(row.value().owner_core, 1u);
     // AU-S3: what the instance installs on every peer, standing in for
     // `Expeditor`'s `instance_stop_`. Installed **before** the listener, so
     // the stop handler it feeds exists by the time a client can send STOP.
@@ -4055,8 +2413,7 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.core0.emplace(rig.clock, rig.io0);
     ASSERT_TRUE(rig.core0->AttachTransport(&rig.ring(), 0).ok());
 
-    rig.catalog2.emplace(*core0_store_, storage::kDefaultInlineCellWidth, /*core_count=*/2);
-    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    rig.catalog2.emplace(*core0_store_, storage::kDefaultInlineCellWidth);
     // The same word the peer's catalog reads (AT-S2): this catalog's DDL
     // bumps it, and the owner revalidates off the shared frame at `done`.
     // The flush that stood here carried the row to the *device*, for an
@@ -4076,7 +2433,6 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.oid = oid.value();
     auto row = rig.catalog2->GetSysTableRow(rig.oid);
     ASSERT_TRUE(row.ok());
-    ASSERT_EQ(row.value().owner_core, 1u);
     rig.row = row.value();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -4140,12 +2496,10 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
 }
 
 void CoreRuntimeTest::OpenCrossOwnerFkPair(ForeignIndexRig& rig, const std::string& base) {
-    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
     ASSERT_EQ(rig.dispatcher
                   ->Dispatch("CREATE TABLE " + base + "p (id int64, v int64) BTREE")
                   .response.substr(0, 3),
               "CRE");
-    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     ASSERT_EQ(rig.dispatcher
                   ->Dispatch("CREATE TABLE " + base + "c (id int64, pid int64 REFERENCES " +
                              base + "p) BTREE")
@@ -4157,7 +2511,6 @@ void CoreRuntimeTest::OpenCrossOwnerFkPair(ForeignIndexRig& rig, const std::stri
     ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
     auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
     ASSERT_TRUE(parent_row.ok());
-    ASSERT_EQ(parent_row.value().owner_core, 0u) << "the parent must be core 0's to cross";
     // Sync before funding: `AdmitWritePages` faults each granted page for
     // read before restamping it, and a creation page still only in core 0's
     // cache abandons the whole grant silently.
@@ -4168,7 +2521,6 @@ void CoreRuntimeTest::OpenCrossOwnerFkPair(ForeignIndexRig& rig, const std::stri
 void CoreRuntimeTest::FundPeerForRelation(ForeignIndexRig& rig, catalog::Oid oid) {
     auto row = rig.catalog2->GetSysTableRow(oid);
     ASSERT_TRUE(row.ok()) << row.status().message();
-    ASSERT_EQ(row.value().owner_core, 1u) << "only a peer-owned relation needs funding here";
     // **The page half of funding went with the write grants** (AW-S1b):
     // this granted the relation's root, anchor and var-heap head before a
     // peer could write any of them, and a shared frame table makes them
@@ -4407,122 +2759,11 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
 //     `AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetried`: the
 //     owner's cost under refusal, and read-your-own-write across a retry.
 //
-// What survives them is `AReadOfAPeerOwnedRelationIsAnsweredHere` and the
-// fan-in cells: a relation another core owns is read here, and a split one
-// still fans in.
+// What survives them is `AReadOfAPeerOwnedRelationIsAnsweredHere`: a
+// relation another core created is read here. The fan-in cells went at
+// AT-S9, when a split relation stopped fanning in and began to be walked
+// whole where the session is.
 
-
-// ---- The step pipeline at the ring slot it actually sends through -------
-
-TEST_F(CoreRuntimeTest, AStepBatchWiderThanTheRingSlotStillDeliversEveryRow) {
-    // P4e's equivalence rig proves the pipeline's reply is the local reply
-    // byte for byte - but it hands each message to the far side by calling
-    // its handler directly, so no batch it builds is ever measured against
-    // a ring slot. Production sends the same batch through
-    // `sched::kCoreRingPayloadBytes` (1,024) while the server seals at
-    // `kStepBatchTargetBytes` (32 KiB) or, unconditionally, at the end of
-    // the walk. This runs the P4c single-step shape over a **real** ring at
-    // both production sizes and compares the row count the session sees
-    // against the owner's own answer, at growing widths.
-    //
-    // A two-column int64 row is 24 encoded bytes (a 4-byte length plus 8
-    // per column), the STEP_BATCH header is 24 and the row-batch header 2
-    // (wire/row_codec.cpp), so 24 + 2 + 24n crosses 1,024 at n = 42 - the
-    // measured first loss exactly.
-    std::optional<SessionStepClient> client;  // declared first: outlives rig.dispatcher
-    ForeignIndexRig rig(clock_);
-    OpenForeignIndexRig(rig, "wide_batch");
-
-    // The owner's rows. `OpenForeignIndexRig` leaves three (10, 20, 30) and
-    // a 16-id lease, so both are extended here.
-    auto more = rig.catalog2->AllocateRowIdRange(rig.oid, 512);
-    ASSERT_TRUE(more.ok()) << more.status().message();
-    rig.peer->row_id_leases().Grant(rig.oid, more.value(), 512);
-    constexpr int kRows = 120;
-    for (int base = 0; base < kRows; base += 10) {
-        std::string ins = "INSERT INTO wide_batch VALUES ";
-        for (int i = 0; i < 10; ++i) {
-            if (i > 0) ins += ", ";
-            ins += "(" + std::to_string(1000 + base + i + 1) + ")";
-        }
-        const std::string reply = rig.peer->dispatcher().Dispatch(ins).response;
-        ASSERT_NE(reply.rfind("ERR", 0), 0u) << reply;
-    }
-
-    // Core 0's session-side pipeline client, wired exactly as
-    // `Expeditor::Serve` wires it: the send is a `SendRetryTask` on the
-    // real transport, and the three consumer kinds are registered on core
-    // 0's reactor.
-    client.emplace(/*core_id=*/0,
-                   [&rig](std::uint32_t dst, sched::RingMessageKind kind,
-                          std::vector<std::byte> payload) {
-                       sched::MessageHeader out{};
-                       out.src_core = 0;
-                       out.dst_core = dst;
-                       out.session_core = 0;
-                       out.kind = static_cast<std::uint16_t>(kind);
-                       out.sched_group =
-                           static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
-                       rig.core0->Submit(
-                           sched::MakeSendRetryTask(rig.ring(), out, payload));
-                       return Status::OK();
-                   });
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kStepBatch,
-                                             [&client](const sched::MessageHeader&,
-                                                       std::span<const std::byte> payload) {
-                                                 client->OnStepBatch(payload);
-                                             })
-                    .ok());
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kStepEof,
-                                             [&client](const sched::MessageHeader&,
-                                                       std::span<const std::byte> payload) {
-                                                 client->OnStepEof(payload);
-                                             })
-                    .ok());
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kStepError,
-                                             [&client](const sched::MessageHeader&,
-                                                       std::span<const std::byte> payload) {
-                                                 client->OnStepError(payload);
-                                             })
-                    .ok());
-    rig.dispatcher->SetRemoteReads(&*client);
-
-    // The text protocol separates rows with a literal backslash-n (the P4e
-    // expectations above are spelled that way), so the row count is the
-    // number of separators: one heading line, then one per row.
-    auto rows_in = [](const std::string& reply) {
-        std::size_t rows = 0;
-        for (std::size_t at = reply.find("\\n"); at != std::string::npos;
-             at = reply.find("\\n", at + 2)) {
-            ++rows;
-        }
-        return rows;
-    };
-
-    // `SELECT *` with a residual stays the star shape the single-step
-    // pipeline takes (command_dispatcher.cpp's eligibility test), so the
-    // predicate is the width dial: `v <= n` is exactly n rows.
-    for (int n : {1, 8, 20, 30, 38, 40, 41, 42, 43, 44, 48, 64, 100, 120}) {
-        const std::string sql =
-            "SELECT * FROM wide_batch WHERE v > 1000 AND v <= " + std::to_string(1000 + n);
-        const std::string local = rig.peer->dispatcher().Dispatch(sql).response;
-        ASSERT_NE(local.rfind("ERR", 0), 0u) << local;
-        ASSERT_EQ(rows_in(local), static_cast<std::size_t>(n)) << local;
-
-        DispatchOutcome out;
-        auto statement = rig.Start(sql.c_str(), out);
-        ASSERT_TRUE(rig.Drive(*statement, 1024)) << "n=" << n << ": " << out.response;
-        // The cross-check that this shape took the pipeline was "nothing
-        // shipped as text"; there is no ship path to measure against
-        // since AT-S6, and the rows below are the whole assertion.
-        EXPECT_EQ(rows_in(out.response), static_cast<std::size_t>(n))
-            << "n=" << n << " reply: " << out.response;
-        EXPECT_EQ(out.response, local) << "n=" << n;
-    }
-}
 
 // `UpdateAndDeleteShipToTheOwnerToo` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
@@ -4819,21 +3060,17 @@ TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
 // funding gate AH-T5 found: each piece was right and the path was
 // unreachable.
 //
-// **Two policies make a two-core rig hold one relation on each side.**
-// `kRotate` at two cores places *everything* on core 1 (the rotation is
-// `kSystemCore + 1 + seq % (core_count - 1)`, which is core 1 for every
-// seq), so a parent on core 0 needs `kCreatingCore` for the length of its
-// CREATE and nothing else.
+// **Two placement policies held one relation on each side until AT-S9.**
+// No core owns a relation since; "cross-owner" in the names below is the
+// parent written from core 0 and the child from the peer.
 
 TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ai_base");
 
-    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
     ASSERT_EQ(rig.dispatcher->Dispatch("CREATE TABLE aiparent (id int64, v int64) BTREE")
                   .response.substr(0, 3),
               "CRE");
-    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     ASSERT_EQ(rig.dispatcher
                   ->Dispatch("CREATE TABLE aichild (id int64, pid int64 REFERENCES aiparent) "
                              "BTREE")
@@ -4846,7 +3083,6 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) 
     ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
     auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
     ASSERT_TRUE(parent_row.ok());
-    ASSERT_EQ(parent_row.value().owner_core, 0u) << "the parent must be core 0's for this to cross";
 
     // **Sync before funding, not after.** `AdmitWritePages` faults each
     // granted page for read before it restamps it, so a creation page still
@@ -5065,14 +3301,11 @@ TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersRunsHere) {
     OpenForeignIndexRig(rig, "shipped_span");
 
     // A second relation on core 0, so the join spans core 0 and the peer.
-    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
     auto local = rig.catalog2->CreateTable(catalog::kNamespacePublic, "span_local",
                                            TwoColumnSchema(), catalog::ClusteredType::kBtree);
-    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     ASSERT_TRUE(local.ok()) << local.status().message();
     auto row = rig.catalog2->GetSysTableRow(local.value());
     ASSERT_TRUE(row.ok());
-    ASSERT_EQ(row.value().owner_core, 0u);
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     DispatchOutcome out;

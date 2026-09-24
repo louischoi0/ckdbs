@@ -169,7 +169,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     //
     // Both are gone with the route. Every core reads every page through
     // the one pool since AM-S2 step 3, so the walk covers **every** chain
-    // of the child here (`AllWalkHeads` below), and an answer from this
+    // of the child here (`WalkHeads` below), and an answer from this
     // core is an answer for the whole relation. The Cabin is the one thing
     // still scoped to a core, and it is handled where it is read rather
     // than by a guard over the whole function: a per-core set may *find* a
@@ -351,14 +351,12 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
         return storage::VisitControl::kStop;
     };
 
-    // **One walk per chain the relation has** (RD6: one chain per range),
-    // and not per chain this core owns, which is what it read until
-    // AT-S5f. `WalkHeadsFor` is the *read path's* rule - a stage of a
-    // fan-in covers the ranges it owns because the session concatenates
-    // the stages - and a constraint check has no second stage to
-    // concatenate: it answers for the whole child or it drops the
-    // constraint. Every page is faultable from every core since AM-S2
-    // step 3, so the heads another core's ranges name are walked here.
+    // **One walk per chain the relation has** (RD6: one chain per range) -
+    // every range, since AT-S5f here and since AT-S9 on the read path too,
+    // which walked only the ranges its core owned while a fan-in
+    // concatenated the rest. A constraint check answers for the whole
+    // child or drops the constraint, and every page is faultable from every
+    // core since AM-S2 step 3.
     // **No range arm on the btree side**, and D1 is what makes that an
     // absence rather than an omission: a btree relation never splits, so a
     // btree child never has a directory.
@@ -366,12 +364,12 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     if (child.clustered_type == catalog::ClusteredType::kBtree) {
         walked = btree::BtreeVisit(store, child.desc_page_id, storage::PageAccess::kRead, visitor);
     } else {
-        const std::vector<PageId> heads = child.AllWalkHeads();
+        const std::vector<PageId> heads = child.WalkHeads();
         // **Checked rather than assumed**, `TableAccess::RangeFor`'s reason
         // in this function's terms: no heads would run no loop body, leave
         // `verdict` at `kPass`, and report "no children" having read
         // nothing - the silent drop this check may never produce.
-        // `AllWalkHeads` answers `desc_page_id` for an unsplit relation and
+        // `WalkHeads` answers `desc_page_id` for an unsplit relation and
         // one entry per range otherwise, so it is empty for no relation
         // this engine can build - which is exactly when this engine checks
         // instead of trusting.

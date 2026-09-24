@@ -143,21 +143,17 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## WAL
 
-- **`PAGE_HANDOFF` is written and never read.** Verified at AM-S4(d),
-  2026-09-07. The record's consumer was the receiving core's write grant,
-  struck at AW-S1b; analysis neither erases the page from the dirty table
-  nor seeds a recLSN for it, and redo skips it — so nothing acts on one.
-  `range_alloc.cpp` is the single remaining site that appends one, and it
-  pays PL §9 rule 1's durability ordering for it: **one `FlushPages` and
-  one device sync per range opening**, for a record with no reader. The
-  ordering is kept whole rather than half-kept, which is the right state to
-  leave it in, but the cost is real and attributable.
-
-  Not fixed here because retiring a record type is a format decision of its
-  own: the kind stays in `ring_message.hpp`'s frozen enum, AU-R4's count
-  freeze is unbuilt, and AU-R5 is where struck kinds are meant to go.
-  Owner: `docs/spec/wal.md` §5.2, and `docs/spec/crosscore.md` CC7 for why
-  the handoff exists at all.
+- **`PAGE_HANDOFF` is neither written nor read, and its record type
+  stays.** Verified at AT-S9, 2026-09-24. Its reader was the receiving
+  core's write grant, struck at AW-S1b, and since AM-S4(d) analysis neither
+  erases nor seeds on it and redo skips it. Its last writer was
+  `range_alloc.cpp`'s range opening, retired at AT-S9 with insert
+  spreading, so the durability cost the entry used to price (one
+  `FlushPages` and one device sync per range opening) is gone too. What
+  remains is the record type, which a pre-AT log can still carry and
+  recovery must still decode, and `wal::LogPageHandoff`, whose only callers
+  are the cells that build such a log. Retiring the type is a format
+  decision of its own. Owner: `docs/spec/wal.md` §5.2.
 
 - **Three cuts AM-S4(d) made possible and did not take.** Named by that
   stage's `critics-developer` pass, verified by it by trace and exhaustive
@@ -380,28 +376,19 @@ there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
-- **The mount refuses a changed core count for a reason that no longer
-  exists, and tells the operator so in the refusal.** Verified at
-  `0e1ed85`, 2026-09-08. `src/bootstrap/bootstrap.cpp` refuses when the
-  running `cores` differs from the superblock's `core_count`, and its
-  message reads *"WAL streams are per core, so mounting under a different
-  count would leave streams with nothing to replay them"*. There has been
-  one stream per instance since AM-S4(d), and `Decode` refuses a volume
-  claiming otherwise, so the sentence is false to the one person who
-  reads it. `wal.md` §3 carried a second reason - the anchor's warm-up
-  over "every core has published" - which is equally dead: `SetWalAnchor`
-  admits `core_id` 0 alone, the fold seeds from the lowest populated
-  slot, and the condition is over one core. That spec bullet is corrected
-  with this entry; the code message is not, because it is an engine
-  change and this entry is not one.
-
-  **What actually still ties a volume to its core count** is
-  `sys.tables.owner_core` and `sys.ranges.owner_core`: at a lower count a
-  relation names a core that does not exist. AR0-5 D17 drops both columns
-  at M3, so the last real ground goes with AT. AR2's E9 argued the pin
-  must stay and was **withdrawn by the operator on 2026-09-08** for
-  resting on the two dead grounds. Owner: `ar0-5-amendment-uniformity.md`
-  (AT), with the one-line message fix owed by whoever touches it first.
+- **A peer's omitted-pk `INSERT` into an unsplit heap relation can be
+  refused `OutOfRange`.** By reading, at `60d83f0` and unchanged by AT-S9;
+  no cell reproduces it. Since AT-S5 a peer's `INSERT` runs on the peer and
+  an omitted pk draws from that core's leased row-id block
+  (`heap-and-tuple.md` §4.1a). A heap relation that has one chain takes ids
+  only above its tail page's `min_key` (`ChainInsert`), so once core 0's
+  own inserts have opened a tail page above a peer's block, that block's
+  ids are refused. A refusal and never a wrong answer. Insert spreading
+  existed to give each core a chain of its own, and AT-S9 retired it on the
+  operator's ruling; a heap relation is creatable only before SUS-1, and a
+  btree relation - the default since - places each id by descent and is
+  unaffected. Owner: AT-S4, whose shared allocator decides what a core's
+  cached block means for a heap chain.
 
 - **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
   Verified at `4bf80fa`, 2026-09-23. AT-S8 put the controller behind a view

@@ -17,6 +17,13 @@
 
 namespace kds::catalog {
 
+// Core 0: the core the instance's mount runs on and its few placements go
+// to - the delete-mark purge's sweep, the checkpoint cadence's phase 0.
+// **A placement, never an authority** since AT-S5 (every core writes the
+// superblock, the free map and the catalog), and no relation is placed on
+// it or anywhere since AT-S9 retired `core_placement.hpp` with ownership.
+inline constexpr std::uint32_t kSystemCore = 0;
+
 inline constexpr Oid kNamespaceSys = 0;
 inline constexpr Oid kNamespacePublic = 1;
 

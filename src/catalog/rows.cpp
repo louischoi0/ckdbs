@@ -55,7 +55,6 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::memcpy(base + kClusteredTypeOffset, &ct, sizeof(ct));
     std::memcpy(base + kNextIdOffset, &next_id, sizeof(next_id));
     std::memcpy(base + kVarHeapPageIdOffset, &varheap_page_id, sizeof(varheap_page_id));
-    std::memcpy(base + kOwnerCoreOffset, &owner_core, sizeof(owner_core));
     auto ko = static_cast<std::uint8_t>(key_order);
     std::memcpy(base + kKeyOrderOffset, &ko, sizeof(ko));
     std::memcpy(base + kAnchorPageIdOffset, &anchor_page_id, sizeof(anchor_page_id));
@@ -76,7 +75,6 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     row.clustered_type = static_cast<ClusteredType>(ct);
     std::memcpy(&row.next_id, base + kNextIdOffset, sizeof(row.next_id));
     std::memcpy(&row.varheap_page_id, base + kVarHeapPageIdOffset, sizeof(row.varheap_page_id));
-    std::memcpy(&row.owner_core, base + kOwnerCoreOffset, sizeof(row.owner_core));
     std::uint8_t ko;
     std::memcpy(&ko, base + kKeyOrderOffset, sizeof(ko));
     row.key_order = static_cast<KeyOrder>(ko);
@@ -352,7 +350,6 @@ std::array<std::byte, SysRangeRow::kOnDiskSize> SysRangeRow::Encode() const {
     std::memcpy(base + kRangeIdOffset, &range_id, sizeof(range_id));
     std::memcpy(base + kLoOffset, &lo, sizeof(lo));
     std::memcpy(base + kRelOidOffset, &rel_oid, sizeof(rel_oid));
-    std::memcpy(base + kOwnerCoreOffset, &owner_core, sizeof(owner_core));
     std::memcpy(base + kEntryPageOffset, &entry_page, sizeof(entry_page));
     return buf;
 }
@@ -365,7 +362,6 @@ StatusOr<SysRangeRow> SysRangeRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.range_id, base + kRangeIdOffset, sizeof(row.range_id));
     std::memcpy(&row.lo, base + kLoOffset, sizeof(row.lo));
     std::memcpy(&row.rel_oid, base + kRelOidOffset, sizeof(row.rel_oid));
-    std::memcpy(&row.owner_core, base + kOwnerCoreOffset, sizeof(row.owner_core));
     std::memcpy(&row.entry_page, base + kEntryPageOffset, sizeof(row.entry_page));
     // Pure, like its neighbours: CC9's two rules are properties of a
     // relation's whole row set (stated at `SysRangeRow`), and a decoder

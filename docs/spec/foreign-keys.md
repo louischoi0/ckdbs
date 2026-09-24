@@ -9,8 +9,7 @@ in-place + undo model (`heap_page.hpp`: tuple header `trx_id` +
 (`VisitControl`).
 Interlocks with: `docs/spec/cabin.md` (the reverse check),
 unique-constraint semantics (fail-fast, same family),
-`docs/spec/cross-owner-txn.md` (the intent's release),
-`docs/spec/namespace.md` NS10 (co-location).
+`docs/spec/cross-owner-txn.md` (retired; the intent's release was there).
 
 Decisions:
 
@@ -45,20 +44,13 @@ Decisions:
   called from the dispatcher's write paths (§2, §3). Two consequences:
   the step VM's probe memo does not apply, and the checks reach
   statistics by hand (§2, Statistics).
-- **F5 — Co-location is advice, not a prerequisite.**
-  `CheckForeignKeyColocation` admits a cross-owner pair. The forward
-  check crosses at the dispatch fork (§2a) and the reverse check fans out
-  (§3a). What a cross-owner pair costs, so the admission is not read as
-  free: every child `INSERT`/`UPDATE` pays **one ring round trip per
-  distinct parent owner** before any row work, and a parent `DELETE`
-  pays a read-only collecting pass plus one probe round per child owner.
-  A **namespace** is how a user asks for co-location: a pair created in
-  one namespace is on one core (`namespace.md` NS10) and never crosses.
-  `CREATE TABLE` emits a `WARN` line when the declared parent's owner
-  differs from the child's, naming the cost and the remedy (create the
-  two in one namespace); it is silent otherwise, which is what makes the
-  warning mean something when it appears. The FK graph stays an input to
-  placement policy.
+- **F5 — There is no co-location to ask for.** Both checks run on the
+  core the statement runs on and read every core's pages (§2a, §3a, since
+  AT-S5f), and no relation is owned by a core since AT-S9, so a parent and
+  a child in two namespaces cost exactly what they cost in one. What this
+  decision said until then - admit a cross-owner pair, price it at one ring
+  round trip per distinct parent owner, warn at `CREATE TABLE` and point at
+  a namespace as the remedy - went with the owners.
 - **F6 — Reverse check is Cabin's territory.** Parent-delete's "does any
   child reference me" is a stoppable walk that consults an active Cabin
   on the child fk column first: its verified empty set is the
@@ -98,12 +90,12 @@ records the declaration for display.
 mount rather than read as an empty foreign-key list, because a constraint
 that silently does not run is not a degraded mode.
 
-CREATE-time validation, in `catalog::CheckForeignKeyDeclaration` and
-`CheckForeignKeyColocation` (`include/kds/catalog/foreign_key.hpp`):
+CREATE-time validation, in `catalog::CheckForeignKeyDeclaration`
+(`include/kds/catalog/foreign_key.hpp`):
 both relations exist; the child column is not column 0 and its type can
 carry a Keystone id; **the parent is a btree relation** (below); a
-duplicate FK on the same (child, column) is rejected; a cross-owner pair
-is admitted (F5). They are free functions rather than `Catalog` methods
+duplicate FK on the same (child, column) is rejected; any pair of
+relations is admitted (F5). They are free functions rather than `Catalog` methods
 because **two doors ask the same questions**: `CREATE TABLE` checks before
 the relation is created, so a refusable declaration writes nothing
 (unlike a Cabin, a constraint may not degrade to a warning), and

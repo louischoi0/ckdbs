@@ -347,7 +347,7 @@ python3 tools/ckdbs_cli.py
 ckdbs> PING
 PONG
 ckdbs> DESCRIBE accounts
-oid=4000 root_page_id=128 clustered_type=HEAP next_id=1 owner_core=0 columns=2
+oid=4000 root_page_id=128 clustered_type=HEAP key_order=ascending next_id=1 columns=2
 pos=0 name=id type=int64 len=8 notnull=yes pk=yes autoincrement=yes
 pos=1 name=name type=varchar len=0 notnull=yes pk=no autoincrement=no
 ckdbs> help        # local-only, not sent to the server

@@ -40,8 +40,8 @@ forbids (`include/kds/base/status.hpp`, `docs/spec/protocol.md` §11).
 
 Every cross-object reference in the engine is by oid, never by name:
 `sys.fkeys` stores parent/child oids, `sys.indexes` its relation's oid,
-`sys.cabins` likewise, the assertion registry keys on the oid, and
-`owner_core` rides the relation row itself. So a rename **dangles
+`sys.cabins` likewise, and the assertion registry keys on the oid. So a
+rename **dangles
 nothing**: FK enforcement, index maintenance and serving, Cabin
 observation and the write hook, and every compiled chain in flight keep
 working, unmodified, because none of them ever read the name again after

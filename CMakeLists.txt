@@ -51,7 +51,6 @@ add_library(kds
     src/exec/assertion_recover.cpp
     src/server/core_affinity.cpp
     src/server/row_id_lease_service.cpp
-    src/server/range_alloc.cpp
     src/server/trx_id_lease_service.cpp
     src/server/step_descriptor.cpp
     src/server/remote_step_service.cpp
@@ -133,7 +132,6 @@ add_library(kds
     src/exec/bound_cabin.cpp
     src/exec/cabin_optimizer_exec.cpp
     src/exec/index_maintain.cpp
-    src/exec/range_eligible.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/coro.cpp

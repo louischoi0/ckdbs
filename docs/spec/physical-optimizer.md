@@ -267,6 +267,12 @@ Not in this engine: a mover, btree-clustered relation relayout,
 temperature-unified eviction, score persistence, per-consumer half-lives,
 and per-pattern hot-set clustering. The decisions are not recorded here.
 
+**Affinity is not an input here yet** (AR0-5 D18). D18 keeps a relation's
+affinity as a statistic and this optimizer as its one consumer, at weight
+0 (AR0 D10) until AS-E. Nothing stores it since AT-S9 dropped `owner_core`,
+and the declaration a consumer would read is the namespace a relation was
+created in (`namespace.md` NS10), already on its `sys.tables` row.
+
 ---
 
 # Part II — Autonomous Advisory Cabin Management (the Cabin controller)

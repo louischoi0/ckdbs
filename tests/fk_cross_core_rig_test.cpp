@@ -170,23 +170,16 @@ struct FkRig {
         return Status::InvalidArgument(std::string(what) + ": " + response);
     }
 
-    // The parent on core 0 under `kCreatingCore`, and the child where the
-    // cell needs it: core 1 under `kRotate` for the wait cells -
-    // `core_runtime_test.cpp`'s `OpenCrossOwnerFkPair` recipe - or core 0
-    // for the Cabin cell, whose point is a **store** on the other core
-    // rather than a relation on it. Either way the peer is funded with a
-    // row-id block, since it writes the child in both.
-    Status Seed(std::uint32_t child_on_core = 1) {
+    // The parent and the child, both created from core 0; no core owns
+    // either since AT-S9, so "on core N" below names the session's core.
+    // The peer is funded with a row-id block, since it writes the child.
+    Status Seed() {
         CommandDispatcher& d0 = rig->core(0).dispatcher();
-        rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
         if (Status s = Expect("create p", d0.Dispatch("CREATE TABLE p (id int64, v int64) BTREE").response,
                               "CRE");
             !s.ok()) {
             return s;
         }
-        rig->core(0).catalog().SetPlacementPolicy(
-            child_on_core == 1 ? catalog::PlacementPolicy::kRotate
-                               : catalog::PlacementPolicy::kCreatingCore);
         if (Status s = Expect("create c",
                               d0.Dispatch("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE")
                                   .response,
@@ -199,13 +192,6 @@ struct FkRig {
         parent_oid = parent_rel.value();
         auto child = rig->core(0).catalog().FindTableOidByName("c");
         if (!child.ok()) return child.status();
-        auto row = rig->core(0).catalog().GetSysTableRow(child.value());
-        if (!row.ok()) return row.status();
-        if (row.value().owner_core != child_on_core) {
-            return Status::InvalidArgument("c was placed on core " +
-                                           std::to_string(row.value().owner_core) + ", not " +
-                                           std::to_string(child_on_core));
-        }
         if (Status s = rig->store().FlushPages(catalog::kEveryCatalogPage); !s.ok()) return s;
         return rig->FundPeerRelation(child.value());
     }
@@ -313,7 +299,7 @@ TEST(FkCrossCoreRigTest, AChildWaitingOnAParentThatRollsBackAcrossCoresIsAViolat
 TEST(FkCrossCoreRigTest, ADrainedCabinSetDoesNotClearAParentAChildOnAnotherCoreReferences) {
     FkRig r({});
     ASSERT_NE(r.rig, nullptr);
-    if (Status seeded = r.Seed(/*child_on_core=*/0); !seeded.ok()) FAIL() << seeded.message();
+    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
     CommandDispatcher& d0 = r.rig->core(0).dispatcher();
 
     ASSERT_EQ(d0.Dispatch("INSERT INTO p VALUES (7, 0)").response.rfind("INSERTED", 0), 0u);

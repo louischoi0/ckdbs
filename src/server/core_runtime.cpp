@@ -2,8 +2,6 @@
 
 #include "kds/base/current_core.hpp"
 
-#include "kds/catalog/core_placement.hpp"
-
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -302,11 +300,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         runtime->store_->SetResidentLimit(kFirstUserPageId);
     }
 
-    // The catalog, read-only in practice: DDL is core 0's, and the store
-    // above refuses a write to the pages it lives on. What this instance
-    // does is *read* and cache, and drop the cache when core 0 says so.
-    runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width, config.core_count,
-                              config.core_id);
+    // This core's catalog: every core writes the catalog's pages since
+    // AT-S5 and asks the instance's schema word at its task boundaries
+    // (AT-S2), so the memo here is this core's cache of shared rows.
+    runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width);
+    runtime->catalog_->SetCoreId(config.core_id);
     runtime->catalog_->SetLogger(log);
     runtime->catalog_->SetSchemaWord(config.schema_word);  // AT-S2
     runtime->catalog_->SetOidSequence(config.oid_sequence);  // AT-S5b
@@ -466,12 +464,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The view is dropped in `~CoreRuntime`, which destroys the scheduler
     // *ahead* of the dispatcher - declaration order alone would not do it.
     runtime->dispatcher_->set_scheduler_view(&*runtime->scheduler_);
-    // RD5's size, which is also the arming bit (`server/range_alloc.hpp`:
-    // one key, because a range **is** its grant). On every core and not
-    // only a peer: core 0 owns most relations but not all of them under a
-    // rotating placement, so it too can hold a foreign INSERT that R4/IS1
-    // wants to leave a demand behind.
-    runtime->dispatcher_->set_range_size_ids(config.range_size_ids);
     // Asymmetry 1 was made enforceable at dispatch by PW4 and is history:
     // the argument lived at `PeerDdlRefused`, which AT-S5 deleted with the
     // route (`crosscore.md` CC11).
@@ -830,77 +822,17 @@ void CoreRuntime::MaybeRefillRowIds() {
     const auto neediest = row_id_leases_.NeediestRelation();
     if (!neediest.has_value()) return;
 
-    // RD5, and **this is the one core that may ask it** (workplan §9c):
-    // the fifth gate's fact lives in this core's own assertion registry,
-    // so core 0 asking on our behalf would answer "eligible" for exactly
-    // the relation an assertion should decline. Core 0 re-checks what its
-    // catalog can see and may still decline; the ids arrive either way.
-    //
-    // **Off by default since the 2026-08-31 operator amendment**
-    // (`range_size_ids`, range_alloc.hpp), which reverses DA1's arming:
-    // spreading is a per-relation option the user decides, so nothing
-    // spreads until something asks. RD6 made a range its own chain, which
-    // is what had forced the key off before that - a directory row would
-    // have described a partition no insert or read honoured. A
-    // `CoreRuntime` built by hand takes `kRangeSizeOff` too
-    // (core_runtime.hpp).
-    const bool ranges_on = config_.range_size_ids != kRangeSizeOff;
-    bool open_range = false;
-    if (ranges_on && dispatcher_.has_value()) {
-        auto access = catalog_->InitTableAccess(*neediest);
-        if (access.ok()) {
-            const exec::RangeGate gate =
-                exec::RangeEligible(*access.value(), dispatcher_->assertions());
-            open_range = gate == exec::RangeGate::kNone;
-            // C3 (§9e): the counter carries the per-ask volume, and the
-            // line rides the *transition* - a permanently gated relation
-            // is every indexed one, and a line per refill would pay
-            // log.hpp's synchronous write once per lease block forever.
-            if (!open_range && dispatcher_->range_split_declines().Record(*neediest, gate)) {
-                LogRangeDecline(log_, config_.core_id, *neediest, gate,
-                                "the owner core's own registry, which is the authority");
-            }
-        }
-    }
-    // The range **is** the lease grant, so one number sizes both
-    // (`server/range_alloc.hpp`).
-    const std::uint64_t count = ranges_on ? config_.range_size_ids : kRowIdLeasePerGrant;
+    const std::uint64_t count = kRowIdLeasePerGrant;
 
     row_id_refill_in_flight_ = true;
     row_id_refill_.stats.NoteSubmit(scheduler_->clock().Now(), scheduler_->iterations());
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
         RequestRowIdLease(*transport_, row_id_refill_, *neediest, count, config_.core_id,
-                          /*system_core=*/0, log_, &*scheduler_, open_range),
+                          /*system_core=*/0, log_, &*scheduler_),
         [this](const Status& s) {
             row_id_refill_in_flight_ = false;
             row_id_refill_.stats.Complete(scheduler_->clock().Now(), scheduler_->iterations());
-            // CC10 step 4's other half. **The write admission it ran went
-            // with the grants** (AW-S1b): core 0 formatted the range's head
-            // page and this core had to acquire write rights over it before
-            // it could write its own range, which a shared frame table
-            // makes unnecessary. What is left is the reason the admission
-            // was here rather than on the ordinary grant path - the
-            // directory this core must see before its next statement
-            // routes.
-            if (row_id_refill_.entry_page != kInvalidPageId) {
-                // The boundary core 0 just published. Asking here rather
-                // than at the next statement's head means the very next
-                // statement resolves against the directory rather than
-                // the tick after - which is what R4/IS3's routing needs,
-                // since until this core sees its own range it keeps
-                // shipping the INSERT away - which since AT-S5 it does
-                // not; the revalidation stays for the directory's sake.
-                //
-                // This completion is a task boundary and the next thing it
-                // reads is the range core 0 just opened, whose `sys.ranges`
-                // row bumped the schema word - so ask now (AT-S2). A drop
-                // stood here, and before it a no-op: IS3's end-to-end test
-                // found the peer never saw the range it had just been
-                // granted.
-                catalog_->Revalidate();
-                row_id_refill_.entry_page = kInvalidPageId;
-            }
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 // Nothing to return it to - a background task - and the
                 // consequence is bounded: INSERTs into that relation keep

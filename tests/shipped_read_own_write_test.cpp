@@ -51,14 +51,12 @@ TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteToAPeerOwnedRel
     auto rig = std::move(opened.value());
 
     CommandDispatcher& d0 = rig->core(0).dispatcher();
-    rig->core(0).catalog().SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    // No core owns r1 since AT-S9, so there is no ship left to route
+    // around; the cell now pins read-your-own-write on the session's core.
     ASSERT_EQ(d0.Dispatch("CREATE TABLE r1 (id int64, v int64) BTREE").response.substr(0, 3),
               "CRE");
     auto oid = rig->core(0).catalog().FindTableOidByName("r1");
     ASSERT_TRUE(oid.ok());
-    auto row = rig->core(0).catalog().GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    ASSERT_EQ(row.value().owner_core, 1u) << "r1 must be core 1's for the read to ship";
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
     ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok());
 
@@ -84,5 +82,72 @@ TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteToAPeerOwnedRel
     rig->Stop();
 }
 
+
+// **AT-S9: a join inside a transaction sees the transaction's own writes.**
+// The two-step pipeline sent a join to its relations' owners whenever
+// either was another core's, and its stages read under their own
+// autocommit snapshot - so inside `BEGIN` it could not see the rows the
+// transaction had just written, the single-step defect above in the join's
+// shape. AT-S6 had removed the enrolment test that kept the route off
+// transactions; AT-S9 removed the route with ownership. The session here is
+// the peer's, and both relations were created on core 0, which under the
+// shipped placement made both core 0's - the shape that shipped.
+struct JoinTxn {
+    Session session;
+    DispatchOutcome begin_out;
+    DispatchOutcome outer_out;
+    DispatchOutcome inner_out;
+    DispatchOutcome join_out;
+    DispatchOutcome end_out;
+    std::atomic<bool> done{false};
+};
+
+sched::Coro WriteBothThenJoin(CommandDispatcher& d, JoinTxn& t) {
+    co_await d.DispatchAsync("BEGIN", &t.session, &t.begin_out);
+    co_await d.DispatchAsync("INSERT INTO acct VALUES (7, 500)", &t.session, &t.outer_out);
+    co_await d.DispatchAsync("INSERT INTO fill VALUES (7, 99)", &t.session, &t.inner_out);
+    co_await d.DispatchAsync("SELECT acct.bal, fill.qty FROM acct JOIN fill ON acct.id = fill.aid",
+                             &t.session, &t.join_out);
+    co_await d.DispatchAsync("ROLLBACK", &t.session, &t.end_out);
+    t.done.store(true, std::memory_order_release);
+    co_return Status::OK();
+}
+
+TEST(ShippedReadOwnWrite, AJoinInsideATransactionOnAPeerSeesItsOwnWrites) {
+    TwoCoreRig::Options options;
+    options.wal_drain_interval_ns = 1'000'000;
+    auto opened = TwoCoreRig::Open(options);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    auto rig = std::move(opened.value());
+
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE acct (id int64, bal int64) BTREE").response.substr(0, 3),
+              "CRE");
+    ASSERT_EQ(
+        d0.Dispatch("CREATE TABLE fill (id int64, aid int64, qty int64) BTREE").response.substr(0, 3),
+        "CRE");
+    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    for (const char* name : {"acct", "fill"}) {
+        auto oid = rig->core(0).catalog().FindTableOidByName(name);
+        ASSERT_TRUE(oid.ok()) << name;
+        ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok()) << name;
+    }
+
+    JoinTxn t;
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, WriteBothThenJoin(d1, t)));
+    rig->Start();
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return t.done.load(std::memory_order_acquire); },
+                          8000ms))
+        << "begin=[" << t.begin_out.response << "] outer=[" << t.outer_out.response
+        << "] inner=[" << t.inner_out.response << "] join=[" << t.join_out.response << "]";
+
+    ASSERT_EQ(t.outer_out.response.rfind("INSERTED", 0), 0u) << t.outer_out.response;
+    ASSERT_EQ(t.inner_out.response.rfind("INSERTED", 0), 0u) << t.inner_out.response;
+    EXPECT_NE(t.join_out.response.find("500,99"), std::string::npos)
+        << "the join could not see the transaction's own rows: " << t.join_out.response;
+    rig->Stop();
+}
 }  // namespace
 }  // namespace kds::server

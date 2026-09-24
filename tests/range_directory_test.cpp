@@ -7,10 +7,9 @@
 #include <vector>
 
 // RD3's resolver (work order `instructions/v2.5.0/range-directory.md`
-// RB1). **This file is deliberately its only unit caller** - the same
-// discipline `range_eligible_test.cpp` states for RD4: the routing sites
-// arrive at RB3 and RB4, and until then a call from a statement path is
-// this row's shape leaking rather than a consumer.
+// RB1). **This file is deliberately its only unit caller**: the routing
+// sites arrive at RB3 and RB4, and until then a call from a statement path
+// is this row's shape leaking rather than a consumer.
 //
 // Everything here is pure over its arguments, so nothing needs a catalog
 // or a store. The end-to-end half - that `TableAccess::ranges` is filled
@@ -21,14 +20,14 @@ namespace kds::catalog {
 namespace {
 
 // Three ranges over the id space, boundaries at the row-id lease grant
-// (D6's starting unit, 4,096): [0, 4096) core 0, [4096, 8192) core 1,
-// [8192, end) core 2.
+// (D6's starting unit, 4,096): [0, 4096) at page 400, [4096, 8192) at 401,
+// [8192, end) at 402. The entry page is what names a range in the cells
+// below, since AT-S9 retired the owner that used to.
 std::vector<RangeTarget> ThreeRanges() {
     std::vector<SysRangeRow> rows(3);
     for (std::size_t i = 0; i < rows.size(); ++i) {
         rows[i].rel_oid = 4000;
         rows[i].lo = static_cast<std::uint64_t>(i) * 4096;
-        rows[i].owner_core = static_cast<std::uint32_t>(i);
         rows[i].entry_page = static_cast<PageId>(400 + i);
     }
     return RangeTargetsFrom(rows);
@@ -48,9 +47,8 @@ TEST(RangeDirectoryTest, HiIsDerivedFromTheNextRowAndTheLastOneEndsTheIdSpace) {
     EXPECT_EQ(ranges[2].lo, 8192u);
     EXPECT_EQ(ranges[2].hi, kIdSpaceEnd);
 
-    // The row's two routing facts cross unchanged; `hi` is the only thing
+    // The row's routing fact crosses unchanged; `hi` is the only thing
     // this derivation adds.
-    EXPECT_EQ(ranges[2].owner_core, 2u);
     EXPECT_EQ(ranges[2].entry_page, 402u);
 }
 
@@ -60,7 +58,7 @@ TEST(RangeDirectoryTest, AnEmptyDirectoryIsRefusedRatherThanAnsweredWithOneRange
     auto refused = ResolveRanges({}, PkSpan::Whole());
     ASSERT_FALSE(refused.ok());
     EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(refused.status().message().find("owner_core"), std::string::npos)
+    EXPECT_NE(refused.status().message().find("desc_page_id"), std::string::npos)
         << refused.status().message();
 }
 
@@ -70,7 +68,6 @@ TEST(RangeDirectoryTest, AnEqualityNamesExactlyOneRange) {
     auto one = ResolveRanges(ranges, PkSpan::Equality(5000));
     ASSERT_TRUE(one.ok()) << one.status().message();
     ASSERT_EQ(one.value().size(), 1u);
-    EXPECT_EQ(one.value()[0].owner_core, 1u);
     EXPECT_EQ(one.value()[0].entry_page, 401u);
 }
 
@@ -80,16 +77,16 @@ TEST(RangeDirectoryTest, ABoundaryIdBelongsToTheRangeAboveIt) {
     // `[lo, hi)`: the boundary is the *first* id of the upper range, not
     // the last of the lower one. Getting this backwards routes every
     // block-aligned id - which is every id the allocator hands out first
-    // (§6b) - to the wrong core.
+    // (§6b) - to the wrong chain.
     auto at = ResolveRanges(ranges, PkSpan::Equality(4096));
     ASSERT_TRUE(at.ok()) << at.status().message();
     ASSERT_EQ(at.value().size(), 1u);
-    EXPECT_EQ(at.value()[0].owner_core, 1u);
+    EXPECT_EQ(at.value()[0].entry_page, 401u);
 
     auto below = ResolveRanges(ranges, PkSpan::Equality(4095));
     ASSERT_TRUE(below.ok()) << below.status().message();
     ASSERT_EQ(below.value().size(), 1u);
-    EXPECT_EQ(below.value()[0].owner_core, 0u);
+    EXPECT_EQ(below.value()[0].entry_page, 400u);
 }
 
 TEST(RangeDirectoryTest, TheFirstAndLastIdsOfTheSpaceResolve) {
@@ -98,14 +95,14 @@ TEST(RangeDirectoryTest, TheFirstAndLastIdsOfTheSpaceResolve) {
     auto first = ResolveRanges(ranges, PkSpan::Equality(0));
     ASSERT_TRUE(first.ok()) << first.status().message();
     ASSERT_EQ(first.value().size(), 1u);
-    EXPECT_EQ(first.value()[0].owner_core, 0u);
+    EXPECT_EQ(first.value()[0].entry_page, 400u);
 
     // kMaxKeystoneId is spellable, and `hi` being exclusive is what makes
     // it fall inside the last range rather than past it.
     auto last = ResolveRanges(ranges, PkSpan::Equality(kMaxKeystoneId));
     ASSERT_TRUE(last.ok()) << last.status().message();
     ASSERT_EQ(last.value().size(), 1u);
-    EXPECT_EQ(last.value()[0].owner_core, 2u);
+    EXPECT_EQ(last.value()[0].entry_page, 402u);
 }
 
 TEST(RangeDirectoryTest, ASpanStraddlingABoundaryNamesBothRanges) {
@@ -116,8 +113,8 @@ TEST(RangeDirectoryTest, ASpanStraddlingABoundaryNamesBothRanges) {
     auto both = ResolveRanges(ranges, PkSpan{4000, 4200});
     ASSERT_TRUE(both.ok()) << both.status().message();
     ASSERT_EQ(both.value().size(), 2u);
-    EXPECT_EQ(both.value()[0].owner_core, 0u);
-    EXPECT_EQ(both.value()[1].owner_core, 1u);
+    EXPECT_EQ(both.value()[0].entry_page, 400u);
+    EXPECT_EQ(both.value()[1].entry_page, 401u);
 }
 
 TEST(RangeDirectoryTest, ASpanInsideOneRangeNamesOnlyIt) {
@@ -126,7 +123,7 @@ TEST(RangeDirectoryTest, ASpanInsideOneRangeNamesOnlyIt) {
     auto inside = ResolveRanges(ranges, PkSpan{4100, 4200});
     ASSERT_TRUE(inside.ok()) << inside.status().message();
     ASSERT_EQ(inside.value().size(), 1u);
-    EXPECT_EQ(inside.value()[0].owner_core, 1u);
+    EXPECT_EQ(inside.value()[0].entry_page, 401u);
 }
 
 TEST(RangeDirectoryTest, ANonPkPredicateNamesEveryRangeInAscendingOrder) {
@@ -137,9 +134,9 @@ TEST(RangeDirectoryTest, ANonPkPredicateNamesEveryRangeInAscendingOrder) {
     auto all = ResolveRanges(ranges, PkSpan::Whole());
     ASSERT_TRUE(all.ok()) << all.status().message();
     ASSERT_EQ(all.value().size(), 3u);
-    EXPECT_EQ(all.value()[0].owner_core, 0u);
-    EXPECT_EQ(all.value()[1].owner_core, 1u);
-    EXPECT_EQ(all.value()[2].owner_core, 2u);
+    EXPECT_EQ(all.value()[0].entry_page, 400u);
+    EXPECT_EQ(all.value()[1].entry_page, 401u);
+    EXPECT_EQ(all.value()[2].entry_page, 402u);
 }
 
 TEST(RangeDirectoryTest, TheAnswerIsASpanIntoTheCallersOwnStorage) {
@@ -180,13 +177,12 @@ TEST(RangeDirectoryTest, ASpanAboveTheIdSpaceIsRefused) {
 
 TEST(RangeDirectoryTest, AOneRowDirectoryStillResolvesRatherThanReadingAsUnsplit) {
     // A single `lo = 0` row is not the same fact as no rows at all: CC10's
-    // migration writes one, and its `owner_core`/`entry_page` can then
-    // differ from `sys.tables`. So "has rows" and not "has more than one
+    // migration writes one, and its `entry_page` can then differ from
+    // `sys.tables`. So "has rows" and not "has more than one
     // row" is the test the router branches on, and this pins it.
     std::vector<SysRangeRow> rows(1);
     rows[0].rel_oid = 4000;
     rows[0].lo = 0;
-    rows[0].owner_core = 3;
     rows[0].entry_page = 700;
 
     const std::vector<RangeTarget> ranges = RangeTargetsFrom(rows);
@@ -196,7 +192,6 @@ TEST(RangeDirectoryTest, AOneRowDirectoryStillResolvesRatherThanReadingAsUnsplit
     auto one = ResolveRanges(ranges, PkSpan::Equality(999999));
     ASSERT_TRUE(one.ok()) << one.status().message();
     ASSERT_EQ(one.value().size(), 1u);
-    EXPECT_EQ(one.value()[0].owner_core, 3u);
     EXPECT_EQ(one.value()[0].entry_page, 700u);
 }
 

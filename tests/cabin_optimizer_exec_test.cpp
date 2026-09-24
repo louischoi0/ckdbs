@@ -195,15 +195,12 @@ TEST(CabinOptimizerExecTest, ExtendWalksEveryChainOfASplitRelation) {
     ASSERT_EQ(db.Run("INSERT INTO h VALUES ('aaa')").substr(0, 8), "INSERTED");   // id 1
     ASSERT_EQ(db.Run("INSERT INTO h VALUES ('bbb')").substr(0, 8), "INSERTED");   // id 2
 
-    // Split at 3, the upper range this core's own: a foreign owner would
-    // make the writes below cross cores, which is a different refusal and
-    // would prove nothing about the walk.
+    // Split at 3.
     auto oid = db.catalog().FindTableOidByName("h");
     ASSERT_TRUE(oid.ok());
     auto head = db.catalog().CreateRangeEntryPage(oid.value(), /*lo=*/3);
     ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(db.catalog().OpenRangeRows(oid.value(), /*lo=*/3, /*owner_core=*/0,
-                                           head.value()).ok());
+    ASSERT_TRUE(db.catalog().OpenRangeRows(oid.value(), /*lo=*/3, head.value()).ok());
 
     // Rows 3 and 4 land in the second chain, and row 3 carries the value
     // row 1 does - so a one-chain walk returns a set that is short by

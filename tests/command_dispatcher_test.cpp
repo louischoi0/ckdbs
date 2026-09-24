@@ -146,38 +146,22 @@ TEST_F(CommandDispatcherTest, ShowMetaReportsSuperblockFields) {
     EXPECT_FALSE(out.should_stop);
 }
 
-// ---- The cross-core write refusal counters (crosscore.md §6, T5) --------
+// ---- The cross-core write refusal counters, retired (AT-S9) -------------
 //
-// §6 specifies a per-core counter keyed (home core, target core, relation)
-// and calls it "the input the future placement/2PC decision will be made
-// from". The class and both recording sites existed; nothing printed them,
-// so the number could not be read from outside the process - which is the
-// whole of what a metric is for.
+// §6's per-core counter keyed (home core, target core, relation) counted a
+// write whose relation another core owned. No core owns a relation since
+// AT-S9, so there is nothing for the key to name and SHOW META prints none
+// of it - on a quiet core, and after a write from a core that did not
+// create the relation, which is what the counter used to record.
 
-TEST_F(CommandDispatcherTest, ShowMetaReportsNoCrossCoreWriteRefusalsOnAQuietCore) {
-    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto out = d.Dispatch("SHOW META");
-    // Zero prints. It is an answer - *this workload asked for no cross-core
-    // write* - and the before-shipping era is recorded for exactly that
-    // reading, so it must not be omitted the way an absent subsystem is.
-    EXPECT_NE(out.response.find("cross_core_write_refusals=0"), std::string::npos)
-        << out.response;
-    EXPECT_NE(out.response.find("cross_core_write_refusal_keys=0"), std::string::npos)
-        << out.response;
-    EXPECT_EQ(out.response.find("cross_core_write_refusal_detail="), std::string::npos)
-        << "no keys, no detail token: " << out.response;
-}
-
-TEST_F(CommandDispatcherTest, ACrossCoreWriteIsCountedAndPrintedByKeyAndRuns) {
-    // Core 0 creates the relation, so its owner_core says 0 - a statistic
-    // since AT-S5, which the counter below reads and nothing else does.
+TEST_F(CommandDispatcherTest, ShowMetaPrintsNoCrossCoreWriteCounters) {
     CommandDispatcher owner(boot_->superblock, boot_->catalog, store_);
+    EXPECT_EQ(owner.Dispatch("SHOW META").response.find("cross_core_write_refusal"),
+              std::string::npos);
     ASSERT_EQ(owner.Dispatch("CREATE TABLE acct (id int64, name varchar)")
                   .response.substr(0, 7),
               "CREATED");
 
-    // A dispatcher running as core 1 writes it (AT-S5), and the write is
-    // counted under the key the placement decision will be made from.
     CommandDispatcher peer(boot_->superblock, boot_->catalog, store_, nullptr, nullptr,
                            nullptr, wal::DurabilityClass::kGroup, exec::Budget(),
                            /*recorder=*/nullptr, /*replay_enabled=*/false,
@@ -186,47 +170,8 @@ TEST_F(CommandDispatcherTest, ACrossCoreWriteIsCountedAndPrintedByKeyAndRuns) {
                            /*core_id=*/1);
     auto written = peer.Dispatch("INSERT INTO acct VALUES ('alice')");
     ASSERT_EQ(written.response.rfind("INSERTED", 0), 0u) << written.response;
-
-    auto meta = peer.Dispatch("SHOW META");
-    EXPECT_NE(meta.response.find("cross_core_write_refusals=1"), std::string::npos)
-        << meta.response;
-    EXPECT_NE(meta.response.find("cross_core_write_refusal_keys=1"), std::string::npos)
-        << meta.response;
-    // home>target:oid=count - the key §6 names, in the order the ordered map
-    // gives, which is what keeps two runs' reports comparable. Asserted as
-    // the **whole token**: a bare find("=1") over the reply passes on a
-    // dozen unrelated fields (`ddl_durable=1`, `catalog_recovered=1`) and
-    // would therefore pass with no count printed at all.
-    const std::size_t at = meta.response.find("cross_core_write_refusal_detail=");
-    ASSERT_NE(at, std::string::npos) << meta.response;
-    const std::string detail =
-        meta.response.substr(at, meta.response.find(' ', at) - at);
-    EXPECT_EQ(detail.rfind("cross_core_write_refusal_detail=1>0:", 0), 0u) << detail;
-    EXPECT_EQ(detail.substr(detail.size() - 2), "=1") << detail;
-
-    // A second write of the same shape is the same key, counted twice -
-    // not a second key. The distinction is the whole point of a keyed
-    // counter: "one relation written cross-core twice" and "two relations
-    // once" are different evidence for placement.
-    ASSERT_EQ(peer.Dispatch("INSERT INTO acct VALUES ('bob')").response.rfind("INSERTED", 0), 0u);
-    auto meta2 = peer.Dispatch("SHOW META");
-    EXPECT_NE(meta2.response.find("cross_core_write_refusals=2"), std::string::npos)
-        << meta2.response;
-    EXPECT_NE(meta2.response.find("cross_core_write_refusal_keys=1"), std::string::npos)
-        << meta2.response;
-}
-
-TEST_F(CommandDispatcherTest, TheOwningCoresOwnWritesAreNotCountedAsCrossCore) {
-    // The counter answers "did this workload want a cross-core write". A
-    // write that succeeds locally is not evidence for 2PC and must not
-    // appear - the sibling half of the undercount stated at the print site.
-    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, name varchar)").response.substr(0, 7),
-              "CREATED");
-    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8),
-              "INSERTED");
-    EXPECT_NE(d.Dispatch("SHOW META").response.find("cross_core_write_refusals=0"),
-              std::string::npos);
+    const std::string meta = peer.Dispatch("SHOW META").response;
+    EXPECT_EQ(meta.find("cross_core_write_refusal"), std::string::npos) << meta;
 }
 
 // ---- The group-accounting block (sched.md §4, T4) ----------------------

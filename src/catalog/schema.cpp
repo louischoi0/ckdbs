@@ -89,31 +89,16 @@ Status CheckKeystoneColumn(const Schema& schema) {
     return Status::OK();
 }
 
-std::vector<PageId> TableAccess::WalkHeadsFor(std::uint32_t core_id, PkSpan span) const {
+std::vector<PageId> TableAccess::WalkHeads(PkSpan span) const {
     if (ranges.empty()) return {desc_page_id};
     std::vector<PageId> heads;
     heads.reserve(ranges.size());
+    // `ranges` is held in `lo` order, so this is too. Every range the span
+    // meets, whoever wrote it: a range has no owner since AT-S9.
     for (const RangeTarget& range : ranges) {
-        // Owned here **and** inside this stage's slice. Both halves are
-        // needed and neither implies the other: ownership is what keeps a
-        // stage off pages it cannot fault, and the span is what keeps two
-        // stages of one core from each emitting the other's rows when
-        // ownership interleaves.
-        if (range.owner_core != core_id) continue;
         if (range.lo >= span.hi || span.lo >= range.hi) continue;
         heads.push_back(range.entry_page);
     }
-    return heads;
-}
-
-std::vector<PageId> TableAccess::AllWalkHeads() const {
-    if (ranges.empty()) return {desc_page_id};
-    std::vector<PageId> heads;
-    heads.reserve(ranges.size());
-    // `ranges` is held in `lo` order, so this is too - the order
-    // `WalkHeadsFor` promises, kept here because a caller that walks both
-    // would otherwise read one relation two ways.
-    for (const RangeTarget& range : ranges) heads.push_back(range.entry_page);
     return heads;
 }
 
@@ -143,12 +128,6 @@ StatusOr<TableAccess::HeapChain> TableAccess::HeapChainFor(std::uint64_t id) con
     if (!range.ok()) return range.status();
     if (range.value() == nullptr) return HeapChain{desc_page_id, &heap_tail_hint};
     return HeapChain{range.value()->entry_page, &range.value()->tail_hint};
-}
-
-StatusOr<std::uint32_t> TableAccess::RangeOwnerFor(std::uint64_t id) const {
-    auto range = RangeFor(id);
-    if (!range.ok()) return range.status();
-    return range.value() == nullptr ? owner_core : range.value()->owner_core;
 }
 
 }  // namespace kds::catalog
