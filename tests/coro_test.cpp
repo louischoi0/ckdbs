@@ -235,9 +235,8 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
     // point, so the only options were blocking the core or hand-rolling the
     // whole executor into a state machine.
     //
-    // This is the exact shape workplan P4's step pipeline needs - send
-    // STEP_OPEN, await batches - and the exact shape P5's lease services
-    // need.
+    // This is the exact shape P5's lease services need - send a request,
+    // await its grant - and the one the step pipeline used until AT-S10.
     ManualClock clock;
     NullIoBackend io_a;
     NullIoBackend io_b;
@@ -261,18 +260,17 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
     // - any request/reply kind serves, since this cell registers its own
     // handlers on bare schedulers; it was `kExtentLease` until AT-S2b
     // struck that kind, `kIndexBuildRequest` until AT-S5e struck that, and
-    // `kShippedStatementRequest` until AT-S6 struck that. The step pair is
-    // the one AT-0 item 4 has not decided, so it is the least likely of
-    // what is left to be struck next.
+    // `kShippedStatementRequest` until AT-S6 struck that, and the step pair
+    // until AT-S10 struck those. The two lease kinds are what is left.
     ASSERT_TRUE(core1
                     .RegisterMessageHandler(
-                        RingMessageKind::kStepOpen,
+                        RingMessageKind::kTrxIdLease,
                         [&transport](const MessageHeader& h, std::span<const std::byte>) {
                             MessageHeader reply{};
                             reply.src_core = 1;
                             reply.dst_core = h.src_core;
                             reply.request_id = h.request_id;
-                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kRowIdLease);
                             const std::uint64_t granted = 4096;
                             std::byte bytes[sizeof(granted)];
                             std::memcpy(bytes, &granted, sizeof(granted));
@@ -284,7 +282,7 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
     // Core 0: routes the reply into the waiting request's state.
     ASSERT_TRUE(core0
                     .RegisterMessageHandler(
-                        RingMessageKind::kStepBatch,
+                        RingMessageKind::kRowIdLease,
                         [&request](const MessageHeader&, std::span<const std::byte> payload) {
                             std::memcpy(&request.answer, payload.data(), sizeof(request.answer));
                             request.replied = true;
@@ -299,7 +297,7 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
         header.src_core = 0;
         header.dst_core = 1;
         header.request_id = 1;
-        header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepOpen);
+        header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
         if (Status s = transport.value().TrySend(header, {}); !s.ok()) co_return s;
 
         co_await WaitFor{&request.replied};

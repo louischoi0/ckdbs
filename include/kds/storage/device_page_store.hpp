@@ -193,12 +193,12 @@
 //     path lands". **That day was AT-S5** (a write runs where the session
 //     is), so the invariant is gone and the pair is still taken.
 //
-//     What is left holding it is narrower and is worth stating as what it
-//     is: `CabinScopeCovers` keeps the build on the relation's owner
-//     (AT-S6), and the only two users of `OpenScanRing` are that build and
-//     the relayout planner, which SUS-1 leaves dark for every relation
-//     created since 2026-09-05. So the exposure is small and unreached
-//     rather than closed, and the order below is owed.
+//     What held it after AT-S5 was `CabinScopeCovers`' owner test (AT-S6),
+//     and AT-S7 removed that test with the per-core store; the function
+//     went at AT-S10. The only two users of `OpenScanRing` are the Cabin
+//     build and the relayout planner, which SUS-1 leaves dark for every
+//     relation created since 2026-09-05, so the pair is taken from any
+//     core and the order below is owed.
 //     A descent holds one at a time, its handle dying per
 //     iteration; through M1 one core
 //     owns its pool, so no two holders of different pages can ever wait on

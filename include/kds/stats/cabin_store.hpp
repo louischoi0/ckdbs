@@ -313,13 +313,6 @@ public:
         // is not filling, which no other counter can distinguish from
         // "nobody probed it".
         std::uint64_t unbankable_views = 0;
-        // SB-R4: probes that found a Cabin and declined to use it because
-        // the serving core's owned ranges do not cover the walk this step
-        // would do (`docs/spec/cabin.md` §4b). It is the one number
-        // that tells "this Cabin is not earning its write hook" apart from
-        // "this Cabin cannot be reached from where the read runs", which
-        // hits and misses cannot: both of those are zero either way.
-        std::uint64_t scope_declines = 0;
     };
 
     // What one Cabin holds and how it has been doing. Per cabin rather than
@@ -333,7 +326,6 @@ public:
         std::uint64_t misses = 0;
         std::uint64_t recordings = 0;
         std::uint64_t appends = 0;
-        std::uint64_t scope_declines = 0;
     };
 
     explicit CabinStore(CabinLimits limits = CabinLimits()) noexcept : limits_(limits) {}
@@ -536,12 +528,6 @@ public:
     void NoteWrite(const CabinKey& key, const CabinEntry& entry);
 
     // ---- Inspection -----------------------------------------------------
-
-    // The serve-scope decline of §4b's span rule, per Cabin and
-    // store-wide.
-    // Counted at the serve site rather than derived from the router,
-    // because the router's answer is two functions away.
-    void NoteScopeDecline(std::uint64_t cabin_id);
 
     // **By value since AT-S7**: the counters are read under their latch,
     // so a caller cannot hold a reference into them while another core

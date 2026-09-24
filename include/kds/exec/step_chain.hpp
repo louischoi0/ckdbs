@@ -310,9 +310,8 @@ struct IndexProbe {
 // declined and the step's residual still binds an own column by equality to
 // an earlier step's or an enclosing chain's column - the walked-join shape,
 // the one the ladder had no answer for. The step stays kScan, so trails,
-// access statistics, `ShippedForm` and every kind-switch downstream are
-// untouched by construction; the descriptor codec never encodes this field,
-// so a shipped step never carries it. An executor that ignores it wholesale
+// access statistics and every kind-switch downstream are untouched by
+// construction. An executor that ignores it wholesale
 // answers identically: the correlated conjunct stays in `Step::residual`,
 // which is the same downgrade-safety every other access hint has.
 //
@@ -359,8 +358,6 @@ struct StepPredicate {
     // the line, so a plan never shows a predicate the client cannot find in
     // their text. `CREATE PATTERN`'s parameter checks were the second
     // consumer, for the same reason, until 2026-08-31.
-    // Deliberately not serialized by step_descriptor.cpp: a shipped chain's
-    // peer only evaluates residuals, and false is the safe default.
     bool derived = false;
 };
 
@@ -669,18 +666,6 @@ struct SortKey {
 
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
-
-    // **Which slice of `steps[0]`'s relation this chain covers** (RD7).
-    // A stage of a fan-in is assigned one maximal contiguous run of the
-    // relation's ranges, and walks that run alone; the session
-    // concatenates the stages in run order. `Whole()` is every other
-    // chain, which is every chain a local statement compiles.
-    //
-    // **In-memory and never encoded**: the wire carries it once, on
-    // `StepOpenHead`, and the stage copies it here after decoding. Putting
-    // it in the step descriptor would have been the same fact on the wire
-    // twice, which is how the two come to disagree.
-    catalog::PkSpan walk_span = catalog::PkSpan::Whole();
 
     // Uncorrelated sub-chains, executed once each before `steps` opens.
     // Hoisting is not an optimizer rewrite - an uncorrelated subquery's

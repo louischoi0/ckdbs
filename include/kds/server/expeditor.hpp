@@ -845,17 +845,6 @@ private:
     // peer so none of them needs to know about either.
     std::function<void()> instance_stop_;
 
-    // The session side of remote reads (workplan P4c), armed with the
-    // transport: core 0 ships eligible single-step reads to owning cores.
-    std::optional<SessionStepClient> remote_reads_;
-
-    // Core 0's own step server (workplan P4d-4b-3): a pipeline stage whose
-    // relation core 0 owns is served here, exactly as a peer serves its
-    // own. Registered *with* remote_reads_ under one fan-by-tag lambda per
-    // shared message kind, because a scheduler holds one handler per kind
-    // and both consumers discard unmatched tags silently.
-    std::optional<RemoteStepServer> remote_steps_;
-
     // Core 0's checkpoint target, and **the instance's anchor**, which every
     // peer's checkpointer publishes into since AT-S8 - so declared above
     // `cores_`: reverse-order destruction takes the peers first, and the

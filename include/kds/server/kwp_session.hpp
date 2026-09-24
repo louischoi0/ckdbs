@@ -71,11 +71,12 @@
 //   - The portal-idle timeout (§10, KW-D3) therefore bounds memory rather
 //     than pins, which is why its refusal is `kResourceExhausted` and not
 //     a protocol error.
-//   - A **true** cursor is reachable without redesigning this: the
-//     cross-core `RemoteStepServer` already streams a walk under credit and
-//     parks it at the page boundary, which is exactly the mechanism a
-//     row-bounded EXECUTE needs. It is a later task, not a different
-//     design.
+//   - A **true** cursor is reachable without redesigning this: a walk
+//     streamed under credit and parked at the page boundary is the
+//     mechanism a row-bounded EXECUTE needs, and the cross-core
+//     `RemoteStepServer` was one until AT-S10 retired it
+//     (`git show 91111e3:src/server/remote_step_service.cpp`). It is a
+//     later task, not a different design.
 //
 // ---- Bound parameters are substituted, and why ---------------------------
 //

@@ -303,7 +303,7 @@ TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
         ASSERT_TRUE(core.value()
                         ->scheduler()
                         .RegisterMessageHandler(
-                            sched::RingMessageKind::kStepEof,
+                            sched::RingMessageKind::kTrxIdLease,
                             [&served](const sched::MessageHeader&, std::span<const std::byte>) {
                                 served.fetch_add(1, std::memory_order_relaxed);
                             })
@@ -331,7 +331,7 @@ TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
 
     // Core 2 is still serving - which is a stronger statement than "its flag
     // is false", and one this thread is allowed to make.
-    send(2, sched::RingMessageKind::kStepEof);
+    send(2, sched::RingMessageKind::kTrxIdLease);
     for (int i = 0; i < 1000 && served.load(std::memory_order_relaxed) == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }

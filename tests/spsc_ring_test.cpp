@@ -32,7 +32,7 @@ MessageHeader HeaderFor(std::uint64_t request_id) {
     h.dst_core = 2;
     h.session_core = 1;
     h.step_id = 7;
-    h.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    h.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     h.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kForeground);
     return h;
 }
@@ -49,7 +49,7 @@ TEST(SpscRingTest, ARoundTripPreservesTheHeaderAndThePayload) {
     ASSERT_TRUE(ring.value().TryReceive(got, out));
     EXPECT_EQ(got.request_id, 42u);
     EXPECT_EQ(got.step_id, 7u);
-    EXPECT_EQ(got.kind, static_cast<std::uint16_t>(RingMessageKind::kStepBatch));
+    EXPECT_EQ(got.kind, static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease));
     EXPECT_EQ(ToString(out), "some rows");
 
     // And the length announced is the length copied - TrySend overwrites
@@ -137,8 +137,8 @@ TEST(SpscRingTest, AnEmptyPayloadIsALegalMessage) {
     auto ring = SpscRing::Create(4, 64);
     ASSERT_TRUE(ring.ok());
 
-    // STEP_EOF and STEP_CANCEL carry nothing but their tag, so zero bytes
-    // has to be a message rather than an absence.
+    // A kind that carries nothing but its tag - STEP_EOF and STEP_CANCEL
+    // were two until AT-S10 - has to be a message rather than an absence.
     ASSERT_TRUE(ring.value().TrySend(HeaderFor(9), {}).ok());
     MessageHeader got{};
     std::vector<std::byte> out;

@@ -19,18 +19,11 @@ std::size_t RoundUpToPowerOfTwo(std::size_t n) noexcept {
 const char* RingMessageKindName(RingMessageKind kind) noexcept {
     switch (kind) {
         case RingMessageKind::kUnset: return "unset";
-        case RingMessageKind::kStepOpen: return "STEP_OPEN";
-        case RingMessageKind::kStepBatch: return "STEP_BATCH";
-        case RingMessageKind::kStepEof: return "STEP_EOF";
-        case RingMessageKind::kStepCredit: return "STEP_CREDIT";
-        case RingMessageKind::kStepCancel: return "STEP_CANCEL";
-        case RingMessageKind::kStepError: return "STEP_ERROR";
+        // Every kind this build sends has a name here, which is what
+        // makes a log line naming one readable; a struck kind's name goes
+        // with it.
         case RingMessageKind::kTrxIdLease: return "TRXID_LEASE";
         case RingMessageKind::kRowIdLease: return "ROWID_LEASE";
-        // Every kind this build sends has a name here, which is what
-        // makes a log line naming one readable; `kAccessStatsBatch`'s went
-        // with the kind at AT-S7.
-        case RingMessageKind::kShippedRowDesc: return "SHIPPED_ROW_DESC";
     }
     return "unknown";
 }

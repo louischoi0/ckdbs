@@ -2710,12 +2710,10 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
     // But **another core reads this field**, which is where it parts company
     // with the index root and the desc page - those belong to one owner and
     // nobody else looks. `key_order` is read by `CompileStepChain` on the
-    // *session's* core, which for a cross-core read is not the owner, and a
+    // *session's* core, which need not be the core that wrote it, and a
     // stale kAscending there discards an `ORDER BY <pk>` this relation now
-    // needs. Worse, the elision is exactly what makes such a statement
-    // shippable (`session_step_client.cpp` refuses a sorted chain but not an
-    // elided one), so the stale read would answer out of order rather than
-    // refuse. Hence the version bump and the schema word's, without the
+    // needs - an answer out of order rather than a refusal. Hence the
+    // version bump and the schema word's, without the
     // local drop: every other core drops at its next boundary and re-reads
     // the flag, and this core keeps the entry the running INSERT holds -
     // `BumpWord` adopts the bump precisely so that entry is not dropped by

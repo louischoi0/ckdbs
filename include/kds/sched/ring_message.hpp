@@ -39,25 +39,19 @@ namespace kds::sched {
 // `StoredAccessKind`, `kCabinOriginUnset` and `stmt_class` each had to be
 // taught: a zeroed buffer must not decode as a real value.
 //
-// The step kinds are `docs/spec/crosscore.md` §3's six, declared now though
-// nothing sends them until workplan P4. Declaring them early costs a line
-// each and is what keeps the pipeline from arriving with an enum of its
-// own - P1's "kinds enumerated centrally" is a structural requirement, not
-// a tidiness one. The system kinds are the four P1 names.
+// **Every value but the two lease kinds is struck**, and each strike is
+// recorded where its enumerator stood (AU-R4).
 enum class RingMessageKind : std::uint16_t {
     kUnset = 0,
 
-    // ---- Cross-core step pipeline (crosscore.md §3) --------------------
-    // Not sent yet. P4 owns all six.
-    kStepOpen = 1,    // session -> step core: the step descriptor
-    kStepBatch = 2,   // step k -> step k+1 (or session): encoded rows
-    kStepEof = 3,     // upstream -> downstream: no more batches
-    kStepCredit = 4,  // downstream -> upstream: grants batch credits
-    kStepCancel = 5,  // any -> any: stop producing, discard tagged state
-    kStepError = 6,   // failing core -> downstream + session
+    // 1 to 6 were the step pipeline's six - kStepOpen, kStepBatch,
+    // kStepEof, kStepCredit, kStepCancel and kStepError - struck at AT-S10
+    // with the remote step server and its session client. AT-S9 retired
+    // the last statement that opened a stage, the fan-in over a split
+    // relation and the two-step join, so both endpoints were wired with no
+    // producer; a read runs where its session is. **The values are not
+    // reused.**
 
-    // ---- System services (workplan P1, owned by P5/P6) ------------------
-    // Not sent yet either.
     // 16 was kAnchorWrite, struck at AT-S8: a peer's checkpoint published
     // its anchor through core 0 because page 0 was core 0's; every core's
     // checkpointer publishes into the instance's anchor under the
@@ -129,23 +123,9 @@ enum class RingMessageKind : std::uint16_t {
     // nothing to fold and nothing to drop (`docs/spec/crosscore.md` CC13).
     // **The value is not reused.**
 
-    // owner -> arrival core: the **result description** of a shipped read
-    // answered in typed rows (XG1, `docs/spec/crosscore.md` §4a). Sent on
-    // the answer edge ahead of the first `kStepBatch`, and **chunked**: the
-    // engine has no column-count cap, so a description may exceed a ring
-    // message and crosses as an ordered sequence reassembled before the
-    // rows arrive.
-    //
-    // **Its own kind rather than a `kStepBatch` with a flag**, and that is
-    // a correctness choice: `StepBatchHeader::seq` is per-edge and asserted
-    // contiguous - a receiver that sees a gap has lost a batch - so folding
-    // a differently-shaped payload into that sequence would either break
-    // the assertion or force description chunks to be counted as batches.
-    // Two kinds, two sequences, one tag.
-    //
-    // Control rather than data, like EOF and CREDIT: it carries no rows and
-    // spends no credit.
-    kShippedRowDesc = 40,
+    // 40 was kShippedRowDesc, the typed result description a stage sent
+    // ahead of its first batch on the answer edge (XG1), struck at AT-S10
+    // with the step kinds it travelled beside. **The value is not reused.**
 
     // 41 and 42 were kFkProbeRequest / kFkProbeReply and 43 and 44
     // kFkReverseProbeRequest / kFkReverseProbeReply, struck at AT-S5f: the
@@ -171,15 +151,8 @@ enum class RingMessageKind : std::uint16_t {
 // `kUnset` a "known" kind - the review of AT-S2b is why it is a switch.)
 constexpr bool IsKnownRingMessageKind(RingMessageKind kind) noexcept {
     switch (kind) {
-        case RingMessageKind::kStepOpen:
-        case RingMessageKind::kStepBatch:
-        case RingMessageKind::kStepEof:
-        case RingMessageKind::kStepCredit:
-        case RingMessageKind::kStepCancel:
-        case RingMessageKind::kStepError:
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kRowIdLease:
-        case RingMessageKind::kShippedRowDesc:
             return true;
         case RingMessageKind::kUnset:
             return false;
@@ -205,12 +178,12 @@ constexpr std::size_t CountKnownRingMessageKinds() noexcept {
     }
     return n;
 }
-static_assert(CountKnownRingMessageKinds() == 9,
+static_assert(CountKnownRingMessageKinds() == 2,
               "AR0-6 D25: the ring's kind count is frozen and moves only by a strike - 34 at "
               "AU-S3, 29 at AT-S2b (17, 19, 21, 23, 24 struck), 26 at AT-S5d (30, 31, 32 "
               "struck), 23 at AT-S5e (25, 26, 27 struck), 19 at AT-S5f (41, 42, 43, 44 "
               "struck), 11 at AT-S6 (28, 29 and 33-38 struck), 10 at AT-S7 (39 struck), 9 at "
-              "AT-S8 (16 struck)");
+              "AT-S8 (16 struck), 2 at AT-S10 (1-6 and 40 struck)");
 
 const char* RingMessageKindName(RingMessageKind kind) noexcept;
 

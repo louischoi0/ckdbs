@@ -63,11 +63,9 @@ CoreRuntime::~CoreRuntime() {
     // **`scheduler_.reset()` used to stand here and is deliberately gone.**
     // It inverted declaration order to enforce a contract that declaration
     // order already keeps: `scheduler_` is declared above every borrower,
-    // so reverse-order destruction drops all seven of them first. Dropping
-    // it here instead did the opposite of what its own comment argued for,
-    // and `MakeStepSend` made that reachable rather than theoretical -
-    // `remote_steps_` now holds a `sched::Scheduler&` and would have
-    // outlived it by the width of this function. The hand-nulled borrows
+    // so reverse-order destruction drops every one of them first. Dropping
+    // it here instead did the opposite of what its own comment argued for.
+    // The hand-nulled borrows
     // above stay: they are for members declared *below* the dispatcher,
     // which reverse order takes first, and that order no line here can fix.
 }
@@ -613,51 +611,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         }
     }
 
-    // The remote step server (workplan P4b, streaming since P4d-4a): this
-    // core executes STEP_OPENs against relations it owns and streams the
-    // batches back under credit, the producer parking at page boundaries
-    // when credit runs dry. The sender submits through the retry task - a
-    // full ring yields and retries, never drops (M7) - and the producer
-    // itself is a coroutine task on this same reactor.
-    //
-    // **`transport`, the parameter - never `transport_`.** That member is
-    // not assigned until the end of this function, and reading it here
-    // was first a null dereference and then, once guarded, a silent
-    // default that left the batch ceiling absent, so nothing clamped an
-    // oversize batch. `MakeStepSend` takes the parameter and holds it,
-    // so the whole class of ordering error is gone rather than commented
-    // around.
-    //
-    // **One seam, two owners** (R4-R/RR2): the client takes a copy of the
-    // sender and the server takes the seam, which is `expeditor.cpp`'s
-    // pairing on core 0 and is what keeps the sender and the ceiling the
-    // server seals against from coming from different transports.
-    StepSendSeam step_seam = MakeStepSend(*scheduler_, transport, config_.core_id);
-    remote_reads_.emplace(config_.core_id, step_seam.send, log_);
-    remote_steps_.emplace(
-        *catalog_, *store_, config_.core_id, std::move(step_seam), log_, kStepBatchTargetBytes,
-        [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); },
-        &*txn_manager_,
-        // And this core's configured row-touch ceiling, which the server
-        // ignored until P4d-4c's review - a shipped statement was bounded
-        // only by whatever a fresh `exec::Budget()` defaulted to.
-        config_.budget,
-        // And this core's Cabin store (AK-S2): a stage on a relation this
-        // core owns serves from the same sets the dispatcher does.
-        cabins(),
-        // And the instance's lock table, so a producer declares the relation
-        // it streams (AT-S1).
-        locks_);
-    // All six kinds, in `remote_step_service.hpp`'s one home - including
-    // the kStepBatch/kStepEof fan-out to both endpoints, which is the rule
-    // that must not be written twice.
-    if (Status s = WireStepEndpoints(*scheduler_, *remote_reads_, *remote_steps_); !s.ok()) {
-        return s;
-    }
-    // **The dispatcher is not handed the client since AT-S9**: no statement
-    // opens a stage (the fan-in and the two-step pipeline retired with
-    // ownership), so the services above are wired and have no producer
-    // until AT-S10/S11 delete them.
+    // **No remote step server and no step client since AT-S10.** AT-S9
+    // retired the last statement that opened a stage - the fan-in over a
+    // split relation and the two-step join - and this core served STEP_OPENs
+    // for relations it owned, a question ownership's retirement removed. The
+    // six `kStep*` kinds and `kShippedRowDesc` are struck.
 
     // **Statement shipping and 2PC are not wired, because they no longer
     // exist** (AT-S6). What stood here built this core's shipped-statement

@@ -89,16 +89,13 @@ Status CheckKeystoneColumn(const Schema& schema) {
     return Status::OK();
 }
 
-std::vector<PageId> TableAccess::WalkHeads(PkSpan span) const {
+std::vector<PageId> TableAccess::WalkHeads() const {
     if (ranges.empty()) return {desc_page_id};
     std::vector<PageId> heads;
     heads.reserve(ranges.size());
-    // `ranges` is held in `lo` order, so this is too. Every range the span
-    // meets, whoever wrote it: a range has no owner since AT-S9.
-    for (const RangeTarget& range : ranges) {
-        if (range.lo >= span.hi || span.lo >= range.hi) continue;
-        heads.push_back(range.entry_page);
-    }
+    // `ranges` is held in `lo` order, so this is too. Every range, whoever
+    // wrote it: a range has no owner since AT-S9.
+    for (const RangeTarget& range : ranges) heads.push_back(range.entry_page);
     return heads;
 }
 

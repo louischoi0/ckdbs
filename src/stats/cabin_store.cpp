@@ -519,16 +519,6 @@ void CabinStore::Forget(std::uint64_t cabin_id) {
     part.info.erase(cabin_id);
 }
 
-void CabinStore::NoteScopeDecline(std::uint64_t cabin_id) {
-    {
-        Partition& part = PartitionFor(cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
-        ++part.info[cabin_id].scope_declines;
-    }
-    std::lock_guard<std::mutex> hold(stats_latch_);
-    ++stats_.scope_declines;
-}
-
 void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
     enum class Counted { kNone, kAppend, kCap };
     Counted counted = Counted::kNone;

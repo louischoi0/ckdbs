@@ -305,21 +305,6 @@ TEST(CabinStoreTest, DiscardClearsTheEntryCapSoReObservationIsPossible) {
     EXPECT_FALSE(store.MayObserve(theirs));
 }
 
-TEST(CabinStoreTest, ScopeDeclinesCountPerCabinAndStoreWide) {
-    // SB-R4's fall-through counter. It is neither a hit nor a miss: the
-    // set was never consulted, and folding it into misses would read as
-    // "the value was not observed", a different fact with a different fix.
-    CabinStore store;
-    store.NoteScopeDecline(1);
-    store.NoteScopeDecline(1);
-    store.NoteScopeDecline(2);
-    EXPECT_EQ(store.InfoFor(1).scope_declines, 2u);
-    EXPECT_EQ(store.InfoFor(2).scope_declines, 1u);
-    EXPECT_EQ(store.stats().scope_declines, 3u);
-    EXPECT_EQ(store.stats().hits, 0u);
-    EXPECT_EQ(store.stats().misses, 0u);
-}
-
 TEST(CabinStoreTest, InfoTracksValuesAndEntriesPerCabin) {
     CabinStore store;
     ASSERT_TRUE(store.Commit(KeyFor(1, Str("aaa")), {EntryFor(1), EntryFor(2)}));

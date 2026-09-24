@@ -255,8 +255,6 @@ using InnerBuildStore = std::unordered_map<std::uint32_t, InnerBuildState>;
 
 class ChainRunner {
 public:
-    void set_walk_span(catalog::PkSpan span) noexcept { walk_span_ = span; }
-
     // `builds` is the statement's inner-build store, shared the way
     // `stats` and `budget` are: a nested runner is rebuilt per outer row,
     // and a map rebuilt per outer row is not a map (JB6). Null means "this
@@ -701,62 +699,13 @@ private:
                                                 : step.cabin->value;
     }
 
-    // **Whether this step's walk covers the relation** (`cabin.md` §4b,
-    // SB-R1). Not a property of the set - one store for the instance makes
-    // a set authoritative for the observed value whole (AT-S7) - but of
-    // the step reading it: a walk narrower than the relation may neither
-    // bank from it (the set would be missing what the walk never reached)
-    // nor answer from it (the same row would be emitted by two stages of
-    // one fan-in).
-    //
-    // **The one-range answer is first and is one branch on a cached
-    // field** - CC9's zero-cost invariant reaching the serve path, the
-    // same `ranges.empty()` test `HeapChainFor` and `VisitRelation` take,
-    // and the reason an unsplit relation's probe is byte-identical to what
-    // it was before this rule existed.
-    //
-    // For a split relation the test is a whole span. It was `ServableBy`
-    // too until AT-S9 retired the fan-in with ownership: every walk here
-    // covers every range now, so the one way a set could answer a step
-    // short is a step assigned a slice - a remote stage's, which nothing
-    // opens any more - and a set covering *all* of the relation would hand
-    // that stage rows outside its slice.
-    // The slice step `index` walks: RD7's stage assignment on the chain's
-    // own first step, the whole space for every step below it. **One
-    // spelling**, because the walk asks it too (`WalkHeads`, below) and
-    // the agreement between the two is the entire correctness argument for
-    // `CabinScopeCovers` - written twice, they could stop agreeing.
-    catalog::PkSpan SpanFor(std::size_t index) const noexcept {
-        return index == 0 ? walk_span_ : catalog::PkSpan::Whole();
-    }
-
-    bool CabinScopeCovers(const catalog::TableAccess& access, std::size_t index) const noexcept {
-        // **The owner test AT-S6 put here is gone** (AT-S7). It read
-        // `access.owner_core != catalog_.core_id()` and declined the
-        // Cabin for every relation this core did not own, because a store
-        // was a core's own and a write ran where the session was - so a
-        // set here was missing whatever another core wrote, and an
-        // exhausted-set answer was short. One store serves every core now,
-        // so a set is a superset of every pk carrying its value whoever
-        // wrote it, and what is left to ask is the step's own span.
-        if (access.ranges.empty()) return true;
-        const catalog::PkSpan span = SpanFor(index);
-        return span.lo == 0 && span.hi == catalog::kIdSpaceEnd;
-    }
-
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
-        // §4b's span rule, before anything else this step could do with
-        // the Cabin - **the recording path is gated by it too**, not only
-        // the serve. A walk that covered less than the relation would bank
-        // a set missing exactly the rows it did not reach, which is the C1
-        // break in its most durable form: recorded once, served as
-        // authoritative forever after.
-        if (cabins_ != nullptr && step.cabin.has_value() && !CabinScopeCovers(access, index)) {
-            cabins_->NoteScopeDecline(step.cabin->cabin_id);
-            ++stats_.For(step.step_id).cabin_scope_declines;
-            co_return co_await RunWalkStep(steps, index, step, access);
-        }
+        // **No span rule since AT-S10** (`cabin.md` §4b): every walk here
+        // covers the whole relation, so a set is neither banked from nor
+        // served to a walk narrower than the relation. The one narrower
+        // walk was a remote stage's assigned slice, and nothing opens a
+        // stage.
 
         // Nothing configured, or a value that must never be observed (NULL,
         // an unbound `$param`). Both take the walk, which is what the step
@@ -1957,10 +1906,7 @@ private:
         // correlated sub-chain - where RD3's zero-cost invariant is one
         // load of the field it always was.
         if (!is_btree && !access.ranges.empty()) {
-            // The span applies to the outermost relation, which is what a
-            // stage is assigned; an inner step reads a different relation
-            // and the assignment says nothing about it.
-            walk_heads = access.WalkHeads(SpanFor(index));
+            walk_heads = access.WalkHeads();
         }
         PageId cur = kInvalidPageId;
         if (resume_page != kInvalidPageId) {
@@ -2532,11 +2478,6 @@ private:
     }
 
     catalog::Catalog& catalog_;
-    // RD7's stage assignment; see `StepChain::walk_span`. Set once,
-    // immediately after construction, and read only at the outermost
-    // step - a nested step reads a different relation.
-    catalog::PkSpan walk_span_ = catalog::PkSpan::Whole();
-
     storage::PageStore& store_;
 
     // Scratch for AcceptTupleAt()'s decode, reused across rows so a scan
@@ -2796,7 +2737,6 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     cabin_hint_hits += other.cabin_hint_hits;
     cabin_hint_misses += other.cabin_hint_misses;
     cabin_recordings += other.cabin_recordings;
-    cabin_scope_declines += other.cabin_scope_declines;
     inner_builds += other.inner_builds;
     build_rows += other.build_rows;
     build_probes += other.build_probes;
@@ -2922,9 +2862,6 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
     ChainRunner runner(catalog, store, sink, /*depth=*/parent != nullptr ? 1u : 0u, parent,
                        counters, spend, trail, replay, cabins, snapshot, indexes, resume_gate,
                        /*builds=*/nullptr, position);
-    // RD7: the slice this chain covers, which a fan-in's stage was
-    // assigned and every other chain leaves whole.
-    runner.set_walk_span(chain.walk_span);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by

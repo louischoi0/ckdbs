@@ -265,10 +265,9 @@ struct TableAccess {
     // check ask the same question, and one walk here reaches all of it.
     //
     // Empty `ranges` answers the one entry it always did, which is the
-    // unsplit path and RD3's zero-cost invariant reaching the walk.
-    // `span` is a remote stage's assigned slice (RD7); `PkSpan::Whole()` -
-    // the default and every local caller's - is the whole relation.
-    std::vector<PageId> WalkHeads(PkSpan span = PkSpan::Whole()) const;
+    // unsplit path and RD3's zero-cost invariant reaching the walk. It took
+    // a span until AT-S10, for a remote stage's assigned slice (RD7).
+    std::vector<PageId> WalkHeads() const;
 
     // The chain a row with `id` belongs in. Heap relations only; a btree
     // relation descends and has no chain.

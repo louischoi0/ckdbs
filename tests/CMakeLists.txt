@@ -61,10 +61,6 @@ add_executable(kds_tests
     prepared_recovery_test.cpp
     core_runtime_test.cpp
     expeditor_test.cpp
-    step_pipeline_test.cpp
-    step_descriptor_test.cpp
-    remote_step_service_test.cpp
-    session_step_client_test.cpp
     coro_test.cpp
     spsc_ring_test.cpp
     ring_transport_test.cpp

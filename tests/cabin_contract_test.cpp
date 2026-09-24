@@ -1081,62 +1081,6 @@ TEST(CabinSplitScopeTest, ASplitRelationWalkedWholeStillServes) {
     const std::uint64_t hits_before = db.cabins().InfoFor(cabin_id).hits;
     EXPECT_EQ(db.Run(q), ref.Run(q));
     EXPECT_GT(db.cabins().InfoFor(cabin_id).hits, hits_before) << "the split declined a serve";
-    EXPECT_EQ(db.cabins().InfoFor(cabin_id).scope_declines, 0u);
-    EXPECT_EQ(db.cabins().stats().scope_declines, 0u);
-}
-
-TEST(CabinSplitScopeTest, ASlicedWalkMakesTheProbeFallThroughToTheWalk) {
-    // The **negative** half, run through `exec::Execute` rather than the
-    // dispatcher, and deliberately: nothing the dispatcher runs assigns a
-    // step a slice since AT-S9 retired the fan-in, so the serve site's
-    // decline is reachable only by setting the chain's `walk_span` here.
-    // Until AT-S9 the premise was a range another core owned; ownership is
-    // gone and the span is the half of the predicate that stays.
-    Instance db(/*cabins=*/true);
-    Instance ref(/*cabins=*/false);
-    Load(db);
-    Load(ref);
-    DeclareCabins(db);
-
-    const std::string q = "SELECT * FROM h WHERE sym = 'aaa'";
-    ASSERT_EQ(db.Run(q), ref.Run(q));
-    const catalog::Oid oid = SplitRelation(db, "h", /*lo=*/4096);
-    const std::uint64_t cabin_id = CabinIdOn(db, oid, /*col_pos=*/1);
-    ASSERT_GT(db.cabins().InfoFor(cabin_id).values, 0u);
-
-    auto parsed = parser::Parse(q);
-    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
-    auto chain = exec::Compile(db.catalog(), std::get<parser::SelectStmt>(parsed.value()));
-    ASSERT_TRUE(chain.ok()) << chain.status().message();
-    ASSERT_EQ(chain.value().steps.size(), 1u);
-    ASSERT_EQ(chain.value().steps[0].kind, exec::AccessKind::kCabinProbe);
-    // The lower range alone, which holds every row `Load` wrote: the walk's
-    // answer is the whole answer, so the count below still reads as right.
-    chain.value().walk_span = catalog::PkSpan{0, 4096};
-
-    std::vector<std::string> rows;
-    exec::ExecStats stats;
-    const Status ran = exec::Execute(
-        db.catalog(), db.store(), chain.value(),
-        [&](const exec::ChainFrame&) -> StatusOr<storage::VisitControl> {
-            rows.emplace_back();
-            return storage::VisitControl::kContinue;
-        },
-        &stats, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr, &db.cabins());
-    ASSERT_TRUE(ran.ok()) << ran.message();
-
-    // The walk answered - three 'aaa' rows, exactly what the observed set
-    // holds - and the Cabin was never consulted.
-    EXPECT_EQ(rows.size(), 3u);
-    const exec::StepStats& step = stats.steps[chain.value().steps[0].step_id];
-    EXPECT_EQ(step.cabin_scope_declines, 1u);
-    EXPECT_EQ(step.cabin_hits, 0u);
-    EXPECT_EQ(step.cabin_misses, 0u) << "a scope decline is neither a hit nor a miss";
-    EXPECT_GT(step.rows_examined, 0u) << "the fall-through did not walk";
-    EXPECT_EQ(db.cabins().InfoFor(cabin_id).scope_declines, 1u);
-    EXPECT_EQ(db.cabins().stats().scope_declines, 1u);
-    // And the set is untouched: a scope decline is not an un-observe.
-    EXPECT_GT(db.cabins().InfoFor(cabin_id).values, 0u);
 }
 
 }  // namespace

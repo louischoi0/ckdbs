@@ -466,7 +466,7 @@ TEST_F(SchedulerInboxTest, AReceivedMessageBecomesATaskInTheSendersGroup) {
     std::string got_payload;
     bool handled = false;
     ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
                                             [&](const MessageHeader& h,
                                                 std::span<const std::byte> payload) {
                                                 handled = true;
@@ -478,7 +478,7 @@ TEST_F(SchedulerInboxTest, AReceivedMessageBecomesATaskInTheSendersGroup) {
                     .ok());
 
     ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                    .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
                                         SchedulingGroup::kMaintenance),
                              PayloadOf("rows"))
                     .ok());
@@ -507,11 +507,11 @@ TEST_F(SchedulerInboxTest, TheHandlerRunsInPhaseFourAndNotInsideTheDrain) {
     bool handled = false;
     ASSERT_TRUE(scheduler
                     .RegisterMessageHandler(
-                        RingMessageKind::kStepBatch,
+                        RingMessageKind::kTrxIdLease,
                         [&](const MessageHeader&, std::span<const std::byte>) { handled = true; })
                     .ok());
     ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                    .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
                                         SchedulingGroup::kForeground),
                              PayloadOf("x"))
                     .ok());
@@ -529,7 +529,7 @@ TEST_F(SchedulerInboxTest, AMessageWithNoHandlerIsDroppedAndNotFatal) {
     ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
 
     ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kStepCancel,
+                    .TrySend(MessageTo(1, RingMessageKind::kRowIdLease,
                                         SchedulingGroup::kForeground),
                              PayloadOf("late"))
                     .ok());
@@ -557,13 +557,13 @@ TEST_F(SchedulerInboxTest, TheDrainIsBoundedByItsLoopBudget) {
     ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
     ASSERT_TRUE(scheduler
                     .RegisterMessageHandler(
-                        RingMessageKind::kStepBatch,
+                        RingMessageKind::kTrxIdLease,
                         [](const MessageHeader&, std::span<const std::byte>) {})
                     .ok());
 
     for (int i = 0; i < 5; ++i) {
         ASSERT_TRUE(transport.value()
-                        .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                        .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
                                             SchedulingGroup::kForeground),
                                  PayloadOf("x"))
                         .ok());
@@ -603,14 +603,14 @@ TEST_F(SchedulerInboxTest, PhaseOrderIsUnchangedByTheDrain) {
     std::vector<std::string> order;
     scheduler.SubmitAt(0, [&] { order.push_back("timer"); });
     ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
                                             [&](const MessageHeader&,
                                                 std::span<const std::byte>) {
                                                 order.push_back("message");
                                             })
                     .ok());
     ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                    .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
                                         SchedulingGroup::kForeground),
                              PayloadOf("x"))
                     .ok());
@@ -694,7 +694,7 @@ TEST_F(SchedulerWakeTest, AMessageAlreadyQueuedIsNotSleptThrough) {
 
     bool handled = false;
     ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
                                             [&](const MessageHeader&,
                                                 std::span<const std::byte>) { handled = true; })
                     .ok());
@@ -702,7 +702,7 @@ TEST_F(SchedulerWakeTest, AMessageAlreadyQueuedIsNotSleptThrough) {
     MessageHeader header{};
     header.src_core = 0;
     header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
     ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
 
@@ -746,7 +746,7 @@ TEST_F(SchedulerWakeTest, AMessageToABlockedReactorArrivesWithoutWaitingOutTheBl
 
     std::atomic<bool> handled{false};
     ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
                                             [&](const MessageHeader&,
                                                 std::span<const std::byte>) {
                                                 handled.store(true);
@@ -764,7 +764,7 @@ TEST_F(SchedulerWakeTest, AMessageToABlockedReactorArrivesWithoutWaitingOutTheBl
     MessageHeader header{};
     header.src_core = 0;
     header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
     const auto sent = std::chrono::steady_clock::now();
     ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
@@ -822,7 +822,7 @@ TEST_F(SchedulerWakeTest, AnAwakeTargetIsNeverWoken) {
     MessageHeader header{};
     header.src_core = 0;
     header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
     for (int i = 0; i < 4; ++i) ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
 
@@ -853,7 +853,7 @@ TEST_F(SchedulerWakeTest, ARefusedSendWakesNobody) {
     MessageHeader header{};
     header.src_core = 0;
     header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
 
     ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
@@ -902,7 +902,7 @@ TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
     MessageHeader header{};
     header.src_core = 0;
     header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
     ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
     EXPECT_EQ(scheduler.wakes_sent(), 0u) << "an awake target was woken";
@@ -1127,7 +1127,7 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
     scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, waiter(),
                                   [&resumed](const Status&) { resumed.store(true); }));
     ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
                                             [&released](const MessageHeader&,
                                                         std::span<const std::byte>) {
                                                 released = true;
@@ -1151,7 +1151,7 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
     MessageHeader header{};
     header.src_core = 0;
     header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
     const auto sent = std::chrono::steady_clock::now();
     ASSERT_TRUE(transport.value().TrySend(header, {}).ok());

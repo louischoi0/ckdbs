@@ -1403,12 +1403,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // splits). A client reading any of them reads its absence, which is
     // this section's absent-rather-than-zeroed rule applied to a counter
     // whose event cannot happen.
-    //
-    // What a pre-AT split still costs a Cabin, `cabin_scope_fallthroughs`,
-    // is store-wide here and per Cabin on `SHOW CABINS`. Absent at zero.
-    if (cabins_ != nullptr && cabins_->stats().scope_declines != 0) {
-        os << " cabin_scope_fallthroughs=" << cabins_->stats().scope_declines;
-    }
+    // `cabin_scope_fallthroughs` went at AT-S10 on the same rule: a Cabin
+    // fell through only for a walk narrower than its relation, which was a
+    // remote stage's slice, and nothing opens a stage.
 
     // **How many ranges each split relation has** (R4-R §7's instrument
     // gap, added with RR1): `sys.ranges` has no column definitions, so
@@ -3142,12 +3139,9 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         //
         // `observed=0 hits=0` on an old Cabin means the column is declared
         // and never probed by equality. `observed>0 hits=0` means the
-        // values being probed are not the ones being observed. And
-        // `scope_declines>0` (SB-R4) means neither: the probes arrived and
-        // the serve path declined them, because the step's own walk would
-        // not have covered the relation (`docs/spec/cabin.md` §4b) - the
-        // third reading, which the first two cannot be distinguished from
-        // without it.
+        // values being probed are not the ones being observed. The third
+        // reading, `scope_declines` (SB-R4), went at AT-S10 with the one
+        // walk that could produce it, a remote stage's slice.
         //
         // **And it is the instance's figure since AT-S7**: one store, so a
         // Cabin's counters are the same numbers whichever core is asked,
@@ -3163,13 +3157,12 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         if (cabins_ != nullptr) {
             const stats::CabinStore::CabinInfo info = cabins_->InfoFor(row.cabin_id);
             os << " observed=" << info.values << " entries=" << info.entries
-               << " hits=" << info.hits << " misses=" << info.misses
-               << " scope_declines=" << info.scope_declines;
+               << " hits=" << info.hits << " misses=" << info.misses;
         } else {
             // Not "0": the store is off, so every count is unknown rather
             // than zero, and printing zeros would read as "nothing has
             // happened" when the truth is "nothing is being recorded".
-            os << " observed=- entries=- hits=- misses=- scope_declines=- (cabins = off)";
+            os << " observed=- entries=- hits=- misses=- (cabins = off)";
         }
     }
     return {os.str(), false};
@@ -6566,9 +6559,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     const std::optional<txn::ReadView> resolve_view = ViewFor(session);
     // Opened before the compile, which declares into it at every bind
     // (`step_compiler.hpp`'s `declare`; AT-R1). Lives to the end of the
-    // statement, which is the end of this function - a statement that
-    // ships a read returns `pending` before its remote walk runs, and the
-    // executing core takes its own (`remote_step_service.cpp`).
+    // statement, which is the end of this function.
     ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
     auto chain = exec::Compile(catalog_, stmt,
                                resolve_view.has_value() ? &*resolve_view : nullptr, &borrow);

@@ -71,14 +71,6 @@ inline constexpr std::uint32_t kMaxFrame = 16u * 1024u * 1024u;
 // would carry it past this, so one row wider than the target still ships
 // whole - the alternative is a row nothing can ever send. `kMaxFrame` is
 // the ceiling, 256x above.
-//
-// **Deliberately not `kStepBatchTargetBytes`** (server/step_pipeline.hpp,
-// 32 KiB). They look like one quantity and are two: the cross-core target
-// is bounded by the ring slot it must fit inside - a bound that layer
-// derives from the transport, after a batch 32x the slot vanished
-// silently - and this one is bounded by nothing but the frame. Naming
-// them once would tie a wire frame's size to a ring's slot, which is the
-// coupling that defect came from rather than the fix for it.
 inline constexpr std::size_t kRowBatchTargetBytes = 64u * 1024u;
 
 // Decoded form of the 8-byte frame header.

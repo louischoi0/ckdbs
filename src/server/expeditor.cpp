@@ -1752,50 +1752,9 @@ Status Expeditor::Start() {
         // made the reservations above durable before a peer could allocate
         // into one, and there are no reservations.
 
-        // The session side of remote reads (workplan P4c): core 0 ships an
-        // eligible single-step read to the owning core and awaits its
-        // batches. Registered before the dispatcher learns about it so a
-        // reply can never beat its handlers.
-        // One send for both pipeline endpoints on this core - the client
-        // below and the step server after it - and one with `CoreRuntime`'s,
-        // which used to be its near-verbatim twin. `MakeStepSend` also
-        // carries the slot the server's ceiling is derived from, so the
-        // sender and that ceiling cannot come from different transports.
-        StepSendSeam step_seam = MakeStepSend(scheduler, *transport_, /*src_core=*/0);
-        // The client takes the sender alone and no ceiling, which is the
-        // one place in the tree the pair comes apart. It needs none: the
-        // only thing it sends that could be wide is a STEP_OPEN, and the
-        // seam's own guard refuses that with `OpenPipeline` propagating
-        // the refusal - a plan-time error, never a silent loss.
-        remote_reads_.emplace(/*core_id=*/0, step_seam.send, &*logger_);
-        // Core 0's own step server (workplan P4d-4b-3): a stage placed on
-        // a relation core 0 owns is served here, like any peer serves its
-        // own - the missing half that made "every stage's core serving"
-        // true. Producers and consumers land on core 0's one reactor.
-        remote_steps_.emplace(
-            database_->catalog, *store_, /*core_id=*/0, std::move(step_seam), &*logger_,
-            kStepBatchTargetBytes,
-            [&scheduler](std::unique_ptr<sched::Task> task) {
-                scheduler.Submit(std::move(task));
-            },
-            txn_manager_.has_value() ? &*txn_manager_ : nullptr,
-            // And the same row-touch ceiling every statement on this core
-            // runs under (P4d-4c's review).
-            exec::Budget(config_.max_rows_touched),
-            // And core 0's Cabin store (AK-S2), as a peer's step server
-            // takes its own (`core_runtime.cpp`).
-            cabin_store_ ? &*cabin_store_ : nullptr,
-            // And the lock table, as a peer's does (AT-S1).
-            locks_.get());
-        // All six kinds, in `remote_step_service.hpp`'s one home. Core 0's
-        // wiring and a peer's became identical when RR2 gave every core a
-        // client, and the fan-out rule the block below used to state twice
-        // now has one place to be got wrong in.
-        if (Status s = WireStepEndpoints(scheduler, *remote_reads_, *remote_steps_); !s.ok()) {
-            return s;
-        }
-        // Not handed to the dispatcher since AT-S9: no statement opens a
-        // stage, so the endpoints have no producer until AT-S10/S11.
+        // **Core 0 wires no step server and no step client since AT-S10**,
+        // as no peer does: AT-S9 retired the last statement that opened a
+        // stage, and the kinds are struck.
 
         // **Core 0 wires neither statement shipping nor 2PC since AT-S6**,
         // because neither exists: it built its own shipped-statement
@@ -2090,16 +2049,6 @@ Status Expeditor::RunUntilStopped() {
     }
     cores_.clear();
 
-    // **The pipeline endpoints go before the transport they send through.**
-    // Both hold a sender bound to `*transport_` - by reference since
-    // `MakeStepSend`, by `[this]` and a `*transport_` dereference before
-    // that - so destroying the transport first leaves a sender that would
-    // be undefined to call. Nothing calls one here (every reactor has
-    // stopped by this line, which is why the old ordering never bit), but
-    // teardown that is correct only because nothing exercises it is the
-    // shape this file has already been caught by once.
-    remote_steps_.reset();
-    remote_reads_.reset();
     transport_.reset();
 
     // **Every listener is torn down before the scheduler leaves scope**,

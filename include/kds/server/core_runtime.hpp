@@ -22,8 +22,6 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/mount_recovery.hpp"
-#include "kds/server/remote_step_service.hpp"
-
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/superblock.hpp"
@@ -639,17 +637,9 @@ private:
     // `Config::cabins` was: then `cabin_store_` below is this runtime's
     // own, which only a fixture builds now.
     stats::CabinStore* cabins_ = nullptr;
-    // Declared ahead of every borrower - the step server just below, the
-    // dispatcher and the probe server further down - so reverse
-    // destruction ends them before the store they point into.
+    // Declared ahead of its borrower, the dispatcher further down, so
+    // reverse destruction ends it before the store it points into.
     std::optional<stats::CabinStore> cabin_store_;
-
-    // The remote step server (P4b) and its client half (R4-R/RR2), armed
-    // at AttachTransport. **No producer since AT-S9**: nothing opens a
-    // stage and the dispatcher borrows neither; both stay wired until
-    // AT-S10/S11 delete them.
-    std::optional<RemoteStepServer> remote_steps_;
-    std::optional<SessionStepClient> remote_reads_;
 
     // The target this core's checkpointer flushes through (PW3), built at
     // `Open` when the runtime is handed an anchor. Declared below `store_`,

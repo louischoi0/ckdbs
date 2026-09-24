@@ -148,8 +148,9 @@ public:
     // above says so, and `TrySend` on one would index a `rings_` the move
     // emptied while `core_count_` survived it). The guard is here so
     // `front()` cannot be UB, not because something reaches this in that
-    // state; every `max_payload()` call in the engine is
-    // `server::MakeStepSend`'s, on a transport it was handed live.
+    // state. No engine code calls `max_payload()` since AT-S10 retired
+    // its one caller, the step pipeline's send seam; the transport cells
+    // still pin it.
     std::size_t max_payload() const noexcept override {
         return rings_.empty() ? 0 : rings_.front().max_payload();
     }

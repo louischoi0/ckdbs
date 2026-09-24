@@ -51,9 +51,6 @@ add_library(kds
     src/exec/assertion_recover.cpp
     src/server/row_id_lease_service.cpp
     src/server/trx_id_lease_service.cpp
-    src/server/step_descriptor.cpp
-    src/server/remote_step_service.cpp
-    src/server/session_step_client.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
     src/catalog/range_directory.cpp

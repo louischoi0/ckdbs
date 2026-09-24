@@ -16,15 +16,13 @@
 // The KWP/1 row encoding (docs/spec/protocol.md D5 and §6): how a result row
 // becomes bytes.
 //
-// ---- One encoder, two consumers -----------------------------------------
+// ---- Below the wire path ------------------------------------------------
 //
-// This is deliberately **not** part of the wire path, and it is not part of
-// the cross-core path either - it is below both. `docs/spec/crosscore.md` CC2
-// requires a `STEP_BATCH` payload to be "rows in the KWP binary encoding -
-// the same encoder the wire path uses... one encoder, two consumers; no
-// second row format", and this file is what makes that literal rather than
-// aspirational. It exists before either consumer does, which is the only
-// way that rule survives contact with whichever one is built first.
+// This is deliberately **not** part of the wire path; it is below it. It
+// was written for two consumers - the wire and the cross-core step
+// pipeline's `STEP_BATCH`, which `docs/spec/crosscore.md` CC2 bound to "one
+// encoder, two consumers; no second row format" - and the pipeline retired
+// at AT-S10, so the wire is the one consumer left.
 //
 // So: nothing here knows about frames, sockets, cores or rings. It turns a
 // schema into a row description and decoded values into bytes, and back.

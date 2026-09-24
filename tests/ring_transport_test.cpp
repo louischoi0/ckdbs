@@ -39,7 +39,7 @@ MessageHeader Msg(std::uint32_t src, std::uint32_t dst, std::uint64_t request_id
     h.dst_core = dst;
     h.session_core = src;
     h.step_id = 0;
-    h.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    h.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
     h.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kForeground);
     return h;
 }
