@@ -13,7 +13,6 @@
 #include "kds/base/status.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
-#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/waker_table.hpp"
 #include "kds/server/config_file.hpp"
 #include "kds/sched/scheduler.hpp"
@@ -638,21 +637,14 @@ public:
     }
 
     // **The instance's one wake registry** (AU-S1b, `sched/waker_table.hpp`),
-    // and the transport that kicks through it. Null at `cores = 1`, where
-    // neither is built. Exposed for the same reason `wal()` and `store()`
-    // are: whether the transport was handed *this* table is the kind of
-    // wiring whose failure is silent - every cross-core message would pay
-    // its destination's idle block, and no result would change.
-    // **The instance's lock table** (AO-S5), exposed for the same reason:
-    // whether it kicks through *this* instance's registry, and whether
-    // every core was handed *this* table, are wiring facts whose failure
-    // is a waiter that sleeps out its block rather than a wrong answer.
+    // null at `cores = 1`, where it is not built, and **the instance's lock
+    // table** (AO-S5). Exposed for the same reason `wal()` and `store()`
+    // are: whether the lock table kicks through *this* registry, and whether
+    // every core was handed *this* table, are wiring facts whose failure is
+    // a waiter that sleeps out its block rather than a wrong answer.
     const txn::LockTable* locks() const noexcept { return locks_.get(); }
     const sched::WakerTable* wakers() const noexcept {
         return wakers_.has_value() ? &*wakers_ : nullptr;
-    }
-    const sched::RealRingTransport* transport() const noexcept {
-        return transport_.has_value() ? &*transport_ : nullptr;
     }
 
     // The `SIGTERM`/`SIGINT` descriptor the platform layer installed
@@ -848,19 +840,18 @@ private:
     // ---- The fan-out (docs/inflight/in-progress/workplan-crosscore.md P2) --------------------
     //
     // Cores 1..N-1, each on its own pinned thread. Empty at `cores = 1`, and
-    // so is `transport_` - guideline 2's "the ring layer contributes zero
-    // messages and zero allocations" is kept literally, by not building one.
+    // so is `wakers_` - G2's zero overhead is kept literally, by not
+    // building one.
     //
     // Core 0's reactor is *not* here: it is the one Serve() runs on the
     // calling thread, with the listener and dispatcher attached, exactly as
     // it was before this existed. That asymmetry is deliberate - it is what
     // makes the single-core path unchanged rather than merely equivalent.
-    std::optional<sched::RealRingTransport> transport_;
-    // AU-S3: how core 0 reaches a peer's reactor without a message. Sized
-    // at open and registered into by each core, so a `Stop()` from this
-    // thread is followed by a kick that ends the block the peer is in.
-    // Outlives the transport deliberately - AR0-6 retires the ring and
-    // keeps the wake.
+    //
+    // AU-S3: how core 0 reaches a peer's reactor, and since AT-S10d how any
+    // core reaches any other (AR0-6-R1). Sized at open and registered into
+    // by each core, so a `Stop()` from this thread is followed by a kick
+    // that ends the block the peer is in.
     std::optional<sched::WakerTable> wakers_;
     // D19's fallback (AT-S10c): the inboxes core 0's listener hands
     // connections into, built only where the port cannot be shared. After

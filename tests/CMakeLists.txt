@@ -63,10 +63,6 @@ add_executable(kds_tests
     core_runtime_test.cpp
     expeditor_test.cpp
     coro_test.cpp
-    spsc_ring_test.cpp
-    ring_transport_test.cpp
-    sim_ring_transport_test.cpp
-    send_retry_test.cpp
     row_codec_test.cpp
     types_predicate_test.cpp
     types_e2e_test.cpp

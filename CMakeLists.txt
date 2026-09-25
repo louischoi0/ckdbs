@@ -130,10 +130,7 @@ add_library(kds
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/coro.cpp
-    src/sched/spsc_ring.cpp
-    src/sched/ring_transport.cpp
     src/sched/waker.cpp
-    src/sched/sim_ring_transport.cpp
     src/sched/sim_waker_table.cpp
     src/sched/epoll_io_backend.cpp
 )

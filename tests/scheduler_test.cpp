@@ -16,7 +16,6 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
-#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/waker.hpp"
 #include "kds/sched/waker_table.hpp"
 
@@ -416,209 +415,6 @@ TEST_F(SchedulerTimerTest, AReadyTaskDropsTheIdleBlockToZero) {
     EXPECT_EQ(io.timeouts[0], 0) << "runnable work must never wait on the io backend";
 }
 
-// ---- Phase 3: the cross-core inbox drain (sched.md §5, workplan P1) ----
-//
-// What the drain owes its callers: a received message becomes a *task*, in
-// the group the **sender** designated, run in phase 4 like any other - not
-// work done inside the drain. And a message nobody handles is dropped
-// rather than fatal, because a request can be torn down while its messages
-// are still in flight (workplan guideline 5).
-
-std::vector<std::byte> PayloadOf(std::string_view s) {
-    std::vector<std::byte> out(s.size());
-    if (!s.empty()) std::memcpy(out.data(), s.data(), s.size());
-    return out;
-}
-
-MessageHeader MessageTo(std::uint32_t dst, RingMessageKind kind, SchedulingGroup group) {
-    MessageHeader h{};
-    h.request_id = 1;
-    h.src_core = 0;
-    h.dst_core = dst;
-    h.session_core = 0;
-    h.kind = static_cast<std::uint16_t>(kind);
-    h.sched_group = static_cast<std::uint16_t>(group);
-    return h;
-}
-
-class SchedulerInboxTest : public ::testing::Test {
-protected:
-    ManualClock clock_;
-    NullIoBackend io_;
-};
-
-TEST_F(SchedulerInboxTest, WithNoTransportPhaseThreeIsANoOp) {
-    // The single-core build (workplan guideline 2): the phase is present in
-    // the fixed order and costs one null test.
-    Scheduler scheduler(clock_, io_);
-    scheduler.RunOnce();
-    EXPECT_EQ(scheduler.messages_drained(), 0u);
-}
-
-TEST_F(SchedulerInboxTest, AReceivedMessageBecomesATaskInTheSendersGroup) {
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
-
-    Scheduler scheduler(clock_, io_);
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
-
-    SchedulingGroup ran_in = SchedulingGroup::kSystem;
-    std::string got_payload;
-    bool handled = false;
-    ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
-                                            [&](const MessageHeader& h,
-                                                std::span<const std::byte> payload) {
-                                                handled = true;
-                                                ran_in = GroupOf(h);
-                                                got_payload.assign(
-                                                    reinterpret_cast<const char*>(payload.data()),
-                                                    payload.size());
-                                            })
-                    .ok());
-
-    ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
-                                        SchedulingGroup::kMaintenance),
-                             PayloadOf("rows"))
-                    .ok());
-
-    scheduler.RunOnce();
-    EXPECT_EQ(scheduler.messages_drained(), 1u);
-    EXPECT_TRUE(handled);
-    // The sender chose `maintenance`; the receiver must not substitute its
-    // own idea of what this kind is worth (sched.md §5).
-    EXPECT_EQ(ran_in, SchedulingGroup::kMaintenance);
-    EXPECT_EQ(got_payload, "rows");
-}
-
-TEST_F(SchedulerInboxTest, TheHandlerRunsInPhaseFourAndNotInsideTheDrain) {
-    // The drain has to stay cheap and bounded, exactly as the phase-1 io
-    // handlers do. The observable form of that: the handler has not run
-    // when the drain finishes, only when tasks do.
-    SchedulerConfig config;
-    config.max_tasks_per_iteration = 0;  // phase 4 runs nothing this iteration
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
-
-    Scheduler scheduler(clock_, io_, config);
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
-
-    bool handled = false;
-    ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(
-                        RingMessageKind::kTrxIdLease,
-                        [&](const MessageHeader&, std::span<const std::byte>) { handled = true; })
-                    .ok());
-    ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
-                                        SchedulingGroup::kForeground),
-                             PayloadOf("x"))
-                    .ok());
-
-    scheduler.RunOnce();
-    EXPECT_EQ(scheduler.messages_drained(), 1u) << "the message was not taken off the ring";
-    EXPECT_FALSE(handled) << "the drain did the work itself instead of queuing a task";
-}
-
-TEST_F(SchedulerInboxTest, AMessageWithNoHandlerIsDroppedAndNotFatal) {
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
-
-    Scheduler scheduler(clock_, io_);
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
-
-    ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kRowIdLease,
-                                        SchedulingGroup::kForeground),
-                             PayloadOf("late"))
-                    .ok());
-
-    // Normal operation, not an error: a message can outlive the request it
-    // belonged to. The reactor keeps going and the message is consumed.
-    EXPECT_TRUE(scheduler.RunOnce());
-    EXPECT_EQ(scheduler.messages_drained(), 1u);
-
-    MessageHeader header{};
-    std::vector<std::byte> payload;
-    EXPECT_FALSE(transport.value().TryReceive(1, header, payload)) << "the message was left behind";
-}
-
-TEST_F(SchedulerInboxTest, TheDrainIsBoundedByItsLoopBudget) {
-    // sched.md §2: a phase may not run unboundedly, or a flooded core never
-    // reaches its I/O completions. What is left on the ring is picked up
-    // next iteration, so nothing is lost by stopping early.
-    SchedulerConfig config;
-    config.max_messages_per_iteration = 2;
-    auto transport = RealRingTransport::Create(2, 16, 64);
-    ASSERT_TRUE(transport.ok());
-
-    Scheduler scheduler(clock_, io_, config);
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
-    ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(
-                        RingMessageKind::kTrxIdLease,
-                        [](const MessageHeader&, std::span<const std::byte>) {})
-                    .ok());
-
-    for (int i = 0; i < 5; ++i) {
-        ASSERT_TRUE(transport.value()
-                        .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
-                                            SchedulingGroup::kForeground),
-                                 PayloadOf("x"))
-                        .ok());
-    }
-
-    scheduler.RunOnce();
-    EXPECT_EQ(scheduler.messages_drained(), 2u);
-    scheduler.RunOnce();
-    EXPECT_EQ(scheduler.messages_drained(), 4u);
-    scheduler.RunOnce();
-    EXPECT_EQ(scheduler.messages_drained(), 5u);
-}
-
-TEST_F(SchedulerInboxTest, AHandlerForAKindThisBuildDoesNotKnowIsRefused) {
-    // Including kUnset. A handler bound to a number no sender can produce
-    // is a silent no-op, and the central kind enum exists so that number
-    // does not exist.
-    Scheduler scheduler(clock_, io_);
-    EXPECT_EQ(scheduler
-                  .RegisterMessageHandler(
-                      RingMessageKind::kUnset,
-                      [](const MessageHeader&, std::span<const std::byte>) {})
-                  .code(),
-              StatusCode::kInvalidArgument);
-}
-
-TEST_F(SchedulerInboxTest, PhaseOrderIsUnchangedByTheDrain) {
-    // Phases run in the fixed order of sched.md §2, and phase 3 sits
-    // between timers and ready tasks. A timer armed for now must therefore
-    // fire before a message received this same iteration is handled.
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
-
-    Scheduler scheduler(clock_, io_);
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
-
-    std::vector<std::string> order;
-    scheduler.SubmitAt(0, [&] { order.push_back("timer"); });
-    ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
-                                            [&](const MessageHeader&,
-                                                std::span<const std::byte>) {
-                                                order.push_back("message");
-                                            })
-                    .ok());
-    ASSERT_TRUE(transport.value()
-                    .TrySend(MessageTo(1, RingMessageKind::kTrxIdLease,
-                                        SchedulingGroup::kForeground),
-                             PayloadOf("x"))
-                    .ok());
-
-    scheduler.RunOnce();
-    EXPECT_EQ(order, (std::vector<std::string>{"timer", "message"}));
-}
-
 // ---- The wake path (sched/waker.hpp) ------------------------------------
 //
 // A reactor with nothing to run blocks in its I/O backend, and until this
@@ -656,7 +452,7 @@ TEST_F(SchedulerWakeTest, AWakerIsReadableOnceWrittenAndNotBefore) {
     EXPECT_EQ(waker.value().wake_failures(), 0u);
 
     // Drained, it goes quiet again - and N wakes before a drain are one
-    // wake, which is the correct reading: the ring is the queue and this
+    // wake, which is the correct reading: the shared state is the queue and this
     // only says "look at it".
     waker.value().Wake();
     waker.value().Wake();
@@ -667,7 +463,7 @@ TEST_F(SchedulerWakeTest, AWakerIsReadableOnceWrittenAndNotBefore) {
 }
 
 TEST_F(SchedulerWakeTest, ASingleCoreReactorArmsNoWakeAtAll) {
-    // Guideline 2: no transport, no fd, no flag stores, no syscalls. The
+    // G2: no registry, no fd, no flag stores, no syscalls. The
     // fast path is what it was.
     NullIoBackend io;
     Scheduler scheduler(clock_, io);
@@ -676,202 +472,23 @@ TEST_F(SchedulerWakeTest, ASingleCoreReactorArmsNoWakeAtAll) {
     EXPECT_EQ(scheduler.idle_blocks(), 0u);
 }
 
-TEST_F(SchedulerWakeTest, AMessageAlreadyQueuedIsNotSleptThrough) {
-    // The pre-block re-check, driven deterministically: with a message
-    // already in the ring and an idle block of a full second, `RunOnce`
-    // must decline to block at all. Without the re-check this test takes a
-    // second and the message waits it out.
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
-    auto backend = EpollIoBackend::Create();
-    ASSERT_TRUE(backend.ok());
-
-    SchedulerConfig config;
-    config.max_idle_block_ms = 1000;
-    Scheduler scheduler(clock_, backend.value(), config);
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
-    ASSERT_TRUE(scheduler.wake_armed());
-
-    bool handled = false;
-    ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
-                                            [&](const MessageHeader&,
-                                                std::span<const std::byte>) { handled = true; })
-                    .ok());
-
-    MessageHeader header{};
-    header.src_core = 0;
-    header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
-    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
-    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
-
-    // One iteration: phase 3 drains and phase 4 runs what it queued. A
-    // second is deliberately not taken - it would find an empty inbox and
-    // block the full second, which is correct behaviour and would only
-    // measure the timeout.
-    const auto started = std::chrono::steady_clock::now();
-    scheduler.RunOnce();
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-
-    EXPECT_TRUE(handled);
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 500)
-        << "the reactor slept on an inbox that was not empty";
-    EXPECT_GE(scheduler.wake_race_skips(), 1u)
-        << "the pre-block re-check is what must have found it";
-}
-
-TEST_F(SchedulerWakeTest, AMessageToABlockedReactorArrivesWithoutWaitingOutTheBlock) {
-    // **The fix itself.** Core 1 blocks for a full second with nothing to
-    // do; core 0 sends. The message must arrive in a small fraction of that
-    // block, and before this path existed it could not - it waited for the
-    // block to expire on its own, which is the millisecond SS-B measured on
-    // every shipped statement (there, twice).
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
-    auto backend = EpollIoBackend::Create();
-    ASSERT_TRUE(backend.ok());
-
-    SchedulerConfig config;
-    config.max_idle_block_ms = 1000;
-    Scheduler scheduler(clock_, backend.value(), config);
-    // **Both**, since AU-S1b: the transport gives this core a queue, the
-    // table is what lets a sender find it asleep. A send through a transport
-    // with no table attached is not wrong, it is slow - the destination
-    // waits out its block, which is the whole thing this test measures.
-    WakerTable wakers(2);
-    ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
-    transport.value().AttachWakers(&wakers);
-
-    std::atomic<bool> handled{false};
-    ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
-                                            [&](const MessageHeader&,
-                                                std::span<const std::byte>) {
-                                                handled.store(true);
-                                            })
-                    .ok());
-
-    std::thread reactor([&] { scheduler.Run(); });
-
-    // Let core 1 reach its block. This is the one place a sleep is the
-    // point rather than a smell: the test is about what happens to a
-    // reactor that is *already* asleep.
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    ASSERT_GE(scheduler.idle_blocks(), 1u) << "the reactor never blocked; the test proves nothing";
-
-    MessageHeader header{};
-    header.src_core = 0;
-    header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
-    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
-    const auto sent = std::chrono::steady_clock::now();
-    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
-
-    while (!handled.load() &&
-           std::chrono::steady_clock::now() - sent < std::chrono::milliseconds(900)) {
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
-    }
-    const auto latency = std::chrono::steady_clock::now() - sent;
-
-    scheduler.Stop();
-    // The stop flag is read by the reactor's own thread, so it needs a wake
-    // of its own to be noticed promptly - which this path now provides for
-    // free. A send is what carries it.
-    (void)transport.value().TrySend(header, {});
-    reactor.join();
-
-    EXPECT_TRUE(handled.load()) << "the message never arrived";
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(latency).count(), 100)
-        << "the message waited out the idle block instead of interrupting it";
-    EXPECT_GE(wakers.kicks(), 1u)
-        << "the sender never wrote a wake, so the arrival was luck";
-    // D7's pair, from the two ends: what the sender wrote is what this
-    // reactor's own eventfd received, and `SHOW META` prints both so the
-    // sum over cores can be checked against the instance total.
-    EXPECT_GE(scheduler.wakes_received(), 1u) << "the wake reached no eventfd";
-    EXPECT_EQ(scheduler.wakes_sent(), wakers.kicks());
-}
-
-// The other half of the wake's contract, and the half a latency test cannot
-// see: **what the sender does not do.** Both of these are properties the
-// path's own comments claim, and neither shows up as a wrong answer when it
-// breaks - only as syscalls nobody asked for.
-
-TEST_F(SchedulerWakeTest, AnAwakeTargetIsNeverWoken) {
-    // Why this matters and is not a micro-optimisation: a write to an
-    // eventfd is a syscall on the *sender's* critical path, and the cells
-    // shipping is already fast in (0.93-0.99x from four sessions up) are
-    // exactly the ones where the owner is never asleep. Waking
-    // unconditionally would pay for every one of them.
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
-    auto backend = EpollIoBackend::Create();
-    ASSERT_TRUE(backend.ok());
-
-    Scheduler scheduler(clock_, backend.value());
-    WakerTable wakers(2);
-    ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
-    transport.value().AttachWakers(&wakers);
-    ASSERT_TRUE(scheduler.wake_armed());
-
-    // The reactor is not running, so its `sleeping` flag is clear - the
-    // same state a busy reactor is in between blocks.
-    MessageHeader header{};
-    header.src_core = 0;
-    header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
-    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
-    for (int i = 0; i < 4; ++i) ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
-
-    EXPECT_EQ(wakers.kicks(), 0u)
-        << "the sender paid a syscall for a target that was not asleep";
-    EXPECT_EQ(wakers.kicks_skipped(), 4u)
-        << "the four sends must each have looked at the flag and declined";
-}
-
-TEST_F(SchedulerWakeTest, ARefusedSendWakesNobody) {
-    // A wake for a message that is not in the ring wakes a core to find
-    // nothing - the spin this path exists to remove, reintroduced at the
-    // sender. One slot, filled, then a send that must fail.
-    auto transport = RealRingTransport::Create(2, /*capacity_slots=*/1, 64);
-    ASSERT_TRUE(transport.ok());
-    auto waker = Waker::Create();
-    ASSERT_TRUE(waker.ok());
-
-    // No reactor here: the flag is driven by hand, which is the only way to
-    // hold a target "asleep" across a send that is going to be refused.
-    // Registering into the table directly is what a reactor's
-    // `AttachWakerTable` does with its own two pointers.
-    std::atomic<bool> sleeping{true};
-    WakerTable wakers(2);
-    wakers.Register(1, &sleeping, &waker.value());
-    transport.value().AttachWakers(&wakers);
-
-    MessageHeader header{};
-    header.src_core = 0;
-    header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
-    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
-
-    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
-    ASSERT_EQ(wakers.kicks(), 1u) << "a sleeping target must be woken";
-
-    ASSERT_FALSE(transport.value().TrySend(header, {}).ok()) << "the ring should be full";
-    EXPECT_EQ(wakers.kicks(), 1u)
-        << "a refused send woke the target anyway, for a message it does not have";
-}
+// Four cells stood here until AT-S10d retired the ring transport, each
+// driving the wake with a ring send: `AMessageAlreadyQueuedIsNotSleptThrough`
+// pinned the pre-block re-check, which went with the queue it asked;
+// `AMessageToABlockedReactorArrivesWithoutWaitingOutTheBlock` is carried by
+// `WakerTableTest.AKickEndsAPeersIdleBlockWithNoTransportAttached` and, for
+// D7's pair, by the parked-coroutine cell below; `AnAwakeTargetIsNeverWoken`
+// by `WakerTableTest.AKickToABusyReactorWritesNothing`; and
+// `ARefusedSendWakesNobody` had no refusal left to pin. The inbox suite
+// (`SchedulerInboxTest`, seven cells) retired with phase 3.
 
 TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
     // D7 of `instructions/v2.3.0-reactor-wake.md`: the idle block used to
     // be invisible from outside the process, so `sched_wall_us - sum(
-    // polled_us)` was sleep and work in one lump. These four counters are
-    // what separate them, and each is asserted against a fact the test
-    // arranges rather than against itself.
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
+    // polled_us)` was sleep and work in one lump. These counters are what
+    // separate them, and each is asserted against a fact the test arranges
+    // rather than against itself. Its second half sent a ring message and
+    // read `spurious_wakes` until AT-S10d retired both.
     auto backend = EpollIoBackend::Create();
     ASSERT_TRUE(backend.ok());
 
@@ -880,8 +497,6 @@ TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
     Scheduler scheduler(clock_, backend.value(), config);
     WakerTable wakers(2);
     ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
-    transport.value().AttachWakers(&wakers);
 
     EXPECT_EQ(scheduler.idle_block_ns(), 0u);
     EXPECT_EQ(scheduler.wakes_received(), 0u);
@@ -894,27 +509,11 @@ TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
     EXPECT_GE(scheduler.idle_blocks(), 1u);
     EXPECT_GE(scheduler.idle_block_ns(), 10'000'000u)
         << "a 50 ms block was not accounted for";
-    const std::uint64_t blocked_once = scheduler.idle_block_ns();
 
     // Now the wake side. The reactor is not running, so it is not asleep
-    // and the send must not wake it - which also makes the next iteration
-    // the one that both drains and reads the eventfd.
-    MessageHeader header{};
-    header.src_core = 0;
-    header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
-    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
-    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
+    // and a kick must write nothing: neither end's counter moves.
+    wakers.Kick(1);
     EXPECT_EQ(scheduler.wakes_sent(), 0u) << "an awake target was woken";
-
-    // The queued message is drained by the next iteration, which therefore
-    // does not block at all: the block counter must not move, and with no
-    // wake ever written nothing can have been spurious.
-    scheduler.RunOnce();
-    EXPECT_EQ(scheduler.idle_block_ns(), blocked_once)
-        << "an iteration with a message waiting still slept";
-    EXPECT_EQ(scheduler.spurious_wakes(), 0u)
-        << "no wake has been written, so nothing can have been spurious";
     EXPECT_EQ(scheduler.wakes_received(), 0u);
 }
 
@@ -927,7 +526,7 @@ TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
 // (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §7).
 //
 // The rule these pin: the reactor may block only after a full iteration in
-// which **nothing advanced** - no event, no timer, no message, no task that
+// which **nothing advanced** - no event, no timer, no task that
 // ran a line or finished, no task newly queued, and no work from the
 // post-task hook. The last clause has its own test, because getting it
 // wrong would put the WAL drain interval on every commit, which is a worse
@@ -1094,19 +693,31 @@ TEST_F(SchedulerParkTest, TheHooksWorkIsProgressSoACommitDoesNotWaitOutABlock) {
 
 // ---- The two halves together (the v2.3.0 order's RW4) -------------------
 
-TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
+TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyAKickIsResumedPromptly) {
     // **The shape the two halves exist for, and the one that hangs if
-    // either is wrong.** A coroutine parked on a flag that only a peer's
-    // message sets; a reactor that - since RW3 - is allowed to sleep on
-    // exactly that; and a block long enough that waiting it out would be
+    // either is wrong.** A coroutine parked on state only another thread
+    // changes; a reactor that - since RW3 - is allowed to sleep on exactly
+    // that; and a block long enough that waiting it out would be
     // unmistakable. Before "parked is not ready" this reactor would have
-    // spun instead of sleeping and would have noticed the message by luck;
-    // before the wake it would have slept through it.
+    // spun instead of sleeping and noticed the change by luck; without the
+    // kick it would sleep through it.
+    //
+    // It was a peer's ring message setting a flag until AT-S10d retired the
+    // transport (`AParkedCoroutineWithOnlyARingWakeIsResumedPromptly`). The
+    // shape is AR0-6-R1's own now - write the shared state, then kick -
+    // which is what the lock table's decide and the connection handoff do.
+    // It also carries D7's pair from both ends, which the retired
+    // `AMessageToABlockedReactorArrivesWithoutWaitingOutTheBlock` did.
+    //
+    // **The kick repeats until the resume**, because nothing closes the
+    // window between the park counter moving and the flag being raised
+    // (`WakerTable::Kick`): a single kick landing in it is skipped and costs
+    // the block, which is the stated price and not what this cell measures.
+    // A kick every 200 µs still cannot end a 1 s block that the flag never
+    // reached, so a latency under 100 ms is a wake and never the timeout.
     //
     // The deadline is the test's own, never CI's: a hang here must fail
     // this test with a message, not time out a suite.
-    auto transport = RealRingTransport::Create(2, 8, 64);
-    ASSERT_TRUE(transport.ok());
     auto backend = EpollIoBackend::Create();
     ASSERT_TRUE(backend.ok());
 
@@ -1115,26 +726,24 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
     Scheduler scheduler(clock_, backend.value(), config);
     WakerTable wakers(2);
     ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
-    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
-    transport.value().AttachWakers(&wakers);
 
     std::atomic<bool> resumed{false};
-    bool released = false;
-    auto waiter = [&released]() -> Coro {
-        co_await WaitFor{&released};
+    std::atomic<bool> released{false};
+    const std::function<bool()> is_released = [&released] {
+        return released.load(std::memory_order_acquire);
+    };
+    auto waiter = [&is_released]() -> Coro {
+        co_await WaitUntil{&is_released};
         co_return Status::OK();
     };
     scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, waiter(),
                                   [&resumed](const Status&) { resumed.store(true); }));
-    ASSERT_TRUE(scheduler
-                    .RegisterMessageHandler(RingMessageKind::kTrxIdLease,
-                                            [&released](const MessageHeader&,
-                                                        std::span<const std::byte>) {
-                                                released = true;
-                                            })
-                    .ok());
 
-    std::thread reactor([&] { scheduler.Run(); });
+    std::atomic<bool> exited{false};
+    std::thread reactor([&] {
+        scheduler.Run();
+        exited.store(true);
+    });
 
     // Wait for the reactor to be asleep **on the park** - which is what
     // `parked_idle_blocks` counts and what nothing before RW3 could have
@@ -1148,22 +757,24 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
     ASSERT_GE(scheduler.parked_idle_blocks(), 1u)
         << "the reactor never slept on the parked coroutine; the test proves nothing";
 
-    MessageHeader header{};
-    header.src_core = 0;
-    header.dst_core = 1;
-    header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
-    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
-    const auto sent = std::chrono::steady_clock::now();
-    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
-
+    // Write, then kick.
+    released.store(true, std::memory_order_release);
+    const auto kicked = std::chrono::steady_clock::now();
     while (!resumed.load() &&
-           std::chrono::steady_clock::now() - sent < std::chrono::milliseconds(900)) {
+           std::chrono::steady_clock::now() - kicked < std::chrono::milliseconds(900)) {
+        wakers.Kick(1);
         std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
-    const auto latency = std::chrono::steady_clock::now() - sent;
+    const auto latency = std::chrono::steady_clock::now() - kicked;
 
+    // Bounded teardown, as `WakerTableTest`'s: a stop is a flag plus a kick,
+    // and the kick is repeated for the same reason as above.
     scheduler.Stop();
-    (void)transport.value().TrySend(header, {});
+    const auto stopping = std::chrono::steady_clock::now();
+    while (!exited.load() && std::chrono::steady_clock::now() - stopping < std::chrono::seconds(2)) {
+        wakers.Kick(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     reactor.join();
 
     ASSERT_TRUE(resumed.load()) << "the parked coroutine was never resumed";
@@ -1171,6 +782,11 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
         << "the park waited out the idle block instead of being woken";
     EXPECT_GE(wakers.kicks(), 1u)
         << "nothing wrote a wake, so the resume was the block expiring";
+    // D7's pair, from the two ends: what the kicker wrote is what this
+    // reactor's own eventfd received, and `SHOW META` prints both so the
+    // sum over cores can be checked against the instance total.
+    EXPECT_GE(scheduler.wakes_received(), 1u) << "the wake reached no eventfd";
+    EXPECT_EQ(scheduler.wakes_sent(), wakers.kicks());
 }
 
 }  // namespace

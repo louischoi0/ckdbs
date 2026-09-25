@@ -16,7 +16,6 @@
 #include "kds/exec/varheap_sweep.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
-#include "kds/sched/send_retry.hpp"
 #include "kds/storage/file_page_device.hpp"
 
 #if KDS_WITH_TLS
@@ -1567,38 +1566,25 @@ Status Expeditor::Start() {
 
     // ---- The fan-out (workplan-crosscore.md P2) -------------------------
     //
-    // At `cores = 1` none of this runs: no transport is built, no thread is
-    // spawned, and the reactor below is the same single one that has always
-    // served. Guideline 2 asks for zero messages and zero allocations on the
-    // single-core path, and the cheapest way to mean it is to build nothing.
+    // At `cores = 1` none of this runs: no wake registry is built, no thread
+    // is spawned, and the reactor below is the same single one that has
+    // always served. G2 asks for zero overhead on the single-core path, and
+    // the cheapest way to mean it is to build nothing.
     if (config_.cores > 1) {
-        auto transport = sched::RealRingTransport::Create(
-            config_.cores, sched::kCoreRingSlots, sched::kCoreRingPayloadBytes);
-        if (!transport.ok()) return transport.status();
-        transport_.emplace(std::move(transport.value()));
-        // AU-S3: the waker table, sized like the transport and registered
-        // into by every core including this one. It outlives the transport
-        // by design - AR0-6 retires the ring and keeps the wake - so it is
-        // built beside it rather than inside it.
+        // AU-S3: the waker table, registered into by every core including
+        // this one - since AT-S10d the only cross-core path the instance
+        // has (AR0-6-R1: write the shared state, then kick).
         wakers_.emplace(config_.cores);
         if (handoff) handoff_.emplace(config_.cores, &*wakers_);
         // AO-S5: and the lock table kicks through it - a decide's slot flip
         // on one core ends the block a waiter's reactor sits in on another
-        // (AU-S2). The same registry a send and a stop kick through.
+        // (AU-S2). The same registry a stop kicks through.
         locks_->SetWakeRegistry(&*wakers_);
-        // AU-S1b: and the transport asks *it* who is asleep. Instance-wide
-        // and installed once, because a reactor registers itself: a send and
-        // a stop now kick through the same registry, where until AU-S1b the
-        // transport carried its own copy of every entry.
-        transport_->AttachWakers(&*wakers_);
 
         // Arms core 0's wake path too (sched/waker.hpp): core 0 is a
-        // destination like any other, and a peer's reply to a statement
-        // it shipped lands here.
+        // destination like any other - a peer's STOP and a lock decide on
+        // another core both kick it.
         if (Status s = scheduler.AttachWakerTable(&*wakers_, /*core_id=*/0); !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler.AttachTransport(&*transport_, /*core_id=*/0); !s.ok()) {
             return s;
         }
 
@@ -1759,9 +1745,8 @@ Status Expeditor::Start() {
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
-            if (Status s = core.value()->AttachTransport(*transport_); !s.ok()) return s;
-            // AU-S3: and into the waker table, so core 0 can stop this
-            // reactor with a flag plus a kick rather than a message.
+            // AU-S3: into the waker table, so core 0 can stop this reactor
+            // with a flag plus a kick, and every other kick can reach it.
             core.value()->set_instance_stop(instance_stop_);
             if (Status s = core.value()->scheduler().AttachWakerTable(
                     &*wakers_, core.value()->core_id());
@@ -2061,8 +2046,6 @@ Status Expeditor::RunUntilStopped() {
         }
     }
     cores_.clear();
-
-    transport_.reset();
 
     // **Every listener is torn down before the scheduler leaves scope**,
     // because each holds fds registered with it and `~TcpServer` calls

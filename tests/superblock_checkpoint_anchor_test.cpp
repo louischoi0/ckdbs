@@ -15,7 +15,6 @@
 
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
-#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/storage/in_memory_page_store.hpp"

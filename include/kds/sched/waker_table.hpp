@@ -16,18 +16,17 @@
 //
 // It exists because the pair it needs - the destination's `sleeping` flag and
 // its `Waker` - lived on `RingTransport` as `WakeTarget`, reachable only
-// through a transport that is being retired. Both halves belong to the
-// destination's reactor and outlive every send.
+// through a transport that AT-S10d retired. Both halves belong to the
+// destination's reactor.
 //
-// **This is the instance's only wake registry** (AU-S1b). A ring send is a
-// caller of this path, not a second copy of it, so AU-S5 removes a user
-// rather than unpicking a registry.
+// **This is the instance's only wake registry** (AU-S1b), and since AT-S10d
+// the only cross-core path there is: a stop, a lock-table decide and a
+// connection handoff kick through it.
 //
 // ---- The seam, and why it is the table rather than the waker ------------
 //
-// `WakeRegistry` is what the attach points take - `Scheduler::AttachWakerTable`
-// and `RealRingTransport::AttachWakers` - and `WakerTable` is its one
-// production implementation. The interface exists for exactly one other
+// `WakeRegistry` is what `Scheduler::AttachWakerTable` takes, and
+// `WakerTable` is its one production implementation. The interface exists for exactly one other
 // implementation, `SimWakerTable` (`sim_waker_table.hpp`), which *wraps* a
 // real table for the two-core rig: it logs `(tick, dst)` per kick and
 // forwards at a seeded tick. AU-R3 first placed the seam on `Waker` itself
@@ -36,15 +35,14 @@
 // the table's pointer would run the base and write to an eventfd it does not
 // own (`workorder-av-two-core-rig.md` AV-R1). The operator took the table
 // instead (AV-R1's mark, 2026-09-07): `Waker` gains no vtable, the wake path
-// keeps its static call, and the cost sits on the *send* path rather than
+// keeps its static call, and the cost sits on the *kick* path rather than
 // the wake's - one indirect call per cross-core `Kick`, and with it the
-// whole of what `Kick` inlined before (the fence, the flag load and the
-// skip) now behind a pointer `RealRingTransport::TrySend` cannot
-// devirtualize, since what it holds may be the sim. That is the trade the
-// mark accepts, stated as what it is. What the wrap buys over a second
-// implementation of the fence is that there is no second implementation:
-// the `sleeping` fence and the skip counter live once, below, and a rig
-// cannot disagree with the protocol it is testing.
+// flag load and the skip behind a pointer the caller cannot devirtualize,
+// since what it holds may be the sim. That is the trade the mark accepts,
+// stated as what it is. What the wrap buys over a second implementation is
+// that there is no second implementation: the flag read and the skip
+// counter live once, below, and a rig cannot disagree with the protocol it
+// is testing.
 //
 // ---- Why the flag, and what a missed kick costs -------------------------
 //
@@ -59,8 +57,7 @@
 // which is exactly `waker.hpp`'s existing contract for a lost or coalesced
 // wake, and AR0-6-R1 adopts it deliberately rather than inheriting it.
 //
-// **Whether that race is closed is a property of the caller, not of this
-// table**, and the argument sits on `Kick`, with the fence it is about.
+// **No caller closes it since AT-S10d**, and the argument sits on `Kick`.
 
 namespace kds::sched {
 
@@ -100,35 +97,21 @@ public:
     // this reads the destination's flag and writes the eventfd only when it
     // is set.
     //
-    // **The fence is the sender's half of a store-buffer pair, and it lives
-    // here because every caller needs it and none can be trusted to write
-    // it.** Two threads, two variables, opposite orders:
-    //
-    //   sender:   publish, then read `sleeping`
-    //   receiver: set `sleeping`, then read the published state
-    //
-    // This fence and its twin in `Scheduler::RunOnce` make sequential
-    // consistency forbid *both* reads returning the stale value, so at least
-    // one of two things happens: the sender sees the flag and kicks, or the
-    // receiver sees the state and does not sleep. It moved here from
-    // `RealRingTransport::TrySend` when the ring became a caller of this
-    // path rather than a second copy of it.
-    //
-    // **What the fence buys depends on the caller, and is the one thing to
-    // read carefully.** The pair has three legs, and this supplies one: the
-    // receiver must *also* store its flag with a fence (`RunOnce` does) and
-    // *re-read the predicate after raising it*. The ring has that third leg
-    // in `HasPending`, so for a send the window is genuinely closed. A caller
-    // with no such predicate has only two legs, and for it the kick stays
-    // **best-effort**: a publisher landing between the destination's last
-    // look and its raising of the flag reads clear, skips the kick, and the
-    // destination waits out one idle block. Slow, never wrong, and
-    // AR0-6-R1's stated cost.
+    // **The kick is best-effort, and that is AR0-6-R1's stated cost.**
+    // Closing the window between the destination's last look and its
+    // raising of the flag takes a store-buffer pair - a fence here, a fence
+    // after the flag's store, and the destination *re-reading the predicate
+    // it is about to park on*. The ring had that third leg in `HasPending`,
+    // and this fence and a twin in `Scheduler::RunOnce` were its other two.
+    // With the ring gone (AT-S10d) no caller has a predicate the reactor can
+    // re-read before it blocks, so the fences ordered nothing and went with
+    // it. A publisher landing in the window reads clear, skips the kick, and
+    // the destination waits out one idle block; every consumer is
+    // level-triggered, re-polled after the block. Slow, never wrong.
     void Kick(std::uint32_t core) const noexcept override {
         if (core >= entries_.size()) return;
         const Entry& entry = entries_[core];
         if (entry.sleeping == nullptr || entry.waker == nullptr) return;
-        std::atomic_thread_fence(std::memory_order_seq_cst);
         if (!entry.sleeping->load(std::memory_order_seq_cst)) {
             skipped_.fetch_add(1, std::memory_order_relaxed);
             return;
@@ -158,13 +141,11 @@ public:
         return skipped_.load(std::memory_order_relaxed);
     }
 
-    // **The size, and it has exactly one caller for a reason.** `Kick`
-    // returns silently for a core outside the table, so a table built
-    // smaller than the transport it serves disables send-wakes for the high
-    // cores with no failure, no counter and no wrong answer - the same
-    // silence `AttachWakers` being forgotten would produce. The two-core
-    // assembly cell compares this against the transport's own count, which
-    // is the only thing in the tree that would notice.
+    // **The size.** `Kick` returns silently for a core outside the table,
+    // so a table built smaller than the instance disables every wake to the
+    // high cores with no failure, no counter and no wrong answer. The
+    // two-core assembly cell compares this against the instance's core
+    // count, which is the only thing in the tree that would notice.
     std::uint32_t core_count() const noexcept {
         return static_cast<std::uint32_t>(entries_.size());
     }

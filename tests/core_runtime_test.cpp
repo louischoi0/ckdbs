@@ -31,8 +31,6 @@
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/sched/clock.hpp"
-#include "kds/sched/ring_transport.hpp"
-#include "kds/sched/send_retry.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -259,12 +257,8 @@ TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
     // `Scheduler::Stop()` wrote a plain bool, so only the reactor's own
     // thread could flip it - which is the whole reason `kShutdown` existed.
     // The flag is atomic now and the message is gone.
-    auto transport = sched::RealRingTransport::Create(2, 16, 64);
-    ASSERT_TRUE(transport.ok());
-
     auto core = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(core.ok()) << core.status().message();
-    ASSERT_TRUE(core.value()->AttachTransport(transport.value()).ok());
 
     std::thread worker([&] { core.value()->Run(); });
 
@@ -284,45 +278,29 @@ TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
 }
 
 TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
-    auto transport = sched::RealRingTransport::Create(3, 16, 64);
-    ASSERT_TRUE(transport.ok());
-
     // The survivor is checked by **liveness, not by reading its flag**, and
     // the reason changed at AU-S3 without the practice changing. Reading
     // `stopped()` from here is no longer a data race - the flag is atomic -
     // but it was never the assertion worth making: `false` says only that
     // nobody asked this core to stop, where the claim is that it is still
     // serving. A running core is shown to be running by making it do
-    // something observable.
-    std::atomic<int> served{0};
+    // something observable: here a periodic timer on core 2, armed before
+    // its worker exists, that counts its own firings. It was a ring message
+    // to core 2 until AT-S10d retired the transport.
+    std::atomic<int> turns{0};
 
     std::vector<std::unique_ptr<CoreRuntime>> cores;
     for (std::uint32_t id = 1; id < 3; ++id) {
         auto core = CoreRuntime::Open(ConfigFor(id), *device_, clock_, nullptr);
         ASSERT_TRUE(core.ok()) << core.status().message();
-        ASSERT_TRUE(core.value()->AttachTransport(transport.value()).ok());
-        ASSERT_TRUE(core.value()
-                        ->scheduler()
-                        .RegisterMessageHandler(
-                            sched::RingMessageKind::kTrxIdLease,
-                            [&served](const sched::MessageHeader&, std::span<const std::byte>) {
-                                served.fetch_add(1, std::memory_order_relaxed);
-                            })
-                        .ok());
         cores.push_back(std::move(core.value()));
     }
+    cores[1]->scheduler().SubmitEvery(/*period_ns=*/1'000'000, [&turns] {
+        turns.fetch_add(1, std::memory_order_relaxed);
+    });
 
     std::vector<std::thread> workers;
     for (auto& core : cores) workers.emplace_back([&core] { core->Run(); });
-
-    auto send = [&](std::uint32_t dst, sched::RingMessageKind kind) {
-        sched::MessageHeader h{};
-        h.src_core = 0;
-        h.dst_core = dst;
-        h.kind = static_cast<std::uint16_t>(kind);
-        h.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-        ASSERT_TRUE(transport.value().TrySend(h, {}).ok());
-    };
 
     cores[0]->scheduler().Stop();  // AU-S3: the flag is atomic; no message
     workers[0].join();
@@ -331,12 +309,13 @@ TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
     EXPECT_TRUE(cores[0]->scheduler().stopped());
 
     // Core 2 is still serving - which is a stronger statement than "its flag
-    // is false", and one this thread is allowed to make.
-    send(2, sched::RingMessageKind::kTrxIdLease);
-    for (int i = 0; i < 1000 && served.load(std::memory_order_relaxed) == 0; ++i) {
+    // is false", and one this thread is allowed to make: its timer keeps
+    // firing after core 1 is gone.
+    const int after_stop = turns.load(std::memory_order_relaxed);
+    for (int i = 0; i < 1000 && turns.load(std::memory_order_relaxed) <= after_stop; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_EQ(served.load(std::memory_order_relaxed), 1)
+    EXPECT_GT(turns.load(std::memory_order_relaxed), after_stop)
         << "one core's stop took another down with it";
 
     cores[1]->scheduler().Stop();  // AU-S3
@@ -350,14 +329,10 @@ TEST_F(CoreRuntimeTest, ManyCoresStartAndJoinCleanly) {
     // startup path is accidentally shared - four reactors, four epoll
     // instances, four WAL streams, no synchronization anywhere.
     constexpr std::uint32_t kCores = 4;
-    auto transport = sched::RealRingTransport::Create(kCores, 16, 64);
-    ASSERT_TRUE(transport.ok());
-
     std::vector<std::unique_ptr<CoreRuntime>> cores;
     for (std::uint32_t id = 1; id < kCores; ++id) {
         auto core = CoreRuntime::Open(ConfigFor(id), *device_, clock_, nullptr);
         ASSERT_TRUE(core.ok()) << core.status().message();
-        ASSERT_TRUE(core.value()->AttachTransport(transport.value()).ok());
         cores.push_back(std::move(core.value()));
     }
 
@@ -1712,9 +1687,6 @@ TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRo
     // system core until AU-S3).
     constexpr std::uint16_t kPort = 25442;
 
-    auto transport = sched::RealRingTransport::Create(2, 16, 256);
-    ASSERT_TRUE(transport.ok());
-
     // A relation owned by core 1 (the :417 test's arrangement), and one
     // owned by core 0 as the foreign control.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
@@ -1728,7 +1700,6 @@ TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRo
 
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
     auto row = catalog2.GetSysTableRow(rotated.value());
     ASSERT_TRUE(row.ok());
     // AU-S3: what the instance installs on every peer, standing in for
@@ -1882,7 +1853,10 @@ TEST_F(CoreRuntimeTest, APeerListenerIsTornDownBeforeTheReactorItRegisteredWith)
     EXPECT_TRUE(after.ok()) << after.status().message();
 }
 
-// ---- PW1c-6b-3: core 0's two phases over a real ring ----------------------
+// ---- PW1c-6b-3: core 0 and a peer, turned by hand -------------------------
+//
+// It ran core 0's two phases over a real ring until AT-S10d retired the
+// transport; nothing in the rig crossed it by then.
 
 // Everything the tests below share. Core 0 is a scheduler, a dispatcher
 // with its transaction stack (so phase 2's DDL scope is a real
@@ -1894,7 +1868,6 @@ struct ForeignIndexRig {
     explicit ForeignIndexRig(const sched::Clock& core0_clock) : clock(core0_clock) {}
 
     const sched::Clock& clock;
-    std::optional<StatusOr<sched::RealRingTransport>> transport;
     sched::NullIoBackend io0;
     std::optional<sched::Scheduler> core0;
     std::optional<catalog::Catalog> catalog2;
@@ -1907,8 +1880,6 @@ struct ForeignIndexRig {
     catalog::Oid oid = 0;
     catalog::SysTableRow row{};
 
-    sched::RealRingTransport& ring() { return transport->value(); }
-
     // Core 0's WAL, borrowed from the fixture (AM-S0). Since the peer
     // attaches to core 0's stream rather than opening its own, **core 0 is
     // the only thing that can drain it** - and in this rig core 0 is a bare
@@ -1916,8 +1887,7 @@ struct ForeignIndexRig {
     // hand. Null in a rig opened before that wiring existed.
     wal::WalManager* shared_wal = nullptr;
 
-    // One turn of both reactors, the peer first: a message core 0 sent
-    // last turn is handled before core 0 polls anything parked on it.
+    // One turn of both reactors, the peer first.
     //
     // **And the group committer after them**, which is what
     // `Expeditor::Serve` installs as the scheduler's post-task hook. It is
@@ -2017,15 +1987,7 @@ struct ForeignIndexRig {
 };
 
 void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* table) {
-    // The full payload, not 256: a shipped statement's request and reply
-    // each fill exactly one slot (the retired ship service's
-    // static_asserts), so a narrower ring cannot carry one.
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16,
-                                                      sched::kCoreRingPayloadBytes);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-    rig.transport.emplace(std::move(transport));
     rig.core0.emplace(rig.clock, rig.io0);
-    ASSERT_TRUE(rig.core0->AttachTransport(&rig.ring(), 0).ok());
 
     rig.catalog2.emplace(*core0_store_, storage::kDefaultInlineCellWidth);
     // The same word the peer's catalog reads (AT-S2): this catalog's DDL
@@ -2056,7 +2018,6 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.peer = std::move(peer.value());
     // The stream the peer just attached to, so `Pump` can drain it.
     rig.shared_wal = core0_wal_.get();
-    ASSERT_TRUE(rig.peer->AttachTransport(rig.ring()).ok());
 
     // Core 0's manager's sequence, over the superblock the peer carves from
     // (`ConfigFor`), so the two windows are disjoint.
@@ -2283,8 +2244,8 @@ TEST_F(CoreRuntimeTest, ADropIndexOnAPeerRelationIsAdmittedInsideATransactionAnd
 // ---- Statement shipping, end to end (SS2/SS3) ---------------------------
 //
 // The rig above is the whole instance a shipped statement crosses: core 0's
-// dispatcher with an arrival-core client, and a peer whose `AttachTransport`
-// wired the owner's server and executor exactly as production does. What
+// dispatcher with an arrival-core client, and a peer whose transport attach
+// wired the owner's server and executor exactly as production did. What
 // these pin is the fork's contract - which statements ship, which keep the
 // refusal they always had, and that a shipped one really executes on the
 // core that owns the relation rather than being simulated on core 0.
@@ -2297,8 +2258,8 @@ TEST_F(CoreRuntimeTest, ADropIndexOnAPeerRelationIsAdmittedInsideATransactionAnd
 // seams by hand, because `MayShip` refused inside an explicit transaction and
 // so nothing ever enrolled a participant. These are the first tests in which
 // a **client statement** makes a transaction cross-owner and the protocol runs
-// end to end over a real ring, with the peer's participant half wired by
-// `AttachTransport` exactly as production wires it.
+// end to end over a real ring, with the peer's participant half wired at
+// its transport attach exactly as production wired it.
 
 // `AWriteInsideATransactionEnrolsItsOwnerAndTheCommitRunsBothPhases` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
 
@@ -2499,8 +2460,8 @@ static int RowsWith(CoreRuntime& owner, const std::string& table, const std::str
 // AT-S6: it filled the ring past its 16 slots with shipped statements and
 // pinned that a full ring costs latency and nothing else - no message
 // dropped, no answer invented, no allocation. Nothing ships, so nothing
-// fills the ring that way; `ring_transport`'s own cells keep the
-// backpressure claim for the kinds that remain.
+// fills the ring that way; the transport and its own cells retired whole at
+// AT-S10d.
 
 
 

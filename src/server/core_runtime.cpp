@@ -7,7 +7,6 @@
 #include <string>
 #include <utility>
 
-#include "kds/sched/send_retry.hpp"
 
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/catalog_spills.hpp"
@@ -222,7 +221,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // Timed, as core 0's is (`Expeditor::Open` passes its clock): `SHOW META`
     // prints the whole RC09 block only when `timings.timed` says a clock was
     // there, so an untimed recovery here would silently drop the phase
-    // numbers *and* the completion checkpoint's, which AttachTransport times.
+    // numbers *and* the completion checkpoint's, which the end of `Open` times.
     // The wal dir goes in too (R6-4): a transaction this core prepared and
     // never heard the outcome of is resolved by reading its coordinator's
     // stream, which is another file in that same directory.
@@ -242,7 +241,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // **Timed, though nothing was recovered.** `SHOW META` prints the
     // whole `_us` block only where a clock was supplied
     // (`command_dispatcher.cpp`), and this core still measures the
-    // completion checkpoint at `AttachTransport` - so leaving this false
+    // completion checkpoint at the end of `Open` - so leaving this false
     // would hide a number that was taken, and print a peer's recovery
     // block as a subset of core 0's rather than the same block reading
     // zero.
@@ -353,10 +352,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.
     runtime->dispatcher_->set_recovery(&runtime->recovery_);
-    // D5's in-doubt ceiling, copied from core 0's config (R6-5). Set here
-    // and not at `AttachTransport`, because a writer blocked on an in-doubt
-    // row is blocked whether or not this core has a transport - the
-    // transaction that holds the row is this core's own.
+    // The lock-wait fault net, copied from core 0's config (R6-5), so a
+    // writer waiting on this core is bounded by the instance's one value.
     runtime->dispatcher_->set_lock_wait_fault_net_ns(config.lock_wait_fault_net_ns);
     // The wait-for graph and the admission it gates, on every core since
     // AO-S4b - the member's declaration says why that is safe now.
@@ -428,9 +425,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     }
 
     // **This core's checkpointer** (PW3), built wherever the runtime is handed
-    // the instance's anchor (AT-S8). It waited for `AttachTransport` while its
-    // anchor was a send over the ring; it publishes into `Expeditor`'s
-    // `SuperBlockCheckpointAnchor` now, so it needs nothing the ring gives.
+    // the instance's anchor (AT-S8), which it publishes into directly
+    // (`Expeditor`'s `SuperBlockCheckpointAnchor`).
     if (config.checkpoint_anchor != nullptr) {
         runtime->checkpoint_target_.emplace(*runtime->store_);
         runtime->checkpointer_.emplace(*runtime->wal_, *runtime->checkpoint_target_,
@@ -473,52 +469,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     return runtime;
 }
 
-Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
-    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
-    const CurrentCoreGuard as_this_core(core_id());
-
-    if (Status s = scheduler_->AttachTransport(&transport, config_.core_id); !s.ok()) {
-        return s;
-    }
-
-    // **No shutdown handler since AU-S3.** Stopping this reactor used to be
-    // a message, and the reason was narrow and specific: `Scheduler::Stop()`
-    // wrote a plain bool, so only this reactor's own thread could safely
-    // flip it. The flag is atomic now, so core 0 stops a peer directly and
-    // kicks it awake (`Expeditor::BroadcastShutdown`, AR0-6-R1) - the kind
-    // is gone from `ring_message.hpp` with it.
-
-    // **CC7's two grant handlers went with the grants** (AW-S1b): core 0
-    // used to hand a peer fault rights over a relation's page range and
-    // write rights over its exact creation pages, because a peer's own
-    // frame table could reach neither without being told. One frame table
-    // serves every core now, so both questions the grants answered have no
-    // asker. Their kinds were struck at AT-S2b; a stale peer's message on a
-    // struck number finds no handler in the scheduler's map and is dropped.
-
-    // **The two id-lease receivers went at AT-S10b**, with the leases: a
-    // peer carves its transaction-id window from the instance's ceiling and
-    // bumps a relation's row-id mark in place, so nothing is granted to it.
-
-    // **No remote step server and no step client since AT-S10.** AT-S9
-    // retired the last statement that opened a stage - the fan-in over a
-    // split relation and the two-step join - and this core served STEP_OPENs
-    // for relations it owned, a question ownership's retirement removed. The
-    // six `kStep*` kinds and `kShippedRowDesc` are struck.
-
-    // **Statement shipping and 2PC are not wired, because they no longer
-    // exist** (AT-S6). What stood here built this core's shipped-statement
-    // executor and its participant seams, registered the ship request
-    // handler and the reply receiver, and then both halves of the
-    // cross-owner commit - every core a participant and every core a
-    // coordinator. A read runs where the session is now, as a write has
-    // since AT-S5, so no statement crosses and no transaction has a half
-    // to prepare.
-
-    transport_ = &transport;
-    return Status::OK();
-}
-
 void CoreRuntime::Run() {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
     const CurrentCoreGuard as_this_core(core_id());
@@ -558,7 +508,7 @@ void CoreRuntime::Run() {
     // **The idle burn rides the drain tick** (AN-R13), on every core but 0,
     // whose tick is `Expeditor`'s. It rode with the two id-lease refills
     // until AT-S10b retired them; a burn is a carve here like any other
-    // since, so it needs no transport. (R6-2's lifetime-ceiling sweep rode
+    // since, so it needs nothing from core 0. (R6-2's lifetime-ceiling sweep rode
     // here too until AT-S6, and what its removal leaves is a gap:
     // `docs/inflight/known-gaps.md`.)
     if (config_.core_id != 0 && config_.wal_drain_interval_ns > 0) {
@@ -675,8 +625,8 @@ Status CoreRuntime::AttachListener(TcpServer server, const TcpServer::ClientSetu
     }
     // STOP accepted on this core must stop the *instance*, not this
     // reactor (the review's BUG 2: a stopped peer's socket keeps
-    // receiving a kernel share of new connections nobody drains, and its
-    // ring goes undrained while core 0 reports healthy). So it routes,
+    // receiving a kernel share of new connections nobody drains while
+    // core 0 reports healthy). So it routes,
     // through the instance's hook, straight to core 0's stop flag - atomic
     // since AU-S3 - plus a kick to end the block it is sitting in; Serve's
     // ordinary tail then broadcasts shutdown to every peer, one stop path

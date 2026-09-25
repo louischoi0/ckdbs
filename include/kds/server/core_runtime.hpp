@@ -14,7 +14,6 @@
 #include "kds/exec/budget.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
-#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/txn/lock_table.hpp"
@@ -289,7 +288,7 @@ public:
         // because the arm that opened a device of this core's own left with
         // the topology that had one.
         //
-        // Borrowed and outliving every peer, the way the ring transport is.
+        // Borrowed and outliving every peer.
         wal::WalStream* shared_stream = nullptr;
         wal::WalWriter* shared_writer = nullptr;
 
@@ -407,14 +406,6 @@ public:
     // `listener_` (PW5), whose `~TcpServer` unregisters its fds from the
     // reactor.
     ~CoreRuntime();
-
-    // Attaches this core to the ring matrix. **It installs no handler since
-    // AT-S10b**: the two id-lease receivers were the last, and a peer carves
-    // and issues its own ids. Nor a stop handler: since AU-S3 core 0 stops
-    // this reactor with `scheduler().Stop()` plus a kick, so shutdown
-    // reaches a core that never attached a transport at all. `transport`
-    // must outlive this.
-    Status AttachTransport(sched::RingTransport& transport);
 
     // PW5, and the arrangement since AT-S8: binds `port` with SO_REUSEPORT
     // and attaches the listener to this core's reactor and dispatcher, on
@@ -537,8 +528,8 @@ public:
 
     storage::DevicePageStore& store() noexcept { return *store_; }
 
-    // What this core's mount did (RV1/RV2 at Open, RC08's completion
-    // checkpoint at AttachTransport) - `Expeditor::recovery()`'s counterpart,
+    // What this core's mount did (RV1/RV2 and RC08's completion
+    // checkpoint, both at Open) - `Expeditor::recovery()`'s counterpart,
     // and what this core's `SHOW META` recovery block reads (PW3b: kept
     // rather than discarded, so a peer's stop can be checked to have bounded
     // its next mount by the same field core 0's is).
@@ -554,7 +545,6 @@ private:
 
     Config config_;
     Logger* log_ = nullptr;
-    sched::RingTransport* transport_ = nullptr;
     // Filled at Open, read by the dispatcher below for the rest of this
     // core's life - so it is declared above everything that borrows it.
     MountRecovery recovery_;

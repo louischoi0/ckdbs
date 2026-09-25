@@ -15,30 +15,28 @@
 #include "kds/base/log.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
-#include "kds/sched/ring_message.hpp"
-#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/waker.hpp"
 #include "kds/sched/waker_table.hpp"
 #include "kds/sched/task.hpp"
 
 // The reactor (docs/spec/sched.md sections 2-4). One Scheduler runs on the
-// calling thread. Still missing from sched.md's blueprint: worker-thread
-// spawning and CPU pinning (workplan-crosscore.md P2), the hierarchical
-// timing wheel, and the SLO-feedback controller. The cross-core inbox
-// (phase 3) is built - see AttachTransport() - though nothing constructs a
-// transport in production yet, so today every instance runs alone.
+// calling thread. Still missing from sched.md's blueprint: the hierarchical
+// timing wheel and the SLO-feedback controller. **No cross-core inbox since
+// AT-S10d**: the ring transport and phase 3 retired with the last message
+// kind, and a peer reaches this reactor only by writing shared state and
+// kicking it through the wake registry (AR0-6-R1, `waker_table.hpp`).
 //
 // Concurrency protocol: a Scheduler is core-local by construction - all of
-// Submit()/RegisterIoHandler()/RegisterMessageHandler()/RunOnce()/Run()/
-// Stop() must be called from the single thread that owns this reactor.
-// There is nothing to lock: the ready queues, the handler tables and the
-// consumed-runtime counters are plain (non-atomic) fields, and the only
-// atomics anywhere near this class are the two indices inside each SpscRing
-// (workplan-crosscore.md guideline 1).
+// Submit()/RegisterIoHandler()/RunOnce()/Run() must be called from the
+// single thread that owns this reactor. There is nothing to lock: the ready
+// queues, the handler table and the consumed-runtime counters are plain
+// (non-atomic) fields. The atomics on this class are the sleep flag, the
+// stop flag and three wake counters, each of which says at its member why
+// another thread reads it.
 //
 // **The read-only accessors are covered by that same rule**, and it has to
-// be said because a getter reads as safe: iterations(), messages_drained()
-// and the group-accounting block below all read plain fields the reactor's
+// be said because a getter reads as safe: iterations() and the
+// group-accounting block below all read plain fields the reactor's
 // thread writes without synchronization, so calling one from another thread
 // while Run() proceeds is a data race. Every caller today reaches them from
 // the reactor's own thread (`SHOW META` runs as a task on it) or after a
@@ -63,14 +61,6 @@ struct SchedulerConfig {
     // proportional picking), indexed by SchedulingGroupIndex().
     std::array<std::uint32_t, kNumSchedulingGroups> group_shares{1000, 100, 50};
 
-    // Max cross-core messages drained per RunOnce() (phase 3). The same
-    // loop-budget rule phase 4 follows and for the same reason (sched.md
-    // §2): a core under a message flood must still get to its I/O
-    // completions and its ready tasks this iteration. Undrained messages
-    // stay in the ring and are picked up next iteration - nothing is lost
-    // by stopping early.
-    int max_messages_per_iteration = 64;
-
     // Consumed-runtime counters are halved (all groups at once, so
     // relative shares are preserved) once the largest counter exceeds this
     // many nanoseconds - sched.md section 4's "consumption counters decay
@@ -90,16 +80,6 @@ struct SchedulerConfig {
 };
 
 using IoHandler = std::function<void(const IoEvent&)>;
-
-// What a core does with a message addressed to it. Invoked from inside the
-// task phase 3 creates, never from the drain itself - so a handler may take
-// as long as a task may, and must yield like one.
-//
-// `payload` is a view into the scheduler's receive buffer and is **not**
-// valid past the call; a handler that needs to keep the bytes copies them.
-// The alternative - handing over an owning vector per message - would put
-// an allocation on the one path sched.md §2 says has none.
-using MessageHandler = std::function<void(const MessageHeader&, std::span<const std::byte>)>;
 
 // Identifies an armed timer, for cancellation. Never reused, so cancelling
 // an already-fired one-shot is a harmless no-op rather than a way to kill
@@ -128,65 +108,26 @@ public:
     Status ModifyIoHandler(IoHandle handle, IoInterest interest);
     Status UnregisterIoHandler(IoHandle handle);
 
-    // ---- Cross-core messaging (sched.md §5, workplan P1) ----------------
+    // ---- The wake (sched.md §5 and §7, AR0-6-R1) ------------------------
 
-    // Attaches this reactor to `transport` as the reactor for `core_id`.
-    // `transport` must outlive the scheduler.
+    // Registers this reactor in the instance's wake registry as `core_id`,
+    // and **arms the wake path** (waker.hpp): an eventfd registered with
+    // this reactor's backend, so a peer that wrote shared state this core
+    // parks on can end the block it is sitting in.
     //
-    // Null is the default and the whole single-core story: a scheduler with
-    // no transport skips phase 3 at the cost of one null test, so every
-    // existing construction site is untouched and the `cores = 1` build
-    // contributes zero messages and zero allocations (workplan guideline
-    // 2).
-    // Attaches this reactor to the ring matrix as `core_id`, and **arms
-    // the wake path** (waker.hpp): an eventfd registered with this
-    // reactor's backend, published to the transport so peers can unblock a
-    // sleep that a ring message would otherwise not interrupt.
+    // **This is where a reactor becomes wakeable at all** - a lock-table
+    // decide, a connection handoff and a stop all kick through the table.
+    // Null registers nothing and arms nothing, which is every single-core
+    // build: no fd, no flag stores, no syscalls (G2).
     //
-    // No longer `noexcept`, and no longer infallible: creating the eventfd
-    // and registering it can fail. A failure is returned rather than
-    // swallowed because the consequence is silent — every cross-core
-    // message on this core would pay the idle block, which is a
+    // Fallible: creating the eventfd and registering it can fail. A failure
+    // is returned rather than swallowed because the consequence is silent -
+    // every kick to this core would pay the idle block, which is a
     // millisecond nobody would think to look for.
-    //
-    // Single-core builds never call this, so they gain no fd, no flag
-    // stores and no syscalls: the fast path is exactly what it was
-    // (guideline 2).
-    Status AttachTransport(RingTransport* transport, std::uint32_t core_id);
-
-    // AU-S1: register this reactor in the instance's waker table, so a peer
-    // can kick it without a transport (AR0-6-R1, `waker_table.hpp`).
-    //
-    // **This is where a reactor becomes wakeable at all**, since AU-S1b -
-    // the table is the instance's one wake registry, and a send goes
-    // through it like a stop does. `AttachTransport` gives this core a
-    // *queue*; this gives peers a way to say something is in it. A reactor
-    // that calls only the first is never woken and falls back to its idle
-    // block, which is what every single-core build does; one that calls
-    // only this is kicked with no queue to drain, which is what every
-    // caller after AU-S5 will be. Creates the `Waker` if attaching a
-    // transport has not already, so the two need no ordering between them.
     Status AttachWakerTable(WakeRegistry* table, std::uint32_t core_id);
-
-private:
-    // Creates and registers this reactor's eventfd, once, for whichever
-    // attach point runs first (AU-S1).
-    Status ArmWaker();
-
-public:
-
-    // What to run when a message of `kind` arrives. Replaces any previous
-    // handler for that kind. Fails with InvalidArgument for `kUnset`, which
-    // names nothing, and for a kind this build does not know - a handler
-    // registered against a number nobody can send is a silent no-op, and
-    // the point of the central enum is that such a number does not exist.
-    Status RegisterMessageHandler(RingMessageKind kind, MessageHandler handler);
 
     std::uint32_t core_id() const noexcept { return core_id_; }
 
-    // Messages this reactor has drained. Diagnostics and tests - notably
-    // the single-core assertion that it stays 0.
-    std::uint64_t messages_drained() const noexcept { return messages_drained_; }
     // The clock this reactor was built on - what a task or handler stamps
     // time with, so nothing threads a second clock pointer beside it.
     const Clock& clock() const noexcept { return clock_; }
@@ -266,8 +207,8 @@ public:
     }
 
     // Runs one iteration of the fixed-order phase loop (sched.md section
-    // 2). Returns true if any task ran, any I/O event was drained, any
-    // timer fired, or any cross-core message was received.
+    // 2). Returns true if any task ran, any I/O event was drained or any
+    // timer fired.
     // Work to do once per loop iteration, **after** the ready tasks have
     // run and before the reactor blocks again.
     //
@@ -340,7 +281,8 @@ private:
     // found a predicate still false leaves it alone, and that is what lets
     // the reactor sleep instead of re-asking forever.
     bool RunReadyTasks(bool& advanced);
-    bool DrainInbox();
+    // Creates and registers this reactor's eventfd (AU-S1).
+    Status ArmWaker();
     // The share-proportional pick over the groups with tasks still unpolled
     // this round (`remaining`, RunReadyTasks' count-down).
     bool PickNextGroup(const std::array<std::size_t, kNumSchedulingGroups>& remaining,
@@ -375,78 +317,57 @@ private:
     std::unordered_map<IoHandle, IoHandler> io_handlers_;
     std::vector<IoEvent> io_events_scratch_;
 
-    // ---- Cross-core (sched.md §5) ---------------------------------------
-    RingTransport* transport_ = nullptr;
-
     // The instance's wake registry, borrowed. Held for one reason beyond
     // registering into it: `wakes_sent()` reads its counter, and after
     // AU-S1b that counter is the only one there is.
     const WakeRegistry* wakers_ = nullptr;
 
-    // **The wake path** (waker.hpp), armed by whichever attach point runs
-    // first and absent on every single-core build.
+    // **The wake path** (waker.hpp), armed at `AttachWakerTable` and absent
+    // on every single-core build.
     //
     // `sleeping_` is read by *other cores' threads*, which is the one place
-    // in this reactor where that is true and why it is atomic. It is
-    // sequentially consistent on both sides on purpose: the argument that
-    // a message cannot be stranded is the store-buffer one, and it needs
-    // seq_cst — `WakerTable::Kick` carries the sender's half and
-    // `HasPending` the third leg (`waker_table.hpp`).
+    // in this reactor where that is true and why it is atomic. A kick that
+    // reads it clear while this reactor is about to raise it is skipped, and
+    // costs one idle block (`WakerTable::Kick` says why nothing closes that
+    // window since AT-S10d).
     std::optional<Waker> waker_;
     std::atomic<bool> sleeping_{false};
-    // Iterations that blocked with the flag raised, and iterations whose
-    // pre-block re-check found work and skipped the block. The second is
-    // the race actually happening, and a run where it stays 0 has not
-    // exercised it.
+    // Iterations that blocked with the flag raised.
     //
     // **Atomic, unlike every other counter on this class**, and the
     // exception is deliberate: "is that reactor asleep yet" is a question
-    // only another thread can usefully ask, so the accessors below are the
-    // one pair the class-level "reactor thread only" rule does not cover.
-    // Relaxed, and free: both are touched only on an iteration that was
-    // about to block, which by construction is an iteration with nothing
-    // ready to run.
+    // only another thread can usefully ask, so its accessor is one the
+    // class-level "reactor thread only" rule does not cover. Relaxed, and
+    // free: it is touched only on an iteration that was about to block,
+    // which by construction is an iteration with nothing ready to run.
     std::atomic<std::uint64_t> idle_blocks_{0};
-    std::atomic<std::uint64_t> wake_race_skips_{0};
     // Idle blocks taken with tasks still sitting in the ready queues - all
     // of them parked. Every one of these is an iteration the reactor used
     // to spin through (§7's "parked is not ready"), so this counter is the
     // fix's own measure of itself: zero on a build without parks, and
     // climbing on exactly the workload that used to burn a core.
     std::atomic<std::uint64_t> parked_idle_blocks_{0};
-    // How long this reactor has actually spent inside the block, and how
-    // many wakes arrived to find nothing on the ring (D7 of the v2.3.0
-    // order). Plain integers, unlike the three above: nothing outside this
-    // reactor's own thread has a use for them, so they follow the
-    // class-level rule rather than the wake protocol's exception. Both are
-    // touched only on an iteration that was about to block or that a wake
-    // ended, which is by construction an iteration with nothing to run.
+    // How long this reactor has actually spent inside the block (D7 of the
+    // v2.3.0 order). A plain integer, unlike the two counters above: nothing
+    // outside this reactor's own thread has a use for it. Touched only on
+    // an iteration that was about to block, which is by construction an
+    // iteration with nothing to run.
     //
-    // `idle_block_ns_` is what makes the reactor's wall clock add up:
+    // It is what makes the reactor's wall clock add up:
     // `run_wall_ns - sum(polled_ns_total) - idle_block_ns` is the time
     // charged to no group *and* spent doing something (sched.md §4's gap),
     // where before it was that plus the sleep in one lump.
     std::uint64_t idle_block_ns_ = 0;
-    std::uint64_t spurious_wakes_ = 0;
-    // Set by the waker's own io handler, read after the inbox drain, reset
-    // at the top of every iteration: an iteration the eventfd ended.
-    bool woken_by_waker_ = false;
 
 public:
-    // The wake path, from this reactor's side. `idle_blocks` counts
-    // iterations that actually blocked with the flag raised;
-    // `wake_race_skips` counts the ones whose pre-block re-check found work
-    // and skipped the block - which *is* the race the flag exists for, so a
-    // run where it stays 0 has not exercised it. Diagnostics and tests, and
-    // - with `wakes_received()` below, which reads the `Waker`'s own atomic
-    // and a `waker_` engaged at attach before any worker exists - the only
-    // three accessors on this class that may be read from another thread
-    // (see the members).
+    // The wake path, from this reactor's side: iterations that actually
+    // blocked with the flag raised. Diagnostics and tests, and - with
+    // `parked_idle_blocks()` and `wakes_received()` below, which reads the
+    // `Waker`'s own atomic and a `waker_` engaged at attach before any
+    // worker exists - one of the three accessors on this class that may be
+    // read from another thread (see the members).
     std::uint64_t idle_blocks() const noexcept {
         return idle_blocks_.load(std::memory_order_relaxed);
-    }
-    std::uint64_t wake_race_skips() const noexcept {
-        return wake_race_skips_.load(std::memory_order_relaxed);
     }
     // Blocks taken while parked tasks were queued - the spin that used to
     // happen instead. See the member.
@@ -467,33 +388,17 @@ public:
     // Wakes this instance has written to *every* destination, so the same
     // number on every core and equal to the sum of every core's
     // `wakes_received()`. Instance-wide because the counter is the waker
-    // table's: one object serves all N reactors, and since AU-S1b a ring
-    // send and a stop are both counted there.
+    // table's: one object serves all N reactors, and a stop, a lock-table
+    // decide and a connection handoff are all counted there.
     std::uint64_t wakes_sent() const noexcept {
         return wakers_ != nullptr ? wakers_->kicks() : 0;
     }
-    // Wakes this reactor read whose iteration then drained no message.
-    // Not a defect: the sender publishes before it wakes, so the message
-    // can be taken by the iteration that raced the flag, one ahead of the
-    // eventfd being read - the ordinary outcome of what `wake_race_skips`
-    // counts from the other side. A number climbing far past that one
-    // would mean senders waking a core they had nothing for.
-    std::uint64_t spurious_wakes() const noexcept { return spurious_wakes_; }
     // Whether this reactor can be woken at all. False on every single-core
-    // build, where nothing can send to it.
+    // build, where nothing can kick it.
     bool wake_armed() const noexcept { return waker_.has_value(); }
 
 private:
     std::uint32_t core_id_ = 0;
-    // Keyed by the enum's underlying value. A small flat map would do as
-    // well; what matters is that nothing iterates it, so its order is never
-    // observable (sched.md §8's deterministic-container rule).
-    std::unordered_map<std::uint16_t, MessageHandler> message_handlers_;
-    // Reused across drains, which is what keeps a received message from
-    // allocating in steady state - the same arrangement io_events_scratch_
-    // has.
-    std::vector<std::byte> message_payload_scratch_;
-    std::uint64_t messages_drained_ = 0;
     std::uint64_t iterations_ = 0;
     // Tasks ever queued (Submit). Only ever compared across one RunOnce, to
     // notice work that appeared mid-iteration; the absolute value is not

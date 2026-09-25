@@ -10,9 +10,7 @@
 
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
-#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
-#include "kds/sched/send_retry.hpp"
 
 // C++20 stackless coroutines as the task representation (docs/spec/sched.md §3,
 // settled 2026-08-05).
@@ -225,100 +223,11 @@ TEST(CoroTest, AWaitingCoroutineDoesNotBlockTheCore) {
     EXPECT_TRUE(finished);
 }
 
-// ---- The thing that was blocked ----------------------------------------
-
-TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
-    // **This is what the decision was for.** Send a message to a peer, wait
-    // for its reply, and continue - in straight-line code, on a reactor that
-    // never blocks. Before coroutines this could not be written at all:
-    // `Dispatch()` returns synchronously and `ChainRunner` has no suspension
-    // point, so the only options were blocking the core or hand-rolling the
-    // whole executor into a state machine.
-    //
-    // This is the exact shape P5's lease services need - send a request,
-    // await its grant - and the one the step pipeline used until AT-S10.
-    ManualClock clock;
-    NullIoBackend io_a;
-    NullIoBackend io_b;
-    Scheduler core0(clock, io_a);
-    Scheduler core1(clock, io_b);
-
-    auto transport = RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok());
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-    ASSERT_TRUE(core1.AttachTransport(&transport.value(), 1).ok());
-
-    // Per-request state the reply is routed to. It outlives the wait, which
-    // is WaitFor's one requirement.
-    struct Request {
-        bool replied = false;
-        std::uint64_t answer = 0;
-    };
-    Request request;
-
-    // Core 1: answers a request by sending one back. The kind is a stand-in
-    // - any request/reply kind serves, since this cell registers its own
-    // handlers on bare schedulers; it was `kExtentLease` until AT-S2b
-    // struck that kind, `kIndexBuildRequest` until AT-S5e struck that, and
-    // `kShippedStatementRequest` until AT-S6 struck that, and the step pair
-    // until AT-S10 struck those. The two lease kinds are what is left.
-    ASSERT_TRUE(core1
-                    .RegisterMessageHandler(
-                        RingMessageKind::kTrxIdLease,
-                        [&transport](const MessageHeader& h, std::span<const std::byte>) {
-                            MessageHeader reply{};
-                            reply.src_core = 1;
-                            reply.dst_core = h.src_core;
-                            reply.request_id = h.request_id;
-                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kRowIdLease);
-                            const std::uint64_t granted = 4096;
-                            std::byte bytes[sizeof(granted)];
-                            std::memcpy(bytes, &granted, sizeof(granted));
-                            (void)transport.value().TrySend(
-                                reply, std::span<const std::byte>(bytes, sizeof(bytes)));
-                        })
-                    .ok());
-
-    // Core 0: routes the reply into the waiting request's state.
-    ASSERT_TRUE(core0
-                    .RegisterMessageHandler(
-                        RingMessageKind::kRowIdLease,
-                        [&request](const MessageHeader&, std::span<const std::byte> payload) {
-                            std::memcpy(&request.answer, payload.data(), sizeof(request.answer));
-                            request.replied = true;
-                        })
-                    .ok());
-
-    // The statement, as straight-line code.
-    bool finished = false;
-    std::uint64_t got = 0;
-    auto ask = [&]() -> Coro {
-        MessageHeader header{};
-        header.src_core = 0;
-        header.dst_core = 1;
-        header.request_id = 1;
-        header.kind = static_cast<std::uint16_t>(RingMessageKind::kTrxIdLease);
-        if (Status s = transport.value().TrySend(header, {}); !s.ok()) co_return s;
-
-        co_await WaitFor{&request.replied};
-
-        got = request.answer;
-        co_return Status::OK();
-    };
-
-    core0.Submit(MakeCoroTask(SchedulingGroup::kForeground, ask(),
-                              [&finished](const Status& s) { finished = s.ok(); }));
-
-    // Both reactors stepped round-robin on this thread - sched.md §8's
-    // simulation shape, which is what makes this deterministic.
-    for (int i = 0; i < 20 && !finished; ++i) {
-        core0.RunOnce();
-        core1.RunOnce();
-    }
-
-    EXPECT_TRUE(finished) << "the request/response never completed";
-    EXPECT_EQ(got, 4096u);
-}
+// `ACoroutineDoesACrossCoreRequestAndResponse` stood here until AT-S10d: it
+// sent a request over the ring and parked on the reply, the shape the id
+// leases and the step pipeline used. The ring retired with the last of
+// them; a coroutine that waits on another core now parks on shared state
+// and is kicked (`scheduler_test.cpp`'s parked-coroutine cell).
 
 // ---- Suspension safety -------------------------------------------------
 //

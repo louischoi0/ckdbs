@@ -23,10 +23,10 @@
 //
 // **Core 0 is a `CoreRuntime` here and an `Expeditor` in production.** The
 // AV-S0 read (the order's §8 table) lists what that leaves out; what it
-// leaves in is everything `CoreRuntime::AttachTransport` wires for every
-// core, so what the rig exercises is production's code - which since AT-S10
-// is the two id-lease receivers, nothing that ships a statement having
-// survived. The two things a
+// leaves in is everything `CoreRuntime::Open` and the wake registry wire for
+// every core, so what the rig exercises is production's code - and since
+// AT-S10d that includes no transport, the ring having retired. The two
+// things a
 // core-0 runtime lacked and this rig needed are landed in the runtime
 // rather than worked around here: it persists page 0 when it carves an id
 // block, and its reactor takes a `SchedulerConfig`.
@@ -42,7 +42,8 @@
 // `core_runtime.hpp` names as safe from another thread - `Stop()` and a
 // kick - which is how `Stop()` here ends both reactors. A cell that wants a
 // task parked on a reactor submits it **before** `Start()`; after it, a
-// task reaches a reactor only the way production's do, over the ring.
+// task reaches a reactor only the way production's do, by shared state and
+// a kick.
 
 #include <array>
 #include <atomic>
@@ -61,7 +62,6 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/sched/clock.hpp"
-#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/sim_waker_table.hpp"
 #include "kds/server/core_runtime.hpp"
 #include "kds/stats/cabin_store.hpp"
@@ -111,8 +111,8 @@ public:
         cores_[0].reset();
         // The log closes before its directory goes - the writer thread joins
         // in `~WalManager` - and the rest follows in reverse declaration
-        // order: the sim table, the real table, the transport, the
-        // visibility, the store, the device.
+        // order: the sim table, the real table, the visibility, the store,
+        // the device.
         wal_.reset();
         log_device_.reset();
         std::error_code ec;
@@ -125,7 +125,6 @@ public:
     // The real table under the sim: what was actually written, and the
     // registry a teardown kicks through.
     sched::WakerTable& wakers() noexcept { return *wakers_; }
-    sched::RealRingTransport& transport() noexcept { return *transport_; }
     // The instance's lock table (AO-S5), the one both runtimes' managers
     // release into, kicking through the sim.
     txn::LockTable& locks() noexcept { return *locks_; }
@@ -212,18 +211,11 @@ private:
         visibility_.emplace();
 
         // ---- The fan-out: `Expeditor::Start`'s, minus the listeners -----
-        auto transport = sched::RealRingTransport::Create(/*core_count=*/2, sched::kCoreRingSlots,
-                                                          sched::kCoreRingPayloadBytes);
-        if (!transport.ok()) return transport.status();
-        transport_.emplace(std::move(transport.value()));
         wakers_.emplace(/*core_count=*/2);
         sim_.emplace(*wakers_, options_.wake);
-        // The transport kicks through the sim, so a send's wake is logged
-        // and held like any other (AU-S1b: one registry, and this is it).
-        transport_->AttachWakers(&*sim_);
         // The instance's lock table (AO-S5), `Expeditor::Open`'s, kicking
-        // through the same registry (AU-S2) - so a decide's wake to a
-        // waiter on the other core is logged and held like a send's.
+        // through the sim (AU-S2) - so a decide's wake to a waiter on the
+        // other core is logged and held like any other kick.
         auto locks = txn::LockTable::Create(/*core_count=*/2);
         if (!locks.ok()) return locks.status();
         locks_ = std::move(locks.value());
@@ -268,10 +260,8 @@ private:
             auto core = CoreRuntime::Open(config, *device_, clock_, /*log=*/nullptr);
             if (!core.ok()) return core.status();
             cores_[id] = std::move(core.value());
-            // Every core's services, production's own wiring; then the
-            // registry, through the sim, so this reactor can be kicked and
-            // the kick is logged.
-            if (Status s = cores_[id]->AttachTransport(*transport_); !s.ok()) return s;
+            // The registry, through the sim, so this reactor can be kicked
+            // and the kick is logged.
             if (Status s = cores_[id]->scheduler().AttachWakerTable(&*sim_, id); !s.ok()) {
                 return s;
             }
@@ -292,7 +282,6 @@ private:
     std::unique_ptr<wal::FileLogDevice> log_device_;
     std::unique_ptr<wal::WalManager> wal_;
     std::optional<txn::InstanceVisibility> visibility_;
-    std::optional<sched::RealRingTransport> transport_;
     std::optional<sched::WakerTable> wakers_;
     std::optional<sched::SimWakerTable> sim_;
     stats::CabinStore cabins_;
@@ -346,10 +335,9 @@ bool KickUntil(TwoCoreRig& rig, std::uint32_t core, Pred pred,
 }
 
 // The kicks the log holds for one destination. **The engine's own kicks are
-// in the log too** - the peer's completion checkpoint publishes its anchor
-// to core 0 over the ring the moment its reactor starts, and that send
-// kicks core 0 through the same table - so a cell reads the log per
-// destination rather than assuming it holds only what the cell asked for.
+// in the log too** - a lock-table decide and a stop kick through the same
+// table - so a cell reads the log per destination rather than assuming it
+// holds only what the cell asked for.
 inline std::vector<sched::SimWakerTable::Record> KicksTo(TwoCoreRig& rig, std::uint32_t dst) {
     std::vector<sched::SimWakerTable::Record> to;
     for (const sched::SimWakerTable::Record& r : rig.wake().log()) {

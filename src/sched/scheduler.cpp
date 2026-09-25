@@ -49,15 +49,10 @@ Status Scheduler::UnregisterIoHandler(IoHandle handle) {
     return io_backend_.Unregister(handle);
 }
 
-// **The wake path** (waker.hpp), armed on demand by whichever attach point
-// runs first. Extracted at AU-S1: it used to sit inside `AttachTransport`,
-// which made a reactor's wakeability a property of having a transport - and
-// AR0-6 retires the transport while keeping the wake. Idempotent, so the two
-// callers need no ordering between them.
-//
-// Armed here rather than at construction because this is the first moment a
-// peer exists to be woken by, and because a single-core reactor must not pay
-// for a handle it can never need.
+// **The wake path** (waker.hpp). Armed at the attach rather than at
+// construction because that is the first moment a peer exists to be woken
+// by, and because a single-core reactor must not pay for a handle it can
+// never need. Idempotent.
 Status Scheduler::ArmWaker() {
     if (waker_.has_value()) return Status::OK();
 
@@ -69,15 +64,9 @@ Status Scheduler::ArmWaker() {
         waker_.reset();
         return s;
     }
-    // Draining is all the handler does: the wake carries no data. With a
-    // transport, phase 3 of this same iteration reads the queue; with a
-    // kick, the woken task re-checks the structure it parked on.
-    io_handlers_[waker_->handle()] = [this](const IoEvent&) {
-        waker_->Drain();
-        // D7's `sched_spurious_wakes`: read once, after phase 3, against
-        // whether that drain found anything.
-        woken_by_waker_ = true;
-    };
+    // Draining is all the handler does: a kick carries no data, and the
+    // woken task re-checks the structure it parked on.
+    io_handlers_[waker_->handle()] = [this](const IoEvent&) { waker_->Drain(); };
     return Status::OK();
 }
 
@@ -92,93 +81,6 @@ Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id) {
     // engine is done.
     table->Register(core_id_, &sleeping_, &*waker_);
     return Status::OK();
-}
-
-Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) {
-    transport_ = transport;
-    core_id_ = core_id;
-    if (transport_ == nullptr) return Status::OK();
-
-    // The waker is armed here and **not registered anywhere** - since AU-S1b
-    // the wake registry is the instance's `WakerTable` and this reactor
-    // enters it through `AttachWakerTable`, once, whether the sender is a
-    // ring send or a stop.
-    //
-    // What arming still buys on this path is the **pre-block re-check**, not
-    // the block: `RunOnce`'s `may_sleep` is `timeout_ms != 0 &&
-    // waker_.has_value()`, and it gates the `sleeping_` store and the
-    // `HasPending` look that follows it - never the `PollReady` timeout,
-    // which is `IdleTimeoutMs`'s alone. A reactor with no waker at all
-    // blocks for exactly as long (measured: a 300 ms `max_idle_block_ms`
-    // with nothing attached spends 300 ms inside `PollReady`); what it
-    // loses is the one look that would have found a message published just
-    // before it went to sleep. A core that attached a transport and no
-    // table keeps that look and is simply never kicked.
-    return ArmWaker();
-}
-
-Status Scheduler::RegisterMessageHandler(RingMessageKind kind, MessageHandler handler) {
-    const auto raw = static_cast<std::uint16_t>(kind);
-    if (!IsKnownRingMessageKind(raw)) {
-        // Including kUnset, which is the point of kUnset. A handler bound
-        // to a number no sender can produce is a no-op nobody would notice,
-        // and the central kind enum exists precisely so that number does
-        // not exist.
-        return Status::InvalidArgument("scheduler: message kind " + std::to_string(raw) +
-                                       " is not one this build knows");
-    }
-    message_handlers_[raw] = std::move(handler);
-    return Status::OK();
-}
-
-bool Scheduler::DrainInbox() {
-    if (transport_ == nullptr) return false;
-
-    bool did_work = false;
-    for (int drained = 0; drained < config_.max_messages_per_iteration; ++drained) {
-        MessageHeader header{};
-        if (!transport_->TryReceive(core_id_, header, message_payload_scratch_)) break;
-
-        did_work = true;
-        ++messages_drained_;
-
-        auto it = message_handlers_.find(header.kind);
-        if (it == message_handlers_.end()) {
-            // Dropped, not failed. A message with no handler here is the
-            // same situation as one whose tag matches no live pipeline
-            // state - normal operation under workplan guideline 5, since a
-            // request can be torn down while its messages are still in
-            // flight. It is logged because the *other* reading, a handler
-            // somebody forgot to register, looks identical from here and
-            // would otherwise be invisible.
-            if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-                log_->Debug("sched", std::string("dropped a ") +
-                                         RingMessageKindName(
-                                             static_cast<RingMessageKind>(header.kind)) +
-                                         " message from core " + std::to_string(header.src_core) +
-                                         ": no handler on core " + std::to_string(core_id_));
-            }
-            continue;
-        }
-
-        // The handler runs inside a task, not here. Phase 3's job is to
-        // move messages out of the ring - doing the work in the drain would
-        // put an unbounded amount of it inside a phase that has to stay
-        // cheap, which is the same contract the phase-1 io handlers are
-        // under.
-        //
-        // The payload is copied into the task because the scratch buffer is
-        // overwritten by the very next iteration of this loop, and the task
-        // does not run until phase 4.
-        Submit(std::make_unique<FunctionTask>(
-            GroupOf(header),
-            [handler = it->second, header,
-             payload = message_payload_scratch_]() mutable -> PollResult {
-                handler(header, std::span<const std::byte>(payload));
-                return PollResult::kDone;
-            }));
-    }
-    return did_work;
 }
 
 TimerId Scheduler::ArmTimer(MonoTimeNs deadline, MonoTimeNs period_ns,
@@ -428,11 +330,10 @@ bool Scheduler::RunOnce() {
     // *next* iteration's IdleTimeoutMs.
     //
     // A task submitted mid-iteration counts, wherever it came from - an io
-    // handler, a message, another task - which is why the count is taken
+    // handler, a timer, another task - which is why the count is taken
     // across the whole body rather than at any one phase.
     bool advanced = false;
     const std::uint64_t submits_at_entry = submits_;
-    woken_by_waker_ = false;
 
     // Phase 1: drain I/O completions. The wait is phase 6's idle policy
     // pulled to the front, which is where a reactor can actually sleep: 0
@@ -441,27 +342,24 @@ bool Scheduler::RunOnce() {
     io_events_scratch_.clear();
     int timeout_ms = IdleTimeoutMs();
 
-    // **Raise the flag before blocking, then look once more** (waker.hpp).
+    // **Raise the flag before blocking** (waker.hpp). The flag is what lets
+    // a peer know this reactor must be woken.
     //
-    // The flag is what lets a peer know this reactor must be woken; the
-    // re-check is what closes the window the flag opens. A sender that
-    // enqueued between this iteration's phase-3 drain and the store below
-    // read the flag as clear and skipped the wake, so its message would
-    // wait out the whole block — the millisecond this path exists to
-    // remove. The fence makes the pair a store-buffer, and sequential
-    // consistency forbids both sides reading stale: `WakerTable::Kick`
-    // carries the sender's half of the argument, and since AU-S1b it is
-    // the only copy of it.
+    // **There is no re-check after it since AT-S10d** (AR0-6-R1,
+    // `waker_table.hpp` says why): a kicker that wrote its state and read
+    // the flag as clear just before the store below skips the wake, and
+    // closing that window needs the receiver to re-ask the predicate it is
+    // about to park on. The ring had a queue to ask (`HasPending`); a kick
+    // has none, and every consumer - the lock table's slot, the connection
+    // handoff's inbox, a stop - is level-triggered, re-polled after every
+    // block. So a kick lost to the window costs one idle block, bounded by
+    // `max_idle_block_ms`, and never the wake. With nothing loaded after the
+    // store, the fence that made the pair a store-buffer went with the look.
     //
     // Only when this iteration would actually sleep. A timeout of 0 is a
-    // reactor with work to do, and it neither needs waking nor may pay two
-    // atomics to say so.
-    // **Not gated on the transport** (AU-S1). This read
-    // `transport_ != nullptr` until AR0-6, which meant a reactor with no
-    // transport never raised its flag and so could never be woken - it only
-    // ever timed out. Retiring the transport would have silently disabled
-    // every cross-core wake with it. What a reactor needs to be wakeable is
-    // its own `Waker`, and nothing else.
+    // reactor with work to do, and it neither needs waking nor may pay an
+    // atomic to say so. What a reactor needs to be wakeable is its own
+    // `Waker`, and nothing else (AU-S1).
     const bool may_sleep = timeout_ms != 0 && waker_.has_value();
     // The block this iteration is about to take is one the reactor used to
     // spin through whenever a parked task was queued. Counted where the
@@ -471,24 +369,7 @@ bool Scheduler::RunOnce() {
     }
     if (may_sleep) {
         sleeping_.store(true, std::memory_order_seq_cst);
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        // The re-check that closes the window the flag opens. **A
-        // transport supplies one; a kick has none** (AR0-6-R1, and
-        // `waker_table.hpp` says why): with no queue there is nothing to
-        // ask, and the general form - re-evaluate the predicate you are
-        // about to park on - belongs with a consumer that has one. AU-S2's
-        // consumer, the lock table's slot, built none and owes none: a
-        // parked task is level-triggered, re-polled after every block, so
-        // a kick lost to this window costs the block and never the wake.
-        // A reactor with no transport takes that accepted cost: one idle
-        // block, slow and never wrong.
-        if (transport_ != nullptr && transport_->HasPending(core_id_)) {
-            sleeping_.store(false, std::memory_order_seq_cst);
-            timeout_ms = 0;
-            wake_race_skips_.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            idle_blocks_.fetch_add(1, std::memory_order_relaxed);
-        }
+        idle_blocks_.fetch_add(1, std::memory_order_relaxed);
     }
     // The block itself, timed (D7). Two clock reads, and only on an
     // iteration that was about to sleep - the same "by construction there
@@ -501,7 +382,7 @@ bool Scheduler::RunOnce() {
     }
     // Cleared the moment the block ends, so a wake written from here on is
     // one this reactor did not need - which costs a syscall, never a
-    // missed message.
+    // missed wake.
     if (may_sleep) sleeping_.store(false, std::memory_order_seq_cst);
     // A poll failure here is not fatal to the reactor: the loop keeps
     // running and the next iteration may succeed. But it is the top of the
@@ -540,18 +421,8 @@ bool Scheduler::RunOnce() {
         advanced = true;
     }
 
-    // Phase 3: drain cross-core inboxes (sched.md section 5). A no-op with
-    // no transport attached, which is every single-core build.
-    const bool drained = DrainInbox();
-    if (drained) {
-        did_work = true;
-        advanced = true;
-    }
-    // A wake that ended the block and left the inbox empty. Ordinary
-    // rather than wrong - the sender publishes before it wakes, so the
-    // message can be drained by the iteration that raced the flag, one
-    // ahead of the eventfd being read (scheduler.hpp's accessor).
-    if (woken_by_waker_ && !drained) ++spurious_wakes_;
+    // Phase 3 drained the cross-core inboxes until AT-S10d retired the ring
+    // transport; a kick arrives in phase 1, as the waker's io event.
 
     // Phase 4: run ready tasks under the loop budget.
     if (RunReadyTasks(advanced)) did_work = true;

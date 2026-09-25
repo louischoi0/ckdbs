@@ -1462,14 +1462,12 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " sched_iterations=" << scheduler_view_->iterations()
            // The wake path and the park rule, from this reactor's side
            // (§7). `sched_idle_blocks` is how often it slept with the flag
-           // raised, `sched_wake_race_skips` how often the pre-block
-           // re-check caught a message the sender had decided not to wake
-           // for - the race the flag exists for, so a run holding at 0 has
-           // not exercised it - and `sched_parked_idle_blocks` the blocks
-           // taken with tasks still queued, every one of which was a spin
-           // before "parked is not ready".
+           // raised, and `sched_parked_idle_blocks` the blocks taken with
+           // tasks still queued, every one of which was a spin before
+           // "parked is not ready". `sched_wake_race_skips` went with the
+           // ring at AT-S10d: it counted the pre-block re-check finding a
+           // queued message, and a kick has no queue to re-check.
            << " sched_idle_blocks=" << scheduler_view_->idle_blocks()
-           << " sched_wake_race_skips=" << scheduler_view_->wake_race_skips()
            << " sched_parked_idle_blocks=" << scheduler_view_->parked_idle_blocks()
            // The block's *duration*, and the wake traffic around it (D7 of
            // `instructions/v2.3.0-reactor-wake.md`). With
@@ -1480,14 +1478,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // one the field above could not give on its own.
            //
            // `sched_wakes_sent` is the whole instance's, so it repeats on
-           // every core and equals the sum of their `sched_wakes_received`;
-           // `sched_spurious_wakes` are wakes that ended a block and found
-           // an empty inbox, which the race makes ordinary rather than
-           // wrong.
+           // every core and equals the sum of their `sched_wakes_received`.
+           // `sched_spurious_wakes` went with the ring at AT-S10d: it
+           // counted wakes that found an empty inbox, and with no inbox
+           // every wake would read as one.
            << " sched_idle_block_us=" << scheduler_view_->idle_block_ns() / 1000
            << " sched_wakes_sent=" << scheduler_view_->wakes_sent()
-           << " sched_wakes_received=" << scheduler_view_->wakes_received()
-           << " sched_spurious_wakes=" << scheduler_view_->spurious_wakes();
+           << " sched_wakes_received=" << scheduler_view_->wakes_received();
         // Indexed by the enum, not paired with it: a fourth group would
         // then fail to compile here rather than print as two.
         static constexpr const char* kGroupNames[sched::kNumSchedulingGroups] = {
