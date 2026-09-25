@@ -15,9 +15,10 @@
 //
 // **The record names the core that logged it** (AR0 M0), in the envelope's
 // per-type `flags` byte, for the reason `payload.hpp` gives: under one
-// stream a page redo has to create would otherwise be created for the
-// recovering core rather than its owner, and an unstamped or wrongly
-// stamped page cannot be claimed by the core that owns it. The one
+// stream a page redo has to create would otherwise be stamped with the
+// recovering core rather than the core that wrote it. The stamp decides
+// nothing since AW-S1b (`page_header.hpp`); it used to decide which core
+// could claim the page. The one
 // caller that needs the LSN anyway (the undo log's reclaim arm stamps
 // *before* the wipe) takes it from the return.
 //

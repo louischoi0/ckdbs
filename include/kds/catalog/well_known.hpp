@@ -254,9 +254,9 @@ inline constexpr Oid kSysFkeysTable = 132;
 // for the user-tuple format apply. **Still empty on every existing file** -
 // nothing writes a row until RD5's allocator exists, which is what made
 // defining the format free of a version bump. It bootstraps at a fixed low
-// page because a peer can only fault pages below kFirstUserPageId and the
-// pre-invalidate flush walks a compile-time span, so a directory every
-// routing core reads cannot come from the general supply
+// page because the catalog's page span is a compile-time range (and a peer
+// could fault only pages below kFirstUserPageId until AW-S1b), so a
+// directory every core reads cannot come from the general supply
 // (workplan-range-directory.md §3a's C1).
 inline constexpr Oid kSysRangesTable = 133;
 
@@ -365,12 +365,11 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // went with the fault grants at AW-S1b: one frame table serves every core,
 // so no core needs a right to read a page another loaded.
 inline constexpr PageId kCatalogPagePatternDefs = 10;
-// sys.access_stats is pinned here, inside the reserved range, which CC11
-// makes core-0-write-only - and Catalog::RecordAccess runs per *statement*,
-// so on a peer it has nowhere to write. That is the consequence CC12/CR3 was
-// chosen for: a per-core sys.access_stats may be managed outside the reserved
-// range on the ordinary relation rules, and it is R5's (the mover's) gate.
-// Do not read this constant as settling where a per-core copy lives.
+// sys.access_stats is pinned here, inside the reserved range. CC11 made that
+// range core-0-write-only until AT-S5, and `Catalog::RecordAccess` runs per
+// *statement*, so a peer had nowhere to write (CR7's batch to core 0 stood
+// in until AT-S7). Every core writes it under its root page latch now; the
+// per-core copy CC12/CR3 left open was declined (`core_runtime.hpp`).
 inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
@@ -392,18 +391,17 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 inline constexpr PageId kCatalogPageAssertions = 14;
 
 // Root heap page of sys.ranges (RD1). Fixed for the reason kSysRangesTable
-// states: a directory every routing core must read before any statement
-// runs cannot sit where a peer may not fault it.
+// states.
 inline constexpr PageId kCatalogPageRanges = 15;
 
 // Every catalog relation's **root** page, in id order.
 //
 // One list, because two places now need "all of them at once" and a
 // hand-written second copy is how a page added later gets left out of one
-// of them: `Catalog::Bootstrap()` creates them, and multicore flushes them
-// before telling peers to re-read (docs/inflight/in-progress/workplan-crosscore.md P6). A page
-// missing from the flush would leave a peer permanently unable to see the
-// relation it describes.
+// of them: `Catalog::Bootstrap()` creates them and `RetireDeleteMarks`
+// walks them. The flush before telling peers to re-read
+// (docs/inflight/in-progress/workplan-crosscore.md P6) was the other user
+// until AT-S2 (`kEveryCatalogPage` below).
 //
 // **These are roots, not the whole relation.** A catalog relation is a
 // chain of heap pages linked through `next_page_id`, exactly as a user

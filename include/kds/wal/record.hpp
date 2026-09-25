@@ -93,7 +93,7 @@ enum class RecordType : std::uint8_t {
     // relation may carry several assertions and the envelope's page_id
     // names a page, not an owner.
     //
-    // One reservation admitted on the home core (§6.2 step 3): the entry
+    // One reservation admitted on the writing core (§6.2 step 3): the entry
     // written into the envelope's page, plus the group key that attributes
     // it - which is what lets replay rebuild the memory-resident group
     // directory without re-reading any relation row. txn_id is the writer,
@@ -194,10 +194,11 @@ enum class RecordType : std::uint8_t {
     kAnchorUpdate = 26,
     // **The participant's prepare** (R6-3, `instructions/v2.4.0/2pc.md` D4):
     // this core has made a cross-owner transaction's work durable in *its
-    // own* stream and may no longer abort it unilaterally. The envelope's
-    // txn_id is this core's **own** transaction id - D2 gives every
-    // participant a local id from its own lease, so no foreign id ever
-    // enters this stream - and the payload names the coordinator's
+    // own* stream and may no longer abort it unilaterally. **No writer since
+    // AT-S6** retired 2PC; a log written before then may carry one, and
+    // recovery still resolves it. The envelope's txn_id is this core's
+    // **own** transaction id - D2 gave every participant a local id from
+    // its own window, so no foreign id entered this stream - and the payload names the coordinator's
     // `(core, session_id, transaction_id)`, which is the only handle
     // recovery has for asking what was decided.
     //
@@ -213,12 +214,8 @@ enum class RecordType : std::uint8_t {
     // Redo applies nothing for it (`TouchesNoPage` - it names no page).
     // Its consumer is analysis, at R6-4: a transaction with a PREPARE and
     // no TXN_COMMIT or TXN_ABORT after it is **in doubt**, not a loser,
-    // and resolving it against the coordinator's stream is that row's
-    // subject. Until R6-4 lands, analysis reads it the way it reads every
-    // record whose envelope names a transaction - as evidence the
-    // transaction existed - and a prepared-but-undecided transaction is
-    // still rolled back at mount, which is a **known gap of this row and
-    // not of the record's shape**.
+    // and is resolved against the coordinator's record (one stream since
+    // AM-S4(d), so the record is in this same scan).
     kTxnPrepare = 27,
     // A spilled value released: the slot it occupied is tombstoned, and its
     // bytes are dead (`varheap::PageRelease`). The var-heap's counterpart

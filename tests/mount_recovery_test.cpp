@@ -217,8 +217,8 @@ TEST_F(MountRecoveryTest, ThePageFloorAndTrxCeilingAreReported) {
     EXPECT_TRUE(r.value().page_floor_raised);
     EXPECT_EQ(r.value().page_floor, kPage + 1);
 
-    // And the ceiling the superblock owes - reported, not applied, because a
-    // peer's superblock is a copy it may not write (M5).
+    // And the ceiling the superblock owes - reported, not applied, because
+    // page 0's image and its persist are the caller's (mount_recovery.hpp).
     EXPECT_EQ(r.value().next_trx_id, 9001u);
     SuperBlock sb = SuperBlock::CreateFresh(/*now_unix_seconds=*/1);
     ASSERT_TRUE(sb.SetNextTrxId(r.value().next_trx_id).ok());

@@ -439,7 +439,7 @@ public:
     // back records belonging to *every* core, and the stamp is a claim on
     // the page - it said which stream's records may name it, and until
     // AW-S1b it was also read at the next fault to decide who may write.
-    // Stamping core 0 onto a page core 2 owns therefore did not merely
+    // Stamping core 0 onto a page core 2 wrote therefore did not merely
     // mislabel it: core 2 faulted the page, was granted nothing, and
     // **could never write its own page again**, because a heap data page was
     // in no relation write grant and the extent lease was re-drawn each
@@ -465,22 +465,14 @@ public:
     // has no content.
 
     // Whether this store's core may **write** `page_id` - i.e. take a frame
-    // it is allowed to dirty.
-    //
-    // Narrower than reading, which no predicate gates at all since the pool
-    // became one: the system range is readable by every core and writable
-    // only by core 0. That asymmetry is the whole of P6's soundness.
-    // Catalog pages have exactly one writer, so a peer's view can be stale
-    // (which is a retryable "not found", crosscore.md §5) but never torn by
-    // a second writer.
-    //
-    // **One question since AW-S1b**, where it used to ask four: the lease,
-    // a write grant, a stamp claim and the system range. The first three
-    // were a leased store's, and a leased store no longer exists - one
-    // frame table serves every core, so who may write a *user* page is the
-    // Expeditor's routing decision and not this layer's. What survives is
-    // the asymmetry AM-R2 and AO-R14 keep: the system range is readable by
-    // every core and writable only by core 0.
+    // it is allowed to dirty. **Yes, for every core and every page, since
+    // AT-S5** (`crosscore.md` CC11 as rewritten, `catalog.md` CT5): the
+    // system range's core-0-only arm was the last thing it enforced, and
+    // what serialises each shared page now is named where it is written
+    // (the definition lists them). It asked four questions until AW-S1b -
+    // the lease, a write grant, a stamp claim and the system range - and
+    // one until AT-S5. The seam stays on the interface; nothing on the
+    // write path asks it.
     bool MayWrite(PageId page_id) const noexcept override;
 
     // Records that the record at `lsn` modified `page_id`: stamps the
@@ -587,25 +579,23 @@ public:
     // un-evictable and then found itself evictable is exactly the failure
     // the declaration exists to prevent.
     //
-    // **It is the write boundary too since AW-a, so this is no longer a
-    // residency-only knob.** The two members that carried this one quantity
-    // were collapsed into it, so `MayWrite` reads *this* value as "the
-    // system range". Raising it therefore moves an authorization boundary:
-    // a raise to `N` makes every page below `N` writable only from core 0.
+    // **A residency-only knob again since AT-S5.** It was the write
+    // boundary too from AW-a, when `MayWrite` read it as "the system range"
+    // writable only from core 0; that arm is gone and nothing reads this as
+    // an authorization.
     //
-    // So the only value any caller may install is the volume's own layout
+    // The only value any caller installs is still the volume's own layout
     // boundary (`server::kFirstUserPageId`). **AST04 must not use this**:
     // a Bound Cabin page is allocated above the system range, and declaring
-    // it resident by raising the floor past it would take every user page
-    // beneath it out of the peers' write set. Its residency needs the kind
-    // half of `IsPinnedClass` (which already answers for
-    // `PageType::kCabinBound`) or a pin, not this.
+    // it resident by raising the floor past it would pin every user page
+    // beneath it. Its residency needs the kind half of `IsPinnedClass`
+    // (which already answers for `PageType::kCabinBound`) or a pin, not this.
     //
     // **Install-time only**, and that is what makes it safe to read
-    // unlatched: the member is a plain `PageId` that `MayWrite` reads from
-    // every core's thread, so a raise after the peers exist would
-    // be a data race on the shared store as well as an authorization
-    // change. `Expeditor::Open` sets it before the first peer is built.
+    // unlatched: the member is a plain `PageId` that `IsPinnedClass` reads
+    // from every core's thread, so a raise after the peers exist would be a
+    // data race on the shared store. `Expeditor::Open` sets it before the
+    // first peer is built.
     void SetResidentLimit(PageId first_evictable_page_id) noexcept;
 
     // The floor, for the assembly cell that checks it was installed. The
@@ -778,7 +768,8 @@ private:
     using Page = std::array<std::byte, kPageSize>;
 
     // The one refusal a caller sees when a page id is not allocated here,
-    // carrying the id and - on a leased core - which authority answered.
+    // carrying the id (and, on a leased core until AW-S1b, which authority
+    // answered).
     Status NotAllocated(PageId page_id) const;
 
     // The gate every accessor goes through, so a third one cannot forget

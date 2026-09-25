@@ -77,9 +77,10 @@
 // walk to a page that is not the instance's waystone, which the header
 // check turns into a miss - the same outcome as a cold directory.
 //
-// Concurrency: none of its own. Core-local, owned by the pattern's owning
-// core (rules.md §3); the caller holds whatever pin/latch discipline
-// applies, exactly as with PageView.
+// Concurrency: none of its own; the caller holds whatever pin/latch
+// discipline applies, exactly as with PageView. Every core records into a
+// pattern's directory since AT-S7, where the pattern's owning core did
+// until then.
 
 namespace kds::stats {
 

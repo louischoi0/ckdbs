@@ -16,7 +16,7 @@
 // **What that cost, measured** (on the ring transport, retired at AT-S10d):
 // `Scheduler::IdleTimeoutMs` returns whole
 // milliseconds and rounds *up*, so the floor was 1 ms, and statement
-// shipping — which puts a ring message on a client's critical path twice —
+// shipping — which put a ring message on a client's critical path twice —
 // paid it twice per statement. SS-B measured the shipped-minus-seated delta
 // at a flat 1,064 µs, identical with the device sync in the path and with
 // it removed, tracking the idle block over a fivefold range

@@ -223,8 +223,8 @@ struct DispatchOutcome {
     // to the rows it did write would be a second increment - and is
     // answered with the conflict it produced, unblocked.
     //
-    // **The synchronous `Dispatch()` never waits on one**, for the reason
-    // it never ships: a path with no reactor cannot park, and the honest
+    // **The synchronous `Dispatch()` never waits on one**: a path with no
+    // reactor cannot park, and the honest
     // answer there is the retryable conflict itself. So the block is a
     // property of served connections, and a fixture sees the pre-R6-5
     // behaviour.
@@ -292,18 +292,11 @@ struct DispatchOutcome {
     // **The COMMIT record's own LSN, whatever the class and whatever the
     // ack point** (XF4). Distinct from `pending_lsn`, which is *"the wait
     // this statement still owes"* and is deliberately empty where the
-    // caller was answered at the append: a cross-owner participant under
-    // `CommitAck::kAtAppend` leaves `pending_lsn` at `kNoLsn` precisely
-    // because nobody is waiting, and yet **the record it appended is the
-    // one thing XE1's timing question is about**.
-    //
-    // `HandleCommit` already had this value in hand and already exported
-    // it through an out-parameter for the coordinator (`CommitLocal`'s
-    // `commit_lsn`); carrying it on the outcome is that same fact reaching
-    // the one caller that has no out-parameter to read it from -
-    // `ShippedStatementExecutor::FinishDecision`, which needs it to time
-    // the leg between its ack and its own durability. `kNoLsn` on every
-    // statement that is not a commit.
+    // caller was answered at the append. It was carried for a cross-owner
+    // participant under `CommitAck::kAtAppend` and for
+    // `ShippedStatementExecutor::FinishDecision`, which timed the leg
+    // between its ack and its own durability; both went with 2PC at AT-S6.
+    // `kNoLsn` on every statement that is not a commit.
     wal::Lsn commit_lsn = wal::kNoLsn;
 };
 
@@ -641,13 +634,10 @@ public:
     // told `COMMIT` under `group` has been told the record is on the
     // platter, and the wait is what makes that true.
     //
-    // `kAtAppend` has exactly one caller - a cross-owner **participant**
-    // applying a decide it was told. Its acknowledgement goes to the
-    // coordinator, which has already made *the decision* durable in its own
-    // stream and already answers the client from that record alone, with or
-    // without this ack. So the participant's own record is a redo shortcut,
-    // and waiting for it before acking serialized a third device sync
-    // behind two that the protocol genuinely needs.
+    // `kAtAppend` **has no caller since AT-S6.** Its one caller was a
+    // cross-owner **participant** applying a decide it was told, whose
+    // acknowledgement went to a coordinator that had already made the
+    // decision durable in its own stream; the participant went with 2PC.
     //
     // **D1 and D3 are unreachable by this**, by construction rather than by
     // a second branch: `kStrict` synced inside `WalManager::Commit` before
@@ -840,7 +830,8 @@ private:
     // caller's test of it *after* the call mean "the re-run opened a new
     // wait" rather than "the old one is still up".
     //
-    // It is a function because the foreign-key probe arm calls it too.
+    // It became a function because the foreign-key probe arm called it too
+    // (the arm went at AT-S5f; `AwaitStatementWaits` is its caller now).
     // `DispatchAsync` ran this wait before that arm and never after it, so
     // a statement that parked on a foreign parent and met a held row on
     // its resume was refused where the same statement dispatched directly
@@ -1176,13 +1167,12 @@ private:
 
 public:
     // **AN-S3: a participant adopts the coordinator's snapshot** (AN-R5).
-    // The transaction open on `session` - a REPEATABLE READ context the
-    // shipped-statement executor has just opened with `BEGIN` - takes
-    // `snapshot_lsn` as its view in place of the one its own `BEGIN`
-    // minted, and this core's slot is lowered to cover it before the
-    // transaction reads anything (`TransactionManager::AdoptSnapshot`).
-    // Public because the executor is the caller and holds this dispatcher,
-    // not the manager; the manager's contract is stated there.
+    // The transaction open on `session` takes `snapshot_lsn` as its view in
+    // place of the one its own `BEGIN` minted, and this core's slot is
+    // lowered to cover it before the transaction reads anything
+    // (`TransactionManager::AdoptSnapshot`). **No caller since AT-S6**: the
+    // shipped-statement executor that opened such a context with `BEGIN`
+    // and called this went with the ship.
     Status AdoptSnapshot(Session& session, std::uint64_t snapshot_lsn);
 
 private:
@@ -1448,10 +1438,6 @@ private:
     // burns. Outside the gate the row loop runs, with byte-identical
     // replies and relation state - the equivalence test is the contract.
     bool SortedFillEligible(const catalog::TableAccess& ta, catalog::Oid oid) const;
-    // `line` is carried only so a foreign-key probe has a statement to
-    // resume with (AH-T2). Empty for a caller with no text - the KWP load
-    // chunk - which then keeps the refusal, exactly as it keeps the
-    // shipping one.
     DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt,
                                     catalog::Oid oid, const catalog::TableAccess& ta,
                                     WriteScope& scope);
@@ -1565,28 +1551,11 @@ public:
     // the ring kind, because every core writes the relation itself now
     // (`crosscore.md` CC13).
 
-    // ---- R6-5: D5's bounded wait, the one function it is reached through -
-    //
-    // How long a writer of a row held by an in-doubt transaction waits
-    // before it is refused by name. `kTxnInDoubtCeilingNs` is the default
-    // and carries the derivation; `in_doubt_ceiling_ms` is the config key
-    // that sweeps it, per the ratification's "a named constant reached
-    // through one function, and config-swept". **The writer's block is
-    // what this sweeps, and only that**: the participant's *ask cadence*
-    // (`ShippedStatementExecutor::ExpireEnrolled`) reads
-    // `kTxnInDoubtCeilingNs` at the constant and is not swept with it, on
-    // purpose - the two are the same number by derivation but not the same
-    // quantity, and a sweep to 0 that means "refuse a writer at once" would
-    // mean "ask the coordinator every reactor tick" on the other. Sweeping
-    // the ask cadence is its own knob and nothing needs one yet.
-    //
-    // 0 is not an off-switch and is not special: it means a writer waits no
-    // time at all and is refused immediately, which is the *other* branch of
-    // D5's `[OPEN]` - "refuse retryably up front" - reachable by
-    // configuration for anyone who wants to measure the two against each
-    // other. It is not the server's default, and the operator ratified the
-    // block; it *is* what an unconfigured dispatcher holds, for the reason
-    // at the member's declaration.
+    // **R6-5's in-doubt ceiling stood here and is gone** (AT-S6):
+    // `in_doubt_ceiling_ms` bounded a writer's wait on a cross-owner
+    // transaction in doubt, and with 2PC retired nothing is in doubt. A
+    // writer's wait is the lock family's, under `lock_wait_fault_net_ms`,
+    // and the old key is refused at startup naming it.
     // **The instance lock table** (AO-R2), borrowed and null until an
     // expeditor hands one over. Its only use here is AO-S4a's wait-for
     // graph: with a table this core detects deadlock and may therefore let
@@ -2116,9 +2085,8 @@ private:
         CommandDispatcher& owner_;
         CommitAck saved_;
     };
-    // The next `Session::ship_id()` this core mints. From 1, because 0 is
-    // "never shipped"; per core, and paired with the arrival core in the
-    // owner's record, which is what makes it unique instance-wide.
+    // Minted `Session::ship_id()` until AT-S6, which retired the id with
+    // the ship; nothing reads it.
     std::uint64_t next_ship_session_id_ = 1;
     Logger* log_;
     const sched::Clock* clock_;

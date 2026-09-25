@@ -42,63 +42,31 @@
 //
 // ---- What a non-system core has, and what it does with it ---------------
 //
-// As of P6 a peer has a full statement stack: its own `DevicePageStore` over
-// the shared device, its own `Catalog`, transaction manager and
-// `CommandDispatcher`. It can resolve a relation and run a statement.
+// A peer has a full statement stack: its own `Catalog`, transaction manager
+// and `CommandDispatcher` over the instance's one `DevicePageStore`, which
+// it borrows from core 0 (AM-S2 step 3; `Config::shared_store`). It
+// resolves a relation and runs a statement exactly as core 0 does.
 //
-// Three asymmetries against core 0 are deliberate and are the whole of P6's
-// soundness:
+// **No asymmetry against core 0 is left in what a statement may do.** P6
+// had three, and each is struck: the catalog was read-only here until
+// AT-S5 (every core writes its pages under the page latch, the DDL's
+// relation `X` and the schema word, `catalog.md` CT5); allocation came
+// from a per-core extent lease until AW-S1b (every core reaches the one
+// free map under its structure latch); and Waystone recorded nothing here,
+// with `access_statistics` forced off and a Cabin store per core, until
+// AT-S7 (every core records and replays trails, writes `sys.access_stats`
+// itself under the relation's root page latch, and observes into the
+// instance's one `stats::CabinStore` - `cabin.md` §6's announce is what
+// replaced the owner argument that store per core stood on).
 //
-//   1. **The catalog was read-only here until AT-S5.** Its fixed pages had
-//      one writer, core 0, enforced by the store's `MayWrite`; a peer
-//      faulted them read-only and shipped or refused every DDL. Every core
-//      writes them now under the page latch, the DDL's relation `X` and the
-//      schema word (`catalog.md` CT5), and this asymmetry is history.
-//   2. **Allocation reaches the one free map**, under the structure latch.
-//      It came from a per-core extent lease until AW-S1b, because a store a
-//      core did not own could not reach that map at all.
-//   3. **Waystone records nothing here.** `waystone_recording` is off on a
-//      peer, and this is not a default anybody should change without
-//      reading the next paragraph. **`access_statistics` left this
-//      sentence at AT-S7**: every core writes `sys.access_stats` itself,
-//      under the relation's root page latch, so the instance's one switch
-//      arms it here exactly as on core 0 - CR7's fold-and-flush to core 0
-//      and the ring kind that carried it are retired. **The Cabin left it
-//      too** (AT-S7): one `stats::CabinStore` serves the instance, so a
-//      peer observes into the same sets it serves from. AK-S2 had given
-//      each core its own, on an invariant that AT-S5 and AT-S6 then
-//      removed - a relation's one owner used to be exactly the core every
-//      write to it landed on and every read of it ran on, so the owner's
-//      store was the only one that could observe a value *and* stay a
-//      superset through the writes that follow. The defect that left
-//      behind (a set served a query short across cores) is closed; what
-//      replaced the ownership argument is `cabin.md` §6's announce.
-//
-// ---- Why a peer records nothing (P6's known cost) -----------------------
-//
-// `sys.patterns` is a catalog page written on the **ordinary statement
-// path** - `TrailRecorder::EnsurePattern` registers a shape seen twice.
-// Under rule 1 above a peer could not write it, and the write could not be
-// shipped to core 0 either: `RegisterPattern` returns a `PatternAccess*`
-// the recorder uses immediately, so it needs an answer, and nothing here
-// can wait for one.
-//
-// Waystone is advisory by construction (invariant 8), so a peer with it
-// off returns **exactly the same rows**, more slowly, and contributes
-// nothing to a replay.
-//
-// **`sys.access_stats` left this paragraph at AT-S7**: rule 1 is history,
-// so a peer writes the relation where the statement ran and CR7's fold,
-// its ring kind and CR8's permitted drop are all retired
-// (`crosscore.md` CC13). Note what was *not* the fix, then or now:
-// per-core statistics **relations**, which this paragraph used to name and
-// which the ratification declined - they would have opened oid allocation,
-// row migration and a core-count question, where the requirement was only
-// that a peer's accesses be counted at all.
-//
-// Core 0 still owns the superblock, the free map, the catalog pages and the
-// listener. Those live on `Expeditor` rather than here: they are the
-// *database*, not a core's copy of anything.
+// The superblock, the free map, the catalog pages and the store are the
+// instance's, not core 0's: every core reads and writes them under their
+// latches. The log is core 0's to open and drain, and every core appends
+// to it under the stream's latch (`Config::shared_stream`). They live on
+// `Expeditor` rather than here because they are the *database*, not a
+// core's copy of anything. Every core listens on
+// the port since AT-S8; only D19's fallback has core 0 accept alone and
+// hand each connection off (`tcp_server.hpp`).
 //
 // ---- Threading -----------------------------------------------------------
 //
@@ -165,16 +133,15 @@ public:
         // pool that could not be shared.
         std::size_t buffer_pool_frames = 0;
 
-        // Settings a peer shares with core 0. Recording is *not* among
-        // them - see the header on why a peer records nothing.
+        // Settings a peer shares with core 0.
         wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
         txn::IsolationLevel isolation = txn::IsolationLevel::kReadCommitted;
         exec::Budget budget;
 
         // The Cabin store's switch and caps, copied from core 0's like every
-        // other shared setting (AK-S2; rule 3 above says why a peer holds a
-        // store). On by default as `Expeditor::Config::cabins` is, so a
-        // fixture's peer is built the way a served one is; the caps carry
+        // other shared setting (AK-S2; the store is the instance's since
+        // AT-S7, `cabins_store` below). On by default as
+        // `Expeditor::Config::cabins` is, so a fixture's peer is built the way a served one is; the caps carry
         // `CabinLimits`' own defaults rather than restating them.
         bool cabins = true;
         stats::CabinLimits cabin_limits;
@@ -626,10 +593,10 @@ private:
     // catches the cycle it could close (AO-S4a). Across cores that was not
     // complete at AO-S5(a) - a cycle could pass through a wait that
     // registered no edge, the shipped-statement park - so the dispatcher
-    // kept AO-S3's narrow rule above one core. AO-S4b records that edge
-    // where it can be recorded, on the owner at enrolment
-    // (`docs/spec/cross-owner-txn.md, retired`), and lifts the rule. The FK probe
-    // park registers none and waits on nothing yet; AO-S5(b) owes both.
+    // kept AO-S3's narrow rule above one core until AO-S4b recorded that
+    // edge at enrolment and lifted it. Both edgeless parks are gone since:
+    // the shipped statement's with its ship (AT-S6), the FK probe's with
+    // the probe protocol (AT-S5f).
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
 

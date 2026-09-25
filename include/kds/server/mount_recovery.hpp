@@ -72,9 +72,9 @@
 //      wearing the multicore shape. Every core allocates through the floor
 //      now, which obligation 1 above raises.
 //
-// The first is not done here, because it writes a structure a peer may not touch
-// (page 0 is core 0's, M5) and a function that did them would be right on
-// one mount path and wrong on the other.
+// The first is not done here, because page 0's image and its persist are the
+// caller's (`Expeditor::Open` holds them): this function reports the
+// ceiling and the caller raises it, before it builds any sequence.
 
 namespace kds::server {
 

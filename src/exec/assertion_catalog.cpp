@@ -195,9 +195,9 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
     // §6a's converse at the **door**, not only at `PrepareAssertionDef`
     // (workplan-range-directory.md §9b), and the difference is a race
     // rather than a duplicate: between the prepare and this row landing -
-    // the build's whole length - the owner's drain tick can open a range
-    // for that relation. (The peer path, which parked between the two until
-    // AT-S5d, made the window longer; the build alone keeps it open.) §9b's
+    // the build's whole length - the owner's drain tick could open a range
+    // for that relation, until AT-S9 retired range opening. (The peer path,
+    // which parked between the two until AT-S5d, made the window longer.) §9b's
     // rule is that the catalog serializes the pair and whichever write
     // lands second is refused;
     // `Catalog::CreateIndex` re-checks `CheckIndexDef` for exactly this

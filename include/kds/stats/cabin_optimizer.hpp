@@ -58,7 +58,9 @@
 // never healed, extended, or dropped - and debug-asserts at emission that
 // every action targets its own table.
 //
-// Concurrency: core-local, no synchronization of its own (rules.md #3).
+// Concurrency: no synchronization of its own. The controller is the
+// instance's one since AT-S8, ticked and read under
+// `OptimizerSurface::view_latch` (`command_dispatcher.hpp`).
 
 namespace kds::stats {
 
@@ -114,7 +116,7 @@ struct CabinOptimizerConfig {
     Fix16 theta_extend = kFixOne / 5;   // 20% coverage-miss share
     Fix16 theta_heal = kFixOne / 10;    // 10% hint-failure rate
     std::uint32_t confirm_snapshots = 3;
-    std::uint64_t page_budget = 1024;   // per core, optimizer-managed pages
+    std::uint64_t page_budget = 1024;   // the instance's optimizer-managed pages
     std::uint64_t p_cabin_pages = 2;    // pages per Cabin lookup (PROPOSED)
     std::uint64_t k_heal_pages = 2;     // pages per heal event (PROPOSED)
     // T_amort in decay half-lives - the one number expressing one belief:
@@ -171,7 +173,7 @@ struct CabinOptimizerConfig {
     // NoteCreated reports the built size. `[PROPOSED]` 8.
     std::uint64_t create_estimate_divisor = 8;
 
-    // PO8's decision log, bounded: the last K decisions per core.
+    // PO8's decision log, bounded: the instance's last K decisions.
     // `[PROPOSED]` 1024. Advisory data - memory-resident, lost on crash,
     // and the loss is documented as acceptable because the state machine
     // re-derives from re-observation (PHY03's stated crash posture).
@@ -180,7 +182,7 @@ struct CabinOptimizerConfig {
 
 // One logged decision (PO8: "every action is recorded with the inputs
 // that produced it"). The snapshot digest is `{version, decay_epoch}` -
-// the pair that names one snapshot uniquely per core - beside the
+// the pair that names one of the instance's snapshots uniquely - beside the
 // ActionItem, which already carries the B/C score it was taken on.
 struct DecisionRecord {
     std::uint64_t snapshot_version = 0;

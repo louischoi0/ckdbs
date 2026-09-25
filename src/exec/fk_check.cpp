@@ -170,10 +170,10 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // Both are gone with the route. Every core reads every page through
     // the one pool since AM-S2 step 3, so the walk covers **every** chain
     // of the child here (`WalkHeads` below), and an answer from this
-    // core is an answer for the whole relation. The Cabin is the one thing
-    // still scoped to a core, and it is handled where it is read rather
-    // than by a guard over the whole function: a per-core set may *find* a
-    // child and may not *clear* one (AT-R15, D4's first half).
+    // core is an answer for the whole relation. The Cabin is handled where
+    // it is read rather than by a guard over the whole function: a set may
+    // *find* a child and may not *clear* one (AT-R15, D4's first half) - a
+    // rule made while the store was per-core and kept since (below).
 
     FkReverseOutcome outcome;
 
@@ -277,18 +277,18 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 }
             }
 
-            // **An exhausted set no longer clears the parent** (AT-R15,
-            // D4's first half). The argument above is sound about the set
-            // and wrong about the *store*: `stats::CabinStore` is a
-            // dispatcher's own, so a child row inserted on another core
-            // never reached this set, and a drained loop here would clear
-            // a parent that has a child - `foreign-keys.md` §1's one
-            // forbidden answer, from the structure that exists to give the
-            // opposite one. So a set may **find** a child, which is what
-            // the two returns above do, and may not clear one: the walk
-            // below is what answers "no children" until the store becomes
-            // the instance's at AT-S7 (AT-0 item 9), which is what restores
-            // this return rather than removing it.
+            // **An exhausted set does not clear the parent** (AT-R15, D4's
+            // first half). The rule was made while `stats::CabinStore` was
+            // a dispatcher's own: a child row inserted on another core never
+            // reached this set, and a drained loop here would have cleared a
+            // parent that has a child - `foreign-keys.md` §1's one forbidden
+            // answer. So a set may **find** a child, which is what the two
+            // returns above do, and may not clear one: the walk below
+            // answers "no children". **The store is the instance's since
+            // AT-S7**, which removes the reason; the clearing return has
+            // **not been restored**, and restoring it is a change to what
+            // may answer "no children" that is not decided here
+            // (`foreign-keys.md` §2).
             //
             // `served_from_cabin` therefore stays true only on a hit, which
             // is what `SHOW ACCESS` has always meant by it.

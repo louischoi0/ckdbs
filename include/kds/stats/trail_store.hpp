@@ -57,7 +57,8 @@
 // results (spec section 9, invariant 8). The pages are ordinary headered
 // `PageType::kWaystone` pages, so they keep their checksum and page_lsn.
 //
-// Concurrency: core-local, no synchronization of its own (rules.md #3).
+// Concurrency: no synchronization of its own; its pages are the page
+// latch's like any page, every core writing trails since AT-S7.
 
 namespace kds::stats {
 

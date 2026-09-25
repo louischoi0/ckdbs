@@ -10,7 +10,9 @@
 
 // The one TXN_PREPARE emitter (R6-3; `log_page_handoff.hpp`'s shape, for
 // its reason - hand-copied appends of the same record are how six PAGE_INIT
-// emitters happened).
+// emitters happened). **No production caller since AT-S6** retired 2PC;
+// `prepared_recovery_test.cpp` writes one to pin that recovery still
+// resolves a log written before then.
 //
 // **The durability is the caller's, and it is the whole point of the
 // record.** This function appends; it does not sync. A prepare is a promise
@@ -22,9 +24,8 @@
 // reactor.
 //
 // The envelope's txn_id is the **participant's own** local transaction id
-// (D2), never the coordinator's: no foreign id enters this stream, which is
-// the invariant `CoreRuntime::Open`'s mount check enforces from the other
-// side. The coordinator's identity travels in the payload instead.
+// (D2), never the coordinator's: no foreign id enters this stream. The
+// coordinator's identity travels in the payload instead.
 //
 // A null `wal` answers kNoLsn, matching every sibling emitter. What that
 // means here is narrower than for a page record and is stated rather than

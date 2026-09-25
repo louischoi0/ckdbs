@@ -34,12 +34,10 @@
 // calls away in another function, so any number of threads could scan the
 // same clear bit before one of them set it.
 //
-// **Unleased on purpose.** A leased store takes ids from a run core 0
-// reserved for it and touches no shared state, which is exactly the
-// arrangement the shared pool removes (the extent leases, struck at
-// AW-S1b:
-// exist because "per-core page stores do not work without it"). The unleased
-// path is core 0's today and every core's after step 3c.
+// **Unleased on purpose**, from when a leased store took ids from a run
+// core 0 reserved for it and touched no shared state - the arrangement the
+// shared pool removed (the extent leases, struck at AW-S1b). The unleased
+// path is every core's since AM-S2 step 3.
 
 namespace kds::storage {
 namespace {

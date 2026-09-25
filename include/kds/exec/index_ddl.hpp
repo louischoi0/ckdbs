@@ -55,9 +55,10 @@ struct IndexDdlResult {
 // every column resolved and refused by name if it cannot be indexed, the
 // widths computed by the encoders that will produce them, every catalog
 // refusal answered (`CheckIndexDef`), and the index oid issued. Touches no
-// page *of the relation* - only catalog pages, the oid bump among them - so
-// it is safe on the core that owns the catalog and none of the relation's;
-// `root_page_id` comes back `kInvalidPageId`, the build's to fill.
+// page *of the relation* - only catalog pages, the oid bump among them -
+// which is what let core 0 run it while the relation's owner built the
+// tree, until AT-S5e; `root_page_id` comes back `kInvalidPageId`, the
+// build's to fill.
 //
 // The oid is issued here, before any page exists, so the root and every
 // page a split creates carry their owner from birth (page.md §2a) - and

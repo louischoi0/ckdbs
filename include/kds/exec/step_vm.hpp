@@ -251,7 +251,7 @@ struct ExecStats {
 // entry is validated first, and any failure falls through to the descent
 // for that step alone. Deleting every trail in the database changes
 // latency and nothing else (invariant 8).
-// `cabins`, when given, is the core-local Cabin store (stats/cabin_store.hpp,
+// `cabins`, when given, is the instance's Cabin store (stats/cabin_store.hpp,
 // docs/spec/cabin.md). **Passing it cannot change what this returns either**,
 // and the argument is a third variation on the same theme: a Cabin supplies a
 // set of *locations*, each of which is then read and filtered by the code a

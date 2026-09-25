@@ -219,15 +219,12 @@
 // three transactions against an `X` request - so AO-S6 owes the container
 // as well as the edge.
 //
-// **One waiter can already have two blockers at once**, since AO-S5(b): a
-// child whose foreign keys name parents on two different owner cores fans
-// out one probe per owner, and each owner that finds its parent busy
-// registers `child -> its own holder` from its own reactor. The second
-// registration replaces the first, so the graph names one of the two
-// blockers and a cycle through the other is not found - a missed
-// detection ended by the probe's deadline and the fault net, never a false
-// one (a walk still only reports a chain that exists). Stated here rather
-// than discovered: it is the container's first customer, ahead of AO-S6.
+// **One waiter could have two blockers at once from AO-S5(b) until
+// AT-S5f**: a child whose foreign keys named parents on two owner cores
+// fanned out one probe per owner, and each owner that found its parent
+// busy registered `child -> its own holder` from its own reactor, the
+// second replacing the first. The probes went at AT-S5f, and a waiter
+// registers its own edges from its own statement since.
 //
 // **Detection happens when the edge is added, not on a cadence, and that
 // is a departure from AO-R7 worth stating.** AO-R7 specifies a
@@ -240,15 +237,12 @@
 // the transaction whose edge closed it", PostgreSQL's detecting-waiter
 // choice - literally true rather than approximately.
 //
-// **The cadence is still owed, by AO-S4b, and not for the reason it is
-// tempting to give.** Visibility is not the problem: the table is the
-// instance's and `wait_latch_` orders every core's registrations, so a
-// registration-time walk would see a foreign core's edges too. What a
-// cross-core cycle can contain is a wait that registers *no* edge - the
-// shipped-statement park and the FK probe park are two - and a link
-// nobody recorded is one no registration can close. That is what the
-// periodic walk is for, together with `kLockAbort` for a victim that
-// lives on another core.
+// **The cadence AO-S4b owed is not built, and its reason is gone.**
+// Visibility was never the problem: the table is the instance's and
+// `wait_latch_` orders every core's registrations, so a registration-time
+// walk sees every core's edges. What a periodic walk was for is a wait
+// that registered *no* edge - the shipped-statement park and the FK probe
+// park - and both went with their protocols (AT-S6, AT-S5f).
 //
 // ---- The cap (AO-R10, E2) -------------------------------------------------
 //
@@ -644,13 +638,12 @@ public:
     // granted, refused, or the transaction decided.
     void ClearWaitFor(std::uint64_t waiter);
     // Drops `waiter`'s edge **only if it still names `holder`** (AO-S4b).
-    // The form for a clear made on the waiter's behalf by another core: the
-    // owner that recorded `coordinator -> participant` at enrolment clears
-    // it at the reply, but by then the coordinator may have given up on the
-    // ship (its 10 s deadline is inside the 11 s fault net) and registered
-    // a live edge of its own for a later park - which the one-argument
-    // form would erase, leaving a parked waiter with no edge and a cycle
-    // through it undetectable.
+    // **No caller since AT-S6.** It was the form for a clear made on the
+    // waiter's behalf by another core: the owner that recorded
+    // `coordinator -> participant` at enrolment cleared it at the reply,
+    // when the coordinator might already have registered a live edge of
+    // its own that the one-argument form would erase. Enrolment went with
+    // the ship.
     void ClearWaitFor(std::uint64_t waiter, std::uint64_t holder);
 
     // Edges currently held. Zero when nothing is waiting, which is what a

@@ -16,7 +16,7 @@
 // Until AN-S2 a view was an exclusive high-water mark over trx ids plus the
 // ids in flight when it was minted, and "committed before my snapshot"
 // collapsed to "below the mark and not in the set". That holds only while
-// issue order is id order, and ids are leased to each core in disjoint
+// issue order is id order, and each core carves its ids in disjoint
 // blocks (`trx_id.hpp`), so across cores it is not: a commit on a core
 // holding a higher block reads as "not yet started" (AN-3 E's H1), and a
 // transaction begun after the mint out of a lower core's unspent range

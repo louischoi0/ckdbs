@@ -269,11 +269,10 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
         // Cabin it had just revived, and refused the relation's writes
         // where the answer was no - the PW1c-6c case, a cabin core 0 built
         // for a relation a peer owns, which is every such assertion in a
-        // file written before owner-built cabins. A cabin chain root is a
-        // *user* page and `MayWrite` admits every core above the system
-        // range now, so the case cannot arise: the owner appends to the
-        // chain core 0 built, through the frame table they share, and the
-        // assertion enforces. `assertion.md` §6.1 carries the fact.
+        // file written before owner-built cabins. `MayWrite` admits every
+        // core for every page since AT-S5, so the case cannot arise: the
+        // writing core appends to the chain core 0 built, through the frame
+        // table they share, and the assertion enforces. `assertion.md` §6.1 carries the fact.
         //
         // `NoteUnenforceable` keeps its other callers - a revive that
         // failed, and a checkpoint whose snapshots do not cover the base -

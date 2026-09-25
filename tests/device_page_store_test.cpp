@@ -547,8 +547,9 @@ TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesThe
 // **The lease's cells went with the lease** (AW-S1b). A store bound to a
 // non-system core used to allocate from a leased extent and never touch the
 // free map, and a dozen cells pinned each half of that. One frame table
-// serves every core now, so what is left of ownership in this class is the
-// boundary below which only core 0 may write.
+// serves every core now, and AT-S5 retired the boundary below which only
+// core 0 could write, so nothing of ownership is left in this class; the
+// cells below pin that it is gone.
 
 TEST(DevicePageStoreOwnershipTest, APeerWritesTheSystemRangeOnASharedStore) {
     // **The gate that stopped being one, and nothing failed when it did.**
@@ -563,8 +564,8 @@ TEST(DevicePageStoreOwnershipTest, APeerWritesTheSystemRangeOnASharedStore) {
     // four callers outside this class, and AW-S1b deleted three of them
     // with the machinery they belonged to (`core_runtime.cpp`'s was inside
     // the write-grant admission, the dispatcher's two were the rights
-    // probe). `ResidentBytes`' `mark_dirty && !MayWrite` is the live
-    // consumer, which is what AM-R2 and AO-R14 keep it for.
+    // probe). `ResidentBytes`' `mark_dirty && !MayWrite` was the last
+    // consumer, and it went at AT-S5 (the next cell).
     //
     // **The name said `MayNot` until AT-S5b**, which AT-S5 left behind when
     // it flipped the body: the cell reads the predicate, and the predicate
@@ -583,8 +584,8 @@ TEST(DevicePageStoreOwnershipTest, APeerWritesTheSystemRangeOnASharedStore) {
     // (`SetResidentLimit(kFirstUserPageId)`). Before AW-a two members held
     // one boundary and only this one was set here, so `MayWrite`'s range
     // was 0 and its system arm was unreachable even before the null-lease
-    // early return got to it. One boundary now, so installing it installs
-    // both readings.
+    // early return got to it. One boundary now, and since AT-S5 only its
+    // residency reading is left.
     constexpr PageId kSystemLimit = 128;
     store->SetResidentLimit(kSystemLimit);
     const PageId system_page = 4;
@@ -1008,7 +1009,7 @@ TEST(FreeMapRegionTest, MapPagesAreNeverReclaimCandidates) {
 
 // Under one stream core 0's mount pass replays and rolls back records
 // belonging to every core, through core 0's store. Stamping core 0 onto a
-// page core 2 owns mislabels whose stream may name it - and until AW-S1b it
+// page core 2 wrote mislabels whose stream may name it - and until AW-S1b it
 // did worse: the next mount read that stamp to decide who may write, so
 // core 2 faulted the page, was granted nothing, and could never write it
 // again. The write half is gone; rule 5's "a page's stamp is the truth

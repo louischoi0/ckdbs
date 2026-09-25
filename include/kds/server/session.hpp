@@ -77,9 +77,8 @@ namespace kds::server {
 // It indexes `ResolveRanges(access.ranges, span)`'s output, and the resume
 // re-resolves that list against a freshly re-read catalog - so it names the
 // same chain only while no range with a lower `lo` can appear during the
-// park. Nothing splits or merges a range today (spreading ships off, and
-// the mid-walk park needs a lock table, which is wired at `core_count == 1`
-// only), so the index is stable and this is unreachable. It is written down
+// park. Nothing splits or merges a range (spreading retired at AT-S9 and
+// nothing opens one), so the index is stable and this is unreachable. It is written down
 // rather than relied on silently: the day a range can open under a parked
 // statement, the cursor must carry the range's `lo` and look it up on
 // resume, or the walk resumes into a different chain.
@@ -188,8 +187,8 @@ public:
     //
     // **On the session and not on the dispatcher**, which was the first
     // shape and was wrong for a reason the dispatcher's own hoisted
-    // aggregator already documents (AG3): a statement can *park* - a
-    // cross-core read, a shipped statement, a group commit's wait - and
+    // aggregator already documents (AG3): a statement can *park* - a lock
+    // wait, a group commit's wait - and
     // while it is parked the reactor runs another connection's statement on
     // the same core and the same dispatcher. A per-dispatcher pointer would
     // then be the other connection's by the time the parked one resumed,

@@ -54,8 +54,9 @@
 // authority over the same bytes - the thing `varheap_release.hpp` exists to
 // prevent for the release step itself.
 //
-// Concurrency: mount-time, single-threaded, core 0. It writes catalog-owned
-// var-heap pages, which is core 0's by M5.
+// Concurrency: mount-time, single-threaded, core 0, before any peer is
+// built - so nothing else can touch the catalog-owned var-heap pages it
+// writes.
 
 namespace kds::exec {
 

@@ -33,9 +33,9 @@
 // 4.4%. This is a ranking score; the tolerance is deliberate and the
 // acceptance tests pin the exact points, not the buckets.
 //
-// Concurrency: pure functions over a caller-owned pair. Core-local like
-// every stats structure — no atomics, no locks; the owning core's event
-// loop is the serialization.
+// Concurrency: pure functions over a caller-owned pair - no atomics, no
+// locks. Whatever serialises the caller's pair covers them: the optimizer
+// collector's latch since AT-S8 made it the instance's.
 
 namespace kds::stats {
 

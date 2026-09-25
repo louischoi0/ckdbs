@@ -394,12 +394,11 @@ protected:
     }
 
 public:
-    // Whether this store's core may **write** `page_id`. True by default:
-    // a store with no core ownership is the system core's arrangement and
-    // may write anything. DevicePageStore overrides it with the lease, the
-    // grants and the stamp claims (PW1c-4, PW1c-7); it is on the interface
-    // so a dispatcher can ask before a write reaches the frame-load path's
-    // refusal, and answer retryably with the relation's name.
+    // Whether this store's core may **write** `page_id`. True, here and in
+    // `DevicePageStore`'s override, for every core and every page since
+    // AT-S5; the override carried the lease, the grants and the stamp
+    // claims until AW-S1b (PW1c-4, PW1c-7) and the system range's
+    // core-0-only arm until AT-S5. The seam stays on the interface.
     virtual bool MayWrite(PageId /*page_id*/) const noexcept { return true; }
 
     // Records that the WAL record at `lsn` modified `page_id`: stamps the

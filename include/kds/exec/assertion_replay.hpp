@@ -52,7 +52,8 @@
 // unrelated page. The context is where "unknown because dropped" and
 // "unknown because the catalog is gone" are told apart; this fold cannot.
 //
-// Concurrency: core-local, like everything it touches (§6.1).
+// Concurrency: mount-time, before the listener binds, so nothing contends
+// for the directories it folds into (§6.1).
 
 namespace kds::exec {
 

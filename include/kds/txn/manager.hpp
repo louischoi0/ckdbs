@@ -163,9 +163,13 @@ public:
 
     // ---- The cross-owner prepare this transaction is holding (R6-4) -----
     //
+    // **Never set since AT-S6**, which retired 2PC and with it the
+    // participant executor that called `MarkPrepared`: every transaction is
+    // an ordinary local one, `prepare_lsn` is 0 and `prepared` false. What
+    // follows is what the pair was for.
+    //
     // The LSN of the `TXN_PREPARE` record this core wrote for it, or 0 when
-    // it is an ordinary local transaction - which is every transaction on
-    // every core that is not a participant in a two-phase commit.
+    // it is an ordinary local transaction.
     //
     // **What it is for is the checkpoint, not the transaction.** A prepared
     // participant is still live, so it appears in every `CHECKPOINT_BEGIN`'s
@@ -186,7 +190,8 @@ public:
     wal::Lsn prepare_lsn() const noexcept { return prepare_lsn_; }
 
     // **This transaction has replied prepared and is in doubt until its
-    // coordinator decides** (R6-5, D5). Set by the participant executor at
+    // coordinator decides** (R6-5, D5). Set by the participant executor (no
+    // caller since AT-S6) at
     // the moment the promise is made - after the PREPARE record is durable,
     // never at the append - and never cleared: a prepared transaction ends
     // only by the decided COMMIT or ROLLBACK, which ends it whole.
@@ -430,11 +435,13 @@ public:
     // cannot drift.
     Status StartStatement(Transaction& txn);
 
-    // **A participant adopts its coordinator's snapshot** (AN-R5, AN-S3):
-    // `txn`'s view takes `snapshot_lsn` in place of the ceiling its own
-    // `Begin` read, so a cross-owner REPEATABLE READ transaction reads one
-    // instant on every core it touches. Called once, on the context's
-    // first statement, before that statement reads anything.
+    // **A participant adopts its coordinator's snapshot** (AN-R5, AN-S3) -
+    // **no caller outside the tests since AT-S6**, which retired the
+    // participant: `txn`'s view takes `snapshot_lsn` in place of the
+    // ceiling its own `Begin` read, so a cross-owner REPEATABLE READ
+    // transaction read one instant on every core it touched. Called once,
+    // on the context's first statement, before that statement reads
+    // anything.
     //
     // **The one case AN-R1's lock-free argument does not cover** (the
     // `instance_visibility.hpp` header): a minted snapshot is at or above
@@ -654,14 +661,8 @@ public:
     // yet been told the outcome of** (R6-5, D5): running here, and marked
     // by `Transaction::MarkPrepared`. **No caller since AO-S3**, which
     // widened the writer's wait from "in doubt" to "in flight" and left
-    // this without the question it existed to answer; kept because the
-    // distinction it draws is still real and AO-S4b's cross-core detector
-    // is the next thing likely to want it. False for a transaction that has
-    // ended, however it ended.
-    //
-    // Per-core, like `IsInFlight`: a participant's transaction is a local
-    // transaction on the core that prepared it, so the writer asking is on
-    // that core too.
+    // this without the question it existed to answer. **Always false since
+    // AT-S6**: nothing marks a transaction prepared once 2PC is retired.
     bool IsInDoubt(std::uint64_t trx_id) const noexcept;
 
     // The lowest id among transactions still running here, or `UINT64_MAX`

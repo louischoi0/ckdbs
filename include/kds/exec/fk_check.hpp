@@ -172,7 +172,7 @@ private:
 
 // What the reverse check may use to answer without walking (F6, FK-M5).
 struct FkReverseOptions {
-    // The core-local Cabin store, or null when cabins are off.
+    // The instance's Cabin store (AT-S7), or null when cabins are off.
     stats::CabinStore* cabins = nullptr;
 
     // The Cabin on the child's foreign-key column, or 0 for none.

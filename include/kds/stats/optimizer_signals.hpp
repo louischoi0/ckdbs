@@ -12,7 +12,7 @@
 // read through (docs/spec/physical-optimizer.md §II.2/§II.3, workplan
 // PHY01).
 //
-// One core-local collector, three signals:
+// One collector for the instance (AT-S8), three signals:
 //
 //   S1  per-fingerprint execution frequency - a decayed count, touched
 //       once per successful fingerprinted SELECT.
@@ -42,9 +42,8 @@
 // an immutable by-value aggregation, versioned, stamped with the decay
 // epoch (the clock reading every decayed value was computed at), entries
 // sorted by id so identical states produce byte-identical snapshots.
-// Construction is a single home-core step - core-local data, cooperative
-// scheduling, no locks (rules.md #3). PHY02's `Decide` takes the snapshot
-// and nothing else.
+// Construction is one step under the collector's latch (the concurrency
+// note below). PHY02's `Decide` takes the snapshot and nothing else.
 //
 // Concurrency: **the instance's, latched above one core** (AT-S8). Every
 // core's dispatcher notes executions into it and the one Cabin store

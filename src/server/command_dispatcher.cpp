@@ -190,9 +190,10 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // must not see the message arrive as a bare "ERR ..." in the meantime.
     {StatusCode::kAssertionViolation, "ASSERTION_VIOLATION retryable=0 "},
     // A shipped statement whose reply never came (SS1,
-    // docs/spec/crosscore.md §6). Its own spelling because it is the
-    // one refusal here that does **not** mean "nothing happened": the
-    // statement may have committed on its owner. A client must be able to
+    // docs/spec/crosscore.md §6) - **no producer since AT-S6** retired the
+    // ship; the spelling stays because the wire pins it. Its own spelling
+    // because it is the one refusal here that does **not** mean "nothing
+    // happened": the statement may have committed. A client must be able to
     // tell it from the bare `ERR` it would otherwise wear, because the
     // correct response is to read the data back - not to retry, which
     // against engine-issued primary keys would insert twice.
@@ -238,10 +239,10 @@ Status StatusFromErrorReply(std::string_view reply) {
     // The bare arm. kInvalidArgument stands for every code that renders
     // bare - which is what makes this lossy, and harmless: `ErrorReply`
     // renders all of them identically, so the line the client is handed is
-    // the line the owner wrote whichever of them it was. Two codes left
-    // this arm on 2026-08-31: a shipped statement's kUnsupported and
-    // kNotImplemented now come back as themselves, which is what lets a
-    // peer's refusal keep saying *which kind of no* it was.
+    // the line the dispatcher wrote whichever of them it was. Two codes
+    // left this arm on 2026-08-31: kUnsupported and kNotImplemented come
+    // back as themselves, which is what let a shipped statement's refusal
+    // keep saying *which kind of no* it was while statements shipped.
     return Status::InvalidArgument(std::string(reply));
 }
 
@@ -688,11 +689,11 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
 
     // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
     //
-    // `AwaitWriteBlock` is the whole of it, and it is a function since
-    // AO-S6d because it has two callers: here, over what the statement's
-    // own dispatch produced, and the foreign-key probe arm below, over what
-    // its resume produced. The frame is allocated only where there is
-    // something to wait for.
+    // `AwaitWriteBlock` is the whole of it, reached through
+    // `AwaitStatementWaits` over what the statement's own dispatch
+    // produced (the foreign-key probe arm was its second caller until
+    // AT-S5f). The frame is allocated only where there is something to
+    // wait for.
     //
     // **The deadline is the statement's** and is threaded through both
     // callers for the reason the function states.
@@ -752,8 +753,9 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // test thread - it is the only thing that makes the identity true, and
     // the identity is written to *disk*: `StampPageLsn` records whose
     // stream the page_lsn beside it belongs to, and a peer's page stamped
-    // core 0's is the lie `page_header.hpp`'s rule 5 refuses at the next
-    // mount. Measured before it was here: 6,250 stamps in the suite carried
+    // core 0's was a lie the next mount refused (rule 5) until AW-S1b made
+    // the stamp a diagnostic (`page_header.hpp`). Measured before it was
+    // here: 6,250 stamps in the suite carried
     // the wrong core, all of them from fixtures, none from `ExpeditorTest`'s
     // real instance.
     //
@@ -820,15 +822,10 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     pending_commit_lsn_ = wal::kNoLsn;
     // R6-5's, on the same terms. `EndWrite` has already dropped the blocker
     // where the statement is not re-runnable, so a value here means "this
-    // statement wrote nothing and a wait could get it past".
+    // statement wrote nothing and a wait could get it past". It was also
+    // never set beside a ship until AT-S6 retired the ship.
     //
-    // **Never beside a ship**, and this is the guard rather than an
-    // ordering. A write-block wait re-runs the whole statement, so an
-    // outcome carrying both would discard what the statement had already
-    // sent elsewhere and send a second one, leaving the first reply for a
-    // request nobody waits on. What the wait is owed instead is the
-    // outcome of the round *after* the
-    // **And never beside a relation wait** (the AT-S5e review's C4): a
+    // **Never beside a relation wait** (the AT-S5e review's C4): a
     // statement can record a busy parent's writer before it asks its
     // relation `IX`, and a write-block re-run would overwrite the outcome
     // and drop the relation's wake without a `DropWake`. The relation
@@ -1066,15 +1063,16 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // record and `pending_shipped->ddl` went with it.
     // The PW1c interim DML guard stood here from 2026-08-24 until PW1c-5
     // removed it the same day. What replaced it, so its removal is not a
-    // hole: `CheckWriteAffinity`'s shape gate refuses the still-unsound
+    // hole: `CheckWriteAffinity`'s shape gate refused the then-unsound
     // shapes by name (cabined, assertion-covered
     // - each citing the task that lifts it; btree lifted at PW2-4, indexed at
     // PW1c-6b-4, the key mode gone entirely 2026-08-25 - a
     // caller-named pk is now refused per row in InsertOneRow - and
     // **FK-linked lifted 2026-09-01**, work order AI, once the forward
-    // check probed the parent's owner instead of reading it), the
-    // multi-row VALUES path refuses on a
-    // peer before touching the catalog page. **The store's `MayWrite` is
+    // check probed the parent's owner instead of reading it), and the
+    // multi-row VALUES path refused on a peer before touching the catalog
+    // page. None of it is left: AT-S9 reduced the gate to
+    // `CheckWriteAdmission`'s one assertion question. **The store's `MayWrite` is
     // no part of this any more**: it stood here as the backstop that
     // refused an unfunded write retryably rather than letting it surface
     // as a rule-5 stamp mismatch at the next mount, and it returns
@@ -1322,12 +1320,12 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         //
         // **This is the number, and a session count is not.** The obvious
         // reading of "how many sessions is this core committing for" is a
-        // count of attached sessions - and under a single listener that is
-        // every session on core 0 and zero on the peers, while the peers
-        // are the cores actually paying the un-batched syncs, because a
-        // shipped write commits on its relation's owner. The batch is the
-        // fact; the session count is a proxy that inverts on the one
-        // topology the fact was found on.
+        // count of attached sessions - and under the single listener the
+        // fact was found on, that was every session on core 0 and zero on
+        // the peers, while the peers paid the un-batched syncs because a
+        // shipped write committed on its relation's owner (until AT-S5).
+        // The batch is the fact; the session count is a proxy that
+        // inverted on that topology.
         //
         // Printed as the two counters plus their quotient rather than the
         // quotient alone: an operator reading a live server needs to see
@@ -1420,22 +1418,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         }
     }
 
-    // **Statement shipping** (D7 of the statement-shipping work order).
-    // Two halves, because a core is both an arrival core and an owner and
-    // the two say different things: the first four are what this core
-    // *sent*, the last four what it *ran for others*.
-    //
-    // Absent rather than zeroed where nothing is wired, the rule the
-    // recovery and scheduler blocks follow - on a single-core instance
-    // these lines do not exist at all, which is the honest reading of
-    // "shipping is not armed here".
-    //
-    // **`cross_core_write_refusals` above keeps its exact meaning**, and
-    // that is deliberate: before shipping it counted the whole demand, and
-    // after it counts the residue - the writes shipping does *not* convert,
-    // which is R6's multi-owner and in-transaction population and the
-    // evidence base a 2PC decision would be made from. A field whose
-    // meaning changed silently would have destroyed that series.
     // **CR7's block went with the batch** (AT-S7): `access_batches_sent`,
     // `access_entries_sent`, `access_batches_dropped`, the two applied
     // counts and `access_shape_overflows` each measured one end of a wire
@@ -1507,9 +1489,8 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // would be an answer.
     if (recovery_ != nullptr) {
         // **Where the pass ran** (AR0 M0). Printed only where it was not
-        // here, the rule the cross-owner three below already keep: on every
-        // core of a per-core-stream instance, and on core 0 of a
-        // single-stream one, its absence means "these numbers are mine".
+        // here, the rule the prepared three below already keep: on core 0
+        // its absence means "these numbers are mine".
         if (!recovery_->ran) {
             os << " recovery_by=core0";
         }
@@ -1521,10 +1502,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " recovery_pages_healed=" << recovery_->pages_healed
            << " recovery_torn_tail=" << (recovery_->torn_tail ? 1 : 0);
         // R6-4's three, printed only when this mount actually resolved a
-        // cross-owner transaction. **Absent rather than zeroed**, the rule
-        // the shipping block already keeps: every mount before R6-8 opens
-        // that path resolves none, and three structural zeroes would say
-        // nothing while looking like a measurement.
+        // cross-owner transaction - one a log written before AT-S6 retired
+        // 2PC left prepared. **Absent rather than zeroed**: nothing prepares
+        // since, and three structural zeroes would say nothing while
+        // looking like a measurement.
         if (recovery_->prepared != 0) {
             os << " recovery_prepared=" << recovery_->prepared
                << " recovery_prepared_committed=" << recovery_->prepared_committed
@@ -1841,7 +1822,7 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     // compiled out - it dirtied a frame of a page this core does not own,
     // to be written back by the next Sync, checkpoint or eviction, and
     // left the peer's catalog eviction (a path AT-S2 retired) failing on
-    // a dirty catalog frame so its cache never dropped again. PW1c's guard covers
+    // a dirty catalog frame so its cache never dropped again. PW1c's guard covered
     // the DML verbs; this one was a read all along.
     auto page = page_store_.GetForRead(page_id);
     if (!page.ok()) {
@@ -1890,9 +1871,9 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     std::ostringstream os;
     os << "page_id=" << page_id << "\\n"
        << "page_type=" << (is_leaf ? "BTREE_LEAF" : "HEAP") << "\\n"
-       // The pair the rule-5 mount refusal names; without them here the
-       // operator meeting it cannot inspect the field it cites (the
-       // f19ead1 review's observability gap).
+       // The pair the rule-5 mount refusal named until AW-S1b (the
+       // f19ead1 review's observability gap); the stamp is a diagnostic
+       // since, and this is where it is read.
        << "page_lsn=" << storage::GetPageLsn(page.value().bytes()) << "\\n"
        << "stream_stamp=" << storage::GetPageStreamStamp(page.value().bytes()) << "\\n"
        << "min_key=" << view.min_key() << "\\n"
@@ -3358,12 +3339,12 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // any row work says "no such parent" where today's per-row check,
         // running after row 1 landed, says pass.
         //
-        // Carving it out costs nothing AH wants, and that is the point
-        // rather than a consolation: parent and child being one relation
-        // means one `owner_core`, so a self-referencing foreign key **can
-        // never be foreign**. The descent it leaves inside the write scope
-        // is a descent that never needs to cross, so AH-R1's rule - nothing
-        // in an open `WriteScope` initiates a ring round trip - is intact.
+        // Carving it out costs nothing AH wants. It was argued when a
+        // foreign parent meant another `owner_core`, which a
+        // self-referencing key could never have, so the descent it left
+        // inside the write scope never crossed (AH-R1). Since AT-S5f no
+        // parent is foreign and nothing crosses, so the carve-out rests on
+        // the ordering above alone.
         if (fk.rel_oid == child.oid) continue;
 
         const auto pk = static_cast<std::uint64_t>(value.int_val);
@@ -4662,9 +4643,9 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     //
     // Over **every** row, before the loop enters `InsertOneRow` for any of
     // them. That is the whole hoist on this path: a thousand-row insert
-    // against one parent descends once rather than a thousand times, and
-    // AH-T2 replaces this local resolution with one probe round per foreign
-    // owner without the row loop below noticing.
+    // against one parent descends once rather than a thousand times. AH-T2's
+    // probe round per foreign owner, which stood in for this resolution on
+    // a peer, went with the probes at AT-S5f.
     exec::FkParentVerdicts fk_held;
     if (!ta->fkeys_out.empty()) {
         const txn::ReadView view = CheckView(scope);
@@ -4731,7 +4712,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // ---- The extraction pass (foreign-keys.md §2a, AH-R1) ---------------
     //
     // Every parent this statement names, resolved once, before the row loop
-    // - which is where AH-T2 will park on a foreign owner instead. The row
+    // (AH-T2's park on a foreign owner stood here until AT-S5f). The row
     // loop below is unchanged in order and in what it reports: it answers
     // from what this resolved, so a refused statement still names the same
     // row ordinal it always did.
@@ -5744,9 +5725,10 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
 }
 
 Status CommandDispatcher::AdoptSnapshot(Session& session, std::uint64_t snapshot_lsn) {
-    // Called from `EnrolFor` alone, immediately after a `BEGIN` it checked
-    // succeeded - so the session holds a transaction and this dispatcher a
-    // manager (`HandleBegin` refuses without one). The one guard is the
+    // **No caller since AT-S6.** It was called from `EnrolFor` alone,
+    // immediately after a `BEGIN` it checked succeeded - so the session held
+    // a transaction and this dispatcher a manager (`HandleBegin` refuses
+    // without one); `EnrolFor` went with the ship. The one guard is the
     // null dereference's.
     if (txn_ == nullptr || session.transaction() == nullptr) {
         return Status::InvalidArgument(
@@ -7150,10 +7132,12 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
     }
 
-    // Minted once per statement rather than per row. Nothing can join or
-    // leave the live set while this statement runs: a write to this relation
-    // can only come from the core that owns it, which is this one, and it is
-    // running this statement (crosscore.md CC3).
+    // Minted once per statement rather than per row. The argument that
+    // stood here - a write to this relation could only come from the core
+    // that owned it, which was this one (crosscore.md CC3) - is false since
+    // AT-S5: another core's writer can join or leave the live set while
+    // this statement runs, and a parent deleted after the check is the
+    // forward check's open interval `known-gaps.md` (Foreign keys) records.
     txn::ReadView check_view = txn::ReadView::Everything();
     exec::FkParentVerdicts fk_held;
     if (!fk_assignments.empty()) {
@@ -7183,9 +7167,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 return {ErrorReply(s), false, 0, s};
             }
         }
-        // Sent **at the fork**, before a single row qualifies - which is
-        // also why an UPDATE matching nothing still parks here where it
-        // would not report a violation: asking an owner is what the
+        // Resolved before a single row qualifies - which is also why an
+        // UPDATE matching nothing still waits here on a busy parent where it
+        // would not report a violation: the resolution is what the
         // statement needs to run at all, not a verdict about a row.
     }
 
@@ -7883,25 +7867,24 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
     // LogInsert() takes it: kGroup staged the commit for the next drain,
     // and the acknowledgement means "durable".
     //
-    // **Except for a cross-owner participant applying a decide** - the
-    // contract, and why it is sound, are on `CommitAck`. What belongs here
-    // is why there is no second branch: this is a **D2 site by
-    // construction**, because `kStrict` synced inside `Commit` before it
+    // `CommitAck::kAtAppend` - a cross-owner participant applying a decide -
+    // has had no caller since AT-S6 (`CommitAck`). What belongs here is why
+    // there is no second branch: this is a **D2 site by construction**, because `kStrict` synced inside `Commit` before it
     // returned and `kRelaxed` stages nothing, so neither class reaches this
     // statement at all and neither can be changed by the flag.
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
         commit_ack_ == CommitAck::kWhenDurable && !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();
     }
-    // The record's LSN whatever the class, for the caller that needs the
-    // *decision* durable rather than the acknowledgement honest (R6-3).
+    // The record's LSN whatever the class, for a caller that needs the
+    // *decision* durable rather than the acknowledgement honest (R6-3) -
+    // the coordinator, which went with 2PC at AT-S6; no caller passes one.
     if (commit_lsn != nullptr) *commit_lsn = committed.value();
     txn_->Release(*txn);
-    // **And on the outcome too** (XF4). The out-parameter above serves the
-    // coordinator, which calls `CommitLocal` directly; a cross-owner
-    // *participant* reaches this through `DispatchAsync("COMMIT")` and has
-    // no out-parameter, so without this the one caller that must time its
-    // own record's durability cannot name the record. `DispatchOutcome`'s
+    // **And on the outcome too** (XF4), for the cross-owner *participant*
+    // that reached this through `DispatchAsync("COMMIT")` with no
+    // out-parameter and timed its own record's durability; it went with
+    // 2PC at AT-S6 and nothing reads the field now. `DispatchOutcome`'s
     // header says why this is not `pending_lsn`.
     DispatchOutcome committed_out{"COMMIT trx_id=" + std::to_string(id), false};
     committed_out.commit_lsn = committed.value();
@@ -7913,18 +7896,6 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
         return {"ERR no transaction is open", false};
     }
 
-    // **A rollback tells its participants too** (R6-8, D4: *"any refusal or
-    // timeout → ABORT. Either way it then tells the participants"*). The
-    // R6-8 review found this leg missing entirely: `HandleCommit` forked on
-    // `has_participants()` and this did not, so a client's `ROLLBACK`, a
-    // poisoned transaction's forced one, and the one `TcpServer::CloseClient`
-    // sends when a connection dies all ended this core's half and told
-    // nobody - leaving each participant holding uncommitted rows, pinning
-    // that core's `ReadHorizon()` and one of its sixteen enrolment slots,
-    // until the lifetime ceiling swept it - five minutes when this was
-    // written, sixty seconds since AN-R14, and on a loop any client can run
-    // either way.
-    //
     DispatchOutcome out = RollbackLocal(session);
 
     // **Nothing follows the local half since AT-S6.** A rollback used to
@@ -8721,10 +8692,10 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
     DispatchOutcome out = DeleteInner(line, scope, snap, resume_from);
 
-    // AO-S3b's park: `HandleUpdate`'s arm, for its reason. Ahead of the
-    // probe and ship arms below because those *end* the scope and this one
-    // must not - a DELETE that has already marked rows has nothing to roll
-    // them back to.
+    // AO-S3b's park: `HandleUpdate`'s arm, for its reason. Ahead of
+    // `EndWrite` below because that *ends* the scope and this must not - a
+    // DELETE that has already marked rows has nothing to roll them back to.
+    // (The probe and ship arms that also ended it went at AT-S5f and AT-S6.)
     if (out.parked_mid_walk) {
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,

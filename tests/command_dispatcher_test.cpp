@@ -774,10 +774,11 @@ TEST_F(CommandDispatcherTest, TheTwoRefusalTokensAreDistinctAndRoundTrip) {
     EXPECT_EQ(forbidden.response.rfind("ERR UNSUPPORTED retryable=0 ", 0), 0u)
         << forbidden.response;
 
-    // Both recover as themselves, which is what a peer's refusal needs to
-    // survive the ring: `StatusFromErrorReply` is the only reader of the
-    // token, and a code that renders but does not recover would come back
-    // from an owner core as kInvalidArgument.
+    // Both recover as themselves. That was what a peer's refusal needed to
+    // survive the ring while statements shipped (until AT-S6), and
+    // `StatusFromErrorReply` is still the only reader of the token for the
+    // KWP paths that hold a rendered line: a code that renders but does not
+    // recover would come back as kInvalidArgument.
     EXPECT_EQ(StatusFromErrorReply(not_built.response).code(), StatusCode::kNotImplemented);
     EXPECT_EQ(StatusFromErrorReply(forbidden.response).code(), StatusCode::kUnsupported);
     EXPECT_FALSE(StatusFromErrorReply(not_built.response).retryable());

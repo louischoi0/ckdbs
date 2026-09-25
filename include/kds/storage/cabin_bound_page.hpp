@@ -51,9 +51,11 @@
 // committed data, so `kVarHeap`'s argument applies and the advisory rules that
 // govern a waystone page do not.
 //
-// Concurrency: core-local. A relation's pages belong to its home core, and an
-// assertion is single-relation (AS8), so the whole structure is one core's
-// (`docs/spec/assertion.md` §6.1). No latches, no atomics.
+// Concurrency: none of its own. The pages sit under the page latch like any
+// page, and the structure they hold is guarded by the instance's assertion
+// registry under its directory latch since AT-S5d (`bound_cabin.hpp`,
+// `docs/spec/assertion.md` §6.1); until then a relation's pages belonged to
+// its home core and the structure was one core's. No atomics here.
 
 namespace kds::storage::cabin {
 

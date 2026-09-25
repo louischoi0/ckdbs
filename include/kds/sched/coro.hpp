@@ -33,7 +33,7 @@
 //
 //   - **A frame is a heap allocation.** One per coroutine, at first call.
 //     That is real, and it is why this is for *suspendable* work - a
-//     statement, a pipeline step, a lease request - and never for the
+//     statement or a wait - and never for the
 //     per-tuple path. sched.md §2's "no allocation in steady state" applies
 //     to the reactor loop, which this does not touch.
 //   - **A coroutine is not a task until it is submitted**, and the frame

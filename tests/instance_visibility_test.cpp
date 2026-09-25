@@ -25,7 +25,7 @@
 // ground and AN-S2 is where it becomes reachable.
 //
 // The two shapes worth naming, because they are the reason the floor has a
-// second bound at all (AN-R8, AN-3 E's H2): ids are leased in disjoint
+// second bound at all (AN-R8, AN-3 E's H2): ids are carved in disjoint
 // per-core blocks, so a core can hold an unspent range *below* another
 // core's committed ids, and a floor raised on resolution alone would answer
 // "committed" for a transaction that has not started.
@@ -846,8 +846,8 @@ TEST_F(VisibilityWiringTest, AnIdleCoreBurnsItsBlockAndUnpinsTheFloor) {
     // a burn takes its new window from the superblock's high-water, so a
     // peer whose cursor was merely published would leave the high-water
     // where core 0 already is and the burn would hand it back the block it
-    // started on. Carving is what a real peer's lease does, and it is what
-    // puts a block above core 0's.
+    // started on. Carving is what a real peer does since AT-S10b, and it is
+    // what puts a block above core 0's.
     auto peer_block = ids_->Carve(4096);
     ASSERT_TRUE(peer_block.ok()) << peer_block.status().message();
     vis_.PublishIssueCursor(kCore1, peer_block.value().first);

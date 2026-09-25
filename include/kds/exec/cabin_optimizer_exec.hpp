@@ -19,9 +19,11 @@
 // Decide (PHY02, pure) and Execute (this, effectful) are separate phases
 // by construction; the completion edges flow back through the controller's
 // `NoteCreated`/`NoteBuildFailed`/`NoteDropped`, which is PO5's lifecycle
-// executing "as single home-core steps" - everything here runs
-// run-to-completion on the owning core, the AST06 builder's argument, so
-// no write can interleave with a build's scan.
+// executing "as single home-core steps". **A write can interleave with a
+// build's scan since AT-S5** - writes run on every core, so the AST06
+// builder's run-to-completion argument no longer covers it, and this path
+// does not announce: `BuildSeededSets` (the .cpp) and `known-gaps.md` say
+// what that loses and why it is sound today.
 //
 // ---- What each action means in this engine -------------------------------
 //

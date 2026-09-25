@@ -86,9 +86,8 @@ enum class StatusCode {
     // compatibility surface (docs/spec/protocol.md §11) - one code wide.
     kFkViolation,
     // A write would take a declared assertion's group aggregate past its
-    // bound (docs/spec/assertion.md §4.4, AS9): the admission check on the
-    // relation's home core refused the statement before anything was
-    // mutated.
+    // bound (docs/spec/assertion.md §4.4, AS9): the admission check refused
+    // the statement before anything was mutated.
     //
     // **Not retryable, and the near-miss is deliberate.** The aggregate a
     // check reads counts committed *and* reserved rows (§4.1), so there is
@@ -103,9 +102,10 @@ enum class StatusCode {
     kAssertionViolation,
     // **A statement whose outcome nobody can state.** A shipped statement
     // was sent to its relation's owner and no reply arrived before the
-    // deadline (docs/spec/crosscore.md §6, the work order's D4):
-    // it may have committed, it may never have run, and this core cannot
-    // tell which.
+    // deadline (docs/spec/crosscore.md §6, the work order's D4): it may
+    // have committed, it may never have run, and this core could not tell
+    // which. **No producer since AT-S6**, which retired the ship; the code
+    // stays because the wire pins it (`kwp.hpp`'s categories).
     //
     // **Its whole reason for existing is that it is not retryable.** Every
     // other refusal in this enum means "nothing happened" - a retry is at

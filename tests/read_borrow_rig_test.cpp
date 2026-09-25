@@ -7,11 +7,12 @@
 // which walks *this core's* live set (`manager.hpp`) - so a holder running
 // on another core reads as "not in flight" from the first poll, and a wait
 // built on that predicate is a re-run per reactor iteration rather than a
-// wait. The read borrow is exactly such a holder: reads run on the
-// relation's owner, DDL runs on core 0 (CC13), and the two are different
-// cores whenever the relation is a peer's. What the DDL waits on instead is
-// the table's own slot, flipped by the release from whichever core releases
-// and carried across by AU-S2's write-then-kick.
+// wait. The read borrow is exactly such a holder: a read and a DDL each run
+// where their session is (AT-S6, AT-S5), so they are on different cores
+// whenever their sessions are - when this cell was written, reads ran on
+// the relation's owner and DDL on core 0 (CC13). What the DDL waits on
+// instead is the table's own slot, flipped by the release from whichever
+// core releases and carried across by AU-S2's write-then-kick.
 //
 // **The reader's borrow is taken here directly, not by a running `SELECT`,
 // and that is a property of the engine rather than a shortcut.** A local

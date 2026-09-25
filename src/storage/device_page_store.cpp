@@ -214,8 +214,8 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     // corrupted region count, one of them on a SIGSEGV.
     //
     // **The peer's private empty region went with the lease** (AW-S1b). A
-    // leased store could not read a map page from the device - core 0 owns
-    // it, writes it and does not latch it - so a peer reaching a region
+    // leased store could not read a map page from the device - core 0 owned
+    // it, wrote it and did not latch it - so a peer reaching a region
     // after its mount got a private, never-dirty copy instead. One frame
     // table serves every core now, so the unsynchronised read that arm
     // avoided cannot arise: there is one copy, and this is the discipline
@@ -412,12 +412,11 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
 }
 
 StatusOr<std::size_t> DevicePageStore::FlushMaps() {
-    // **This is the one write path that reaches `device_.WritePage` without
-    // asking `MayWrite`.** It used to carry a check of its own for that
-    // reason - a leased store dropped its map writes rather than publishing
-    // a copy taken at its own mount - and AW-S1b removed the copy along with
-    // the lease. Region 0's map pages sit below the system range, so the
-    // core that writes them is the core `MayWrite` would admit anyway.
+    // **It reaches `device_.WritePage` without asking `MayWrite`**, which
+    // answers yes for every core and page since AT-S5 anyway. It used to
+    // carry a check of its own - a leased store dropped its map writes
+    // rather than publishing a copy taken at its own mount - and AW-S1b
+    // removed the copy along with the lease.
     //
     // **Copy under the hold, write outside it** (AM-S3). The rule this class
     // has had since AM-S2 2b is that device work does not run under the
@@ -716,12 +715,6 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // which every core faults every page - so the predicate it called
     // answered `true` unconditionally from AM-S2 step 3 onwards and the
     // check was dead on every mountable volume before it was deleted.
-    // The write half is enforced in **every** build,
-    // since PW1c-5: the interim peer-DML guard is gone, so this is what
-    // stands between an unfunded peer write (a crashed publish, grants
-    // lost to a restart) and a page whose next mount refuses with the
-    // rule-5 stamp mismatch. Refused-retryably beats detected-later.
-    // Dirtying a system page would make a peer the second writer of a
     // The write gate that stood here - `mark_dirty && !MayWrite(page_id)`,
     // `InvalidArgument` to a peer dirtying a system page - went at AT-S5
     // with the arm it enforced; `MayWrite` says what serialises the page
@@ -973,10 +966,10 @@ bool DevicePageStore::MayWrite(PageId) const noexcept {
     // the no-park-under-a-span rule within one for a catalog row's bytes
     // (`catalog.hpp`, `AdmitExplicitRowId`'s hook); the map's own
     // `map_latch_` for allocation (AM-S3); the schema word for every core's
-    // memo (AT-S2); and page 0's ceiling, which AT-S4 advances by CAS from
-    // whichever task crosses it - until then `TrxIdSequence::Carve` runs on
-    // core 0 alone by the lease's routing, not by this predicate. The seam
-    // stays and answers yes; `ResidentBytes` no longer asks.
+    // memo (AT-S2); and page 0's ceiling, which every core's
+    // `TrxIdSequence::Carve` raises under the superblock latch since
+    // AT-S10b. The seam stays and answers yes; `ResidentBytes` no longer
+    // asks.
     return true;
 }
 
@@ -1282,21 +1275,21 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
                                 " is not resident, so its page_lsn cannot be stamped");
     }
 
-    // This is the one dirtying path that never asks MayWrite, and that is
-    // deliberate, not an oversight (the 25059bf review's C-6): rule 6's
-    // acquisition restamp must dirty a page *before* the write grant is
-    // installed - the restamp is what makes granting sound. Every other
-    // caller reached its frame through the checked accessor first.
+    // Nothing on the write path asks `MayWrite` since AT-S5. This path
+    // skipped it deliberately before then (the 25059bf review's C-6): rule
+    // 6's acquisition restamp had to dirty a page *before* its write grant
+    // existed, and the grants went at AW-S1b.
     SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
-    // PW1c-3, PL §9 rule 4: the stream that last wrote the page. Rides
-    // the LSN stamp because the two answer one question - *whose* offset
-    // is page_lsn - and a page stamped by one and not the other is what
-    // rule 5 calls Corruption.
+    // PW1c-3, PL §9 rule 4: the core that last wrote the page. Rides the
+    // LSN stamp because the two answered one question - *whose* offset is
+    // page_lsn - while streams were per core. With one stream (AR0 M0) and
+    // the ownership reading gone (AW-S1b) it is a diagnostic `SHOW PAGE`
+    // prints, and nothing refuses on it (`page_header.hpp`).
     //
     // **Unless this pass is recovering on every core's behalf** (AR0 M0;
     // the header's `SetStampSuppressed` says why). The page_lsn above is
     // still stamped, because idempotence is that field's job; what is
-    // withheld is the claim.
+    // withheld is the stream stamp.
     //
     // **`CurrentCore()`, not `core_id_`** (AM-S2 step 3, the same argument
     // the page latch's owner field made). The stamp answers *whose* offset

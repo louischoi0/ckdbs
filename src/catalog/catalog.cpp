@@ -27,8 +27,9 @@
 
 namespace kds::catalog {
 
-// The overflow range must end exactly where the user pages begin: a catalog
-// page at or above this is one a peer core may not fault (well_known.hpp).
+// The overflow range must end exactly where the user pages begin: the
+// invalidation flush names every catalog page by this range, and a page at
+// or above it was one a peer could not fault until AW-S1b (well_known.hpp).
 static_assert(kCatalogOverflowLimit == server::kFirstUserPageId,
               "the catalog overflow range must end at the first user page");
 
@@ -43,10 +44,10 @@ namespace {
 // catalog page, and every checkpoint wrote every one of them back having
 // changed none.
 //
-// Multicore turned that waste into a refusal: a peer may read the catalog
-// pages and may never write one (workplan-crosscore.md P6), so a read that
-// dirties is a read a peer cannot do at all. Which is the ownership check
-// doing exactly its job - the bug predates it by a long way.
+// Multicore turned that waste into a refusal while a peer could read the
+// catalog pages and never write one (workplan-crosscore.md P6, until
+// AT-S5): a read that dirtied was a read a peer could not do at all. The
+// ownership check was doing its job - the bug predates it by a long way.
 //
 // **`view`, when given, is the reader's visibility** (DT3): a catalog row
 // stamped by a transaction that this view cannot see is not there for this
@@ -204,8 +205,9 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
 // The page a growing catalog chain takes next.
 //
 // **From the reserved low range, never from the free map's general
-// supply** (well_known.hpp says why: a peer may only fault low pages, and
-// the invalidation flush has to be able to name every catalog page). The
+// supply** (well_known.hpp says why: the invalidation flush has to be able
+// to name every catalog page; that a peer could fault only low pages was
+// the other reason, until AW-S1b). The
 // range is probed rather than tracked, because `CreateAt` already answers
 // "is this id taken" durably through the free map - a second record of it
 // here would be a second thing to keep true across a crash.
@@ -875,8 +877,8 @@ void Catalog::BumpWord() {
     // another core this cache has not yet revalidated against leaves it
     // behind, so the next boundary still drops - otherwise this write would
     // swallow that change and serve the other relation's old schema for
-    // good, a wrong answer and not a refusal. Sound today with one writer
-    // and required the day a peer writes (AT-S3, AT-S5).
+    // good, a wrong answer and not a refusal. Required since a peer writes
+    // the catalog (AT-S3, AT-S5).
     if (cache_built_at_ == prev) cache_built_at_ = prev + 1;
 }
 
@@ -1391,11 +1393,11 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     if (!generated_oid.ok()) return generated_oid.status();
     const Oid new_oid = generated_oid.value();
 
-    // The root's PageRef is scoped so its pin drops before the publish
-    // hook at the tail of this function: on a rotated relation that hook
-    // EvictCleans the departed pages, and EvictClean refuses a pinned
-    // frame - held to the function's end, the eviction failed on every
-    // peer CREATE TABLE (the 25059bf review's C-1).
+    // The root's PageRef is scoped so its pin drops before the rest of this
+    // function. It was for CC7's publish hook at the tail, which
+    // EvictCleaned a rotated relation's departed pages and refused a pinned
+    // frame (the 25059bf review's C-1); the hook went with the grants at
+    // AW-S1b, and the scope stays - a pin held no longer than its use.
     PageId root_id = kInvalidPageId;
     {
         auto created = store_.CreateNew();
@@ -1642,8 +1644,12 @@ Status CheckRenameName(std::string_view what, std::string_view name) {
 Status Catalog::RenameTable(Oid table_oid, std::string_view new_name) {
     if (Status s = CheckRenameName("table", new_name); !s.ok()) return s;
 
-    // The collision check and the write run on one core (DDL is core 0's),
-    // so check-then-write is atomic by the event loop.
+    // **Check-then-write, no longer atomic by construction.** It was while
+    // DDL ran on core 0 alone and the event loop serialised it; since AT-S5
+    // a DDL runs where its session is, and nothing a rename holds covers a
+    // second relation renamed to the same name from another core. Nothing
+    // here closes that race (`RegisterPattern`'s held root page is the
+    // shape that would).
     if (auto taken = FindTableOidByName(new_name); taken.ok()) {
         return Status::AlreadyExists("a relation named '" + std::string(new_name) +
                                       "' already exists");
@@ -1828,9 +1834,9 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
                                       "' is a well-known catalog object");
     }
 
-    // The collision check and the write run on one core (DDL is core 0's),
-    // so check-then-write is atomic by the event loop - `RenameTable`'s
-    // argument, and the same absence of a tombstone race: a dropped
+    // Check-then-write - `RenameTable`'s shape, with its race across cores
+    // since AT-S5 (stated there) - and the same absence of a tombstone
+    // race: a dropped
     // namespace's name is free the instant the retype lands, and unlike
     // `DROP TABLE` there is no `NameHeldByPendingDrop` equivalent owed
     // here yet, because nothing but this function creates one and no
@@ -2280,11 +2286,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // between fills the cached access is updated in place on a root move,
     // the same license the in-place root updates always had. A system
     // relation (no anchor) keeps the row's value: its fixed-page root
-    // never moves. The fall-through arm is deliberate: a *foreign*
-    // relation's anchor may be unfaultable on this core (no grant, or a
-    // stale map) and its root is never walked here - execution ships to
-    // the owner, whose own fill resolves through its own anchor - so only
-    // Corruption is loud.
+    // never moves.
     // **Every core, since AT-S5c.** This was scoped to the core that owned
     // the relation (PW2-4, the C3 decision taken as "owner-readable") on
     // two grounds, and AT-S5 falsified the second: *"the anchor lives above
@@ -2695,9 +2697,9 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
     // re-read the pk out of a freed vector: a second insert on one relation
     // answered "tuple's Keystone id N does not match the id being inserted".
     //
-    // But **another core reads this field**, which is where it parts company
-    // with the index root and the desc page - those belong to one owner and
-    // nobody else looks. `key_order` is read by `CompileStepChain` on the
+    // But **another core reads this field** - as it reads the index root and
+    // the desc page, which bump the word at their repoint since AT-S5c for
+    // the same reason. `key_order` is read by `CompileStepChain` on the
     // *session's* core, which need not be the core that wrote it, and a
     // stale kAscending there discards an `ORDER BY <pk>` this relation now
     // needs - an answer out of order rather than a refusal. Hence the
@@ -2721,14 +2723,13 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
                                        PageId anchor_page_id) {
     // PW2-3/PW2-4: a root move writes the **anchor alone** - the
     // sys.tables row is CREATE-fixed, which is the whole point of the
-    // indirection (a growth writes a relation page, never a catalog page;
-    // on a peer, its own granted page in its own stream). The anchor id
+    // indirection (a growth writes a relation page, never a catalog page).
+    // The anchor id
     // comes from the caller's own TableAccess, UpdateIndexRoot's S2 rule -
     // no catalog scan inside a level-grow - and the cached entry updates
     // **in place**: the pre-anchor BumpVersion here destroyed the entry
-    // the running INSERT was holding, and on a peer it would have
-    // broadcast a cluster-wide invalidation per split. Same one-field/
-    // one-owner license as the index root's in-place update - and since
+    // the running INSERT was holding. Same one-field license as the index
+    // root's in-place update - and since
     // AT-S5c the *word* is bumped beside it, which is not the same thing:
     // it drops nothing here and drops every other core's memo there. A
     // system relation (no anchor) cannot reach this function - its fixed catalog
@@ -3043,10 +3044,8 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
 
         // Saturating for the reason rows.hpp gives: a wrapped count would
         // invert the ranking this exists to produce. `count` is 1 on the
-        // statement path and a peer's fold on CR7's batch path, so the
-        // saturation is an add rather than an increment - the two paths
-        // share this row, and a second one would be a second authority over
-        // the same ranking.
+        // statement path, the one path since AT-S7 retired CR7's batch
+        // (whose fold passed more); the saturation stays an add.
         if (row.use_count > std::numeric_limits<std::uint64_t>::max() - count) {
             row.use_count = std::numeric_limits<std::uint64_t>::max();
         } else {
@@ -3529,8 +3528,8 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
     // PW2-3: the anchor slot is seeded at creation, so the anchor is the
     // index root's whole truth from birth - without this the row would
     // stay a second source forever ("slot absent, fall back") instead of
-    // for the transition alone. The creating core seeds it whoever owns
-    // the relation (the owner seeded its own until AT-S5e).
+    // for the transition alone. The creating core seeds it (the relation's
+    // owner seeded its own until AT-S5e).
     {
         auto rel = GetSysTableRow(def.table_oid);
         if (!rel.ok()) {
@@ -3589,7 +3588,8 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
             // reason §5a had to correct: not because the payload survives
             // an overwrite, which was the original and wrong argument, but
             // because DT9 taught the unfiltered read to leave an open mark
-            // alone. On core 0, which is where every writer is.
+            // alone. On every core since AT-S5e, because the drop holds the
+            // relation `X` (`HandleIndex`).
             if (!transactional) {
                 if (Status s = RetireLogged(wal_, store_, page, page_id, i, trx_id); !s.ok()) {
                     return s;

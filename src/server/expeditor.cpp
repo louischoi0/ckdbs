@@ -831,9 +831,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->undo_log_.emplace(*expeditor->store_, &*expeditor->wal_);
 
     // **Recovery, before anything can read a page or issue an id** (RV1,
-    // server/mount_recovery.hpp). This is core 0's stream; every peer's is
-    // recovered by its own CoreRuntime::Open (RV2 - no order between
-    // streams).
+    // server/mount_recovery.hpp). This is the instance's one stream, so a
+    // peer's `CoreRuntime::Open` recovers nothing (AR0 M0, AL-R5).
     //
     // Where it sits is not a preference. Three things must already be true
     // and two must not yet be:
@@ -853,14 +852,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     //     the floor recovery establishes (RC04's obligation 1, which
     //     `RaiseAllocationFloor` applies to the store every core allocates
     //     through - it was the extent allocator's search hint until AW-S1b).
-    // The wal dir goes in too (R6-4): core 0 is a participant like any
-    // other - a peer's client writes core-0-owned relations - so its stream
-    // can hold a prepared transaction whose verdict is in a peer's.
-    // **This pass is the whole instance's** (AL-R5/R6), so it meets pages
-    // every core owns. The `wal_dir` and per-core anchor vector that used
-    // to go in here were the cross-stream prepared resolver's, and it left
-    // at AM-S4(d): with one stream a prepare's verdict is in this same
-    // scan.
+    // **This pass is the whole instance's** (AL-R5/R6): one stream holds
+    // every core's records. The `wal_dir` and per-core anchor vector that
+    // used to go in here were the cross-stream prepared resolver's (R6-4),
+    // and it left at AM-S4(d); the prepare itself went with 2PC at AT-S6.
     auto recovered = RecoverCoreAtMount(
         /*core_id=*/0, expeditor->database_->superblock.wal_anchor(0), *expeditor->log_device_,
         *expeditor->store_, *expeditor->undo_log_, &*expeditor->wal_, &*expeditor->logger_,
@@ -890,8 +885,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // own log restored is included, and before the transaction stack
     // exists, so no live transaction can own a mark this retires.
     //
-    // The system core's alone: a peer may not write a catalog page (P6),
-    // and by the time a peer mounts, core 0 has already done this.
+    // Core 0's, at mount, before any peer is built - a mount-pass
+    // placement, not a writer rule (every core writes catalog pages since
+    // AT-S5).
     auto finalized = expeditor->database_->catalog.FinalizeDeleteMarksAtMount();
     if (!finalized.ok()) return finalized.status();
     expeditor->recovery_.catalog_marks_finalized = finalized.value();
@@ -900,7 +896,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // window and for the same reasons as the two maintenance steps around
     // it**: after recovery, so this mount's own log has had its say, and
     // before the listener binds, so nothing is reading the relation while
-    // it is judged. Core 0's alone, being a catalog page.
+    // it is judged. Core 0's, at mount, like the step above.
     //
     // Unlike them it is a *discard* rather than a repair, because the
     // relation is unlogged (CR6): there is no record to replay and nothing
@@ -922,8 +918,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // **The same window as the sweep above, for the same reasons**: after
     // recovery, so a spill this mount's own log restored is included; and
     // before the listener binds, so "what the rows point at" is a closed
-    // question rather than a race. Core 0's alone - these are catalog
-    // var-heap pages.
+    // question rather than a race. Core 0's, at mount, like the steps
+    // above.
     auto swept = exec::SweepUnownedSpills(expeditor->database_->catalog, *expeditor->store_,
                                           expeditor->wal_.get());
     if (!swept.ok()) return swept.status();
@@ -1236,10 +1232,10 @@ void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
     }
 }
 
-// **The reactor-borrow guard** (`expeditor.hpp`'s `ServeRuntime`). Three
-// members hold a pointer into the serving reactor - the dispatcher's
-// scheduler view, its statement-shipping client, its index-build client -
-// and the reactor outlives none of them. A guard rather than a line at the
+// **The reactor-borrow guard** (`expeditor.hpp`'s `ServeRuntime`). One
+// member holds a pointer into the serving reactor - the dispatcher's
+// scheduler view; the statement-shipping and index-build clients were the
+// other two until AT-S6 and AT-S5e - and the reactor outlives it. A guard rather than a line at the
 // bottom of `Start`: there are twenty early returns above it, and a path
 // that missed one would leave the dispatcher pointing at a destroyed
 // reactor, so `SHOW META` through the public `dispatcher()` accessor would
@@ -1549,12 +1545,9 @@ Status Expeditor::Start() {
     // the public `dispatcher()` accessor would then read freed memory.
     // Declared after `scheduler`, so reverse order clears the view first.
     dispatcher_->set_scheduler_view(&scheduler);
-    // The statement-shipping client armed below is the same shape of
-    // borrow - a member holding this reactor - and is cleared by the same
-    // guard, so a dispatch after `Serve` returns refuses as a single-core
-    // one does instead of shipping through a destroyed reactor.
-    // (The index-build client was the third of the same shape until AT-S5e
-    // retired it.)
+    // (The statement-shipping and index-build clients were the same shape
+    // of borrow, cleared by the same guard, until AT-S6 and AT-S5e retired
+    // them.)
     live.clear_reactor_borrows.emplace(&*dispatcher_);
 
     // Core-local, and installed before any statement runs: from here on a
@@ -1608,9 +1601,6 @@ Status Expeditor::Start() {
         // `checkpoint_anchor_` itself, under `superblock_latch_`, so
         // `kAnchorWrite` and `RemoteCheckpointAnchor` are gone.
 
-        // Every peer's page-id lease is carved here, on the startup thread,
-        // out of core 0's free map - which is the only writer of it (M5).
-        //
         // **Recovery's page floor is the store's own now** (AW-S1b). A
         // hint was computed here so that an extent carved for a peer could
         // not cover pages redo had just written - the free map is unlogged,
@@ -1662,10 +1652,11 @@ Status Expeditor::Start() {
             // a session accepted here runs here, under the same config file.
             core_config.statement_limits = config_.Limits();
             core_config.optimizer = Optimizer();
-            // CR7: the instance's switch reaches the peers now that they
-            // have somewhere to put a shape.
+            // The instance's switch, on every core: a peer writes
+            // `sys.access_stats` itself since AT-S7.
             core_config.access_statistics = config_.access_statistics;
-            // AK-S2: and the Cabin's, now that a peer holds a store.
+            // AK-S2: and the Cabin's (the store is the instance's since
+            // AT-S7, handed over below).
             core_config.cabins = config_.cabins;
             // Waystone's two switches, which a peer honoured as "off" until
             // AT-S7 because it could not write `sys.patterns`.

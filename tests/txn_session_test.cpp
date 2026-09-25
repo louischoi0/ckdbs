@@ -1199,8 +1199,8 @@ TEST_F(TxnSessionTest, ALeasedReaderHoldsTheMarksAndItsReleaseFreesThem) {
     ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
     ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
 
-    // An autocommit reader from before the drop - what a parked
-    // session-side statement or a shipped stage holds.
+    // An autocommit reader from before the drop - what a parked statement
+    // holds.
     const txn::ReadView view = mgr_->MintReadView(txn::kNoTrxId);
     auto lease = mgr_->RegisterReader(view);
     ASSERT_TRUE(lease.ok());

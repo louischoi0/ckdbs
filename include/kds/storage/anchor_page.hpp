@@ -8,9 +8,11 @@
 
 // The relation anchor page (PageType::kAnchor; workplan-peer-writer.md
 // §7a, PW2's decision): one fixed page per relation holding its entry
-// points, so that a root move writes a relation page - owned, granted and
-// PL-stamped like any of the relation's pages - and never a catalog page
-// only the system core may write.
+// points, so that a root move writes a relation page and never a catalog
+// page. When PW2 decided it a catalog page was the system core's alone and a
+// relation page was owned and granted; both rules are retired (AT-S5,
+// AW-S1b), and the indirection stays because the `sys.tables` row is
+// CREATE-fixed.
 //
 // Layout, packed at kPageBodyOffset, every field read and written through
 // explicit offsets and memcpy (invariant 6's discipline - no overlay
@@ -26,8 +28,8 @@
 // row. Removal deliberately does not exist yet - the note at the foot of
 // this header says why, and what shape it takes when it arrives.
 //
-// Mutation protocol: single-writer under the owning core's statement
-// execution, like every relation page. Every mutation is WAL-logged by
+// Mutation protocol: under the page latch, like every relation page - any
+// core's statement may write it since AT-S5. Every mutation is WAL-logged by
 // the caller (PW2-3's record) and stamped through StampPageLsn; this
 // header only moves bytes.
 

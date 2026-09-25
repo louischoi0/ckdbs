@@ -458,9 +458,9 @@ TEST_F(ForeignKeyCheckTest, AnUpdateMatchingNoRowsDoesNotReportTheHoistedVerdict
 // changes, this cell fails and points at a carve-out already waiting rather
 // than at a wrong answer nobody was looking for.
 //
-// The carve-out costs AH nothing either way: parent and child being one
-// relation means one `owner_core`, so a self-referencing foreign key can
-// never be foreign and its descent never needs to cross.
+// The carve-out cost AH nothing: parent and child being one relation meant
+// one `owner_core`, so a self-referencing foreign key could never be
+// foreign. Since AT-S5f no parent is foreign and no descent crosses.
 TEST_F(ForeignKeyCheckTest, ASelfReferencingForeignKeyCannotBeDeclared) {
     const std::string out =
         Run("CREATE TABLE nodes (id int64, parent int64 REFERENCES nodes, label int64) BTREE");

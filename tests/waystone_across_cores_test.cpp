@@ -3,7 +3,7 @@
 // `waystone_recording` was honoured as "off" on every core a `CoreRuntime`
 // opened, and `core_runtime.hpp`'s asymmetry 3 said why: `sys.patterns` is
 // a catalog page, the catalog was read-only on a peer, and the registration
-// cannot be shipped because `RegisterPattern` returns a `PatternAccess*`
+// could not be shipped because `RegisterPattern` returns a `PatternAccess*`
 // the recorder uses immediately. Every core writes catalog pages since
 // AT-S5, so the instance's switch means the same thing on every core.
 //

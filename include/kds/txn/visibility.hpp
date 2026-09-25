@@ -135,9 +135,9 @@ enum class CheckVerdict : std::uint8_t {
     // view can see.
     kAbsent,
     // Another transaction is writing this row and has not resolved. The
-    // answer depends on how it ends, so the check refuses now rather than
-    // waiting - there is nothing to wait *on* under a cooperative
-    // single-writer core.
+    // answer depends on how it ends. F3 refused on it, there being nothing
+    // to wait *on* under a cooperative single-writer core; since AO-S3 the
+    // caller waits for the writer's decide and asks again (`fk_check.hpp`).
     kBusy,
 };
 

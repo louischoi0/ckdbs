@@ -103,10 +103,11 @@ struct CatalogRowRef {
 //
 // §6a decides what may *split*; nothing decided what may be **created on a
 // relation already split** — an index, a Cabin (the optimizer's auto path
-// included), an assertion, or a foreign key naming it. Both orders reach
-// the same unsound state, so both doors need a refusal, and both run on
-// core 0's single catalog stream: whichever of the two writes lands second
-// is the one that is refused. `crosscore.md` §9's "auxiliary placement
+// included), an assertion, or a foreign key naming it. Both orders reached
+// the same unsound state, so both doors refuse; while DDL ran on core 0's
+// single catalog stream (until AT-S5) whichever write landed second was
+// refused. Nothing opens a range since AT-S9, so only a relation split
+// before then meets this door. `crosscore.md` §9's "auxiliary placement
 // under a split relation" owns lifting each of these; until it is taken
 // per auxiliary, the conservative answer is the only sound one.
 //
@@ -425,12 +426,11 @@ public:
 
     // ---- Namespaces (AF-T1) ---------------------------------------------
     //
-    // A namespace is a **logical grouping that decides placement**: a
-    // relation created in one is owned by the core that owns the
-    // namespace, fixed by its first relation (AF-P1, unbuilt - that is
-    // AF-T2). It partitions nothing and bounds no transaction; two
-    // namespaces are two cores and 2PC crosses them exactly as it does
-    // today (`instructions/v2.8.0/ratification-af-namespace.md` AF-2).
+    // A namespace is a **logical grouping** that declares the affinity of
+    // its relations - a hint nothing reads since AT-S9 retired placement,
+    // which is what it decided until then (AF-P1, AF-T2). It partitions
+    // nothing and bounds no transaction
+    // (`instructions/v2.8.0/ratification-af-namespace.md` AF-2).
     //
     // **It is an ordinary `sys.objects` row of `kTypeNamespace`**, with a
     // `GenerateUserOid()` oid and - following the bootstrap convention at
@@ -1399,13 +1399,15 @@ private:
 
     Logger* log_ = nullptr;
     // Armed by the `CommandDispatcher` constructor, so it is null for
-    // bootstrap, for recovery, for a test over a bare store - and **for
-    // every peer core**, whose `CoreRuntime` builds a Catalog and no
-    // dispatcher. That last one is deliberate rather than missed: a peer's
-    // live list can never hold the core-0 transaction that wrote a
-    // catalog mark, so armed and unarmed answer identically there
-    // (`ddl-transactional.md` §5b's core-0 scope, from the other
-    // side). Null is the pre-DT9 answer: a mark counts the moment it is
+    // bootstrap, for recovery and for a test over a bare store; every
+    // core's `CoreRuntime` builds a dispatcher, so every serving catalog is
+    // armed. **The predicate is this core's** (`IsInFlight` walks one
+    // core's live set), so a mark written by another core's open
+    // transaction reads as settled here. That was harmless while DDL ran
+    // on core 0 alone (`ddl-transactional.md` §5b's core-0 scope); since
+    // AT-S5 a peer's DDL writes marks too, and what stands between that and
+    // a wrong answer is the DDL's relation `X` where one is taken, not this
+    // predicate. Null is the pre-DT9 answer: a mark counts the moment it is
     // written.
     const txn::TransactionManager* txn_ = nullptr;
     // RV3: null means unlogged catalog writes, the pre-RV3 engine.

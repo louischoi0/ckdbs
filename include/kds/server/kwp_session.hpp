@@ -45,8 +45,7 @@
 // may say "run this text", and the caller runs it and hands the outcome
 // back through `OnStatementComplete`. That is exactly `TcpServer`'s shape
 // and it exists for `TcpServer`'s reason: a statement may **park** - a
-// cross-core read, a shipped statement, a group commit's durability wait -
-// and a function that returns a finished reply cannot wait. The endpoint
+// lock wait, a group commit's durability wait - and a function that returns a finished reply cannot wait. The endpoint
 // submits `DispatchAsync`; a test calls `Dispatch` and feeds the result
 // back. Both run the real engine, which is what KW-D1 requires; what
 // differs is who waits.
@@ -165,13 +164,11 @@ public:
     // **The byte target a batch is sealed at**, defaulting to the socket's
     // (`wire::kRowBatchTargetBytes`, 64 KiB, KW-D2).
     //
-    // Settable because XG1 gave this sink a second consumer whose bound is
-    // three orders of magnitude smaller: a shipped read's rows cross on a
-    // **ring** message, and `StepBatchCeiling` of the shipped slot is about
-    // a kilobyte. Reusing this sink rather than writing a second one is the
-    // point - the row bytes are the same D5 encoding either way, and a
-    // second encoder is what `result_sink.hpp`'s header exists to forbid.
-    // Only the sealing bound differs, so only the sealing bound is a knob.
+    // Settable because XG1 gave this sink a second consumer whose bound was
+    // three orders of magnitude smaller: a shipped read's rows crossed on a
+    // **ring** message, whose slot held about a kilobyte. **No caller since
+    // AT-S6** retired the shipped read (and AT-S10d the ring); the default
+    // is every sink's bound.
     void set_batch_target_bytes(std::size_t bytes) noexcept { target_bytes_ = bytes; }
 
     // Seals whatever is still open. Call once, after the statement.

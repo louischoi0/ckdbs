@@ -351,7 +351,7 @@ TEST_F(RedoTest, ACreatedPageIsStampedForTheCoreThatLoggedIt) {
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
     EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), storage::StreamStampFor(2))
-        << "a page redo created was claimed by the recovering core, not its owner";
+        << "a page redo created was stamped by the recovering core, not the core that logged it";
 }
 
 // Core 0's own records still produce core 0's stamp, so a single-core

@@ -197,8 +197,8 @@ protected:
     }
 
     // PW1c-6b-3's rig (defined below, after the schema helpers it needs):
-    // a peer owning one populated relation, core 0 as a dispatcher over a
-    // real ring, and the client the statement parks on.
+    // a peer, one populated relation, core 0 as a dispatcher, and the
+    // client the statement parks on.
     void OpenForeignIndexRig(struct ForeignIndexRig& rig, const char* table);
 
     // Asserts the peer may write a relation created after the rig opened
@@ -469,7 +469,7 @@ TEST_F(CoreRuntimeTest, APeerSeesADdlAtItsNextCachedReadWithNothingSent) {
 // shipped `CREATE INDEX`es turn every later write to that relation into
 // a permanent `page id not found`
 // (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d).
-// There is one copy of the map now and core 0 sets the bit in it, so
+// There is one copy of the map now and every core sets its bits in it, so
 // the snapshot the refresh reconciled does not exist. The cell that
 // still says something about this path is
 // `APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverflowPage`,
@@ -520,19 +520,18 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverf
     EXPECT_EQ(access.value()->schema.columns.size(), 2u);
 }
 
-TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
-    // The asymmetry that makes a peer's stale view safe: one writer per
-    // catalog page, so a peer can be behind but never torn.
+TEST_F(CoreRuntimeTest, EveryCoreMayWriteTheCatalogPages) {
+    // **Renamed at AT-S12** from `APeerReadsTheCatalogAndCannotWriteIt`, a
+    // rule retired at AT-S5: one writer per catalog page, so a peer could be
+    // behind but never torn. Every core writes them now under the page
+    // latch, and this cell pins that the predicate admits it.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // **The boundary and the asker, both explicit since AW-S1b.** The
-    // boundary because a shared store is given it by `Expeditor::Open` and
-    // this fixture is not the Expeditor; the asker because `MayWrite`
-    // answers from `CurrentCore()` now rather than from "does this store
-    // carry a lease" - so a question put from the test thread is core 0's
-    // question, whichever runtime's store it names. In an instance the
-    // asker is always the reactor running the statement.
+    // **The boundary and the asker, both explicit since AW-S1b**, when
+    // `MayWrite` answered from `CurrentCore()` against the boundary. It
+    // answers yes for every core and page since AT-S5, so neither changes
+    // the answer; both stay so the cell asks as a peer would.
     peer.value()->store().SetResidentLimit(kFirstUserPageId);
     {
         const CurrentCoreGuard as_the_peer(1);
@@ -541,9 +540,7 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
         EXPECT_TRUE(peer.value()->store().MayWrite(catalog::kCatalogPageTables));
         EXPECT_TRUE(peer.value()->store().MayWrite(kSuperBlockPageId));
 
-        // Above the boundary it writes freely: which core may write a user
-        // page is the Expeditor's routing decision, not this predicate's
-        // (AM-R2, AO-R14).
+        // Above the boundary too.
         auto own = peer.value()->store().CreateNew();
         ASSERT_TRUE(own.ok()) << own.status().message();
         EXPECT_TRUE(peer.value()->store().MayWrite(own.value().first));
@@ -553,12 +550,11 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
 // ---- CC7: the ownership reconciliation (workplan P6b) -----------------
 //
 // The blocker P6 stopped at - relation ownership and page ownership were
-// different facts nothing reconciled - is decided (crosscore.md CC7,
-// operator-ratified 2026-08-10): **page ownership is a function of the
-// catalog**, realized at DDL publish by the flush-then-grant handoff. The
-// test below is the positive contract that replaced the pinned negative
-// (`APeerCannotYetFaultARelationsDataPages`): after the grant, the owner
-// faults the relation's pages read-only and its schema resolves.
+// different facts nothing reconciled - was decided by crosscore.md CC7
+// (operator-ratified 2026-08-10): page ownership as a function of the
+// catalog, realized at DDL publish by a flush-then-grant handoff. The
+// grants went at AW-S1b and ownership itself at AT-S9: every core faults
+// and writes every page of the one pool.
 //
 // A second blocker was that **a peer could not INSERT**, because
 // `Catalog::AllocateRowId()` bumps `next_id` on the sys.tables page, which
@@ -1061,9 +1057,8 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedHere) {
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
 
-    // The session core's runtime. Its store is lease-bound, so schema
-    // resolution needs CC7's grant exactly as a real session core would
-    // have received at the relation's publish.
+    // The session core's runtime, over the instance's pool: nothing is
+    // granted to it (CC7's grants went at AW-S1b).
     auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
     ASSERT_TRUE(runtime.ok()) << runtime.status().message();
 
@@ -1519,9 +1514,10 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestart) {
 // `APeerRefusesACallerSuppliedKeyAndTakesTheSameRowWithout` stood here until AT-S5: it pinned a peer refusing a caller-supplied key, which every core admits since AT-S5 (`ReadBorrowRigTest.ANamedKeyAdmitsOnAPeer` is the positive form).
 
 TEST_F(CoreRuntimeTest, AFundedPeerGrowsItsOwnBtreeWritingNoCatalogPage) {
-    // PW2-4's proof: a peer INSERTs into its own btree relation far enough
-    // to divide leaves - every split page from its own lease, every root
-    // move in its own granted anchor - and the sys.tables row never moves.
+    // PW2-4's proof: a peer INSERTs into a btree relation far enough to
+    // divide leaves - every split page from the one free map, every root
+    // move in the relation's anchor (the lease and the grant that funded
+    // both went at AW-S1b) - and the sys.tables row never moves.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema(),
                                     catalog::ClusteredType::kBtree);
@@ -1618,7 +1614,7 @@ TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerOwnedRelationBuildsWhereItRuns) {
     // core 1 until AT-S9 retired placement. This was refused by name until AT-S5e - the build
     // was the owner's, shipped to it, and a dispatcher with no index-build
     // client had nothing to reach it with. `CREATE INDEX` builds where its
-    // session is now, whoever the relation's owner is.
+    // session is now, and no relation has an owner since AT-S9.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix", TwoColumnSchema(),
                                     catalog::ClusteredType::kBtree);
@@ -1684,16 +1680,16 @@ std::string RoundTrip(int fd, std::string_view line) {
 
 TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRoutesStop) {
     // FINDING 5 of the PW5 review: nothing proved a peer listener serves
-    // anything. This is the whole loop over a real socket - a rotated
-    // relation is served on the peer that owns it, a core-0 relation is
-    // refused with the affinity answer, and STOP does not stop this
-    // reactor: it fires the instance's stop hook (tcp_server.hpp's stop
+    // anything. This is the whole loop over a real socket - a relation is
+    // read and written on the peer (a core-0 relation was refused with the
+    // affinity answer until SS2, and shipped until AT-S6), and STOP does
+    // not stop this reactor: it fires the instance's stop hook (tcp_server.hpp's stop
     // contract, CoreRuntime::ListenAndAttach; a `kShutdown` message to the
     // system core until AU-S3).
     constexpr std::uint16_t kPort = 25442;
 
-    // A relation owned by core 1 (the :417 test's arrangement), and one
-    // owned by core 0 as the foreign control.
+    // Two relations, created through two catalogs; no core owns either
+    // since AT-S9 (`local0` was core 0's, the foreign control, until then).
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto rotated = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
                                         TwoColumnSchema(), catalog::ClusteredType::kHeap);
@@ -1719,19 +1715,13 @@ TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRo
     int fd = ConnectLoopback(kPort);
     ASSERT_GE(fd, 0);
 
-    // Served: the relation this core owns (empty is fine; not an ERR).
+    // Served here (empty is fine; not an ERR).
     const std::string own = RoundTrip(fd, "SELECT * FROM rotated");
     EXPECT_EQ(own.rfind("ERR", 0), std::string::npos) << own;
-    // **The foreign read is no longer asserted here, and that is SS2.** A
-    // relation core 0 owns used to answer "owned by core 0" from this
-    // listener; it now ships to core 0 and is answered there, which is the
-    // whole of what this version changes. It cannot be asserted in *this*
-    // fixture: no core-0 reactor runs in it, so the shipped statement would
-    // wait out the ten-second deadline and answer `UNKNOWN_OUTCOME` -
-    // truthful, and a ten-second test. It is pinned instead where core 0
-    // answers, on the rig that has one
-    // (`AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRows`, and the
-    // write half beside it).
+    // **The foreign read is not asserted here.** A relation core 0 owned
+    // answered "owned by core 0" from this listener until SS2, and shipped
+    // to core 0 from then until AT-S6 - which this fixture, with no core-0
+    // reactor, could not drive. It is an ordinary read on this core since.
     //
     // **A write with nothing granted runs** (AT-S10b). This cell pinned
     // the opposite until then: a listener-served peer held no transaction-
@@ -1772,7 +1762,7 @@ TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
 
     // The write a recording peer would attempt, refused at the store. The
     // boundary and the asker are both stated for the reason
-    // `APeerReadsTheCatalogAndCannotWriteIt` gives (AW-S1b).
+    // `EveryCoreMayWriteTheCatalogPages` gives (AW-S1b).
     peer.value()->store().SetResidentLimit(kFirstUserPageId);
     {
         const CurrentCoreGuard as_the_peer(1);
@@ -1866,8 +1856,8 @@ TEST_F(CoreRuntimeTest, APeerListenerIsTornDownBeforeTheReactorItRegisteredWith)
 // Everything the tests below share. Core 0 is a scheduler, a dispatcher
 // with its transaction stack (so phase 2's DDL scope is a real
 // transaction, D2) and the client that parks between the phases; the peer
-// is a whole runtime owning one relation with three rows core 0 never
-// faulted. `clock` is core 0's alone - the timeout test drives it by hand
+// is a whole runtime that wrote one relation's three rows, which core 0
+// never faulted. `clock` is core 0's alone - the timeout test drives it by hand
 // while the peer keeps the system clock, so nothing there expires.
 struct ForeignIndexRig {
     explicit ForeignIndexRig(const sched::Clock& core0_clock) : clock(core0_clock) {}
@@ -1924,9 +1914,8 @@ struct ForeignIndexRig {
                                    dispatcher->DispatchAsync(sql, session, &out));
     }
     // The **peer's** statement as its reactor would poll it (AI-T2). The
-    // rig's other cells drive core 0 because that is where a shipped
-    // statement starts; a cross-owner INSERT starts on the owner, and the
-    // owner is the peer.
+    // rig's other cells drive core 0, where a shipped statement started
+    // until AT-S6; these drive the peer.
     std::unique_ptr<sched::CoroTask> StartOnPeer(const char* sql, DispatchOutcome& out,
                                                  Session* session = nullptr) {
         return sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
@@ -1996,9 +1985,9 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
 
     rig.catalog2.emplace(*core0_store_, storage::kDefaultInlineCellWidth);
     // The same word the peer's catalog reads (AT-S2): this catalog's DDL
-    // bumps it, and the owner revalidates off the shared frame at `done`.
-    // The flush that stood here carried the row to the *device*, for an
-    // owner that re-read from there; one pool serves every core now.
+    // bumps it, and the peer revalidates off the shared frame. The flush
+    // that stood here carried the row to the *device*, for an owner that
+    // re-read from there; one pool serves every core now.
     rig.catalog2->SetSchemaWord(&schema_word_);
     // All three instance words, not the schema one alone: this rig's second
     // catalog writes the same store, so a private oid counter here is the
@@ -2048,20 +2037,17 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // participant's server with its two ring handlers. None of it exists -
     // a read runs where the session is, as a write has since AT-S5.
 
-    // **The owner's group-commit drain**, which `CoreRuntime::Run()`
+    // **The peer's group-commit drain**, which `CoreRuntime::Run()`
     // installs and this rig has to install itself, because it pumps
     // `RunOnce()` rather than running the reactor. Without it a statement
-    // that stages a commit on the owner parks on `IsDurable` forever - and
-    // that is precisely what a shipped write does, since joining the
-    // owner's group commit is the whole point of shipping (D3). The
-    // index-build tests never needed it: their write happens on core 0.
+    // that stages a commit on the peer parks on `IsDurable` forever.
     rig.peer->scheduler().SetPostTaskHook([&rig] {
         const bool staged = rig.peer->wal().HasPendingGroupCommits();
         (void)rig.peer->wal().DrainOnce();
         return staged;
     });
 
-    // Rows the owner wrote and core 0 never saw - what the build must find.
+    // Rows the peer wrote and core 0 never faulted - what the build must find.
     const std::string ins =
         rig.peer->dispatcher()
             .Dispatch("INSERT INTO " + std::string(table) + " VALUES (10), (20), (30)")
@@ -2085,9 +2071,9 @@ void CoreRuntimeTest::OpenCrossOwnerFkPair(ForeignIndexRig& rig, const std::stri
     ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
     auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
     ASSERT_TRUE(parent_row.ok());
-    // Sync before funding: `AdmitWritePages` faults each granted page for
-    // read before restamping it, and a creation page still only in core 0's
-    // cache abandons the whole grant silently.
+    // The sync was funding's precondition while `AdmitWritePages` faulted
+    // each granted page before restamping it (until AW-S1b); kept, as the
+    // harmless shape every rig cell was written against.
     ASSERT_TRUE(core0_store_->Sync().ok());
     FundPeerForRelation(rig, child_oid.value());
 }
@@ -2102,33 +2088,32 @@ void CoreRuntimeTest::FundPeerForRelation(ForeignIndexRig& rig, catalog::Oid oid
     ASSERT_TRUE(rig.peer->store().MayWrite(row.value().desc_page_id));
 }
 
-// ---- CR5 / CB4-CB6: a peer routes DDL to core 0 --------------------------
+// ---- CR5 / CB4-CB6: a peer's DDL -----------------------------------------
 //
 // PW4 refused the whole verb on a peer, because every target of
-// `CREATE`/`ALTER`/`DROP` writes state only the system core may write. CR5
-// keeps that premise and changes the answer: the peer **ships** the
-// statement to core 0 and waits, so the refusal survives for the cases the
-// route cannot serve rather than for all of them. `MayShip`'s conditions
-// are what decide which of the two a client gets.
+// `CREATE`/`ALTER`/`DROP` wrote state only the system core could write, and
+// CR5 shipped the statement to core 0 instead. Both are retired: a DDL runs
+// where the session is since AT-S5 (`crosscore.md` CC11). The cell below
+// keeps the route's name and pins what replaced it.
 
 // `APeerWithNoShipClientStillRefusesDdlAndPoisons` stood here until AT-S5: it pinned a peer refusing DDL, which runs where the session is since AT-S5 (`crosscore.md` CC11).
 
-TEST_F(CoreRuntimeTest, APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt) {
+TEST_F(CoreRuntimeTest, APeersDdlRunsOnThePeerAndCoreZeroSeesIt) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "cb4_base");
 
-    // The peer's own statement, driven as its reactor would drive it: it
-    // parks on the ship, and core 0 runs the DDL under its own catalog.
+    // The peer's own statement, driven as its reactor would drive it; it
+    // runs here, under the peer's catalog (AT-S5).
     DispatchOutcome out;
     auto statement = sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground,
         rig.peer->dispatcher().DispatchAsync("CREATE TABLE cb4_new (id int64, v int64)", nullptr,
                                              &out));
-    ASSERT_TRUE(rig.Drive(*statement)) << "the shipped DDL never finished";
+    ASSERT_TRUE(rig.Drive(*statement)) << "the peer's DDL never finished";
     EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
 
-    // It ran where the catalog is writable, which is the whole point: core
-    // 0's own catalog has the relation, and the peer wrote no page of it.
+    // Core 0's catalog resolves the relation the peer created - one set of
+    // catalog pages - and the peer may write them (AT-S5).
     auto oid = rig.catalog2->FindTableOidByName("cb4_new");
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     rig.peer->store().SetResidentLimit(kFirstUserPageId);
@@ -2137,12 +2122,10 @@ TEST_F(CoreRuntimeTest, APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt) {
         EXPECT_TRUE(rig.peer->store().MayWrite(catalog::kCatalogPageTables));  // AT-S5
     }
 
-    // **CB6: the peer sees its own DDL.** Core 0's invalidation broadcast is
-    // a submitted task and nothing orders it against the reply to this ship,
-    // so without CB6 the session that typed the statement could be told by
-    // its own core that the relation does not exist. The peer drops its
-    // catalog cache when the answer arrives, and core 0 flushed the pages
-    // before answering, so the next statement on this core resolves.
+    // **CB6: the peer sees its own DDL.** It was a race while the DDL
+    // shipped - core 0's invalidation against the reply to the ship. The
+    // DDL runs on this core now and moves the schema word its own next
+    // statement asks (AT-S2).
     const std::string described = rig.peer->dispatcher().Dispatch("DESCRIBE cb4_new").response;
     EXPECT_NE(described.rfind("ERR", 0), 0u)
         << "a peer could not resolve the DDL it had just been told succeeded: " << described;
@@ -2156,7 +2139,8 @@ TEST_F(CoreRuntimeTest, APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt) {
 
 TEST_F(CoreRuntimeTest, APeerMaintainsInsertsIntoAnIndexCore0BuiltAndReadsAnswerWhole) {
     // The e2e for the maintained path across cores: core 0 builds the index
-    // on a relation core 1 owns (the owner built it until AT-S5e), and a
+    // on a relation core 1 wrote (its owner built it until AT-S5e; no
+    // relation has one since AT-S9), and a
     // run of INSERTs on core 1 each maintains it through the frame table
     // both share, and every keyed read answers whole - the pre-build rows
     // the backfill covered and the post-build rows maintenance added, and
@@ -2248,43 +2232,38 @@ TEST_F(CoreRuntimeTest, ADropIndexOnAPeerRelationIsAdmittedInsideATransactionAnd
 
 // ---- Statement shipping, end to end (SS2/SS3) ---------------------------
 //
-// The rig above is the whole instance a shipped statement crosses: core 0's
-// dispatcher with an arrival-core client, and a peer whose transport attach
-// wired the owner's server and executor exactly as production did. What
-// these pin is the fork's contract - which statements ship, which keep the
-// refusal they always had, and that a shipped one really executes on the
-// core that owns the relation rather than being simulated on core 0.
+// The rig above was the whole instance a shipped statement crossed until
+// AT-S6: core 0's dispatcher with an arrival-core client, and a peer whose
+// transport attach wired the owner's server and executor. These cells
+// pinned the fork's contract; the ship retired with it.
 
 // `AWriteToAPeerOwnedRelationIsShippedAndTheOwnerExecutesIt` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
 // ---- R6-8: the cross-owner transaction, on a live path -----------------------
 //
-// Every row before this one was reachable only from a test that called the
-// seams by hand, because `MayShip` refused inside an explicit transaction and
-// so nothing ever enrolled a participant. These are the first tests in which
-// a **client statement** makes a transaction cross-owner and the protocol runs
-// end to end over a real ring, with the peer's participant half wired at
-// its transport attach exactly as production wired it.
+// These were the first tests in which a **client statement** made a
+// transaction cross-owner and the protocol ran end to end over a real ring.
+// The protocol went at AT-S6 and the ring at AT-S10d.
 
-// `AWriteInsideATransactionEnrolsItsOwnerAndTheCommitRunsBothPhases` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `AWriteInsideATransactionEnrolsItsOwnerAndTheCommitRunsBothPhases` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
-// `EachCrossOwnerCommitLegIsTimedAndAOneOwnerCommitTimesNothing` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `EachCrossOwnerCommitLegIsTimedAndAOneOwnerCommitTimesNothing` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
-// `AParticipantEnrolledByReadsAlonePreparesWithNoRecord` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `AParticipantEnrolledByReadsAlonePreparesWithNoRecord` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
-// `ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
-// `AConnectionThatDiesMidCrossOwnerTransactionAbortsItsParticipants` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `AConnectionThatDiesMidCrossOwnerTransactionAbortsItsParticipants` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
-// `TheCoordinatorsIsolationLevelCrossesToTheParticipant` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `TheCoordinatorsIsolationLevelCrossesToTheParticipant` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
-// `AWriteInsideATransactionOnACoreWithNoCoordinatorKeepsItsOldRefusal` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `AWriteInsideATransactionOnACoreWithNoCoordinatorKeepsItsOldRefusal` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
-// `ARolledBackCrossOwnerTransactionsWritesDoNotCommitWithTheNext` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `ARolledBackCrossOwnerTransactionsWritesDoNotCommitWithTheNext` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
 // `AShippedStatementTheOwnerRefusesPoisonsTheTransactionThatSentIt` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
-TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
+TEST_F(CoreRuntimeTest, AReadOfARelationAnotherCoreCreatedIsAnsweredHere) {
     // D1's read half: a relation another core created is read here, a
     // local walk of pages every core faults.
     ForeignIndexRig rig(clock_);
@@ -2294,14 +2273,14 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
     auto statement = rig.Start("SELECT * FROM shipped_read", out);
     ASSERT_TRUE(rig.Drive(*statement)) << out.response;
     EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
-    // The three rows `OpenForeignIndexRig` wrote on the owner, which core 0
-    // has never seen.
+    // The three rows `OpenForeignIndexRig` wrote on the peer, which core 0
+    // has never faulted.
     EXPECT_NE(out.response.find(",10"), std::string::npos) << out.response;
     EXPECT_NE(out.response.find(",20"), std::string::npos) << out.response;
     EXPECT_NE(out.response.find(",30"), std::string::npos) << out.response;
     EXPECT_EQ(out.response,
               rig.peer->dispatcher().Dispatch("SELECT * FROM shipped_read").response)
-        << "a read of a peer-owned relation must answer exactly what its owner would";
+        << "core 0's read must answer exactly what the creating core's does";
 }
 
 // **Ten shipped-read cells went at AT-S6**, with the protocol they
@@ -2328,7 +2307,7 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
 //     `AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetried`: the
 //     owner's cost under refusal, and read-your-own-write across a retry.
 //
-// What survives them is `AReadOfAPeerOwnedRelationIsAnsweredHere`: a
+// What survives them is `AReadOfARelationAnotherCoreCreatedIsAnsweredHere`: a
 // relation another core created is read here. The fan-in cells went at
 // AT-S9, when a split relation stopped fanning in and began to be walked
 // whole where the session is.
@@ -2338,7 +2317,7 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationIsAnsweredHere) {
 
 // `TheOwnersRefusalReachesTheClientAsTheOwnerSpelledIt` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
-// `AStatementInsideATransactionShipsAndEnrolsSinceR68` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself is AT-S6's to retire.
+// `AStatementInsideATransactionShipsAndEnrolsSinceR68` stood here until AT-S5: it pinned the cross-owner transaction, whose traffic went with the route at AT-S5; the protocol itself went at AT-S6.
 
 
 
@@ -2358,11 +2337,11 @@ TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
     //
     // **What this covers and what it does not**, stated because the
     // difference matters: this refusal is taken on *this* core, at compile,
-    // before anything ships - so it proves the sink is left untouched and
-    // no receiver is left behind, and it does **not** exercise an owner
-    // failing part way through a result it has already begun sending. That
-    // case needs a process kill at `shipped.answer_batch_sent:1`, which is
-    // why that crash point exists; it is not reachable from this rig.
+    // so it proves the sink is left untouched, and it does **not** exercise
+    // a statement failing part way through a result it has already begun
+    // sending. (That case needed a process kill at
+    // `shipped.answer_batch_sent:1` while reads shipped; the crash point
+    // went with the ship at AT-S6.)
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "refused_read");
 
@@ -2374,7 +2353,7 @@ TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
     auto read = rig.Start("SELECT no_such_column FROM refused_read", out, &session);
     ASSERT_TRUE(rig.Drive(*read)) << out.response;
     EXPECT_EQ(out.response.rfind("ERR", 0), 0u)
-        << "the owner's refusal did not reach the client: " << out.response;
+        << "the refusal did not reach the client: " << out.response;
     EXPECT_EQ(sink.row_count(), 0u);
     EXPECT_FALSE(sink.described())
         << "a refused statement described a result set it does not have";
@@ -2473,36 +2452,24 @@ static int RowsWith(CoreRuntime& owner, const std::string& table, const std::str
 
 // ---- A5: the shape gates survive the fork ---------------------------------
 //
-// Shipping must not become a path that routes around a gate. The fork (SS2)
-// sits after the relation is resolved and before `CheckWriteAffinity`, and
-// it *returns* - so everything above it has already run, and everything
-// below it is what the owner runs instead, through its own ordinary
-// dispatcher. The gates that could therefore be lost are the owner's, and
-// the peer-side shape gate (`workplan-peer-writer.md` §4: assertion-covered
-// and unenforceable - FK-linked lifted 2026-09-01 by work order AI, cabined
-// lifted 2026-09-02 by AK-S2) is the one a shipped write newly reaches -
-// core 0 could write those relations itself, and a peer cannot.
-//
-// **The vehicle moved twice, and the property did not** (AI-R3). A5's real
-// claim is *a shipped write is answered by the owner's own gate, byte for
-// byte, with no retryable bit invented on the way* - which is independent
-// of which arm answers. The FK shape proved it until 2026-09-01, the
-// cabined shape until 2026-09-02, and both admit now; the caller-supplied
-// pk refusal carries it (`AShippedRefusalCrossesTheRingByteIdenticalAndTerminal`),
-// and the two cells below prove the converse for each lifted arm.
+// A5 held that shipping must not route around a gate: a shipped write was
+// answered by the owner's own gate, byte for byte (AI-R3), through the
+// peer-side shape gate (`workplan-peer-writer.md` §4). The ship went at
+// AT-S6 and the shape gate at AT-S9 (`CheckWriteAdmission` is what is
+// left); the cell below keeps the converse for the FK arm, lifted
+// 2026-09-01 by work order AI.
 
 TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_gate");
 
-    // Both relations rotate onto the peer, so the child is a peer-owned
-    // FK-linked relation. **Until 2026-09-01 that shape was refused
-    // outright** - `funded_shape` required both fkey lists empty, on the
-    // grounds that "validation reads the linked relation, which this core
-    // may not fault". AH-T4 removed the reason: the forward check probes a
-    // foreign parent instead of reading it (§2a), and the reverse refuses
-    // by name on a foreign child (§3a). The arm lifted, and this cell is
-    // its converse.
+    // The child is an FK-linked relation the peer writes. **Until
+    // 2026-09-01 that shape was refused outright** - `funded_shape`
+    // required both fkey lists empty, on the grounds that "validation reads
+    // the linked relation, which this core may not fault". AH-T4 removed
+    // the reason with the probes, and AT-S5f removed the probes: every
+    // check reads the linked relation where it runs. This cell is the arm's
+    // converse.
     //
     // **What this cell proves and what it deliberately does not.** It
     // asserts the peer's own dispatcher no longer answers the FK shape
@@ -2518,8 +2485,7 @@ TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
               "CRE");
     ASSERT_TRUE(core0_store_->Sync().ok());
 
-    // The owner's own answer, which is what the shape gate is a property
-    // of. Whatever refuses now, it is not the FK arm.
+    // The peer's own answer. Whatever refuses now, it is not the FK arm.
     const std::string owner_says =
         rig.peer->dispatcher().Dispatch("INSERT INTO fkchild VALUES (1)").response;
     EXPECT_EQ(owner_says.find("FK-linked relation cannot take writes"), std::string::npos)
@@ -2570,10 +2536,9 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) 
     auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
     ASSERT_TRUE(parent_row.ok());
 
-    // **Sync before funding, not after.** `AdmitWritePages` faults each
-    // granted page for read before it restamps it, so a creation page still
-    // only in core 0's cache abandons the whole grant silently and the peer
-    // is left owning a relation it may not write.
+    // **Sync before funding, not after** - funding's precondition while
+    // `AdmitWritePages` faulted each granted page before restamping it
+    // (until AW-S1b); kept.
     ASSERT_TRUE(core0_store_->Sync().ok());
     FundPeerForRelation(rig, child_oid.value());
 
@@ -2588,8 +2553,8 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) 
 
     // **Nothing crosses and nothing parks.** The extraction pass runs
     // before any row work, as AH-R1 requires, and resolves the parent by
-    // descending core 0's pages from core 1 - one frame table since AM-S2
-    // step 3 - so the statement never suspends on another core's answer.
+    // descending its pages from core 1 - one frame table since AM-S2 step
+    // 3 - so the statement never suspends on another core's answer.
     ASSERT_TRUE(rig.Drive(*statement)) << out.response;
     EXPECT_NE(out.response.rfind("ERR", 0), 0u) << "the cross-owner INSERT: " << out.response;
 
@@ -2604,7 +2569,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) 
     // came pinned the row for the life of the process (F1). There is
     // nothing to leak, and the `DELETE` that used to be refused by the
     // intent - and then by §3a's "cannot see a child on another core" -
-    // now walks the peer-owned child and answers RESTRICT on its merits.
+    // now walks the child and answers RESTRICT on its merits.
     const std::string del =
         rig.dispatcher->Dispatch("DELETE FROM aiparent WHERE id = 7").response;
     EXPECT_NE(del.find("FK_VIOLATION"), std::string::npos) << del;
@@ -2653,7 +2618,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteOnASynchronousPathRunsRatherThanR
     // has no reactor to park the fan-out's answers on.
     //
     // **AT-S5f removes the asking, so the path has nothing to park on.**
-    // The reverse check walks the peer-owned child from here, and a
+    // The reverse check walks the child from here, and a
     // statement that needs no reply needs no reactor: the DELETE runs on
     // the synchronous path exactly as it does on the served one.
     ForeignIndexRig rig(clock_);
@@ -2686,12 +2651,10 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteOnASynchronousPathRunsRatherThanR
 // ---- AK-S3: the reverse fan-out, driven, and the collect pass -------------
 //
 // AJ-T3 built the chain - fork, register, intent check, fan-out, park,
-// resume, per-row check from held verdicts - and landed with no cell that
-// drives it end to end. The first cell here is that owed cell for the shape
-// AJ-R2 admitted (a bare pk equality); the rest are AK-S3's: any other
-// WHERE collects its pks by a read-only pass and fans out over them, a set
-// too large for one message takes another round, and a row that appears
-// while the statement is parked is caught by the round that follows.
+// resume, per-row check from held verdicts - and AK-S3 its collect pass;
+// both went at AT-S5f. The cells kept here drive the walk that replaced
+// them, for the two shapes they were written for: a bare pk equality and
+// any other WHERE.
 
 TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPkChecksItsChildAndDeletes) {
     ForeignIndexRig rig(clock_);
@@ -2705,13 +2668,13 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPkChecksItsChildAndDeletes) {
     ASSERT_TRUE(rig.Drive(*wrote)) << child.response;
     ASSERT_NE(child.response.rfind("ERR", 0), 0u) << child.response;
 
-    // Unreferenced: the walk over the peer-owned child finds nothing and
+    // Unreferenced: the walk over the child finds nothing and
     // the row goes.
     DispatchOutcome gone;
     auto del7 = rig.Start("DELETE FROM pkp WHERE id = 7", gone);
     ASSERT_TRUE(rig.Drive(*del7)) << gone.response;
     EXPECT_EQ(gone.response, "DELETED 1") << gone.response;
-    // Referenced from a child another core owns: RESTRICT, and there is
+    // Referenced from a child the peer wrote: RESTRICT, and there is
     // one spelling because there is one check.
     DispatchOutcome kept;
     auto del8 = rig.Start("DELETE FROM pkp WHERE id = 8", kept);
@@ -2737,7 +2700,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPredicateChecksEveryRowItMarks)
     ASSERT_NE(child.response.rfind("ERR", 0), 0u) << child.response;
 
     // Three rows named by a non-pk predicate: each checked against the
-    // peer-owned child as the walk reaches it, and deleted.
+    // child as the walk reaches it, and deleted.
     DispatchOutcome three;
     auto del5 = rig.Start("DELETE FROM prp WHERE v = 5", three);
     ASSERT_TRUE(rig.Drive(*del5)) << three.response;
@@ -2786,7 +2749,8 @@ TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersRunsHere) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_span");
 
-    // A second relation on core 0, so the join spans core 0 and the peer.
+    // A second relation, created through core 0's catalog; the join spanned
+    // two owners until AT-S9.
     auto local = rig.catalog2->CreateTable(catalog::kNamespacePublic, "span_local",
                                            TwoColumnSchema(), catalog::ClusteredType::kBtree);
     ASSERT_TRUE(local.ok()) << local.status().message();
@@ -2804,7 +2768,7 @@ TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersRunsHere) {
     EXPECT_EQ(out.response.find("is owned by core"), std::string::npos) << out.response;
 }
 
-TEST_F(CoreRuntimeTest, AnalyzeOfAPeerOwnedRelationIsPlannedHere) {
+TEST_F(CoreRuntimeTest, AnalyzeOfARelationAnotherCoreCreatedIsPlannedHere) {
     // The read fork runs on the *stripped* text (`ANALYZE` is a dispatcher
     // prefix, not a parser keyword), so shipping it would have answered a
     // request for a plan with a result set - which is why it was excluded

@@ -1,5 +1,5 @@
-// **A transaction cannot read its own uncommitted write to a peer-owned
-// relation**, because the write runs locally and the read still ships.
+// **A transaction could not read its own uncommitted write to a peer-owned
+// relation** while the write ran locally and the read still shipped.
 //
 // Written during AT-S6's survey as the reproduction of a defect, landed
 // disabled, and **enabled by AT-S6 itself**: the operator took AT-0
@@ -43,7 +43,7 @@ sched::Coro WriteThenRead(CommandDispatcher& d, Txn& t) {
     co_return Status::OK();
 }
 
-TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteToAPeerOwnedRelation) {
+TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteOnAPeer) {
     TwoCoreRig::Options options;
     options.wal_drain_interval_ns = 1'000'000;
     auto opened = TwoCoreRig::Open(options);
@@ -72,7 +72,7 @@ TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteToAPeerOwnedRel
         << "the local write to a peer-owned relation: " << t.write_out.response;
     // The question this probe exists to answer, printed either way.
     EXPECT_NE(t.read_out.response.find("41"), std::string::npos)
-        << "read-your-own-writes across the ship: " << t.read_out.response;
+        << "read-your-own-writes on a peer: " << t.read_out.response;
     // And the row is really there once the transaction commits, which is
     // what tells a blind read from a lost write.
     EXPECT_EQ(t.end_out.response.rfind("COMMIT", 0), 0u) << t.end_out.response;

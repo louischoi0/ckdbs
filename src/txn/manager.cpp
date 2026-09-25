@@ -736,8 +736,8 @@ wal::Lsn TransactionManager::OldestPreparedLsn() const {
     // R6-4. The oldest live prepare pins the checkpoint's redo start, so
     // the record that says "this transaction is not mine to decide" stays
     // inside every replay range until it is decided. 0 when nothing here is
-    // prepared, which is every core that is not a participant in a
-    // cross-owner transaction right now.
+    // prepared - on every core since AT-S6, which retired 2PC and the only
+    // caller of `MarkPrepared`.
     wal::Lsn oldest = 0;
     for (const std::unique_ptr<Transaction>& t : live_) {
         if (!t->active_ || t->prepare_lsn_ == 0) continue;

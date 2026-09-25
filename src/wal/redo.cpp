@@ -496,16 +496,14 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         storage::SetPageLsn(page, record.header.lsn);
         // No restamp rides it. PL §9 rule 4 had every applied page take the
         // replaying stream's stamp; with one stream (AM-S4(d)) the
-        // recovering core is not the owning core, so that would hand core
-        // 2's pages to core 0 - which is precisely what
-        // `device_page_store`'s claim-at-fault reads at the next mount. The
-        // stamp stays a claim about ownership and has stopped being a
-        // statement about which log the page's records are in, there being
-        // one. `ApplyPageInit` is the one path that still writes a stamp,
-        // from `LoggingCoreOf(record.header.flags)` - the record's own
-        // owner, not the recovering core. An FPI writes none: its memcpy
-        // restores whatever stamp the captured image carried, which is the
-        // owning core's by the same argument.
+        // recovering core is not the core that wrote the record, so that
+        // would label core 2's pages core 0's. The stamp decides nothing
+        // since AW-S1b took `device_page_store`'s claim-at-fault
+        // (`page_header.hpp`); it stays truthful about which core last
+        // wrote the page. `ApplyPageInit` is the one path that still writes
+        // a stamp, from `LoggingCoreOf(record.header.flags)` - the record's
+        // own core, not the recovering core. An FPI writes none: its memcpy
+        // restores whatever stamp the captured image carried.
         ++stats.applied;
         return Status::OK();
     };

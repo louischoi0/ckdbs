@@ -175,7 +175,9 @@ def session_core(conn):
 
 def refill_summary(meta):
     """A peer's `<kind>_refill_*` fields off SHOW META, one clause per lease
-    kind: requests/grants, and the longest wait with its two legs."""
+    kind: requests/grants, and the longest wait with its two legs. The
+    leases and their fields are gone (extent AW-S1b, row-id and trx-id
+    AT-S10b); a current server prints none, and this answers nothing."""
     out = []
     for kind in ("rowid", "trxid", "extent"):
         if f"{kind}_refill_requests=" not in meta:
@@ -221,14 +223,12 @@ def collect_connections(port, needed, max_attempts):
 
 
 # The engine's refusals that mean "again, later" (docs/spec/protocol.md §11): the
-# wire's `retryable=1` - and the three lease
-# exhaustions a peer answers until its refill grant lands: the row-id lease
-# on a relation's first INSERT (PW1b), the trx-id lease, and the extent lease
-# (a btree insert that could not allocate). Those three carry the bit since
-# 2026-08-25 (they are TxnConflict now - docs/inflight/known-gaps.md closes PW6's
-# finding (2)); the message matching below stays as the fallback that reads
-# a server built before that, and is what kept this driver from losing rows
-# to them at v2.0.0-48-g314a06d.
+# wire's `retryable=1` - and, on a server built before the leases retired
+# (extent AW-S1b, row-id and trx-id AT-S10b), the three lease exhaustions a
+# peer answered until its refill grant landed. Those carried the bit from
+# 2026-08-25 (PW6's finding (2)); the message matching below is the fallback
+# that reads a server built before that, and is what kept this driver from
+# losing rows to them at v2.0.0-48-g314a06d.
 RETRY_TEXTS = ("retry after the refill grant lands",
                "a refill must be granted before it can allocate again")
 
@@ -405,10 +405,10 @@ def run_config(binary, workdir, tag, cores, port, tables, rows,
             t.join()
         wall = time.perf_counter() - t0
 
-        # What the peer's lease refills cost, from its own SHOW META
-        # (docs/spec/client-manual.md): requests, grants and the longest wait per
-        # kind, split into the ring-and-core-0 leg and this reactor's
-        # resume leg. Read after the workload from one fresh session per
+        # What the peer's lease refills cost, from its own SHOW META, on a
+        # server built before the leases retired (AT-S10b; a current one
+        # prints no refill fields): requests, grants and the longest wait
+        # per kind. Read after the workload from one fresh session per
         # writer core; the lease-refill trace's instrument.
         refills = None
         if peer_listeners:
