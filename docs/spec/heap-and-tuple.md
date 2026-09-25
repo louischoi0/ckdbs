@@ -188,9 +188,9 @@ The supplied pk must be an **integer literal** — the gate runs before anything
 
 **Bulk `INSERT`** runs every row through that same single-row pipeline in statement order, so a bulk statement may name keys in any order, mix named and omitted rows, and each row is admitted, placed and indexed exactly as if it had arrived alone. The **sorted-fill fast path is engaged only when every row omits its key** (`SortedFillEligible` plus a per-statement check at the call site): the fill carves one contiguous id range up front and appends in order, which leaves no place for a key the caller chose. Ineligibility, never a refusal — a statement that names keys still runs, through the per-row path. The check is per statement rather than per relation because naming a key is a property of the row; what stays on `SortedFillEligible` is the relation-shaped half.
 
-**Row-id leases work on every relation.** `AllocateRowIdRange` refuses nothing for a key reason, which is what lets a peer core take the omitted-pk arity on any relation it owns. The one consequence: a carve spends its block from the mark's point of view before those ids are placed, so a *named* key landing inside a live carve meets the leased id when the peer places it. On a heap relation that cannot happen — a named key must be at or above the mark, which the carve has already moved past its own block. On a btree relation the descent reports it as the duplicate it is, `AlreadyExists`, to whichever of the two lands second.
+**A carve works on every relation.** `AllocateRowIdRange` refuses nothing for a key reason. Its one caller is the sorted fill, which is heap-gated (`bulkinsert.md`), and the one consequence is that a carve spends its block from the mark's point of view before those ids are placed. A *named* key cannot land inside a live carve: on a heap relation a named key must be at or above the mark, which the carve has already moved past its own block. (On a btree relation the descent would report it as the duplicate it is, `AlreadyExists`, to whichever of the two landed second.)
 
-**Every core admits a named key since AT-S5.** Admitting one writes the relation's `sys.tables` row — the mark, or the `key_order` flip — which was the system core's page until then and a peer refused per row; it is every core's now, written under the page latch with no task parking inside the span (`catalog.md` CT5). The omitted arity still draws from the core's id lease until AT-S4 replaces the leases.
+**Every core issues and admits from the one mark.** Admitting a named key writes the relation's `sys.tables` row — the mark, or the `key_order` flip — and so does issuing an omitted one (`AllocateRowId`'s bump). That row was the system core's page until AT-S5 and a peer refused a named key per row; it is every core's now, written under the page latch with no task parking inside the span (`catalog.md` CT5). The omitted arity has bumped it on every core since AT-S10b (§4.1a).
 
 **The pk is not updatable** (K2). `exec::CompileAssignments` refuses a pk `UPDATE` at compile time as `Unsupported` with the column's byte, regardless of provenance. Naming a key at insert and changing one afterwards are unrelated permissions; only the first is granted.
 
@@ -212,61 +212,58 @@ Tests: `tests/supplied_key_test.cpp` end to end, the admission cases in `tests/c
 
 ### 4.1a Monotonicity when more than one core inserts
 
+**Every core issues from the one mark since AT-S10b.** A peer's omitted-pk
+`INSERT` runs on the peer (AT-S5) and calls `Catalog::AllocateRowId`, the
+in-place bump of the relation's `sys.tables.next_id` under that catalog
+page's latch that core 0 always ran (`catalog.md` CT5). Two cores issuing
+into one relation are serialised by the latch, so the ids are **one
+sequence in issue order however many cores insert**, and §4.1's argument
+holds unchanged: the mark stays one ceiling on what has been placed, ids
+are unique across cores by construction (K1), and `key_order` flips only
+for a below-mark named key.
+
+**No core caches a block, and that is deliberate.** AT-R4 and D20
+(`instructions/v3.0.0/workorder-at-m3-uniformity.md`) name a per-core
+row-id cache of 4,096; the build departs from that wording on hard
+invariant 11's authority (`CLAUDE.md`): with insert spreading off, which is
+every relation, the pk is an identity *and a sequence*, monotonic in issue
+order, and a per-core block breaks issue order across cores - two rows
+inserted a microsecond apart on different cores carry ids thousands apart,
+and the later one may carry the lower id. That was the engine until
+AT-S10b, when a peer issued from a block core 0 carved and leased to it over
+the ring. The transaction-id sequence keeps its per-core block
+(`txn.md` §4.2), because no reader decides by a transaction id's order
+since AN-S2 (`txn.md` §4.1).
+
 **Insert spreading is retired (AT-S9)**, with range ownership: no range is
-opened, and `range_size_ids` is refused by name. What this section says
-about ranges is true of a relation split before it; what it says about
-cores is true of every relation since AT-S5, because a peer's omitted-pk
-`INSERT` runs on the peer and issues from that core's leased block (until
-AT-S4 replaces the leases with shared allocators). §4.1's own argument one
-level down; what changes is the scope over which "ascending" is a claim.
+opened, and `range_size_ids` is refused by name. A relation split before
+it keeps its ranges, each its own chain whose head page is created with
+`min_key = lo` (`Catalog::CreateRangeEntryPage`), and a row lands in the
+range its id falls in (`HeapChainFor`, `crosscore.md` CC8), so invariant 3
+holds per range structurally. `ORDER BY <pk>` over a split relation is
+ordered by the walk's range order, not by `key_order`: one walk covers
+every range, and `TableAccess::WalkHeads` answers their heads in `lo`
+order.
 
-**A relation's ids do not ascend in issue order once more than one core
-inserts into it.** Under id-block-aligned insert spreading each core issues
-from its own leased block, ranges align to block boundaries, and a core
-appends to its own range's tail. So two rows inserted a microsecond apart on
-different cores carry ids thousands apart, and the *later* one may carry the
-*lower* id. Per **range**, ids still ascend exactly as §3.1b requires: a
-range is one chain, its block is contiguous and issued in order, and a
-higher block belongs to a different chain.
+**What a client may rely on.** The pk is an identity **and a sequence**,
+monotonic in issue order, on every relation and whichever cores insert;
+a named key below the mark, which only a btree relation admits, ends the
+sequence and `key_order` records that it has (§4.1). Comparing two ids of
+one relation orders them in issue order while `key_order` is `kAscending`,
+and never across relations or histories (§4.1).
 
-Three consequences, each a property of the mechanism rather than added by
-this sentence:
-
-- **Invariant 3 is satisfied per range, and structurally.** A range's head
-  page is created with `min_key = lo` (`Catalog::CreateRangeEntryPage`), and
-  every id the owning core issues into it comes from a block starting at
-  `lo`. Nothing below the boundary can land in that chain even by mistake.
-- **`sys.tables.next_id` stays one high-water mark for the relation.** It is
-  what every block is carved from (`AllocateRowIdRange`), so ids remain
-  globally unique across cores by construction — K1's issue-once contract —
-  and the mark is still a ceiling on what has been placed. It is not, and
-  never was, a statement about the order rows arrived in.
-- **`key_order` is unaffected, and that is deliberate.** A block is issued
-  ascending within its chain, so no page ever takes an id below one already
-  on it, and slot order is still key order *within a page*. `kUnordered`
-  records a below-mark key landing, which spreading never produces — every
-  block is carved *above* the mark. `ORDER BY <pk>` over a spread relation
-  is ordered by the walk's range order, not by this flag: one walk covers
-  every range, and `TableAccess::WalkHeads` answers their heads in `lo`
-  order (`crosscore.md` CC8). It was the fan-in's range-order
-  concatenation until AT-S9 retired the fan-in.
-
-**What a caller may not infer:** comparing two ids of a spread relation
-orders them in the *id space*, never in time. That inference is unavailable
-across relations and across histories (§4.1); it is unavailable within one
-relation once a second core has taken a block of it.
-
-**What a client may rely on.** While one core inserts into a relation the
-pk is an identity **and a sequence**, monotonic in issue order; once a
-second core inserts omitting the pk, it is an identity and nothing more -
-the blocks interleave, and the later row may carry the lower id. On a
-btree relation that is the whole consequence, the descent placing each id
-where it sorts. **On an unsplit heap relation it is also a refusal**: one
-chain takes ids only above its tail's `min_key`, so a peer's block that
-the chain has passed is refused `OutOfRange` (`ChainInsert`) - spreading was
-the mechanism that gave each core a chain of its own, and a heap relation
-is creatable only before SUS-1 (`docs/inflight/known-gaps.md`). A
-single-core instance never produces either case.
+**Issue order is not placement order across cores, and on an unsplit heap
+relation that can be a refusal.** The bump and the placement are two
+latched spans, not one: a core can issue `n`, a second core issue `n + 1`
+and place it first, and if that placement opened a new tail page -
+`min_key = n + 1` - the first core's `n` is below the tail and
+`ChainInsert` refuses it `OutOfRange`. The sorted fill's carve has the same
+window against another core's issue. A btree relation has none, the
+descent placing each id where it sorts. The window is one tail-page
+boundary wide, where the lease's was a whole block: until AT-S10b a peer's
+leased block that the chain had passed was refused on every row of it. A
+heap relation is creatable only before SUS-1
+(`instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`).
 
 ## 5. Indexing
 

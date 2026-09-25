@@ -21,8 +21,8 @@ Decisions fixed here:
   insert. An UPDATE that targets the super column is **Unsupported**
   (hard rejection at compile, no slow path).
 - **K3 — No density promise, and no ordering promise.** Gaps are legal
-  and expected (bump-ahead recovery, aborted inserts, a burned lease
-  remainder); nothing may rely on ids being contiguous. Ids need not
+  and expected (bump-ahead recovery, aborted inserts, an aborted sorted
+  fill's carve); nothing may rely on ids being contiguous. Ids need not
   ascend either: a caller may name a key below the mark on a btree
   relation, and the relation records that it has (`sys.tables.key_order`).
   Monotonicity is a **per-relation, per-history property, not an
@@ -65,7 +65,7 @@ What this buys, engine-wide:
    crash — holds exactly as far as the mark's durability does:
    `sys.tables.next_id` advances through a logged catalog write that
    precedes the row it covers and replays with every other catalog write
-   (`docs/spec/wal.md`), and a leased block is carved above the mark the
+   (`docs/spec/wal.md`), and the sorted fill's carve moves the mark the
    same way, so a crash burns ids and never reissues one.
 3. **Audit posture.** For the finance-adjacent positioning: "a row's
    identifier never changes and is never reissued" is a compliance
@@ -131,14 +131,12 @@ Rules:
   catalog write path (`docs/spec/wal.md`), so a crash in between leaves a
   ceiling that is too high — burning ids K3 calls free — never one too
   low.
-- The relation's owning core is the only issuer, so the allocator is
-  single-writer by construction — no atomics, no cross-core coordination.
-  A peer that may not write the catalog issues from a **leased block**
-  carved by core 0 through `AllocateRowIdRange`
-  (`include/kds/catalog/row_id_lease.hpp`): ids unique and monotonic per
-  core, never gapless — a crash, a dropped core, or a refill that arrives
-  while ids remain burns the remainder. The default grant is 4096
-  (`kRowIdLeasePerGrant`), the measured floor §5's K-M2 states.
+- **Every core issues, and none caches** (AT-S10b). The mark is a
+  `sys.tables` row bumped in place under its catalog page's latch, so two
+  cores issuing into one relation are serialised by the latch and the ids
+  stay one sequence in issue order (`heap-and-tuple.md` §4.1a). Until
+  AT-S10b a peer issued from a block core 0 carved and leased to it, which
+  made the ids a sequence per core only.
 - **Named keys — `Catalog::AdmitExplicitRowId(oid, id)`.** It first checks
   that the id is *spellable* — inside `[kFirstRowId, kMaxKeystoneId]`,
   else `InvalidArgument` — before the catalog page is touched. At or above
@@ -211,18 +209,19 @@ every path that issues an id, every path that could re-issue one, and the
 exposure a durable log has to a sequence persisted outside it.
 
 **K-M2 — Bump-ahead allocation.**
-The peer-side row-id lease (`include/kds/catalog/row_id_lease.hpp`,
-`include/kds/server/row_id_lease_service.hpp`) is this shape: an
-in-memory block of ids per relation per core, the catalog touched once
-per block rather than once per id. The block-size floor is **4096**,
-measured against the `bench/` tree at `1769487`
-(`git show 1769487:bench/keystone_alloc_bench.cpp`): below it the durable
-bump stops amortizing — one fsync per 64 rows is still one fsync every 64
-rows, a 3× INSERT regression at N=64 — and per-id durability caps INSERT
-at the device's fsync rate. `kRowIdLeasePerGrant` and `txn::kTrxIdBlockSize`
-reuse the number rather than re-deciding it; it is frozen like
-`kds.inline_cell_width`, not per-relation tunable. Core 0's own
-`AllocateRowId` bumps the mark per issued id.
+The block-size floor is **4096**, measured against the `bench/` tree at
+`1769487` (`git show 1769487:bench/keystone_alloc_bench.cpp`): below it a
+durable bump stops amortizing — one fsync per 64 rows is still one fsync
+every 64 rows, a 3× INSERT regression at N=64 — and per-id durability caps
+INSERT at the device's fsync rate. `txn::kTrxIdBlockSize` reuses the number
+rather than re-deciding it, for the one sequence whose ceiling is synced
+per block (the superblock's, `txn.md` §4.2); it is frozen like
+`kds.inline_cell_width`, not per-relation tunable. **Row ids take no block
+since AT-S10b**: every core's `AllocateRowId` bumps the mark per issued id
+as core 0's always did, a logged catalog write with no sync of its own, and
+the per-core row-id lease that had this shape (`kRowIdLeasePerGrant`,
+4096) is gone - a per-core block breaks issue order across cores
+(`heap-and-tuple.md` §4.1a).
 
 **K-M2a — The ceiling is durable.**
 `sys.tables.next_id`'s bump is a logged catalog write with an `UNDO_WRITE`

@@ -51,12 +51,12 @@ key-order flip, because the `INSERT` doing it holds the relation's
 **Asked at a task boundary, and never inside one.** `Catalog::Revalidate()`
 is one acquire load; on a mismatch the cache is dropped and the value
 adopted. It runs where the broadcast's handler used to — between tasks, at
-three sites: `CommandDispatcher::DispatchAndStage`'s head; the peer's
-refill tick (`core_runtime.cpp`); and the Cabin optimizer's tick
-(`CabinOptimizerExecutor::Tick`). The other six went with their handlers:
-the two foreign-key probe handlers at AT-S5f, the two build request
-handlers at AT-S5d/AT-S5e, the refill's completion when range opening
-retired at AT-S9, and the remote-step open (`OnStepOpen`) at AT-S10.
+two sites: `CommandDispatcher::DispatchAndStage`'s head and the Cabin
+optimizer's tick (`CabinOptimizerExecutor::Tick`). The other seven went
+with their handlers: the two foreign-key probe handlers at AT-S5f, the two
+build request handlers at AT-S5d/AT-S5e, the refill's completion when range
+opening retired at AT-S9, the remote-step open (`OnStepOpen`) at AT-S10,
+and the peer's id-lease refill tick at AT-S10b.
 **It is never called from a cached read**, because a drop frees every
 `const TableAccess*` and `Schema&` a running statement holds
 (`catalog_cache.hpp`'s entries are reference-stable *until the next
@@ -79,9 +79,7 @@ it.
 A task that reads the catalog without a boundary serves a memo as fresh
 as its last boundary — what a peer served while a broadcast was in flight,
 which bounded nothing either. Stale, never wrong, by CT1's three facts.
-Where staleness has a cost the task asks: the peer's refill tick and its
-completion, whose stale answer is a range that does not open, and the
-Cabin optimizer's tick.
+Where staleness has a cost the task asks: the Cabin optimizer's tick.
 
 ## CT4 — Why a drop of the memo is enough
 
@@ -124,7 +122,10 @@ fixed at AT-S2: the flip bumps it. A transaction-length `X` would
 serialise every named-key `INSERT` into a relation for the length of each
 transaction and protect nothing. A peer refused a named key until AT-S5
 (`catalog_read_only_`); it admits one now, the page write being every
-core's. `rules.md` §3 declares the pages, not the rows.
+core's. An omitted key's issue (`AllocateRowId`) is the same
+read-modify-write of the same row, and every core has made it since
+AT-S10b, with no per-core cache (`heap-and-tuple.md` §4.1a). `rules.md` §3
+declares the pages, not the rows.
 
 **Placing a *new* catalog page is every core's too, since AT-S5b.** The
 pages CT5 opens with are the fixed ones; a catalog relation's chain grows

@@ -370,8 +370,8 @@ Visible(t):  t == kAlwaysVisibleTrxId  -> true      (§4.2, unconditional and pe
 
 **A commit-LSN snapshot, not a bound on transaction ids.** Until AN-S2 a view
 was an exclusive high-water mark over trx ids plus the ids in flight when it
-was minted. That is sound only while issue order is id order, and ids are
-leased to each core in disjoint blocks of `kTrxIdBlockSize` (§4.2), so across
+was minted. That is sound only while issue order is id order, and each core
+issues from its own disjoint block of `kTrxIdBlockSize` (§4.2), so across
 cores it is not: a commit on a core holding a higher block read as "not yet
 started" until the reader's core burned its own block (H1), and a transaction
 begun after the mint out of a lower core's unspent range read as committed
@@ -390,7 +390,7 @@ crash, by recovery's undo phase (`wal.md` §12), which rolls back every loser
 before the database is served. That is the load-bearing assumption of the
 whole design. The floor is a trx id below which every transaction is
 resolved **and no id will ever be issued again**: the second bound is what
-block leases require, because a core holding an unspent range below the
+per-core blocks require, because a core holding an unspent range below the
 floor could otherwise issue into it, and it is the minimum issue cursor over
 attached cores. **The floor is read live and never copied into the view**:
 reclamation drops a window entry *because* the floor rose past it, so a view
@@ -486,14 +486,35 @@ never reissued to a real transaction. The field was added in superblock
 format version **9** and lives past the WAL anchor table
 (`kNextTrxIdOffset`); ids are handed out a block at a time
 (`txn::TrxIdSequence`, `kTrxIdBlockSize = 4096` `[PROPOSED]`), so a crash
-burns the block's remainder - ids are unique and monotonic, never gapless,
-the same promise the row-id sequence makes. Exhaustion of the 48-bit space is
+burns the block's remainder - ids are unique and monotonic per core, never
+gapless. Exhaustion of the 48-bit space is
 reported `OutOfRange` and never wrapped, exactly as the row-id sequence does.
 The superblock is unlogged, so a crash between raising the ceiling and the
 page reaching the platter reissues the block; that is the exposure
 `keystoneid-k0-findings.md` records for row ids, and it closes the same way,
 with recovery. This mirrors PostgreSQL's `FrozenTransactionId`, which is what
 `kBootstrapXid`'s own comment says.
+
+**Every core carves its own block from the one ceiling since AT-S10b.**
+Each core's `TrxIdSequence` is built over the instance's one `SuperBlock`,
+the superblock latch and one persist callback, which encodes page 0 under
+the latch and syncs the store (`CoreRuntime::Config::trx_id_ceiling`,
+handed by `Expeditor`; `Expeditor::PersistTrxIdCeiling`). `Carve()` reads
+the ceiling and raises it **in one step under the latch** - two cores
+carving at once get two disjoint blocks - and the raised ceiling is durable
+before the block is issued from, because a mount refuses a log naming an id
+above it. A spent window is another carve: no grant, no refill, no
+refusal. Until AT-S10b only core 0 carved, and a peer drew windows from
+blocks core 0 carved for it and sent over the ring (the transaction-id
+lease), refused retryable `TxnConflict` while its refill was in flight.
+The row-id sequence keeps no per-core block (`heap-and-tuple.md` §4.1a).
+
+**An idle core burns its window** (AN-R13): `TransactionManager::MaybeBurnIdleBlock`,
+on each core's periodic tick (core 0's rides `Expeditor`'s, a peer's its
+drain tick), carves a fresh block when the core has issued nothing
+since its last tick, the instance's floor is waiting on its issue cursor,
+and the window has grown past `kBurnWindowThreshold`, so an idle core stops
+holding the floor. It is a carve like any other, on any core.
 
 ### 4.3 The predicate
 

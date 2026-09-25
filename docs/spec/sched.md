@@ -59,7 +59,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 
 - Topology: per-core-pair **SPSC lock-free rings** (N² rings for N cores), preallocated at startup. SPSC keeps each ring single-writer/single-reader — one writer and one reader by construction, so no atomics beyond the ring indices. This holds regardless of what else the engine shares: the rings are how *work* moves between cores, and nothing has been added to them.
 - A message names a target-core operation and carries POD payload; on receipt (phase 3) the peer wraps it as a task in the sender-designated scheduling group. Replies are messages back to the origin core.
-- **What crosses: two kinds since AT-S10**, a peer's transaction-id or row-id lease request to core 0 and core 0's grant (`crosscore.md` §3); `ring_message.hpp`'s census freezes the count at 2. The step pipeline's kinds went with the remote-step protocol.
+- **What crosses: nothing the engine sends, since AT-S10b** (`crosscore.md` §3). The last two kinds, a peer's transaction-id or row-id lease request to core 0 and core 0's grant, lost their users when every core began issuing its own ids; `ring_message.hpp` keeps them enumerated, its census frozen at 2, only as the transport cells' stand-ins. The step pipeline's kinds went with the remote-step protocol at AT-S10.
 - **Backpressure:** a full ring fails the send with the KDS status type (no blocking, no `throw`). Callers must handle `ring_full` — typically by suspending the sending task until the reactor retries. Silent drop is forbidden.
 - The ring interface is injectable: simulation replaces it with an in-memory model that can delay and reorder deliveries (§8).
 
@@ -171,15 +171,14 @@ indistinguishable from one that has a wake it never needed.
 
 | Park site | Predicate | What satisfies it | Ends the block? |
 |---|---|---|---|
-| `row_id_lease_service.cpp:142`, `trx_id_lease_service.cpp:106` | `WaitFor{&refill.granted}` | core 0's grant reply | ring message → **wake** |
 | `command_dispatcher.cpp:225` (shipped statement) (the index build's went with its ship at AT-S5e, the assertion build's at AT-S5d) | `Settled(id)`, **with the deadline read inside the predicate** | the owner's reply, or the deadline | the reply is a ring message → **wake**; the *deadline* has no timer of its own and is noticed only when the task is next polled, so it is honored to within one idle block. **This is what the ceiling above is for** — under an unbounded block a timed-out shipped statement would never answer |
 | `command_dispatcher.cpp:737` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1953`), with the drain timer as backstop | on-core: nothing to wake. Any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
 
-The two lease sites are satisfied by a peer's message and are covered by
-the wake; the rows below them are named with what covers them instead.
-The remote read's park and the remote step server's two, with the
-executor's `resume_gate_` they drove, went with the remote-step protocol
-at AT-S10.
+Each row is named with what covers it. The two id-lease refill parks,
+satisfied by core 0's grant over the ring and covered by the wake, went
+with the leases at AT-S10b; the remote read's park and the remote step
+server's two, with the executor's `resume_gate_` they drove, went with
+the remote-step protocol at AT-S10.
 
 ## 8. Deterministic Simulation
 

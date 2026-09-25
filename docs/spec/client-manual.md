@@ -262,11 +262,10 @@ hold on the debug port too (Appendix A gives the text spellings).
 - **`TXN_CONFLICT` with `retryable = 1` is the one error worth a retry
   loop.** Another transaction wrote a row this one wanted; there is no lock
   to wait on and no partial recovery, so the whole transaction is rolled
-  back and retried. On a multi-core instance the same code answers a
-  statement that reached a peer core whose id or page lease is spent while
-  its refill is in flight — unless core 0 has refused the refill (a
-  dropped relation, an exhausted id space), which answers the next
-  statement without the bit. **Every other code is not retryable**, and
+  back and retried. Until AT-S10b the same code also answered a statement
+  on a peer core whose id lease was spent while its refill was in flight;
+  every core issues its own ids since, so a peer's first write runs.
+  **Every other code is not retryable**, and
   the bit is the compatibility surface: read the bit, not the message.
   After a conflict the session is in a failed transaction and answers only
   `C_TXN_ABORT` and `C_SYNC` until it is rolled back.

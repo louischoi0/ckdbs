@@ -376,6 +376,20 @@ there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
+- **Two cores inserting omitted-pk rows into one unsplit heap relation can
+  refuse the lower id `OutOfRange`.** By reading, on `at-s10-ring-consumers`
+  at `59ed9c0` (found by AT-S10b's prose pass); no cell reproduces it. Since
+  AT-S10b every core issues from the relation's one mark
+  (`Catalog::AllocateRowId`), but issuing and placing are two steps under
+  two latches: core A issues `n`, core B issues `n+1` and places it first,
+  opening a tail page with `min_key = n+1`, and `ChainInsert` refuses A's
+  `n` below it (invariant 3). The sorted fill's carve has the same window.
+  A refusal, never a wrong answer. It narrows AT-S9's leased-block entry,
+  which AT-S10b closed, to a one-id window; within one core the two steps
+  cannot interleave. A heap relation is creatable only before SUS-1, and a
+  btree relation - the default since - places each id by descent and is
+  unaffected. Owner: `heap-and-tuple.md` §4.1a.
+
 - **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
   Verified at `4bf80fa`, 2026-09-23. AT-S8 put the controller behind a view
   latch that core 0's cadence holds across a tick, and a tick may create a

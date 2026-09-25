@@ -58,12 +58,12 @@ issued by a scan-and-overwrite of that row. Pinned by
 
 ## 3. What the allocator costs
 
-Per issued id, core 0's `AllocateRowId` fetches `sys.tables` **for write**
+Per issued id, `AllocateRowId` fetches `sys.tables` **for write**
 (dirtying the frame), decodes rows until the oid matches, and overwrites
 one — O(relations) across the chained catalog pages (§5), one dirtied
-catalog page per insert, and §4's logged write. A peer issues from a
-leased block and touches no catalog page
-(`include/kds/catalog/row_id_lease.hpp`).
+catalog page per insert, and §4's logged write. Every core pays it since
+AT-S10b, under the catalog page's latch; until then a peer issued from a
+block core 0 leased to it and touched no catalog page.
 
 ## 4. A ceiling persisted outside the log does not survive a crash
 
