@@ -80,8 +80,6 @@ catalog::Oid PeerRelation(TwoCoreRig& rig, const std::string& name) {
     EXPECT_EQ(made.rfind("CREATED", 0), 0u) << made;
     auto oid = rig.core(0).catalog().FindTableOidByName(name);
     EXPECT_TRUE(oid.ok()) << oid.status().message();
-    // Row ids for the peer's inserts: this rig leaves the refill tick off.
-    EXPECT_TRUE(rig.FundPeerRelation(oid.value(), 64).ok());
     return oid.value();
 }
 

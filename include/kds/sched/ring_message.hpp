@@ -58,7 +58,12 @@ enum class RingMessageKind : std::uint16_t {
     // superblock latch now. **The value is not reused.**
     // 17 was kExtentLease, struck at AT-S2b: the page-id lease refill went
     // with the per-core pool at AW-S1b. **The value is not reused.**
-    kTrxIdLease = 18,         // -> core 0: request a transaction-id block
+    // 18 and 22, the two id leases, have **no engine user since AT-S10b**:
+    // every core carves its own transaction-id window and bumps a
+    // relation's row-id mark in place. They stay enumerated for one
+    // sub-stage only, as the transport cells' stand-in kinds, and go with
+    // this file and the transport at AT-S10d.
+    kTrxIdLease = 18,
     // 19 was kCatalogInvalidate, struck at AT-S2b: a peer asks the schema
     // version word at its task boundaries (AT-S2a, `catalog.hpp`) and is no
     // longer told. **The value is not reused.**
@@ -77,13 +82,7 @@ enum class RingMessageKind : std::uint16_t {
     // reused**: a struck kind arriving from a stale peer is unknown, and an
     // unknown kind is dropped rather than read as something else.
 
-    // peer <-> core 0: a block of Keystone row ids for one relation
-    // (workplan-crosscore.md P5's shape; catalog/row_id_lease.hpp). The
-    // request carries `server::RowIdLeaseRequestPayload` and the reply
-    // `server::RowIdLeaseGrantPayload`, on this one kind both ways - the
-    // page-id lease's arrangement. A zero-count grant means the relation's
-    // id space is exhausted; the requester fails honestly, never waits.
-    kRowIdLease = 22,
+    kRowIdLease = 22,  // see 18
 
     // 25, 26 and 27 were the index build's request, reply and done - a
     // peer-owned relation's CREATE INDEX built by its owner behind a

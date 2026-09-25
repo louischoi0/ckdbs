@@ -58,7 +58,6 @@ TEST(ShippedReadOwnWrite, ATransactionReadsItsOwnUncommittedWriteToAPeerOwnedRel
     auto oid = rig->core(0).catalog().FindTableOidByName("r1");
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
-    ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok());
 
     Txn t;
     rig->core(0).scheduler().Submit(
@@ -130,7 +129,6 @@ TEST(ShippedReadOwnWrite, AJoinInsideATransactionOnAPeerSeesItsOwnWrites) {
     for (const char* name : {"acct", "fill"}) {
         auto oid = rig->core(0).catalog().FindTableOidByName(name);
         ASSERT_TRUE(oid.ok()) << name;
-        ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok()) << name;
     }
 
     JoinTxn t;

@@ -12,7 +12,7 @@
 // **The mutation**: give each core its own store again - drop
 // `config.cabins_store = &cabins_` from `two_core_rig.hpp`, which is the
 // line `Expeditor` has as `core_config.cabins_store` - and the second
-// answer is `id\n17`, one row where two carry the value.
+// answer is `id\n1`, one row where two carry the value.
 
 #include "two_core_rig.hpp"
 
@@ -54,16 +54,15 @@ TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote
     auto oid = rig->core(0).catalog().FindTableOidByName("r0");
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
-    ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok());
 
     // One row of v=7 written here, then the read that banks core 0's set
     // for the value 7 - from a walk, so the set is complete as of now.
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
-    // The ids are issued, and the peer holds the first block: core 0's row
-    // is 17 and core 1's is 1. Named here so the assertion below is about
+    // The ids are one sequence both cores bump (AT-S10b): core 0's row is
+    // 1 and core 1's will be 2. Named here so the assertion below is about
     // two identified rows rather than about a count.
     const std::string first = d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response;
-    ASSERT_NE(first.find("17"), std::string::npos) << first;
+    ASSERT_EQ(first, "id\\n1") << first;
 
     // A second row of v=7, written by a session on core 1 - which since
     // AT-S5 runs there rather than on the relation's owner, and files its
@@ -82,10 +81,10 @@ TEST(CabinServeAcrossCores, AQueryServedFromThisCoresSetSeesARowAnotherCoreWrote
     // store holds one.
     // **Both rows, and the set is what served them.** The separator in a
     // debug-text response is the two characters `\n`, so the row core 1
-    // wrote is `\n1\n` spelled that way and a real newline would match
+    // wrote is `\n2` spelled that way and a real newline would match
     // nothing here - which is how this cell read as short when it was not.
     const std::string again = d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response;
-    EXPECT_EQ(again, "id\\n1\\n17")
+    EXPECT_EQ(again, "id\\n1\\n2")
         << "core 0's answer holds its own row and the one core 1 wrote: " << again;
     // And it was the set: `hits` moves on this statement where the read
     // above moved `misses` and banked. Without it the assertion above
@@ -122,7 +121,6 @@ TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
     auto oid = rig->core(0).catalog().FindTableOidByName("r0");
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
-    ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
 
     // Core 1 reads first, and a **declared** Cabin records on the first
@@ -135,13 +133,13 @@ TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
     ASSERT_TRUE(KickUntil(*rig, 1, [&] { return peer.done.load(std::memory_order_acquire); },
                           8000ms))
         << peer.out.response;
-    ASSERT_EQ(peer.out.response, "id\\n17") << peer.out.response;
+    ASSERT_EQ(peer.out.response, "id\\n1") << peer.out.response;
     ASSERT_EQ(rig->core(1).cabins()->stats().recordings, 1u)
         << "the peer banked nothing, so what core 0 serves below is its own set";
 
     // And core 0 is served from it - a set it never walked for.
     const std::string served = d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response;
-    EXPECT_EQ(served, "id\\n17") << served;
+    EXPECT_EQ(served, "id\\n1") << served;
     EXPECT_EQ(rig->core(0).cabins()->stats().hits, 1u)
         << "core 0 walked instead of serving from the peer's set";
     EXPECT_EQ(rig->core(0).cabins()->stats().recordings, 1u)

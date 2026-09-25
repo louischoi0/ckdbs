@@ -191,7 +191,7 @@ public:
     // time with, so nothing threads a second clock pointer beside it.
     const Clock& clock() const noexcept { return clock_; }
     // RunOnce() calls so far: a stamp for "did the loop iterate between two
-    // events, or was it blocked" (server/lease_refill_stats.hpp).
+    // events, or was it blocked" (`SHOW META`'s `sched_iterations`).
     std::uint64_t iterations() const noexcept { return iterations_; }
 
     // ---- Timers (sched.md section 6, phase 2) ---------------------------

@@ -53,7 +53,6 @@ TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
     auto oid = rig->core(0).catalog().FindTableOidByName("r0");
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
-    ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
 
     const auto pattern_count = [&] {
@@ -64,28 +63,24 @@ TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
     // Core 0's own shape first, twice, so `before` proves this fixture
     // records at all - without it a peer that recorded nothing and a
     // fixture that records nothing look the same.
-    d0.Dispatch("SELECT id FROM r0 WHERE id = 17");
-    d0.Dispatch("SELECT id FROM r0 WHERE id = 17");
+    d0.Dispatch("SELECT id FROM r0 WHERE id = 1");
+    d0.Dispatch("SELECT id FROM r0 WHERE id = 1");
     const std::size_t before = pattern_count();
     ASSERT_EQ(before, 1u) << "core 0 registered nothing, so the comparison below says nothing";
 
-    // **Twice would be the threshold and is not enough here.**
     // `kAutoRecordThreshold` is 2, so an instance seen once is a one-shot
-    // query and pays no catalog page - but the registration that follows
-    // allocates a `sys.patterns` row id, and on a peer that is the row-id
-    // lease's demand-then-grant (PW1b): the first attempts are refused
-    // with a spent block, the demand rides the tick to core 0, and the
-    // grant lands a few rounds later. The same wait the **first** INSERT
-    // into a relation pays on a peer, arriving here because AT-S7 gave a
-    // peer a recorder. Eight rounds is that wait with room, not a
-    // threshold.
+    // query and pays no catalog page. The registration that follows
+    // allocates a `sys.patterns` row id, which a peer bumps in place since
+    // AT-S10b; until then it was the row-id lease's demand-then-grant, and
+    // this loop ran eight rounds to outlast the grant. The rounds are kept
+    // and only the first two are needed.
     rig->Start();
     for (int round = 0; round < 8; ++round) {
         OneShot peer;
         // A **different** shape from core 0's: one pattern row per shape,
         // so the peer re-running core 0's would move a `use_count` and no
         // row count.
-        peer.statement = "SELECT v FROM r0 WHERE id = 17";
+        peer.statement = "SELECT v FROM r0 WHERE id = 1";
         rig->core(1).scheduler().Submit(sched::MakeCoroTask(
             sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), peer)));
         ASSERT_TRUE(KickUntil(*rig, 1, [&] { return peer.done.load(std::memory_order_acquire); },

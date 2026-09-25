@@ -22,8 +22,6 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/mount_recovery.hpp"
-#include "kds/server/row_id_lease_service.hpp"
-#include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/page_store_checkpoint_target.hpp"
@@ -364,6 +362,23 @@ public:
         // anchor is not, which runs ungated (`wal::CheckpointGate`).
         wal::CheckpointAnchor* checkpoint_anchor = nullptr;
         wal::CheckpointGate* checkpoint_gate = nullptr;
+
+        // **The instance's transaction-id ceiling** (AT-S10b, AT-R4),
+        // borrowed from `Expeditor`: the one `SuperBlock` every core's
+        // sequence carves its window from, the superblock latch the carve
+        // reads and raises it under, and what makes a raised ceiling
+        // durable. Every core's `TrxIdSequence` is built over these three,
+        // so two cores carving at once get disjoint blocks. A null
+        // `superblock` is a runtime that carves from its own copy and
+        // persists page 0 itself - a fixture's arrangement, and a core-0
+        // runtime's in a rig that hands it nothing; two runtimes so built
+        // over one volume would issue one id twice.
+        struct TrxIdCeiling {
+            SuperBlock* superblock = nullptr;
+            Latch* latch = nullptr;
+            std::function<Status()> persist;
+        };
+        TrxIdCeiling trx_id_ceiling;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -395,10 +410,12 @@ public:
     // reactor.
     ~CoreRuntime();
 
-    // Attaches this core to the ring matrix and installs the handlers a
-    // peer needs - the two id-lease receivers. **Not a stop handler**: since AU-S3 core 0 stops this reactor
-    // with `scheduler().Stop()` plus a kick, so shutdown reaches a core that
-    // never attached a transport at all. `transport` must outlive this.
+    // Attaches this core to the ring matrix. **It installs no handler since
+    // AT-S10b**: the two id-lease receivers were the last, and a peer carves
+    // and issues its own ids. Nor a stop handler: since AU-S3 core 0 stops
+    // this reactor with `scheduler().Stop()` plus a kick, so shutdown
+    // reaches a core that never attached a transport at all. `transport`
+    // must outlive this.
     Status AttachTransport(sched::RingTransport& transport);
 
     // PW5, and the arrangement since AT-S8: binds `port` with SO_REUSEPORT
@@ -469,23 +486,6 @@ public:
     // next mount, which the caller logs.
     Status ShutdownCheckpoint();
 
-    // The same, for this core's transaction ids (PW1): a peer may not raise
-    // the superblock's ceiling, so its windows are granted. Peers only -
-    // core 0 carves its own and never leases from itself.
-    void MaybeRefillTrxIds();
-
-    // Asks this core's manager whether it should burn its unspent id block
-    // to stop pinning the instance's commit-order floor (AN-R13), and turns
-    // a "yes, but I have no block" into the grant request `MaybeRefillTrxIds`
-    // sends. Runs on the same `system` tick, immediately before it.
-    void MaybeBurnIdleTrxIdBlock();
-
-    // And for row ids (PW1b), which differ in what triggers them: a row-id
-    // lease is per *relation*, so this asks for the neediest relation the
-    // lease table knows about, and the table learns of one only when a
-    // statement asks it for an id (catalog/row_id_lease.hpp).
-    void MaybeRefillRowIds();
-
     // **`MaybeFlushAccessStats` rode this tick and is gone** (AT-S7). It
     // sent CR7's folded access shapes to core 0 at `wal_drain_interval_ns`,
     // because a peer could not write `sys.access_stats`; it writes the row
@@ -497,16 +497,6 @@ public:
     // that carried PL §9 rule 6's acquisition restamp. Each answered "may
     // this core reach that page", which a frame table shared by every core
     // does not ask.
-
-    // This core's row-id leases and refill state (P5's shape). Exposed so a
-    // test drives the grant without a reactor, and diagnostics read the
-    // counters.
-    catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
-    RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
-
-    // This core's transaction-id lease, exposed for the first of those two
-    // reasons only: a test drives a grant without a reactor.
-    txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
 
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     // What this core was opened with. Immutable after `Open`, so readable
@@ -527,11 +517,8 @@ public:
     void set_instance_stop(std::function<void()> stop) { instance_stop_ = std::move(stop); }
     wal::WalManager& wal() noexcept { return *wal_; }
     catalog::Catalog& catalog() noexcept { return *catalog_; }
-    // This core's transaction-id sequence, exposed for one caller: a rig
-    // whose core 0 is a `CoreRuntime` registers production's own grant
-    // handler over it (`trx_id_lease_service.hpp`), which `Expeditor` does
-    // over its own sequence. Two sequences over one superblock would issue
-    // one id twice, so a rig must carve a peer's block from this one.
+    // This core's transaction-id sequence: its own window over the
+    // ceiling it was handed (`Config::trx_id_ceiling`), exposed for tests.
     txn::TrxIdSequence& trx_ids() noexcept { return *trx_ids_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
     // **The instance's Cabin store** since AT-S7, or this runtime's own
@@ -597,32 +584,6 @@ private:
     // back into it (see the destructor's note on reverse order).
     std::unique_ptr<storage::DevicePageStore> owned_store_;
     storage::DevicePageStore* store_ = nullptr;
-
-    // Row-id leases (P5's shape): the per-relation blocks this core issues
-    // Keystone ids from, installed into the catalog on every non-zero
-    // core, and the refill state the kRowIdLease receiver releases.
-    catalog::RowIdLeaseTable row_id_leases_;
-    RowIdRefill row_id_refill_;
-
-    // The transaction-id lease this core issues from (PW1), and the refill
-    // waiting on a grant. Declared before `trx_ids_` below, which holds a
-    // pointer to the lease.
-    txn::TrxIdLease trx_id_lease_;
-    TrxIdRefill trx_id_refill_;
-    // One refill in flight at a time, `refill_in_flight_`'s rule and for
-    // its reason: without it every tick before the first grant lands would
-    // submit another request, and every one of them would be answered.
-    bool trx_id_refill_in_flight_ = false;
-
-    // Set by the burn check when this core should burn its unspent id block
-    // and has no granted one parked to install (AN-R13). Makes
-    // `MaybeRefillTrxIds` ask despite a full window, which is the one thing
-    // that inverts the parking rule `low_water()` states.
-    bool burn_requested_ = false;
-    // One row-id refill in flight at a time, for the same reason - and it is
-    // per core rather than per relation, so a second needy relation waits one
-    // tick rather than racing the first.
-    bool row_id_refill_in_flight_ = false;
 
     // This core's trail recorder, built where `waystone_recording` is on
     // (AT-S7 - it was core 0's alone). Declared ahead of the dispatcher,

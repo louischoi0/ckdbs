@@ -611,7 +611,6 @@ TransactionManager::BurnOutcome TransactionManager::MaybeBurnIdleBlock() {
     // held, and what the floor holds is memory nobody is short of yet.
     if (visibility_->window_size() < kBurnWindowThreshold) return BurnOutcome::kNotNeeded;
 
-    if (!ids_.can_burn()) return BurnOutcome::kNeedsBlock;
     if (Status s = ids_.BurnWindow(); !s.ok()) {
         // The window is untouched on a failure, so this core is exactly
         // where it was and the next tick tries again. Nothing is reported:
@@ -628,8 +627,8 @@ TransactionManager::BurnOutcome TransactionManager::MaybeBurnIdleBlock() {
     // exactly the instance it was built for: with the commits stopped
     // nothing ever calls `Reclaim()`, `window_size()` never falls, and every
     // idle core that pins burns again on its next tick - a superblock carve
-    // and `Sync()` per tick on core 0 and a lease round trip per two ticks
-    // on a peer, for the life of the process, on an instance doing nothing.
+    // and a sync per tick, for the life of the process, on an instance
+    // doing nothing.
     // Reclaiming here is what makes the mechanism terminate: each burn puts
     // one core's cursor above every id ever issued, so after at most one
     // burn per attached core the candidate passes the whole window, the

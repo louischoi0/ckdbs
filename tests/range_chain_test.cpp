@@ -26,9 +26,9 @@
 // `AScanOverASplitRelationReturnsEveryRangesRows` is what found that the
 // step VM's walk was still range-blind.
 //
-// The split here is made through the catalog directly rather than through
-// the row-id lease: this fixture is one core with no ring, and what RD6
-// owns is what happens *after* a boundary exists, whoever wrote it.
+// The split here is made through the catalog directly: nothing opens a
+// range since AT-S9, and what RD6 owns is what happens *after* a boundary
+// exists, whoever wrote it.
 
 namespace kds::server {
 namespace {

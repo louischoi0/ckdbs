@@ -701,11 +701,6 @@ public:
         // The window was burned; this core's cursor is at the high-water
         // and the floor is free to pass every id below it.
         kBurned,
-        // This core should burn and cannot: a leased sequence with no
-        // granted block parked. The caller asks for one and tries again on
-        // its next tick. **Peers only** - core 0 carves and never answers
-        // this.
-        kNeedsBlock,
     };
 
     // Burns this core's unspent id block when the instance's commit-order
@@ -717,8 +712,8 @@ public:
     // previous call, which is exact rather than approximate - `Next()` has
     // one caller, `Begin` - and costs no counter.
     //
-    // Called from the `system`-group tick on every core. A burn writes the
-    // superblock on core 0 and spends a granted block on a peer, which is
+    // Called from the `system`-group tick on every core. A burn is a carve
+    // - a superblock write and a sync, on any core since AT-S10b - which is
     // why it is gated on the window having grown rather than on idleness
     // alone: an instance whose window drains has nothing to buy.
     BurnOutcome MaybeBurnIdleBlock();

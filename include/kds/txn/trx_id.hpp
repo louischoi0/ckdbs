@@ -8,7 +8,6 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
-#include "kds/txn/trx_id_lease.hpp"
 
 // The transaction id sequence (docs/spec/txn.md section 4.2, section 10-2).
 //
@@ -43,24 +42,24 @@
 // indistinguishable on top of that. Both close with recovery and neither
 // closes without it.
 //
-// ---- Two consumers of one ceiling (PW1) -----------------------------------
+// ---- One ceiling, a window per core (AT-S10b, AT-R4) -----------------------
 //
-// Since `docs/inflight/in-progress/workplan-peer-writer.md` PW1 the superblock's ceiling has two
-// consumers: core 0's own sequence, and the blocks core 0 carves for peers
-// that may not write page 0. `Carve()` below is the single place either one
-// takes a block from, which is what keeps them from colliding - the same
-// arrangement `Catalog::AllocateRowIdRange()` already has for row ids, where
-// the bulk-INSERT path and the grant handler share one carve.
-//
-// A peer's sequence is given a `TrxIdLease*` instead (`SetLeaseSource`), and
-// draws its window from grants rather than from the page. It never carves,
-// and `persist` stays installed as the backstop that says so.
+// Every core carves its own block from the instance's one ceiling: each
+// core's sequence is built over the same `SuperBlock`, the same `persist`
+// and the same superblock latch, and `Carve()` reads and raises the ceiling
+// inside that latch, which makes it the `fetch_add` AT-R4 names - two
+// cores carving at once get two disjoint blocks. There is no refill
+// protocol, no grant and no refusal: a spent window is another carve. Until
+// AT-S10b only core 0 carved, and a peer drew windows from blocks core 0
+// carved for it and sent over the ring (the transaction-id lease, PW1),
+// because page 0 was core 0's; every core writes it since AT-S5, under the
+// superblock latch since AT-S8.
 //
 // ---- Concurrency ----------------------------------------------------------
 //
-// Core-local, like everything else (rules.md section 3). One sequence per
-// core; the cross-core protocol is the lease above, and a *shared* sequence
-// is still [OPEN] (txn.md section 9) and still assumed by nothing here.
+// A sequence's window (`next_`, `ceiling_`) is its core's own and is read
+// and written by that core alone (rules.md section 3). The superblock it
+// carves from is declared shared, under the superblock latch - `SetLatch`.
 
 namespace kds::txn {
 
@@ -73,6 +72,14 @@ inline constexpr std::uint64_t kMaxTrxId = heap::kMaxTrxId;
 // amortizing (see the header comment's measurements). Raising it costs only
 // ids burned by a crash, which are free.
 inline constexpr std::uint64_t kTrxIdBlockSize = 4096;
+
+// A reserved run of ids: `[first, first + count)`.
+struct TrxIdRange {
+    std::uint64_t first = 0;
+    std::uint64_t count = 0;
+
+    bool empty() const noexcept { return count == 0; }
+};
 
 class TrxIdSequence {
 public:
@@ -104,55 +111,24 @@ public:
     // Issues the next id, reserving and persisting a new block when the
     // current one is spent. Fails with OutOfRange past kMaxTrxId - never
     // wrapped, because a wrapped id would make an old row's writer look
-    // like a live one. On a leased sequence a spent window fails with
-    // **TxnConflict** instead: the one code `IsRetryable` admits, because
-    // the grant that fixes it is already on its way (status.hpp's IsRetryable).
+    // like a live one.
     StatusOr<std::uint64_t> Next();
 
     // Reserves `count` ids and makes the raised ceiling durable, **without
     // touching this sequence's own window**. The one place a block leaves
-    // the superblock: `ReserveBlock()` calls it for this core, and core 0's
-    // `kTrxIdLease` handler calls it for a peer's.
+    // the superblock, for whichever core's sequence calls it - the read of
+    // the ceiling and its raise are one step under the superblock latch.
     //
     // The range is durable before it is returned. That ordering is a
     // correctness statement rather than a preference:
-    // `CoreRuntime::Open` refuses a mount whose peer stream names an id
-    // above the superblock's ceiling, so granting before persisting would
-    // let a crash produce exactly that log and refuse the mount of a
-    // database that did nothing wrong.
+    // a mount refuses a log that names an id above the superblock's
+    // ceiling, so issuing before persisting would let a crash produce
+    // exactly that log and refuse the mount of a database that did nothing
+    // wrong.
     StatusOr<TrxIdRange> Carve(std::uint64_t count);
 
-    // Draws this sequence's windows from `lease` instead of from the
-    // superblock. A peer's wiring, and `Catalog::SetRowIdLeases`'s shape
-    // for the same reason. `lease` must outlive this sequence; null
-    // restores the carving path.
-    void SetLeaseSource(TrxIdLease* lease) noexcept { lease_ = lease; }
-
-    // Ids left in the current window. A pending grant is **not** counted:
-    // it is not issuable until the window is spent and `ReserveBlock()`
-    // takes it.
+    // Ids left in the current window.
     std::uint64_t remaining() const noexcept { return next_ >= ceiling_ ? 0 : ceiling_ - next_; }
-
-    // Whether it is time to ask for another block. A leased core must ask
-    // **before** the window is spent - `Next()` is called from inside a
-    // statement and cannot await a grant. The quarter-window threshold is
-    // the page-id lease's, which set the rule every lease here follows and
-    // was struck at AW-S1b. A sequence holding nothing at all reads as low,
-    // so a peer's first tick asks.
-    //
-    // **A grant already in hand counts, even though `remaining()` cannot
-    // see it**, and this is the one point where the lease may not simply
-    // copy the page-id lease's shape. That one installed the extent when
-    // the grant arrived, so its low-water mark fell with the grant; this one parks
-    // the block until the window is spent. Asking on the window alone would
-    // therefore stay true across the whole refill and `MaybeRefillTrxIds()`
-    // would ask again on every tick - a superblock write and a full `Sync()`
-    // per millisecond on core 0, and a block of ids burned with each.
-    bool low_water() const noexcept {
-        const std::uint64_t held =
-            remaining() + (lease_ != nullptr ? lease_->pending_count() : 0);
-        return held == 0 || held <= window_ / 4;
-    }
 
     // The next id this sequence would issue, without issuing it. For
     // minting a read view's high-water mark, which must be an *exclusive*
@@ -177,20 +153,8 @@ public:
     // only when this core issues. A core that stops running transactions
     // freezes it, and the floor - a minimum over cores - freezes with it,
     // so the commit window can never drop an entry again. Burning is how an
-    // idle core stops holding the instance.
-    //
-    // **Inverts the parking rule `low_water()` states, deliberately.** That
-    // rule keeps a *busy* core from asking every tick by leaving a granted
-    // block parked until the window is spent. An idle core has the opposite
-    // problem, so it asks while its window is full and installs the grant
-    // early. `can_burn()` is what a caller checks first: a leased sequence
-    // with nothing parked answers false, and the caller asks for a grant
-    // rather than burning into an empty hand and failing its next `Next()`.
-    bool can_burn() const noexcept { return lease_ == nullptr || lease_->pending_count() > 0; }
-
-    // Burns the unspent remainder. `can_burn()` must hold; a leased
-    // sequence with no parked grant fails without touching the window,
-    // which leaves the caller exactly where it was.
+    // idle core stops holding the instance. It is a carve like any other,
+    // on any core, since AT-S10b.
     Status BurnWindow();
 
 private:
@@ -201,17 +165,10 @@ private:
     std::function<Status()> persist_;
     // `next_` and `ceiling_` keep the offsets they had before PW1, ahead of
     // what it added. Reordering them measured inside `kds_txn_bench`'s own
-    // noise floor either way, so this is free rather than proven -
-    // `docs/inflight/in-progress/workplan-peer-writer.md` carries the numbers and the null
-    // control that made them unusable.
+    // noise floor either way, so this is free rather than proven.
     std::uint64_t next_;
     std::uint64_t ceiling_;
-    TrxIdLease* lease_ = nullptr;
     Latch* superblock_latch_ = nullptr;  // SetLatch; last, off the hot offsets
-    // The size of the window `next_`/`ceiling_` came from, so `low_water()`
-    // measures against what was actually granted rather than against a
-    // constant a smaller grant would sit permanently below.
-    std::uint64_t window_ = 0;
 };
 
 }  // namespace kds::txn

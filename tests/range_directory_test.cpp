@@ -19,8 +19,7 @@
 namespace kds::catalog {
 namespace {
 
-// Three ranges over the id space, boundaries at the row-id lease grant
-// (D6's starting unit, 4,096): [0, 4096) at page 400, [4096, 8192) at 401,
+// Three ranges over the id space, boundaries at D6's starting unit, 4,096: [0, 4096) at page 400, [4096, 8192) at 401,
 // [8192, end) at 402. The entry page is what names a range in the cells
 // below, since AT-S9 retired the owner that used to.
 std::vector<RangeTarget> ThreeRanges() {

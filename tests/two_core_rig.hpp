@@ -65,9 +65,7 @@
 #include "kds/sched/sim_waker_table.hpp"
 #include "kds/server/core_runtime.hpp"
 #include "kds/stats/cabin_store.hpp"
-#include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/superblock.hpp"
-#include "kds/server/trx_id_lease_service.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/txn/instance_visibility.hpp"
@@ -87,10 +85,9 @@ public:
         // times out instead of waking fails a cell rather than passing it
         // slowly; a cell about block expiry sets it short.
         int max_idle_block_ms = 5000;
-        // The peer's `system` tick (lease refills, access-stat flushes).
-        // Off by default so an idle reactor's block is the whole block;
-        // a cell that wants production's refill path over the ring turns
-        // it on.
+        // The peer's `system` tick (the idle burn, AN-R13). Off by default
+        // so an idle reactor's block is the whole block; a cell that wants
+        // production's tick turns it on.
         sched::MonoTimeNs wal_drain_interval_ns = 0;
     };
 
@@ -133,16 +130,6 @@ public:
     // release into, kicking through the sim.
     txn::LockTable& locks() noexcept { return *locks_; }
 
-    // Funds the peer with a row-id block for `oid` (`row_id_lease.hpp`), the
-    // way core 0's grant handler would over the ring on the peer's tick -
-    // which this rig leaves off by default. Rig thread, before `Start()`.
-    Status FundPeerRelation(catalog::Oid oid, std::uint64_t count = 16) {
-        auto first = core(0).catalog().AllocateRowIdRange(oid, count);
-        if (!first.ok()) return first.status();
-        core(1).row_id_leases().Grant(oid, first.value(), count);
-        return Status::OK();
-    }
-
     // Both reactors on their own threads, production's `Run()`.
     void Start() {
         if (started_) return;
@@ -170,6 +157,18 @@ public:
 
 private:
     explicit TwoCoreRig(Options options) : options_(options) {}
+
+    // `Expeditor::PersistTrxIdCeiling`'s shape over the bootstrap image:
+    // the encode under the superblock latch, the store's sync outside it.
+    Status PersistSuperBlock() {
+        {
+            LatchGuard hold(&superblock_latch_);
+            auto page = store_->Get(server::kSuperBlockPageId);
+            if (!page.ok()) return page.status();
+            boot_->superblock.Encode(page.value().bytes());
+        }
+        return store_->Sync();
+    }
 
     Status Build() {
         static std::atomic<int> counter{0};
@@ -259,6 +258,11 @@ private:
                 config.checkpoint_anchor = &peer_anchor_;
                 config.checkpoint_gate = &checkpoint_gate_;
             }
+            // The instance's transaction-id ceiling (AT-S10b), as
+            // `Expeditor` hands it: both cores carve from the bootstrap
+            // image under one latch and persist page 0 through the store.
+            config.trx_id_ceiling = {&boot_->superblock, &superblock_latch_,
+                                     [this] { return PersistSuperBlock(); }};
             config.wal_drain_interval_ns = options_.wal_drain_interval_ns;
             config.scheduler.max_idle_block_ms = options_.max_idle_block_ms;
             auto core = CoreRuntime::Open(config, *device_, clock_, /*log=*/nullptr);
@@ -273,27 +277,9 @@ private:
             }
         }
 
-        // ---- Core 0's half that `Expeditor` wires and a runtime does not ----
-        CoreRuntime& core0 = *cores_[0];
-        // The two lease services' grant sides, over core 0's own sequence
-        // and catalog - production's handlers, so a peer whose tick asks is
-        // answered the way an instance answers it.
-        if (Status s = RegisterTrxIdGrantHandler(core0.scheduler(), *transport_,
-                                                 core0.trx_ids());
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = RegisterRowIdGrantHandler(core0.scheduler(), *transport_,
-                                                 core0.catalog());
-            !s.ok()) {
-            return s;
-        }
-        // The peer's first transaction-id block, carved from the one
-        // sequence - which persists page 0 through core 0's runtime - so
-        // the peer can write before its tick has asked for anything.
-        auto block = core0.trx_ids().Carve(kTrxIdLeasePerGrant);
-        if (!block.ok()) return block.status();
-        cores_[1]->trx_id_lease().Grant(block.value().first, block.value().count);
+        // **Core 0's two id-lease grant handlers stood here** until AT-S10b,
+        // with a first transaction-id block carved for the peer: both cores
+        // carve their own windows from one ceiling now.
         return Status::OK();
     }
 
@@ -317,6 +303,7 @@ private:
     wal::InMemoryCheckpointAnchor peer_anchor_;    // AT-S8: page 0's stand-in
     wal::CheckpointGate checkpoint_gate_;          // AT-S8: one for both cores
     exec::AssertionEnforcer assertions_{/*shared=*/true};  // AT-S5d: one for both cores
+    Latch superblock_latch_;  // AT-S10b: the one ceiling both cores carve from
     std::array<std::thread, 2> threads_;
     // Last, so they die first: every runtime borrows everything above.
     std::array<std::unique_ptr<CoreRuntime>, 2> cores_;

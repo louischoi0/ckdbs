@@ -25,8 +25,6 @@
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/mount_recovery.hpp"
 
-#include "kds/server/row_id_lease_service.hpp"
-#include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/stop_signal.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
@@ -591,6 +589,15 @@ public:
     // thing the durable write is bought for.
     Status PersistSuperBlock();
 
+    // **What every core's transaction-id carve persists through** (AT-S10b):
+    // the same encode, then the store's sync alone - callable from any
+    // core, because the encode is under the superblock latch and a store
+    // flush is (`DevicePageStore::Flush`), where `Sync()`'s log drain is
+    // core 0's WAL manager's. The drain was never what made the ceiling
+    // durable: page 0 is unlogged, and every other page a flush writes
+    // waits on the WAL gate for its own record.
+    Status PersistTrxIdCeiling();
+
     // Runs one checkpoint to completion: snapshot the dirty table, flush
     // it, log CHECKPOINT_END, publish the superblock anchor. This is what
     // the interval timer calls, exposed so a test can drive the cadence
@@ -656,6 +663,10 @@ public:
 private:
     Expeditor(Config config, std::unique_ptr<storage::PageDevice> device,
               std::unique_ptr<storage::DevicePageStore> store) noexcept;
+
+    // Encodes the in-memory superblock into page 0 under the superblock
+    // latch - the half `PersistSuperBlock` and `PersistTrxIdCeiling` share.
+    Status EncodeSuperBlock();
 
     Status OpenLog();
 

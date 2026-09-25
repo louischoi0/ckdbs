@@ -1369,26 +1369,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " wal_ring_full_refusals=" << wal_stats.ring_full_refusals;
     }
 
-    // A peer's lease refills and what each cost (lease_refill_stats.hpp):
-    // requests and grants per kind, and the three legs' maxima - submit to
-    // grant received (the ring and core 0), grant received to the parked
-    // coroutine resuming (this reactor), and the whole wait. The trace
-    // PW6's four-writer cell asked for, where every refill took seconds
-    // and nothing said which leg. Peers only: core 0 leases from nobody.
-    const auto refill_block = [&os](const char* kind, const LeaseRefillStats* s) {
-        if (s == nullptr) return;
-        os << ' ' << kind << "_refill_requests=" << s->requests << ' ' << kind
-           << "_refill_grants=" << s->grants << ' ' << kind
-           << "_refill_wait_max_us=" << s->wait_total_max_ns / 1000 << ' ' << kind
-           << "_refill_submit_lag_max_us=" << s->submit_lag_max_ns / 1000 << ' ' << kind
-           << "_refill_grant_lag_max_us=" << s->wait_to_grant_max_ns / 1000 << ' ' << kind
-           << "_refill_resume_lag_max_us=" << s->resume_lag_max_ns / 1000 << ' ' << kind
-           << "_refill_submit_lag_max_iters=" << s->submit_lag_max_iters << ' ' << kind
-           << "_refill_grant_lag_max_iters=" << s->grant_lag_max_iters << ' ' << kind
-           << "_refill_resume_lag_max_iters=" << s->resume_lag_max_iters;
-    };
-    refill_block("trxid", trx_id_refill_stats_);
-    refill_block("rowid", row_id_refill_stats_);
+    // **The `trxid_refill_*` and `rowid_refill_*` blocks went at AT-S10b**
+    // with the two id leases they timed: a peer carves and issues its own
+    // ids, so there is no refill to wait on.
 
     // **XF4's per-leg renderer stood here and went with its callers**
     // (AT-S6). It printed what each leg of a cross-owner commit cost -
@@ -4960,15 +4943,14 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     const exec::FkParentVerdicts& fk_held, InsertRowResult& out) {
     const catalog::TableAccess& ta = *ta_ptr;
 
-    // ---- Where a peer's leases can refuse, and how that reaches the wire --
+    // ---- How a refusal below reaches the wire -----------------------------
     //
     // Every failure below renders through `ErrorReply`, never a bare "ERR ":
-    // on a peer the row id comes from the row-id lease, and the var-heap
-    // spill, the placement, an index leaf's growth and a full undo page all
-    // allocate from the extent lease - each refuses TxnConflict when spent,
-    // and `ErrorReply` is the one spelling that puts `retryable=1` on the
-    // wire (status.hpp's IsRetryable). The transaction id itself is drawn in
-    // BeginWrite or at BEGIN, and rendered the same way there.
+    // it is the one spelling that puts `retryable=1` on the wire for a
+    // TxnConflict (status.hpp's IsRetryable). The spent-lease refusals that
+    // were its reason on a peer went with the leases - the extent lease at
+    // AW-S1b, the row-id lease at AT-S10b - and a lock wait's fault net is
+    // what still refuses that way.
 
     // ---- Arity, and where the pk comes from -----------------------------
     //
@@ -6443,9 +6425,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // view is taken - so two SELECTs in one transaction can see different
     // data, which is the level's entire definition.
     auto snapshot = SnapshotFor(session);
-    // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse with a
-    // TxnConflict (a spent transaction-id lease on a peer), and the
-    // wire's `retryable=1` is what a client's retry loop reads. The
+    // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse (a spent
+    // transaction-id lease on a peer did, until AT-S10b), and the wire's
+    // `retryable=1` is what a client's retry loop reads. The
     // DELETE site has always rendered it this way; these two did not,
     // so the same refusal carried the bit on one verb and lost it on
     // the other (the SS2 review's cut 2).
@@ -7025,8 +7007,8 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // it writes, and it must not see a row a SELECT in the same
         // transaction would not - so it takes the snapshot the same way.
         auto snapshot = SnapshotFor(session);
-        // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse with a
-        // TxnConflict (a spent transaction-id lease on a peer), and the
+        // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse (a
+        // spent transaction-id lease on a peer did, until AT-S10b), and the
         // wire's `retryable=1` is what a client's retry loop reads. The
         // DELETE site has always rendered it this way; these two did not,
         // so the same refusal carried the bit on one verb and lost it on
@@ -7808,11 +7790,11 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
     }
 
     auto begun = txn_->Begin(level);
-    // ErrorReply, not a bare "ERR ": on a peer the id this draws comes from
-    // the transaction-id lease, and a spent one refuses TxnConflict. Inside
-    // an explicit transaction that refusal lands *here* rather than at the
-    // INSERT - the id is drawn once, at BEGIN - so this is the site the
-    // wire's `retryable=1` has to reach for a transactional client.
+    // ErrorReply, not a bare "ERR ": the id this draws can fail to carve,
+    // and inside an explicit transaction that refusal lands *here* rather
+    // than at the INSERT - the id is drawn once, at BEGIN - so this is the
+    // site a retryable refusal has to reach the wire from. (A spent
+    // transaction-id lease on a peer was that refusal until AT-S10b.)
     if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
     session.Adopt(begun.value());
     // After `Adopt`, which is what makes `EffectiveDurability` read the

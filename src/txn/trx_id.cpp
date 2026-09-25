@@ -5,20 +5,6 @@
 namespace kds::txn {
 
 StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
-    // Taken from the **superblock's** high-water, not from this sequence's
-    // `next_`. On one core the two are equal at every reserve - a sequence
-    // only reserves when its window is spent, and a spent window ends
-    // exactly where the ceiling it persisted does - so this is
-    // behaviour-identical to the pre-PW1 arithmetic. With a second consumer
-    // it is the difference between correct and impossible: a peer's block
-    // raises the ceiling above core 0's `next_`, and reserving from `next_`
-    // would then compute a ceiling *below* the durable one, which
-    // `SetNextTrxId` refuses to write.
-    const std::uint64_t first = superblock_.next_trx_id();
-    if (first > kMaxTrxId) {
-        return Status::OutOfRange("transaction id space exhausted at " + std::to_string(first) +
-                                  "; ids are never wrapped");
-    }
     if (count == 0) {
         // Refused rather than answered with a zero-width range, which
         // `InstallWindow` would turn into a window `Next()` issues straight
@@ -26,15 +12,30 @@ StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
         return Status::InvalidArgument("a transaction-id block of 0 ids was asked for");
     }
 
-    // Clamped at the top of the space rather than allowed to overflow past
-    // it: the last block is whatever is left, and it is still a block.
-    std::uint64_t ceiling = first + count;
-    if (ceiling > kMaxTrxId + 1 || ceiling < first) {
-        ceiling = kMaxTrxId + 1;
-    }
-
+    std::uint64_t first = 0;
+    std::uint64_t ceiling = 0;
     {
+        // **The read and the raise are one step under the latch** (AT-S10b):
+        // every core's sequence carves from this one superblock, and a read
+        // outside it would let two cores read one high-water and carve the
+        // same block. Taken from the **superblock's** high-water, not from
+        // this sequence's `next_`, for the same reason: another core's carve
+        // raises it above this core's window, and reserving from `next_`
+        // would compute a ceiling *below* the durable one, which
+        // `SetNextTrxId` refuses to write.
         LatchGuard hold(superblock_latch_);
+        first = superblock_.next_trx_id();
+        if (first > kMaxTrxId) {
+            return Status::OutOfRange("transaction id space exhausted at " +
+                                      std::to_string(first) + "; ids are never wrapped");
+        }
+        // Clamped at the top of the space rather than allowed to overflow
+        // past it: the last block is whatever is left, and it is still a
+        // block.
+        ceiling = first + count;
+        if (ceiling > kMaxTrxId + 1 || ceiling < first) {
+            ceiling = kMaxTrxId + 1;
+        }
         if (Status s = superblock_.SetNextTrxId(ceiling); !s.ok()) return s;
     }
     if (persist_ != nullptr) {
@@ -53,32 +54,12 @@ StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
 void TrxIdSequence::InstallWindow(TrxIdRange window) noexcept {
     next_ = window.first;
     ceiling_ = window.first + window.count;
-    window_ = window.count;
 }
 
 Status TrxIdSequence::ReserveBlock() {
     if (next_ > kMaxTrxId) {
         return Status::OutOfRange("transaction id space exhausted at " + std::to_string(next_) +
                                   "; ids are never wrapped");
-    }
-
-    if (lease_ != nullptr) {
-        auto granted = lease_->Take();
-        if (!granted.ok()) return granted.status();
-        // A grant below what this core has already issued would reissue an
-        // id - invariant 12's one unforgivable failure. It cannot happen
-        // while every block comes from one monotonic `Carve()`, which is
-        // exactly why it is worth saying out loud rather than assuming:
-        // this is the same check `CoreRuntime::Open` makes against a
-        // recovered stream, one layer down.
-        if (granted.value().first < next_) {
-            return Status::Corruption(
-                "transaction-id grant starts at " + std::to_string(granted.value().first) +
-                ", below the " + std::to_string(next_) +
-                " this core would issue next; a block was carved out of order");
-        }
-        InstallWindow(granted.value());
-        return Status::OK();
     }
 
     auto carved = Carve(kTrxIdBlockSize);
@@ -89,9 +70,8 @@ Status TrxIdSequence::ReserveBlock() {
 
 Status TrxIdSequence::BurnWindow() {
     // `ReserveBlock()` unchanged and unconditional: it is already the one
-    // place a window is replaced, it already refuses a grant starting below
-    // `next_` - invariant 12's one unforgivable failure - and a carved
-    // block is already durable before it is returned. Burning is calling it
+    // place a window is replaced, and a carved block is already durable
+    // before it is returned. Burning is calling it
     // while the current window still has room, which is the whole of the
     // mechanism.
     return ReserveBlock();

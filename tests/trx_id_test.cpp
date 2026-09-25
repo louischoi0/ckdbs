@@ -1,14 +1,17 @@
 #include "kds/txn/trx_id.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <set>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "kds/base/latch.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/server/superblock.hpp"
 
@@ -186,6 +189,45 @@ TEST(SuperBlockTrxIdTest, TheCeilingRoundTripsThroughAPage) {
     auto decoded = server::SuperBlock::Decode(std::span<const std::byte, kPageSize>(page));
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
     EXPECT_EQ(decoded.value().next_trx_id(), 123456u);
+}
+
+// AT-S10b: every core's sequence carves from one superblock, under the
+// superblock latch, so two cores carving at once must get disjoint blocks -
+// invariant 12's writer identity across cores. Real threads released
+// together from a barrier, one-id blocks so every `Next()` is a carve, and
+// enough rounds that a read of the ceiling outside the latch loses the race
+// (the mutation this cell exists to kill).
+TEST(TrxIdSequenceTest, SequencesCarvingFromOneCeilingOnManyThreadsIssueNoIdTwice) {
+    server::SuperBlock sb = server::SuperBlock::CreateFresh(1000);
+    Latch latch;
+    constexpr int kThreads = 8;
+    constexpr int kCarves = 5000;
+
+    std::atomic<int> ready{0};
+    std::vector<std::vector<std::uint64_t>> issued(kThreads);
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            TrxIdSequence seq(sb);
+            seq.SetLatch(&latch);
+            ready.fetch_add(1);
+            while (ready.load() < kThreads) {
+            }
+            for (int i = 0; i < kCarves; ++i) {
+                auto block = seq.Carve(1);
+                ASSERT_TRUE(block.ok()) << block.status().message();
+                issued[t].push_back(block.value().first);
+            }
+        });
+    }
+    for (auto& thread : threads) thread.join();
+
+    std::set<std::uint64_t> all;
+    for (const auto& ids : issued) all.insert(ids.begin(), ids.end());
+    EXPECT_EQ(all.size(), static_cast<std::size_t>(kThreads) * kCarves)
+        << "two sequences carved the same block";
+    EXPECT_EQ(sb.next_trx_id(), catalog::kFirstUserTrxId + kThreads * kCarves)
+        << "the ceiling does not account for every carve";
 }
 
 // A ceiling that moved backwards would reissue ids already stamped on

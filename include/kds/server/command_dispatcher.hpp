@@ -34,7 +34,6 @@
 
 
 #include "kds/stats/trace.hpp"
-#include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
@@ -1675,17 +1674,6 @@ public:
     // ran and found nothing".
     void set_recovery(const MountRecovery* recovery) noexcept { recovery_ = recovery; }
 
-    // What this core's lease refills cost, for `SHOW META` on a peer
-    // (lease_refill_stats.hpp): pointers into CoreRuntime's three refill
-    // states, which outlive this dispatcher; null on core 0, which leases
-    // from nobody, and everywhere the block is then omitted rather than
-    // printed as zeroes.
-    void set_lease_refill_stats(const LeaseRefillStats* trx_id,
-                                const LeaseRefillStats* row_id) noexcept {
-        trx_id_refill_stats_ = trx_id;
-        row_id_refill_stats_ = row_id;
-    }
-
     // This core's reactor, for `SHOW META`'s group-accounting block
     // (`docs/spec/sched.md` §4's last bullet, owed since `bench/v2.1.0` §11-5).
     // The scheduler outlives this dispatcher on every core: core 0's is a
@@ -2382,9 +2370,6 @@ private:
     // mutates the controller under it. Null where one thread owns both.
     Latch* cabin_optimizer_view_latch_ = nullptr;
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
-    // A peer's lease refill stats, set_lease_refill_stats(); null on core 0.
-    const LeaseRefillStats* trx_id_refill_stats_ = nullptr;
-    const LeaseRefillStats* row_id_refill_stats_ = nullptr;
 
     // PHY06's view sources: the controller's managed table and decision
     // log, the executor's applied-action counters. Read-only - the view

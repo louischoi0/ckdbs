@@ -147,15 +147,13 @@ enum class StatusCode {
 //
 // **One code, by decision** (docs/spec/protocol.md section 11: the bit is a
 // compatibility surface). Everything the engine means by "wait and retry"
-// spells itself kTxnConflict - a lost write race, a write to another core's
-// relation, a peer's rights still in flight, an index build's window - and
-// since 2026-08-25 a peer's **spent lease** too (row-id and transaction-id:
-// catalog/row_id_lease.hpp, txn/trx_id_lease.hpp; the page-id lease was the
-// third until AW-S1b struck it). Those were kResourceExhausted, whose
-// message promised a retry the wire never carried, so a client retrying on
-// the bit lost rows (PW6, docs/inflight/known-gaps.md). kResourceExhausted stays for
-// what a retry cannot fix: a cap, a budget, a ring's backpressure, and a
-// refill core 0 has denied.
+// spells itself kTxnConflict - a lost write race, a lock wait past the fault
+// net. From 2026-08-25 a peer's **spent lease** was one too (row-id,
+// transaction-id and page-id), until the page-id lease went at AW-S1b and
+// the other two at AT-S10b; they had been kResourceExhausted, whose message
+// promised a retry the wire never carried, so a client retrying on the bit
+// lost rows (PW6). kResourceExhausted stays for what a retry cannot fix: a
+// cap, a budget, a ring's backpressure.
 constexpr bool IsRetryable(StatusCode code) noexcept { return code == StatusCode::kTxnConflict; }
 
 class [[nodiscard]] Status {

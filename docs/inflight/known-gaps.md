@@ -376,22 +376,6 @@ there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
-- **A peer's omitted-pk `INSERT` into an unsplit heap relation can be
-  refused `OutOfRange`.** By reading, at `60d83f0` and unchanged by AT-S9;
-  no cell reproduces it. Since AT-S5 a peer's `INSERT` runs on the peer and
-  an omitted pk draws from that core's leased row-id block
-  (`heap-and-tuple.md` §4.1a). A heap relation that has one chain takes ids
-  only above its tail page's `min_key` (`ChainInsert`), so once core 0's
-  own inserts have opened a tail page above a peer's block, that block's
-  ids are refused. **The same holds on a relation split before AT-S9**:
-  every leased block lands in its top range, whose chain refuses the same
-  way (found by AT-S9's review). A refusal and never a wrong answer. Insert spreading
-  existed to give each core a chain of its own, and AT-S9 retired it on the
-  operator's ruling; a heap relation is creatable only before SUS-1, and a
-  btree relation - the default since - places each id by descent and is
-  unaffected. Owner: AT-S4, whose shared allocator decides what a core's
-  cached block means for a heap chain.
-
 - **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
   Verified at `4bf80fa`, 2026-09-23. AT-S8 put the controller behind a view
   latch that core 0's cadence holds across a tick, and a tick may create a

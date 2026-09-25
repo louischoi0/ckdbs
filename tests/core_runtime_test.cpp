@@ -185,6 +185,10 @@ protected:
         // pool on every single-stream volume, which is every volume this
         // build can mount.
         c.shared_store = core0_store_.get();
+        // The instance's transaction-id ceiling (AT-S10b): core 0's image,
+        // in memory only - a fixture's cells carve and never restart past
+        // what the image already carries.
+        c.trx_id_ceiling = {&core0_->superblock, &superblock_latch_, nullptr};
         return c;
     }
 
@@ -247,6 +251,7 @@ protected:
     std::atomic<std::uint64_t> schema_word_{0};
     std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b
     std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b
+    Latch superblock_latch_;  // AT-S10b: the one ceiling every core carves from
 };
 
 TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
@@ -579,66 +584,25 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
 // (`APeerCannotYetFaultARelationsDataPages`): after the grant, the owner
 // faults the relation's pages read-only and its schema resolves.
 //
-// A second, independent blocker remains: **a peer cannot INSERT**, because
-// `Catalog::AllocateRowId()` bumps `next_id` on the sys.tables page, and a
-// peer may not write the catalog. That one is P5's shape - a leased range
-// of row ids, exactly like the page-id lease - and
-// `docs/rules/keystoneid-invariant.md` K-M2's bump-ahead allocator is the same
-// mechanism.
+// A second blocker was that **a peer could not INSERT**, because
+// `Catalog::AllocateRowId()` bumps `next_id` on the sys.tables page, which
+// a peer could not write; P5 leased it a range of row ids. Every core
+// writes the catalog pages since AT-S5 and bumps the mark itself since
+// AT-S10b.
 
-// ---- Row-id leases (P5's shape) ----------------------------------------
+// ---- Row ids and transaction ids on a peer (AT-S10b) -------------------
 
-TEST(RowIdLeaseTableTest, IssuesFromAGrantAndExhaustsRetryably) {
-    catalog::RowIdLeaseTable table;
+// `RowIdLeaseTableTest.IssuesFromAGrantAndExhaustsRetryably` stood here until AT-S10b: it pinned a peer's per-relation row-id lease; the leases were retired at AT-S10b: a peer carves its transaction-id window from the instance's ceiling and bumps a relation's row-id mark in place, so nothing is granted to it and nothing is refilled.
 
-    // No grant yet: exhaustion, and the code a retry loop keys on.
-    auto dry = table.Next(1000);
-    ASSERT_FALSE(dry.ok());
-    EXPECT_EQ(dry.status().code(), StatusCode::kTxnConflict);
+// `RowIdLeaseTableTest.ADeniedRelationAnswersOnceWithoutTheBitThenAsksAgain` stood here until AT-S10b: it pinned a denied lease's one unretryable answer; the leases were retired at AT-S10b: a peer carves its transaction-id window from the instance's ceiling and bumps a relation's row-id mark in place, so nothing is granted to it and nothing is refilled.
 
-    table.Grant(1000, 100, 3);
-    EXPECT_EQ(table.Next(1000).value(), 100u);
-    EXPECT_EQ(table.Next(1000).value(), 101u);
-    // Relations do not share blocks: oid 2000's lease is its own.
-    EXPECT_FALSE(table.Next(2000).ok());
-    EXPECT_EQ(table.Next(1000).value(), 102u);
-    EXPECT_EQ(table.Next(1000).status().code(), StatusCode::kTxnConflict);
-
-    // A contiguous grant extends; a disjoint one replaces and burns.
-    table.Grant(1000, 103, 2);
-    EXPECT_EQ(table.Next(1000).value(), 103u);
-    table.Grant(1000, 500, 2);
-    EXPECT_EQ(table.Next(1000).value(), 500u);
-}
-
-TEST(RowIdLeaseTableTest, ADeniedRelationAnswersOnceWithoutTheBitThenAsksAgain) {
-    // The review of the retryable-bit change: a "none" from core 0 is
-    // permanent, so the statement that meets it must not be told to retry
-    // with the bit - it would spin to its own deadline. One answer without
-    // the bit, and the entry is re-armed so the next statement asks again.
-    catalog::RowIdLeaseTable table;
-    auto miss = table.Next(1000);
-    ASSERT_FALSE(miss.ok());
-    EXPECT_TRUE(miss.status().retryable());
-    ASSERT_EQ(*table.NeediestRelation(), 1000u);
-
-    table.Deny(1000);
-    EXPECT_FALSE(table.NeediestRelation().has_value()) << "a denied relation is not demand";
-    auto denied = table.Next(1000);
-    ASSERT_FALSE(denied.ok());
-    EXPECT_EQ(denied.status().code(), StatusCode::kResourceExhausted);
-    EXPECT_FALSE(denied.status().retryable());
-    ASSERT_EQ(*table.NeediestRelation(), 1000u) << "the denied answer must re-arm the demand";
-
-    // Re-armed means the next miss is fresh demand again, with the bit.
-    EXPECT_TRUE(table.Next(1000).status().retryable());
-}
-
-TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
-    // The whole point of the lease: a peer's AllocateRowId() answers from
-    // its granted block and never touches the sys.tables page - which its
-    // own store would refuse to write anyway (MayWrite is the guard this
-    // path exists to satisfy, not to bypass).
+TEST_F(CoreRuntimeTest, APeerIssuesRowIdsFromTheRelationsOwnMarkInIssueOrder) {
+    // AT-S10b: a peer's `AllocateRowId` bumps the relation's `sys.tables`
+    // mark in place, as core 0's always has, so ids issued by two cores
+    // into one relation are **one sequence in issue order** - invariant 11
+    // with spreading off. The lease this replaced handed a peer a block
+    // ahead of core 0's mark, so core 0's next id sat above the peer's
+    // later ones.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
                                            catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
@@ -647,89 +611,48 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // Before any grant: retryable exhaustion, never a catalog write.
-    auto dry = peer.value()->catalog().AllocateRowId(oid.value());
-    ASSERT_FALSE(dry.ok());
-    EXPECT_EQ(dry.status().code(), StatusCode::kTxnConflict);
-
-    // Core 0 carves a block with the bulk-INSERT primitive - the exact
-    // call the kRowIdLease handler makes - and the peer's table takes it,
-    // the exact application the receiver makes.
-    auto first = core0_->catalog.AllocateRowIdRange(oid.value(), 16);
-    ASSERT_TRUE(first.ok()) << first.status().message();
-    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
-
-    // The peer issues the block, in order, from its own table.
-    for (std::uint64_t i = 0; i < 16; ++i) {
-        auto id = peer.value()->catalog().AllocateRowId(oid.value());
-        ASSERT_TRUE(id.ok()) << id.status().message();
-        EXPECT_EQ(id.value(), first.value() + i);
+    // Nothing granted, and the first ask answers.
+    std::uint64_t previous = 0;
+    for (int i = 0; i < 8; ++i) {
+        catalog::Catalog& issuer = i % 2 == 0 ? peer.value()->catalog() : core0_->catalog;
+        auto id = issuer.AllocateRowId(oid.value());
+        ASSERT_TRUE(id.ok()) << "issue " << i << ": " << id.status().message();
+        if (i > 0) {
+            EXPECT_EQ(id.value(), previous + 1)
+                << "issue " << i << " is not the next id after the other core's";
+        }
+        previous = id.value();
     }
-    EXPECT_EQ(peer.value()->catalog().AllocateRowId(oid.value()).status().code(),
-              StatusCode::kTxnConflict);
-
-    // And the blocks stay disjoint: core 0's next single id sits past the
-    // granted block, so a peer id can never collide with a core-0 id -
-    // K1's issue-once contract across cores.
-    auto next_on_core0 = core0_->catalog.AllocateRowId(oid.value());
-    ASSERT_TRUE(next_on_core0.ok());
-    EXPECT_GE(next_on_core0.value(), first.value() + 16);
 }
 
-TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblock) {
-    // The row-id lease's twin, and the door PW1 opened
-    // (`docs/inflight/in-progress/workplan-peer-writer.md`): before it, a peer's TrxIdSequence
-    // constructed spent and its persist callback refused, so a peer could
-    // not begin a *single* transaction - every write died at its first id,
-    // ahead of any page. Reads never noticed: a read view mints from
-    // `peek()`, which issues nothing.
-    // Core 0's ceiling travels in the config, the way its WAL anchor does -
-    // as of the AL-S9 review, inside the whole superblock rather than as a
-    // field of its own, because a peer's copy answered a legal zero for
-    // every field nobody had thought to carry.
+TEST_F(CoreRuntimeTest, APeerCarvesItsTransactionIdsFromTheInstancesCeiling) {
+    // AT-S10b: a peer's sequence carves its window from the one superblock
+    // core 0's does (`Config::trx_id_ceiling`), so a peer begins a
+    // transaction with nothing granted to it, and the two windows are
+    // disjoint - invariant 12's writer identity across cores. Before it, a
+    // peer began nothing until core 0 had carved and leased it a block.
     CoreRuntime::Config config = ConfigFor(1);
-    ASSERT_GT(config.superblock->next_trx_id(), 0u)
-        << "a bootstrapped database should carry a ceiling";
+    const std::uint64_t ceiling_before = core0_->superblock.next_trx_id();
+    ASSERT_GT(ceiling_before, 0u) << "a bootstrapped database should carry a ceiling";
 
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // A read still works with no lease at all, which is the half that was
-    // never broken and must stay unbroken.
-    EXPECT_EQ(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0),
-              std::string::npos);
-
-    // Before any grant: retryable exhaustion, and never a write to page 0 -
-    // this core's store would refuse that anyway, which is the guard this
-    // path exists to satisfy rather than to bypass.
-    const auto dry = peer.value()->dispatcher().Dispatch("BEGIN").response;
-    EXPECT_EQ(dry.rfind("ERR", 0), 0u) << "a peer began a transaction with no leased ids: " << dry;
-    EXPECT_NE(dry.find("lease"), std::string::npos)
-        << "the refusal should name the lease, not page 0: " << dry;
-
-    // Core 0 carves a block through the same `Carve()` its own windows come
-    // from - the exact call the kTrxIdLease handler makes - and the peer's
-    // lease takes it, the exact application the receiver makes.
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-    auto block = core0_ids.Carve(16);
-    ASSERT_TRUE(block.ok()) << block.status().message();
-    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
-
-    const auto wet = peer.value()->dispatcher().Dispatch("BEGIN").response;
-    EXPECT_NE(wet.rfind("ERR", 0), 0u) << "a leased peer still could not begin: " << wet;
+    const auto began = peer.value()->dispatcher().Dispatch("BEGIN").response;
+    EXPECT_NE(began.rfind("ERR", 0), 0u) << "a peer could not begin on its own: " << began;
     (void)peer.value()->dispatcher().Dispatch("ROLLBACK");
 
-    // The grant sits at or above the ceiling the config carried, so the
-    // out-of-order guard in `ReserveBlock` has a real floor to check
-    // against rather than the 0 a default-constructed superblock reads.
-    EXPECT_GE(block.value().first, config.superblock->next_trx_id());
+    // The peer's carve raised the instance's ceiling, from where it stood.
+    const txn::TrxIdSequence& peer_ids = peer.value()->trx_ids();
+    EXPECT_GE(peer_ids.peek(), ceiling_before);
+    EXPECT_EQ(core0_->superblock.next_trx_id(), peer_ids.ceiling())
+        << "the peer carved from a copy rather than from the instance's superblock";
 
-    // And the windows stay disjoint: core 0's next id sits past the block it
-    // granted, so a peer's transaction id can never collide with a core-0
-    // one - invariant 12's writer identity across cores.
+    // And core 0's next window sits past it.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
     auto next_on_core0 = core0_ids.Next();
     ASSERT_TRUE(next_on_core0.ok()) << next_on_core0.status().message();
-    EXPECT_GE(next_on_core0.value(), block.value().first + block.value().count);
+    EXPECT_GE(next_on_core0.value(), peer_ids.ceiling());
 }
 
 TEST_F(CoreRuntimeTest, APeersDispatcherRunsUnderTheStatementLimitsItIsHanded) {
@@ -742,11 +665,6 @@ TEST_F(CoreRuntimeTest, APeersDispatcherRunsUnderTheStatementLimitsItIsHanded) {
     config.statement_limits.sort_max_rows = 1;
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    // Funded as the grant cell above funds it, so the peer can write.
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-    auto block = core0_ids.Carve(16);
-    ASSERT_TRUE(block.ok()) << block.status().message();
-    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
     CommandDispatcher& d = peer.value()->dispatcher();
     for (const char* sql : {"CREATE TABLE capped (id int64, v int64)",
                             "INSERT INTO capped VALUES (1, 20)", "INSERT INTO capped VALUES (2, 10)"}) {
@@ -1116,91 +1034,7 @@ TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) 
         << opened.status().message();
 }
 
-TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) {
-    // PW1b. `RequestRowIdLease` had no callers, so a peer's lease table was
-    // never granted anything and `AllocateRowId` answered ResourceExhausted
-    // forever - the retry its own message promises could not succeed.
-    //
-    // The trigger could not copy PW1's: that lease is per *instance*, so a
-    // peer pre-empts for it from the first tick, while a row-id lease is per
-    // *relation* and has no subject until a statement names one. So the miss
-    // records the demand and the refill tick answers it.
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-    ASSERT_TRUE(
-        RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr).ok());
-
-    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-
-    // Nothing has asked yet, so the table knows of no relation at all and the
-    // tick has nothing to do.
-    EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value());
-    peer.value()->MaybeRefillRowIds();
-    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 0u)
-        << "a peer asked for ids for a relation no statement had named";
-
-    // The first allocation fails retryably **and records the demand** - the
-    // half that did not exist before PW1b.
-    auto dry = peer.value()->catalog().AllocateRowId(oid.value());
-    ASSERT_FALSE(dry.ok());
-    EXPECT_EQ(dry.status().code(), StatusCode::kTxnConflict);
-    ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value())
-        << "the miss did not record which relation needs ids";
-    EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value());
-
-    // The tick answers it, and the retry the message promised now succeeds.
-    peer.value()->MaybeRefillRowIds();
-    for (int i = 0; i < 20; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
-    }
-    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 1u);
-    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
-    // The refill's three legs are stamped (lease_refill_stats.hpp): the
-    // request's submit, the grant's arrival on this reactor, the parked
-    // coroutine's completion. Real clock, so nonzero and ordered is the
-    // pin; the in-flight stamps are cleared by the completion.
-    {
-        const auto& st = peer.value()->row_id_refill().stats;
-        EXPECT_GT(st.wait_total_max_ns, 0u);
-        EXPECT_GE(st.wait_total_max_ns, st.wait_to_grant_max_ns);
-        EXPECT_GE(st.wait_total_max_ns, st.resume_lag_max_ns);
-        EXPECT_FALSE(st.in_flight) << "the completion clears the in-flight request";
-    }
-    // And a peer's SHOW META prints them; core 0's never does.
-    const auto meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
-    EXPECT_NE(meta.find("rowid_refill_requests=1 rowid_refill_grants=1"), std::string::npos)
-        << meta;
-    EXPECT_NE(meta.find("rowid_refill_wait_max_us="), std::string::npos) << meta;
-
-    auto wet = peer.value()->catalog().AllocateRowId(oid.value());
-    ASSERT_TRUE(wet.ok()) << wet.status().message();
-
-    // And the relation stops being needy, so the tick does not ask again on
-    // every cadence - PW1's defect, which had the same shape one lease over.
-    EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value())
-        << "a freshly granted relation still reads as low water";
-    peer.value()->MaybeRefillRowIds();
-    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 1u)
-        << "the tick asked again for a relation that had just been granted a block";
-
-    // The ids are core 0's to give, and disjoint from what core 0 issues.
-    auto on_core0 = core0_->catalog.AllocateRowId(oid.value());
-    ASSERT_TRUE(on_core0.ok()) << on_core0.status().message();
-    EXPECT_GE(on_core0.value(), wet.value() + kRowIdLeasePerGrant)
-        << "core 0's next id sits inside the block it granted the peer";
-}
+// `APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds` stood here until AT-S10b: it pinned the row-id refill a miss armed and the tick answered; the leases were retired at AT-S10b: a peer carves its transaction-id window from the instance's ceiling and bumps a relation's row-id mark in place, so nothing is granted to it and nothing is refilled.
 
 // `AForeignInsertLeavesTheDemandThatBecomesThisCoresRange` stood here until AT-S5: it pinned the row-id demand a shipped insert left on this core; nothing ships, and the demand path is AT-S4's.
 
@@ -1208,105 +1042,9 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
 
 // `AForeignInsertThatNamesItsKeyLeavesNoDemand` stood here until AT-S5: it pinned the row-id demand a shipped insert left on this core; nothing ships, and the demand path is AT-S4's.
 
-TEST(RowIdLeaseTableTest, AContiguousTopUpKeepsTheWindowAtTheRunInHand) {
-    // PW1b review. `window` is what `low_water()` takes its quarter of, so
-    // it must be the run in hand and not the sum of every run ever granted.
-    // Accumulating it raised the mark by count/4 per refill, which asked for
-    // the next run after only 3/4 of this one had been issued - a standing
-    // 25% burn of the relation's 40-bit space, and a mark that drifts up
-    // without bound.
-    catalog::RowIdLeaseTable table;
-    table.Grant(4000, 100, 4096);
-    for (int refill = 0; refill < 8; ++refill) {
-        while (!table.NeediestRelation().has_value()) {
-            ASSERT_TRUE(table.Next(4000).ok());
-        }
-        // Topped up contiguously, exactly as core 0's sequential carve does.
-        table.Grant(4000, 100 + 4096 * (refill + 1), 4096);
-        ASSERT_FALSE(table.NeediestRelation().has_value())
-            << "a freshly topped-up relation reads as low water";
-    }
-    // Eight refills in, the mark is still a fraction of *one* run rather
-    // than of their sum: ask now and the relation is nearly spent, which is
-    // what makes it issue almost every id it is granted. Accumulating the
-    // window puts 8,192 ids behind this mark instead of 1,365.
-    while (!table.NeediestRelation().has_value()) {
-        ASSERT_TRUE(table.Next(4000).ok());
-    }
-    EXPECT_LT(table.remaining(4000), 4096u)
-        << "the low-water mark drifted up with every refill, so a run is asked for again "
-           "with more than a whole run still in hand";
-}
+// `RowIdLeaseTableTest.AContiguousTopUpKeepsTheWindowAtTheRunInHand` stood here until AT-S10b: it pinned the lease's low-water window; the leases were retired at AT-S10b: a peer carves its transaction-id window from the instance's ceiling and bumps a relation's row-id mark in place, so nothing is granted to it and nothing is refilled.
 
-TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOther) {
-    // PW1b review. A carve fails for reasons that are permanent - the
-    // relation has no sys.tables row, it names its own ids, or its 40-bit
-    // space is gone - and core 0 answers those with a zero-count grant. The
-    // entry stays spent, so it reads as low water forever: without the
-    // denial the drain tick asks again every cadence, and because one
-    // request is in flight per core and the neediest is the lowest low-water
-    // oid, no *other* relation on that core is ever asked for again.
-    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_GT(oid.value(), 3000u);  // the ungrantable oid below must sort first
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-    ASSERT_TRUE(transport.ok()) << transport.status().message();
-
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-    ASSERT_TRUE(
-        RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr).ok());
-
-    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-
-    // Demand for a relation core 0 has no sys.tables row for - what a
-    // dropped relation looks like to the lease table - and demand for a
-    // real one, which sorts after it.
-    EXPECT_FALSE(peer.value()->row_id_leases().Next(3000).ok());
-    EXPECT_FALSE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
-    ASSERT_EQ(*peer.value()->row_id_leases().NeediestRelation(), 3000u);
-
-    auto turn = [&] {
-        peer.value()->MaybeRefillRowIds();
-        for (int i = 0; i < 20; ++i) {
-            peer.value()->scheduler().RunOnce();
-            core0.RunOnce();
-        }
-    };
-
-    turn();
-    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 1u);
-    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 0u) << "core 0 granted a relation it has no row for";
-    ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value());
-    EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value())
-        << "a relation core 0 refused still counts as demand, so the tick never reaches another";
-
-    // The next tick reaches the real relation, and the one after that asks
-    // for nothing at all.
-    turn();
-    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 2u);
-    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
-    EXPECT_TRUE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
-    turn();
-    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 2u)
-        << "the tick asked again for a relation core 0 had already refused";
-
-    // And the refusal is not permanent to a *statement*: a fresh miss is
-    // fresh demand, so the retry the message promises is one that is made -
-    // but the statement that meets the denial is answered without the
-    // wire's bit, since the "none" was for a permanent cause.
-    auto after_deny = peer.value()->row_id_leases().Next(3000);
-    ASSERT_FALSE(after_deny.ok());
-    EXPECT_EQ(after_deny.status().code(), StatusCode::kResourceExhausted);
-    EXPECT_FALSE(after_deny.status().retryable());
-    EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), 3000u);
-}
+// `ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOther` stood here until AT-S10b: it pinned the refill's denial handling; the leases were retired at AT-S10b: a peer carves its transaction-id window from the instance's ceiling and bumps a relation's row-id mark in place, so nothing is granted to it and nothing is refilled.
 
 // ---- P4c: a SELECT against a rotated relation executes remotely ---------
 
@@ -1689,24 +1427,16 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
     // **The write grant this cell opened with went with the grants**
     // (AW-S1b): the peer wrote through core 0's frame table, so the pages
     // core 0 formatted for a relation it owns were writable from the moment
-    // they existed. What is left is the funding that is still real - the
-    // row-id lease and the transaction-id block.
+    // they existed. **The id half of funding went at AT-S10b**: the peer
+    // carves its transaction ids and bumps the relation's mark itself.
     ASSERT_TRUE(peer.value()->store().MayWrite(row.value().desc_page_id));
-
-    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
-    ASSERT_TRUE(first.ok());
-    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-    auto block = core0_ids.Carve(16);
-    ASSERT_TRUE(block.ok());
-    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
 
     const auto ins = peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (7)").response;
     EXPECT_NE(ins.rfind("ERR", 0), 0u) << "the funded INSERT must run: " << ins;
 
     // Multi-row runs too (revised at the 25059bf review's S-1): the sorted
     // fill is merely ineligible on a peer, and the ordinary per-row path
-    // allocates through the lease.
+    // allocates through the catalog's mark.
     const auto bulk =
         peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (8), (9)").response;
     EXPECT_NE(bulk.rfind("ERR", 0), 0u) << "the per-row path must serve a peer: " << bulk;
@@ -1714,57 +1444,13 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
 
     // The reply is the CSV shape the neighbouring rotated-SELECT test
     // pins: a header line then one line per row, ",<v>" carrying the
-    // inserted value after the leased id.
+    // inserted value after the issued id.
     const auto sel = peer.value()->dispatcher().Dispatch("SELECT * FROM owned").response;
     EXPECT_NE(sel.find(",7"), std::string::npos) << sel;
     EXPECT_NE(sel.find(",9"), std::string::npos) << sel;
 }
 
-TEST_F(CoreRuntimeTest, ASpentLeaseRefusesWithTheWiresRetryableBit) {
-    // PW6's finding (2), closed and still closed: a peer whose lease is
-    // spent used to answer a bare `ERR` (ResourceExhausted is not
-    // IsRetryable), so a client retrying on the bit did not retry it and
-    // lost the row. The refusal is TxnConflict now and the dispatcher
-    // renders it through ErrorReply, so the wire carries `retryable=1` -
-    // the token a retry loop reads.
-    //
-    // **Two of PW6's three leases survive AW-S1b** (`base/status.hpp`): the
-    // page-id lease went, the transaction-id and row-id leases did not, and
-    // this is the cell that says each names itself.
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "spent", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    auto row = catalog2.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    ASSERT_TRUE(core0_store_->Sync().ok());
-
-    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
-    ASSERT_TRUE(peer.ok()) << peer.status().message();
-
-    // No transaction-id block: BeginWrite refuses first, before the row.
-    const std::string kToken = "ERR TXN_CONFLICT retryable=1 ";
-    const auto no_trx = peer.value()->dispatcher().Dispatch("INSERT INTO spent VALUES (7)").response;
-    EXPECT_EQ(no_trx.substr(0, kToken.size()), kToken) << no_trx;
-    EXPECT_NE(no_trx.find("transaction-id lease"), std::string::npos) << no_trx;
-
-    // With transaction ids but no row-id block: the row's allocation refuses.
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-    auto block = core0_ids.Carve(16);
-    ASSERT_TRUE(block.ok());
-    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
-    const auto no_rows = peer.value()->dispatcher().Dispatch("INSERT INTO spent VALUES (7)").response;
-    EXPECT_EQ(no_rows.substr(0, kToken.size()), kToken) << no_rows;
-    EXPECT_NE(no_rows.find("row-id lease"), std::string::npos) << no_rows;
-
-    // Both funded: the same statement runs. The refusals above were the
-    // lease's, never the relation's.
-    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
-    ASSERT_TRUE(first.ok());
-    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
-    const auto ins = peer.value()->dispatcher().Dispatch("INSERT INTO spent VALUES (7)").response;
-    EXPECT_NE(ins.rfind("ERR", 0), 0u) << ins;
-}
+// `ASpentLeaseRefusesWithTheWiresRetryableBit` stood here until AT-S10b: it pinned that an unfunded peer's write was refused `TXN_CONFLICT retryable=1` naming its lease; the leases were retired at AT-S10b: a peer carves its transaction-id window from the instance's ceiling and bumps a relation's row-id mark in place, so nothing is granted to it and nothing is refilled. `APeerListenerServesAReadAndAWriteWithNothingGrantedAndRoutesStop` pins the replacement.
 
 // A peer that wrote a relation across several pages, then restarted, reads
 // it whole and writes it again.
@@ -1790,29 +1476,10 @@ void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
         ASSERT_TRUE(core0_store_->Sync().ok());
         const PageId root = row.value().desc_page_id;
 
-        txn::TrxIdSequence core0_ids(core0_->superblock);
-        auto fund = [&](CoreRuntime& peer) {
-            // **As the peer** (AM-S2 step 3). In an instance these grants
-            // arrive as ring messages and are handled on the peer's own
-            // reactor, which declares its core; here the test thread makes
-            // them directly, and the row-id grant writes the relation's
-            // anchor page - `StampPageLsn` would record core 0's stream on
-            // a page core 1 owns, and the restart below would then decline
-            // to claim it from its stamp. That is the whole cell.
-            const CurrentCoreGuard as_the_peer(peer.core_id());
-            auto first = catalog2.AllocateRowIdRange(oid.value(), 1024);
-            ASSERT_TRUE(first.ok());
-            peer.row_id_leases().Grant(oid.value(), first.value(), 1024);
-            auto block = core0_ids.Carve(1024);
-            ASSERT_TRUE(block.ok());
-            peer.trx_id_lease().Grant(block.value().first, block.value().count);
-        };
-
         // The first run: funded the ordinary way, grown past one page.
         CoreRuntime::Config first_run = ConfigFor(1);
         auto peer = CoreRuntime::Open(first_run, *device_, clock_, nullptr);
         ASSERT_TRUE(peer.ok()) << peer.status().message();
-        fund(*peer.value());
         for (int i = 0; i < 600; ++i) {
             const auto ins = peer.value()
                                  ->dispatcher()
@@ -1847,7 +1514,6 @@ void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
         EXPECT_TRUE(reopened.value()->store().MayWrite(root))
             << "the owner may not write the root it built";
 
-        fund(*reopened.value());
         const auto ins =
             reopened.value()->dispatcher().Dispatch("INSERT INTO " + name + " VALUES (600)").response;
         EXPECT_NE(ins.rfind("ERR", 0), 0u) << "the restarted owner must write again: " << ins;
@@ -1888,13 +1554,6 @@ TEST_F(CoreRuntimeTest, AFundedPeerGrowsItsOwnBtreeWritingNoCatalogPage) {
     ASSERT_TRUE(peer.ok()) << peer.status().message();
     ASSERT_TRUE(peer.value()->store().MayWrite(row.value().anchor_page_id));
 
-    auto first = catalog2.AllocateRowIdRange(oid.value(), 1024);
-    ASSERT_TRUE(first.ok());
-    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 1024);
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-    auto block = core0_ids.Carve(1024);
-    ASSERT_TRUE(block.ok());
-    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
 
     for (int i = 0; i < 600; ++i) {
         const auto ins =
@@ -2043,7 +1702,7 @@ std::string RoundTrip(int fd, std::string_view line) {
 
 }  // namespace
 
-TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteAndRoutesStop) {
+TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRoutesStop) {
     // FINDING 5 of the PW5 review: nothing proved a peer listener serves
     // anything. This is the whole loop over a real socket - a rotated
     // relation is served on the peer that owns it, a core-0 relation is
@@ -2098,19 +1757,13 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
     // (`AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRows`, and the
     // write half beside it).
     //
-    // The `BEGIN`-then-read form is not the substitute it looks like: a
-    // listener-served peer holds no transaction-id lease either, so `BEGIN`
-    // itself refuses and the read that follows is an autocommit read again.
-    // Refused: an *unfunded* write to the relation this core owns. The
-    // PW1c-5 replacement for the interim guard: this listener-served peer
-    // holds no write grant and no row-id lease, so the INSERT dies at the
-    // first funding wall - retryably, from the lease - and in release the
-    // store's now-always-on MayWrite is what stands behind it
-    // (workplan-peer-writer.md §8, the PW1c-4r row).
+    // **A write with nothing granted runs** (AT-S10b). This cell pinned
+    // the opposite until then: a listener-served peer held no transaction-
+    // id lease and no row-id lease, so the INSERT died at the first funding
+    // wall, retryably, naming the lease. A peer carves its own ids now, so
+    // a session on any core writes on its first statement.
     const std::string write = RoundTrip(fd, "INSERT INTO rotated VALUES (7)");
-    EXPECT_EQ(write.rfind("ERR", 0), 0u) << write;
-    EXPECT_NE(write.find("lease"), std::string::npos)
-        << "the refusal should name the funding wall, not a page or a read: " << write;
+    EXPECT_NE(write.rfind("ERR", 0), 0u) << "a peer's first write was refused: " << write;
 
     // STOP: replied to, and **routed to the instance rather than to this
     // reactor**. That is the contract - a stopped peer would still take its
@@ -2404,16 +2057,10 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // The stream the peer just attached to, so `Pump` can drain it.
     rig.shared_wal = core0_wal_.get();
     ASSERT_TRUE(rig.peer->AttachTransport(rig.ring()).ok());
-    auto first = rig.catalog2->AllocateRowIdRange(rig.oid, 16);
-    ASSERT_TRUE(first.ok());
-    rig.peer->row_id_leases().Grant(rig.oid, first.value(), 16);
 
-    // One transaction-id sequence: the peer's lease is carved from it, and
-    // core 0's manager draws from it.
+    // Core 0's manager's sequence, over the superblock the peer carves from
+    // (`ConfigFor`), so the two windows are disjoint.
     rig.ids.emplace(core0_->superblock);
-    auto block = rig.ids->Carve(16);
-    ASSERT_TRUE(block.ok());
-    rig.peer->trx_id_lease().Grant(block.value().first, block.value().count);
     rig.undo.emplace(*core0_store_, /*wal=*/nullptr);
     // Unlogged, over the fixture's shared visibility (`ConfigFor` says why
     // it is shared). **The fixture's one lie, stated**: core 0's commits
@@ -2485,11 +2132,8 @@ void CoreRuntimeTest::FundPeerForRelation(ForeignIndexRig& rig, catalog::Oid oid
     // **The page half of funding went with the write grants** (AW-S1b):
     // this granted the relation's root, anchor and var-heap head before a
     // peer could write any of them, and a shared frame table makes them
-    // writable where they are formatted. The id half is still real.
+    // writable where they are formatted. The id half went at AT-S10b.
     ASSERT_TRUE(rig.peer->store().MayWrite(row.value().desc_page_id));
-    auto first = rig.catalog2->AllocateRowIdRange(oid, 16);
-    ASSERT_TRUE(first.ok()) << first.status().message();
-    rig.peer->row_id_leases().Grant(oid, first.value(), 16);
 }
 
 // ---- CR5 / CB4-CB6: a peer routes DDL to core 0 --------------------------
@@ -2783,11 +2427,8 @@ TEST_F(CoreRuntimeTest, AReadFarWiderThanOneRingSlotIsAnsweredWhole) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "big_read_auto");
 
-    auto more = rig.catalog2->AllocateRowIdRange(rig.oid, 512);
-    ASSERT_TRUE(more.ok()) << more.status().message();
-    rig.peer->row_id_leases().Grant(rig.oid, more.value(), 512);
-    // Ten statements, not three hundred: the rig grants the peer sixteen
-    // transaction ids, and each `INSERT` is one.
+    // Ten statements, not three hundred: a multi-row `INSERT` is one
+    // transaction.
     for (int base = 0; base < 300; base += 30) {
         std::string ins = "INSERT INTO big_read_auto VALUES ";
         for (int i = 0; i < 30; ++i) {
@@ -2899,12 +2540,8 @@ TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
     //
     // **What this cell proves and what it deliberately does not.** It
     // asserts the peer's own dispatcher no longer answers the FK shape
-    // gate. It does *not* drive the write to completion: this rig does not
-    // refill a peer's transaction-id or row-id leases for a relation it
-    // did not open itself, so a completed peer write meets
-    // `TXN_CONFLICT retryable=1` forever here - a fixture limit, not an
-    // engine one. The end-to-end write is AH-T6's, which builds the
-    // two-process fixture for its measurement anyway.
+    // gate, and nothing about the write's outcome: the foreign-key cells
+    // own that.
     ASSERT_EQ(rig.dispatcher->Dispatch("CREATE TABLE fkparent (id int64, v int64) BTREE")
                   .response.substr(0, 3),
               "CRE");

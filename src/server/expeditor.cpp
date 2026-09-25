@@ -958,10 +958,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // through it. The persist callback is what makes a reserved id block
     // durable: the superblock is unlogged, so a block is only safe once the
     // page has been written and synced (txn/trx_id.hpp records the exposure
-    // that leaves).
+    // that leaves). Every peer's sequence is built over the same three
+    // (`CoreRuntime::Config::trx_id_ceiling`, AT-S10b).
     Expeditor* self = expeditor.get();
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
-                                [self] { return self->PersistSuperBlock(); });
+                                [self] { return self->PersistTrxIdCeiling(); });
     expeditor->trx_ids_->SetLatch(&expeditor->superblock_latch_);
     // Before the manager that publishes into it. **Unconditional since
     // AM-S4(d)**: the arm that skipped it was per-core streams, where
@@ -1143,17 +1144,25 @@ Status Expeditor::OpenLog() {
     return Status::OK();
 }
 
+Status Expeditor::EncodeSuperBlock() {
+    // The encode under the superblock latch and the sync outside it
+    // (`superblock_latch_`): a peer's checkpoint anchor and a peer's carve
+    // mutate the same object from their own cores.
+    LatchGuard hold(&superblock_latch_);
+    auto page = store_->Get(kSuperBlockPageId);
+    if (!page.ok()) return page.status();
+    database_->superblock.Encode(page.value().bytes());
+    return Status::OK();
+}
+
 Status Expeditor::PersistSuperBlock() {
-    {
-        // The encode under the superblock latch and the sync outside it
-        // (`superblock_latch_`): a peer's checkpoint anchor encodes the same
-        // object from its own core.
-        LatchGuard hold(&superblock_latch_);
-        auto page = store_->Get(kSuperBlockPageId);
-        if (!page.ok()) return page.status();
-        database_->superblock.Encode(page.value().bytes());
-    }
+    if (Status s = EncodeSuperBlock(); !s.ok()) return s;
     return Sync();
+}
+
+Status Expeditor::PersistTrxIdCeiling() {
+    if (Status s = EncodeSuperBlock(); !s.ok()) return s;
+    return store_->Sync();
 }
 
 OptimizerSurface Expeditor::Optimizer() {
@@ -1728,6 +1737,11 @@ Status Expeditor::Start() {
             // directly and takes the one gate every checkpointer takes.
             core_config.checkpoint_anchor = &*checkpoint_anchor_;
             core_config.checkpoint_gate = &checkpoint_gate_;
+            // The instance's transaction-id ceiling (AT-S10b): this peer's
+            // sequence carves its window from the superblock core 0's does,
+            // under the same latch, and persists through the same call.
+            core_config.trx_id_ceiling = {&database_->superblock, &superblock_latch_,
+                                          [this] { return PersistTrxIdCeiling(); }};
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
@@ -1763,31 +1777,12 @@ Status Expeditor::Start() {
         // coordinator like any other core. A read runs where the session
         // is now, as a write has since AT-S5.
 
-        // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
-        // request is answered with a block carved by AllocateRowIdRange -
-        // the bulk-INSERT primitive, already ceiling-checked. Core 0 is the
-        // reason this service exists - until AT-S4 makes the sequence a
-        // shared allocator. Ids only since AT-S9: no grant opens a range.
-        if (Status s = RegisterRowIdGrantHandler(scheduler, *transport_, database_->catalog,
-                                                 &*logger_);
-            !s.ok()) {
-            return s;
-        }
-
-        // The transaction-id lease's grant side (PW1,
-        // `docs/inflight/in-progress/workplan-peer-writer.md`): a peer's kTrxIdLease request is
-        // answered with a block from core 0's **own** sequence, through the
-        // same `Carve()` its own windows come from. Sharing that one carve
-        // is what keeps two consumers of one ceiling from colliding, and it
-        // persists the raise before replying - a grant whose ceiling a
-        // crash could forget is the one thing `CoreRuntime::Open`'s
-        // mount-time refusal cannot tell from a corrupt stream.
-        if (Status s =
-                RegisterTrxIdGrantHandler(scheduler, *transport_, *trx_ids_,
-                                          kTrxIdLeasePerGrant, &*logger_);
-            !s.ok()) {
-            return s;
-        }
+        // **The two id-lease grant handlers went at AT-S10b** (AT-S4's
+        // allocators, folded in): core 0 carved a transaction-id block or a
+        // relation's row-id block for a peer that asked over the ring,
+        // because page 0 and the catalog pages were core 0's. Every core
+        // carves its own window from the one ceiling now, and bumps a
+        // relation's mark in place under its page latch.
 
         // **CR7's receiving half stood here and is gone** (AT-S7): a peer
         // folded its access shapes and sent them to this core to apply,
@@ -1916,13 +1911,12 @@ Status Expeditor::Start() {
             logger_->Warn("expeditor", "writeback drain failed: " + drained.status().message());
         }
         // Core 0's half of AN-R13, riding this tick rather than taking one
-        // of its own - the same `system`-group economy the peer's lease
-        // check makes. **Core 0 never answers `kNeedsBlock`**: it carves
-        // its own window from the superblock, so a burn is synchronous and
-        // there is nothing to ask anyone for. It is also a real case rather
-        // than a symmetry: core 0 carves first, so its block is the lowest
-        // in the instance, and an instance whose relations all live on
-        // peers has core 0 idle and pinning from the first commit.
+        // of its own - the same `system`-group economy a peer's drain tick
+        // makes. A burn is a synchronous carve on every core since AT-S10b.
+        // It is a real case on core 0 rather than a symmetry: core 0 carves
+        // first, so its block is the lowest in the instance, and an
+        // instance whose sessions all land on peers has core 0 idle and
+        // pinning from the first commit.
         if (txn_manager_.has_value()) (void)txn_manager_->MaybeBurnIdleBlock();
     });
 

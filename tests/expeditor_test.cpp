@@ -125,26 +125,6 @@ std::string SendLine(int fd, const std::string& line) {
     return response;
 }
 
-// **A client that retries what the engine told it to retry.** A peer's very
-// first write to a relation finds its row-id lease unfunded and is refused
-// `TXN_CONFLICT retryable=1` until the refill grant lands (`row_id_lease.hpp`
-// P5) - which is the documented contract and what every real client does, so
-// a test that treated the first refusal as a failure would be testing a
-// client nobody writes. Bounded, so a refusal that never clears still fails
-// the cell rather than hanging it - and the last response is what comes
-// back, so nothing is masked. The cost is on the *negative* use: a write
-// that is meant to be refused by an assertion, on a peer that came up not
-// enforcing it, spins the whole budget before the expectation fails.
-std::string SendLineRetrying(int fd, const std::string& line) {
-    std::string response;
-    for (int attempt = 0; attempt < 200; ++attempt) {
-        response = SendLine(fd, line);
-        if (response.find("retryable=1") == std::string::npos) return response;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return response;
-}
-
 class ExpeditorTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -619,7 +599,7 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
         const std::string declared =
             SendLine(c, "CREATE ASSERTION one ON cap GROUP BY (v) CHECK COUNT(*) <= 1");
         ASSERT_EQ(declared.rfind("ERR", 0), std::string::npos) << declared;
-        const std::string seeded = SendLineRetrying(c, "INSERT INTO cap VALUES (7)");
+        const std::string seeded = SendLine(c, "INSERT INTO cap VALUES (7)");
         ASSERT_EQ(seeded.rfind("ERR", 0), std::string::npos) << seeded;
         EXPECT_TRUE(running.Stop().ok());
     }
@@ -657,7 +637,7 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
     // registry held no directory for it and admitted the row.
     RunningInstance running(db, config.debug_text_port);
     ASSERT_TRUE(running.Run());
-    const std::string violating = SendLineRetrying(running.client(), "INSERT INTO cap VALUES (7)");
+    const std::string violating = SendLine(running.client(), "INSERT INTO cap VALUES (7)");
     EXPECT_EQ(violating.rfind("ERR ", 0), 0u) << violating;
     EXPECT_NE(violating.find("ASSERTION_VIOLATION"), std::string::npos) << violating;
     EXPECT_TRUE(running.Stop().ok());

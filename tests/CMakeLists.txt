@@ -11,6 +11,7 @@ add_executable(kds_tests
     lock_wake_rig_test.cpp
     fk_cross_core_rig_test.cpp
     shipped_read_own_write_test.cpp
+    id_allocation_across_cores_test.cpp
     access_stats_across_cores_test.cpp
     waystone_across_cores_test.cpp
     cabin_serve_across_cores_test.cpp
@@ -57,7 +58,6 @@ add_executable(kds_tests
     index_compile_test.cpp
     index_contract_test.cpp
     superblock_test.cpp
-    trx_id_lease_service_test.cpp
     prepared_recovery_test.cpp
     core_runtime_test.cpp
     expeditor_test.cpp

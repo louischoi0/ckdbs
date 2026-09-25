@@ -10,7 +10,6 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
 
-#include "kds/catalog/row_id_lease.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/catalog/sys_object_registry.hpp"
@@ -272,15 +271,6 @@ public:
         return schema_word_ == nullptr ||
                schema_word_->load(std::memory_order_acquire) == cache_built_at_;
     }
-
-    // Row-id leases for a core that may not write the catalog (P5's shape;
-    // catalog/row_id_lease.hpp). With a table installed, AllocateRowId()
-    // draws from it - no catalog write, retryable exhaustion when a
-    // relation's lease is spent - and the catalog page is only ever
-    // touched by core 0's AllocateRowIdRange() carving the blocks. Null
-    // (the default) is core 0's arrangement and the path that always
-    // existed. `leases` must outlive the catalog.
-    void SetRowIdLeases(RowIdLeaseTable* leases) noexcept { row_id_leases_ = leases; }
 
     // Drops every cached fact without bumping anything. Its callers are
     // the mount's post-redo drops - `Expeditor`'s and the sim harness's -
@@ -673,6 +663,14 @@ public:
     // OutOfRange once the relation has issued its 40-bit id space -
     // reclamation policy is an open decision, so exhaustion is reported
     // rather than wrapped.
+    //
+    // **Every core calls it, and none caches** (AT-S10b). The bump is an
+    // in-place write of the relation's `sys.tables` row under its page
+    // latch, so two cores issuing into one relation are serialised by the
+    // latch and the ids stay a sequence in issue order - invariant 11 with
+    // spreading off. Until AT-S10b a peer issued from a block core 0 carved
+    // and leased to it, which broke that order across cores and could be
+    // refused `OutOfRange` by a heap chain whose tail had passed the block.
     StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
     // What an `INSERT` that **supplies** the pk calls (docs/spec/heap-and-tuple.md
@@ -1430,7 +1428,6 @@ private:
     std::uint64_t pending_marks_ = 0;
     std::atomic<std::uint64_t>* mark_counter_ = nullptr;
 
-    RowIdLeaseTable* row_id_leases_ = nullptr;
     // Unset until the first GenerateUserOid() recovers it from the catalog.
     // An optional rather than a sentinel value, because every integer in
     // this type's range is a legal oid and a sentinel would be one more

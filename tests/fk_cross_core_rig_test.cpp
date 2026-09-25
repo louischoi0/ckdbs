@@ -193,7 +193,7 @@ struct FkRig {
         auto child = rig->core(0).catalog().FindTableOidByName("c");
         if (!child.ok()) return child.status();
         if (Status s = rig->store().FlushPages(catalog::kEveryCatalogPage); !s.ok()) return s;
-        return rig->FundPeerRelation(child.value());
+        return Status::OK();
     }
 
     // The parent's writer on core 0 and the child's on core 1.
@@ -308,8 +308,7 @@ TEST(FkCrossCoreRigTest, ADrainedCabinSetDoesNotClearAParentAChildOnAnotherCoreR
     // value 7: a probe that finds nothing banks nothing, so the set has to
     // be made to drain rather than started empty.
     ASSERT_EQ(d0.Dispatch("INSERT INTO c VALUES (7)").response.rfind("INSERTED", 0), 0u);
-    ASSERT_NE(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response.find("7"),
-              std::string::npos);
+    ASSERT_EQ(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response, "id\\n1");
     // The row goes; the set keeps its pk, because maintenance is
     // append-only and the re-check is what subtracts it.
     ASSERT_EQ(d0.Dispatch("DELETE FROM c WHERE pid = 7").response, "DELETED 1");

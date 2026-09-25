@@ -54,12 +54,10 @@ TEST(AccessStatsAcrossCores, APeersStatementIsCountedInTheOneRelation) {
     auto oid = rig->core(0).catalog().FindTableOidByName("r0");
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
-    ASSERT_TRUE(rig->FundPeerRelation(oid.value()).ok());
     ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES (7)").response.substr(0, 8), "INSERTED");
     // A read here first, because a shape is recorded from an executed step
     // chain and an INSERT's write path is not one.
-    ASSERT_NE(d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response.find("17"),
-              std::string::npos);
+    ASSERT_EQ(d0.Dispatch("SELECT id FROM r0 WHERE v = 7").response, "id\\n1");
 
     // What this core has recorded for the relation before the peer runs.
     const auto count_for = [&](catalog::Oid rel) {
@@ -85,7 +83,7 @@ TEST(AccessStatsAcrossCores, APeersStatementIsCountedInTheOneRelation) {
     ASSERT_TRUE(KickUntil(*rig, 1, [&] { return peer.done.load(std::memory_order_acquire); },
                           8000ms))
         << peer.out.response;
-    ASSERT_NE(peer.out.response.find("17"), std::string::npos) << peer.out.response;
+    ASSERT_EQ(peer.out.response, "id\\n1") << peer.out.response;
 
     // **Immediately, not on a tick.** There is no flush to wait for: the
     // peer wrote the row under the relation's own root-page latch before

@@ -302,38 +302,23 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->catalog_->SetWal(runtime->wal_.get());
     const bool is_peer = config.core_id != catalog::kSystemCore;
 
-    // A peer may not write the catalog, so its row ids come from leased
-    // blocks (P5's shape, catalog/row_id_lease.hpp): AllocateRowId() draws
-    // from this table, and a spent block is retryable exhaustion until the
-    // kRowIdLease refill lands. Core 0 keeps the direct path - it owns the
-    // page the sequence lives on.
-    if (is_peer) {
-        runtime->catalog_->SetRowIdLeases(&runtime->row_id_leases_);
-    }
-
-    // The transaction stack. `superblock_` is a copy (see the header): the
-    // sequence would write through it, which is why the persist callback
-    // below refuses rather than pretending.
-    runtime->trx_ids_.emplace(runtime->superblock_, [runtime = runtime.get(), is_peer] {
-        // A peer may not write the superblock - it is page 0 and belongs to
-        // the system core (M5). Since PW1 a peer does not come here at all:
-        // its sequence draws windows from the lease installed below, and
-        // this callback is the backstop that says a lease source went
-        // missing rather than a gap that has not been filled.
-        if (is_peer) {
-            return Status::NotImplemented(
-                "core " + std::to_string(runtime->core_id()) +
-                " cannot raise the transaction-id ceiling; the superblock belongs to the "
-                "system core, and this core's transaction-id lease source is not installed");
-        }
-        // **Core 0 is the system core, wherever it was built** (AV-S1).
-        // A core-0 `CoreRuntime` exists only in a rig, and until the rig
-        // needed one it refused every carve through the arm above - so a
-        // core 0 built this way could not open a single writing transaction,
-        // and every two-core fixture in the tree built core 0 by hand
-        // instead. The raised ceiling reaches page 0 before the block is
-        // handed out, which is the ordering `Carve` says is a correctness
-        // statement rather than a preference.
+    // The transaction stack. **Every core carves its own transaction-id
+    // window from the instance's ceiling since AT-S10b** - the superblock,
+    // latch and persist it was handed (`Config::trx_id_ceiling`) - and
+    // issues row ids through the catalog's direct path, as core 0 always
+    // has. A peer used to draw both from blocks core 0 carved and leased to
+    // it over the ring, because page 0 and the catalog pages were core 0's.
+    if (config.trx_id_ceiling.superblock != nullptr) {
+        runtime->trx_ids_.emplace(*config.trx_id_ceiling.superblock,
+                                  config.trx_id_ceiling.persist);
+        runtime->trx_ids_->SetLatch(config.trx_id_ceiling.latch);
+    } else {
+    // Handed none: this runtime carves from `superblock_`, its own copy
+    // (see the header), and persists page 0 itself - a fixture's
+    // arrangement. The raised ceiling reaches page 0 before the block is
+    // handed out, which is the ordering `Carve` says is a correctness
+    // statement rather than a preference.
+    runtime->trx_ids_.emplace(runtime->superblock_, [runtime = runtime.get()] {
         //
         // **Read-modify-write, not `Expeditor::PersistSuperBlock`'s blanket
         // encode.** The Expeditor writes the one image every writer of page
@@ -361,14 +346,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         }
         return runtime->store_->Sync();
     });
-    // Transaction ids come from a leased block on a peer, exactly as row
-    // ids do above (`docs/inflight/in-progress/workplan-peer-writer.md` PW1). Installed here
-    // rather than at AttachTransport because a peer without a transport
-    // must fail its first write with the lease's retryable exhaustion, not
-    // with the superblock refusal above - the refusal names a wiring bug,
-    // and a transport-less core is a test fixture rather than one.
-    if (is_peer) {
-        runtime->trx_ids_->SetLeaseSource(&runtime->trx_id_lease_);
     }
     // The undo log is already built - recovery wrote its compensations
     // through it above, before this stack existed.
@@ -468,11 +445,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // relation itself now, under its root page's latch, so the switch
         // above is the whole of the arming and this block has nothing left
         // to do for statistics.
-        // The lease refills' cost, for `SHOW META` on this core
-        // (lease_refill_stats.hpp): the trace PW6's four-writer cell asked
-        // for.
-        runtime->dispatcher_->set_lease_refill_stats(&runtime->trx_id_refill_.stats,
-                                                     &runtime->row_id_refill_.stats);
     }
 
     // **Assertion enforcement at mount** (RC07). Here rather than beside
@@ -591,25 +563,9 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // asker. Their kinds were struck at AT-S2b; a stale peer's message on a
     // struck number finds no handler in the scheduler's map and is dropped.
 
-    // The row-id lease's receive side (P5's shape), peers only: core 0
-    // owns the sequence pages and never leases from itself - and in
-    // production its scheduler carries the *grant handler* on this kind
-    // instead (row_id_lease_service.hpp).
-    if (config_.core_id != 0) {
-        if (Status s = RegisterRowIdGrantReceiver(*scheduler_, row_id_refill_, row_id_leases_,
-                                                  log_);
-            !s.ok()) {
-            return s;
-        }
-        // And the transaction-id lease's receive side (PW1), on the same
-        // terms and for the same reason: core 0 carries the grant handler
-        // on this kind instead (trx_id_lease_service.hpp).
-        if (Status s = RegisterTrxIdGrantReceiver(*scheduler_, trx_id_refill_, trx_id_lease_,
-                                                  log_);
-            !s.ok()) {
-            return s;
-        }
-    }
+    // **The two id-lease receivers went at AT-S10b**, with the leases: a
+    // peer carves its transaction-id window from the instance's ceiling and
+    // bumps a relation's row-id mark in place, so nothing is granted to it.
 
     // **No remote step server and no step client since AT-S10.** AT-S9
     // retired the last statement that opened a stage - the fan-in over a
@@ -666,43 +622,15 @@ void CoreRuntime::Run() {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns, drain);
     }
 
-    // **The page-id lease's low-water check went with the lease** (AW-S1b).
-    // The other two refills below keep the cadence it set: both are cheap
-    // `system` work, and a second timer for a check that is one integer
-    // comparison would cost more than it measures.
-    if (transport_ != nullptr && config_.wal_drain_interval_ns > 0) {
-        // **R6-2's lifetime-ceiling sweep stood here and went with the
-        // protocol** (AT-S6): it expired a cross-owner participant context
-        // nobody decided. Its registration was left behind with an empty
-        // body - a task submitted on every drain tick doing nothing - until
-        // this line removed it. What the removal leaves is recorded as a
-        // gap: no transaction has a lifetime ceiling any more
-        // (`docs/inflight/known-gaps.md`).
-        //
-        // The transaction-id lease rides the drain tick (PW1). A peer that
-        // has never held a window reads as low, so the first tick asks and
-        // a peer is ready to write before a client arrives - which is the
-        // point, since `TrxIdSequence::Next()` cannot await a grant.
-        // The row-id lease (PW1b) and the relation-grant re-delivery
-        // (PW1c-7) ride the same tick and for the same reason the extent
-        // check is here: cheap `system` work, and a timer each would cost
-        // more than it measures - so one timer, one lambda (the PW1c-7
-        // review's S4; they were one registration apiece).
-        if (config_.core_id != 0) {
-            scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
-                // A task boundary (AT-S2): the refill below reads the
-                // catalog, and stale here is a range that does not open.
-                catalog_->Revalidate();
-                // **Before the refill, and that order is the mechanism**
-                // (AN-R13): the burn check is what sets `burn_requested_`,
-                // and the refill below is what acts on it. A peer that
-                // should burn therefore asks on this tick and installs on
-                // the next.
-                MaybeBurnIdleTrxIdBlock();
-                MaybeRefillTrxIds();
-                MaybeRefillRowIds();
-            });
-        }
+    // **The idle burn rides the drain tick** (AN-R13), on every core but 0,
+    // whose tick is `Expeditor`'s. It rode with the two id-lease refills
+    // until AT-S10b retired them; a burn is a carve here like any other
+    // since, so it needs no transport. (R6-2's lifetime-ceiling sweep rode
+    // here too until AT-S6, and what its removal leaves is a gap:
+    // `docs/inflight/known-gaps.md`.)
+    if (config_.core_id != 0 && config_.wal_drain_interval_ns > 0) {
+        scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
+                                [this] { (void)txn_manager_->MaybeBurnIdleBlock(); });
     }
 
     // The `system`-group checkpoint cadence of wal.md §11, per core since
@@ -752,92 +680,6 @@ void CoreRuntime::Run() {
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor stopped");
     }
-}
-
-void CoreRuntime::MaybeRefillRowIds() {
-    // The row-id lease's asking half (PW1b). It could not ride the trx-id
-    // lease's shape directly: that sequence is per *instance*, so a peer can
-    // pre-empt for it from the first tick, while a row-id lease is per
-    // *relation* and has no subject until a statement names one. So demand
-    // is recorded where it is discovered - `RowIdLeaseTable::Next` inserts
-    // the spent entry on a miss - and this tick answers it.
-    //
-    // The consequence, stated because a client sees it: the **first** INSERT
-    // into a relation on a given peer fails retryably, which is exactly what
-    // that lease's `TxnConflict` message already promises, and no later one
-    // does.
-    if (row_id_refill_in_flight_) return;
-    const auto neediest = row_id_leases_.NeediestRelation();
-    if (!neediest.has_value()) return;
-
-    row_id_refill_in_flight_ = true;
-    row_id_refill_.stats.NoteSubmit(scheduler_->clock().Now(), scheduler_->iterations());
-    scheduler_->Submit(sched::MakeCoroTask(
-        sched::SchedulingGroup::kSystem,
-        RequestRowIdLease(*transport_, row_id_refill_, *neediest, kRowIdLeasePerGrant,
-                          config_.core_id, /*system_core=*/0, log_, &*scheduler_),
-        [this](const Status& s) {
-            row_id_refill_in_flight_ = false;
-            row_id_refill_.stats.Complete(scheduler_->clock().Now(), scheduler_->iterations());
-            if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                // Nothing to return it to - a background task - and the
-                // consequence is bounded: INSERTs into that relation keep
-                // failing retryably until a later tick succeeds. A relation
-                // whose id space is genuinely exhausted answers zero-count
-                // forever, and the retry is then the honest report.
-                log_->Error("rowid", "core " + std::to_string(config_.core_id) +
-                                         ": row-id refill failed: " + s.message());
-            }
-        }));
-}
-
-void CoreRuntime::MaybeBurnIdleTrxIdBlock() {
-    if (!txn_manager_.has_value()) return;
-    // **Re-derived every tick, never latched.** `MaybeRefillTrxIds` below
-    // clears the flag only on the tick it acts on it, and it returns early
-    // while a refill is already in flight - so latching would leave the flag
-    // set across the grant that answered it, and the next tick would ask for
-    // a second block nothing needs. On core 0 that second ask is a carve, a
-    // superblock write and a `Sync()`. The answer is a fact about this tick,
-    // so it is stored as one.
-    burn_requested_ =
-        txn_manager_->MaybeBurnIdleBlock() == txn::TransactionManager::BurnOutcome::kNeedsBlock;
-}
-
-void CoreRuntime::MaybeRefillTrxIds() {
-    // Asked for *before* the window is spent, the extent lease's rule and
-    // for its reason: `TrxIdSequence::Next()` is called from inside a
-    // statement and cannot await, so by the time it reports exhaustion the
-    // statement is already lost.
-    //
-    // **Or asked for while the window is full**, which is the one case that
-    // inverts the rule above (AN-R13, AN-S1b): an *idle* core's window is
-    // not low and never will be, and its unspent range is what holds the
-    // instance's commit-order floor down. `burn_requested_` is set by the
-    // burn check on the same tick, so the grant is asked for on one tick
-    // and installed on the next - never burning into an empty hand, which
-    // would leave this core's next write failing retryably for no gain.
-    if (trx_id_refill_in_flight_ || (!trx_ids_->low_water() && !burn_requested_)) return;
-    burn_requested_ = false;
-
-    trx_id_refill_in_flight_ = true;
-    trx_id_refill_.stats.NoteSubmit(scheduler_->clock().Now(), scheduler_->iterations());
-    scheduler_->Submit(sched::MakeCoroTask(
-        sched::SchedulingGroup::kSystem,
-        RequestTrxIdLease(*transport_, trx_id_refill_, config_.core_id, /*system_core=*/0, log_,
-                          &*scheduler_),
-        [this](const Status& s) {
-            trx_id_refill_in_flight_ = false;
-            trx_id_refill_.stats.Complete(scheduler_->clock().Now(), scheduler_->iterations());
-            if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                // Nothing to return it to - this is a background task - and
-                // the consequence is bounded: writes on this core fail
-                // retryably until a later tick succeeds. Reads are
-                // untouched either way; a read view issues no id.
-                log_->Error("trxid", "core " + std::to_string(config_.core_id) +
-                                         ": transaction-id refill failed: " + s.message());
-            }
-        }));
 }
 
 Status CoreRuntime::Checkpoint() {
