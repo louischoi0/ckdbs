@@ -203,14 +203,10 @@ protected:
     // real ring, and the client the statement parks on.
     void OpenForeignIndexRig(struct ForeignIndexRig& rig, const char* table);
 
-    // Funds the peer for **one more** relation than the rig opened with
-    // (AI-T2). `OpenForeignIndexRig` funds exactly its own table, so a
-    // relation created afterwards through core 0's dispatcher is
-    // peer-*owned* and peer-*unfunded* - and an unfunded write refuses
-    // `TXN_CONFLICT retryable=1` forever, which reads like an engine
-    // refusal and is a fixture's. This is `AFundedPeerInsertsIntoItsOwn
-    // RelationEndToEnd`'s recipe, once: the fault extent, the write grants
-    // over the two creation pages, and a row-id block.
+    // Asserts the peer may write a relation created after the rig opened
+    // (AI-T2). It funded one - fault extent, write grants, a row-id block -
+    // until each funding piece retired (the grants at AW-S1b, the row-id
+    // lease at AT-S10b); what is left is the check that none is needed.
     void FundPeerForRelation(struct ForeignIndexRig& rig, catalog::Oid oid);
 
     // PW1c-7's restart, shared by two cells because only *half* of it is
@@ -634,6 +630,11 @@ TEST_F(CoreRuntimeTest, APeerCarvesItsTransactionIdsFromTheInstancesCeiling) {
     CoreRuntime::Config config = ConfigFor(1);
     const std::uint64_t ceiling_before = core0_->superblock.next_trx_id();
     ASSERT_GT(ceiling_before, 0u) << "a bootstrapped database should carry a ceiling";
+    // Core 0's sequence, built before the peer carves: its window opens at
+    // the ceiling as it stands now, so its first id is a carve that must
+    // find the peer's raise - a peer carving from a copy would leave core 0
+    // issuing the peer's own ids.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
 
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
@@ -649,7 +650,6 @@ TEST_F(CoreRuntimeTest, APeerCarvesItsTransactionIdsFromTheInstancesCeiling) {
         << "the peer carved from a copy rather than from the instance's superblock";
 
     // And core 0's next window sits past it.
-    txn::TrxIdSequence core0_ids(core0_->superblock);
     auto next_on_core0 = core0_ids.Next();
     ASSERT_TRUE(next_on_core0.ok()) << next_on_core0.status().message();
     EXPECT_GE(next_on_core0.value(), peer_ids.ceiling());
@@ -1763,7 +1763,7 @@ TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRo
     // wall, retryably, naming the lease. A peer carves its own ids now, so
     // a session on any core writes on its first statement.
     const std::string write = RoundTrip(fd, "INSERT INTO rotated VALUES (7)");
-    EXPECT_NE(write.rfind("ERR", 0), 0u) << "a peer's first write was refused: " << write;
+    EXPECT_EQ(write.rfind("INSERTED", 0), 0u) << "a peer's first write did not run: " << write;
 
     // STOP: replied to, and **routed to the instance rather than to this
     // reactor**. That is the contract - a stopped peer would still take its

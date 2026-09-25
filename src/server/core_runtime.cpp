@@ -84,6 +84,15 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             "CoreRuntime: core " + std::to_string(config.core_id) +
             " was given no superblock; a core cannot be opened without the volume's image");
     }
+    // And the instance's transaction-id ceiling (AT-S10b), for the same
+    // reason: a core that carved from a ceiling of its own would issue ids
+    // another core issues too.
+    if (config.trx_id_ceiling.superblock == nullptr) {
+        return Status::InvalidArgument(
+            "CoreRuntime: core " + std::to_string(config.core_id) +
+            " was given no transaction-id ceiling; two cores carving from two would issue one "
+            "id twice");
+    }
 
     // **This whole pass acts as the core it is opening** (AM-S2 step 3,
     // `base/current_core.hpp`). `Open` runs on the *startup* thread, not on
@@ -247,33 +256,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                   "records; nothing recovered here");
     }
 
-    // A peer may not raise the durable transaction ceiling - the superblock is
-    // page 0 and belongs to the system core (M5), and `superblock_` here is a
-    // copy. Refused rather than applied to the copy, which would be a raise
-    // nothing persists and a ceiling core 0 never learns of.
-    //
-    // **The ceiling it compares against is core 0's, and PW1 is when that
-    // started mattering.** This check used to compare a recovered stream
-    // against the 0 of a default-constructed copy, which was harmless only
-    // while a peer's stream named no transaction of its own - and the id
-    // leases ended that: the first peer to write and then remount would
-    // recover ids above 0 and refuse its own mount, on a database that did
-    // nothing wrong. PW1 fixed it by copying that one field across; the
-    // AL-S9 review replaced the copying with the whole image above, because
-    // field-by-field had by then been wrong three more times.
-
-    // Reads the report this core's own recovery produced, which is zeroed
-    // under one stream because core 0's pass covered these records and
-    // raised the ceiling there. So in that topology the check is core 0's
-    // to make and this one is vacuously true rather than skipped.
-    if (runtime->recovery_.next_trx_id > runtime->superblock_.next_trx_id()) {
-        return Status::Unsupported(
-            "core " + std::to_string(config.core_id) + ": its log names transaction id " +
-            std::to_string(runtime->recovery_.next_trx_id - 1) +
-            ", above the ceiling the superblock carries; the system core owns page 0 and grants "
-            "this core its id blocks (docs/inflight/in-progress/workplan-peer-writer.md PW1)");
-    }
-
     // **No completion checkpoint here** (RC08): it runs at the end of `Open`,
     // once the dispatcher whose assertion registry it may snapshot exists,
     // and only on a runtime handed the instance's anchor (AT-S8). Core 0's
@@ -297,10 +279,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->catalog_->SetSchemaWord(config.schema_word);  // AT-S2
     runtime->catalog_->SetOidSequence(config.oid_sequence);  // AT-S5b
     runtime->catalog_->SetMarkCounter(config.mark_counter);  // AT-S5b
-    // RV3: a peer may not write a catalog page (P6), so this should never
-    // fire - but if a write ever slips through, logged beats silent.
+    // Every core's catalog writes are logged (RV3), on every core since
+    // AT-S5.
     runtime->catalog_->SetWal(runtime->wal_.get());
-    const bool is_peer = config.core_id != catalog::kSystemCore;
 
     // The transaction stack. **Every core carves its own transaction-id
     // window from the instance's ceiling since AT-S10b** - the superblock,
@@ -308,45 +289,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // issues row ids through the catalog's direct path, as core 0 always
     // has. A peer used to draw both from blocks core 0 carved and leased to
     // it over the ring, because page 0 and the catalog pages were core 0's.
-    if (config.trx_id_ceiling.superblock != nullptr) {
-        runtime->trx_ids_.emplace(*config.trx_id_ceiling.superblock,
-                                  config.trx_id_ceiling.persist);
-        runtime->trx_ids_->SetLatch(config.trx_id_ceiling.latch);
-    } else {
-    // Handed none: this runtime carves from `superblock_`, its own copy
-    // (see the header), and persists page 0 itself - a fixture's
-    // arrangement. The raised ceiling reaches page 0 before the block is
-    // handed out, which is the ordering `Carve` says is a correctness
-    // statement rather than a preference.
-    runtime->trx_ids_.emplace(runtime->superblock_, [runtime = runtime.get()] {
-        //
-        // **Read-modify-write, not `Expeditor::PersistSuperBlock`'s blanket
-        // encode.** The Expeditor writes the one image every writer of page
-        // 0 goes through; `superblock_` here is a *copy* taken at `Open`,
-        // and encoding it whole would erase any anchor a checkpoint had
-        // written to the page since - silently, the symptom being a later
-        // mount replaying from the head of the log. Nothing writes page 0
-        // beside this on a core-0 runtime today (a core-0 runtime is handed
-        // no anchor, AT-S8), and the shape is what keeps that from being
-        // load-bearing. The store's sync alone: page 0 is unlogged, so
-        // there is no record to make durable first - and **after the page
-        // is released**, because a flush waits out every exclusive holder
-        // it meets (`DevicePageStore::WriteBack`'s `kWait`), and no flush
-        // caller may hold a page latch across one.
-        {
-            auto page = runtime->store_->Get(kSuperBlockPageId);
-            if (!page.ok()) return page.status();
-            auto on_disk = SuperBlock::Decode(page.value().bytes());
-            if (!on_disk.ok()) return on_disk.status();
-            if (Status s = on_disk.value().SetNextTrxId(runtime->superblock_.next_trx_id());
-                !s.ok()) {
-                return s;
-            }
-            on_disk.value().Encode(page.value().bytes());
-        }
-        return runtime->store_->Sync();
-    });
-    }
+    runtime->trx_ids_.emplace(*config.trx_id_ceiling.superblock, config.trx_id_ceiling.persist);
+    runtime->trx_ids_->SetLatch(config.trx_id_ceiling.latch);
     // The undo log is already built - recovery wrote its compensations
     // through it above, before this stack existed.
     // The lock table: the instance's when handed one (AO-S5), else this
@@ -432,20 +376,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // Asymmetry 1 was made enforceable at dispatch by PW4 and is history:
     // the argument lived at `PeerDdlRefused`, which AT-S5 deleted with the
     // route (`crosscore.md` CC11).
-    if (is_peer) {
-        // `SetCatalogReadOnly(true)` stood here until AT-S5: a peer's
-        // dispatcher refused DDL and named keys, took no sorted fill, and
-        // shipped or refused every write to a relation it did not own -
-        // because the catalog pages had one writer. They have none
-        // (`DevicePageStore::MayWrite` names what serialises them).
-        // **CR7's batch was armed here and is gone** (AT-S7): a peer
-        // recorded nothing until CR7, then folded into a batch and flushed
-        // it to core 0 on the tick, because `sys.access_stats` sits in the
-        // reserved range and a peer could not write it. It writes the
-        // relation itself now, under its root page's latch, so the switch
-        // above is the whole of the arming and this block has nothing left
-        // to do for statistics.
-    }
+    // `SetCatalogReadOnly(true)` stood here until AT-S5 and CR7's batch
+    // arming until AT-S7, both for a peer: its catalog pages had one writer
+    // and `sys.access_stats` sat where it could not write.
 
     // **Assertion enforcement at mount** (RC07). Here rather than beside
     // `RecoverCoreAtMount` above for `Expeditor::Open`'s reason - the

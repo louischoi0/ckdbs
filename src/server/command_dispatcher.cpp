@@ -4295,9 +4295,9 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     // The write scope is opened before anything is parsed, so that a
     // statement inside an explicit transaction re-mints its read view at
     // the same boundary a SELECT does.
-    // ErrorReply, not a bare "ERR ": on a peer a spent transaction-id
-    // lease refuses here as TxnConflict, and the wire's `retryable=1` is
-    // what the client's retry loop reads.
+    // ErrorReply, not a bare "ERR ": a refusal here carries the wire's
+    // `retryable=1` where its code is retryable, which is what a client's
+    // retry loop reads.
     auto opened = BeginWrite(session);
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
@@ -4601,8 +4601,8 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
 
     // **No routing, since AT-S9.** R4/IS3's block stood here: it peeked the
     // row id this core would issue, asked which core owned the range that
-    // id fell in, and pumped lease demand so core 0 would open a range for
-    // this core - insert spreading. Spreading retired with ownership (the
+    // id fell in, and pumped row-id lease demand so core 0 would open a
+    // range for this core - insert spreading. Spreading retired with ownership (the
     // operator's ruling at AT-S9): no range is opened, and a row lands in
     // whichever existing range its id falls in (`TableAccess::HeapChainFor`,
     // which refuses an id in no range), on the core the session is on.
@@ -4717,12 +4717,9 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
     // appended in order, which is wrong for any id the caller names. Whether
     // a caller names one is a fact about the rows now, so the caller checks
     // the rows; what is left here is the relation-shaped half.
-    // PW1c-5 (revised at the 25059bf review's S-1): the sorted fill's id
-    // block is AllocateRowIdRange's, straight off the catalog page a peer
-    // may never write - so a peer takes the ordinary per-row path, which
-    // allocates through the lease and works. Ineligibility, not a
-    // refusal: the first form refused the statement whole, which was
-    // false of what the per-row path could do.
+    // PW1c-5 (revised at the 25059bf review's S-1): the sorted fill is
+    // ineligible rather than refused where it cannot run, and the ordinary
+    // per-row path serves the statement.
     return ta.clustered_type == catalog::ClusteredType::kHeap &&
            ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
            !enforcer_->AnyOn(oid);
@@ -5087,9 +5084,9 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         // (CheckWriteAffinity); the refusal is per row now, because that is
         // what it was always about. Admitting a supplied id writes the
         // relation's sys.tables row - the mark, or the key-order flip - and
-        // that page is the system core's. A row that omits its pk writes no
-        // catalog page at all: AllocateRowId below draws from this core's
-        // lease, which is why the omitted arity needs no gate.
+        // that page was the system core's. A row that omits its pk bumps
+        // the same row's mark in `AllocateRowId` below, on every core since
+        // AT-S10b.
         // A peer refused a named key here until AT-S5 - admitting one
         // writes the relation's `sys.tables` row, which was the system
         // core's page. It is every core's now, under the page latch and
@@ -8032,8 +8029,8 @@ StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
     }
 
     // Autocommit: a view over the committed state, owned by no
-    // transaction - the same one a step service's stage mints, and leased
-    // because that seam leases (manager.hpp says why, and says plainly that
+    // transaction, leased because that seam leases (manager.hpp says why,
+    // and says plainly that
     // *this* holder's statement never parks with it: the dispatch path is
     // synchronous, and the statement drops this object before any wait).
     return txn::AutocommitSnapshot(txn_);

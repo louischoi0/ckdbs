@@ -341,7 +341,8 @@ bool Scheduler::RunReadyTasks(bool& advanced) {
     // and a task submitted by a poll waits for the next round too.
     //
     // Two floors under the share law, both forced by the lease-refill
-    // trace (docs/inflight/in-progress/workplan-peer-writer.md PW7; sched.md §4 carries them).
+    // trace of PW7 (sched.md §4 carries them; the refill itself retired at
+    // AT-S10b).
     // A *parked* coroutine answers kSuspended in nanoseconds. Without the
     // first floor the loop budget re-polled one parked system task up to
     // 64 times an iteration and charged every poll to a group with share

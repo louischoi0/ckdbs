@@ -172,7 +172,6 @@ struct FkRig {
 
     // The parent and the child, both created from core 0; no core owns
     // either since AT-S9, so "on core N" below names the session's core.
-    // The peer is funded with a row-id block, since it writes the child.
     Status Seed() {
         CommandDispatcher& d0 = rig->core(0).dispatcher();
         if (Status s = Expect("create p", d0.Dispatch("CREATE TABLE p (id int64, v int64) BTREE").response,

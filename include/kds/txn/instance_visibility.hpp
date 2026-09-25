@@ -24,7 +24,7 @@
 // is a dirty read rather than an error.
 //
 // **A bound on trx ids cannot be repaired into an instance-wide one.** Ids
-// are leased to each core in disjoint blocks of `kTrxIdBlockSize`
+// are carved by each core in disjoint blocks of `kTrxIdBlockSize`
 // (`trx_id.hpp`), so issue order across cores is not id order:
 //
 //   - a commit on a core holding a *higher* block is above a lower core's

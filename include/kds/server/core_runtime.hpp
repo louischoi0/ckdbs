@@ -368,11 +368,9 @@ public:
         // sequence carves its window from, the superblock latch the carve
         // reads and raises it under, and what makes a raised ceiling
         // durable. Every core's `TrxIdSequence` is built over these three,
-        // so two cores carving at once get disjoint blocks. A null
-        // `superblock` is a runtime that carves from its own copy and
-        // persists page 0 itself - a fixture's arrangement, and a core-0
-        // runtime's in a rig that hands it nothing; two runtimes so built
-        // over one volume would issue one id twice.
+        // so two cores carving at once get disjoint blocks. **Required**,
+        // as `superblock` is: `Open` refuses a null one. A null `persist`
+        // raises the ceiling in memory only, a fixture's arrangement.
         struct TrxIdCeiling {
             SuperBlock* superblock = nullptr;
             Latch* latch = nullptr;
@@ -619,11 +617,8 @@ private:
     // startup thread: the dispatcher needs one for SHOW-class commands, and
     // the live instance belongs to core 0. Nothing here reaches the page.
     //
-    // Since PW1 the copy carries one field that is not merely decorative:
-    // `Config::next_trx_id`, core 0's transaction-id ceiling, is applied to
-    // it at `Open` so the mount check has a real bound and `trx_ids_` below
-    // caches a real one. It is still a copy and still unpersisted - a peer's
-    // *raise* of that ceiling comes from a grant, never from here.
+    // No transaction id is carved from it: `trx_ids_` below carves from the
+    // instance's image, handed in `Config::trx_id_ceiling` (AT-S10b).
     SuperBlock superblock_;
     std::optional<catalog::Catalog> catalog_;
     std::optional<txn::TrxIdSequence> trx_ids_;

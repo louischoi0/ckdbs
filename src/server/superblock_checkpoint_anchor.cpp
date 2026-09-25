@@ -81,7 +81,8 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
     // The fold, the field and the image under one hold (`SetLatch`) - and
     // page 0's pin with them. The sync below is outside both: a pin kept
     // across it holds page 0's exclusive page latch through the fsync, and
-    // core 0's carve, already under the superblock latch, would spin on it.
+    // a carve on any core, already under the superblock latch, would spin
+    // on it.
     wal::CheckpointAnchorRecord landing;
     std::size_t folded = 0;
     {

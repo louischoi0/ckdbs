@@ -587,10 +587,9 @@ public:
         return store_->Sync();
     }
 
-    // Writes the superblock page and syncs it. What `txn::TrxIdSequence`
-    // calls when it raises the transaction-id ceiling: the sequence hands
-    // out a block of ids from memory, and this is what makes that block's
-    // ceiling survive a restart so the ids are never reissued.
+    // Writes the superblock page and syncs it, the log first. The mount's
+    // raise of the transaction-id ceiling calls it; a carve calls
+    // `PersistTrxIdCeiling` below, which skips the log drain.
     //
     // A full Sync() rather than a page write, because a superblock in the
     // page cache is a ceiling that a crash still loses - which is the whole
@@ -790,8 +789,8 @@ private:
     // **Page 0's two writers since AT-S8, and the one run** - declared above
     // everything that borrows them. `superblock_latch_` is taken around every
     // mutation of `database_->superblock` and the encode that follows it:
-    // `trx_ids_`' carve on core 0 and the checkpoint anchor's fold from any
-    // core (`SuperBlockCheckpointAnchor::SetLatch`). `checkpoint_gate_` is
+    // every core's transaction-id carve (AT-S10b) and the checkpoint
+    // anchor's fold from any core (`SuperBlockCheckpointAnchor::SetLatch`). `checkpoint_gate_` is
     // what lets at most one of the instance's checkpointers run
     // (`wal::CheckpointGate`); every peer is handed both.
     //

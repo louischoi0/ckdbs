@@ -77,8 +77,6 @@ inline constexpr std::uint64_t kTrxIdBlockSize = 4096;
 struct TrxIdRange {
     std::uint64_t first = 0;
     std::uint64_t count = 0;
-
-    bool empty() const noexcept { return count == 0; }
 };
 
 class TrxIdSequence {

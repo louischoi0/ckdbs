@@ -115,7 +115,7 @@ public:
     // **The superblock latch** (AT-S8), null where one thread writes page 0.
     // Every core's checkpointer publishes here since `RemoteCheckpointAnchor`
     // retired, so the fold and the in-memory `SuperBlock` it encodes are
-    // written from any core, and so is `next_trx_id` by core 0's carve
+    // written from any core, and so is `next_trx_id` by every core's carve
     // (`txn::TrxIdSequence::SetLatch`): both mutate one object and encode it
     // whole, and an encode racing the other's field write is a torn image.
     // Held across the mutation and the encode, **never across the sync** -
