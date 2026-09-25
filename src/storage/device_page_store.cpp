@@ -5,10 +5,12 @@
 #include "kds/base/current_core.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef NDEBUG
@@ -1363,6 +1365,25 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
     return Status::OK();
 }
 
+void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
+    // A writeback's claim spans a device write and, at worst, a WAL sync -
+    // milliseconds, not the nanoseconds a page latch is held for - so the
+    // spin is brief and the rest of the wait sleeps rather than yields
+    // (`base/latch.hpp` says what a yield loop costs against an fsync).
+    for (std::uint32_t turn = 0;; ++turn) {
+        {
+            LatchGuard structure(structure_latch());
+            auto it = frames_.find(page_id);
+            if (it == frames_.end() || !it->second.writing) return;
+        }
+        if (turn < 64) {
+            std::this_thread::yield();
+        } else {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+    }
+}
+
 StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids,
                                                   HeldFrames held) {
     // Ascending and unique: id order is file order (page.md section 13),
@@ -1404,6 +1425,16 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // holding a pin (the header's page-latch section) - and one page latch is
     // held at a time, so writeback adds no page-against-page pair. The clean
     // is then conditional on what the copy saw (`CopiedPage`).
+    //
+    // **And each frame is claimed from its copy to its clean** (AT-S10e,
+    // `Frame::writing`). The generation made the clean honest and left the
+    // *order* of two writebacks' device writes to chance: one that copied
+    // an older image could land it after a newer one had gone out and
+    // cleaned the frame. A claimed frame is another writeback's until its
+    // clean; `kWait` waits for that and looks again, `kSkip` leaves it. The
+    // wait holds no claim of this call's own - a run is claimed, written
+    // and released before the next is looked at - so two writebacks cannot
+    // wait on each other.
     struct CopiedPage {
         Frame* frame = nullptr;
         std::uint32_t dirty_gen = 0;  // the frame's generation at the copy
@@ -1411,10 +1442,17 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     std::size_t written = 0;
     std::vector<std::byte> scratch;
     std::vector<CopiedPage> copied;
+    // Gives back the claims on `copied[from, to)`. Under the structure latch;
+    // a claimed frame is dirty, so it is still in the table.
+    const auto release = [&](std::size_t from, std::size_t to) {
+        LatchGuard structure(structure_latch());
+        for (std::size_t k = from; k < to; ++k) copied[k].frame->writing = false;
+    };
     for (std::size_t i = 0; i < ordered.size();) {
         std::size_t run = 0;
         std::uint64_t run_lsn = wal::kNoLsn;
         copied.clear();
+        bool claimed_elsewhere = false;
         {
             LatchGuard structure(structure_latch());
             auto it = frames_.find(ordered[i]);
@@ -1422,25 +1460,45 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 ++i;  // evicted, or already written by someone else: not ours
                 continue;
             }
+            if (it->second.writing) {
+                if (held == HeldFrames::kSkip) {
+                    ++i;  // its writer carries it, or leaves it dirty
+                    continue;
+                }
+                claimed_elsewhere = true;
+            } else {
+                // Extend the run while the next ids are consecutive,
+                // resident, dirty and unclaimed - the shape one
+                // WritePageRun can take.
+                run = 1;
+                while (run < kWritebackRunPages && i + run < ordered.size() &&
+                       ordered[i + run] == ordered[i] + run) {
+                    auto next = frames_.find(ordered[i + run]);
+                    if (next == frames_.end() || !next->second.dirty || next->second.writing) {
+                        break;
+                    }
+                    ++run;
+                }
 
-            // Extend the run while the next ids are consecutive, resident
-            // and dirty - the shape one WritePageRun can take.
-            run = 1;
-            while (run < kWritebackRunPages && i + run < ordered.size() &&
-                   ordered[i + run] == ordered[i] + run) {
-                auto next = frames_.find(ordered[i + run]);
-                if (next == frames_.end() || !next->second.dirty) break;
-                ++run;
+                // Pinned and claimed here, under the hold that found them: a
+                // concurrent writeback may clean one of these, after which
+                // the dirty invariant no longer keeps it resident, and a pin
+                // does.
+                for (std::size_t k = 0; k < run; ++k) {
+                    Frame& frame = frames_.find(ordered[i + k])->second;
+                    CountPin(frame);
+                    frame.writing = true;
+                    copied.push_back(CopiedPage{&frame});
+                }
             }
-
-            // Pinned here, under the hold that found them: a concurrent
-            // writeback may clean one of these, after which the dirty
-            // invariant no longer keeps it resident, and a pin does.
-            for (std::size_t k = 0; k < run; ++k) {
-                Frame& frame = frames_.find(ordered[i + k])->second;
-                CountPin(frame);
-                copied.push_back(CopiedPage{&frame});
-            }
+        }
+        if (claimed_elsewhere) {
+            // Outside the hold. The other writeback's copy may be older than
+            // what this caller must see written, so this waits for its clean
+            // and then asks again: still dirty means a later write it did not
+            // carry, and this writeback takes it.
+            AwaitWritebackClaim(ordered[i]);
+            continue;
         }
 
         scratch.resize(run * kPageSize);
@@ -1454,7 +1512,11 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 AcquirePageLatch(page_id, *page.frame, PinMode::kShared);
             } else if (!TryAcquirePageLatchShared(page_id, *page.frame)) {
                 LatchGuard structure(structure_latch());
-                for (std::size_t rest = k; rest < run; ++rest) UncountPin(*copied[rest].frame);
+                for (std::size_t rest = k; rest < run; ++rest) {
+                    UncountPin(*copied[rest].frame);
+                    copied[rest].frame->writing = false;
+                }
+                copied.resize(k);
                 run = k;
                 break;
             }
@@ -1523,6 +1585,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                     log_->Error("pagestore", "WAL gate refused a writeback up to page_lsn " +
                                                  std::to_string(run_lsn) + ": " + s.message());
                 }
+                release(0, run);
                 return s;
             }
         }
@@ -1541,6 +1604,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                                              std::to_string(ordered[i]) + " (run of " +
                                              std::to_string(run) + "): " + wrote.message());
             }
+            release(0, run);
             return wrote;
         }
 
@@ -1550,9 +1614,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // the copy is a write fetched after it, whose bytes did not go out;
         // that frame stays dirty with its recLSN, and a later writeback
         // carries it.
+        // The claim goes back here too, clean or not, under the same hold: a
+        // waiter that sees it gone sees the clean with it.
         {
             LatchGuard structure(structure_latch());
             for (std::size_t k = 0; k < run; ++k) {
+                copied[k].frame->writing = false;
                 auto cleaned = frames_.find(ordered[i + k]);
                 if (cleaned == frames_.end()) continue;
                 if (cleaned->second.dirty_gen != copied[k].dirty_gen) {

@@ -1179,5 +1179,120 @@ TEST(WritebackUnderAWriterTest, AWriteFetchedBeforeTheCopyAndLatchedAfterItKeeps
     ASSERT_TRUE(device.value()->ReadPage(page, on_device).ok());
     EXPECT_EQ(on_device[kPageBodyOffset], std::byte{0xCC}) << "the write never went out";
 }
+// ---- AT-S10e: two writebacks of one page land in copy order --------------
+//
+// A device that holds the first write of one page until released: the
+// writeback that made it has copied its image and not yet put it on disk,
+// which is the whole window.
+class HoldingDevice final : public PageDevice {
+public:
+    HoldingDevice(PageDevice& inner, PageId held) : inner_(inner), held_page_(held) {}
+
+    std::uint32_t page_capacity() const noexcept override { return inner_.page_capacity(); }
+    Status ReadPage(PageId id, std::span<std::byte, kPageSize> out) override {
+        return inner_.ReadPage(id, out);
+    }
+    Status WritePage(PageId id, std::span<const std::byte, kPageSize> in) override {
+        if (id == held_page_ && !used_.exchange(true)) {
+            holding_.store(true, std::memory_order_release);
+            while (!released_.load(std::memory_order_acquire)) std::this_thread::yield();
+        }
+        return inner_.WritePage(id, in);
+    }
+    Status WritePageRun(PageId first, std::uint32_t nr, std::span<const std::byte> in) override {
+        for (std::uint32_t k = 0; k < nr; ++k) {
+            if (Status s = WritePage(first + k, std::span<const std::byte, kPageSize>(
+                                                    in.data() + k * kPageSize, kPageSize));
+                !s.ok()) {
+                return s;
+            }
+        }
+        return Status::OK();
+    }
+    Status EnsureCapacity(std::uint32_t nr_pages) override {
+        return inner_.EnsureCapacity(nr_pages);
+    }
+    Status Sync() override { return inner_.Sync(); }
+
+    bool holding() const noexcept { return holding_.load(std::memory_order_acquire); }
+    void Release() noexcept { released_.store(true, std::memory_order_release); }
+
+private:
+    PageDevice& inner_;
+    PageId held_page_;
+    std::atomic<bool> used_{false};
+    std::atomic<bool> holding_{false};
+    std::atomic<bool> released_{false};
+};
+
+// Two flushes of one page, on two cores, with a write between their copies.
+// The first copies the older image and is held before its device write;
+// the page is written again; the second flushes. **The older image must not
+// land last**: before AT-S10e the second copied the newer image, wrote it
+// and cleaned the frame, the first then wrote the older one over it, and a
+// frame that read clean sat above a disk one write behind - a committed
+// update lost with no crash to replay it. The claim makes the second wait
+// for the first's clean and then carry the newer image itself.
+//
+// **The mutation**: skip `AwaitWritebackClaim` and treat a claimed frame as
+// not ours, and the device holds the older byte.
+TEST(EvictionWritebackTest, TheOlderOfTwoWritebacksOfOnePageNeverLandsLast) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    constexpr PageId kFirst = 16;
+    HoldingDevice holding(*device.value(), kFirst);
+    auto opened = DevicePageStore::Open(holding, /*first_new_page_id=*/kFirst);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    store.SetLatchArmed(true, /*concurrent_pinners=*/8);
+
+    constexpr std::size_t kMark = kPageSize - 1;  // a body byte no header owns
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    ASSERT_EQ(page, kFirst);
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.bytes()[kMark] = std::byte{1};
+    created.value().second.Release();
+
+    // The first flush: copies the image holding 1 and stops at the device.
+    std::thread older([&] {
+        SetCurrentCore(1);
+        EXPECT_TRUE(store.Flush().ok());
+    });
+    while (!holding.holding()) std::this_thread::yield();
+
+    // The page written again, to 2, while that image is in flight.
+    SetCurrentCore(0);
+    {
+        auto again = store.Get(page);
+        ASSERT_TRUE(again.ok());
+        again.value().bytes()[kMark] = std::byte{2};
+    }
+
+    // The second flush. Fixed, it waits for the first's claim; broken, it
+    // writes 2 and returns - either way the first is released once the
+    // second has had its chance to finish.
+    std::atomic<bool> newer_done{false};
+    std::thread newer([&] {
+        SetCurrentCore(2);
+        EXPECT_TRUE(store.Flush().ok());
+        newer_done.store(true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    while (!newer_done.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    holding.Release();
+    older.join();
+    newer.join();
+
+    std::array<std::byte, kPageSize> on_disk{};
+    ASSERT_TRUE(device.value()->ReadPage(page, on_disk).ok());
+    EXPECT_EQ(on_disk[kMark], std::byte{2})
+        << "the older image landed last: the disk is one write behind a frame that reads clean";
+}
+
 }  // namespace
 }  // namespace kds::storage

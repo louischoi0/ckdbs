@@ -353,6 +353,11 @@ public:
     StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids,
                                     HeldFrames held = HeldFrames::kWait);
 
+    // Returns once no writeback holds `page_id`'s claim (`Frame::writing`,
+    // AT-S10e) - its clean done, or the frame gone. Holds nothing while it
+    // waits.
+    void AwaitWritebackClaim(PageId page_id);
+
     // Pages one coalesced run may span, and so the scratch bound: 8 pages
     // = 64 KiB, chosen as the largest single write the background task
     // should hold the core for under run-to-completion. `[PROPOSED]` -
@@ -811,6 +816,18 @@ private:
         // touched five times outlives one touched once - which a bit cannot
         // express, and which is the whole of EV1's "no LRU lists".
         std::uint8_t usage = 0;
+
+        // **A writeback holds this frame between its copy and its clean**
+        // (AT-S10e), under the structure latch like `dirty`. Two writebacks
+        // of one frame used to run unordered: the one that copied the older
+        // image could reach the device last, after the newer one had cleaned
+        // the frame, leaving the disk behind a frame that read clean - a
+        // lost committed update with no crash to replay it. A writeback that
+        // meets a claimed frame waits for the claim and looks again
+        // (`HeldFrames::kWait`), or leaves the frame to its writer
+        // (`kSkip`). In the padding after `usage`, so the frame's size does
+        // not move.
+        bool writing = false;
 
         // **Moved at every dirty mark** (AT-S8, step 1b), under the
         // structure latch like `dirty` itself, to the next value of the
