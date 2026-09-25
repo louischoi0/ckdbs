@@ -107,13 +107,10 @@ public:
     // ---- D19's fallback (AT-S10c, `connection_handoff.hpp`) --------------
     //
     // Core 0's listener, where the port cannot be shared: each accepted
-    // connection goes to `handoff.NextCore()`, and one that is not
-    // `self_core` is offered to that core's inbox rather than run here.
-    // Before Attach(); `handoff` must outlive this server.
-    void set_handoff(ConnectionHandoff* handoff, std::uint32_t self_core) noexcept {
-        handoff_ = handoff;
-        self_core_ = self_core;
-    }
+    // connection goes to `handoff.NextCore()`, and one not placed on core 0
+    // is offered to that core's inbox rather than run here. Before Attach();
+    // `handoff` must outlive this server.
+    void set_handoff(ConnectionHandoff* handoff) noexcept { handoff_ = handoff; }
 
     // The receiving side, after Attach(): parks a task on this reactor that
     // wakes whenever `core`'s inbox holds a socket and runs each one here,
@@ -336,16 +333,14 @@ private:
         return log_ != nullptr && log_->enabled(level);
     }
 
-    // What `Host`'s parked task reads: the server it adopts into (null once
-    // detached, re-pointed by a move) and the predicate its wait polls.
-    // Shared with the task's frame, so neither dangles.
+    // What `Host`'s parked task shares with this server: the server it
+    // adopts into, null once detached and re-pointed by a move. Shared with
+    // the task's frame, so the task never reads a dead one.
     struct HostState {
         TcpServer* server = nullptr;
-        ConnectionHandoff* handoff = nullptr;
-        std::uint32_t core = 0;
-        std::function<bool()> ready;
     };
-    static sched::Coro RunHost(std::shared_ptr<HostState> state);
+    static sched::Coro RunHost(std::shared_ptr<HostState> state, ConnectionHandoff& handoff,
+                               std::uint32_t core);
 
     // Everything after `accept()` returns a socket: the connection's state,
     // its protocol session and its reactor registration.
@@ -355,7 +350,6 @@ private:
     // A `Hosting()` server: no socket is not an error at Attach().
     bool hosting_ = false;
     ConnectionHandoff* handoff_ = nullptr;  // set_handoff
-    std::uint32_t self_core_ = 0;
     std::shared_ptr<HostState> host_;  // Host
     sched::Scheduler* scheduler_ = nullptr;
     CommandDispatcher* dispatcher_ = nullptr;

@@ -84,7 +84,6 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
     : listen_fd_(other.listen_fd_),
       hosting_(other.hosting_),
       handoff_(other.handoff_),
-      self_core_(other.self_core_),
       host_(std::move(other.host_)),
       scheduler_(other.scheduler_),
       dispatcher_(other.dispatcher_),
@@ -121,7 +120,6 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         listen_fd_ = other.listen_fd_;
         hosting_ = other.hosting_;
         handoff_ = other.handoff_;
-        self_core_ = other.self_core_;
         host_ = std::move(other.host_);
         if (host_ != nullptr) host_->server = this;
         scheduler_ = other.scheduler_;
@@ -221,8 +219,12 @@ void TcpServer::Detach() noexcept {
             (void)scheduler_->UnregisterIoHandler(listen_fd_);
         }
         // `Host`'s task ends at its next wake rather than adopting into a
-        // server that is gone.
-        if (host_ != nullptr) host_->server = nullptr;
+        // server that is gone - and the state is dropped, so a later move of
+        // this detached server cannot re-point the task at it.
+        if (host_ != nullptr) {
+            host_->server = nullptr;
+            host_.reset();
+        }
         scheduler_ = nullptr;
         dispatcher_ = nullptr;
     }
@@ -257,7 +259,7 @@ void TcpServer::OnListenerReadable() {
     // runs it, and one routed elsewhere is that core's from here on.
     if (handoff_ != nullptr) {
         const std::uint32_t core = handoff_->NextCore();
-        if (core != self_core_) {
+        if (core != 0) {
             handoff_->Offer(core, client_fd);
             return;
         }
@@ -334,25 +336,24 @@ Status TcpServer::Host(ConnectionHandoff& handoff, std::uint32_t core) {
     }
     host_ = std::make_shared<HostState>();
     host_->server = this;
-    host_->handoff = &handoff;
-    host_->core = core;
-    // A raw pointer to the state it lives in: the task's frame owns a
-    // `shared_ptr` to the state, so the predicate cannot outlive it.
-    HostState* state = host_.get();
-    host_->ready = [state] {
-        return state->server == nullptr || state->handoff->Pending(state->core);
-    };
-    scheduler_->Submit(sched::MakeCoroTask(sched::SchedulingGroup::kSystem, RunHost(host_)));
+    scheduler_->Submit(sched::MakeCoroTask(sched::SchedulingGroup::kSystem,
+                                           RunHost(host_, handoff, core)));
     return Status::OK();
 }
 
-sched::Coro TcpServer::RunHost(std::shared_ptr<HostState> state) {
+sched::Coro TcpServer::RunHost(std::shared_ptr<HostState> state, ConnectionHandoff& handoff,
+                               std::uint32_t core) {
+    // A frame local: the wait holds a pointer to it only while this frame
+    // is suspended, which is while the frame exists.
+    const std::function<bool()> ready = [s = state.get(), &handoff, core] {
+        return s->server == nullptr || handoff.Pending(core);
+    };
     while (true) {
         // Level-triggered (AR0-6-R1): the reactor re-polls this after every
         // block, so the kick an offer sends only has to end the block.
-        co_await sched::WaitUntil{&state->ready};
+        co_await sched::WaitUntil{&ready};
         if (state->server == nullptr) co_return Status::OK();
-        for (int fd : state->handoff->Take(state->core)) state->server->AdoptConnection(fd);
+        for (int fd : handoff.Take(core)) state->server->AdoptConnection(fd);
     }
 }
 

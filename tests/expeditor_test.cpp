@@ -450,8 +450,9 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
 // for it, and an inbox nobody took keeps its socket open and silent until
 // the instance stops.
 //
-// **The mutation**: make `TcpServer::Host` return before it submits its
-// task and the second read times out.
+// **The mutations**: make `TcpServer::Host` return before it submits its
+// task and the second read times out; drop core 0's `set_handoff` and the
+// placement count reads 0.
 namespace {
 // Bytes back within `ms`, or -1 on a timeout.
 ssize_t ReadWithin(int fd, int ms) {
@@ -486,10 +487,12 @@ TEST_F(ExpeditorTest, UnderTheHandoffFallbackAConnectionCoreZeroAcceptedIsServed
     EXPECT_GT(ReadWithin(to_core0, 5000), 0) << "core 0 did not answer the connection it kept";
     EXPECT_GT(ReadWithin(to_core1, 5000), 0)
         << "nobody answered the connection core 0 handed to core 1";
+    // And core 0 routed both: without the routing it would adopt both
+    // itself and both reads above would still answer.
+    EXPECT_EQ(db.connection_handoff()->placed(), 2u) << "core 0 placed no connection";
     ::close(to_core0);
     ::close(to_core1);
     EXPECT_TRUE(running.Stop().ok());
-    EXPECT_FALSE(db.connection_handoff()->Pending(1)) << "core 1 never took its inbox";
 }
 
 TEST_F(ExpeditorTest, WhereThePortIsSharedThereIsNoHandoff) {

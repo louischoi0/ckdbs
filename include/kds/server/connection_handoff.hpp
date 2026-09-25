@@ -28,9 +28,12 @@
 // but a vector push or swap. `pending` is a hint read without the latch, so
 // a woken reactor pays one acquire load when its inbox is empty; it is set
 // under the latch before the kick (release) and cleared under the latch by
-// the take, so a kick that lands before the reactor parks is never lost -
-// the reactor re-polls its wait predicate after every block (AR0-6-R1's
-// level-triggered wait), and the predicate reads `pending`.
+// the take, so **no socket is stranded**: the reactor re-polls its wait
+// predicate after every block (AR0-6-R1's level-triggered wait), and the
+// predicate reads `pending`. A kick can still be skipped - one that lands
+// after the reactor's last poll and before it raises its sleeping flag -
+// and that costs at most one idle block (`max_idle_block_ms`), AR0-6-R1's
+// stated price, never the socket.
 //
 // ---- Ownership of a socket ----------------------------------------------
 //
@@ -55,6 +58,9 @@ public:
     // The core a newly accepted connection is placed on: round-robin over
     // every core, core 0 included. Core 0's accept path only.
     std::uint32_t NextCore() noexcept;
+
+    // Connections placed so far, on any core. Diagnostics and tests.
+    std::uint32_t placed() const noexcept { return next_.load(std::memory_order_relaxed); }
 
     // Places `fd` in `core`'s inbox, then kicks `core`. Callable from any
     // thread; `core` must be below `cores()`.

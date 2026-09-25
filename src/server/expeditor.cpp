@@ -134,8 +134,8 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
         // has no off position left to describe.
         {"peer_listeners",
          "peer_listeners is retired since v3.0.0's M3: every core accepts on the port "
-         "(SO_REUSEPORT above one core) and a session runs on the core that accepted it; "
-         "remove the key"},
+         "(SO_REUSEPORT above one core) and a session runs on the core that accepted it, "
+         "or where the port cannot be shared on the core core 0 hands it to; remove the key"},
         // AT-S9 (D17, D18). Placement chose the core that owned a relation,
         // and nothing owns one.
         {"placement",
@@ -1863,7 +1863,7 @@ Status Expeditor::Start() {
             return s;
         }
     }
-    if (handoff_.has_value()) listener.value().set_handoff(&*handoff_, /*self_core=*/0);
+    if (handoff_.has_value()) listener.value().set_handoff(&*handoff_);
     if (Status s = listener.value().Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
         return s;
     }
