@@ -266,10 +266,12 @@ like `durability`.
   other does.
 - **Class / access stats**: AG14 — unchanged; `RecordChainAccess` sees the
   same chain.
-- **Cross-core**: AG-M is the contract. A remote core runs a local
-  `Aggregator` over its partition and ships states; the home core merges.
-  The wire format for a shipped state is `crosscore.md`'s, not this
-  document's.
+- **Cross-core**: nothing crosses. An aggregated statement runs, whole,
+  on its session's core (`crosscore.md` CC1), so no state is shipped and
+  no core merges another's. AG-M stays the contract - a merge of two
+  partitions equals the one-pass fold - because it is what a partitioned
+  aggregation would need; the remote cores that ran a partition and
+  shipped its state retired with the fan-in at AT-S9.
 - **Transactions**: the fold reads through the statement's snapshot like
   every read; nothing here touches visibility.
 

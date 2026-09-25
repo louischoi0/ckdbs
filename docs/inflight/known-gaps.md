@@ -300,20 +300,6 @@ statement about an engine that no longer exists; re-verify or strike it.
   the same two calls the serve path makes. Owner:
   `src/exec/cabin_optimizer_exec.cpp`.
 
-- **The cabin optimizer's CREATE decision still sees one core.** Verified
-  at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`. One store for the
-  instance means a Cabin *probe* on any core reaches
-  `stats::OptimizerSignals` - the store forwards to them - but the
-  **scan-shape** signal is recorded by a dispatcher, and only core 0's is
-  given one (`Expeditor::Open`'s `set_optimizer_signals`; no
-  `CoreRuntime` calls it). A relation read only from peers therefore
-  feeds EXTEND and not CREATE.
-
-  It is the residue of "a peer-owned relation earns no `CABIN AUTO`"
-  (`cabin.md` §10), which was whole before this stage. The controller is
-  off by default, so nothing reads either signal today. Owner:
-  `docs/spec/physical-optimizer.md` Part II.
-
 - **A Cabin builds rarely on a busy instance, and that is the price of
   one store.** Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`.
   §6a's banking gate refuses while **anything** is unresolved anywhere —
@@ -389,6 +375,17 @@ there is no second core's registration to be answered by.
   cannot interleave. A heap relation is creatable only before SUS-1, and a
   btree relation - the default since - places each id by descent and is
   unaffected. Owner: `heap-and-tuple.md` §4.1a.
+
+- **The Cabin store's partition latches are taken at `cores = 1`.** By
+  reading, on `at-s12-prose-sweep` at `2b20369` (found by AT-S12's
+  `rules.md` §3 sweep). AT-S7 made the store the instance's with a
+  `std::mutex` per partition (`stats/cabin_store.hpp`'s `Partition`), and
+  unlike every other latch `rules.md` §3 indexes it is not null-armed, so a
+  single-core instance pays an uncontended lock and unlock on every Cabin
+  probe, append and serve. G1's compile-out clause
+  (`ar0-architecture-revision.md` §3) does not admit it; G2 says cores = 1
+  pays nothing. Cost, not correctness, and unmeasured. Owner:
+  `docs/spec/cabin.md`.
 
 - **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
   Verified at `4bf80fa`, 2026-09-23. AT-S8 put the controller behind a view

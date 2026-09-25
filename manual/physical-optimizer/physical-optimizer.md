@@ -151,7 +151,7 @@ equality alone — the Keystone-id check stays the identity test.
 
 ## 5. Part II — the Cabin controller (status)
 
-The `CABIN AUTO` promotion pipeline: a per-core background controller that
+The `CABIN AUTO` promotion pipeline: one background controller for the instance (since AT-S8) that
 would CREATE/EXTEND/HEAL/DROP Observational Cabins under a pure
 cost-benefit core with hysteresis. Built so far:
 

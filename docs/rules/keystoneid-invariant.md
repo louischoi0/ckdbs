@@ -183,9 +183,12 @@ constraint is cheaper than the redesign.
 Not specified in this document; the reservation fixes only its
 boundary conditions so nothing else accidentally forecloses it:
 
-- It is an **offline, exclusive** operation on one relation: the
-  owning core runs it as a maintenance task with no concurrent
-  statements (the scheduling model already provides this exclusivity).
+- It is an **offline, exclusive** operation on one relation: a
+  maintenance task with no concurrent statement on any core. The
+  scheduling model provided that exclusivity while every statement on a
+  relation ran on its owning core; since AT-S5 it does not, and what
+  excludes other cores' statements is not specified here (the relation
+  `X` of `docs/spec/txn.md` §5 is the lock family's candidate).
 - It deliberately violates K1 **once, atomically, and visibly**:
   every tuple receives a fresh id from a reset HWM; the operation is
   logged as a single recoverable unit.

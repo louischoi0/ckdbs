@@ -107,9 +107,13 @@ The sweep hand walks the frame array circularly:
 - usage == 0, dirty ⇒ schedule for writeback (§4); do not reclaim yet.
 
 The sweep runs in two contexts: the background watermark task (EV5 primary)
-and the on-demand fallback inside an allocating step (EV5 fallback). Both
-execute on the owning core's event loop, so they never race each other —
-they are the same code path invoked from two places.
+and the on-demand fallback inside an allocating step (EV5 fallback) — the
+same code path invoked from two places. **Two cores' sweeps do not race
+because both run under the frame table's structure latch** (`page.md` §6;
+`EvictColdFramesLocked`, and since AM-S2 `EvictColdFrames` and
+`EvictClean`), not because they share an event loop: one pool serves every
+core since AM-S2 step 3, and "both execute on the owning core's event loop"
+was the per-core pool's argument.
 
 ### 3.3 Exhaustion protocol (EV8)
 

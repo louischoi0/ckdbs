@@ -575,13 +575,13 @@ declared — and is **off by default** (`cabin_optimizer`). With the
 controller off, a column declared `auto` behaves exactly as an undeclared
 one.
 
-**Its input is half the instance's since AT-S7.** A Cabin *probe* on any
+**Its input is the instance's since AT-S8.** A Cabin *probe* on any
 core reaches the signals, because the store that forwards to them is the
-instance's; the **scan-shape** signal is still core 0's alone, because it
-is recorded by that core's dispatcher (`set_optimizer_signals`) and no
-peer is given one. So a relation read only from peers feeds EXTEND and
-not CREATE, which is a thinner version of "a peer-owned relation earns no
-`CABIN AUTO`" rather than the whole of it. `known-gaps.md` carries it.
+instance's (AT-S7); the **scan-shape** signal is recorded by every core's
+dispatcher, each handed the one collector through `OptimizerSurface`
+(AT-S8 step 3). So a relation read only from peers feeds CREATE as well
+as EXTEND. It was core 0's alone between the two stages, and "a
+peer-owned relation earns no `CABIN AUTO`" before either.
 
 A policy on the **primary-key column is refused**, not ignored: the pk's
 Cabin is the clustered tree (§2), so any of the three would be a statement

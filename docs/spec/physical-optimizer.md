@@ -73,7 +73,7 @@ No mover exists; nothing moves a tuple, and nothing bumps a page epoch.
 | R3 | **Two halves with a hard seam.** The **planner** is pure — it reads statistics and the catalog and produces `RelayoutPlan`s with predicted benefit — and the **mover** enacts plans. Shadow mode is the planner without the mover. The `physical_optimizer` config key takes `off | shadow` (default `shadow`); `on` is **refused at startup naming the gates**, so a config written for a future the engine does not have fails loudly instead of silently under-delivering. |
 | R4 | **The page epoch**: `PageHeaderFields::reserved0` (offset 16, u64) is `relayout_epoch`. Every existing page carries 0 there, so **no format bump**: a zero reads as epoch 0. Durable by construction (it is header bytes), which trails need because trail pages are durable. Bumped **only by a mover** when tuples move; INSERT/UPDATE/DELETE never bump, because the fixed-length rule makes them address-stable — that stability is the whole reason replay is safe. Wraparound is unreachable at u64 width rather than handled. **Pairing rule: no consumer may accept a location on epoch equality alone** — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. |
 | R5 | **The legal-move table (§4)** is normative for any mover. It derives from invariants 2, 3, 4, 8, 14, from `kRange` pruning's ordered-between dependency, and from rollback's in-memory undo trail naming addresses. |
-| R6 | **Mover execution context**: a maintenance-group task on the relation's home core, never cross-core, run-to-completion with no in-flight statement holding a position on the relation and no open transaction whose undo trail names addresses in it. |
+| R6 | **Mover execution context**: a maintenance-group task, run-to-completion, with no in-flight statement **on any core** holding a position on the relation and no open transaction whose undo trail names addresses in it. It was "on the relation's home core, never cross-core" until AT-S9 retired home cores; running on the owner was what excluded every other writer, and **how a mover excludes other cores' statements now is not decided here** (the relation `X` of `txn.md` §5 is the lock family's candidate, not a ruling). |
 | R7 | **Mover logging**: a full-page image of every page it mutates plus `PAGE_INIT` for pages it creates `[PROPOSED]`. A `HEAP_RELAYOUT` record type is reserved, not assigned. An unlogged relayout is forbidden: the WAL-before-data gate is store-enforced, and a log that names slots a relayout silently moved is a log that lies. |
 | R8 | **The maintenance surface is deliberately empty.** Cabins and secondary indexes are relocation-invariant (value = pk indirection, `cabin.md`, `index.md` B2); the var-heap is untouched (invariant 14); trails are invalidated by the epoch bump and self-heal on next execution. A **heap relation has no pk index**, so a heap-relation mover maintains *nothing but the epoch*. `heap-and-tuple.md` §7's "keep the B+ tree consistent" applies only to btree-clustered relations, whose relayout is the tree's own restructure and outside this spec; this spec amends that parenthetical. |
 | R9 | **The benefit model**: predicted benefit = pages-not-touched per execution × decayed shape frequency, reported per plan in pages and per shape. The planner's output carries a measured-after field beside the prediction so the two are comparable in one format. |
@@ -278,7 +278,7 @@ created in (`namespace.md` NS10), already on its `sys.tables` row.
 # Part II — Autonomous Advisory Cabin Management (the Cabin controller)
 
 Part II is the **`CABIN AUTO` promotion pipeline** `cabin.md` §8.1 names —
-a per-core background controller over Observational Cabins. It consumes
+one background controller for the instance over Observational Cabins. It consumes
 the R1 lazy-decay score Part I defines (`stats/decay.hpp` — one decay
 implementation, shared) and touches none of Part I's structures. It keeps
 its own id spaces: decisions `PO1`-`PO10`, sections `§II.n`. The
@@ -320,7 +320,7 @@ The component carries the plain technical name — **cabin optimizer**
 is engine machinery, not a user-facing storage concept like Keystone,
 Waystone, or Cabin.
 
-The cabin optimizer is a per-core background controller that consumes
+The cabin optimizer is one background controller for the instance that consumes
 workload statistics and issues a closed vocabulary of actions over
 Observational Cabins. It is experimental, runtime-switchable, and every
 decision it makes is logged with the inputs that produced it.
@@ -332,9 +332,9 @@ decision it makes is logged with the inputs that produced it.
 | PO1 | Action vocabulary (closed set): **CREATE** (build a new Cabin for a column combination), **EXTEND** (widen an existing Cabin's value coverage), **HEAL** (batch re-validate location hints), **DROP** (retire a cold or unhealable Cabin). REBUILD is excluded (≡ DROP+CREATE). **Bound Cabins are outside the cabin optimizer's jurisdiction** — owned by assertions, never read, never touched (invariant, debug-asserted). |
 | PO2 | Input signals, exactly three: **(S1)** fingerprint execution frequency under the R1 lazy exponential-decay score (`stats/decay.hpp` — one decay implementation, shared); **(S2)** observed predicate scan cost — pages scanned per execution, from the executor's per-statement counters; **(S3)** Cabin quality — hint hit/failure counters and lookup coverage misses. Buffer-pool miss statistics are not an input (relation-granular, too coarse for column/value decisions). |
 | PO3 | Decision model: **cost–benefit formula** (§II.4). Determinism requirements: the decision core is a **pure function** from a statistics snapshot to an action set, computed in **fixed-point integer arithmetic** (no floats), with hysteresis built in as asymmetric margin factors and cooldowns — a raw cost model oscillates; the margins are load-bearing, not tuning sugar. |
-| PO4 | Execution: a background-group task on each relation's **home core**. Independent decisions per core; no cross-core coordination (EV4 spirit). All build/extend scans go through the **scan ring (EV6)** — mandatory, so the cabin optimizer can never displace the foreground working set it is trying to serve. |
-| PO5 | Lifecycle state machine per managed Cabin: `CANDIDATE → BUILDING → ACTIVE → DECAYING → DROPPED`, with `DECAYING → ACTIVE` recovery on score rebound and `BUILDING → discard` on failure/interruption. All transitions execute as single home-core steps. |
-| PO6 | Budget: per-core page budget for optimizer-managed Cabins (`cabin_optimizer_page_budget`). Over-budget CREATE is admitted only in **exchange** for dropping the lowest-net-benefit ACTIVE Cabin (explicit replacement rule — optimization within a budget, not open-ended growth). Memory residency is the buffer pool's concern (Observational Cabin pages are evictable, EV3); this budget governs disk and upkeep. |
+| PO4 | Execution: **one controller for the instance**, ticked by a background-group task on core 0's cadence (AT-S8 step 3: every core's dispatcher is handed the one `OptimizerSurface` - the switch, the collector every core feeds, and the controller and executor behind a view latch). It was a task on each relation's home core, deciding per core, until AT-S8 made the surface the instance's and AT-S9 retired home cores. **A build's scan does not announce** (AT-S7), so a write another core lands during the walk is lost from the set it banks; sound only while the controller is off by default, and `docs/inflight/known-gaps.md` carries it. All build/extend scans go through the **scan ring (EV6)** — mandatory, so the cabin optimizer can never displace the foreground working set it is trying to serve. |
+| PO5 | Lifecycle state machine per managed Cabin: `CANDIDATE → BUILDING → ACTIVE → DECAYING → DROPPED`, with `DECAYING → ACTIVE` recovery on score rebound and `BUILDING → discard` on failure/interruption. All transitions execute as single steps of the controller's tick. |
+| PO6 | Budget: one page budget for the instance's optimizer-managed Cabins (`cabin_optimizer_page_budget`). Over-budget CREATE is admitted only in **exchange** for dropping the lowest-net-benefit ACTIVE Cabin (explicit replacement rule — optimization within a budget, not open-ended growth). Memory residency is the buffer pool's concern (Observational Cabin pages are evictable, EV3); this budget governs disk and upkeep. |
 | PO7 | Refresh strategy: quality surveillance, not eager maintenance. Hint-failure rate above threshold ⇒ HEAL; if quality does not recover after HEAL (e.g., mass relocation by bulk UPDATE) ⇒ DROP — demand, if real, re-nominates the candidate. "Discard and re-observe" over "repair at any cost" is the correct posture for advisory structures. |
 | PO8 | Safety: experimental status; runtime kill switch `SET cabin_optimizer = on\|off`. Turning off halts new decisions and in-flight builds but leaves existing Cabins untouched (no destructive path on disable). Every action is recorded in a decision log with the input-score snapshot. |
 | PO9 | Observability: `SHOW CABIN_OPTIMIZER` — per managed Cabin: state, net-benefit score, hint hit rate, coverage, pages, last action + reason; production counters per action type and budget utilization; ANALYZE's Cabin-hit output carries `cabin_optimizer=true` on an optimizer-managed Cabin. |
@@ -343,7 +343,7 @@ decision it makes is logged with the inputs that produced it.
 ## II.3 Architecture
 
 ```
-            (per home core)
+            (one, on core 0's cadence)
   ┌─────────────────────────────────────────┐
   │  Stats collectors (S1,S2,S3) ──► Snapshot│
   │                                     │    │
@@ -489,7 +489,7 @@ Cabins and manually-declared Cabins are invisible to it.
 | Setting | Default | Notes |
 |---|---|---|
 | `cabin_optimizer` | off (experimental) | runtime switch (`SET`), non-destructive off (PO8) |
-| `cabin_optimizer_page_budget` | 1024 pages, per core | PO6 |
+| `cabin_optimizer_page_budget` | 1024 pages, the instance's | PO6 |
 | `cabin_optimizer_theta_create_pct` / `_drop_pct` / `_swap_pct` / `_extend_pct` / `_heal_pct` | 300 / 50 / 200 / 20 / 10 | percent integers; validated against the hysteresis gap |
 | `cabin_optimizer_confirm_snapshots` | 3 | N_confirm |
 | `cabin_optimizer_amort_windows` | 64 half-lives | T_amort — the build-cost amortization window (§II.4); 0 refused |

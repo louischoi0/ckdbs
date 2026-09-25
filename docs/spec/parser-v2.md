@@ -189,7 +189,7 @@ The check is free at runtime: the producing row is already decoded by R1 and the
 
 ## 7. Executor
 
-A small step VM in `src/exec/`: compile once (AST → `StepChain`, alongside class tagging), then iterate — a linear loop over steps, a nested loop for sub-chain steps, run to completion on the owning core. Cursor and row state live in the chain frame: no allocation per row, bounded by depth cap × per-step state. The VM is the compile contract J4 preserves.
+A small step VM in `src/exec/`: compile once (AST → `StepChain`, alongside class tagging), then iterate — a linear loop over steps, a nested loop for sub-chain steps, run to completion on the core its session is on. Cursor and row state live in the chain frame: no allocation per row, bounded by depth cap × per-step state. The VM is the compile contract J4 preserves.
 
 Two things the VM inherits from I15 rather than choosing: frames own their decoded rows (R1), and nested steps are read-only (R2). One thing it must not do: hold a `TableAccess` pointer across anything that can bump the catalog version.
 

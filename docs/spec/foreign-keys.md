@@ -329,16 +329,19 @@ the child's decide is refused by it and the window closes exactly. D9(a)
 is the following letter's (AT-0 item 6), and this window is its first
 named consequence: `docs/inflight/known-gaps.md` carries it until then.
 
-**The Cabin may find a child and may not clear one** (AT-R15, D4).
-`stats::CabinStore` is a dispatcher's own and a write files its entry
-into the *writing* core's store, which since AT-S5 is where the session
-is rather than where the relation's owner is — so a set observed on this
-core can be complete for what this core wrote and blind to what another
-core wrote. A hit is therefore still authoritative and still returns
-without walking; an exhausted, all-non-matching set is **not** an
-authoritative "no children" and falls through to the walk. The store
-becomes the instance's at AT-S7, which is what restores the fast path
-rather than removing it.
+**The Cabin may find a child and may not clear one** (AT-R15, D4). The
+rule was made while `stats::CabinStore` was a dispatcher's own: a write
+filed its entry into the *writing* core's store, which since AT-S5 is
+where the session is, so a set observed on one core could be blind to what
+another core wrote. A hit is authoritative and returns without walking;
+an exhausted, all-non-matching set is **not** an authoritative "no
+children" and falls through to the walk. **The store has been the
+instance's since AT-S7** (`cabin.md`), which removes the reason, and the
+clearing return AT-R15 took away **has not been restored**: the reverse
+check still walks after an exhausted set (`fk_check.cpp`). Restoring it is
+a change to what may answer "no children" - the one forbidden wrong answer
+of §1 - and is not decided here; until it is, the walk costs a relation
+scan the fast path would have saved, and nothing is wrong.
 
 ## 3. Reverse check — parent DELETE
 

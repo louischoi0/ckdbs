@@ -98,7 +98,11 @@ Built, and what each gets:
 
 - **`CREATE TABLE`** — atomic, isolated, durable, rolled back by
   `ROLLBACK`. `BEGIN; CREATE TABLE t ...; INSERT INTO t ...; ROLLBACK;`
-  leaves no relation and no rows.
+  leaves no relation and no rows. **Not isolated against a concurrent
+  create of the same name on another core**: the duplicate check and the
+  insert are two latch holds, which was one act only while DDL ran on
+  core 0 (`docs/inflight/bugs/two-cores-can-create-one-name-twice.md`,
+  with `RENAME TO` and `CREATE NAMESPACE`).
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
   §5a is the whole argument. In autocommit it retires its dependent rows;
   inside a transaction it delete-marks them.
@@ -108,7 +112,7 @@ Built, and what each gets:
 - **`DROP INDEX`** — atomic and isolated on every core, admitted inside a
   transaction (§5b, §5e).
 - **`CREATE ASSERTION`** — built and published where its session is,
-  whoever owns the relation, since AT-S5d; admitted inside a transaction
+  on any core, since AT-S5d; admitted inside a transaction
   (§5f).
 - The autocommit path is unchanged in behaviour: a bare `CREATE TABLE`
   commits immediately.

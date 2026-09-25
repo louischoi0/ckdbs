@@ -31,7 +31,7 @@ How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
 | BI8 | Durability | Orthogonal, unchanged: the transaction's WAL class applies. **D3 relaxed is the documented recommendation for bulk load** — the use `wal.md` §1 named for it. No new class |
 | BI9 | Keystone budget | Per-row `AllocateRowId`; a refused row burns no id (admission precedes allocation, per row). An **aborted** bulk statement burns the ids of rows placed before the failure — a documented K1 40-bit budget consumption, the same class of product constraint as the budget itself. No id pre-reservation |
 | BI10 | WAL records | Per-row redo records exactly as for a single-row `INSERT`; there is no batched multi-row record type, and recovery (`wal.md` §12) sees nothing new |
-| BI11 | T2 transactions | A load is one implicit transaction: `C_LOAD_BEGIN` runs the session's `BEGIN`, `C_LOAD_END` commits, `C_LOAD_ABORT` (or connection loss mid-load) rolls back. Cross-core: the target relation's home core, CC3 rules verbatim |
+| BI11 | T2 transactions | A load is one implicit transaction: `C_LOAD_BEGIN` runs the session's `BEGIN`, `C_LOAD_END` commits, `C_LOAD_ABORT` (or connection loss mid-load) rolls back. Cross-core: the load runs on the core its session is on, whole, as every transaction does since AT-S6 (`crosscore.md` CC3); it ran on the target relation's home core until AT-S9 retired home cores |
 | BI13 | Observability | `S_COMPLETE` tag `LOAD` (or `ABORT`) with `rows_affected` |
 | BI14 | Resume / dedup | **None.** A load has no resume token, `chunk_seq` must arrive strictly increasing from 0, and the engine deduplicates nothing — replaying chunks after a crash duplicates rows. Restart-safety is the client's (truncate-and-reload) |
 
@@ -238,7 +238,7 @@ and for a million.
   trail is ever recorded for a write path.
 - **Physical optimizer** — no direct coupling. A bulk load lands cold data;
   the optimizer's decayed scores treat it as exactly that.
-- **Crosscore** — one relation, one home core, CC3 verbatim (BI11).
+- **Crosscore** — one relation, the session's core, CC3 verbatim (BI11).
   A multi-relation load is a client loop, not a protocol feature.
 - **Recovery** — per-row WAL records mean bulk writes replay under the
   same `wal.md` §12 rules as single-row writes; nothing new to specify,
