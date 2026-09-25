@@ -171,6 +171,13 @@
 //     scan comes to need must be dropped before EnsureDurable, or the wait
 //     acquires exactly the "latched across a durability wait" shape this
 //     bullet rules out.
+//   - **The writeback claim** (AT-S10e, `Frame::writing`): taken under
+//     the structure latch before the copy's page latch, held across the
+//     WAL gate and the device write, given back at the clean. A writeback
+//     waits on another's claim holding no claim of its own and no page
+//     latch, so a claim's holder never waits on its waiter - provided no
+//     flush caller holds a page latch across the flush (`WriteBack`'s
+//     `kWait` note).
 //   - **Never nested with the visibility window latch** in either
 //     direction: that latch is taken holding nothing (AN-R9), and no path
 //     holds a PageRef at commit.
@@ -333,30 +340,30 @@ public:
     // arrives with page.md §9's preallocated slab, not here.
     //
     // Each page is copied under its page latch, shared (AT-S8, step 1b), so
-    // what goes out is never half of another core's write. `held` says what
-    // to do about a frame another core holds exclusive: `kWait` waits out
-    // the writer - which is running, since no task parks holding a pin - and
-    // is what a flush owes, `Sync()` being a durability barrier; `kSkip`
-    // leaves it dirty for a later pass, and is the background drain's
+    // what goes out is never half of another core's write, and each frame is
+    // claimed from its copy to its clean (AT-S10e, `Frame::writing`), so two
+    // writebacks of one page land in copy order. `held` says what to do
+    // about a frame another core holds exclusive or another writeback has
+    // claimed: `kWait` waits out the writer or the claim - both running,
+    // since no task parks holding a pin and a claim's holder waits on no
+    // claim - and is what a flush owes, `Sync()` being a durability barrier;
+    // `kSkip` leaves the frame to its holder, and is the background drain's
     // (`DrainDirtyEvictionQueue`, on core 0's cadence), which owes no
     // barrier and so has no reason to wait.
     //
     // **What `kWait` rests on, stated because nothing enforces it**: no flush
     // caller holds a page latch across the flush. Waiting while holding X(Q)
-    // on a writer of P that then wants Q is a cycle; today every caller
-    // releases first (the anchor publish, `PersistSuperBlock`, the
-    // checkpointer, SYNC), and "no task parks holding a pin" - audited in
-    // debug builds only - is what keeps the writer it waits for running.
+    // on a writer of P that then wants Q is a cycle; and since AT-S10e so is
+    // holding X(P) itself - another writeback can claim P and wait on that
+    // latch while this flush waits on the claim. Today every caller releases
+    // first (the anchor publish, `PersistSuperBlock`, the carve's persist,
+    // the checkpointer, SYNC), and "no task parks holding a pin" - audited
+    // in debug builds only - is what keeps the writer it waits for running.
     //
     // Returns how many pages it wrote.
     enum class HeldFrames : std::uint8_t { kWait, kSkip };
     StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids,
                                     HeldFrames held = HeldFrames::kWait);
-
-    // Returns once no writeback holds `page_id`'s claim (`Frame::writing`,
-    // AT-S10e) - its clean done, or the frame gone. Holds nothing while it
-    // waits.
-    void AwaitWritebackClaim(PageId page_id);
 
     // Pages one coalesced run may span, and so the scratch bound: 8 pages
     // = 64 KiB, chosen as the largest single write the background task
@@ -763,6 +770,11 @@ public:
     bool IsAllocated(PageId page_id) const noexcept;
 
 private:
+    // Returns once no writeback holds `page_id`'s claim (`Frame::writing`,
+    // AT-S10e) - its clean done, or the frame gone. Holds nothing while it
+    // waits. `WriteBack`'s alone.
+    void AwaitWritebackClaim(PageId page_id);
+
     using Page = std::array<std::byte, kPageSize>;
 
     // The one refusal a caller sees when a page id is not allocated here,

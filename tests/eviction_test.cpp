@@ -1193,9 +1193,12 @@ public:
         return inner_.ReadPage(id, out);
     }
     Status WritePage(PageId id, std::span<const std::byte, kPageSize> in) override {
-        if (id == held_page_ && !used_.exchange(true)) {
-            holding_.store(true, std::memory_order_release);
-            while (!released_.load(std::memory_order_acquire)) std::this_thread::yield();
+        if (id == held_page_) {
+            writes_.fetch_add(1, std::memory_order_acq_rel);
+            if (!used_.exchange(true)) {
+                holding_.store(true, std::memory_order_release);
+                while (!released_.load(std::memory_order_acquire)) std::this_thread::yield();
+            }
         }
         return inner_.WritePage(id, in);
     }
@@ -1215,12 +1218,15 @@ public:
     Status Sync() override { return inner_.Sync(); }
 
     bool holding() const noexcept { return holding_.load(std::memory_order_acquire); }
+    // Writes of the held page begun, the held one included.
+    int writes() const noexcept { return writes_.load(std::memory_order_acquire); }
     void Release() noexcept { released_.store(true, std::memory_order_release); }
 
 private:
     PageDevice& inner_;
     PageId held_page_;
     std::atomic<bool> used_{false};
+    std::atomic<int> writes_{0};
     std::atomic<bool> holding_{false};
     std::atomic<bool> released_{false};
 };
@@ -1270,18 +1276,16 @@ TEST(EvictionWritebackTest, TheOlderOfTwoWritebacksOfOnePageNeverLandsLast) {
         again.value().bytes()[kMark] = std::byte{2};
     }
 
-    // The second flush. Fixed, it waits for the first's claim; broken, it
-    // writes 2 and returns - either way the first is released once the
-    // second has had its chance to finish.
-    std::atomic<bool> newer_done{false};
+    // The second flush. Fixed, it waits for the first's claim and writes
+    // nothing yet; broken, it begins its own write of the page. The first is
+    // released on that second write - so a broken engine is caught however
+    // slow the host - or at the deadline, which a fixed one always reaches.
     std::thread newer([&] {
         SetCurrentCore(2);
         EXPECT_TRUE(store.Flush().ok());
-        newer_done.store(true, std::memory_order_release);
     });
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
-    while (!newer_done.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (holding.writes() < 2 && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
     holding.Release();

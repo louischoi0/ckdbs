@@ -1442,16 +1442,28 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     std::size_t written = 0;
     std::vector<std::byte> scratch;
     std::vector<CopiedPage> copied;
-    // Gives back the claims on `copied[from, to)`. Under the structure latch;
-    // a claimed frame is dirty, so it is still in the table.
-    const auto release = [&](std::size_t from, std::size_t to) {
-        LatchGuard structure(structure_latch());
-        for (std::size_t k = from; k < to; ++k) copied[k].frame->writing = false;
+    // Reserved once, so the push under the structure latch - after a claim
+    // is set - cannot allocate.
+    copied.reserve(kWritebackRunPages);
+    // Gives back the claims on `copied` when a run leaves its iteration by
+    // any path - an error return, a thrown allocation - that is not the
+    // clean, which gives them back itself and empties `copied`. A claimed
+    // frame is dirty, so it is still in the table.
+    struct ClaimRelease {
+        DevicePageStore& store;
+        std::vector<CopiedPage>& copied;
+        ~ClaimRelease() {
+            if (copied.empty()) return;
+            LatchGuard structure(store.structure_latch());
+            for (CopiedPage& page : copied) page.frame->writing = false;
+            copied.clear();
+        }
     };
     for (std::size_t i = 0; i < ordered.size();) {
         std::size_t run = 0;
         std::uint64_t run_lsn = wal::kNoLsn;
         copied.clear();
+        const ClaimRelease claims{*this, copied};
         bool claimed_elsewhere = false;
         {
             LatchGuard structure(structure_latch());
@@ -1480,10 +1492,10 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                     ++run;
                 }
 
-                // Pinned and claimed here, under the hold that found them: a
-                // concurrent writeback may clean one of these, after which
-                // the dirty invariant no longer keeps it resident, and a pin
-                // does.
+                // Claimed and pinned here, under the hold that found them.
+                // The claim and the dirty mark keep the frame resident - only
+                // the claim's holder cleans it - and the pin is the half of
+                // the page latch `UnpinFrame` gives back after the copy.
                 for (std::size_t k = 0; k < run; ++k) {
                     Frame& frame = frames_.find(ordered[i + k])->second;
                     CountPin(frame);
@@ -1523,12 +1535,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
             {
                 LatchGuard structure(structure_latch());
                 // Our share excludes every other core's exclusive hold, so the
-                // bytes are whole. One exclusive hold can coexist with it -
-                // this core's own, a task that holds the frame for write and
-                // reached this flush - and a write through that handle after
-                // the flush is the caller's own sequencing, exactly as on an
-                // unarmed store; the generation is what covers every other
-                // core.
+                // bytes are whole, and the generation covers every write
+                // after it. **A flush by a task holding this page exclusive
+                // is excluded** (the header's `kWait` rule): the share would
+                // re-enter its own latch, but since AT-S10e another writeback
+                // can hold the claim and wait on that latch while this one
+                // waits on the claim.
                 page.dirty_gen = page.frame->dirty_gen;
 
                 // (2) checksum, the last thing that touches a page before it
@@ -1585,7 +1597,6 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                     log_->Error("pagestore", "WAL gate refused a writeback up to page_lsn " +
                                                  std::to_string(run_lsn) + ": " + s.message());
                 }
-                release(0, run);
                 return s;
             }
         }
@@ -1604,7 +1615,6 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                                              std::to_string(ordered[i]) + " (run of " +
                                              std::to_string(run) + "): " + wrote.message());
             }
-            release(0, run);
             return wrote;
         }
 
@@ -1619,18 +1629,16 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         {
             LatchGuard structure(structure_latch());
             for (std::size_t k = 0; k < run; ++k) {
-                copied[k].frame->writing = false;
-                auto cleaned = frames_.find(ordered[i + k]);
-                if (cleaned == frames_.end()) continue;
-                if (cleaned->second.dirty_gen != copied[k].dirty_gen) {
-                    continue;
-                }
-                cleaned->second.dirty = false;
-                cleaned->second.rec_lsn = wal::kNoLsn;  // nothing to replay into it
+                Frame& frame = *copied[k].frame;  // resident: claimed, so dirty
+                frame.writing = false;
+                if (frame.dirty_gen != copied[k].dirty_gen) continue;
+                frame.dirty = false;
+                frame.rec_lsn = wal::kNoLsn;  // nothing to replay into it
                 if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
                     log_->Trace("pagestore", "wrote page=" + std::to_string(ordered[i + k]));
                 }
             }
+            copied.clear();  // given back here, so `claims` has nothing to do
         }
         written += run;
         i += run;
