@@ -41,8 +41,8 @@ per-core caches, and the writer thread AL-S1a/S1b already built.
 every place the engine today answers differently depending on which core
 asks, or refuses because a structure's owner is elsewhere, is either
 retired with the ownership that justified it or given a lock. AT-3 is the
-census. AT is not evaluated on throughput, and since AT-S13 was struck
-(2026-09-25) no AT stage measures - what M2 handed on stays unpriced.
+census. AT is not evaluated on throughput, and no AT stage measures
+(AT-S13 struck): what M2 handed on stays unpriced.
 
 **What it is not.**
 
@@ -81,11 +81,11 @@ maintenance rule flips when a decision *lands*.
 | D17 | **marked 2026-09-05**: columns dropped at M3 on AT's own event; a pre-M3 value ignored on read | **AT-S9**; the layout anchors AT-R7 names move there. **D17 and E8 disagree** and D17 wins (AT-7 item 6) |
 | D18 | **marked**: affinity kept as a statistic and optimizer hint, D10 weight 0 until AS-E; placement NS10 deleted. The mark also obliges *"`physical-optimizer.md` keeps its consumer"* | **AT-S9** and **AT-S12**, which carries that spec; and AT-0 item 4, because a weight-0 hint leaves the remote-step protocol with a consumer that never fires |
 | D19 | **marked**: every core listens (`SO_REUSEPORT`); a session lives where it was accepted; no handoff — **and, on a platform without it, core 0 accepts and hands off, a fallback whose handoff is "a ring consumer AU-S5 must list, not one it may strike"** | **AT-S8** for the listener, **AT-S10** for the fallback's kind (AT-R12). Smaller than the mark assumes on the socket and larger on the fallback (AT-3 F) |
-| D20 | **marked as constants carried, not decided**: 4,096 for trx-id and row-id caches, one extent | **AT-S4**; any change from them needs a measurement. **The row-id half superseded by invariant 11 on the operator's word, 2026-09-25** (AT-S10b, which carried AT-S4): row ids are issued with no per-core cache, one mark every core bumps under its page latch, because a cached block breaks the sequence invariant 11 requires; the price was AT-S13's to measure, and is unmeasured since that stage was struck (2026-09-25). The 4,096 stands for trx-id windows |
+| D20 | **marked as constants carried, not decided**: 4,096 for trx-id and row-id caches, one extent | **AT-S4**; any change from them needs a measurement. **The row-id half superseded by invariant 11 on the operator's word, 2026-09-25** (AT-S10b, which carried AT-S4): row ids are issued with no per-core cache, one mark every core bumps under its page latch, because a cached block breaks the sequence invariant 11 requires; the price is unmeasured (AT-S13 struck). The 4,096 stands for trx-id windows |
 | D21 | **marked**: schema word in `Expeditor`, memory only, bumped **before** the DDL's relation `X` releases | **AT-S2**; AR0-5 §8's read-order hazard is AT-S1's cell |
 | D22 | **marked**: M3 is "Uniformity", letter **AT** | this document; `index.md`'s row |
 | D25 (AR0-6) | count **34** since AU-S3 — and the `static_assert` freezing it **was a mark's obligation, not a fact of the tree** until AT-S2b: `ring_message.hpp` carried two asserts, both on `MessageHeader`'s layout | AT-3 C: four of the 34 have no engine user. **AT-S2b wrote the assert AU-R4 owes, at 29** — the four and `kCatalogInvalidate` — and its review gave it its form: the count is derived from the default-less switch, so a new enumerator warns and a moved count fails |
-| E7 (execution default) | measurement-gated; C1/C2 measured, **C3 answered that its shape does not exist** (AO-S7) | AT-R5 settles the *correctness* half — routing is not a correctness condition. The default is AT-0 item 2; ~~AT-S13's cell~~ struck with its stage (2026-09-25), so no AT stage measures it |
+| E7 (execution default) | measurement-gated; C1/C2 measured, **C3 answered that its shape does not exist** (AO-S7) | AT-R5 settles the *correctness* half — routing is not a correctness condition. The default is AT-0 item 2, which no AT stage measures (AT-S13 struck) |
 | E8 (NS10's verb) | user-visible: *"selects the core that owns" → "declares the affinity of"*, **take it** | **AT-S9** takes the verb. E8's companion clause — `owner_core` "keeps its bytes" — is dead, D17 having dropped the columns (AT-7 item 6) |
 | E9 (`core_count` pinning) | **withdrawn by the operator 2026-09-08** — it argued from two dead premises | AT-S9 decides the count's fate with the rest of core specialization, which is what the withdrawal hands it |
 | E13 (catalog rows borrowable) | OPEN, M3 | **AT-S3**; AR0-5 §3 already reads it as closed-yes and AT builds it |
@@ -419,9 +419,8 @@ written at `091be8c`, deleted by the sub-stage that closes it.
 
 **AT-R14 — No stage claims an overhead number it did not measure.** The
 interleaved A/B is suspended by operator decision; a landed stage carries
-"overhead not measured" as a stated fact, never an implied pass. ~~AT-S13 is
-the one stage that measures, and it says what it could not.~~ **AT-S13 is
-struck** (2026-09-25), so no AT stage measures and none may claim a price.
+"overhead not measured" as a stated fact, never an implied pass. No AT stage
+measures (AT-S13 struck), so none may claim a price.
 
 ---
 
@@ -451,7 +450,7 @@ AO-S6 did.
 | **AT-S10** | **AU-S5**, one sub-stage per surviving group of AT-3 C's table, **plus D19's fallback handoff**, which the mark obliges this stage to list rather than strike (AT-R12) | per group: a call-site grep, and the group's own behaviour cell | **L** | S9 |
 | ~~AT-S11~~ | **Struck on the operator's word, 2026-09-25.** It carried AU-S6: `RingTransport`, `RealRingTransport`, `SimRingTransport`, `ring_message.hpp`, phase 3, the N² preallocation, `AttachTransport` and the transport tests removed, and G1's sentence rewritten with them. **All of it was built as AT-S10d** (AT-6), with this row's done-conditions met there - the suite, the golden log CRC unchanged, `SHOW META`'s ring counters gone and `client-manual.md` saying so. The number is not reused | - | - | - |
 | **AT-S12** | **The prose sweep.** CC11 and CC13 in `crosscore.md`; **`physical-optimizer.md`, which D18's mark names**; the `(M5)` comments **to the rule and not to §3's command** — `tests/` and the bare-`M5` claims of AT-3 A included; `core_runtime.hpp`'s asymmetries 1 and 3 and asymmetry 2's sentence; `Expeditor`'s "core 0 owns the superblock, the free map, the catalog pages and the listener"; `namespace.md`, `sched.md` §5, `rules.md` §3, `page.md` §6, `CLAUDE.md`'s rows | done-conditions written as greps, and **checked as greps** — AO-S8's two done-conditions were grep conditions that did not hold on the first pass, and a grep scoped to `include/ src/` is how this one would repeat that | M | S10 (S10d carried AT-S11's list; S11 struck) |
-| ~~AT-S13~~ | **Struck on the operator's word, 2026-09-25.** It carried the prices: E7's cell, which AO-S7 handed on because C3's shape did not exist on an engine that serialised writes per core; the `cores = 1` A/B; D20's row-id price. **None of it was built elsewhere** - E7's default (AT-0 item 2) and D20's price are left with no stage to read them off, and AT-R14's "overhead not measured" is the standing statement for every AT stage. The number is not reused | - | - | - |
+| ~~AT-S13~~ | **Struck on the operator's word, 2026-09-25.** It carried the prices: E7's cell, which AO-S7 handed on because C3's shape did not exist on an engine that serialised writes per core; the `cores = 1` A/B; D20's row-id price. **None of it was built elsewhere** - E7's default (AT-0 item 2) and D20's price are left with no stage to read them off. The number is not reused | - | - | - |
 
 **Order, and why it is not negotiable at two points** (AT-R13, as AT-S3
 corrected it): S1 before S2; S5 before S6–S9. Everything else may be resequenced by
@@ -491,7 +490,7 @@ the operator without breaking an argument.
 | # | item | class | CLA proposal |
 |---|---|---|---|
 | 1 | **AR0-5's body.** It is still a DRAFT; `raft-marks-2026-09-05.md` §2 marks §6's D17–D22 and says so explicitly — *"this marks its §6 items, not the amendment"*. AT is built on the body | procedural | ratify it, or AT proceeds against it as a governing draft the way AO proceeded against AR2. AT-3 A and AT-7 are the corrections the body needs either way |
-| 2 | **E7's default** now that AT-R5 settles the correctness half | measurement-gated | ~~read it off AT-S13, not off AO-S7's C3, which measured an engine where the shape did not exist~~ **AT-S13 struck (2026-09-25)**: the item stays open with no stage to measure it, and AO-S7's C3 is still not the source - it measured an engine where the shape did not exist |
+| 2 | **E7's default** now that AT-R5 settles the correctness half | measurement-gated | open with no stage to measure it (AT-S13 struck); not AO-S7's C3, which measured an engine where the shape did not exist |
 | 3 | **The borrow cap's unit.** `raft-marks-2026-09-08.md` §1 left it per *local* transaction "until AT's uniformity work asks the question again". With no participants there is one `Transaction` per transaction, so the cap silently narrows | constant, user-visible | state the narrowing in AT-S6's row and keep 65,536; it stops being one-cap-per-participant because there are no participants |
 | 4 | **Answered at AT-S9: struck** - on the operator's word both remote routes retired, the fan-in and the two-step pipeline; the services and the transport stay with no producer for AT-S10/S11 to delete. **Does the remote-step protocol survive AT?** D18 keeps affinity as a weight-0 hint, so `kStep*` retains a consumer that never fires. **AU-S6 cannot reach count 0 while it lives** | design | keep it, converted by AT-S10 to shared state plus a kick (AR0-6-R1), and let AT-S11 delete the *transport* rather than the feature. If instead it is struck, say so before AT-S10 sizes its sub-stages |
 | 5 | **AO-0's carried items 9, 22, 25 and 27** — the FK split's M2 half awaiting confirmation, the bound-assertion wait's own bound, `DROP TABLE` refused because readers keep arriving, and the intention-mode-on-an-interval rule that shipped with no ruling to point at | mixed | 9 confirms with D9(a) in the following letter; 22 and 25 move with it; **27 is AT's**, because AT-S1 widens what holds an `IS` and 27 is the rule that decides what such a borrow fences |
