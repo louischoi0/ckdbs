@@ -1782,9 +1782,9 @@ Status Catalog::CheckRelationQualifier(std::string_view qualifier, std::string_v
     const Oid actual_oid = access.value()->namespace_oid;
     if (actual_oid == ns.value()) return Status::OK();
 
-    // Names where it *is*, not only where it is not: the qualifier is a
-    // placement assertion, so the useful answer to a wrong one is the
-    // placement. A relation in `public` has no spelling of its own
+    // Names where it *is*, not only where it is not: the qualifier asserts
+    // the relation's namespace (grouping, never placement since AT-S9), so
+    // the useful answer to a wrong one is the namespace. A relation in `public` has no spelling of its own
     // (`well_known.hpp`), which is why that case says so in words.
     std::string actual;
     if (actual_oid == kNamespaceSys) {

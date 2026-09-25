@@ -297,45 +297,15 @@ struct SuperBlockFields {
     // and moving it would rewrite every anchor's position for no gain.
     std::uint64_t next_trx_id;
 
-    // ---- The pinned core count (docs/inflight/in-progress/workplan-crosscore.md M6) ----------
+    // ---- The core count ----------------------------------------------------
     //
-    // How many reactor cores this database was created for. Like
-    // `inline_cell_width` above it, configuration proposes the value once -
-    // at the bootstrap of a *new* database - and the superblock is what pins
-    // it; every later mount validates the running `cores` against this and
-    // refuses to start on a disagreement, naming both numbers
-    // (bootstrap.cpp).
-    //
-    // The reason it is pinned rather than simply adopted is the WAL. Streams
-    // are per core and LSNs are stream-local (wal.md section 3), so a
-    // database written by N cores holds N streams and N anchor slots; a
-    // mount at M cores would leave |N - M| streams with nothing to replay
-    // them and no rule for what to do about it. Stream reassignment is
-    // [OPEN], and a refusal at the door is what keeps this file from
-    // deciding it by accident.
-    //
-    // **The `[OPEN]` narrowed on 2026-08-28** (operator direction; the same
-    // paragraph is in `docs/spec/wal.md` §3 and
-    // `docs/inflight/in-progress/blueprint-range-ownership.md` §12). *When*
-    // a core count may change is settled: **at mount, in both directions**,
-    // inside the window RV1 already establishes - after the superblock is
-    // read, before the listener binds. Online change is not supported and is
-    // not a goal. *How* the reorganisation works is still open, and this
-    // refusal stands until it is built. Three constraints ride with the
-    // direction and bear on this field directly:
-    //
-    //   - **prepared transactions resolve before anything is reorganised**
-    //     (R6-4), because reassigning or discarding a coordinator's records
-    //     destroys the evidence a prepare is resolved against; an
-    //     unresolved prepare refuses the mount. The cross-stream resolver
-    //     that made this a *per-stream* constraint went at AM-S4(d); the
-    //     evidence is now in the one log, which does not weaken the rule;
-    //   - **this field is written last**, so a crash mid-reorganisation
-    //     reads as the old count and the work reruns - which makes
-    //     idempotence a requirement on the reassignment, not a nicety;
-    //   - **modulo is not required.** Placement policy belongs with the
-    //     range mover; correctness needs only that relations whose owner
-    //     core no longer exists are moved.
+    // The `cores` this volume was last mounted with. **Not pinned since
+    // AT-S9**: a mount at another count records the running one and logs
+    // the change (`bootstrap.cpp`; `core_count()` below says why nothing on
+    // the volume names a core). It was pinned, and every mount refused a
+    // disagreement, while WAL streams were per core and relations had an
+    // owner core; the reorganisation a count change would then have needed
+    // is `git show 2b20369:include/kds/server/superblock.hpp`.
     //
     // Never zero in a legal image: CreateFresh takes the count from a
     // configuration that has already refused 0, and Decode refuses a zero
@@ -463,9 +433,9 @@ public:
     // The default exists for callers that are not testing the width
     // (anchor tests, tooling); BootstrapDatabase(), the only production
     // caller, always passes the configured value explicitly.
-    // `core_count` is pinned by the same rule and validated by the same
-    // caller (CheckCoreCount), and its default is 1 for the same reason the
-    // width's exists: callers that are not testing the count.
+    // `core_count` is validated by the same caller (CheckCoreCount), and
+    // its default is 1 for the same reason the width's exists: callers that
+    // are not testing the count.
     // The log topology is `kSingleStream` and takes no parameter
     // (AM-S4(d)): it is what the volume's log **is**, chosen once here and
     // never again, and this build has one answer. A parameter stood here

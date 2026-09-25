@@ -102,7 +102,7 @@ enum class StatusCode {
     kAssertionViolation,
     // **A statement whose outcome nobody can state.** A shipped statement
     // was sent to its relation's owner and no reply arrived before the
-    // deadline (docs/spec/crosscore.md §6, the work order's D4): it may
+    // deadline (`git show c63e49f:docs/spec/crosscore.md` §6, the work order's D4): it may
     // have committed, it may never have run, and this core could not tell
     // which. **No producer since AT-S6**, which retired the ship; the code
     // stays because the wire pins it (`kwp.hpp`'s categories).

@@ -190,7 +190,7 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // must not see the message arrive as a bare "ERR ..." in the meantime.
     {StatusCode::kAssertionViolation, "ASSERTION_VIOLATION retryable=0 "},
     // A shipped statement whose reply never came (SS1,
-    // docs/spec/crosscore.md §6) - **no producer since AT-S6** retired the
+    // `git show c63e49f:docs/spec/crosscore.md` §6) - **no producer since AT-S6** retired the
     // ship; the spelling stays because the wire pins it. Its own spelling
     // because it is the one refusal here that does **not** mean "nothing
     // happened": the statement may have committed. A client must be able to

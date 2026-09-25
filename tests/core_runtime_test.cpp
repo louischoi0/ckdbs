@@ -158,16 +158,16 @@ protected:
         // owned a private one, which no instance can be in - a peer's view
         // could not see a core-0 commit at all and nothing noticed, because
         // no cell read the other core's rows locally. What made it
-        // load-bearing is the coordinator's snapshot crossing the ring: a
-        // participant that adopted an LSN from another instance's order
-        // would read nonsense.
+        // load-bearing then was the coordinator's snapshot crossing the
+        // ring (both gone since AT-S6/AT-S10d); what does now is that every
+        // core reads every other core's commits locally.
         c.visibility = &visibility_;
         c.schema_word = &schema_word_;
         c.oid_sequence = &oid_sequence_;
         c.mark_counter = &pending_marks_;
         // What `Expeditor` hands a peer on a single-stream volume, and what
-        // `CoreRuntime::Open` refuses to proceed without (AM-S0). Null on
-        // the per-core arm, where a peer opens its own log.
+        // `CoreRuntime::Open` refuses to proceed without (AM-S0); the one
+        // cell that watches that refusal clears them itself.
         if (core0_wal_ != nullptr) {
             c.shared_stream = core0_wal_->stream();
             c.shared_writer = core0_wal_->writer();
@@ -1383,7 +1383,7 @@ TEST_F(CoreRuntimeTest, APeerOnASharedPoolTakesNoBudgetOfItsOwn) {
         << "a peer re-budgeted the instance's pool from its own config";
 }
 
-TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
+TEST_F(CoreRuntimeTest, APeerInsertsIntoARelationItCreatedEndToEnd) {
     // PW1c-5's e2e: the interim guard is gone, and a peer with every
     // funding piece - fault grant, write grant (rule 6's acquisition
     // restamp inside it), a row-id block, a trx-id block - runs a
@@ -1501,7 +1501,7 @@ void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
     }
 }
 
-TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestart) {
+TEST_F(CoreRuntimeTest, APeersPagesSurviveARestart) {
     // **The device path**, which is the half that has nothing to do with
     // the log: the pages were flushed, and the restarted owner reads and
     // writes them again. It was `APeersOwnPagesSurviveARestartByTheirStamp`
@@ -1513,7 +1513,7 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestart) {
 
 // `APeerRefusesACallerSuppliedKeyAndTakesTheSameRowWithout` stood here until AT-S5: it pinned a peer refusing a caller-supplied key, which every core admits since AT-S5 (`ReadBorrowRigTest.ANamedKeyAdmitsOnAPeer` is the positive form).
 
-TEST_F(CoreRuntimeTest, AFundedPeerGrowsItsOwnBtreeWritingNoCatalogPage) {
+TEST_F(CoreRuntimeTest, APeerGrowsABtreeWithoutMovingItsSysTablesRow) {
     // PW2-4's proof: a peer INSERTs into a btree relation far enough to
     // divide leaves - every split page from the one free map, every root
     // move in the relation's anchor (the lease and the grant that funded
@@ -1609,7 +1609,7 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
     EXPECT_EQ(row_after.value().desc_page_id, row.value().desc_page_id);
 }
 
-TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerOwnedRelationBuildsWhereItRuns) {
+TEST_F(CoreRuntimeTest, ACreateIndexOnARelationAnotherCoreCreatedBuildsWhereItRuns) {
     // **AT-S5e.** A core-0 runtime opened bare, and a relation placed on
     // core 1 until AT-S9 retired placement. This was refused by name until AT-S5e - the build
     // was the owner's, shipped to it, and a dispatcher with no index-build
@@ -1751,23 +1751,23 @@ TEST_F(CoreRuntimeTest, APeerListenerServesAReadAndAWriteWithNothingGrantedAndRo
     worker.join();
 }
 
-TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
-    // P6's deliberate cost, pinned so it stays a decision rather than
-    // becoming a surprise: sys.patterns and sys.access_stats are catalog
-    // pages written on the statement path, and a peer may not write them.
-    // Both features are advisory, so a peer will return the same rows
-    // without them once it can serve at all.
+TEST_F(CoreRuntimeTest, APeerMayWriteTheStatisticsRelationsAndHasWrittenNothing) {
+    // **Renamed at AT-S12** from P6's `APeerIsWiredWithRecordingOff`, false
+    // since AT-S7: a peer records trails and access shapes (`Config::waystone_recording` and
+    // `access_statistics` both default on). P6 had it off because
+    // sys.patterns and sys.access_stats are catalog pages written on the
+    // statement path and a peer could not write them. What the cell still
+    // pins: the store admits the peer's write, and a peer that has run no
+    // statement has written nothing.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // The write a recording peer would attempt, refused at the store. The
-    // boundary and the asker are both stated for the reason
-    // `EveryCoreMayWriteTheCatalogPages` gives (AW-S1b).
+    // The write a recording peer makes. The boundary and the asker are
+    // both stated for the reason `EveryCoreMayWriteTheCatalogPages` gives.
     peer.value()->store().SetResidentLimit(kFirstUserPageId);
     {
         const CurrentCoreGuard as_the_peer(1);
-        // Writable since AT-S5; what keeps a peer from recording here is
-        // the `waystone_recording` default, AT-S7's, not the store.
+        // Writable since AT-S5.
         EXPECT_TRUE(peer.value()->store().MayWrite(catalog::kCatalogPageAccessStats));
         EXPECT_TRUE(peer.value()->store().MayWrite(catalog::kCatalogPagePatterns));
     }
@@ -2364,7 +2364,7 @@ TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
 
 
 
-TEST_F(CoreRuntimeTest, AReadFarWiderThanOneRingSlotIsAnsweredWhole) {
+TEST_F(CoreRuntimeTest, AReadWithAVeryWideAnswerIsAnsweredWhole) {
     // A read whose reply is far past what one ring slot carried is answered
     // whole. It took the remote-step pipeline until AT-S9 retired the route
     // with ownership; it is a local walk now, and the size floor below is
@@ -2516,7 +2516,7 @@ TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
 // No core owns a relation since; "cross-owner" in the names below is the
 // parent written from core 0 and the child from the peer.
 
-TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) {
+TEST_F(CoreRuntimeTest, AnInsertWithAParentFromAnotherCoreResolvesItAndWritesTheChildRow) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ai_base");
 
@@ -2582,7 +2582,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertResolvesTheParentAndWritesTheChildRow) 
 // reference intent its forward probe had been granted on the parent's
 // owner. No probe grants an intent and no decide releases one.
 
-TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnAbsentParentIsRefusedAndWritesNoRow) {
+TEST_F(CoreRuntimeTest, AnInsertNamingAnAbsentParentFromAnotherCoreIsRefusedAndWritesNoRow) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ah6_absent");
     OpenCrossOwnerFkPair(rig, "abs");
@@ -2609,7 +2609,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnAbsentParentIsRefusedAndWritesN
 
 }
 
-TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteOnASynchronousPathRunsRatherThanRefusing) {
+TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreOnASynchronousPathRunsRatherThanRefusing) {
     // **This cell has said three things and each was that day's truth.**
     // As `ACrossOwnerParentCannotBeRetiredAtAllSoThatFixtureCannotExist` it
     // recorded §3a's refusal - RESTRICT needs an authoritative "no
@@ -2656,7 +2656,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteOnASynchronousPathRunsRatherThanR
 // them, for the two shapes they were written for: a bare pk equality and
 // any other WHERE.
 
-TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPkChecksItsChildAndDeletes) {
+TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreByPkChecksItsChildAndDeletes) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ak3_pk");
     OpenCrossOwnerFkPair(rig, "pk");
@@ -2686,7 +2686,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPkChecksItsChildAndDeletes) {
     EXPECT_NE(rows.find("8"), std::string::npos) << rows;
 }
 
-TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPredicateChecksEveryRowItMarks) {
+TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreByPredicateChecksEveryRowItMarks) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ak3_pred");
     OpenCrossOwnerFkPair(rig, "pr");
@@ -2738,7 +2738,7 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPredicateChecksEveryRowItMarks)
 //     protected - a parent deleted while another core's transaction writes a
 //     child against it - is the walk's `kBusy` on the uncommitted child row.
 
-TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersRunsHere) {
+TEST_F(CoreRuntimeTest, AStatementSpanningRelationsFromTwoCoresRunsHere) {
     // **This cell asserted a refusal until AT-S6.** `SoleForeignOwner`
     // refused a chain whose steps did not all belong to one foreign core,
     // and the statement fell through to the affinity refusal - shipping a

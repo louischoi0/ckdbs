@@ -139,9 +139,10 @@ public:
         exec::Budget budget;
 
         // The Cabin store's switch and caps, copied from core 0's like every
-        // other shared setting (AK-S2; the store is the instance's since
-        // AT-S7, `cabins_store` below). On by default as
-        // `Expeditor::Config::cabins` is, so a fixture's peer is built the way a served one is; the caps carry
+        // other shared setting (AK-S2). Read only where `cabins_store` below
+        // is null - a fixture - since the store is the instance's (AT-S7).
+        // On by default as `Expeditor::Config::cabins` is, so a fixture's
+        // peer is built the way a served one is; the caps carry
         // `CabinLimits`' own defaults rather than restating them.
         bool cabins = true;
         stats::CabinLimits cabin_limits;

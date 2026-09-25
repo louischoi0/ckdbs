@@ -10,10 +10,12 @@ AT-S5's routing retired).
 Every name-creating DDL checks that the name is free and then writes it,
 as two separate latch holds:
 
-- `CREATE TABLE`, both forms: `CommandDispatcher::HandleCreateTable`
-  (and the SQL form) calls `Catalog::FindTableOidByName`, then
-  `Catalog::CreateTable`, whose `InsertObjectRow` inserts the
-  `sys.objects` row under that page's latch taken afresh.
+- `CREATE TABLE`: `CommandDispatcher::HandleCreateTableSql` calls
+  `Catalog::FindTableOidByName`, then `Catalog::CreateTable`, whose
+  `InsertObjectRow` inserts the `sys.objects` row under that page's latch
+  taken afresh. (The bare `HandleCreateTable` has the same shape but
+  creates nothing: its schema is empty and `CheckKeystoneColumn` refuses
+  it.)
 - `ALTER TABLE ... RENAME TO`: `Catalog::RenameTable` checks
   `FindTableOidByName(new_name)`, then rewrites the row. `HandleAlter`
   holds no relation `X` over it, and the new name has no lock unit.

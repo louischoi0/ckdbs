@@ -768,8 +768,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // mutation for a section no second thread can reach. AR0's G2 is that
     // `cores = 1` pays nothing, and `latch.hpp` calls it a property of the
     // code rather than of a build flag; this test is where that stays true.
-    // `core_count` is pinned at bootstrap and validated at every mount, so
-    // it cannot disagree with the peers that actually exist, and
+    // `core_count` is the running count - bootstrap records it at every
+    // mount since AT-S9 unpinned it - so it cannot disagree with the peers
+    // that actually exist, and
     // `WalManager::Attach` refuses an unshared stream - so getting this
     // wrong fails the mount loudly rather than racing.
     wal_config.shared_stream = expeditor->database_->superblock.core_count() > 1;

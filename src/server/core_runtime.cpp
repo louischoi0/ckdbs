@@ -201,7 +201,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // now, and the
     // `CurrentCoreGuard` at the top of this function covers the whole pass.
     // The page latch (AM-S1): armed from the instance's core count, which
-    // the superblock pinned at bootstrap and `Expeditor::Open` copied here -
+    // bootstrap recorded in the superblock and `Expeditor::Open` copied here -
     // after the identity above, so the owner field the word records is this
     // core's. `core_count > 1` alone, which is what the WAL's own arming
     // predicate came down to at AM-S4(d) as well. At one core the word is

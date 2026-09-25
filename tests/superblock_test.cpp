@@ -267,9 +267,9 @@ TEST(SuperBlockTest, DecodeRefusesAnyVersionButThisBuilds) {
     }
 }
 
-// ---- The pinned core count (workplan-crosscore.md M6) -----------------
+// ---- The recorded core count (pinned until AT-S9) ---------------------
 
-TEST(SuperBlockTest, TheCoreCountIsPinnedAndRoundTrips) {
+TEST(SuperBlockTest, TheCoreCountIsRecordedAndRoundTrips) {
     SuperBlock sb = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth,
                                             /*core_count=*/4);
     EXPECT_EQ(sb.core_count(), 4u);

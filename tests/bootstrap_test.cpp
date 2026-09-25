@@ -149,15 +149,15 @@ TEST(BootstrapTest, AnIllegalCellWidthIsRefusedBeforeAnythingIsCreated) {
     EXPECT_FALSE(store.Get(server::kSuperBlockPageId).ok());
 }
 
-// ---- The pinned core count (docs/inflight/in-progress/workplan-crosscore.md M6) -------------
+// ---- The recorded core count ---------------------------------------------
 //
-// Same shape as the width above and for a reason of the same weight: WAL
-// streams are per core, so the count decides how many streams the database
-// has. Mounting under a different one would leave streams with nothing to
-// replay them, and recovery under a changed count is [OPEN] (wal.md §3) -
-// the refusal is what stops this path from settling it by accident.
+// It was pinned like the width above (workplan-crosscore.md M6), because WAL
+// streams were per core and a changed count would have left streams nothing
+// replayed. One stream since AR0 M0 and no core named on disk since AT-S9,
+// so the superblock records the running count and a mount under another
+// one records the new count rather than refusing it.
 
-TEST(BootstrapTest, AFreshDatabasePinsTheConfiguredCoreCount) {
+TEST(BootstrapTest, AFreshDatabaseRecordsTheConfiguredCoreCount) {
     storage::InMemoryPageStore store(server::kFirstUserPageId);
 
     auto result = BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/4);

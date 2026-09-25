@@ -683,10 +683,10 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
 
 // ---- The reverse check under a split child (SA-T6's prerequisite) ----
 //
-// `RangeEligible`'s `kForeignKey` arm gates a split on either side of an
-// FK, so nothing below is reachable through the shipped surface; the
-// directory rows are written directly, which is the state SA-T6 makes
-// ordinary the day it lifts that gate. Both cells exist because RESTRICT
+// Nothing opens a range since AT-S9 (and `RangeEligible`'s `kForeignKey`
+// arm refused a split on either side of an FK before then), so no volume
+// reaches the state below through SQL; the directory rows are written
+// directly. Both cells exist because RESTRICT
 // needs an authoritative *"no children"* (F6), and a reverse check that
 // saw less than the whole child and answered `kPass` would not be a slow
 // constraint - it would be an absent one.
@@ -818,7 +818,7 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-TEST_F(ForeignKeyPlacementTest, ACrossOwnerForeignKeyIsAdmittedAndSaysNothing) {
+TEST_F(ForeignKeyPlacementTest, AForeignKeyBetweenRelationsFromTwoCoresIsAdmittedAndSaysNothing) {
     // **This cell asserted a notice until AT-S5f**, and the notice named
     // two costs that stage deleted: one cross-core probe round per write,
     // and a `DELETE` of a referenced parent refused until the reverse

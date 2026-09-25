@@ -2504,8 +2504,9 @@ std::size_t DevicePageStore::pinned_frames() const noexcept {
 
 std::size_t DevicePageStore::EvictColdFrames(std::size_t budget) {
     // **The third eraser's public door**, and all it does is take the latch
-    // (the other two are `ReleaseScanSlot` and `EvictClean`).
-    // the body assumes. Split rather than made re-entrant because
+    // (the other two are `ReleaseScanSlot` and `EvictClean`), which the
+    // `Locked` body assumes.
+    // Split rather than made re-entrant because
     // `base/latch.hpp` says plainly that a second acquisition on one thread
     // hangs, and `InsertFrame` reaches the body with the hold already taken.
     LatchGuard structure(structure_latch());

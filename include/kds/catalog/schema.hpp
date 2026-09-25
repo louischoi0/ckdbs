@@ -174,14 +174,10 @@ struct ForeignKeyRef {
 };
 
 struct TableAccess {
-    // Filled from the `sys.tables` row and **read by no engine code
-    // today** - `RangeEligible` deliberately does not consult it
-    // (range_eligible.hpp's scope note), and the four sites that ask about
-    // a namespace read the row rather than the access. Kept rather than
-    // deleted because AF-T2 - placement keyed on the namespace
-    // (`instructions/v2.8.0/ratification-af-namespace.md`) - is the first
-    // reader it will have. Said here so that is a decision rather than
-    // something a reader discovers by grepping for uses and finding none.
+    // Filled from the `sys.tables` row. Its one reader is
+    // `Catalog::CheckRelationQualifier`, which asks whether a qualified
+    // name's namespace is the relation's own; placement keyed on it
+    // (AF-T2) retired with ownership at AT-S9.
     Oid namespace_oid;
     Oid oid;
     Schema schema;
@@ -369,10 +365,9 @@ struct TableAccess {
     // per the mask's own comment above) and not `!cabin_ids.empty()`
     // (the vector is column-parallel and non-empty on every relation the
     // cache fills). One accessor for CabinOn's reason: the id-0 rule
-    // lives here, not re-derived per caller. `CheckWriteAffinity`
-    // (command_dispatcher.cpp) still hand-rolls the same predicate; that
-    // site flips to this whenever RD5/R6-8 rewrites that decision point
-    // (it is out of range-foundation's scope until then).
+    // lives here, not re-derived per caller. **No caller**: it was written
+    // for `CheckWriteAffinity`'s cabin gate, which AT-S9 reduced to
+    // `CheckWriteAdmission`'s one assertion question.
     bool AnyCabin() const noexcept {
         for (const CabinRef& cabin : cabin_ids) {
             if (cabin.id != 0) return true;
