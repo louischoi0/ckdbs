@@ -244,10 +244,10 @@ private:
 };
 
 // Readers a purge must not purge under, beyond the live transactions the
-// manager already holds: autocommit snapshots held across a park, which
-// today means the shipped pipeline stages alone - `RunProducer` and
-// `RunConsumer` keep theirs on a coroutine frame across every credit gate.
-// Bounded and fixed so the registry is an array and never a malloc on a
+// manager already holds: autocommit snapshots held across a park. None is
+// today - the shipped pipeline stages, which kept theirs on a coroutine
+// frame across every credit gate, retired at AT-S10 - so every lease is
+// structural (`AutocommitSnapshot` below says why it is kept). Bounded and fixed so the registry is an array and never a malloc on a
 // statement's front door, and the bound refuses rather than drops: a
 // reader the registry could not admit would be a reader a purge cannot
 // see, so exhaustion refuses the reader rather than unsoundly proceeding.
@@ -262,7 +262,7 @@ class TransactionManager;
 //
 // The manager must outlive every lease it issued - which the ownership
 // order already guarantees: the core runtime owns the manager, and the
-// dispatcher and pipeline stages that hold leases die first.
+// dispatcher that holds leases dies first.
 class ReaderLease {
 public:
     ReaderLease() = default;
@@ -832,26 +832,23 @@ struct LeasedSnapshot {
 // The view a statement outside any transaction reads at: everything
 // committed on this manager's core, nothing in flight. The free-function
 // sibling of `SnapshotFor(const Transaction&)` above, and it lives here
-// for the same reason that one does - two callers mint it (the
-// dispatcher's autocommit arm and every cross-core pipeline stage), and
-// spelling six lines twice is how the two drift.
+// for the same reason that one does: it was minted by two callers until
+// AT-S10 retired the cross-core pipeline stages, and one seam is where a
+// future second caller will look.
 //
 // Registered by construction, on the seam and not at the call sites: a
-// shipped stage holds its snapshot on a coroutine frame across every
-// credit grant, which is exactly the reader `live_` cannot name, and
-// putting the lease here is what keeps a stage from forgetting one.
-// Transactions need none: `live_` is their record.
+// reader that outlives its statement across a park is exactly the reader
+// `live_` cannot name. Transactions need none: `live_` is their record.
 //
-// **The dispatcher's autocommit snapshot does not currently outlive its
+// **The dispatcher's autocommit snapshot does not outlive its
 // statement**, and its lease is structural rather than load-bearing:
-// `DispatchInner` is synchronous throughout (`exec::Execute`, not
-// `ExecuteAsync`), and the statement returns its outcome - dropping
-// this object - *before* `DispatchAsync` awaits anything. So that reader is today the
-// synchronous one txn.md section 4.1 exempts by proof. Kept leased
-// anyway because the exemption is an invariant to re-check whenever the
-// session-side executor gains a suspension point (P4d-3's page-boundary
-// awaits are the named watch item), and one slot store per statement is
-// cheaper than rediscovering that.
+// `DispatchInner` is synchronous throughout (`exec::Execute`), and the
+// statement returns its outcome - dropping this object - *before*
+// `DispatchAsync` awaits anything. So that reader is the synchronous one
+// txn.md section 4.1 exempts by proof. Kept leased anyway because the
+// exemption is an invariant to re-check whenever the executor gains a
+// suspension point, and one slot store per statement is cheaper than
+// rediscovering that.
 //
 // A null manager answers the default snapshot with an empty lease: every
 // writer visible, no undo log, which is the pre-MVCC engine exactly and

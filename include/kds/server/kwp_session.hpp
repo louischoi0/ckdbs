@@ -56,9 +56,9 @@
 // §7 describes a suspended portal as "a suspended foreground task holding
 // pins". **It is not one here, and the spec is amended rather than the
 // build overstated.** This engine has no suspension point at a row
-// boundary: a walk holds a page pin across every row of a page, and the one
-// place a statement parks is a page boundary under the cross-core gate
-// (`exec::ExecuteAsync`'s resume gate). So `C_EXECUTE {max_rows}` bounds
+// boundary: a walk holds a page pin across every row of a page, and no
+// walk parks at all since AT-S10 retired the cross-core resume gate. So
+// `C_EXECUTE {max_rows}` bounds
 // **delivery**, not execution: the statement runs whole into the portal's
 // buffered batches, and `max_rows` decides how many rows leave now.
 //
@@ -146,10 +146,6 @@ public:
     Status EncodeValueRow(std::span<const std::uint32_t> types,
                           std::span<const parser::AstValue> values, std::string& out) override;
     Status Emit(std::string_view row) override;
-
-    // Yes: this sink's `Emit` takes the D5 encoding, which is the same
-    // encoding a cross-core batch carries. XG1's forward relies on it.
-    bool AcceptsEncodedRows() const noexcept override { return true; }
 
     bool described() const noexcept { return described_; }
     const std::vector<wire::FieldDescription>& fields() const noexcept { return fields_; }

@@ -24,10 +24,11 @@
 // each site warning that a second formatter would drift ("a sorted reply
 // rendering a DATE as an epoch day because one of two copies forgot
 // `projection_types`", `RenderProjectedRow`). KWP is a second output form
-// and would have been that second copy four times over: the local walk, the
-// sorted drain, the aggregate fold and the cross-core fan-in.
+// and would have been that second copy at every emission point: the local
+// walk, the sorted drain and the aggregate fold (and the cross-core fan-in
+// until AT-S9 retired it).
 //
-// So it is not a copy - it is the same four call sites, calling a sink. The
+// So it is not a copy - it is the same call sites, calling a sink. The
 // text form is `TextResultSink` below, is installed by default, and does
 // **exactly** what the inline code did, byte for byte; that is the property
 // the whole existing suite checks, since every one of its expected replies
@@ -72,8 +73,7 @@ public:
                                       std::span<const std::uint32_t> types,
                                       const exec::ChainFrame& frame, std::string& out) = 0;
 
-    // The same for a row that arrives as values - a fold's output, and a
-    // row decoded off the wire by the fan-in.
+    // The same for a row that arrives as values - a fold's output.
     virtual Status EncodeValueRow(std::span<const std::uint32_t> types,
                                   std::span<const parser::AstValue> values,
                                   std::string& out) = 0;
@@ -83,27 +83,6 @@ public:
     // keeps the bytes must copy them.
     virtual Status Emit(std::string_view row) = 0;
 
-    // **Whether `Emit` will accept a row this sink did not encode** (XG1,
-    // `docs/spec/crosscore.md` §4a).
-    //
-    // `Emit`'s contract above is "a row an `Encode*` call produced" -
-    // meaning *this* sink's. That is the whole of the answer: the text form
-    // takes rendered text and the wire form takes the D5 encoding, and
-    // handing either the other's bytes is a wrong answer rather than an
-    // error.
-    //
-    // It matters because a **shipped read's rows arrive already encoded**,
-    // in the same D5 form a `WireResultSink` emits - so forwarding them
-    // byte for byte is exactly right for that sink and exactly wrong for
-    // the text one, and nothing else in this interface can tell them apart.
-    // A sink that answers true is promising that its `Emit` reads the
-    // engine's one row encoding, which is the promise `wire/row_codec.hpp`
-    // exists to make singular.
-    //
-    // **False by default**, so a sink written later without reading this
-    // gets the safe answer, and the forward path refuses rather than
-    // guessing.
-    virtual bool AcceptsEncodedRows() const noexcept { return false; }
 };
 
 // The newline protocol's form: a header line of comma-joined column names,

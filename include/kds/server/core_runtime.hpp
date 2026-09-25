@@ -380,26 +380,23 @@ public:
     CoreRuntime(const CoreRuntime&) = delete;
     CoreRuntime& operator=(const CoreRuntime&) = delete;
 
-    // **The reactor is dropped first, ahead of everything it borrows.**
-    // `scheduler_` is declared first because every member below borrows it,
-    // which by the reverse-order rule would destroy it *last* - and the
+    // **The reactor is left to declaration order** (`core_runtime.cpp`
+    // says why its early reset went): `scheduler_` is declared above every
+    // member that borrows it, so it is destroyed after them - and the
     // scheduler owns coroutine frames (`sched::CoroTask` destroys a
-    // suspended one), whose locals reach back into those members. A
-    // pipeline stage parked at a credit gate when the reactor stops holds
-    // a `txn::ReaderLease` on its frame, and that lease's destructor calls
-    // `txn_manager_->UnregisterReader()` - on a manager the reverse order
-    // has already destroyed. Safe here because nothing destroyed below
-    // submits or polls; only the frames' own destructors run, and every
-    // member they touch is still alive.
+    // suspended one), so a frame it destroys at teardown may reach only
+    // members declared above it, which is why `owned_locks_` is. The frame
+    // that used to break this, a pipeline stage parked at a credit gate
+    // with a `txn::ReaderLease` whose destructor reached `txn_manager_`,
+    // retired at AT-S10.
     //
-    // One member breaks that last sentence and so goes *before* the
-    // scheduler in the same body: `listener_` (PW5), whose `~TcpServer`
-    // unregisters its fds from the reactor.
+    // One member is dropped by hand *before* the scheduler in the body:
+    // `listener_` (PW5), whose `~TcpServer` unregisters its fds from the
+    // reactor.
     ~CoreRuntime();
 
-    // Attaches this core to the ring matrix and installs the handlers every
-    // core needs - catalog invalidation, the CC7 grants, and the services
-    // below. **Not a stop handler**: since AU-S3 core 0 stops this reactor
+    // Attaches this core to the ring matrix and installs the handlers a
+    // peer needs - the two id-lease receivers. **Not a stop handler**: since AU-S3 core 0 stops this reactor
     // with `scheduler().Stop()` plus a kick, so shutdown reaches a core that
     // never attached a transport at all. `transport` must outlive this.
     Status AttachTransport(sched::RingTransport& transport);
@@ -569,13 +566,11 @@ private:
     // backend, the WAL manager holds the log device, and the dispatcher
     // holds references into everything below it.
     // **Declared above the scheduler, so it outlives every frame that
-    // releases into it** - `expeditor.hpp`'s rule for its own table. Since
-    // AT-S1 a parked producer's or consumer's borrow (`read_borrow.hpp`)
-    // releases in its destructor, which runs when the scheduler drops the
-    // frame at teardown; with the table declared below the scheduler that
-    // release would reach a freed table. Unreachable today - an owned table
-    // exists only at one core, where no transport and so no producer exists
-    // - and the order is what keeps it that way rather than a coincidence.
+    // releases into it** - `expeditor.hpp`'s rule for its own table: a
+    // parked frame's borrow (`read_borrow.hpp`) releases in its destructor,
+    // which runs when the scheduler drops the frame at teardown. The frames
+    // that made this reachable were the remote step producer's and
+    // consumer's, retired at AT-S10; the order keeps it unreachable.
     // The pointer is the table this core uses, owned or borrowed (AO-S5).
     std::unique_ptr<txn::LockTable> owned_locks_;
     txn::LockTable* locks_ = nullptr;

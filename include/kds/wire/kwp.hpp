@@ -56,10 +56,6 @@ inline constexpr std::uint32_t kMinFrameLength = 4;
 // legitimate frame is a row batch, whose target is `kRowBatchTargetBytes`
 // (64 KiB, §9's builder), making this 256x the largest thing the server
 // intends to send; a per-connection buffer bounded here is affordable.
-//
-// **It bounds nothing a shipped statement can produce**: the cross-core
-// ring's reply cap is `kShippedStatementReplyTextMax`, 1000 bytes. Locally-answered
-// result batches only.
 inline constexpr std::uint32_t kMaxFrame = 16u * 1024u * 1024u;
 
 // The size a server aims at when it seals an `S_ROW_BATCH`

@@ -402,38 +402,6 @@ StatusOr<std::vector<std::vector<DecodedField>>> DecodeRowBatch(std::span<const 
     return out;
 }
 
-StatusOr<std::vector<std::span<const std::byte>>> DecodeRowExtents(
-    std::span<const std::byte> payload, std::size_t field_count) {
-    if (payload.size() < kBatchHeaderSize) {
-        return Status::Corruption("wire row batch: truncated row count");
-    }
-    const auto rows = static_cast<std::uint16_t>(LoadLE(payload.subspan(kRowCountOffset, 2)));
-    std::size_t at = kBatchHeaderSize;
-
-    std::vector<std::span<const std::byte>> out;
-    out.reserve(rows);
-    for (std::uint16_t r = 0; r < rows; ++r) {
-        const std::size_t row_at = at;
-        for (std::size_t f = 0; f < field_count; ++f) {
-            if (at + 4 > payload.size()) {
-                return Status::Corruption("wire row batch: truncated field length at row " +
-                                          std::to_string(r));
-            }
-            const auto raw = static_cast<std::uint32_t>(LoadLE(payload.subspan(at, 4)));
-            at += 4;
-            if (raw == 0xFFFFFFFFu) continue;  // NULL: the length and nothing else
-            if (at + raw > payload.size()) {
-                return Status::Corruption("wire row batch: field of " + std::to_string(raw) +
-                                          " bytes runs past the payload at row " +
-                                          std::to_string(r));
-            }
-            at += raw;
-        }
-        out.push_back(payload.subspan(row_at, at - row_at));
-    }
-    return out;
-}
-
 StatusOr<std::int64_t> DecodeInt(std::span<const std::byte> bytes) {
     if (bytes.empty() || bytes.size() > 8) {
         return Status::Corruption("wire row codec: integer field of " +
@@ -469,84 +437,6 @@ StatusOr<Int128> DecodeDecimalWide(std::span<const std::byte> bytes) {
     const auto lo = static_cast<std::int64_t>(LoadLE(bytes.subspan(0, 8)));
     const auto hi = static_cast<std::int64_t>(LoadLE(bytes.subspan(8, 8)));
     return Int128FromHalves(hi, lo);
-}
-
-parser::AstValue FieldToValue(const catalog::SysColumnRow& col, const DecodedField& field) {
-    parser::AstValue v;
-    if (field.is_null) return v;  // kNull default
-    auto le = [&](std::size_t n) {
-        std::uint64_t out = 0;
-        for (std::size_t i = 0; i < n && i < field.bytes.size(); ++i) {
-            out |= static_cast<std::uint64_t>(field.bytes[i]) << (8 * i);
-        }
-        return out;
-    };
-    switch (col.type_val) {
-        case catalog::kTypeValInt8:
-            v.type = parser::ValueType::kInt;
-            v.int_val = static_cast<std::int8_t>(le(1));
-            break;
-        case catalog::kTypeValInt16:
-            v.type = parser::ValueType::kInt;
-            v.int_val = static_cast<std::int16_t>(le(2));
-            break;
-        case catalog::kTypeValInt32:
-        case catalog::kTypeValDate:
-            v.type = parser::ValueType::kInt;
-            v.int_val = static_cast<std::int32_t>(le(4));
-            break;
-        case catalog::kTypeValInt64:
-        case catalog::kTypeValTimestamp:
-            v.type = parser::ValueType::kInt;
-            v.int_val = static_cast<std::int64_t>(le(8));
-            break;
-        case catalog::kTypeValUint64:
-            v.type = parser::ValueType::kInt;
-            v.int_val = static_cast<std::int64_t>(le(8));
-            v.raw_int_text = std::to_string(le(8));
-            break;
-        case catalog::kTypeValBool:
-            v.type = parser::ValueType::kInt;
-            v.int_val = le(1) != 0 ? 1 : 0;
-            break;
-        case catalog::kTypeValDecimal:
-            v.type = parser::ValueType::kDecimal;
-            v.int_val = static_cast<std::int64_t>(le(8));
-            v.scale = static_cast<std::uint8_t>(catalog::DecimalScaleOf(col.len));
-            break;
-        case catalog::kTypeValDecimalWide: {
-            v.type = parser::ValueType::kDecimalWide;
-            v.int_val = static_cast<std::int64_t>(le(8));
-            std::uint64_t hi = 0;
-            for (std::size_t i = 8; i < 16 && i < field.bytes.size(); ++i) {
-                hi |= static_cast<std::uint64_t>(field.bytes[i]) << (8 * (i - 8));
-            }
-            v.dec_hi = static_cast<std::int64_t>(hi);
-            v.scale = static_cast<std::uint8_t>(catalog::DecimalScaleOf(col.len));
-            break;
-        }
-        default:  // varchar, char: the bytes are the text
-            v.type = parser::ValueType::kStr;
-            v.str_val.assign(reinterpret_cast<const char*>(field.bytes.data()),
-                             field.bytes.size());
-            break;
-    }
-    return v;
-}
-
-StatusOr<parser::AstValue> FieldToValueChecked(const catalog::SysColumnRow& col,
-                                               const DecodedField& field) {
-    if (!field.is_null) {
-        const std::int16_t want = WireTypeLen(col.type_val);
-        if (want >= 0 && field.bytes.size() != static_cast<std::size_t>(want)) {
-            return Status::Corruption(
-                "wire row codec: field for column type " + std::to_string(col.type_val) +
-                " carries " + std::to_string(field.bytes.size()) + " bytes where " +
-                std::to_string(want) + " are its width; a disagreeing length is never "
-                "interpreted");
-        }
-    }
-    return FieldToValue(col, field);
 }
 
 // ---- Bound parameters (§5) -----------------------------------------------

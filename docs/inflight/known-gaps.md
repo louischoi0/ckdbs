@@ -458,8 +458,9 @@ there is no second core's registration to be answered by.
 
   **Closed at AT-S1 on `m3-at`** for every shape above: the compiler
   declares each relation it binds (`step_compiler.cpp`), the three write
-  verbs declare at resolve, and a remote-step producer takes its own `IS`
-  in its frame (`remote_step_service.cpp`). **What stays open is the
+  verbs declare at resolve, and a remote-step producer took its own `IS`
+  in its frame (`remote_step_service.cpp`, deleted at AT-S10 with the
+  protocol). **What stays open is the
   direction, and it is a correction to AR0-5 §8 rather than a gap**: the
   ask is a non-blocking `TryAcquire`, so a reader arriving while a DDL holds
   `X` is refused and reads on - sound by DT1, catalog MVCC and catalog-only

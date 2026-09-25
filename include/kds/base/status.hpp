@@ -45,7 +45,7 @@ enum class StatusCode {
     // code is for the refusals where it could not: one falls out of a hard
     // invariant (a pk UPDATE, invariant 11 - the id is the tuple's identity
     // and not a field of it), out of a fixed structure's ceiling (the
-    // fan-in's stage cap, the shipped reply's one slot), out of a format
+    // subquery nesting depth), out of a format
     // (comparing decimals of different width or scale, which are different
     // types), or out of a protocol's shape (a `$name` bind on a wire that
     // has no bind step). A client seeing this must rewrite the statement,
@@ -212,7 +212,7 @@ public:
     // to IoError** rather than being trusted - nothing persists a
     // StatusCode and no on-disk format encodes one, so a stray integer is a
     // build disagreeing with itself. The one decode for every wire that
-    // carries a code (remote steps, index builds): two switches drifted once
+    // carries a code (an error reply's `code=` token): two switches drifted once
     // - one read kAlreadyExists as IoError - and this is what keeps a third
     // from drifting.
     static Status FromWire(std::uint32_t code, std::string msg) {

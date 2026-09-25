@@ -532,7 +532,7 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, /*parent=*/nullptr, &seen);
+        /*snapshot=*/nullptr, /*indexes=*/true, &seen);
     ASSERT_TRUE(ran.ok()) << ran.message();
     ASSERT_EQ(rows, 600u);
 
@@ -571,7 +571,7 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, /*parent=*/nullptr, &small);
+        /*snapshot=*/nullptr, /*indexes=*/true, &small);
     ASSERT_TRUE(ran_one.ok()) << ran_one.message();
     ASSERT_EQ(small.at.size(), 1u) << "a one-page walk declares its position exactly once";
     EXPECT_EQ(small.at.front().lo, 0u);
@@ -596,7 +596,7 @@ TEST_F(ExecChainTest, AHeapWalkDeclaresTheRelationAndNoSlice) {
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
-        /*snapshot=*/nullptr, /*indexes=*/true, /*parent=*/nullptr, &seen);
+        /*snapshot=*/nullptr, /*indexes=*/true, &seen);
     ASSERT_TRUE(ran.ok()) << ran.message();
 
     ASSERT_EQ(seen.at.size(), 1u) << "a heap walk reports once, before its first page";

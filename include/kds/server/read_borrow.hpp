@@ -156,20 +156,16 @@ private:
 };
 
 // The holder id a read borrow is taken under, and the one spelling of its
-// layout: bit 63 is `kReadHolderBit` (`lock_table.hpp`), **bit 62 says
-// which minter**, bits 32-61 the core, bits 0-31 that minter's own
-// sequence. Two minters live on one core - the dispatcher for statements,
-// the remote-step server for the stages it executes - each with a counter
-// of its own, and without the minter bit two holders on one core could
-// share an id: the table's covering test would then grant the second an
-// `IS` it does not own and record nothing for it, so the first holder's
-// release would free a position the second was still walking under. A
-// wait names any of them "a positioned reader" rather than a transaction
-// that never existed. `seq` is 32 bits so the field cannot alias a core's.
-constexpr std::uint64_t ReadHolderId(std::uint32_t core_id, std::uint32_t seq,
-                                     bool remote) noexcept {
-    return txn::kReadHolderBit | (remote ? (std::uint64_t{1} << 62) : 0) |
-           (static_cast<std::uint64_t>(core_id & 0x3FFFFFFF) << 32) | seq;
+// layout: bit 63 is `kReadHolderBit` (`lock_table.hpp`), bits 32-61 the
+// core, bits 0-31 the dispatcher's sequence. **Bit 62 is always 0 since
+// AT-S10**: it named the minter while a second one lived on a core - the
+// remote-step server, with a counter of its own - so two holders on one
+// core could not share an id. One minter per core cannot collide with
+// itself. A wait names a holder "a positioned reader" rather than a
+// transaction that never existed. `seq` is 32 bits so the field cannot
+// alias a core's.
+constexpr std::uint64_t ReadHolderId(std::uint32_t core_id, std::uint32_t seq) noexcept {
+    return txn::kReadHolderBit | (static_cast<std::uint64_t>(core_id & 0x3FFFFFFF) << 32) | seq;
 }
 
 }  // namespace kds::server

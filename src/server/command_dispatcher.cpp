@@ -6269,7 +6269,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
             return storage::VisitControl::kContinue;
         },
         &exec_stats_, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
-        /*parent=*/nullptr, &borrow);
+        &borrow);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
         // path has it: a statement that stopped part way through touched
@@ -6380,7 +6380,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                        : storage::VisitControl::kContinue;
         },
         &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
-        /*parent=*/nullptr, &borrow);
+        &borrow);
     if (!ran.ok()) {
         return {ErrorReply(ran), false, 0, ran};
     }
@@ -6801,7 +6801,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                        : storage::VisitControl::kContinue;
         },
         &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value().snap,
-        indexes_enabled_, /*parent=*/nullptr, &borrow);
+        indexes_enabled_, &borrow);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -8199,7 +8199,7 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* 
 
 std::uint64_t CommandDispatcher::NextReadHolder() noexcept {
     if (locks_ == nullptr) return 0;
-    return ReadHolderId(core_id_, ++read_borrow_seq_, /*remote=*/false);
+    return ReadHolderId(core_id_, ++read_borrow_seq_);
 }
 
 void CommandDispatcher::TakeLockWait(DispatchOutcome::LockWait wait) {

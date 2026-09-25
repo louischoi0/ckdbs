@@ -252,7 +252,7 @@ struct TableAccess {
         // not be held across a park: `CatalogCache::Invalidate()` frees
         // the storage, and the same rule `range_directory.hpp` states for
         // a resolved range span applies here for the same reason. Both
-        // callers today are synchronous; RD7's pipeline will not be.
+        // callers are synchronous.
         PageId* tail_hint = nullptr;
     };
 

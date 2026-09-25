@@ -888,8 +888,7 @@ private:
     // `#if KDS_WITH_TLS` member in a public header.
     //
     // **Declared last, so it is destroyed before every member it borrows
-    // from** - `dispatcher_` holds its reactor, and the pipeline endpoints
-    // above send through a transport it outlives.
+    // from** - `dispatcher_` holds its reactor.
     struct ServeRuntime;
     std::unique_ptr<ServeRuntime> running_;
 };

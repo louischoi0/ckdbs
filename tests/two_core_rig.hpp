@@ -24,8 +24,9 @@
 // **Core 0 is a `CoreRuntime` here and an `Expeditor` in production.** The
 // AV-S0 read (the order's §8 table) lists what that leaves out; what it
 // leaves in is everything `CoreRuntime::AttachTransport` wires for every
-// core - shipping, 2PC, the foreign-key probe, the remote step server - so a
-// statement crossing the rig crosses production's code. The two things a
+// core, so what the rig exercises is production's code - which since AT-S10
+// is the two id-lease receivers, nothing that ships a statement having
+// survived. The two things a
 // core-0 runtime lacked and this rig needed are landed in the runtime
 // rather than worked around here: it persists page 0 when it carves an id
 // block, and its reactor takes a `SchedulerConfig`.

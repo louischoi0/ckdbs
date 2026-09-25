@@ -263,7 +263,6 @@ public:
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
                 const txn::Snapshot* snapshot, bool indexes,
-                const std::function<bool()>* resume_gate = nullptr,
                 InnerBuildStore* builds = nullptr, PositionSink* position = nullptr)
         // Listed in declaration order, which is the order they are actually
         // initialized in - `snapshot_` sits third among the members even
@@ -277,7 +276,7 @@ public:
         : catalog_(catalog), store_(store),
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), sink_(sink),
           depth_(depth), parent_(parent), stats_(stats), budget_(budget), trail_(trail),
-          replay_(replay), cabins_(cabins), indexes_(indexes), resume_gate_(resume_gate),
+          replay_(replay), cabins_(cabins), indexes_(indexes),
           builds_(builds != nullptr ? builds : &owned_builds_), position_(position) {}
 
     // Sub-chain mode - see `record_through_stops_`'s comment for what it
@@ -422,8 +421,7 @@ public:
         // once per outer row - which is the whole cost the map exists to
         // remove (JB6).
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_, cabins_, &snapshot_, indexes_,
-                          /*resume_gate=*/nullptr, builds_);
+                          trail_, replay_, cabins_, &snapshot_, indexes_, builds_);
         // Sub-chain mode - `record_through_stops_`'s comment carries the
         // argument.
         inner.RecordThroughStops();
@@ -1117,16 +1115,13 @@ private:
     //    is false from `CompileWhere` down, JB1 - so no such step is ever
     //    annotated; the runtime gate that used to say so a second time is
     //    JB6's prefix arm now), and an annotated step has no park at all -
-    //    `BuildKey` is never encoded by the descriptor codec
-    //    (step_chain.hpp), so a built step never runs under a
-    //    `resume_gate_`, which is the executor's only suspension point.
-    //    **JB6's resumed walk does not change that**: a sub-chain runner
-    //    is constructed without a resume gate, so the walk it resumes has
-    //    no more suspension point than the walk it continues - which is
-    //    also what lets a physical mark name the same row twice.
-    //    **Give a built step a park - JB8's peer-side build, P4d-4c's
-    //    multi-step gate - and this arm owes VerifyTupleAt with a pk
-    //    fallback**, because the in-place-update and
+    //    nothing in the executor parks since AT-S10 retired the remote
+    //    producer's resume gate, the one suspension point it had. **JB6's
+    //    resumed walk does not change that**: the walk it resumes has no
+    //    more suspension point than the walk it continues - which is also
+    //    what lets a physical mark name the same row twice.
+    //    **Give a built step a park and this arm owes VerifyTupleAt with a
+    //    pk fallback**, because the in-place-update and
     //    slots-never-compact cases are not the only way a location dies.
     //    What stands in for both checks meanwhile: every entry goes through
     //    `AcceptTupleAt`, which re-applies MVCC under the statement's
@@ -1661,10 +1656,8 @@ private:
         // terminating value for every other shape.
         std::size_t range_index = prefixed ? prefix->resume.range : 0;
         // The chain heads this walk covers, in `lo` order
-        // (`TableAccess::WalkHeads`): every range the step's span meets,
-        // which is every range since AT-S9 retired the fan-in's per-owner
-        // stages. One entry - the relation's own head - for every unsplit
-        // relation.
+        // (`TableAccess::WalkHeads`): every range. One entry - the
+        // relation's own head - for every unsplit relation.
         std::vector<PageId> walk_heads;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
@@ -1934,19 +1927,13 @@ private:
             // **one chain per range** after (CC8), so the walk starts at
             // the first range's head and steps to the next range's when a
             // chain ends. `ranges` is ascending by `lo`, which is the
-            // order this walk therefore emits in - and the order RD7
-            // concatenates remote stages in, so the local and remote
-            // answers agree by construction.
+            // order this walk therefore emits in.
             //
             // Unsplit is the field it always was, reached by one branch on
             // a cached vector's emptiness.
-            if (access.ranges.empty()) {
-                cur = access.desc_page_id;  // unsplit: the field it always was
-            } else if (walk_heads.empty()) {
-                co_return Status::OK();  // split, and no range of ours: no rows
-            } else {
-                cur = walk_heads.front();
-            }
+            // A split relation's heads are never empty: `WalkHeads` returns
+            // one per range.
+            cur = access.ranges.empty() ? access.desc_page_id : walk_heads.front();
         }
 
         // ---- The page loop, owned by the coroutine (P4d-3) ---------------
@@ -1954,10 +1941,10 @@ private:
         // The walk used to hand the whole chain to storage; now this
         // coroutine steps it page by page. Each *OnePage call holds its
         // page's pin only for the call, so the bottom of this loop - no
-        // pin, no span - is the executor's legal suspension point: the
-        // pipeline's awaits (credit, cancellation) land exactly there
-        // (P4d-4). Nothing suspends yet, which is what keeps this
-        // bit-identical to the whole-chain walk it replaces.
+        // pin, no span - is the executor's one legal suspension point.
+        // Nothing suspends there since AT-S10 retired the remote producer
+        // that parked for credit, which is what keeps this bit-identical
+        // to the whole-chain walk it replaces.
         //
         // The first page is visited unconditionally, exactly as the
         // whole-chain forms do: a bad head fails inside the fetch, where
@@ -2041,44 +2028,12 @@ private:
             // a bound on what it has yet to read; there the relation
             // reported above is the whole declaration. Since SUS-1 every
             // relation created is a btree.
-            // `parent_ == nullptr` since AT-S1: a consuming stage's inner
-            // walk is `index == 0` on its own core and would otherwise
-            // re-take a slice per input row - two partition-latch ops per
-            // page per row, over-declaring a position the relation `IS`
-            // above already covers. The M2 rule stands: a nested walk
-            // declares no slice.
+            // `parent_ == nullptr`: a sub-chain's walk is `index == 0` in
+            // its own runner and would otherwise re-take a slice per outer
+            // row, over-declaring a position the relation `IS` above
+            // already covers. The M2 rule: a nested walk declares no slice.
             if (position_ != nullptr && index == 0 && parent_ == nullptr && is_btree) {
                 position_->Position(live_access->oid, walk_page_min_key, catalog::kIdSpaceEnd);
-            }
-
-            // ---- The page boundary: no pin, no span (P4d-3) --------------
-            //
-            // The one place a statement may park (P4d-4a): the pipeline's
-            // producer waits here for batch credit, and a cancel is seen
-            // here at the latest. Outermost walk only - a deeper step runs
-            // beneath a visitor through the gated synchronous driver until
-            // P4d-4c moves that descent, and consulting the gate there
-            // would turn a wait into the driver's hard error.
-            if (resume_gate_ != nullptr && index == 0 && !(*resume_gate_)()) {
-                co_await sched::WaitUntil{resume_gate_};
-
-                // The park ran other tasks on this core, and any task's
-                // boundary may revalidate against a schema word a DDL
-                // anywhere moved (AT-S2), dropping the whole TableAccess
-                // cache - killing every borrow this runner holds (bound_,
-                // schemas_, the frame's schema pointers, the visitor's
-                // access). Re-take them: a refill from catalog storage
-                // restores the same physical
-                // values for a live relation (no DDL can change a live
-                // relation's shape), and a relation dropped while we were
-                // parked surfaces here as a clean error instead of a read
-                // through freed memory. The frame re-opens too - legal at
-                // a boundary because the gated shape is single-step, so
-                // no outer row is live in it; P4d-4c owns the multi-step
-                // form of this seam.
-                if (Status s = Bind(steps); !s.ok()) co_return s;
-                frame_.Open(schemas_, parent_);
-                live_access = bound_[index].access;
             }
         }
     }
@@ -2466,14 +2421,11 @@ private:
 
         if (index + 1 == steps.size()) {
             // Terminal: the emit is a plain call, so a single-step scan
-            // allocates zero frames per row. This is where P4d-4's remote
-            // forward will buffer the row instead; the await it needs
-            // happens at the page boundary above (workplan §3), never here.
+            // allocates zero frames per row.
             return EmitRow();
         }
-        // A deeper local step: driven synchronously until P4d-4 batches
-        // rows across this edge. One frame per row on multi-step chains
-        // only - the shape the pipeline rebuilds anyway.
+        // A deeper local step, driven synchronously: one frame per row on
+        // multi-step chains only.
         return RunToCompletionAtWalkBoundary(RunStep(steps, index + 1));
     }
 
@@ -2661,14 +2613,6 @@ private:
     // property (pagination_exec_test) a completed walk would break.
     bool record_through_stops_ = false;
 
-    // The page-boundary resume gate (workplan-crosscore.md P4d-4a). Null
-    // for every local statement. When set, the outermost walk consults it
-    // at each page boundary and parks - holding no pin and no span, which
-    // P4d-3 made structural - until it answers true. It is a pointer to a
-    // caller-owned predicate for WaitFor's lifetime reason: the poller
-    // re-reads it while this runner sits suspended in its frame.
-    const std::function<bool()>* resume_gate_ = nullptr;
-
     // ---- The statement-local inner build (workplan JB3/JB5/JB6) ----------
     //
     // The store and its state types are above the class, because the
@@ -2830,11 +2774,14 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     return true;
 }
 
-sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
+namespace {
+
+// Execute's body as a coroutine, because the runner's steps are; it never
+// parks, and `Execute` drives it to completion inline.
+sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         const std::function<bool()>* resume_gate, const ChainFrame* parent,
                          PositionSink* position) {
     if (chain.steps.empty()) {
         co_return Status::InvalidArgument("a step chain with no steps reads nothing");
@@ -2859,9 +2806,8 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
     // copy, so no entry point can drop a field.
     Budget spend = budget.Fresh();
 
-    ChainRunner runner(catalog, store, sink, /*depth=*/parent != nullptr ? 1u : 0u, parent,
-                       counters, spend, trail, replay, cabins, snapshot, indexes, resume_gate,
-                       /*builds=*/nullptr, position);
+    ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
+                       trail, replay, cabins, snapshot, indexes, /*builds=*/nullptr, position);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by
@@ -2872,9 +2818,7 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
     // all. That is a real saving on a large relation, and it is only
     // available because hoisting is decided structurally at compile.
     //
-    // They run synchronously even here: whether a sub-chain may ever
-    // await is P4d-4's open decision, and until it is taken they stay on
-    // the gated driver exactly as a nested step does.
+    // They run on the gated driver, as a nested step does.
     if (!chain.hoisted.empty()) {
         // An empty frame with no parent: a hoisted sub-chain refers to
         // nothing outside itself, which is what "uncorrelated" means.
@@ -2890,19 +2834,17 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
     co_return co_await runner.Run(chain.steps);
 }
 
+}  // namespace
+
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot, bool indexes, const ChainFrame* parent,
-               PositionSink* position) {
-    // The synchronous wrapper (P4d-2's staging): with no resume gate
-    // nothing beneath can park, so the gated driver completes the
-    // coroutine inline and this is bit-identical to the pre-coroutine
-    // executor. A caller that wants the walk to actually wait passes a
-    // gate to ExecuteAsync and polls the Coro instead.
-    return RunToCompletionAtWalkBoundary(ExecuteAsync(catalog, store, chain, sink, stats, budget,
+               const txn::Snapshot* snapshot, bool indexes, PositionSink* position) {
+    // Nothing beneath parks, so the gated driver completes the coroutine
+    // inline, bit-identical to the pre-coroutine executor.
+    return RunToCompletionAtWalkBoundary(ExecuteChain(catalog, store, chain, sink, stats, budget,
                                                       trail, replay, cabins, snapshot, indexes,
-                                                      /*resume_gate=*/nullptr, parent, position));
+                                                      position));
 }
 
 }  // namespace kds::exec

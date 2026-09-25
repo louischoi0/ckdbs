@@ -534,7 +534,7 @@ TEST_F(SchedulerInboxTest, AMessageWithNoHandlerIsDroppedAndNotFatal) {
                              PayloadOf("late"))
                     .ok());
 
-    // Normal operation, not an error: a cancel can outlive the request it
+    // Normal operation, not an error: a message can outlive the request it
     // belonged to. The reactor keeps going and the message is consumed.
     EXPECT_TRUE(scheduler.RunOnce());
     EXPECT_EQ(scheduler.messages_drained(), 1u);

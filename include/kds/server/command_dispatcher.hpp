@@ -2315,9 +2315,8 @@ private:
     // the borrow cap's refusal counter; the accessor above states its contract.
     std::uint64_t borrow_cap_stops_ = 0;
 
-    // This minter's sequence for `ReadHolderId` (`read_borrow.hpp`, which
-    // is the one home of the layout and of why two minters on a core need
-    // telling apart). One per statement that declares - every read, every
+    // This core's sequence for `ReadHolderId` (`read_borrow.hpp`, the one
+    // home of the layout). One per statement that declares - every read, every
     // write - since AT-S1. It wraps, and a wrap could only collide with a
     // borrow still held four billion statements later on the same core.
     std::uint32_t read_borrow_seq_ = 0;
