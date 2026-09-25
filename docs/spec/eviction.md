@@ -143,6 +143,11 @@ A background-group task per core:
   ahead), **(2)** compute checksum (S9), **(3)** write via IoBackend,
   **(4)** mark clean. Reclaim happens on the sweep's next visit, keeping the
   page cached until frames are actually needed.
+- **The drain leaves what another holds** (`HeldFrames::kSkip`): a frame
+  another core holds exclusive ends the run, and a frame another writeback
+  has claimed between its copy and its clean (AT-S10e, `page.md` §8) is
+  left to that writer. A flush, `Sync` and the checkpointer wait for both
+  instead (`kWait`), since they owe a durability barrier.
 - Batches contiguous page ids where possible (write coalescing) —
   best-effort, not a correctness property.
 
