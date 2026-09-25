@@ -112,7 +112,7 @@ PG-shaped phases, KDS semantics:
 
 ## 8. Cross-Core Execution — Server-Side Forwarding
 
-- A connection is owned by the core that accepted it; its session state (statements, portals, txn) lives on that core (rules.md §3).
+- A connection is owned by the core that accepted it — or, under D19's fallback where the port cannot be shared (AT-S10c), by the core core 0 handed it to (`include/kds/server/connection_handoff.hpp`, `sched.md` §5) — and its session state (statements, portals, txn) lives on that core (rules.md §3). Either way it runs to completion there.
 - Every statement executes on the core its session is on (`crosscore.md` CC1), reading every page through the instance's one frame table. **Clients never see topology**; no routing hints exist in KWP v1.
 - The forwarding hop this section described - owning-core work dispatched over the cross-core message interface, results returned to the session core - is gone: statement shipping retired at AT-S6 and the remote-step protocol at AT-S10.
 

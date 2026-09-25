@@ -72,6 +72,14 @@ connections, so do not start two instances on one port. With `cores = 1`
 the port is bound exclusively. The `peer_listeners` key that used to switch
 this is retired and refused at startup.
 
+Where the platform refuses `SO_REUSEPORT`, the server does not fail: it
+logs a `WARN` from `expeditor` ("the port cannot be shared ... core 0
+accepts and hands connections off"), core 0 binds the port exclusively and
+accepts every connection, and each is handed round-robin to a core — core 0
+included — where its session runs to completion as before. No configuration
+selects this; Linux never refuses the option, so a Linux deployment does
+not see it.
+
 Shutdown: send `STOP` (what `scripts/stop.sh` does), which flushes and
 persists pages before exiting — the clean path. A kill signal is a crash by
 definition; see §6 for what that loses.

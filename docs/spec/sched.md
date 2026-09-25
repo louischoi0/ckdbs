@@ -60,6 +60,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 - Topology: per-core-pair **SPSC lock-free rings** (N² rings for N cores), preallocated at startup. SPSC keeps each ring single-writer/single-reader — one writer and one reader by construction, so no atomics beyond the ring indices. This holds regardless of what else the engine shares: the rings are how *work* moves between cores, and nothing has been added to them.
 - A message names a target-core operation and carries POD payload; on receipt (phase 3) the peer wraps it as a task in the sender-designated scheduling group. Replies are messages back to the origin core.
 - **What crosses: nothing the engine sends, since AT-S10b** (`crosscore.md` §3). The last two kinds, a peer's transaction-id or row-id lease request to core 0 and core 0's grant, lost their users when every core began issuing its own ids; `ring_message.hpp` keeps them enumerated, its census frozen at 2, only as the transport cells' stand-ins. The step pipeline's kinds went with the remote-step protocol at AT-S10.
+- **What crosses outside the ring: write-then-kick** (AR0-6-R1, §7) — shared state written under its own latch, then the destination kicked through the wake registry. Two consumers: the lock table's slot flip (AU-S2, `txn.md` §5), and **D19's connection handoff** (AT-S10c, `include/kds/server/connection_handoff.hpp`), built only where `TcpServer::Listen` answers `Unsupported` because the platform refuses `SO_REUSEPORT`. There core 0 binds the port alone, places each accepted socket on a core round-robin over every core, itself included (`NextCore`), pushes it into that core's inbox under the inbox's latch, and kicks it; the destination's reactor runs a parked task (`TcpServer::Host`, attached by `CoreRuntime::HostHandedConnections`) that takes the inbox and adopts each socket as though it had accepted it. The socket travels in the inbox because a kick carries no payload. A session crosses once, at placement, and runs to completion where it lands.
 - **Backpressure:** a full ring fails the send with the KDS status type (no blocking, no `throw`). Callers must handle `ring_full` — typically by suspending the sending task until the reactor retries. Silent drop is forbidden.
 - The ring interface is injectable: simulation replaces it with an in-memory model that can delay and reorder deliveries (§8).
 
@@ -101,7 +102,8 @@ and registered with that reactor's backend like any other readable handle —
 so a single-core build arms nothing and pays nothing. **Arming and being
 reachable are two things**: a reactor becomes wakeable *by a sender* only
 when `AttachWakerTable` registers it in the instance's one wake registry
-(`sched/waker_table.hpp`), which is where a ring send and a stop both go.
+(`sched/waker_table.hpp`), which is where a ring send, a stop and every
+write-then-kick consumer (§5) go.
 A core that attached a transport and no table is never kicked and waits out
 its idle block — slow, never wrong. **The attach points take an interface,
 `WakeRegistry`, and `WakerTable` is its one production implementation**
@@ -173,6 +175,7 @@ indistinguishable from one that has a wake it never needed.
 |---|---|---|---|
 | `command_dispatcher.cpp:225` (shipped statement) (the index build's went with its ship at AT-S5e, the assertion build's at AT-S5d) | `Settled(id)`, **with the deadline read inside the predicate** | the owner's reply, or the deadline | the reply is a ring message → **wake**; the *deadline* has no timer of its own and is noticed only when the task is next polled, so it is honored to within one idle block. **This is what the ceiling above is for** — under an unbounded block a timed-out shipped statement would never answer |
 | `command_dispatcher.cpp:737` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1953`), with the drain timer as backstop | on-core: nothing to wake. Any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
+| `tcp_server.cpp` `RunHost` (**D19's handoff**, a peer's hosting task; only where the port cannot be shared) | `handoff->Pending(core)`, or the server gone | core 0's `Offer`, which sets `pending` under the inbox latch and then kicks | the kick → **wake**. The pre-block re-check reads the ring's `HasPending`, not the inbox, so the handoff is a caller with no queue in the sense above: an offer racing the reactor into its block is noticed at the block's ceiling, one idle block late, never lost |
 
 Each row is named with what covers it. The two id-lease refill parks,
 satisfied by core 0's grant over the ring and covered by the wake, went
@@ -235,7 +238,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
 4a. A queue is not a claim of work: a task parked on a condition is not runnable, and the reactor may sleep while holding one (§7). A task type that cannot tell a park from a yield inherits `advanced_in_last_poll() == true` and keeps the reactor awake — the safe answer, never the accurate-looking one.
 5. Every task carries a scheduling-group membership; group pick is share-proportional.
 6. Background work is throttled only via group shares, never via ad-hoc sleeps.
-7. Cross-core interaction goes through the SPSC ring interface only; sends are non-blocking and fallible. **A message delivered to a sleeping core wakes it** (§7): a successful send either finds the target awake or ends its block, so no reactor waits out an idle block on work that has already arrived.
+7. Cross-core interaction goes through the SPSC ring interface or is write-then-kick (§5: the lock table's slot flip and D19's connection handoff); sends are non-blocking and fallible. **A message delivered to a sleeping core wakes it** (§7): a successful send either finds the target awake or ends its block, so no reactor waits out an idle block on work that has already arrived.
 7a. A reactor's idle block is always bounded — `PollReady` is never given a negative timeout — so a missed wake costs latency and never liveness.
 8. Engine logic never reads real time, real randomness, or performs direct syscalls; only injected interfaces.
 
