@@ -370,6 +370,11 @@ the server's own `STOP` command instead shuts the whole server down, and
 the REPL detects that and exits automatically since there is nothing left
 to talk to.
 
+**`SHOW META` lost two fields at AT-S10d**: `sched_wake_race_skips` and
+`sched_spurious_wakes`, which measured the cross-core ring transport the
+engine no longer has (`docs/spec/sched.md` §7). A tool that parses them
+finds them absent, not zero; the rest of the wake block is unchanged.
+
 `--host` / `--port` override the loopback default if the server is bound
 elsewhere.
 

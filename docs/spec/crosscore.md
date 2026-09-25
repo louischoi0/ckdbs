@@ -46,7 +46,7 @@ multi-*range* write statement or transaction is refused (§6).
 | CC3 | Write scope | A transaction's writes run on the core its session is on (AT-S5), and a transaction is one core's, whole (AT-S6). **Nothing is refused for touching two ranges or two relations** since AT-S9: the multi-owner refusals (a write naming no pk, a join, `LIMIT`/`OFFSET`, a sort, DDL on a relation with two or more ranges) went with the owners they described |
 | CC4 | Remote-read isolation | **There is no remote read since AT-S10.** Every read takes the snapshot its own statement or transaction holds on the session's core (`txn.md` §4.1), so the per-stage view this row described - a remote step's latest-committed snapshot, minted per stage and outside any asking transaction - has nothing left to describe (§5) |
 | CC5 | Cancellation & errors | **Nothing cross-core to cancel since AT-S10**: a statement's errors are its own core's, framed by its session. The `STEP_CANCEL`/`STEP_ERROR` propagation this row named went with the protocol (§7). The tag `(session_core, request_id, step_id)` is still a field of every ring message's header (`ring_message.hpp`'s `MessageHeader`); nothing reads it since the lease services went at AT-S10b (§3) |
-| CC6 | Scheduling | A ring message's task runs in the scheduling group its **sender designates** on the header (`sched.md` §5). The rule that stood here - remote step tasks in `foreground`, because step chains are the OLTP path - retired with the protocol at AT-S10 |
+| CC6 | Scheduling | **Nothing crosses to be scheduled since AT-S10d**: a kick carries no group, and the woken core's own parked task runs in its own group. A ring message's task ran in the scheduling group its sender designated on the header until the transport retired; the rule before that - remote step tasks in `foreground`, because step chains are the OLTP path - retired with the protocol at AT-S10 |
 | CC7 | Page ownership | **None, since AT-S9** (AR0-5 D17). Pages were the core's that `sys.tables.owner_core` named; that column's four bytes are reserved now - written 0, never read, so a pre-AT volume's value is ignored where it lies and the volume mounts unchanged. Every core reads and writes every page under the page latch (CC11, `page.md` §6). The history of how ownership was realized - the flush-then-grant handoff AW-S1b deleted, the owner-built index and assertion paths AT-S5d/S5e retired - is git's |
 | CC8 | Ranges | **A pk range `[lo, hi)` is a sub-structure of one relation, and owned by nothing** (AT-S9). A heap range is its own chain with its own head, the entry page riding the directory row (CC9); a btree relation does not split (§6a). Ranges exist only on relations split before AT-S9 retired spreading (and, for a relation created since SUS-1, not even then). **Every walk covers every range** (`TableAccess::WalkHeads`), and a row lands in the range its id falls in (`HeapChainFor`, which refuses an id in no range) |
 | CC9 | Range directory | `sys.ranges` (rel oid, lo, a reserved word where the owner core was, entry page; hi is the next row's lo, and a **non-empty directory carries a row at lo = 0**, so the rows partition the whole id space) records every split a pre-AT volume made; a relation with no rows there is one range headed by `sys.tables.desc_page_id`. Resolved from the executing core's catalog cache. A directory write bumps the schema version word as DDL does (`catalog.md` CT2) |
@@ -116,26 +116,20 @@ step error). Two rules beyond CC9's cell:
 
 ## 3. Messages
 
-**No engine message crosses the per-core-pair SPSC rings since AT-S10b**
-(`docs/spec/sched.md` §5). The last two kinds, `kTrxIdLease` (18) and
-`kRowIdLease` (22) - a peer's request to core 0 for a block of transaction
-ids or of one relation's row ids, and core 0's grant on the same kind -
-lost their users when every core began carving its own transaction-id
-window and bumping a relation's row-id mark in place (`txn.md` §4.2,
-`heap-and-tuple.md` §4.1a). They stay enumerated in
-`include/kds/sched/ring_message.hpp`, the census AR0-6's D25 freezes at 2,
-only as the transport cells' stand-in kinds, until the transport and that
-file go whole. Every other value is struck and never reused. The seven this
-section tabulated until AT-S10 - `STEP_OPEN`, `STEP_BATCH`, `STEP_EOF`,
-`STEP_CREDIT`, `STEP_CANCEL`, `STEP_ERROR` (1-6) and `SHIPPED_ROW_DESC`
-(40) - went with the protocol.
-
-Every message's header still carries the tag `(session_core, request_id,
-step_id)` (`MessageHeader`). A `request_id` is sequential per core, never
-pointer-derived (`docs/spec/sched.md` §8 determinism rules), and zero names
-no request. The rule the tag was written for - a batch whose tag matches no
-live pipeline state is discarded silently, the teardown correctness rule -
-has no batch left to apply to.
+**There are no messages since AT-S10d**: the ring transport, its header
+and its kind enum are deleted (`docs/spec/sched.md` §5), and a core that
+needs another to act writes shared state and kicks it. The last two kinds,
+`kTrxIdLease` (18) and `kRowIdLease` (22) - a peer's request to core 0 for
+a block of transaction ids or of one relation's row ids, and core 0's grant
+on the same kind - lost their users at AT-S10b, when every core began
+carving its own transaction-id window and bumping a relation's row-id mark
+in place (`txn.md` §4.2, `heap-and-tuple.md` §4.1a); they stayed
+enumerated one sub-stage as the transport cells' stand-ins and went with
+the transport. The seven this section tabulated until AT-S10 -
+`STEP_OPEN`, `STEP_BATCH`, `STEP_EOF`, `STEP_CREDIT`, `STEP_CANCEL`,
+`STEP_ERROR` (1-6) and `SHIPPED_ROW_DESC` (40) - went with the protocol.
+The enum as it last stood, every struck value recorded where it stood, is
+`git show ba8c824:include/kds/sched/ring_message.hpp`.
 
 ## 4. Transfer Format and Flow Control
 
@@ -143,18 +137,10 @@ has no batch left to apply to.
 no flow control left to state: the step batch, its 32 KiB target and
 ring-slot ceiling, and the per-edge credit protocol (4 initial credits,
 preallocated at `STEP_OPEN`) went with the protocol. The one-encoding rule
-they obeyed stands as CC2's.
-
-What stands is the transport's own rule, which every send keeps:
-
-- **A successful send wakes a sleeping destination; a refused one wakes
-  nobody** (`docs/spec/sched.md` §7 and its invariant 7). The send stays
-  non-blocking and fallible, and the wake follows the push, so a message
-  never waits out the destination's idle block. The refused case is
-  deliberate: waking a core for a message that is not in the ring is the
-  spin the wake exists to remove, moved to the sender. Ring-full on send
-  follows the global rule: the sending task yields and retries; it never
-  blocks the reactor and never drops.
+they obeyed stands as CC2's. The transport's own send rule - a successful
+send wakes a sleeping destination, a refused one wakes nobody, ring-full
+yields and retries - retired with the transport at AT-S10d; a kick's rule
+is `docs/spec/sched.md` §5 and its invariant 7.
 
 ### 4a. The answer edge
 
@@ -422,10 +408,10 @@ leaking its pipeline entry - went with the protocol; the record is
 
 ## 8. Determinism and Testing
 
-Nothing the engine sends crosses a core since AT-S10b; the transport
-itself is still exercised under the simulated ring seam
-(`docs/spec/sched.md` §8): message delay and reorder injection, reactors
-stepped round-robin on one thread. The list keeps its numbering;
+Nothing the engine sends crosses a core since AT-S10b, and the transport
+and its simulated ring seam are deleted since AT-S10d; what crosses is a
+kick, whose deterministic shape is the two-core rig's seeded
+`SimWakerTable` (`docs/spec/sched.md` §8). The list keeps its numbering;
 the items that tested the remote-step protocol are retired with it at
 AT-S10, their cells deleted with the services they pinned.
 

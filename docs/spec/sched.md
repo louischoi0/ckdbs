@@ -20,7 +20,8 @@ Each iteration executes fixed phases:
 loop:
   1. drain I/O completions        // poll completion queue; wake waiting tasks
   2. expire timers                // timing wheel against injected clock
-  3. drain cross-core inboxes     // per-peer SPSC rings; enqueue as tasks
+  3. (retired at AT-S10d)         // drained the cross-core rings; a kick
+                                  //   arrives in phase 1 as the waker's fd
   4. run ready tasks              // pick by group policy (§4), up to loop budget
   5. submit pending I/O           // batch submission
   6. idle policy if nothing ran   // §7 - the block is phase 1's, and
@@ -32,7 +33,8 @@ Rules:
 
 - Phases always run in this order; a phase may be empty but never skipped. Fixed ordering is required for deterministic replay.
 - Phase 4 has a **loop budget** (max tasks or time slice per iteration) so completion draining and I/O submission latency stay bounded under load.
-- The loop body performs no allocation in steady state; all queues/rings are preallocated at startup.
+- The loop body performs no allocation in steady state; all queues are preallocated at startup.
+- Phase 3 is kept as a number and not reused: the numbering is cited across the tree, and renumbering would make every earlier citation name the wrong phase.
 
 ## 3. Tasks
 
@@ -40,7 +42,7 @@ Rules:
 - **Cooperative yielding is mandatory:** every task must yield within its budget (work-item count or injected-clock time). Any loop that cannot statically prove boundedness must contain an explicit yield check. Blocking syscalls inside tasks are forbidden; all waiting is expressed as suspension on I/O, timer, or message events.
 - **No preemption.** Signal- or timer-driven preemption is forbidden — it destroys deterministic simulation.
 - **Suspension safety.** A coroutine must not be parked while holding a resource that only makes sense within a call — above all a page span (`docs/spec/parser-v2.md` I15's R1). `sched::SetSuspendAudit` is the hook a higher layer installs to answer that, checked in debug builds at every suspension; `exec::InstallSuspendAudit()` is the executor's answer, installed per core on the thread that runs statements.
-- **No work-stealing.** A task created on a core runs and completes on that core. Moving *work* between cores happens only by sending a message that causes the peer to create its own task.
+- **No work-stealing.** A task created on a core runs and completes on that core. Nothing moves *work* between cores since AT-S10d: a core that needs another to act writes shared state and kicks it (§5), and the kicked core's own parked task does the work.
 - Task representation: **C++20 stackless coroutines** (`include/kds/sched/coro.hpp`). Every cross-core operation is a request whose answer arrives later, and a coroutine is how "wait" is spelled without blocking the reactor or hand-rolling a call chain into a state machine. `Task::Poll()` returning `kSuspended`/`kDone` is a coroutine's resume protocol, so the scheduler needed no change for it. The cost is a heap-allocated frame per coroutine, so this is for *suspendable* work — a statement, a lock or durability wait, a lease request — and never the per-tuple path.
 
 ## 4. Scheduling Groups
@@ -57,24 +59,49 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 
 ## 5. Cross-Core Communication
 
-- Topology: per-core-pair **SPSC lock-free rings** (N² rings for N cores), preallocated at startup. SPSC keeps each ring single-writer/single-reader — one writer and one reader by construction, so no atomics beyond the ring indices. This holds regardless of what else the engine shares: the rings are how *work* moves between cores, and nothing has been added to them.
-- A message names a target-core operation and carries POD payload; on receipt (phase 3) the peer wraps it as a task in the sender-designated scheduling group. Replies are messages back to the origin core.
-- **What crosses: nothing the engine sends, since AT-S10b** (`crosscore.md` §3). The last two kinds, a peer's transaction-id or row-id lease request to core 0 and core 0's grant, lost their users when every core began issuing its own ids; `ring_message.hpp` keeps them enumerated, its census frozen at 2, only as the transport cells' stand-ins. The step pipeline's kinds went with the remote-step protocol at AT-S10.
-- **What crosses outside the ring: write-then-kick** (AR0-6-R1, §7) — shared state written under its own latch, then the destination kicked through the wake registry. Two consumers: the lock table's slot flip (AU-S2, `txn.md` §5), and **D19's connection handoff** (AT-S10c, `include/kds/server/connection_handoff.hpp`), built only where `TcpServer::Listen` answers `Unsupported` because the platform refuses `SO_REUSEPORT`. There core 0 binds the port alone, places each accepted socket on a core round-robin over every core, itself included (`NextCore`), pushes it into that core's inbox under the inbox's latch, and kicks it; the destination's reactor runs a parked task (`TcpServer::Host`, attached by `CoreRuntime::HostHandedConnections`) that takes the inbox and adopts each socket as though it had accepted it. The socket travels in the inbox because a kick carries no payload. A session crosses once, at placement, and runs to completion where it lands.
-- **Backpressure:** a full ring fails the send with the KDS status type (no blocking, no `throw`). Callers must handle `ring_full` — typically by suspending the sending task until the reactor retries. Silent drop is forbidden.
-- The ring interface is injectable: simulation replaces it with an in-memory model that can delay and reorder deliveries (§8).
+**One mechanism: write-then-kick** (AR0-6-R1). A core that has something
+for another writes it into shared state under that state's own latch, then
+kicks the destination through the instance's wake registry
+(`sched/waker_table.hpp`, §7). The kick carries no payload and no meaning:
+a woken reactor learns why from the structure it parks on. **There is no
+message, no queue between cores and no ring since AT-S10d**, and nothing
+crosses that a kick does not cover.
 
-`sched/spsc_ring.hpp` is the ring, `sched/ring_transport.hpp` the injectable seam and its real N² implementation, `sched/sim_ring_transport.hpp` the simulated one, `sched/ring_message.hpp` the header and the central kind enum, `sched/send_retry.hpp` the `ring_full` answer. Four properties callers depend on:
+Three consumers:
 
-- **Delivery order is per edge only.** Messages on one `(src, dst)` pair arrive in send order; two messages from *different* peers to the same core have no defined relative order, and the real and simulated transports deliberately disagree about it — the real one rotates its peer sweep to avoid starvation, the simulation delivers by injected deadline. Nothing above this layer may depend on cross-peer order.
-- **The receiving handler runs in phase 4, not phase 3.** The drain moves messages off the ring and queues a task per message, under its own loop budget. A handler is a task and must yield like one.
-- **A successful send wakes a sleeping target** (§7). `TrySend` stays non-blocking and fallible; it costs a syscall only when the target is actually asleep, and a *refused* send wakes nobody — waking a core to find nothing is the spin the wake exists to remove. The wake follows the push and never precedes it.
-- **A service armed inside `AttachTransport` takes the transport *parameter*, never the `transport_` member.** The member is assigned at the end of that function, so a service constructed earlier that reads it gets a null; the parameter is in scope the whole time. `src/server/core_runtime.cpp` carries the rule as a comment at the sites it binds, and no read of `transport_` occurs inside `AttachTransport`.
+- **The lock table's slot flip** (AU-S2, `txn.md` §5): a decide flips the
+  waiter's slot under the partition latch and kicks the waiter's core.
+- **D19's connection handoff** (AT-S10c, `include/kds/server/connection_handoff.hpp`),
+  built only where `TcpServer::Listen` answers `Unsupported` because the
+  platform refuses `SO_REUSEPORT`. There core 0 binds the port alone,
+  places each accepted socket on a core round-robin over every core,
+  itself included (`NextCore`), pushes it into that core's inbox under the
+  inbox's latch, and kicks it; the destination's reactor runs a parked task
+  (`TcpServer::Host`, attached by `CoreRuntime::HostHandedConnections`)
+  that takes the inbox and adopts each socket as though it had accepted it.
+  The socket travels in the inbox because a kick carries no payload. A
+  session crosses once, at placement, and runs to completion where it lands.
+- **A stop** (AU-S3): the scheduler's stop flag is atomic, and core 0 sets
+  a peer's and kicks it; a peer's STOP sets core 0's through the
+  instance's hook and kicks it.
 
-At `cores = 1` nothing constructs a transport and phase 3 costs one null
-test. Above one core `Expeditor::Serve` builds the real N² transport and
-attaches every reactor to it (`src/server/expeditor.cpp`), which is what
-makes the rule above a production rule and not a test one.
+**A kick is best-effort, and the cost of losing one is bounded.** A kicker
+reads the destination's `sleeping` flag and writes the eventfd only when it
+is set; one landing between the destination's last look and its raising of
+the flag reads clear and is skipped, and the destination waits out one idle
+block (`max_idle_block_ms`, §7). Every consumer above is level-triggered -
+its parked task re-asks its predicate after every block - so a lost kick
+costs latency and never the wake.
+
+**What went at AT-S10d**, with the last kind that used it (the two id
+leases, AT-S10b): the per-core-pair SPSC rings and their N² preallocation
+(`sched/spsc_ring.hpp`), the injectable transport and its real and
+simulated implementations (`sched/ring_transport.hpp`,
+`sched/sim_ring_transport.hpp`), the message header and kind enum
+(`sched/ring_message.hpp`, D25's census at 2), the `ring_full` retry task
+(`sched/send_retry.hpp`), phase 3's drain and handler table, and
+`AttachTransport` on the scheduler and on `CoreRuntime`. The full text of
+this section as it stood is `git show ba8c824:docs/spec/sched.md`.
 
 ## 6. Timers
 
@@ -83,68 +110,61 @@ makes the rule above a production rule and not a test one.
 
 ## 7. Idle Policy
 
-When phase 4 finds no runnable task the reactor **blocks**: it arms
-eventfd/ring wakeups and blocks until an event (`include/kds/sched/waker.hpp`).
-There is no busy-poll mode.
+When phase 4 finds no runnable task the reactor **blocks**: it raises its
+`sleeping` flag and blocks in its I/O backend until an fd, a timer or a
+kick ends it (`include/kds/sched/waker.hpp`). There is no busy-poll mode.
 
 **The block is accountable.** `SHOW META` prints `sched_idle_blocks`,
-`sched_parked_idle_blocks`, `sched_wake_race_skips`, `sched_idle_block_us`,
-`sched_wakes_sent`, `sched_wakes_received` and `sched_spurious_wakes`
-(§4 for what the duration buys, `docs/spec/client-manual.md` §3 field by
-field). Two of them are checks rather than measurements: the instance's
-`sched_wakes_sent` must equal the sum of the cores' `sched_wakes_received`,
-and `sched_spurious_wakes` climbing far past `sched_wake_race_skips` would
-mean senders waking cores they have nothing for.
+`sched_parked_idle_blocks`, `sched_idle_block_us`, `sched_wakes_sent` and
+`sched_wakes_received` (§4 for what the duration buys; `command_dispatcher.cpp`
+carries each field's reading, the client manual lists none). One of them is a check
+rather than a measurement: the instance's `sched_wakes_sent` must equal
+the sum of the cores' `sched_wakes_received`. **`sched_wake_race_skips`
+and `sched_spurious_wakes` went with the ring at AT-S10d**: the first
+counted the pre-block re-check finding a queued message and the second a
+wake that found an empty inbox, and with no queue the first cannot move
+and the second would count every wake.
 
 **The wake, and its one atomic.** One `Waker` (an eventfd) per reactor,
-armed by whichever of `AttachTransport` and `AttachWakerTable` runs first
-and registered with that reactor's backend like any other readable handle —
-so a single-core build arms nothing and pays nothing. **Arming and being
-reachable are two things**: a reactor becomes wakeable *by a sender* only
-when `AttachWakerTable` registers it in the instance's one wake registry
-(`sched/waker_table.hpp`), which is where a ring send, a stop and every
-write-then-kick consumer (§5) go.
-A core that attached a transport and no table is never kicked and waits out
-its idle block — slow, never wrong. **The attach points take an interface,
-`WakeRegistry`, and `WakerTable` is its one production implementation**
-(AU-S1c, on AV-R1's mark): the seam is the *table*, never `Waker`, whose
-`Wake()` stays non-virtual — so the fence and the skip counter have one
-implementation, and the cost is on the send path: one indirect call per
-cross-core `Kick`, carrying the fence, the flag load and the skip that
-used to inline into `TrySend`. The other implementation is
+armed by `AttachWakerTable` and registered with that reactor's backend like
+any other readable handle — so a single-core build, which attaches no
+table, arms nothing and pays nothing. The same call registers the reactor
+in the instance's one wake registry (`sched/waker_table.hpp`), which is
+where every write-then-kick consumer (§5) goes. **The attach point takes an
+interface, `WakeRegistry`, and `WakerTable` is its one production
+implementation** (AU-S1c, on AV-R1's mark): the seam is the *table*, never
+`Waker`, whose `Wake()` stays non-virtual — so the flag read and the skip
+counter have one implementation, and the cost is on the kick path: one
+indirect call per cross-core `Kick`. The other implementation is
 `SimWakerTable` (`sched/sim_waker_table.hpp`), the two-core rig's: it
 wraps a real table, logs `(tick, dst)` per kick and forwards at
 `tick + delay(seed, dst, tick)`, where the tick is a counter the rig
-advances and never wall time. A sender wakes **only a destination that is
+advances and never wall time. A kicker wakes **only a destination that is
 actually asleep**, reading that core's `sleeping` flag first, because an
-eventfd write is a
-syscall on the sender's critical path and the cells shipping is already fast
-in are exactly the ones where the owner is never asleep. The flag cannot be
-missed: sender and receiver touch the two variables in opposite orders with
-a `seq_cst` fence on **both** sides, so sequential consistency forbids both
-reads returning stale — either the sender sees the flag and writes the wake,
-or the receiver's pre-block re-check sees the message and does not sleep
-(`sched/waker_table.hpp` carries the argument, on `Kick`, where the sender's
-fence is; `Scheduler::wake_race_skips()` counts the second case). **The
-sender's fence is not optional**: its store is the ring's release, and
-StoreLoad is the one reordering x86 TSO permits. **The third leg is the
-caller's**, not the registry's: closing the window needs the receiver to
-re-read the predicate it is about to park on, which the ring has in
-`HasPending` and a caller with no queue does not — for that caller the kick
-is best-effort and the cost is one idle block.
-The simulated transport does not wake — its reactors are multiplexed by a
-seeded harness, and a second "who runs now" input is the nondeterminism §8
-forbids.
+eventfd write is a syscall on the kicker's critical path and a busy
+destination is never asleep.
+
+**The flag can be missed, and that is the stated cost** (AR0-6-R1). A
+kicker that published just before the destination raised its flag reads it
+clear and skips the kick, and the destination waits out one idle block.
+Closing that window takes a store-buffer pair - a `seq_cst` fence on both
+sides - *and* the destination re-reading the predicate it is about to park
+on after raising the flag. The ring supplied that third leg in
+`HasPending`; no write-then-kick consumer has a predicate the reactor can
+re-read before it blocks, so since AT-S10d the re-check, both fences and
+`Scheduler::wake_race_skips()` are gone rather than kept for a leg nothing
+supplies. Every consumer is level-triggered, re-polled after the block, so
+a skipped kick is slow and never wrong.
 
 **A block always has a ceiling.** `max_idle_block_ms` (10 ms) bounds every
 idle block, so a wake that is somehow missed costs latency and never
-liveness. That is not belt-and-braces; the census below has two entries that
+liveness. That is not belt-and-braces; the census below has entries that
 depend on it. **`PollReady` is never given a negative timeout** — invariant
 7a.
 
 **Parked is not ready.** `IdleTimeoutMs` does not read a non-empty queue as
 work to do. A block is permitted only after a full iteration in which
-**nothing advanced**: no I/O event, no timer, no message drained, no task
+**nothing advanced**: no I/O event, no timer, no task
 that completed or executed a line, no task newly submitted, and no work
 from the post-task hook. "Executed a line" is `Task::advanced_in_last_poll`
 — `CoroTask` answers it from whether the poll resumed the coroutine at all,
@@ -173,22 +193,27 @@ indistinguishable from one that has a wake it never needed.
 
 | Park site | Predicate | What satisfies it | Ends the block? |
 |---|---|---|---|
-| `command_dispatcher.cpp:225` (shipped statement) (the index build's went with its ship at AT-S5e, the assertion build's at AT-S5d) | `Settled(id)`, **with the deadline read inside the predicate** | the owner's reply, or the deadline | the reply is a ring message → **wake**; the *deadline* has no timer of its own and is noticed only when the task is next polled, so it is honored to within one idle block. **This is what the ceiling above is for** — under an unbounded block a timed-out shipped statement would never answer |
 | `command_dispatcher.cpp:737` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1953`), with the drain timer as backstop | on-core: nothing to wake. Any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
-| `tcp_server.cpp` `RunHost` (**D19's handoff**, a peer's hosting task; only where the port cannot be shared) | `handoff->Pending(core)`, or the server gone | core 0's `Offer`, which sets `pending` under the inbox latch and then kicks | the kick → **wake**. The pre-block re-check reads the ring's `HasPending`, not the inbox, so the handoff is a caller with no queue in the sense above: an offer racing the reactor into its block is noticed at the block's ceiling, one idle block late, never lost |
+| `tcp_server.cpp` `RunHost` (**D19's handoff**, a peer's hosting task; only where the port cannot be shared) | `handoff->Pending(core)`, or the server gone | core 0's `Offer`, which sets `pending` under the inbox latch and then kicks | the kick → **wake**. There is no pre-block re-check (§5, and above), so an offer racing the reactor into its block is noticed at the block's ceiling, one idle block late, never lost |
 
 Each row is named with what covers it. The two id-lease refill parks,
 satisfied by core 0's grant over the ring and covered by the wake, went
 with the leases at AT-S10b; the remote read's park and the remote step
 server's two, with the executor's `resume_gate_` they drove, went with
-the remote-step protocol at AT-S10.
+the remote-step protocol at AT-S10; the shipped statement's `Settled(id)`
+park, whose reply was a ring message and whose deadline was the reason
+the ceiling above existed, went with statement shipping at AT-S6 and its
+row with the ring at AT-S10d. **Not in the table and owed to it**: the
+lock family's two parks (`command_dispatcher.cpp`'s `decided` and
+`freed` predicates, AO), each bounded by the fault net read inside its
+predicate.
 
 ## 8. Deterministic Simulation
 
-The reactor depends only on injectable interfaces: **I/O backend, clock, RNG, cross-core rings, idle policy**. In simulation:
+The reactor depends only on injectable interfaces: **I/O backend, clock, RNG, wake registry, idle policy**. In simulation:
 
 - All N reactors run **single-threaded**, multiplexed by a simulated scheduler that picks which reactor advances next using a seeded RNG.
-- The simulated environment can inject I/O errors and torn writes, delay/reorder cross-core messages, and skew per-core clocks.
+- The simulated environment can inject I/O errors and torn writes, delay kicks, and skew per-core clocks.
 - A failure reproduces from `(seed, build)` alone. CI runs the simulator across many seeds; any nondeterminism (iteration-order dependence, address-dependent hashing, real-time reads) is a build-rejecting defect.
 - Practical consequences: containers used by the scheduler must have deterministic iteration order; hashing must be seed-stable; task IDs are sequential per core, never derived from pointers.
 
@@ -200,12 +225,10 @@ representation in it — its role here is a regression gate, not coverage.
 The deterministic coverage the wake needs lives in the scheduler suite
 (`tests/scheduler_test.cpp`) against the **real** epoll backend, which is
 the only place a block exists to be ended — including the composed shape, a
-coroutine parked on a flag only a peer's message sets, on a reactor that
-"parked is not ready" has allowed to sleep, with the test carrying **its
-own deadline** so a lost wake fails a named assertion rather than timing out
-a suite. The `SimRingTransport` answers the wake's two halves honestly and
-wakes nobody: its reactors are multiplexed by a seeded harness, and a second
-"who runs now" input is the nondeterminism this section forbids.
+coroutine parked on state only another thread changes and then kicks, on a
+reactor that "parked is not ready" has allowed to sleep, with the test
+carrying **its own deadline** so a lost wake fails a named assertion rather
+than timing out a suite.
 
 **The two-core rig is the other deterministic shape, and it is deterministic
 over less** (`instructions/v3.0.0/workorder-av-two-core-rig.md` AV-R3).
@@ -238,7 +261,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
 4a. A queue is not a claim of work: a task parked on a condition is not runnable, and the reactor may sleep while holding one (§7). A task type that cannot tell a park from a yield inherits `advanced_in_last_poll() == true` and keeps the reactor awake — the safe answer, never the accurate-looking one.
 5. Every task carries a scheduling-group membership; group pick is share-proportional.
 6. Background work is throttled only via group shares, never via ad-hoc sleeps.
-7. Cross-core interaction goes through the SPSC ring interface or is write-then-kick (§5: the lock table's slot flip and D19's connection handoff); sends are non-blocking and fallible. **A message delivered to a sleeping core wakes it** (§7): a successful send either finds the target awake or ends its block, so no reactor waits out an idle block on work that has already arrived.
+7. Cross-core interaction is write-then-kick and nothing else since AT-S10d (§5: the lock table's slot flip, D19's connection handoff and a stop): shared state written under its own latch, then the destination kicked. A kick never blocks and cannot fail. **A kick that finds the destination asleep ends its block** (§7); one that races the destination into its block is skipped, and the work it announced waits at most one idle block (7a) - the ring's stronger guarantee, that no reactor waits out a block on work already queued, retired with its queue.
 7a. A reactor's idle block is always bounded — `PollReady` is never given a negative timeout — so a missed wake costs latency and never liveness.
 8. Engine logic never reads real time, real randomness, or performs direct syscalls; only injected interfaces.
 

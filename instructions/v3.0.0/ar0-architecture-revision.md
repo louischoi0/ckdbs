@@ -42,7 +42,7 @@ Everything derived from **pk immutability** (client-side routing, ABA-free exter
 
 ## 3. Guideline revisions
 
-- **G1 (revised):** No atomics outside ring indices and the lock/latch primitives. All latch and lock primitives compile to no-ops at cores=1.
+- **G1 (revised; AR0-6's wording, applied at AT-S10d when the ring transport retired):** No atomics outside the wake flag and the lock/latch primitives. All latch and lock primitives compile to no-ops at cores=1.
 - **G2 (unchanged):** cores=1 zero overhead. Enforced by the compile-out clause of G1.
 - **G3 (retired):** LSN is global and totally ordered. Cross-stream comparison is no longer a concept.
 - **Shared-nothing principle:** replaced by "shared memory, thread-per-core execution, single log appender".
