@@ -47,17 +47,9 @@
 // ---- Why the flag, and what a missed kick costs -------------------------
 //
 // A write to an eventfd is a syscall, and a busy reactor is never asleep, so
-// kicking one unconditionally buys a syscall for nothing. The sender reads
-// the destination's flag first and writes only when it is set.
-//
-// That is a race, and it is an **accepted** one: a sender that published
-// between the destination's last look and its raising of the flag reads the
-// flag as clear and skips the kick, so the destination waits out its idle
-// block (`Scheduler::Config::max_idle_block_ms`, 10 ms). Slow, never wrong -
-// which is exactly `waker.hpp`'s existing contract for a lost or coalesced
-// wake, and AR0-6-R1 adopts it deliberately rather than inheriting it.
-//
-// **No caller closes it since AT-S10d**, and the argument sits on `Kick`.
+// kicking one unconditionally buys a syscall for nothing. The kicker reads
+// the destination's flag first and writes only when it is set. That is a
+// race, accepted deliberately; `Kick` states it and its price.
 
 namespace kds::sched {
 
@@ -97,22 +89,22 @@ public:
     // this reads the destination's flag and writes the eventfd only when it
     // is set.
     //
-    // **The kick is best-effort, and that is AR0-6-R1's stated cost.**
-    // Closing the window between the destination's last look and its
-    // raising of the flag takes a store-buffer pair - a fence here, a fence
-    // after the flag's store, and the destination *re-reading the predicate
-    // it is about to park on*. The ring had that third leg in `HasPending`,
-    // and this fence and a twin in `Scheduler::RunOnce` were its other two.
-    // With the ring gone (AT-S10d) no caller has a predicate the reactor can
-    // re-read before it blocks, so the fences ordered nothing and went with
-    // it. A publisher landing in the window reads clear, skips the kick, and
-    // the destination waits out one idle block; every consumer is
-    // level-triggered, re-polled after the block. Slow, never wrong.
+    // **The kick is best-effort - a choice, priced at one idle block**
+    // (AR0-6-R1). A publisher landing between the destination's last look
+    // and its raising of the flag reads clear, skips the kick, and the
+    // destination waits out one block (`max_idle_block_ms`); every consumer
+    // is level-triggered, re-polled after the block, so this is slow and
+    // never wrong. Closing the window would take a `seq_cst` fence here, one
+    // after the flag's store, and the reactor re-polling its parked tasks
+    // after raising the flag. The ring had that third leg for its own queue
+    // in `HasPending`; AT-S10d retired it with the ring rather than
+    // generalise it, so the fences ordered nothing and went too, and the
+    // flag is a hint read and written relaxed.
     void Kick(std::uint32_t core) const noexcept override {
         if (core >= entries_.size()) return;
         const Entry& entry = entries_[core];
         if (entry.sleeping == nullptr || entry.waker == nullptr) return;
-        if (!entry.sleeping->load(std::memory_order_seq_cst)) {
+        if (!entry.sleeping->load(std::memory_order_relaxed)) {
             skipped_.fetch_add(1, std::memory_order_relaxed);
             return;
         }

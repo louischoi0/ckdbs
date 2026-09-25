@@ -31,7 +31,7 @@
 // single thread that owns this reactor. There is nothing to lock: the ready
 // queues, the handler table and the consumed-runtime counters are plain
 // (non-atomic) fields. The atomics on this class are the sleep flag, the
-// stop flag and three wake counters, each of which says at its member why
+// stop flag and two wake counters, each of which says at its member why
 // another thread reads it.
 //
 // **The read-only accessors are covered by that same rule**, and it has to
@@ -326,10 +326,10 @@ private:
     // on every single-core build.
     //
     // `sleeping_` is read by *other cores' threads*, which is the one place
-    // in this reactor where that is true and why it is atomic. A kick that
-    // reads it clear while this reactor is about to raise it is skipped, and
-    // costs one idle block (`WakerTable::Kick` says why nothing closes that
-    // window since AT-S10d).
+    // in this reactor where that is true and why it is atomic. A hint,
+    // relaxed on both sides: a kick that reads it clear while this reactor
+    // is about to raise it is skipped and costs one idle block
+    // (`WakerTable::Kick`).
     std::optional<Waker> waker_;
     std::atomic<bool> sleeping_{false};
     // Iterations that blocked with the flag raised.

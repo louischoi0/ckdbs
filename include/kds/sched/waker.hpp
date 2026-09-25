@@ -5,15 +5,16 @@
 #include "kds/base/status.hpp"
 #include "kds/sched/io_backend.hpp"
 
-// **The wake a cross-core message needs** (`docs/spec/sched.md` §4).
+// **The wake a cross-core kick needs** (`docs/spec/sched.md` §5, §7).
 //
 // A reactor with nothing to run blocks in its I/O backend. Sockets and
-// timers wake it because both are things the kernel knows about; a ring
-// message is neither — it is a store to shared memory by another thread,
-// and `epoll_wait` cannot see it. Until this existed, a message to an idle
-// core waited for that block to expire on its own.
+// timers wake it because both are things the kernel knows about; a write to
+// shared state by another thread is neither, and `epoll_wait` cannot see
+// it. Until this existed, work for an idle core waited for that block to
+// expire on its own.
 //
-// **What that cost, measured**: `Scheduler::IdleTimeoutMs` returns whole
+// **What that cost, measured** (on the ring transport, retired at AT-S10d):
+// `Scheduler::IdleTimeoutMs` returns whole
 // milliseconds and rounds *up*, so the floor was 1 ms, and statement
 // shipping — which puts a ring message on a client's critical path twice —
 // paid it twice per statement. SS-B measured the shipped-minus-seated delta
@@ -29,19 +30,19 @@
 // safe from any thread — that is the whole point, since the caller is
 // another core.
 //
-// It is **not** a queue and carries no data: the ring is the queue, and a
-// wake only says "look at it". Counting semantics are therefore irrelevant
-// and the counter is drained to zero whenever it fires; N wakes that arrive
-// before the reactor looks are one wake, which is exactly right.
+// It is **not** a queue and carries no data: the shared state the kicker
+// wrote is what the woken task re-reads, and a wake only says "look". Counting
+// semantics are therefore irrelevant and the counter is drained to zero
+// whenever it fires; N wakes that arrive before the reactor looks are one
+// wake, which is exactly right.
 //
-// ---- Why it is not written on every send --------------------------------
+// ---- Why it is not written on every kick --------------------------------
 //
-// A write to an eventfd is a syscall. A busy reactor is never asleep, so
-// waking it would be a syscall per message bought for nothing — and a busy
-// owner is the case shipping is *fast* in (0.93-0.99x from four sessions
-// up, same file §5). The sender therefore reads the destination's
-// `sleeping` flag first and writes only when it is set; `waker_table.hpp`
-// carries that protocol and the argument for why the flag cannot be missed.
+// A write to an eventfd is a syscall, and a busy reactor is never asleep, so
+// waking it would be a syscall bought for nothing. The kicker therefore
+// reads the destination's `sleeping` flag first and writes only when it is
+// set; `waker_table.hpp` carries that protocol, and why a kick that reads
+// the flag a moment too early costs one idle block.
 
 namespace kds::sched {
 

@@ -182,7 +182,7 @@ int Scheduler::IdleTimeoutMs() const noexcept {
     //
     // The test is therefore not "is a queue non-empty" but "did the last
     // full iteration change anything" - any I/O event, any timer, any
-    // message drained, any task that completed or executed a line, any
+    // task that completed or executed a line, any
     // task newly submitted, or the post-task hook doing work. If none of
     // that happened, polling the same queue again cannot produce a
     // different answer, and only an outside event can: the three that
@@ -342,19 +342,10 @@ bool Scheduler::RunOnce() {
     io_events_scratch_.clear();
     int timeout_ms = IdleTimeoutMs();
 
-    // **Raise the flag before blocking** (waker.hpp). The flag is what lets
-    // a peer know this reactor must be woken.
-    //
-    // **There is no re-check after it since AT-S10d** (AR0-6-R1,
-    // `waker_table.hpp` says why): a kicker that wrote its state and read
-    // the flag as clear just before the store below skips the wake, and
-    // closing that window needs the receiver to re-ask the predicate it is
-    // about to park on. The ring had a queue to ask (`HasPending`); a kick
-    // has none, and every consumer - the lock table's slot, the connection
-    // handoff's inbox, a stop - is level-triggered, re-polled after every
-    // block. So a kick lost to the window costs one idle block, bounded by
-    // `max_idle_block_ms`, and never the wake. With nothing loaded after the
-    // store, the fence that made the pair a store-buffer went with the look.
+    // **Raise the flag before blocking** (waker.hpp): it is what lets a
+    // kicker know this reactor must be woken. Nothing is re-read after it,
+    // so a kick racing the store is skipped and costs one idle block -
+    // `WakerTable::Kick` states that choice and its price.
     //
     // Only when this iteration would actually sleep. A timeout of 0 is a
     // reactor with work to do, and it neither needs waking nor may pay an
@@ -368,7 +359,7 @@ bool Scheduler::RunOnce() {
         parked_idle_blocks_.fetch_add(1, std::memory_order_relaxed);
     }
     if (may_sleep) {
-        sleeping_.store(true, std::memory_order_seq_cst);
+        sleeping_.store(true, std::memory_order_relaxed);
         idle_blocks_.fetch_add(1, std::memory_order_relaxed);
     }
     // The block itself, timed (D7). Two clock reads, and only on an
@@ -383,7 +374,7 @@ bool Scheduler::RunOnce() {
     // Cleared the moment the block ends, so a wake written from here on is
     // one this reactor did not need - which costs a syscall, never a
     // missed wake.
-    if (may_sleep) sleeping_.store(false, std::memory_order_seq_cst);
+    if (may_sleep) sleeping_.store(false, std::memory_order_relaxed);
     // A poll failure here is not fatal to the reactor: the loop keeps
     // running and the next iteration may succeed. But it is the top of the
     // stack, so nothing else can report it - it goes to the log, and only
@@ -420,9 +411,6 @@ bool Scheduler::RunOnce() {
         did_work = true;
         advanced = true;
     }
-
-    // Phase 3 drained the cross-core inboxes until AT-S10d retired the ring
-    // transport; a kick arrives in phase 1, as the waker's io event.
 
     // Phase 4: run ready tasks under the loop budget.
     if (RunReadyTasks(advanced)) did_work = true;

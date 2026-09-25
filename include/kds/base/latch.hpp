@@ -7,8 +7,8 @@
 // that keeps G2 - `cores = 1` zero overhead - a property of the code
 // rather than of a build flag: a structure that *can* be shared carries a
 // `Latch*` that is **null** where it is not, and the guard is then two
-// predictable branches and no atomic at all (`docs/spec/sched.md` §5's
-// accepted cost class, "phase 3 costs one null test").
+// predictable branches and no atomic at all (G2's
+// accepted cost class).
 //
 // **A `std::mutex`, not a spin latch, and the reason is what the sections
 // actually do.** The first draft of this header was a spinning

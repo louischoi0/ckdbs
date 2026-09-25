@@ -148,13 +148,16 @@ destination is never asleep.
 kicker that published just before the destination raised its flag reads it
 clear and skips the kick, and the destination waits out one idle block.
 Closing that window takes a store-buffer pair - a `seq_cst` fence on both
-sides - *and* the destination re-reading the predicate it is about to park
-on after raising the flag. The ring supplied that third leg in
-`HasPending`; no write-then-kick consumer has a predicate the reactor can
-re-read before it blocks, so since AT-S10d the re-check, both fences and
-`Scheduler::wake_race_skips()` are gone rather than kept for a leg nothing
-supplies. Every consumer is level-triggered, re-polled after the block, so
-a skipped kick is slow and never wrong.
+sides - *and* the destination re-polling what it parks on after raising the
+flag. The ring supplied that third leg for its own queue in `HasPending`.
+**Not closing it is a choice, not a consequence**: a consumer's predicate -
+D19's `Pending(core)`, a lock waiter's slot - could be re-polled there, and
+AT-S10d retired the re-check with the ring rather than generalise it, so
+both fences ordered nothing and went too, the flag is a relaxed hint, and
+`Scheduler::wake_race_skips()` has nothing to count. Every consumer is
+level-triggered, re-polled after the block, so a skipped kick is slow and
+never wrong; generalising the re-check is the fix if one idle block ever
+measures as too much.
 
 **A block always has a ceiling.** `max_idle_block_ms` (10 ms) bounds every
 idle block, so a wake that is somehow missed costs latency and never

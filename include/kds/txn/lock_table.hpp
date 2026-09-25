@@ -89,8 +89,8 @@
 // waiter's reactor awake is skipped by the registry, and a kick lost to the
 // registry's accepted race costs one idle block - AR0-6-R1's stated cost,
 // never liveness, because the park is level-triggered: a parked task is
-// re-polled after every block, so no third leg of the fence pair is built
-// for it and none is owed. No `kLockWake` ring kind was ever built (AU-R4).
+// re-polled after every block, so the reactor re-reads nothing before it
+// blocks and none is owed. No `kLockWake` ring kind was ever built (AU-R4).
 //
 // Two consequences of having no caller yet, stated so they are not read as
 // finished work:

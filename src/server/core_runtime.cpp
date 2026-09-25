@@ -120,6 +120,15 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
 
     runtime->scheduler_.emplace(clock, *runtime->io_backend_, config.scheduler);
     runtime->scheduler_->SetLogger(log);
+    // **The reactor learns its core here**, with no registry: `RunOnce`
+    // sets the thread's `CurrentCore()` from it every iteration, so a
+    // reactor left at the default runs as core 0 - re-entering core 0's
+    // exclusive page latches and stamping core 0's stream. `AttachTransport`
+    // set it until AT-S10d; the instance's `AttachWakerTable` sets it again
+    // with the same id, and a runtime that never gets one keeps this.
+    if (Status s = runtime->scheduler_->AttachWakerTable(nullptr, config.core_id); !s.ok()) {
+        return s;
+    }
 
     // **The instance's one stream** (AR0 M0, AL-S1c; AM-S4(d)). This core
     // opens no log device at all: it appends through core 0's stream under

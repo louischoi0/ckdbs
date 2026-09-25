@@ -310,12 +310,13 @@ TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
 
     // Core 2 is still serving - which is a stronger statement than "its flag
     // is false", and one this thread is allowed to make: its timer keeps
-    // firing after core 1 is gone.
+    // firing after core 1 is gone - twice, because a reactor stopped by
+    // mistake could still fire one coalesced tick on its way out.
     const int after_stop = turns.load(std::memory_order_relaxed);
-    for (int i = 0; i < 1000 && turns.load(std::memory_order_relaxed) <= after_stop; ++i) {
+    for (int i = 0; i < 1000 && turns.load(std::memory_order_relaxed) <= after_stop + 1; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_GT(turns.load(std::memory_order_relaxed), after_stop)
+    EXPECT_GT(turns.load(std::memory_order_relaxed), after_stop + 1)
         << "one core's stop took another down with it";
 
     cores[1]->scheduler().Stop();  // AU-S3
@@ -333,6 +334,10 @@ TEST_F(CoreRuntimeTest, ManyCoresStartAndJoinCleanly) {
     for (std::uint32_t id = 1; id < kCores; ++id) {
         auto core = CoreRuntime::Open(ConfigFor(id), *device_, clock_, nullptr);
         ASSERT_TRUE(core.ok()) << core.status().message();
+        // The reactor is this core with no wake registry attached: its
+        // `RunOnce` sets the thread's `CurrentCore()`, so a reactor left at
+        // 0 would run every peer as core 0.
+        EXPECT_EQ(core.value()->scheduler().core_id(), id);
         cores.push_back(std::move(core.value()));
     }
 

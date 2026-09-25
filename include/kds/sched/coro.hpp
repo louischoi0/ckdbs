@@ -421,11 +421,12 @@ struct Yield {
 
 // `co_await WaitFor{&flag}` - suspend until `flag` becomes true.
 //
-// The shape every cross-core request/response has: send, then wait for the
-// handler that receives the reply to set the flag. **The flag must outlive
-// the wait**, which in practice means it lives in the same per-request
-// state the reply is routed to - not on the coroutine's own stack frame
-// before a `co_await` that could outlive it.
+// For a condition something on this reactor sets. **The flag must outlive
+// the wait**, which in practice means it lives in the state its setter
+// reaches - not on the coroutine's own stack frame before a `co_await` that
+// could outlive it. A condition another core changes is read by a
+// `WaitUntil` predicate instead, since a plain `bool` written from another
+// thread is a data race.
 //
 // It records the flag on the promise as it suspends, and `CoroTask::Poll()`
 // is what re-tests it (see `promise_type::wait_flag` for why it cannot be

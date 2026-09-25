@@ -510,8 +510,10 @@ TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
     EXPECT_GE(scheduler.idle_block_ns(), 10'000'000u)
         << "a 50 ms block was not accounted for";
 
-    // Now the wake side. The reactor is not running, so it is not asleep
-    // and a kick must write nothing: neither end's counter moves.
+    // Now the wake side. The reactor is not running, so it is not asleep -
+    // which is the claim: the block above lowered its flag on the way out
+    // (`WakerTableTest.AKickToABusyReactorWritesNothing` pins the skip
+    // itself). A kick must write nothing, and neither end's counter moves.
     wakers.Kick(1);
     EXPECT_EQ(scheduler.wakes_sent(), 0u) << "an awake target was woken";
     EXPECT_EQ(scheduler.wakes_received(), 0u);
@@ -784,9 +786,11 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyAKickIsResumedPromptly) {
         << "nothing wrote a wake, so the resume was the block expiring";
     // D7's pair, from the two ends: what the kicker wrote is what this
     // reactor's own eventfd received, and `SHOW META` prints both so the
-    // sum over cores can be checked against the instance total.
+    // sum over cores can be checked against the instance total. One
+    // destination, so the sum is this reactor's count alone.
     EXPECT_GE(scheduler.wakes_received(), 1u) << "the wake reached no eventfd";
-    EXPECT_EQ(scheduler.wakes_sent(), wakers.kicks());
+    EXPECT_EQ(scheduler.wakes_received(), scheduler.wakes_sent())
+        << "the instance's sent count and the one destination's received count disagree";
 }
 
 }  // namespace

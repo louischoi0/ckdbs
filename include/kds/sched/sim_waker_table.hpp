@@ -28,7 +28,7 @@
 // carried between draws - so the delay a kick draws does not depend on how
 // many kicks preceded it. That is the whole of the determinism claim: in
 // the rig two reactors on two threads kick at moments the interleaving
-// chooses (the peer's anchor send is one), so *which* kicks land, and at
+// chooses (a lock-table decide is one), so *which* kicks land, and at
 // which tick, is not the seed's to fix; *what delay each one draws* is. A
 // stateful stream would have let one thread's kick shift the delay of
 // every later kick from the other, which is the nondeterminism AV-R3

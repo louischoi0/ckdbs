@@ -19,7 +19,7 @@
 How a single statement that references relations owned by different cores
 executes. This is the concept spec for the mechanism `docs/spec/protocol.md` D3
 reserved ("server-side forwarding — clients are core-topology-unaware") and
-`docs/spec/sched.md` §5 provides transport for. Consistent with `docs/rules/rules.md`
+`docs/spec/sched.md` §5 provided transport for until AT-S10d. Consistent with `docs/rules/rules.md`
 (thread-per-core, core-local by default with what is shared declared,
 no exceptions, deterministic testability).
 
