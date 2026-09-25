@@ -708,7 +708,33 @@ Status CoreRuntime::ListenAndAttach(std::uint16_t port, const TcpServer::ClientS
     const CurrentCoreGuard as_this_core(core_id());
     auto listener = TcpServer::Listen(port, /*reuse_port=*/true);
     if (!listener.ok()) return listener.status();
-    listener_.emplace(std::move(listener.value()));
+    if (Status s = AttachListener(std::move(listener.value()), setup); !s.ok()) return s;
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("core", "core " + std::to_string(config_.core_id) +
+                               " listening on port " + std::to_string(port) +
+                               " (SO_REUSEPORT)");
+    }
+    return Status::OK();
+}
+
+Status CoreRuntime::HostHandedConnections(ConnectionHandoff& handoff,
+                                          const TcpServer::ClientSetup& setup) {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+    if (Status s = AttachListener(TcpServer::Hosting(), setup); !s.ok()) return s;
+    if (Status s = listener_->Host(handoff, config_.core_id); !s.ok()) {
+        listener_.reset();
+        return s;
+    }
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("core", "core " + std::to_string(config_.core_id) +
+                               " runs the connections core 0 hands it (no SO_REUSEPORT)");
+    }
+    return Status::OK();
+}
+
+Status CoreRuntime::AttachListener(TcpServer server, const TcpServer::ClientSetup& setup) {
+    listener_.emplace(std::move(server));
     listener_->Configure(setup);
     if (Status s = listener_->Attach(*scheduler_, *dispatcher_, log_); !s.ok()) {
         listener_.reset();
@@ -729,11 +755,6 @@ Status CoreRuntime::ListenAndAttach(std::uint16_t port, const TcpServer::ClientS
     // this listener is attached to (`tcp_server.cpp`'s `scheduler_->Stop()`).
     if (instance_stop_) {
         listener_->set_stop_handler([this] { instance_stop_(); });
-    }
-    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-        log_->Info("core", "core " + std::to_string(config_.core_id) +
-                               " listening on port " + std::to_string(port) +
-                               " (SO_REUSEPORT)");
     }
     return Status::OK();
 }

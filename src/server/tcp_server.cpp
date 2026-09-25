@@ -46,10 +46,12 @@ StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port) {
             // Refused rather than degraded: a listener that silently fell
             // back to exclusive binding would make every later per-core
             // bind fail with EADDRINUSE, which reads as a port clash
-            // rather than what it is.
+            // rather than what it is. Unsupported, because it is the
+            // platform's answer and not an I/O failure: the caller's cue
+            // for D19's fallback (AT-S10c).
             Status s =
-                Status::IoError(std::string("setsockopt(SO_REUSEPORT) failed: ") +
-                                std::strerror(errno));
+                Status::Unsupported(std::string("setsockopt(SO_REUSEPORT) failed: ") +
+                                    std::strerror(errno));
             ::close(fd);
             return s;
         }
@@ -80,6 +82,10 @@ StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port) {
 
 TcpServer::TcpServer(TcpServer&& other) noexcept
     : listen_fd_(other.listen_fd_),
+      hosting_(other.hosting_),
+      handoff_(other.handoff_),
+      self_core_(other.self_core_),
+      host_(std::move(other.host_)),
       scheduler_(other.scheduler_),
       dispatcher_(other.dispatcher_),
       log_(other.log_),
@@ -98,6 +104,7 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       server_info_(std::move(other.server_info_)),
       stop_handler_(std::move(other.stop_handler_)),
       clients_(std::move(other.clients_)) {
+    if (host_ != nullptr) host_->server = this;
     other.listen_fd_ = -1;
     other.scheduler_ = nullptr;
     other.dispatcher_ = nullptr;
@@ -112,6 +119,11 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         Detach();
         CloseIfOpen();
         listen_fd_ = other.listen_fd_;
+        hosting_ = other.hosting_;
+        handoff_ = other.handoff_;
+        self_core_ = other.self_core_;
+        host_ = std::move(other.host_);
+        if (host_ != nullptr) host_->server = this;
         scheduler_ = other.scheduler_;
         dispatcher_ = other.dispatcher_;
         log_ = other.log_;
@@ -149,7 +161,7 @@ void TcpServer::CloseIfOpen() noexcept {
 
 Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatcher,
                           Logger* log) {
-    if (listen_fd_ < 0) {
+    if (listen_fd_ < 0 && !hosting_) {
         return Status::IoError("TcpServer: no listening socket to attach");
     }
     scheduler_ = &scheduler;
@@ -159,13 +171,14 @@ Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatc
     // Non-blocking from here on: the reactor decides when to wait, and it
     // waits in exactly one place (the io backend). A blocking accept() here
     // would re-create the problem this class exists to solve.
-    if (Status s = SetNonBlocking(listen_fd_); !s.ok()) return s;
-
-    if (Status s = scheduler_->RegisterIoHandler(
-            listen_fd_, sched::IoInterest::kReadable,
-            [this](const sched::IoEvent&) { OnListenerReadable(); });
-        !s.ok()) {
-        return s;
+    if (listen_fd_ >= 0) {
+        if (Status s = SetNonBlocking(listen_fd_); !s.ok()) return s;
+        if (Status s = scheduler_->RegisterIoHandler(
+                listen_fd_, sched::IoInterest::kReadable,
+                [this](const sched::IoEvent&) { OnListenerReadable(); });
+            !s.ok()) {
+            return s;
+        }
     }
 
     // **The portal-idle timeout's caller** (§10, KW-D3). Without one the
@@ -207,6 +220,9 @@ void TcpServer::Detach() noexcept {
         if (listen_fd_ >= 0) {
             (void)scheduler_->UnregisterIoHandler(listen_fd_);
         }
+        // `Host`'s task ends at its next wake rather than adopting into a
+        // server that is gone.
+        if (host_ != nullptr) host_->server = nullptr;
         scheduler_ = nullptr;
         dispatcher_ = nullptr;
     }
@@ -237,6 +253,19 @@ void TcpServer::OnListenerReadable() {
     int nodelay = 1;
     ::setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
+    // D19's fallback (AT-S10c): the socket is set up for whichever core
+    // runs it, and one routed elsewhere is that core's from here on.
+    if (handoff_ != nullptr) {
+        const std::uint32_t core = handoff_->NextCore();
+        if (core != self_core_) {
+            handoff_->Offer(core, client_fd);
+            return;
+        }
+    }
+    AdoptConnection(client_fd);
+}
+
+void TcpServer::AdoptConnection(int client_fd) {
     // Stamped with the server's configured level, so `isolation` in the
     // config file is what a fresh connection actually starts at rather than
     // the compiled-in default.
@@ -293,6 +322,37 @@ void TcpServer::OnListenerReadable() {
     if (!s.ok()) {
         clients_.erase(client_fd);
         ::close(client_fd);
+    }
+}
+
+Status TcpServer::Host(ConnectionHandoff& handoff, std::uint32_t core) {
+    if (scheduler_ == nullptr) return Status::InvalidArgument("TcpServer::Host before Attach");
+    if (core >= handoff.cores()) {
+        return Status::InvalidArgument("TcpServer::Host: core " + std::to_string(core) +
+                                       " is past the handoff's " +
+                                       std::to_string(handoff.cores()));
+    }
+    host_ = std::make_shared<HostState>();
+    host_->server = this;
+    host_->handoff = &handoff;
+    host_->core = core;
+    // A raw pointer to the state it lives in: the task's frame owns a
+    // `shared_ptr` to the state, so the predicate cannot outlive it.
+    HostState* state = host_.get();
+    host_->ready = [state] {
+        return state->server == nullptr || state->handoff->Pending(state->core);
+    };
+    scheduler_->Submit(sched::MakeCoroTask(sched::SchedulingGroup::kSystem, RunHost(host_)));
+    return Status::OK();
+}
+
+sched::Coro TcpServer::RunHost(std::shared_ptr<HostState> state) {
+    while (true) {
+        // Level-triggered (AR0-6-R1): the reactor re-polls this after every
+        // block, so the kick an offer sends only has to end the block.
+        co_await sched::WaitUntil{&state->ready};
+        if (state->server == nullptr) co_return Status::OK();
+        for (int fd : state->handoff->Take(state->core)) state->server->AdoptConnection(fd);
     }
 }
 

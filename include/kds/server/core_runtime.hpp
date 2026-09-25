@@ -434,6 +434,15 @@ public:
     // that exercise the newline surface.
     Status ListenAndAttach(std::uint16_t port, const TcpServer::ClientSetup& setup = {});
 
+    // **D19's fallback** (AT-S10c, `connection_handoff.hpp`): where the port
+    // cannot be shared, core 0 alone binds it and this core runs the
+    // connections core 0 hands it - a listener with no socket, attached and
+    // stop-routed exactly as `ListenAndAttach`'s, whose reactor takes each
+    // socket from its inbox when kicked. `setup` is that function's, for its
+    // reasons; `handoff` must outlive this runtime.
+    Status HostHandedConnections(ConnectionHandoff& handoff,
+                                 const TcpServer::ClientSetup& setup = {});
+
     // BUG-4 ordering (the PW5 review): closes the listener - and with it
     // every accepted session, rolling back open transactions - while this
     // core's WAL can still be synced by the caller. Serve calls it for
@@ -540,6 +549,10 @@ public:
 private:
     CoreRuntime(Config config, Logger* log) noexcept
         : config_(config), log_(log) {}
+
+    // What `ListenAndAttach` and `HostHandedConnections` share: `server`
+    // becomes this core's listener, configured, attached and stop-routed.
+    Status AttachListener(TcpServer server, const TcpServer::ClientSetup& setup);
 
     Config config_;
     Logger* log_ = nullptr;

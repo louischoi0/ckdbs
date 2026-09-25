@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -431,6 +432,71 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
     EXPECT_TRUE(surface.cabin_optimizer_on->load()) << "core 0 and the peer hold two switches";
     EXPECT_NE(surface.signals, nullptr) << "the peer's reads feed no optimizer signal";
     EXPECT_NE(surface.view_latch, nullptr) << "two cores and no view latch";
+}
+
+// ---- D19's fallback (AT-S10c): core 0 accepts and hands off ------------
+//
+// Where the platform refuses `SO_REUSEPORT`, core 0 binds the port alone
+// and hands each connection to the core it places it on, through the
+// destination's inbox and a kick (`connection_handoff.hpp`). Linux never
+// refuses, so `force_listener_handoff` takes the arm.
+//
+// Two raw connections, made before core 0's reactor runs so the backlog
+// holds them in order: the first is core 0's, the second core 1's. Each
+// sends eight bytes - a whole frame header - declaring a length past
+// `kMaxFrame`, and a server that runs the
+// connection answers with a fatal error frame. **The second answer can come
+// only from core 1**: core 0 offered that socket and holds no connection
+// for it, and an inbox nobody took keeps its socket open and silent until
+// the instance stops.
+//
+// **The mutation**: make `TcpServer::Host` return before it submits its
+// task and the second read times out.
+namespace {
+// Bytes back within `ms`, or -1 on a timeout.
+ssize_t ReadWithin(int fd, int ms) {
+    pollfd p{fd, POLLIN, 0};
+    if (::poll(&p, 1, ms) <= 0) return -1;
+    char buf[256];
+    return ::read(fd, buf, sizeof(buf));
+}
+}  // namespace
+
+TEST_F(ExpeditorTest, UnderTheHandoffFallbackAConnectionCoreZeroAcceptedIsServedByCoreOne) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    config.force_listener_handoff = true;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(db.Start().ok());
+    ASSERT_NE(db.connection_handoff(), nullptr) << "the fallback was forced and not taken";
+    ASSERT_EQ(db.cores().size(), 1u);
+    EXPECT_TRUE(db.cores().front()->listening()) << "the peer hosts nothing";
+
+    const int to_core0 = ConnectToLoopback(config.port);
+    const int to_core1 = ConnectToLoopback(config.port);
+    ASSERT_GE(to_core0, 0);
+    ASSERT_GE(to_core1, 0);
+
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run()) << "the debug text port never accepted";
+    for (const int fd : {to_core0, to_core1}) {
+        ASSERT_EQ(::write(fd, "PINGPING", 8), 8);
+    }
+    EXPECT_GT(ReadWithin(to_core0, 5000), 0) << "core 0 did not answer the connection it kept";
+    EXPECT_GT(ReadWithin(to_core1, 5000), 0)
+        << "nobody answered the connection core 0 handed to core 1";
+    ::close(to_core0);
+    ::close(to_core1);
+    EXPECT_TRUE(running.Stop().ok());
+    EXPECT_FALSE(db.connection_handoff()->Pending(1)) << "core 1 never took its inbox";
+}
+
+TEST_F(ExpeditorTest, WhereThePortIsSharedThereIsNoHandoff) {
+    auto opened = Expeditor::Open(ConfigAt(/*cores=*/2), /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(opened.value()->Start().ok());
+    EXPECT_EQ(opened.value()->connection_handoff(), nullptr);
 }
 
 // ---- AT-0 item 7: the fault net's key sets the fault net ----------------

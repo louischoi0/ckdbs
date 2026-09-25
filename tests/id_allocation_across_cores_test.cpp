@@ -19,27 +19,39 @@ namespace {
 using namespace std::chrono_literals;
 
 constexpr int kRowsPerCore = 200;
+// Per statement. A client retries what the engine answers `retryable=1`,
+// and one does arrive here: a descent that meets the root while the other
+// core grows it a level is refused `TxnConflict` (`btree.cpp`'s
+// `DescendTo`, AT-S5c), and the id it drew is burned.
+constexpr int kRetriesPerRow = 50;
 
 struct Writer {
     Session session;
     DispatchOutcome out;
-    std::string first_refusal;
+    std::string first_refusal;  // one that was not retryable, or ran out
+    int retries = 0;            // retryable refusals - each burned an id
     std::atomic<bool> done{false};
 };
 
 sched::Coro InsertMany(CommandDispatcher& d, Writer& w) {
     for (int i = 0; i < kRowsPerCore; ++i) {
-        co_await d.DispatchAsync("INSERT INTO ids VALUES (" + std::to_string(i) + ")",
-                                 &w.session, &w.out);
-        if (w.out.response.rfind("INSERTED", 0) != 0 && w.first_refusal.empty()) {
-            w.first_refusal = w.out.response;
+        for (int attempt = 0; attempt <= kRetriesPerRow; ++attempt) {
+            co_await d.DispatchAsync("INSERT INTO ids VALUES (" + std::to_string(i) + ")",
+                                     &w.session, &w.out);
+            if (w.out.response.rfind("INSERTED", 0) == 0) break;
+            const bool retryable = w.out.response.find("retryable=1") != std::string::npos;
+            if (!retryable || attempt == kRetriesPerRow) {
+                if (w.first_refusal.empty()) w.first_refusal = w.out.response;
+                break;
+            }
+            ++w.retries;
         }
     }
     w.done.store(true, std::memory_order_release);
     co_return Status::OK();
 }
 
-TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneGaplessSequence) {
+TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
     TwoCoreRig::Options options;
     options.wal_drain_interval_ns = 1'000'000;
     auto opened = TwoCoreRig::Open(options);
@@ -72,12 +84,13 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneGaplessSequence)
     EXPECT_TRUE(w0.first_refusal.empty()) << "core 0 refused a write: " << w0.first_refusal;
     EXPECT_TRUE(w1.first_refusal.empty()) << "core 1 refused a write: " << w1.first_refusal;
 
-    // Every row, every id distinct - and **gapless**: the mark is one
-    // sequence both cores bump, so no id is skipped. A block cached on
-    // either core would leave its unspent remainder as a gap, and a block
-    // leased ahead of the mark would put one core's ids above the other's
-    // later ones. The primary key refuses a duplicate, so a count of every
-    // row written is also a count of distinct ids.
+    // Every row, every id distinct - and **no gap but the burned ones**:
+    // the mark is one sequence both cores bump, so the only ids missing are
+    // the ones a retried statement drew and never placed. A block cached on
+    // either core would leave its unspent remainder - thousands of ids - as
+    // a gap, and a block leased ahead of the mark would put one core's ids
+    // above the other's later ones. The primary key refuses a duplicate, so
+    // a count of every row written is also a count of distinct ids.
     const std::string reply = d0.Dispatch("SELECT COUNT(*), MIN(id), MAX(id) FROM ids").response;
     const std::string kHeader = "count(*),min(id),max(id)\\n";
     ASSERT_EQ(reply.rfind(kHeader, 0), 0u) << reply;
@@ -89,7 +102,9 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneGaplessSequence)
     const std::uint64_t lo = std::stoull(row.substr(c1 + 1, c2 - c1 - 1));
     const std::uint64_t hi = std::stoull(row.substr(c2 + 1));
     EXPECT_EQ(count, static_cast<std::uint64_t>(2 * kRowsPerCore)) << reply;
-    EXPECT_EQ(hi - lo + 1, count) << "the ids are not one gapless sequence: " << reply;
+    const std::uint64_t burned = static_cast<std::uint64_t>(w0.retries + w1.retries);
+    EXPECT_EQ(hi - lo + 1, count + burned)
+        << "the ids are not one sequence less the " << burned << " burned: " << reply;
 }
 
 }  // namespace

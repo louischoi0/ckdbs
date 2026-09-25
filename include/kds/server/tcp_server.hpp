@@ -11,6 +11,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/auth.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/connection_handoff.hpp"
 #include "kds/server/kwp_session.hpp"
 #include "kds/server/wire_channel.hpp"
 
@@ -66,8 +67,16 @@ public:
     // core - share one port and the kernel distributes accepted
     // connections among them (crosscore.md M3, workplan-peer-writer.md
     // PW5). Every socket on the port must pass it, core 0's included: the
-    // option must be set on the first binder or later binds fail.
+    // option must be set on the first binder or later binds fail. **A
+    // platform that refuses the option answers Unsupported**, never a
+    // listener that silently binds exclusively - the caller's cue for D19's
+    // fallback, core 0 accepting alone and handing off (`set_handoff`).
     static StatusOr<TcpServer> Listen(std::uint16_t port, bool reuse_port = false);
+
+    // **A server with no socket** (AT-S10c): it accepts nothing and runs the
+    // connections handed to it (`Host`). A peer's arrangement under D19's
+    // fallback, where core 0 alone can bind the port.
+    static TcpServer Hosting() { return TcpServer(-1, /*hosting=*/true); }
 
     TcpServer(TcpServer&& other) noexcept;
     TcpServer& operator=(TcpServer&& other) noexcept;
@@ -94,6 +103,24 @@ public:
     // Unregisters the listener and every live client, and closes the
     // clients. Idempotent; called by the destructor.
     void Detach() noexcept;
+
+    // ---- D19's fallback (AT-S10c, `connection_handoff.hpp`) --------------
+    //
+    // Core 0's listener, where the port cannot be shared: each accepted
+    // connection goes to `handoff.NextCore()`, and one that is not
+    // `self_core` is offered to that core's inbox rather than run here.
+    // Before Attach(); `handoff` must outlive this server.
+    void set_handoff(ConnectionHandoff* handoff, std::uint32_t self_core) noexcept {
+        handoff_ = handoff;
+        self_core_ = self_core;
+    }
+
+    // The receiving side, after Attach(): parks a task on this reactor that
+    // wakes whenever `core`'s inbox holds a socket and runs each one here,
+    // as though this server had accepted it. The task outlives nothing it
+    // uses - a server moved or detached is told so, and the task ends at
+    // its next wake. `handoff` must outlive the scheduler's frames.
+    Status Host(ConnectionHandoff& handoff, std::uint32_t core);
 
     // Installs the wire-byte transform every *subsequently accepted*
     // connection runs through (wire_channel.hpp) - in practice the TLS
@@ -264,7 +291,7 @@ private:
         std::vector<std::byte> frames_out;
     };
 
-    explicit TcpServer(int fd) noexcept : listen_fd_(fd) {}
+    explicit TcpServer(int fd, bool hosting = false) noexcept : listen_fd_(fd), hosting_(hosting) {}
     void CloseIfOpen() noexcept;
 
     void OnListenerReadable();
@@ -309,7 +336,27 @@ private:
         return log_ != nullptr && log_->enabled(level);
     }
 
+    // What `Host`'s parked task reads: the server it adopts into (null once
+    // detached, re-pointed by a move) and the predicate its wait polls.
+    // Shared with the task's frame, so neither dangles.
+    struct HostState {
+        TcpServer* server = nullptr;
+        ConnectionHandoff* handoff = nullptr;
+        std::uint32_t core = 0;
+        std::function<bool()> ready;
+    };
+    static sched::Coro RunHost(std::shared_ptr<HostState> state);
+
+    // Everything after `accept()` returns a socket: the connection's state,
+    // its protocol session and its reactor registration.
+    void AdoptConnection(int client_fd);
+
     int listen_fd_;
+    // A `Hosting()` server: no socket is not an error at Attach().
+    bool hosting_ = false;
+    ConnectionHandoff* handoff_ = nullptr;  // set_handoff
+    std::uint32_t self_core_ = 0;
+    std::shared_ptr<HostState> host_;  // Host
     sched::Scheduler* scheduler_ = nullptr;
     CommandDispatcher* dispatcher_ = nullptr;
     Logger* log_ = nullptr;

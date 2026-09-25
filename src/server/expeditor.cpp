@@ -1451,8 +1451,21 @@ Status Expeditor::Start() {
     // different database (the PW5 review's finding 6), so it is not set.
     // Above one core that exposure is the arrangement's price, and it is
     // stated in `manual/server/server.md`.
+    //
+    // **D19's fallback** (AT-S10c, AT-R12): where the platform refuses the
+    // option, core 0 binds alone and hands each accepted connection to the
+    // core it is placed on (`connection_handoff.hpp`), shared state and a
+    // kick rather than a ring kind. `force_listener_handoff` takes this arm
+    // on Linux, which never refuses.
+    bool handoff = config_.cores > 1 && config_.force_listener_handoff;
     {
-        auto opened = TcpServer::Listen(config_.port, /*reuse_port=*/config_.cores > 1);
+        auto opened = TcpServer::Listen(config_.port, /*reuse_port=*/config_.cores > 1 && !handoff);
+        if (!opened.ok() && opened.status().code() == StatusCode::kUnsupported) {
+            logger_->Warn("expeditor", "the port cannot be shared (" + opened.status().message() +
+                                           "); core 0 accepts and hands connections off");
+            handoff = true;
+            opened = TcpServer::Listen(config_.port, /*reuse_port=*/false);
+        }
         if (!opened.ok()) return opened.status();
         listener.emplace(std::move(opened.value()));
     }
@@ -1568,6 +1581,7 @@ Status Expeditor::Start() {
         // by design - AR0-6 retires the ring and keeps the wake - so it is
         // built beside it rather than inside it.
         wakers_.emplace(config_.cores);
+        if (handoff) handoff_.emplace(config_.cores, &*wakers_);
         // AO-S5: and the lock table kicks through it - a decide's slot flip
         // on one core ends the block a waiter's reactor sits in on another
         // (AU-S2). The same registry a send and a stop kick through.
@@ -1754,8 +1768,12 @@ Status Expeditor::Start() {
                 !s.ok()) {
                 return s;
             }
-            // Every peer listens on the port with core 0's setup (AT-S8).
-            if (Status s = core.value()->ListenAndAttach(config_.port, client_setup); !s.ok()) {
+            // Every peer listens on the port with core 0's setup (AT-S8), or
+            // runs what core 0 hands it where the port cannot be shared.
+            if (Status s = handoff_.has_value()
+                               ? core.value()->HostHandedConnections(*handoff_, client_setup)
+                               : core.value()->ListenAndAttach(config_.port, client_setup);
+                !s.ok()) {
                 return s;
             }
             cores_.push_back(std::move(core.value()));
@@ -1845,6 +1863,7 @@ Status Expeditor::Start() {
             return s;
         }
     }
+    if (handoff_.has_value()) listener.value().set_handoff(&*handoff_, /*self_core=*/0);
     if (Status s = listener.value().Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
         return s;
     }

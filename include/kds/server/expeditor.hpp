@@ -114,6 +114,14 @@ public:
         std::string data_file = "kds.db";
         std::uint16_t port = 15432;
 
+        // **Not a configuration key**: the test seam D19's fallback needs
+        // (AT-S10c). Above one core, core 0 binds the port alone and hands
+        // every accepted connection off (`connection_handoff.hpp`), as it
+        // does on a platform that refuses `SO_REUSEPORT` - which Linux, the
+        // one platform this engine builds for, never does. No config file
+        // reaches it.
+        bool force_listener_handoff = false;
+
         // Resident-frame budget for the **whole instance**, divided evenly
         // per core with the remainder to core 0 (docs/spec/eviction.md §6
         // EV4 - built 2026-08-24; docs/workplan-pageref.md MG06); 0 =
@@ -625,6 +633,10 @@ public:
     // cores rather than dangling ones. Core 0 is not in it - core 0's
     // runtime is this object.
     const std::vector<std::unique_ptr<CoreRuntime>>& cores() const noexcept { return cores_; }
+    // D19's fallback's inboxes, or null where every core listens on the port.
+    const ConnectionHandoff* connection_handoff() const noexcept {
+        return handoff_.has_value() ? &*handoff_ : nullptr;
+    }
 
     // **The instance's one wake registry** (AU-S1b, `sched/waker_table.hpp`),
     // and the transport that kicks through it. Null at `cores = 1`, where
@@ -851,6 +863,11 @@ private:
     // Outlives the transport deliberately - AR0-6 retires the ring and
     // keeps the wake.
     std::optional<sched::WakerTable> wakers_;
+    // D19's fallback (AT-S10c): the inboxes core 0's listener hands
+    // connections into, built only where the port cannot be shared. After
+    // `wakers_`, which it kicks through, and before `cores_` and
+    // `running_`, whose listeners hold it - so it outlives both.
+    std::optional<ConnectionHandoff> handoff_;
     // AU-S3: what a peer calls when a client says STOP on it. Built once
     // core 0's scheduler and the waker table both exist, and handed to every
     // peer so none of them needs to know about either.
