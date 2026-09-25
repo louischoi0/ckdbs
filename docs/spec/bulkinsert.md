@@ -26,7 +26,7 @@ How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
 | BI3 | T1 grammar | `INSERT INTO t VALUES (…), (…) [, …]` — comma-separated row lists; per-statement row cap `max_insert_rows` (config key, default **1024**, `parser::kDefaultMaxInsertRows`) |
 | BI4 | Atomicity | A bulk statement (T1) and a load session (T2) are **atomic**: all rows or none, unwound by the existing transaction scope. Any per-row refusal fails the whole statement with the 1-based row ordinal in the message. No partial-accept mode, no error table, no slow path |
 | BI5 | Fingerprint | An N-row INSERT fingerprints **identically to the 1-row INSERT** on the same relation — row count is not part of the template. Existing 1-row fingerprints are byte-stable (cf. `types.md` TY3). T2 never parses, so it never fingerprints |
-| BI6 | T2 protocol | KWP frames `C_LOAD_BEGIN / C_LOAD_CHUNK / C_LOAD_END / C_LOAD_ABORT` and `S_LOAD_READY / S_LOAD_ACK`, gated by the `BULK_LOAD` capability bit (`wire::kCapBulkLoad`) — no version break. Chunk rows use the D5 row encoding of `wire/row_codec`, the same codec below `S_ROW_BATCH` and crosscore `STEP_BATCH` (§4) |
+| BI6 | T2 protocol | KWP frames `C_LOAD_BEGIN / C_LOAD_CHUNK / C_LOAD_END / C_LOAD_ABORT` and `S_LOAD_READY / S_LOAD_ACK`, gated by the `BULK_LOAD` capability bit (`wire::kCapBulkLoad`) — no version break. Chunk rows use the D5 row encoding of `wire/row_codec`, the same codec below `S_ROW_BATCH` (crosscore's `STEP_BATCH` was its third reader until AT-S10 deleted the remote-step protocol) |
 | BI7 | Flow control | Windowed chunk acknowledgment: at most `window` unacknowledged chunks in flight (server-announced in `S_LOAD_READY`, **4**), chunk payload ≤ the announced byte cap (**256 KiB**). Explicit and deterministic, in the spirit of `protocol.md` §7 portal suspension — no TCP-buffer guesswork |
 | BI8 | Durability | Orthogonal, unchanged: the transaction's WAL class applies. **D3 relaxed is the documented recommendation for bulk load** — the use `wal.md` §1 named for it. No new class |
 | BI9 | Keystone budget | Per-row `AllocateRowId`; a refused row burns no id (admission precedes allocation, per row). An **aborted** bulk statement burns the ids of rows placed before the failure — a documented K1 40-bit budget consumption, the same class of product constraint as the budget itself. No id pre-reservation |
@@ -132,8 +132,9 @@ do not change; `tests/bulk_insert_test.cpp` pins it.
 The parser is the remaining per-row cost T1 cannot shed, and the migration
 tool should not be paying text-encoding costs to talk to a binary protocol.
 T2 is `COPY`-shaped: a framed binary row stream, decoded by the same
-`wire/row_codec` that encodes result rows and crosscore batches — one
-codec, three readers, knowing nothing about frames or cores.
+`wire/row_codec` that encodes result rows — one codec, two readers (the
+cross-core step batch was a third until AT-S10), knowing nothing about
+frames or cores.
 
 **Where it listens.** The load stream is served by `KwpLoadServer`, a
 second listener on the `kwp_port` config key; `0` (the default) opens no

@@ -389,8 +389,9 @@ DROP CABIN ON accounts(owner);
 - **A Cabin serves a relation split into ranges** as it serves any other,
   since v3.0.0's M3: every read walks every range on the core it runs on,
   so a set speaks for the whole relation. (A relation can only have been
-  split before M3; nothing splits one now.) `SHOW CABINS`' `scope_declines`
-  counts the probes that fell through to a walk instead.
+  split before M3; nothing splits one now.) `SHOW CABINS` no longer prints
+  `scope_declines`: with every walk covering the whole relation, no probe
+  falls through for its scope.
 
 ### CREATE PATTERN / DROP PATTERN — withdrawn
 

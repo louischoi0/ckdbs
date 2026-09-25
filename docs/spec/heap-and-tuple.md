@@ -246,8 +246,10 @@ this sentence:
   on it, and slot order is still key order *within a page*. `kUnordered`
   records a below-mark key landing, which spreading never produces — every
   block is carved *above* the mark. `ORDER BY <pk>` over a spread relation
-  is ordered by the fan-in's range-order concatenation, not by this flag
-  (`crosscore.md` §2a).
+  is ordered by the walk's range order, not by this flag: one walk covers
+  every range, and `TableAccess::WalkHeads` answers their heads in `lo`
+  order (`crosscore.md` CC8). It was the fan-in's range-order
+  concatenation until AT-S9 retired the fan-in.
 
 **What a caller may not infer:** comparing two ids of a spread relation
 orders them in the *id space*, never in time. That inference is unavailable

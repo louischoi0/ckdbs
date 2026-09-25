@@ -54,9 +54,10 @@ support `Merge(a, b) → a'` such that folding a row stream in one pass and
 folding two disjoint partitions of it then merging yield the same output
 rows. `COUNT`/`SUM` merge by addition, `MIN`/`MAX` by comparison, `DISTINCT`
 by set union, `AVG` as its `(sum, count)` pair with the divide deferred to
-`Finish`. It is what lets `docs/spec/crosscore.md`'s step pipeline ship
-*partial aggregates* — group count, not row count, on the wire — without
-touching the step VM. Merge preserves the left operand's group order and
+`Finish`. It was written so `docs/spec/crosscore.md`'s step pipeline could
+ship *partial aggregates* — group count, not row count, on the wire —
+without touching the step VM; that pipeline is deleted since AT-S10, and
+the invariant stands as a property of the state. Merge preserves the left operand's group order and
 appends the right's unseen groups in their own order, so first-seen
 determinism (AG6) survives a merge with a defined partition order.
 

@@ -185,12 +185,11 @@ row count may decline a build, are decisions unrecorded here.
 
 ## 8. Cross-core, and the other exclusions
 
-A build is core-local execution state; the descriptor cannot ship it
-and does not need to: `ShippedForm` already downgrades structure-served
-steps to their walk, and the build — being execution-time, not a
-compiled kind — needs no descriptor presence at all. A peer's consuming
-stage does not build for its own stage; whether it may is a decision
-unrecorded here.
+A build is core-local execution state, and nothing needs to ship it: a
+statement runs whole on its session's core (`crosscore.md` CC1). The
+question this section left open - whether a peer's consuming stage may
+build for its own stage - went with the stage, when AT-S10 deleted the
+remote-step protocol and its descriptor.
 
 Out of scope, by decision: multi-column join keys (the Cabin's scope
 rule, `cabin.md` §2); non-equality joins; spill-to-disk; building for a

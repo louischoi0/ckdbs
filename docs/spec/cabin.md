@@ -204,7 +204,7 @@ rule would record a dead set — and its forever write-hook tax — for every
 key it would never see again, with one SELECT able to flood
 `cabin_max_values` on its own. Per key: the first touch costs one
 sighting insert and records nothing; a genuinely repeating key — across
-statements, or within one join's fan-in — records on its second touch and
+statements, or across one join's outer rows — records on its second touch and
 serves from its third. A join whose keys mostly repeat converts its
 O(outer × inner) walk into O(distinct-keys × inner + hits), one counted
 miss later — provided the two touches land inside one sighting window:
@@ -254,44 +254,26 @@ been admitted below its high-water mark — IX8a's rule applied with
 
 ### 4b. What a set speaks for, and what a step may answer from it
 
-**The scope rule that stood here is struck** (AT-S7). It read *"a Cabin's
-entry set is authoritative for (observed value × the ranges its core
-owns)"*, and it rested on one sentence about the write hook:
-`CabinStore::NoteWrite` appended *only on the core performing the write*,
-so a write into a range another core owns was appended nowhere. There is
-one store for the instance now and every core appends into it, so a set
-is again authoritative for the observed value and nothing narrows it —
-§1's promise, unqualified. Three rules followed from the narrowing and
-two of them go with it: there is no per-core claim for a probe to
-resolve, and no core whose ranges a set speaks for.
+**A set is authoritative for the observed value across the instance, and
+every walk covers the whole relation.** The first half is AT-S7's: one
+store for the instance, into which every core appends, so the per-core
+scope rule that stood here - *"(observed value × the ranges its core
+owns)"*, resting on a write hook that appended only on the writing core -
+is struck with the per-core store that forced it. The second is AT-S10's:
+a split relation's walk covers every range (`TableAccess::WalkHeads`), and
+no step is assigned a slice of one, so a step banks from and serves to a
+walk of the whole relation and there is nothing for a set to answer short
+or twice. §1's promise holds unqualified.
 
-**What survives is not a property of the set but of the step.** A walk
-that covers less than the relation answers less than the relation, in
-both directions:
-
-1. **A step may only bank from a walk that would have reached every
-   qualifying row.** A walk bounded to a range collects the matches in
-   that range, and a set banked from it is missing exactly the rows it
-   did not reach — recorded once and served as authoritative forever
-   after, which is the C1 break in its most durable form.
-2. **A step may only answer from a set what its own walk would have
-   answered.** A stage over one range of a split relation serving the
-   whole set would return rows outside its span, and the fan-in above it
-   would deliver them twice.
-
-Both are one predicate, asked once at the serve site
-(`CabinScopeCovers`): the relation has one range, or this step's walk
-spans the whole key space. A one-range relation — every relation created
-since AT-S9 retired insert spreading — takes `ranges.empty()` and pays one
-predictable branch. **A split relation is served too since AT-S9**: every
-local walk covers every range (`TableAccess::WalkHeads`), so a set banked
-from one is a superset of the whole relation, and the predicate's
-`ServableBy` conjunct - which declined a relation whose ranges were not all
-this core's - went with range ownership. What still declines is a step
-assigned a partial slice, which only a remote stage was and none is opened.
-When the predicate does not hold the probe **falls through to the walk** —
-always legal, §1's corollary, a performance event and never an answer — and
-§4c's counter reads it.
+**The span rule that followed is retired at AT-S10.** It read: a step may
+bank only from a walk that would have reached every qualifying row, and
+answer from a set only what its own walk would have answered - asked once
+at the serve site as `CabinScopeCovers`, falling through to the walk when
+it did not hold. The one walk narrower than its relation was a remote
+stage's assigned slice (`StepChain::walk_span`), and the protocol that
+assigned it is deleted, so the predicate, the slice and the fall-through
+went together. A walk that *stops* early is a different matter and stays
+C1's: its set is partial and never commits (§4a).
 
 **The transition rule was the discard**, `crosscore.md` CC10's pre-grant
 drop of sets banked while a relation was whole. No relation is split since
@@ -299,15 +281,14 @@ AT-S9, so there is no transition to guard.
 
 ### 4c. What the serve path reports
 
-One counter, because a Cabin whose savings cannot be seen cannot be
-measured and an unmeasured saving is not claimed:
+**No counter of its own since AT-S10.** A Cabin's serve is read from
+`SHOW CABINS`' per-cabin `observed=`, `entries=`, `hits=` and `misses=`
+and from `ANALYZE`'s per-step `cabin_hits=`/`cabin_misses=` (§7).
 
-- **`cabin_scope_fallthroughs`** on `SHOW META`, and `scope_declines` per
-  cabin on `SHOW CABINS` beside that cabin's hits and misses — probes that
-  found an observed set and declined to serve from it because rule 3 did
-  not hold. It is the one number that distinguishes "this Cabin is not
-  earning its write hook" from "this Cabin cannot be reached from where
-  the read runs", which no other counter can tell apart.
+- **`cabin_scope_fallthroughs` on `SHOW META`, `scope_declines` per cabin
+  on `SHOW CABINS`, and `ANALYZE`'s per-step `cabin_scope_declines=` are
+  retired** (AT-S10) with §4b's span rule, whose fall-throughs they
+  counted; a client reading any of them reads its absence.
 - **`cabin_split_discard` is retired** (AT-S9) with the discard it
   counted: nothing splits a relation.
 
@@ -532,11 +513,12 @@ Distinct trust classes, cooperative operation; none replaces another:
 - **ANALYZE narrates all three.** Per step: cabin hit/miss, trail
   replay/fallback, and the recording events themselves.
 - **And the Cabin layer is no longer one of the scoped ones** (AT-S7).
-  Its sets are the instance's and speak for the observed value whole;
-  what is still scoped is the *step* that reads one (§4b), Waystone's
-  trail by invariant 8, and the clustered tree's range. The three degrade
-  independently, and the fan-in is where the ranges are put back
-  together.
+  Its sets are the instance's and speak for the observed value whole,
+  and since AT-S10 no step reading one is scoped either (§4b): what is
+  still scoped is Waystone's trail by invariant 8 and the clustered
+  tree's range. The layers degrade independently, and a split
+  relation's ranges are put back together by the walk itself, which
+  covers every one.
 
 ## 8. Materialization policy and the full-coverage limit (C5)
 
@@ -694,9 +676,8 @@ not**.
 
 **The scope of the two classes differs and §4b is where the
 Observational one is stated.** An Observational set is authoritative for
-the observed value across the instance since AT-S7, and what falls
-through is a *step* whose walk would not have covered the relation; a
-Bound Cabin's coverage contract is 100% of the target relation's live
+the observed value across the instance since AT-S7, and every step
+reading one walks the whole relation since AT-S10; a Bound Cabin's coverage contract is 100% of the target relation's live
 rows, and a scope narrower than the relation would be a contract change
 rather than an authority one — which is why `crosscore.md` §6a gates it
 from split and migration both.

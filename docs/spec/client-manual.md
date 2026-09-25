@@ -290,7 +290,7 @@ hold on the debug port too (Appendix A gives the text spellings).
   retryable. They differ in one thing, and it is the thing a client library
   wants: `UNSUPPORTED` is a form this engine's architecture cannot admit —
   updating a primary key, comparing two decimals of different width, a
-  read wider than the fan-in's stage ceiling — so **no later server answers
+  subquery nested deeper than the engine's fixed limit — so **no later server answers
   it** and the statement must be rewritten. `NOT_IMPLEMENTED` is a form the
   design admits and this release has not built — outer joins, CTEs,
   `UNIQUE`, `ALTER TABLE ADD COLUMN` — so a client may feature-detect and

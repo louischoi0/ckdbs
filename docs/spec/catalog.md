@@ -51,11 +51,12 @@ key-order flip, because the `INSERT` doing it holds the relation's
 **Asked at a task boundary, and never inside one.** `Catalog::Revalidate()`
 is one acquire load; on a mismatch the cache is dropped and the value
 adopted. It runs where the broadcast's handler used to — between tasks, at
-nine sites: `CommandDispatcher::DispatchAndStage`'s head; the remote-step
-open (`OnStepOpen` — not the batch handler, whose parked producer
-re-`Bind`s instead); the two foreign-key probe handlers; the two build
-request handlers; the peer's refill tick and that refill's completion,
-which reads the range core 0 just opened; and the Cabin optimizer's tick.
+three sites: `CommandDispatcher::DispatchAndStage`'s head; the peer's
+refill tick (`core_runtime.cpp`); and the Cabin optimizer's tick
+(`CabinOptimizerExecutor::Tick`). The other six went with their handlers:
+the two foreign-key probe handlers at AT-S5f, the two build request
+handlers at AT-S5d/AT-S5e, the refill's completion when range opening
+retired at AT-S9, and the remote-step open (`OnStepOpen`) at AT-S10.
 **It is never called from a cached read**, because a drop frees every
 `const TableAccess*` and `Schema&` a running statement holds
 (`catalog_cache.hpp`'s entries are reference-stable *until the next

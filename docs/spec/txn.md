@@ -416,7 +416,8 @@ position in commit order.
 **Readers are registered.** Two records together name every reader on a
 core: live transactions in the manager's `live_`, and every other snapshot
 that can read a superseded version across a park — an autocommit
-statement's, a shipped pipeline stage's — through a move-only `ReaderLease`
+statement's (and a remote pipeline stage's, until AT-S10 deleted the
+protocol) — through a move-only `ReaderLease`
 that `txn::AutocommitSnapshot` returns beside the snapshot, so registering
 is structural rather than disciplinary. Each core publishes the oldest
 `snapshot_lsn` over both into its slot, and a held mint lowers that slot
@@ -686,9 +687,9 @@ every subquery block, and a write's own relation — and its outermost walk
 declares **where it is**, `IS` on the slice it has reached, moved at every
 page boundary. The scope is **the statement**, not the transaction, so two
 `SELECT`s in one transaction declare twice and hold nothing between them.
-A stage executing on another core declares for itself in its own frame,
-because the session core's borrow ends when its statement returns
-`pending` (`remote_step_service.cpp`).
+(A stage executing on another core declared for itself in its own frame
+until AT-S10 deleted the remote-step protocol; every step of a statement
+runs under the session's borrow now.)
 
 - **It is a position, never a permission.** Visibility is the snapshot's
   and nothing here changes it. A borrow the table refuses leaves the reader
@@ -741,8 +742,10 @@ because the session core's borrow ends when its statement returns
   in key order, so it declares the relation and no slice.
 - **The holder is not a transaction.** An autocommit `SELECT` has no
   transaction, so a read borrow holds under an id from a space of its own
-  (bit 63, which no 48-bit trx id reaches; bit 62 tells the dispatcher's
-  holders from the remote-step server's on the same core, `read_borrow.hpp`).
+  (bit 63, which no 48-bit trx id reaches, `read_borrow.hpp`'s
+  `ReadHolderId`). Bit 62 told the dispatcher's holders from the
+  remote-step server's on the same core; since AT-S10 the dispatcher is the
+  one minter and nothing sets it.
   A refusal naming one says "a positioned reader".
 - **What declares the relation and no slice**: a nested step's walk (the
   per-page cost would be the page count times the outer cardinality), a

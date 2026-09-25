@@ -41,7 +41,7 @@ Rules:
 - **No preemption.** Signal- or timer-driven preemption is forbidden — it destroys deterministic simulation.
 - **Suspension safety.** A coroutine must not be parked while holding a resource that only makes sense within a call — above all a page span (`docs/spec/parser-v2.md` I15's R1). `sched::SetSuspendAudit` is the hook a higher layer installs to answer that, checked in debug builds at every suspension; `exec::InstallSuspendAudit()` is the executor's answer, installed per core on the thread that runs statements.
 - **No work-stealing.** A task created on a core runs and completes on that core. Moving *work* between cores happens only by sending a message that causes the peer to create its own task.
-- Task representation: **C++20 stackless coroutines** (`include/kds/sched/coro.hpp`). Every cross-core operation is a request whose answer arrives later, and a coroutine is how "wait" is spelled without blocking the reactor or hand-rolling a call chain into a state machine. `Task::Poll()` returning `kSuspended`/`kDone` is a coroutine's resume protocol, so the scheduler needed no change for it. The cost is a heap-allocated frame per coroutine, so this is for *suspendable* work — a statement, a pipeline step, a lease request — and never the per-tuple path.
+- Task representation: **C++20 stackless coroutines** (`include/kds/sched/coro.hpp`). Every cross-core operation is a request whose answer arrives later, and a coroutine is how "wait" is spelled without blocking the reactor or hand-rolling a call chain into a state machine. `Task::Poll()` returning `kSuspended`/`kDone` is a coroutine's resume protocol, so the scheduler needed no change for it. The cost is a heap-allocated frame per coroutine, so this is for *suspendable* work — a statement, a lock or durability wait, a lease request — and never the per-tuple path.
 
 ## 4. Scheduling Groups
 
@@ -59,6 +59,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 
 - Topology: per-core-pair **SPSC lock-free rings** (N² rings for N cores), preallocated at startup. SPSC keeps each ring single-writer/single-reader — one writer and one reader by construction, so no atomics beyond the ring indices. This holds regardless of what else the engine shares: the rings are how *work* moves between cores, and nothing has been added to them.
 - A message names a target-core operation and carries POD payload; on receipt (phase 3) the peer wraps it as a task in the sender-designated scheduling group. Replies are messages back to the origin core.
+- **What crosses: two kinds since AT-S10**, a peer's transaction-id or row-id lease request to core 0 and core 0's grant (`crosscore.md` §3); `ring_message.hpp`'s census freezes the count at 2. The step pipeline's kinds went with the remote-step protocol.
 - **Backpressure:** a full ring fails the send with the KDS status type (no blocking, no `throw`). Callers must handle `ring_full` — typically by suspending the sending task until the reactor retries. Silent drop is forbidden.
 - The ring interface is injectable: simulation replaces it with an in-memory model that can delay and reorder deliveries (§8).
 
@@ -171,14 +172,14 @@ indistinguishable from one that has a wake it never needed.
 | Park site | Predicate | What satisfies it | Ends the block? |
 |---|---|---|---|
 | `row_id_lease_service.cpp:142`, `trx_id_lease_service.cpp:106` | `WaitFor{&refill.granted}` | core 0's grant reply | ring message → **wake** |
-| `command_dispatcher.cpp:238` | the remote read is done or torn down | the pipeline's reply | ring message → **wake** |
-| `remote_step_service.cpp:600` (`actionable`), `:734` (`output_ok`), `exec/step_vm.cpp:1858` (`resume_gate_`) | pipeline credit, cancel, data | a peer's message | ring message → **wake** |
 | `command_dispatcher.cpp:225` (shipped statement) (the index build's went with its ship at AT-S5e, the assertion build's at AT-S5d) | `Settled(id)`, **with the deadline read inside the predicate** | the owner's reply, or the deadline | the reply is a ring message → **wake**; the *deadline* has no timer of its own and is noticed only when the task is next polled, so it is honored to within one idle block. **This is what the ceiling above is for** — under an unbounded block a timed-out shipped statement would never answer |
-| `command_dispatcher.cpp:279` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1723`), with the drain timer as backstop | on-core: nothing to wake. Any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
+| `command_dispatcher.cpp:737` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1953`), with the drain timer as backstop | on-core: nothing to wake. Any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
 
-Nine of the eleven sites are satisfied by a peer's message and are covered
-by the wake. The two that are not are named above with what covers them
-instead.
+The two lease sites are satisfied by a peer's message and are covered by
+the wake; the rows below them are named with what covers them instead.
+The remote read's park and the remote step server's two, with the
+executor's `resume_gate_` they drove, went with the remote-step protocol
+at AT-S10.
 
 ## 8. Deterministic Simulation
 

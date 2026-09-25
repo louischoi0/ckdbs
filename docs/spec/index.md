@@ -410,19 +410,11 @@ What it deliberately does not change:
   descriptor makes that the encoding the index was built from. Any decline,
   at compile or per row, takes the walk and returns identical rows by the
   residual.
-- **Cross-core — shipped as its walk.** An index step cannot cross the
-  descriptor (core-local structure state), so the session applies a
-  **ship-time downgrade** (`ShippedForm`, `step_descriptor.cpp`) at every
-  encode seam: the shipped copy becomes the walk the step would fall back
-  to anyway — `kScan`, aux dropped, residual intact — which cannot change
-  a result, and the local half of the statement still takes the
-  structure. The same route carries the `kCabinProbe` case. The peer
-  therefore pays *walk* cost, not local cost: a downgraded correlated
-  probe runs O(outer × inner) where the local form runs
-  O(outer × log inner), and the consuming stage's row-touch budget can
-  refuse a large enough shipped join that the local side answers. The
-  descriptor's refusal stays as the backstop for callers that skip the
-  sanctioned route.
+- **Cross-core — nothing ships.** An index step runs on the session's
+  core with the rest of its statement (`crosscore.md` CC1). Until AT-S10 a
+  step shipped to a remote stage was downgraded at encode to the walk it
+  would fall back to (`ShippedForm`); the step descriptor and the
+  downgrade went with the remote-step protocol.
 
 ---
 

@@ -67,7 +67,8 @@ undecided-prepare arm is unreachable — held before a line was written.
 
 ## What is not retired with it
 
-**The remote-step protocol is a different mechanism and stays.** A fan-in
-over a split relation and a two-step join open stages on other cores
-(`kStep*`, `crosscore.md` §4a); a stage is a read, not a transaction half.
-Whether it survives AT is AT-0 item 4's other half, undecided.
+**The remote-step protocol was a different mechanism, and it is retired
+too, separately.** A fan-in over a split relation and a two-step join
+opened stages on other cores; a stage was a read, not a transaction half.
+AT-S9 retired both routes and AT-S10 deleted the protocol and its ring
+kinds (AT-0 item 4's other half, answered *struck*; `crosscore.md` §4a).
