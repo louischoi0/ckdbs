@@ -258,13 +258,14 @@ constexpr bool kWritePathEnforcesAssertions = true;
 sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* session,
                                                DispatchOutcome* out,
                                                sched::MonoTimeNs* statement_deadline_ns) {
-    // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
+    // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
-    // The ratified answer to D5's `[OPEN]`: a writer of a row held by a
-    // transaction this core prepared **blocks**, with a bounded ceiling
-    // ending in a named refusal - rather than being refused retryably up
-    // front, which would surface an engine-internal state to a client that
-    // can do nothing with it but spin.
+    // A writer of a row held by a transaction on this core that has not
+    // decided **blocks**, with a bounded ceiling ending in a named refusal
+    // - rather than being refused retryably up front, which would surface
+    // an engine-internal state to a client that can do nothing with it but
+    // spin. D5 ratified it for a prepared holder; AO-S3 widened it to any
+    // undecided one, and nothing has prepared since AT-S6.
     //
     // **The wait is on the statement, not on the row**, because there is
     // nowhere inside a write path to park: a conflict is found under a page
@@ -277,7 +278,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     //
     // **Bounded once, not once per blocker.** The deadline is taken before
     // the first wait and every later one shares it, so a statement that is
-    // blocked, freed, and blocked again by a *second* in-doubt transaction
+    // blocked, freed, and blocked again by a *second* undecided transaction
     // still ends within one ceiling. That is what makes HP3's "no hang is
     // reachable" true of a shape that would otherwise be a loop with a
     // bounded body.
@@ -399,15 +400,6 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
                                         std::to_string(block.trx_id) +
                                         " decided, and is running it again");
             }
-            // **The re-run is deliberately not re-stamped**, so it
-            // executes under `kWhenDurable` (`CommitAck`). Unreachable
-            // rather than merely unlikely: `blocking_writer_` is set only
-            // by `CheckWriteConflictBlocking` on a write path, and the one
-            // caller that stamps `kAtAppend` dispatches the literal
-            // `COMMIT`, which writes no row and takes no conflict. And the
-            // direction is the safe one - a re-run would wait for
-            // durability that a decide no longer waits for, never the
-            // reverse - which is why this is a comment and not a fix.
             const MayParkScope parking(*this, /*allowed=*/true);
             *out = DispatchAndStage(line, session);
         }
@@ -661,7 +653,7 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
 }
 
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
-                                             DispatchOutcome* out, CommitAck commit_ack) {
+                                             DispatchOutcome* out) {
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -671,23 +663,20 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // the synchronous half, which takes no suspension point, so it never
     // spans a park and never describes another statement.
     {
-        // **Both guards RAII since AO-S6d, and the argument this comment
-        // used to make about only one of them is why.** A leaked
-        // `may_park_` grants a parking allowance; a leaked `commit_ack_`
-        // silently drops a client's durability wait. The window below
-        // provably takes no suspension point - `DispatchAndStage` is not a
-        // coroutine, and nothing in this file pumps a scheduler or a ring -
-        // so a hand-placed pair would be correct today and silently wrong
-        // the day an early `co_return` or a `co_await` appears between
-        // them. AO-S6d added a third `may_park_` window, inside a loop and
-        // beside a `co_await`, which is that day arriving; the guard makes
-        // the property structural rather than reviewed.
+        // **RAII since AO-S6d.** A leaked `may_park_` grants a parking
+        // allowance. The window below provably takes no suspension point -
+        // `DispatchAndStage` is not a coroutine, and nothing in this file
+        // pumps a scheduler - so a hand-placed pair would be correct today
+        // and silently wrong the day an early `co_return` or a `co_await`
+        // appears between them. AO-S6d added a third `may_park_` window,
+        // inside a loop and beside a `co_await`, which is that day
+        // arriving; the guard makes the property structural rather than
+        // reviewed.
         const MayParkScope parking(*this, /*allowed=*/true);
-        const CommitAckScope stamped(*this, commit_ack);
         *out = DispatchAndStage(line, session);
     }
 
-    // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
+    // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
     // `AwaitWriteBlock` is the whole of it, reached through
     // `AwaitStatementWaits` over what the statement's own dispatch
@@ -1072,12 +1061,10 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // check probed the parent's owner instead of reading it), and the
     // multi-row VALUES path refused on a peer before touching the catalog
     // page. None of it is left: AT-S9 reduced the gate to
-    // `CheckWriteAdmission`'s one assertion question. **The store's `MayWrite` is
-    // no part of this any more**: it stood here as the backstop that
-    // refused an unfunded write retryably rather than letting it surface
-    // as a rule-5 stamp mismatch at the next mount, and it returns
-    // unconditional `true` since AT-S5 - there is no funding to check,
-    // and what keeps two cores off one page's bytes is the page latch.
+    // `CheckWriteAdmission`'s one assertion question. The store's write
+    // predicate, the backstop that refused an unfunded write retryably,
+    // answered yes from AT-S5 and went at AT-S18: there is no funding to
+    // check, and what keeps two cores off one page's bytes is the page latch.
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "CABIN")) {
@@ -1264,9 +1251,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // order that asked for this said "from `Writer::syncs()`"; the source
     // says otherwise, and the reading would have been ~0 on every cell it
     // was wanted for. `WalManager::Sync()` performs every sync a caller is
-    // parked on - a commit's, a prepare's `RequestDurable`, a client
-    // `SYNC`, the checkpoint gate - on the reactor itself, and only D3's
-    // loss-window tick is handed to the writer thread (`manager.cpp:249`).
+    // parked on - a commit's, a client `SYNC`, the checkpoint gate - on
+    // the reactor itself, and only D3's loss-window tick is handed to the
+    // writer thread (`manager.cpp`'s `DrainOnce`).
     // A peer core starts no writer thread of its own (`expeditor.cpp` does,
     // for core 0 alone), so its `writer_syncs()` is structurally zero.
     //
@@ -5690,20 +5677,6 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
     if (owned) EndDdlScopeById(id);
 }
 
-Status CommandDispatcher::AdoptSnapshot(Session& session, std::uint64_t snapshot_lsn) {
-    // **No caller since AT-S6.** It was called from `EnrolFor` alone,
-    // immediately after a `BEGIN` it checked succeeded - so the session held
-    // a transaction and this dispatcher a manager (`HandleBegin` refuses
-    // without one); `EnrolFor` went with the ship. The one guard is the
-    // null dereference's.
-    if (txn_ == nullptr || session.transaction() == nullptr) {
-        return Status::InvalidArgument(
-            "cross-owner transaction: no transaction is open on this session to adopt a "
-            "snapshot into");
-    }
-    return txn_->AdoptSnapshot(*session.transaction(), snapshot_lsn);
-}
-
 Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
     if (txn_ == nullptr || !session.in_explicit_txn()) return Status::OK();
     if (statement_boundary_taken_) return Status::OK();
@@ -7786,7 +7759,7 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     return CommitLocal(session);
 }
 
-DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commit_lsn) {
+DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     txn::Transaction* txn = session.transaction();
     const std::uint64_t id = txn->id();
 
@@ -7840,30 +7813,14 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
 
     // The durability wait the client is owed, for the same reason
     // LogInsert() takes it: kGroup staged the commit for the next drain,
-    // and the acknowledgement means "durable".
-    //
-    // `CommitAck::kAtAppend` - a cross-owner participant applying a decide -
-    // has had no caller since AT-S6 (`CommitAck`). What belongs here is why
-    // there is no second branch: this is a **D2 site by construction**, because `kStrict` synced inside `Commit` before it
-    // returned and `kRelaxed` stages nothing, so neither class reaches this
-    // statement at all and neither can be changed by the flag.
+    // and the acknowledgement means "durable". `kStrict` synced inside
+    // `Commit` before it returned and `kRelaxed` stages nothing.
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
-        commit_ack_ == CommitAck::kWhenDurable && !wal_->IsDurable(committed.value())) {
+        !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();
     }
-    // The record's LSN whatever the class, for a caller that needs the
-    // *decision* durable rather than the acknowledgement honest (R6-3) -
-    // the coordinator, which went with 2PC at AT-S6; no caller passes one.
-    if (commit_lsn != nullptr) *commit_lsn = committed.value();
     txn_->Release(*txn);
-    // **And on the outcome too** (XF4), for the cross-owner *participant*
-    // that reached this through `DispatchAsync("COMMIT")` with no
-    // out-parameter and timed its own record's durability; it went with
-    // 2PC at AT-S6 and nothing reads the field now. `DispatchOutcome`'s
-    // header says why this is not `pending_lsn`.
-    DispatchOutcome committed_out{"COMMIT trx_id=" + std::to_string(id), false};
-    committed_out.commit_lsn = committed.value();
-    return committed_out;
+    return {"COMMIT trx_id=" + std::to_string(id), false};
 }
 
 DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
@@ -8529,7 +8486,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // everything else.
         //
         // **The one failure that does not poison** (R6-5): a write refused
-        // by an in-doubt row before it wrote anything. The transaction is
+        // by an undecided holder's row before it wrote anything. The transaction is
         // exactly as it was - that is what the trail check above
         // established - and poisoning it would turn a wait into a forced
         // ROLLBACK, which is the stall D5's ceiling exists to bound rather

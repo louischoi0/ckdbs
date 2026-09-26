@@ -117,8 +117,6 @@
 // So a mint **lowers its core's slot before it reads the ceiling**
 // (`LowerSnapshotBound`), to a value at or below the snapshot it is about
 // to take; the manager's next publication recomputes the slot exactly.
-// **A snapshot that is *adopted* rather than minted takes the same route**
-// and must publish before its first read - the cross-owner case, AN-S3.
 //
 // ---- Concurrency ----------------------------------------------------------
 //

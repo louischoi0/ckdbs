@@ -464,17 +464,6 @@ public:
     // serves every core, so every core faults every page and the question
     // has no content.
 
-    // Whether this store's core may **write** `page_id` - i.e. take a frame
-    // it is allowed to dirty. **Yes, for every core and every page, since
-    // AT-S5** (`crosscore.md` CC11 as rewritten, `catalog.md` CT5): the
-    // system range's core-0-only arm was the last thing it enforced, and
-    // what serialises each shared page now is named where it is written
-    // (the definition lists them). It asked four questions until AW-S1b -
-    // the lease, a write grant, a stamp claim and the system range - and
-    // one until AT-S5. The seam stays on the interface; nothing on the
-    // write path asks it.
-    bool MayWrite(PageId page_id) const noexcept override;
-
     // Records that the record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn and, if this is the first record to dirty the
     // frame since it was last written back, adopts `lsn` as its recLSN.
@@ -580,9 +569,10 @@ public:
     // the declaration exists to prevent.
     //
     // **A residency-only knob again since AT-S5.** It was the write
-    // boundary too from AW-a, when `MayWrite` read it as "the system range"
-    // writable only from core 0; that arm is gone and nothing reads this as
-    // an authorization.
+    // boundary too from AW-a, when the store's write predicate read it as
+    // "the system range" writable only from core 0; that arm went at AT-S5
+    // and the predicate at AT-S18, and nothing reads this as an
+    // authorization.
     //
     // The only value any caller installs is still the volume's own layout
     // boundary (`server::kFirstUserPageId`). **AST04 must not use this**:

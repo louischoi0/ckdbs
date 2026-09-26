@@ -1,3 +1,4 @@
+#include <array>
 #include <memory>
 #include <utility>
 
@@ -5,12 +6,17 @@
 
 #include "kds/sched/clock.hpp"
 #include "kds/wal/analysis.hpp"
-#include "kds/wal/log_txn_prepare.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/payload.hpp"
 
 // R6-4: what a mount does with a transaction this core **prepared** and
 // never heard the outcome of (`instructions/v2.4.0/2pc.md` D4).
+//
+// **Nothing in this engine writes a `TXN_PREPARE`**: 2PC retired at AT-S6
+// and its emitter at AT-S18. A volume written before AT-S6 can still carry
+// one, so these cells append the record by hand - the bytes that engine
+// wrote - and pin that analysis still reads it as its own outcome.
 //
 // The property under test is one sentence: *a prepared transaction is
 // neither rolled back nor published on this core's own authority.* The way
@@ -21,7 +27,8 @@
 // **Only analysis is tested here.** The verdict itself is `RecoverCore`'s,
 // and with one stream for the instance (AM-S4(d)) it is a lookup of the
 // coordinator's transaction id in the table this same scan built:
-// `wal_recovery_test.cpp` owns those cells. The `CoordinatorStreamResolver`
+// `wal_recovery_test.cpp` owns those cells, and `mount_recovery_test.cpp`
+// the mount's. The `CoordinatorStreamResolver`
 // that opened a second core's log, and the fixtures that exercised it, went
 // with the topology that made a second log exist.
 
@@ -51,9 +58,16 @@ protected:
         wal_ = std::move(manager.value());
     }
 
+    // The record a pre-AT-S6 participant appended, as its emitter wrote
+    // it: the participant's own id on the envelope, the coordinator's in
+    // the payload.
     void LogPrepare(std::uint64_t participant_txn = kParticipantTxn) {
-        auto lsn = wal::LogTxnPrepare(wal_.get(), participant_txn, kCoordinatorCore,
-                                      kCoordinatorSession, kCoordinatorTxn);
+        std::array<std::byte, wal::kTxnPreparePayloadSize> buf{};
+        const wal::TxnPreparePayload fields{kCoordinatorSession, kCoordinatorTxn,
+                                            kCoordinatorCore};
+        ASSERT_TRUE(wal::EncodeTxnPrepare(buf, fields).ok());
+        auto lsn = wal_->Append(
+            wal::RecordSpec{wal::RecordType::kTxnPrepare, participant_txn, kInvalidPageId}, buf);
         ASSERT_TRUE(lsn.ok()) << lsn.status().message();
     }
 

@@ -75,13 +75,6 @@
 // holds dirty was either redone from at-or-after it or dirtied later - no
 // core's earliest needed record can precede it.
 //
-// **The warm-up is load-bearing for the prepare floor too, not only for
-// redo.** A peer holding a live `TXN_PREPARE` that has not checkpointed in
-// this run contributes nothing to the minimum, so without the warm-up slot
-// 0 could advance past its prepare record - `checkpointer.cpp`'s D4 hazard,
-// reached silently. Anyone optimising the warm-up away must answer that
-// case, not just the dirty-page one.
-//
 // The cost is the slowest core's first checkpoint - **and it is unbounded
 // where `checkpoint_interval_ns` is 0**, because then no core's cadence
 // tick is armed and the warm-up ends only at shutdown. A configuration

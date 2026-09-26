@@ -125,7 +125,10 @@ StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in);
 
 // ---- TXN_PREPARE ---------------------------------------------------------
 //
-// R6-3, D4's prepare phase. The **coordinator's** identity, and nothing
+// R6-3, D4's prepare phase, **written only by a pre-AT engine** (2PC
+// retired at AT-S6); decoded by analysis for the mount's resolution, and
+// encoded here by the cells that synthesise such a volume. The
+// **coordinator's** identity, and nothing
 // else: what this core prepared is described by every record it already
 // wrote under the envelope's own txn_id, and what it needs from this
 // record is the handle to ask *who decided what*.

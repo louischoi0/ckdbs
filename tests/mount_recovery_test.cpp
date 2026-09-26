@@ -68,13 +68,47 @@ protected:
     void WriteStream(std::uint64_t txn_id, wal::RecordType terminal) {
         auto s = wal::WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok()) << s.status().message();
+        AppendInsert(*s.value(), txn_id);
 
+        if (terminal != wal::RecordType::kPad) {
+            ASSERT_TRUE(s.value()->Append({terminal, txn_id, kInvalidPageId}).ok());
+        }
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    // What a pre-AT-S6 volume holds after a cross-owner transaction: the
+    // participant's insert and its TXN_PREPARE naming `coordinator_txn`,
+    // then - unless `decision` is kPad - the coordinator's own terminal
+    // record, in the same stream. The prepare's bytes are the retired
+    // emitter's: the participant's id on the envelope, the coordinator's in
+    // the payload.
+    void WritePreparedParticipant(std::uint64_t participant_txn, std::uint64_t coordinator_txn,
+                                  wal::RecordType decision) {
+        auto s = wal::WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        AppendInsert(*s.value(), participant_txn);
+
+        std::vector<std::byte> prepare(wal::kTxnPreparePayloadSize, std::byte{0});
+        const wal::TxnPreparePayload fields{/*coordinator_session_id=*/42, coordinator_txn,
+                                            /*coordinator_core=*/1};
+        ASSERT_TRUE(wal::EncodeTxnPrepare(prepare, fields).ok());
+        ASSERT_TRUE(s.value()
+                        ->Append({wal::RecordType::kTxnPrepare, participant_txn, kInvalidPageId},
+                                 prepare)
+                        .ok());
+        if (decision != wal::RecordType::kPad) {
+            ASSERT_TRUE(s.value()->Append({decision, coordinator_txn, kInvalidPageId}).ok());
+        }
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    void AppendInsert(wal::WalStream& s, std::uint64_t txn_id) {
         std::vector<std::byte> init(wal::kPageInitPayloadSize, std::byte{0});
         const wal::PageInitPayload fields{
             /*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap), {0, 0, 0},
             /*reserved2=*/0, /*owner_oid=*/0};
         ASSERT_TRUE(wal::EncodePageInit(init, fields).ok());
-        auto init_lsn = s.value()->Append({wal::RecordType::kPageInit, txn_id, kPage}, init);
+        auto init_lsn = s.Append({wal::RecordType::kPageInit, txn_id, kPage}, init);
         ASSERT_TRUE(init_lsn.ok()) << init_lsn.status().message();
 
         const auto payload = Bytes(24, 0xC1);
@@ -83,15 +117,10 @@ protected:
                                        static_cast<std::uint16_t>(payload.size())};
         auto n = wal::EncodeHeapWrite(buf, hw, payload);
         ASSERT_TRUE(n.ok()) << n.status().message();
-        auto insert_lsn = s.value()->Append({wal::RecordType::kHeapInsert, txn_id, kPage},
-                                            std::span(buf).first(n.value()));
+        auto insert_lsn = s.Append({wal::RecordType::kHeapInsert, txn_id, kPage},
+                                   std::span(buf).first(n.value()));
         ASSERT_TRUE(insert_lsn.ok()) << insert_lsn.status().message();
         insert_lsn_ = insert_lsn.value();
-
-        if (terminal != wal::RecordType::kPad) {
-            ASSERT_TRUE(s.value()->Append({terminal, txn_id, kInvalidPageId}).ok());
-        }
-        ASSERT_TRUE(s.value()->Sync().ok());
     }
 
     // A stream that exists and holds nothing - a database opened and never
@@ -202,6 +231,53 @@ TEST_F(MountRecoveryTest, ADurableAbortOwesUndoNothing) {
     EXPECT_EQ(r.value().aborted, 1u);
     EXPECT_EQ(r.value().losers, 0u);
     EXPECT_EQ(r.value().transactions_rolled_back, 0u);
+}
+
+// ---- A pre-AT volume's TXN_PREPARE (AT-S6's third done-condition) --------
+//
+// **What replaced the prepared state: nothing, because nothing prepares.**
+// 2PC retired at AT-S6 and the emitter, the runtime prepared flag and the
+// checkpoint's prepare floor at AT-S18, so this engine never writes the
+// record and never holds a prepared transaction live. A volume written
+// before AT-S6 can still carry one, and **this pass resolves it before the
+// mount serves anything** - a coordinator's commit makes the participant a
+// winner, no decision makes it a loser (`recovery.cpp` says why absence is
+// sound). After the pass no prepared transaction exists, which is why the
+// floor could go.
+
+TEST_F(MountRecoveryTest, APreAtPrepareWhoseCoordinatorCommittedMountsAsAWinner) {
+    WritePreparedParticipant(/*participant_txn=*/7, /*coordinator_txn=*/9,
+                             wal::RecordType::kTxnCommit);
+
+    auto r = Recover(WalAnchorFields{});
+    ASSERT_TRUE(r.ok()) << "a pre-AT prepare refused the mount: " << r.status().message();
+    EXPECT_EQ(r.value().prepared, 1u);
+    EXPECT_EQ(r.value().prepared_committed, 1u);
+    EXPECT_EQ(r.value().prepared_aborted, 0u);
+    // Two winners: the coordinator's own commit is a record of this log
+    // too, and the participant joins it. A loser verdict would leave one.
+    EXPECT_EQ(r.value().winners, 2u) << "the verdict, which the page below cannot tell apart";
+    EXPECT_EQ(r.value().losers, 0u);
+    EXPECT_EQ(r.value().transactions_rolled_back, 0u) << "a committed participant owes no rollback";
+
+    // Redo ran. The row is on the page in the rollback cell too: its
+    // insert predates RV10's undo record, so no compensation removes it
+    // (`ALoserRecoversInsteadOfRefusingTheMount`).
+    auto page = store_.GetUnpinned(kPage);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    EXPECT_EQ(heap::PageView(page.value()).slot_count(), 1u);
+}
+
+TEST_F(MountRecoveryTest, APreAtPrepareWithNoDecisionMountsAsARollback) {
+    WritePreparedParticipant(/*participant_txn=*/7, /*coordinator_txn=*/9, wal::RecordType::kPad);
+
+    auto r = Recover(WalAnchorFields{});
+    ASSERT_TRUE(r.ok()) << "a pre-AT prepare refused the mount: " << r.status().message();
+    EXPECT_EQ(r.value().prepared, 1u);
+    EXPECT_EQ(r.value().prepared_committed, 0u);
+    EXPECT_EQ(r.value().prepared_aborted, 1u);
+    EXPECT_EQ(r.value().losers, 1u);
+    EXPECT_EQ(r.value().transactions_rolled_back, 1u) << "an undecided participant is rolled back";
 }
 
 // ---- The caller's two obligations come back as numbers -------------------

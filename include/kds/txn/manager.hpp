@@ -161,57 +161,6 @@ public:
     // thing that advances either.
     std::uint64_t last_undo_ptr() const noexcept { return last_undo_ptr_; }
 
-    // ---- The cross-owner prepare this transaction is holding (R6-4) -----
-    //
-    // **Never set since AT-S6**, which retired 2PC and with it the
-    // participant executor that called `MarkPrepared`: every transaction is
-    // an ordinary local one, `prepare_lsn` is 0 and `prepared` false. What
-    // follows is what the pair was for.
-    //
-    // The LSN of the `TXN_PREPARE` record this core wrote for it, or 0 when
-    // it is an ordinary local transaction.
-    //
-    // **What it is for is the checkpoint, not the transaction.** A prepared
-    // participant is still live, so it appears in every `CHECKPOINT_BEGIN`'s
-    // active table as an ordinary `{id, undo head}` pair - and that table
-    // says nothing about preparedness. Once the transaction's pages have
-    // been written back, its recLSNs leave the dirty table and the
-    // checkpoint's redo start can advance **past the prepare record**; the
-    // next mount then scans from the checkpoint, never sees the prepare,
-    // reads the active-list entry as a loser, and rolls back a transaction
-    // the coordinator may have committed. That is D4's exact prohibition,
-    // reached with no message and no refusal anywhere.
-    //
-    // So the checkpointer floors its redo start at the oldest of these
-    // (`Checkpointer::Start`, `ActiveTransactions::OldestPreparedLsn`), and
-    // the record stays inside every future replay range until the
-    // transaction is decided. The price is the standard one: an in-doubt
-    // transaction pins the log, and D5's bounded wait is what bounds it.
-    wal::Lsn prepare_lsn() const noexcept { return prepare_lsn_; }
-
-    // **This transaction has replied prepared and is in doubt until its
-    // coordinator decides** (R6-5, D5). Set by the participant executor (no
-    // caller since AT-S6) at
-    // the moment the promise is made - after the PREPARE record is durable,
-    // never at the append - and never cleared: a prepared transaction ends
-    // only by the decided COMMIT or ROLLBACK, which ends it whole.
-    //
-    // Two readers, and they want different things. The checkpointer wants
-    // the LSN (`prepare_lsn` above), which is 0 on an unlogged instance
-    // because there is no record. A **writer of the same rows** wants the
-    // flag: `CheckWriteConflict` refuses it as it refuses any in-flight
-    // writer. **The dispatcher no longer asks whether that writer is in
-    // doubt** - since AO-S3 it waits for any undecided holder, so the
-    // question the flag used to answer for `WriteBlock` is gone and what
-    // remains is 2PC's own: a prepared transaction stays live until its
-    // coordinator decides. The flag rather than the LSN, so the unlogged
-    // fixture blocks the way a logged core does.
-    bool prepared() const noexcept { return prepared_; }
-    void MarkPrepared(wal::Lsn lsn) noexcept {
-        prepared_ = true;
-        prepare_lsn_ = lsn;
-    }
-
     // The borrow list AO-R6 puts here. Non-const because `LockTable`
     // records into it; a transaction owns exactly one and it is move-only,
     // so there is no way to hand a second owner the same borrows.
@@ -242,8 +191,6 @@ private:
     // never touches it.
     LockHoldings borrows_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
-    wal::Lsn prepare_lsn_ = 0;
-    bool prepared_ = false;
     bool active_ = false;
     bool wrote_catalog_ = false;
 };
@@ -435,31 +382,6 @@ public:
     // cannot drift.
     Status StartStatement(Transaction& txn);
 
-    // **A participant adopts its coordinator's snapshot** (AN-R5, AN-S3) -
-    // **no caller outside the tests since AT-S6**, which retired the
-    // participant: `txn`'s view takes `snapshot_lsn` in place of the
-    // ceiling its own `Begin` read, so a cross-owner REPEATABLE READ
-    // transaction read one instant on every core it touched. Called once,
-    // on the context's first statement, before that statement reads
-    // anything.
-    //
-    // **The one case AN-R1's lock-free argument does not cover** (the
-    // `instance_visibility.hpp` header): a minted snapshot is at or above
-    // every live one, an adopted snapshot is *below* this core's current
-    // ceiling. The mechanism here is that this core's slot is lowered to
-    // the snapshot **before** the view moves; the argument that this is
-    // enough - the coordinator's live transaction already holds that
-    // snapshot, and what happens when it does not - is
-    // `docs/spec/cross-owner-txn.md` §3's, which owns the rule.
-    //
-    // Refused, never clamped, when `snapshot_lsn` is above the ceiling this
-    // transaction's own mint read: the ceiling is monotone over time and
-    // the coordinator minted first, so that value can only be a wire or a
-    // wiring defect, and adopting it would cover commits whose entries are
-    // not in the window - AN-Q3's flip, by request. `InvalidArgument`: a
-    // value that cannot be right, and one a retry would repeat.
-    Status AdoptSnapshot(Transaction& txn, std::uint64_t snapshot_lsn);
-
     // Ends the transaction. The trail is dropped: a committed write needs
     // no compensation, and the undo records stay for readers whose
     // snapshots predate it.
@@ -641,12 +563,6 @@ public:
     // checkpoint's CHECKPOINT_BEGIN table (wal.md sections 11, 12).
     std::vector<wal::CheckpointActiveTxn> Snapshot() const override;
 
-    // wal::ActiveTransactions. The oldest live `TXN_PREPARE`'s LSN, which
-    // the checkpointer floors its redo start at (R6-4) - see
-    // `Transaction::prepare_lsn` for why that is a correctness rule and not
-    // a tuning one. 0 when nothing on this core is prepared.
-    wal::Lsn OldestPreparedLsn() const override;
-
     UndoLog& undo() noexcept { return undo_; }
 
     // Transactions still running. An ended-but-unreleased one is not
@@ -665,14 +581,6 @@ public:
     // core answers false. Sound for its one user only while CC3 refuses
     // cross-core writes.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
-
-    // Whether `trx_id` is a transaction **this core prepared and has not
-    // yet been told the outcome of** (R6-5, D5): running here, and marked
-    // by `Transaction::MarkPrepared`. **No caller since AO-S3**, which
-    // widened the writer's wait from "in doubt" to "in flight" and left
-    // this without the question it existed to answer. **Always false since
-    // AT-S6**: nothing marks a transaction prepared once 2PC is retired.
-    bool IsInDoubt(std::uint64_t trx_id) const noexcept;
 
     // The lowest id among transactions still running here, or `UINT64_MAX`
     // when none is. **Everything below it is settled**, which is the whole

@@ -262,14 +262,6 @@ Status WalManager::RequestSyncNow() {
 }
 
 void WalManager::ResolveBatches() noexcept {
-    // R6-3's parked non-committer: the request is cleared once the record
-    // it named is on the platter, so an idle drain goes back to doing
-    // nothing.
-    if (durability_requested_ && IsDurable(requested_durable_lsn_)) {
-        durability_requested_ = false;
-        requested_durable_lsn_ = 0;
-    }
-
     // Group commit: one sync past the last staged commit record resolves
     // every commit in the batch, which is the whole mechanism. **Which
     // thread performed that sync is not this bookkeeping's business** -
@@ -421,12 +413,11 @@ Status WalManager::DrainOnce() {
     if (!attached() && appended_lsn() == durable_lsn()) {
         return Status::OK();  // nothing to do; a tick must be free
     }
-    if (pending_group_commits_ > 0 ||
-        (durability_requested_ && !IsDurable(requested_durable_lsn_))) {
+    if (pending_group_commits_ > 0) {
         // Someone is parked on this. On an owning manager it is performed
         // here, on the reactor, for the reason Sync() gives: a waiter pays
-        // for a hand-off. The second disjunct is R6-3's prepare - a record
-        // nobody committed and somebody is waiting on (RequestDurable).
+        // for a hand-off. R6-3's second disjunct - a prepare nobody
+        // committed and somebody waited on - went with the prepare at AT-S18.
         //
         // **On an attached manager it is asked for and not waited on.**
         // The waiter is a parked task polling `IsDurable`, not this tick,

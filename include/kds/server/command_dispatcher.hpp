@@ -288,16 +288,6 @@ struct DispatchOutcome {
     // `DispatchAsync()` parks, which is what lets the next connection's
     // statement run and stage its own commit into the same sync.
     wal::Lsn pending_lsn = wal::kNoLsn;
-
-    // **The COMMIT record's own LSN, whatever the class and whatever the
-    // ack point** (XF4). Distinct from `pending_lsn`, which is *"the wait
-    // this statement still owes"* and is deliberately empty where the
-    // caller was answered at the append. It was carried for a cross-owner
-    // participant under `CommitAck::kAtAppend` and for
-    // `ShippedStatementExecutor::FinishDecision`, which timed the leg
-    // between its ack and its own durability; both went with 2PC at AT-S6.
-    // `kNoLsn` on every statement that is not a commit.
-    wal::Lsn commit_lsn = wal::kNoLsn;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -614,33 +604,9 @@ public:
     // (parser-v2.md's zero-copy tokens). The caller must keep the statement
     // text alive until the coroutine finishes, which is why `TcpServer`
     // copies each line out of its inbox before dispatching one.
-    // **When a D2 commit inside this dispatch owes its acknowledgement**
-    // (`docs/spec/cross-owner-txn.md` §2, ratified 2026-08-31 by
-    // `instructions/v2.7.1/ratification-xd1.md`, enacted by
-    // `instructions/v2.7.1/workorder-xd.md`).
     //
-    // `kWhenDurable` is every client-facing path and the default: a client
-    // told `COMMIT` under `group` has been told the record is on the
-    // platter, and the wait is what makes that true.
-    //
-    // `kAtAppend` **has no caller since AT-S6.** Its one caller was a
-    // cross-owner **participant** applying a decide it was told, whose
-    // acknowledgement went to a coordinator that had already made the
-    // decision durable in its own stream; the participant went with 2PC.
-    //
-    // **D1 and D3 are unreachable by this**, by construction rather than by
-    // a second branch: `kStrict` synced inside `WalManager::Commit` before
-    // it returned and `kRelaxed` waits for nothing, so neither ever stages
-    // a `pending_commit_lsn_` for this to suppress. The one site that reads
-    // it says so.
-    enum class CommitAck {
-        kWhenDurable,
-        kAtAppend,
-    };
-
     // A cache-dropping boundary, as `DispatchAndStage` states.
-    sched::Coro DispatchAsync(std::string_view line, Session* session, DispatchOutcome* out,
-                              CommitAck commit_ack = CommitAck::kWhenDurable);
+    sched::Coro DispatchAsync(std::string_view line, Session* session, DispatchOutcome* out);
 
     // The level a fresh session starts at (`isolation`). TcpServer stamps
     // it on each connection's session at accept.
@@ -730,11 +696,11 @@ private:
     // First-updater-wins, plus the one thing R6-5 adds to it: **who** the
     // conflicting writer is. `TransactionManager::CheckWriteConflict` is
     // unchanged and still decides the verdict; this notes, when the verdict
-    // is a conflict against a transaction this core prepared and is in
-    // doubt about, that the refusal is one a bounded wait could get past
-    // (D5's ratified "block, with a bounded ceiling ending in a named
-    // refusal"). One function for the two call sites, so the two write
-    // paths cannot come to disagree about which conflicts are waitable.
+    // is a conflict against a transaction on this core that has not decided,
+    // that the refusal is one a bounded wait could get past (AO-S3 widened
+    // R6-5's prepared holder to any undecided one). One function for the
+    // two call sites, so the two write paths cannot come to disagree about
+    // which conflicts are waitable.
     // Records `trx` as the holder this statement is waiting for, when
     // waiting is both **safe** and **capable of a different answer**. Both
     // tests are the point, and each closes a hole the S3 cutover would
@@ -1152,17 +1118,6 @@ private:
     Status EnsureStatementBoundary(Session& session);
     bool statement_boundary_taken_ = false;
 
-public:
-    // **AN-S3: a participant adopts the coordinator's snapshot** (AN-R5).
-    // The transaction open on `session` takes `snapshot_lsn` as its view in
-    // place of the one its own `BEGIN` minted, and this core's slot is
-    // lowered to cover it before the transaction reads anything
-    // (`TransactionManager::AdoptSnapshot`). **No caller since AT-S6**: the
-    // shipped-statement executor that opened such a context with `BEGIN`
-    // and called this went with the ship.
-    Status AdoptSnapshot(Session& session, std::uint64_t snapshot_lsn);
-
-private:
     // Registers everything `written` holds on the transaction's trail.
     // Called **even when the DDL failed**: rows written before the failure
     // are on the page either way, and a rollback that skipped them would
@@ -2016,11 +1971,11 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
 
-    // **The allowance, taken and given back structurally** (AO-S6d).
-    // `CommitAckScope`'s shape, and the argument for it is the one the
-    // `DispatchAsync` site already makes about a hand-placed pair: it is
-    // correct today and silently wrong the day a `co_await` or an early
-    // `co_return` appears between the two lines. There are three of them
+    // **The allowance, taken and given back structurally** (AO-S6d). The
+    // argument for it is the one the `DispatchAsync` site already makes
+    // about a hand-placed pair: it is correct today and silently wrong the
+    // day a `co_await` or an early `co_return` appears between the two
+    // lines. There are three of them
     // now - the statement's own dispatch, the write-block re-run and the
     // probe arm's resume - and the third sits inside a loop next to a
     // suspension point, which is exactly the shape the argument names.
@@ -2040,33 +1995,6 @@ private:
         CommandDispatcher& owner_;
         bool saved_;
     };
-    // Where the statement now in flight owes a D2 commit's acknowledgement
-    // (see `CommitAck`). A member for `may_park_`'s reason; unlike it, the
-    // stamp is scoped, because leaking this one drops a durability wait
-    // rather than granting a parking allowance.
-    CommitAck commit_ack_ = CommitAck::kWhenDurable;
-
-    // The stamp, and the whole of its lifetime. Restores rather than
-    // assigning the default, so a nested dispatch would compose - there is
-    // none today, and a guard that assumed so would be the kind of thing
-    // that stops being true quietly.
-    class CommitAckScope {
-    public:
-        CommitAckScope(CommandDispatcher& owner, CommitAck ack) noexcept
-            : owner_(owner), saved_(owner.commit_ack_) {
-            owner_.commit_ack_ = ack;
-        }
-        ~CommitAckScope() { owner_.commit_ack_ = saved_; }
-        CommitAckScope(const CommitAckScope&) = delete;
-        CommitAckScope& operator=(const CommitAckScope&) = delete;
-
-    private:
-        CommandDispatcher& owner_;
-        CommitAck saved_;
-    };
-    // Minted `Session::ship_id()` until AT-S6, which retired the id with
-    // the ship; nothing reads it.
-    std::uint64_t next_ship_session_id_ = 1;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;
@@ -2355,7 +2283,7 @@ private:
 
     // The local commit and rollback - the whole of both since AT-S6,
     // where they used to be one arm of a fork.
-    DispatchOutcome CommitLocal(Session& session, wal::Lsn* commit_lsn = nullptr);
+    DispatchOutcome CommitLocal(Session& session);
     DispatchOutcome RollbackLocal(Session& session);
 
 

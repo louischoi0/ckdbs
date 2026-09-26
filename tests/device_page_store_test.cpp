@@ -551,70 +551,11 @@ TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesThe
 // core 0 could write, so nothing of ownership is left in this class; the
 // cells below pin that it is gone.
 
-TEST(DevicePageStoreOwnershipTest, APeerWritesTheSystemRangeOnASharedStore) {
-    // **The gate that stopped being one, and nothing failed when it did.**
-    // `MayWrite` opened with `if (lease_ == nullptr) return true`, which
-    // meant "core 0, which may write anything" while only a peer's store
-    // carried a lease. AM-S2 step 3 made every core borrow core 0's store,
-    // and the lease was only ever installed on an *owned* one - so from then
-    // on every core reached this predicate with a null lease and was told
-    // yes to everything, the system range included. AW-S1b then removed the
-    // lease outright, which is why this is now the whole of the predicate.
-    // **And why the store's own gate is what carries it**: `MayWrite` had
-    // four callers outside this class, and AW-S1b deleted three of them
-    // with the machinery they belonged to (`core_runtime.cpp`'s was inside
-    // the write-grant admission, the dispatcher's two were the rights
-    // probe). `ResidentBytes`' `mark_dirty && !MayWrite` was the last
-    // consumer, and it went at AT-S5 (the next cell).
-    //
-    // **The name said `MayNot` until AT-S5b**, which AT-S5 left behind when
-    // it flipped the body: the cell reads the predicate, and the predicate
-    // now admits. Renamed rather than retired, because what it pins - that
-    // `MayWrite` answers the same for every core and every range - is a
-    // claim the engine still makes.
-    //
-    // **Mutation**: restore the system arm's `CurrentCore() == 0` and the
-    // peer arm below answers false.
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    // **The production arrangement**: the system boundary installed
-    // directly, which is what `Expeditor` does for core 0
-    // (`SetResidentLimit(kFirstUserPageId)`). Before AW-a two members held
-    // one boundary and only this one was set here, so `MayWrite`'s range
-    // was 0 and its system arm was unreachable even before the null-lease
-    // early return got to it. One boundary now, and since AT-S5 only its
-    // residency reading is left.
-    constexpr PageId kSystemLimit = 128;
-    store->SetResidentLimit(kSystemLimit);
-    const PageId system_page = 4;
-    const PageId user_page = 1000;
-
-    // Core 0 writes anything, which is what it did before this repair and
-    // after it.
-    EXPECT_TRUE(store->MayWrite(system_page));
-    EXPECT_TRUE(store->MayWrite(user_page));
-
-    {
-        // A peer on the same store writes the system range too (AT-S5):
-        // one writer per catalog page was the property until then, and the
-        // page latch is what serialises the bytes now.
-        const CurrentCoreGuard as_peer(3);
-        EXPECT_TRUE(store->MayWrite(system_page))
-            << "a peer was refused the system range after AT-S5 retired the arm";
-        EXPECT_TRUE(store->MayWrite(user_page));
-    }
-
-    // The identity is scoped, not sticky.
-    EXPECT_TRUE(store->MayWrite(system_page));
-}
-
 TEST(DevicePageStoreOwnershipTest, ASharedStoreAdmitsAPeersSystemWriteAsItsUserWrite) {
-    // Until AT-S5 this cell pinned `ResidentBytes`' `mark_dirty &&
-    // !MayWrite(...)` gate refusing a peer a system page, `InvalidArgument`
-    // and never retryable. The gate is gone with the arm it enforced: every
-    // core dirties every page, and what keeps a catalog page from tearing
+    // Until AT-S5 this cell pinned `ResidentBytes`' write gate refusing a
+    // peer a system page, `InvalidArgument` and never retryable. The gate
+    // is gone with the arm it enforced: every core dirties every page, and
+    // what keeps a catalog page from tearing
     // is the page latch across cores (`catalog.md` CT5). Same two page ids,
     // the opposite reading of the first.
     auto device = MakeDevice(64, 0);
@@ -652,8 +593,8 @@ TEST(DevicePageStoreOwnershipTest, ASharedStoreAdmitsAPeersSystemWriteAsItsUserW
 TEST(DevicePageStoreOwnershipTest, APeerPlacesAPageAtAChosenIdInTheSystemRange) {
     // The third and last of the store's core-0 predicates, retired at
     // AT-S5b: `CreateAtUnpinned` refused a chosen id below the resident
-    // limit to every core but 0. `MayWrite`'s arm and `ResidentBytes`' gate
-    // went at AT-S5, which is what made this one reachable - a peer's
+    // limit to every core but 0. The store's write predicate's arm and
+    // `ResidentBytes`' gate went at AT-S5, which is what made this one reachable - a peer's
     // `CREATE TABLE` runs where the session is, and its catalog chain grows
     // through `AllocateCatalogPage`'s probe of exactly this range.
     //
