@@ -387,6 +387,19 @@ there is no second core's registration to be answered by.
   pays nothing. Cost, not correctness, and unmeasured. Owner:
   `docs/spec/cabin.md`.
 
+- **An unexplained ~0.4 s stall inside foreground time, on the post-AT
+  engine only.** Measured by AT-S13 on `at-s13-prices` at
+  `v2.7.0-391-gf6f2073` (2026-09-26, `bench/v3.0.0/results-at-s13-prices-v2.7.0-391-gf6f2073.md`,
+  cell 2): in three of the measured commit's seven runs one
+  `update-disjoint` arm took ~0.37-0.41 s longer than its siblings (max
+  latency 371-413 ms), inside `sched_foreground_polled_us`, and in one run on
+  every core at once; `df8cc5f`'s three runs show none. An instance-wide
+  hold would produce it, and so would a WAL append held behind device
+  writeback under the log's latch. Three against zero is too few to call
+  it AT's and too many to call it noise; not investigated. Owner: whoever
+  measures next, starting from `wal.md` §3 and `page.md` §6's writeback
+  claim.
+
 - **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
   Verified at `4bf80fa`, 2026-09-23. AT-S8 put the controller behind a view
   latch that core 0's cadence holds across a tick, and a tick may create a
@@ -412,6 +425,29 @@ there is no second core's registration to be answered by.
   it. Owner: `docs/spec/page.md` §6.
 
 ## Locks
+
+- **A write that meets an undecided holder on another core is refused, not
+  made to wait.** Found by AT-S13's review, measured on `at-s13-prices` at
+  `896af54` (2026-09-26). `CommandDispatcher::NoteBlockingWriter` parks the
+  statement only when `txn_->IsInFlight(trx)`, and
+  `TransactionManager::IsInFlight` walks **this core's** `live_`. A holder on
+  another core reads as not in flight, so the writer is refused
+  `TXN_CONFLICT retryable=1` where AO-S3 promised a wait for the decide.
+  The holder's-core premise ("holders are this core's by CC3") stopped
+  holding at AT-S5, when writes began running where their session is;
+  AT-S5e closed the same shape for DDL and AT-S5f for a foreign-key parent,
+  and nothing closed it for a plain row. Evidence: AT-S13's cell 1 server
+  log (`bench/v3.0.0/archive/at-s13-prices-v2.7.0-391-gf6f2073/s8-kds.log`)
+  carries 7 refusals reading *"row id=1 is held by transaction N … in
+  14us"*, which only an undecided holder elsewhere produces, beside 3,422
+  first-updater-wins refusals (*"was written by"*) that the log cannot
+  split between a holder committed after the snapshot and one still in
+  flight on another core. **A refusal, retryable, never a wrong answer** -
+  and part of cell 1's 4-6% hot-row refusal price is this gap rather than
+  spreading itself. The fix is the instance's in-flight answer (the
+  visibility window's slots already publish each core's live transactions,
+  `txn.md` §4.1) in place of the core's; not built. Owner: `docs/spec/txn.md`
+  §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
   and AT's quiet-wrong defence is sequenced as though it covered every

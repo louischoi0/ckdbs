@@ -587,7 +587,10 @@ has no lock table the header is all there is and this section reads as it
 always did. **What follows the detection is no longer a refusal alone**
 (M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`, until AO-S8
 moves it here): a writer meeting an undecided holder waits for its decide
-(AO-S3), a transaction holding rows may wait because a wait-for graph in
+(AO-S3) - **when the holder is on the writer's own core**; one on another
+core reads as settled and the writer is refused retryable, because the
+in-flight test is the core's (`docs/inflight/known-gaps.md`, Locks) - a
+transaction holding rows may wait because a wait-for graph in
 the instance's lock table refuses the waiter whose registration would close
 a cycle, naming deadlock (AO-S4a on one core, AO-S4b across cores), and a wait
 that reaches the fault net is logged as the defect it is (AO-R8). For writer `T`

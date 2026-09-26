@@ -17,7 +17,7 @@ for path in sys.argv[1:]:
               + (f", pinned to {pool['pin_core']} ({pool['opened']} connections opened)"
                  if pool.get("pin_core") is not None else ""))
     print()
-    print("| arm | " + " | ".join(f"{l} p0 / p25 / p50 / p99 µs, qps, err" for l in labels) + " |")
+    print("| arm | " + " | ".join(f"{l}: p0 / p25 / p50 / p99, throughput, errors" for l in labels) + " |")
     print("|---|" + "---|" * len(labels))
     for arm in ARMS:
         cells = []
@@ -26,6 +26,6 @@ for path in sys.argv[1:]:
             if s is None:
                 cells.append("-")
                 continue
-            cells.append(f"{s['p0_us']} / {s['p25_us']} / {s['p50_us']} / {s['p99_us']}, "
-                         f"{s['qps']:.0f}, {s['errors']}")
+            cells.append(f"{s['p0_us']} µs / {s['p25_us']} µs / {s['p50_us']} µs / {s['p99_us']} µs, "
+                         f"{s['qps']:.0f} qps, {s['errors']} errors")
         print(f"| `{arm}` | " + " | ".join(cells) + " |")
