@@ -407,7 +407,8 @@ route recovers the whole loss C1 measures, and a peer-local `INSERT`
 under spreading loses 24–26% with the loss landing on the unchanged
 shipped `UPDATE` (C2 §5). On that evidence E7's `INSERT` arm reads
 **routed**; CLA's **local** proposal for `UPDATE` and `DELETE` stands
-(AR2-A §4) and waits on C3.
+(AR2-A §4) and waits on C3. **The operator marked E7 local for every
+verb on 2026-09-26** (`workorder-at-m3-uniformity.md` AT-0 item 2).
 
 **AR2-R13 — A move borrows the unit whose key-space assignment it
 changes.** `[ratified, AR2-A §2; the operator's text]`
@@ -623,7 +624,7 @@ added at AR2-A's request.
 | E4 | Slice key | **ratified (AR2-A)** | `(rel_oid, [lo, hi))`, page as hint only (R6) |
 | E5 | Affinity and wait collector | spec (R2 of `physical-optimizer.md`) — deferred to M3, amended (AR2-A) | per lock unit: grant counts, wait counts and wait time, decayed by that spec's R1; grants feed `sys.ranges.owner_core` per AR0-M5, waits are the optimizer's move signal (R8); not a `sys.access_stats` extension |
 | E6 | Observational bank rule under the LSN view | OPEN, AN's | keep the rule's content; AN-S2 re-expresses the test (R11) |
-| E7 | Execution default: local unless routed, or routed unless local | measurement-gated — C1/C2 measured, C3 pending (AR2-A) | CLA proposes **local** for `UPDATE`/`DELETE` (stands per AR2-A §4) and, on C2's evidence, **routed** for `INSERT`; C3 decides the rest (R12, §9) |
+| E7 | Execution default: local unless routed, or routed unless local | measurement-gated — C1/C2 measured, C3 pending (AR2-A) | CLA proposes **local** for `UPDATE`/`DELETE` (stands per AR2-A §4) and, on C2's evidence, **routed** for `INSERT`; C3 decides the rest (R12, §9). **Marked by the operator, 2026-09-26: local as default** - a statement runs on the core its session landed on, for every verb, `INSERT` included, read off `workorder-at-m3-uniformity.md` AT-S13's cell 1; the `INSERT` arm's routed proposal is not taken, spreading having retired at AT-S9 |
 | E8 | NS10's verb: "selects the core that owns" → "declares the affinity of" | user-visible | take it; `owner_core` fields keep their bytes (§5.6) |
 | E9 | `core_count` pinning once `owner_core` means affinity | format / mount rule | **WITHDRAWN by the operator, 2026-09-08.** It read "stays pinned: E7 answers the ownership ground and `wal.md:58`'s warm-up ground is untouched by anything here (§5.6)". Both grounds are gone (§5.6 as amended): the warm-up one died at AM-S4(d), which left slot 0 as the only anchor slot `SetWalAnchor` admits, and the ownership one dies at AT with `owner_core` (AR0-5 D17). **The item is not "unpin the count" either** — it is withdrawn because it argued from two dead premises, and what replaces it is AT's to decide with the rest of core specialization |
 | E10 | "A relation with a durable auxiliary does not split" (ratification AE, 2026-09-01) under AR2 | spec | re-ratify or retire in M3's work order after §5.7's gate-by-gate check |
