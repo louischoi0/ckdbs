@@ -143,7 +143,7 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneTableNameLeaveOneRow) {
     // **Mutations**: drop the name check under `CreateTable`'s hold (both
     // succeed every round, since the rendezvous orders both lookups first);
     // keep the check and drop the hold (the second succeeds whenever both
-    // checks run before either insert).
+    // checks run before either insert). Each killed 10 in 10.
     TwoCatalogs cats;
     Rendezvous gate(kThreads);
     const Schema schema = PkAnd({"v"});
@@ -173,7 +173,7 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneNamespaceLeaveOneRow) {
     // `CreateNamespace` checks inside the call, so the rendezvous is at its
     // door: both enter together and both scans run before either insert.
     //
-    // **Mutation**: drop the hold in `CreateNamespace`.
+    // **Mutation**: drop the hold in `CreateNamespace` - killed 10 in 10.
     TwoCatalogs cats;
     Rendezvous gate(kThreads);
     auto out = OnTwoCores([&](int core, int round) {
@@ -197,7 +197,7 @@ TEST(CatalogNameRaceTest, TwoCoresRenamingTwoTablesOntoOneNameLeaveOneRow) {
     // `ALTER TABLE ... RENAME TO`, two relations renamed onto one name from
     // two cores.
     //
-    // **Mutation**: drop the hold in `RenameTable`.
+    // **Mutation**: drop the hold in `RenameTable` - killed 10 in 10.
     TwoCatalogs cats;
     const Schema schema = PkAnd({"v"});
     std::array<std::vector<Oid>, kThreads> rels;
@@ -235,7 +235,7 @@ TEST(CatalogNameRaceTest, TwoCoresRenamingTwoColumnsOntoOneNameLeaveOneColumn) {
     // `HandleAlter` holds no relation lock over. Two columns of one name
     // are one relation whose second column resolution can never reach.
     //
-    // **Mutation**: drop the hold in `RenameColumn`.
+    // **Mutation**: drop the hold in `RenameColumn` - killed 10 in 10.
     TwoCatalogs cats;
     std::vector<Oid> rels;
     for (int round = 0; round < kRounds; ++round) {
@@ -269,7 +269,13 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneIndexNameOnTwoRelationsLeaveOneRow)
     // `CREATE INDEX`'s relation `X` covers only its own relation, so two
     // indexes of one name on two relations were two holds apart.
     //
-    // **Mutation**: drop the hold in `CreateIndex`.
+    // The oid is pre-issued, as `PrepareIndexDef` issues it on the DDL
+    // path: an index `CreateIndex` issues itself takes `sys.tables`' latch
+    // between the two checks, which staggers the threads and narrows the
+    // window this cell is about (measured: the mutant below survived 1 run
+    // in 10 that way).
+    //
+    // **Mutation**: drop the hold in `CreateIndex` - killed 20 in 20.
     TwoCatalogs cats;
     std::array<std::vector<Oid>, kThreads> rels;
     for (int core = 0; core < kThreads; ++core) {
@@ -290,6 +296,9 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneIndexNameOnTwoRelationsLeaveOneRow)
         def.key_width = 9;
         def.entry_width = 17;
         def.key_cols = {1};
+        auto issued = cats[core].AllocateRowId(kSysIndexesTable);
+        if (!issued.ok()) return issued.status();
+        def.index_oid = issued.value();
         gate.Wait();
         return cats[core].CreateIndex(def).status();
     });
@@ -312,7 +321,7 @@ TEST(CatalogNameRaceTest, TwoCoresPublishingOneAssertionNameOnTwoRelationsLeaveO
     // fences the target's writers, not a second assertion on another
     // relation, and assertion names are instance-wide.
     //
-    // **Mutation**: drop the hold in `InsertAssertion`.
+    // **Mutation**: drop the hold in `InsertAssertion` - killed 10 in 10.
     TwoCatalogs cats;
     std::array<std::vector<Oid>, kThreads> rels;
     for (int core = 0; core < kThreads; ++core) {

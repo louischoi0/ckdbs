@@ -543,25 +543,6 @@ public:
     StatusOr<Oid> FindTableOidByName(std::string_view name,
                                       const txn::ReadView* view = nullptr);
 
-    // Is `name` claimed by a **tombstone whose drop has not committed**?
-    //
-    // `DROP TABLE` frees a name the instant it runs, for everybody: the
-    // retype to `kTypeDroppedTable` is an in-place overwrite and a catalog
-    // row has no undo chain, so no reader can be isolated from it
-    // (ddl-transactional.md §5a). But the drop can still roll back,
-    // and the rollback rewrites that row back to a live `kTypeTable` -
-    // so a `CREATE TABLE` that took the name meanwhile leaves **two live
-    // rows claiming one name**, which is precisely the corruption §6's
-    // unfiltered duplicate check exists to prevent. That check cannot see
-    // it, because the retype hid the name from it.
-    //
-    // True when some `kTypeDroppedTable` row carries `name` and its stamp -
-    // the dropping transaction's, written by the retype - is one `view`
-    // cannot see. A view minted by the asking session answers "another
-    // transaction's pending drop" and not its own, so `DROP TABLE t;
-    // CREATE TABLE t` inside one transaction still works.
-    StatusOr<bool> NameHeldByPendingDrop(std::string_view name, const txn::ReadView& view);
-
     // Lists every table registered in sys.objects (type_oid == kTypeTable),
     // including the catalog's own bootstrap tables - not just user-created
     // ones. Added for the
@@ -1356,6 +1337,42 @@ private:
                             CatalogRowRef* where = nullptr);
     Status InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type_val,
                           std::uint32_t len);
+
+    // **Is `name` free for a new `live_type` row** (`kTypeTable` or
+    // `kTypeNamespace`) - the check every write that gives a `sys.objects`
+    // row a name makes, and makes **under the relation's root page held
+    // exclusive** (AT-S17, the AT-close order's Q2): the caller takes page
+    // 6 before calling and keeps it through its insert or rewrite, so the
+    // check and the write are one act across cores, as `RegisterPattern`'s
+    // are on page 9. Held, nothing else can write a `sys.objects` row
+    // between the two, because every such write enters the chain at page 6.
+    //
+    // Two questions, both answered here so no caller can ask one:
+    //
+    //   - **A live row of the name**, unfiltered (`ddl-transactional.md`'s
+    //     duplicate check): another transaction's uncommitted row counts,
+    //     whichever core wrote it, because a row is on the page from the
+    //     moment it is written. `AlreadyExists`.
+    //   - **A tombstone whose drop has not committed.** A drop frees a name
+    //     the instant it runs - the retype is an in-place overwrite and a
+    //     catalog row has no undo chain (§5a) - but its rollback rewrites
+    //     the row live again, so a name taken meanwhile leaves two live rows
+    //     claiming it. Asked under a latest-state check view with
+    //     `own_trx_id` as its own, so another transaction's pending drop
+    //     holds the name on every core and the caller's own does not
+    //     (`DROP TABLE t; CREATE TABLE t` in one transaction still works).
+    //     `TxnConflict`: the name is free once that transaction resolves,
+    //     which is what the retryable code means (status.hpp).
+    //
+    // With no transaction manager there is no pending drop to ask about.
+    Status CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id);
+
+    // `CheckNameFree` for an index's name, over `sys.indexes`: a live row
+    // of the name is `AlreadyExists`, and one delete-marked by a drop the
+    // instance's check view cannot see yet is `TxnConflict`. Held under
+    // page 8 by `CreateIndex`; asked unheld by `CheckIndexDef`, whose answer
+    // is the early one.
+    Status CheckIndexNameFree(std::string_view name, std::uint64_t own_trx_id);
 
     // The uncached sys.columns scan behind BuildSchemaFromColumns(). Split
     // out so InitTableAccess() can fill an entry without re-probing the

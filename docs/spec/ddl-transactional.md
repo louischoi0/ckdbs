@@ -98,11 +98,11 @@ Built, and what each gets:
 
 - **`CREATE TABLE`** — atomic, isolated, durable, rolled back by
   `ROLLBACK`. `BEGIN; CREATE TABLE t ...; INSERT INTO t ...; ROLLBACK;`
-  leaves no relation and no rows. **Not isolated against a concurrent
-  create of the same name on another core**: the duplicate check and the
-  insert are two latch holds, which was one act only while DDL ran on
-  core 0 (`docs/inflight/bugs/two-cores-can-create-one-name-twice.md`,
-  with `RENAME TO` and `CREATE NAMESPACE`).
+  leaves no relation and no rows. **One name, one row on every core since
+  AT-S17**: the duplicate check and the insert are one hold of
+  `sys.objects`' root page, and the check refuses a name another core's
+  open drop has freed (`catalog.md` CT7, which also covers `RENAME TO`,
+  `CREATE NAMESPACE`, `RENAME COLUMN`, index and assertion names).
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
   §5a is the whole argument. In autocommit it retires its dependent rows;
   inside a transaction it delete-marks them.

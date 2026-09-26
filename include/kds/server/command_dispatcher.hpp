@@ -1066,19 +1066,17 @@ private:
     DispatchOutcome HandleCreateTable(std::string_view args, Session& session);
     DispatchOutcome HandleCreateTableSql(std::string_view line, Session& session);
 
-    // The other half of the duplicate-name refusal, for **both** CREATE
-    // TABLE forms: the reply to send when `name` is claimed by a drop that
-    // has not committed, or nullopt when it is genuinely free.
-    //
-    // The unfiltered duplicate check answers "is a live relation using this
-    // name" and is deliberately unfiltered so a second create is refused
-    // (ddl-transactional.md §6). It cannot see the case this covers -
-    // `DROP TABLE` retypes the `sys.objects` row in place, so the name
-    // reads as free to everyone while the drop is still undoable, and a
-    // create that took it would leave two live rows claiming one name once
-    // the drop rolled back.
-    std::optional<DispatchOutcome> RefuseIfNameHeldByPendingDrop(std::string_view name,
-                                                                 Session& session);
+    // The duplicate-name check's answer, for **both** CREATE TABLE forms:
+    // `EXISTS oid=` when a relation of `name` is on the page, the qualifier
+    // refusal when it lives in another namespace than the statement says,
+    // nullopt when the name is free. Unfiltered, deliberately
+    // (`ddl-transactional.md`'s duplicate check), and **not the answer that
+    // binds**: `Catalog::CreateTable` asks again under `sys.objects`' held
+    // root page (AT-S17), and a create that loses the name there comes back
+    // through this so it answers as if it had arrived second.
+    std::optional<DispatchOutcome> ExistingRelationReply(std::string_view qualifier,
+                                                         std::string_view name,
+                                                         std::uint32_t byte_offset);
 
     // The DDL half of a transaction: the id a catalog row should carry,
     // and where to put the rows it wrote so `ROLLBACK` can retire them.

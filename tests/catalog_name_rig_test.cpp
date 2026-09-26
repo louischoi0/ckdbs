@@ -92,7 +92,8 @@ TEST(CatalogNameRigTest, ACreateOnOneCoreIsRefusedWhileAnotherCoresDropOfTheName
     // Red at `4d1e970`: core 1 answered `CREATED`, and the rollback below
     // left two relations named `t`.
     //
-    // **Mutation**: drop the pending-drop arm of `Catalog::CheckNameFree`.
+    // **Mutation**: drop the pending-drop arm of `Catalog::CheckNameFree` -
+    // this cell, the rename's and the namespace's each fail, 3 runs in 3.
     auto rig = OpenRig();
     ASSERT_NE(rig, nullptr);
     CommandDispatcher& d0 = rig->core(0).dispatcher();
@@ -157,6 +158,43 @@ TEST(CatalogNameRigTest, ANamespaceCreateOnOneCoreIsRefusedWhileAnotherCoresDrop
 
     ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
     EXPECT_EQ(NamespacesNamed(*rig, "ledger"), 1);
+}
+
+TEST(CatalogNameRigTest, AnIndexCreateOnOneCoreIsRefusedWhileAnotherCoresDropOfItIsOpen) {
+    // The index flavour, found by AT-S17's survey: a `DROP INDEX` inside a
+    // transaction delete-marks its row, and the unfiltered name check read
+    // the mark by *its own core's* in-flight test (DT9), so core 1 saw core
+    // 0's open drop as done and took the name on another relation. The
+    // rollback cleared the mark: two indexes of one name.
+    //
+    // **Mutation**: `CheckIndexNameFree` settling a mark through `txn_`'s
+    // `IsInFlight` rather than the check view - core 1 answers `CREATED`,
+    // 3 runs in 3.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE p (id int64, v int64)").response, "CREATED"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE q (id int64, v int64)").response, "CREATED"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE INDEX ix ON p (v)").response, "CREATED INDEX"));
+
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    const std::string dropped = d0.Dispatch("DROP INDEX ix", &ddl).response;
+    ASSERT_TRUE(StartsWith(dropped, "DROPPED INDEX")) << dropped;
+
+    const std::string second = d1.Dispatch("CREATE INDEX ix ON q (v)").response;
+    EXPECT_TRUE(StartsWith(second, "ERR")) << second;
+    EXPECT_NE(second.find("being dropped"), std::string::npos) << second;
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    auto indexes = rig->core(0).catalog().ListIndexes();
+    ASSERT_TRUE(indexes.ok()) << indexes.status().message();
+    int named = 0;
+    for (const catalog::SysIndexRow& row : indexes.value()) {
+        named += catalog::NameView(row.name) == "ix" ? 1 : 0;
+    }
+    EXPECT_EQ(named, 1);
 }
 
 }  // namespace

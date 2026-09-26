@@ -623,7 +623,12 @@ public:
     // never held across a park, so it holds nothing back: it does not
     // touch this core's slot, and the only thing a reclamation pass can do
     // to it is answer a committed writer "committed" a moment earlier.
-    ReadView MintCheckView(std::uint64_t writer_trx_id) noexcept;
+    //
+    // `const` because it is: the one thing a mint writes is this core's
+    // slot, and only `MintReadView` lowers it - which is what lets a
+    // catalog holding the manager `const` ask a latest-state question
+    // (`Catalog::CheckNameFree`, AT-S17).
+    ReadView MintCheckView(std::uint64_t writer_trx_id) const noexcept;
 
     // Frees a transaction the caller is done holding. Separate from
     // Commit/Abort on purpose: those end the transaction and leave the
@@ -751,11 +756,6 @@ private:
     void UnregisterReader(std::uint32_t slot) noexcept;
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);
-
-    // The one mint. `held` is whether the view will be registered or held
-    // on a transaction, which is what decides whether this core's slot is
-    // lowered ahead of it.
-    ReadView MintView(std::uint64_t own_trx_id, bool held) noexcept;
 
     // Republishes what this core contributes to the instance's three
     // bounds: its oldest live snapshot LSN (the horizon's term), the

@@ -113,16 +113,22 @@ Refusals, each with a byte: a missing or non-identifier name is
 `InvalidArgument`; `ADD`/`DROP`/`MODIFY`/`SET` after the table name is
 `NotImplemented` with AL1's reason, and any other verb there is
 `InvalidArgument` ("expected RENAME"); `RENAME` to an existing name is
-`AlreadyExists`; renaming a column to a sibling's name is
+`AlreadyExists`, and to a name an uncommitted `DROP TABLE` holds is
+`TxnConflict`; renaming a column to a sibling's name is
 `AlreadyExists`; a `sys.*` relation is refused outright (the catalog's
 names are load-bearing for bootstrap and are nobody's to change).
 
 ## 8. AL8 — What a rename must check, and what it must not
 
 - New table name: non-empty, fits `kCatalogNameMax`, no existing relation
-  carries it. The check and the write happen on the same core (DDL is
-  core 0's), so check-then-write is atomic by the event loop.
-- New column name: same checks against the relation's own columns.
+  carries it, and no drop that has not committed holds it - a rename lands
+  for good, so a drop's rollback would restore the name beside it; that
+  holds for the renaming session's own open drop too. The check and the
+  rewrite are one hold of `sys.objects`' root page, which is what makes
+  them one act across cores (`catalog.md` CT7, AT-S17); until AT-S5 the
+  event loop did, DDL being core 0's.
+- New column name: same checks against the relation's own columns, under
+  one hold of `sys.columns`' root page (CT7).
 - **The pk column may be renamed.** Identity is the Keystone word and
   position 0 (invariant 11), not the spelling; `CheckKeystoneColumn` is
   positional and does not re-run.

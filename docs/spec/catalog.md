@@ -6,7 +6,9 @@ order in `catalog.md` so nobody later removes the lock because the word
 'covers it'"*. This file owns one thing: how every core's view of the
 catalog stays current once no core is told anything. The catalog's rows,
 pages and DDL semantics stay where they are — `heap-and-tuple.md` §4,
-`ddl-transactional.md`, `alter.md`, `drop-table.md`.
+`ddl-transactional.md`, `alter.md`, `drop-table.md`. **A second thing
+since AT-S17**: how a name is taken so that two cores cannot both take it
+(CT7), which every one of those DDLs leans on and none of them owned.
 
 ## CT1 — The lock is the argument; the word is the fast path
 
@@ -196,3 +198,63 @@ concurrent mark counted, can overshoot by a mark the sweep both saw and was
 told about - the direction the gate's own rule already allows, costing one
 sweep that finds less than it expected - and cannot undershoot, which is
 the direction that would strand a mark until the next mount.
+
+## CT7 — A name is taken under its relation's root page
+
+**Every write that gives a catalog row a name checks the name and writes
+the row under one hold of that relation's root page, taken exclusive**
+(AT-S17; the AT-close order's Q2, marked 2026-09-26: the held page, no
+name lock unit). The check was a read and the write a second latch hold,
+which was one act while every DDL ran on core 0; AT-S5 made a DDL run where
+its session is, and two cores then both found a name free and both wrote
+it — two rows claiming one name, and resolution answering whichever it met
+first. Held, the relation's chain can be entered by one core only, because
+every write to it enters at the root; `RegisterPattern` (page 9) and
+`RecordAccess` (page 11) were the shape, for their admissions, at AT-S7.
+
+| write | relation (root page) | held across |
+|---|---|---|
+| `CreateTable` | `sys.objects` (6) | the name check through the `sys.objects` insert — taken before the oid and the relation's pages, so a refusal costs neither, and dropped before `sys.tables` and `sys.columns` are written |
+| `CreateNamespace` | `sys.objects` (6) | the name check and the insert |
+| `RenameTable` | `sys.objects` (6) | the name check and the in-place rewrite |
+| `RenameColumn` | `sys.columns` (5) | the sibling check and the rewrite — `ALTER` holds no relation lock |
+| `CreateIndex` | `sys.indexes` (8) | the name check and the insert; `CheckIndexDef` asks the same check unheld, earlier, so a taken name is refused before a build |
+| `InsertAssertion` | `sys.assertions` (14) | the name check and the insert; `CreateAssertion` asks unheld before its build, for the same reason |
+
+**What is checked, in one place per relation** (`Catalog::CheckNameFree`,
+`Catalog::CheckIndexNameFree`), so no caller can ask half of it:
+
+- **A live row of the name, unfiltered** — `ddl-transactional.md`'s
+  duplicate check: another transaction's uncommitted row counts, whichever
+  core wrote it, because a row is on the page from the moment it is
+  written. `AlreadyExists`; `CREATE TABLE` answers it `EXISTS oid=`, which
+  a create that lost the name to another core under the hold answers too.
+- **A drop that has not committed.** A table's or a namespace's drop
+  retypes its `sys.objects` row in place and an index's delete-marks its
+  `sys.indexes` row; either frees the name at once, and either's rollback
+  restores it, beside whatever took the name meanwhile. The question is
+  asked under an **instance** check view (`MintCheckView`, AN-S2) with the
+  asking transaction's id as its own, so a drop open on any core holds the
+  name and the asker's own does not. `TxnConflict`: the name is free once
+  that transaction resolves, which is what the retryable code means. Until
+  AT-S17 the table case was asked by the dispatcher only when the asking
+  core had DDL open, the namespace case not at all, `RENAME TO` not at all,
+  and the index case through `ScanAll`'s core-local in-flight test (DT9) —
+  each of which read another core's open drop as done. A rename is not
+  transactional, so its check view has no own id: even its own session's
+  open drop holds the name.
+
+**Assertion names have no pending drop to ask about**: `DROP ASSERTION`
+retires its row outside any transaction (`ddl-transactional.md` §5).
+
+**What nests under a hold** (`rules.md` §3): the relation's own chain
+growth, the allocator, pages nobody else can reach yet, the WAL, and for
+`sys.assertions` its own var-heap chain — never another catalog relation's
+page. `CreateTable` releases page 6 before it writes page 7.
+
+**What it does not cover.** The hold holds a name only until its latch
+drops; what keeps a later check from admitting a name an open transaction
+has taken or given up is the two questions above, not the latch.
+`DROP NAMESPACE`'s RESTRICT check against a relation being created in the
+namespace on another core is a different pair of holds, and open
+(`docs/inflight/bugs/drop-namespace-restrict-races-a-create-in-it.md`).
