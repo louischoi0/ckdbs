@@ -23,13 +23,13 @@
 // it and `docs/spec/page.md` section 6:
 //
 //   - shared acquire: admitted while `X` is clear (count + 1), and admitted
-//     under this core's own exclusive hold (count + 1). No path in the tree
-//     takes that second shape today - `LogFullPageImage`, the obvious
-//     candidate, re-fetches with `Get` and so is exclusive-under-exclusive
-//     - but a `GetForRead` under a live `Get` on one page is one edit away
-//     on any read-under-write path, and refusing it would be a hang, not a
-//     refusal: the store's self-deadlock check only fires on an exclusive
-//     request, so an X-then-S it did not admit would spin undiagnosed;
+//     under this core's own exclusive hold (count + 1). The catalog takes
+//     that second shape on purpose: a relation's root held exclusive across
+//     a read of its own chain and the write that follows (`RegisterPattern`
+//     since AT-S7, every name-taking write since AT-S17 - `catalog.md`
+//     CT7). Refusing it would be a hang, not a refusal: the store's
+//     self-deadlock check only fires on an exclusive request, so an X-then-S
+//     it did not admit would spin undiagnosed;
 //   - exclusive acquire: admitted on a free word, and **re-entrant for the
 //     owning core** (count + 1) - one task holds a page twice on every chain
 //     growth and split path, and the owning core stands for the running

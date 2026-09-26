@@ -1933,26 +1933,9 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
             return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
         }
 
-        auto existing = catalog_.FindTableOidByName(name);
-        if (existing.ok()) {
-        // **`EXISTS` is truthful only about the name, so a qualifier that
-        // disagrees gets a sentence rather than that token** (the AF-T3
-        // review's finding 5). Relation names are instance-global, so
-        // `ledger.plain` cannot be created while a `plain` sits in `public`
-        // - but replying `EXISTS` to it asserts that `ledger.plain` exists,
-        // which is the one thing that is false. The qualifier check answers
-        // with the namespace the name is actually held in.
-            if (Status s = catalog_.CheckRelationQualifier(qualifier, name, existing.value());
-                !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
-            }
-            return {"EXISTS oid=" + std::to_string(existing.value()), false};
-        }
-        if (existing.status().code() != StatusCode::kNotFound) {
-            return {ErrorReply(existing.status()), false, 0, existing.status()};
-        }
-        if (auto refused = RefuseIfNameHeldByPendingDrop(name, session); refused.has_value()) {
-            return *refused;
+        if (auto exists = ExistingRelationReply(qualifier, name, /*byte_offset=*/0);
+            exists.has_value()) {
+            return *exists;
         }
 
         catalog::Schema schema;
@@ -2519,7 +2502,10 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     const Status renamed =
         stmt.rename_column
             ? catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name)
-            : catalog_.RenameTable(oid.value(), stmt.new_name);
+            : catalog_.RenameTable(oid.value(), stmt.new_name,
+                                   session.in_explicit_txn() && session.transaction() != nullptr
+                                       ? session.transaction()->id()
+                                       : txn::kNoTrxId);
     if (!renamed.ok()) {
         return {ErrorReply(renamed), false, 0, renamed};
     }
@@ -3724,46 +3710,13 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
         }
 
-        // **Deliberately unfiltered, and this is a decision rather than an
-        // omission** (ddl-transactional.md §6's second open item: what two
-        // transactions creating the same name should do).
-        //
-        // Resolving this under the session's view would hide another
-        // transaction's uncommitted relation of the same name, both creates
-        // would succeed, and the catalog would end up with two rows claiming
-        // one name - the last-writer-wins outcome the spec declines. Seeing
-        // everything means the second create is **refused** while the first is
-        // still open, which is the conservative half of that decision and the
-        // one that cannot corrupt anything.
-        //
-        // The cost, stated because a user will hit it: the refusal can be
-        // spurious - if the first transaction rolls back, the name was never
-        // taken - and it names a relation the asker cannot see. Improving that
-        // message, or holding the second create instead of refusing it, is
-        // what the spec still has open.
-        auto existing = catalog_.FindTableOidByName(stmt.table_name);
-        if (existing.ok()) {
-        // **`EXISTS` is truthful only about the name, so a qualifier that
-        // disagrees gets a sentence rather than that token** (the AF-T3
-        // review's finding 5). Relation names are instance-global, so
-        // `ledger.plain` cannot be created while a `plain` sits in `public`
-        // - but replying `EXISTS` to it asserts that `ledger.plain` exists,
-        // which is the one thing that is false. The qualifier check answers
-        // with the namespace the name is actually held in.
-            if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name,
-                                                           existing.value(),
-                                                           stmt.table_byte_offset);
-                !s.ok()) {
-                return {ErrorReply(s), false, 0, s};
-            }
-            return {"EXISTS oid=" + std::to_string(existing.value()), false};
-        }
-        if (existing.status().code() != StatusCode::kNotFound) {
-            return {ErrorReply(existing.status()), false, 0, existing.status()};
-        }
-        if (auto refused = RefuseIfNameHeldByPendingDrop(stmt.table_name, session);
-            refused.has_value()) {
-            return *refused;
+        // The duplicate check, answered early so a taken name costs no type
+        // resolution and no foreign-key lookup; `ExistingRelationReply` says
+        // why it is unfiltered and why it is not the answer that binds.
+        if (auto exists = ExistingRelationReply(stmt.schema, stmt.table_name,
+                                                stmt.table_byte_offset);
+            exists.has_value()) {
+            return *exists;
         }
 
         // Resolve each column's parsed type_name against sys.types - the
@@ -4008,8 +3961,21 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // Registered before the status is read: a create that failed partway
         // still left rows on the page, and those are exactly the rows a
         // rollback has to retire.
+        const bool wrote_rows = !ddl.written.empty();
         NoteDdlRows(ddl);
         if (!oid.ok()) {
+            // The name taken by another core between the early check and
+            // the catalog's held one (AT-S17): the reply a second arrival
+            // gets, `EXISTS`, which is not an `ERR` and poisons nothing -
+            // and only while nothing was written, since a non-`ERR` reply
+            // lets autocommit commit whatever was.
+            if (oid.status().code() == StatusCode::kAlreadyExists && !wrote_rows) {
+                if (auto exists = ExistingRelationReply(stmt.schema, stmt.table_name,
+                                                        stmt.table_byte_offset);
+                    exists.has_value()) {
+                    return *exists;
+                }
+            }
             return {ErrorReply(oid.status()), false, 0, oid.status()};
         }
 
@@ -5743,28 +5709,42 @@ std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     return txn_->MintCheckView(txn::kNoTrxId);
 }
 
-std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
-    std::string_view name, Session& session) {
-    // `ViewFor` answers nullopt exactly when no transaction holds
-    // uncommitted DDL - and with none open there is no pending drop for a
-    // create to collide with, so the fast path pays nothing.
-    const std::optional<txn::ReadView> view = ViewFor(session);
-    if (!view.has_value()) return std::nullopt;
-
-    auto held = catalog_.NameHeldByPendingDrop(name, *view);
-    if (!held.ok()) return DispatchOutcome{ErrorReply(held.status()), false};
-    if (!held.value()) return std::nullopt;
-
-    // Refused rather than allowed, for §6's reason and with §6's cost: the
-    // refusal is spurious if that transaction commits its drop, and it
-    // names a relation the asker can no longer see. Allowing it is the
-    // outcome that corrupts - the drop's rollback restores a second live
-    // row with this name, and resolution then answers with whichever one
-    // sits earlier on the page.
-    return DispatchOutcome{"ERR relation '" + std::string(name) +
-                               "' is being dropped by a transaction that has not committed; "
-                               "the name is not free until that transaction resolves",
-                           false};
+std::optional<DispatchOutcome> CommandDispatcher::ExistingRelationReply(
+    std::string_view qualifier, std::string_view name, std::uint32_t byte_offset) {
+    // **Deliberately unfiltered, and this is a decision rather than an
+    // omission** (ddl-transactional.md §6's second open item: what two
+    // transactions creating the same name should do).
+    //
+    // Resolving this under the session's view would hide another
+    // transaction's uncommitted relation of the same name, both creates
+    // would succeed, and the catalog would end up with two rows claiming
+    // one name - the last-writer-wins outcome the spec declines. Seeing
+    // everything means the second create is **refused** while the first is
+    // still open, which is the conservative half of that decision and the
+    // one that cannot corrupt anything.
+    //
+    // The cost, stated because a user will hit it: the refusal can be
+    // spurious - if the first transaction rolls back, the name was never
+    // taken - and it names a relation the asker cannot see. Improving that
+    // message, or holding the second create instead of refusing it, is
+    // what the spec still has open.
+    auto existing = catalog_.FindTableOidByName(name);
+    if (existing.status().code() == StatusCode::kNotFound) return std::nullopt;
+    if (!existing.ok()) {
+        return DispatchOutcome{ErrorReply(existing.status()), false, 0, existing.status()};
+    }
+    // **`EXISTS` is truthful only about the name, so a qualifier that
+    // disagrees gets a sentence rather than that token** (the AF-T3
+    // review's finding 5). Relation names are instance-global, so
+    // `ledger.plain` cannot be created while a `plain` sits in `public` -
+    // but replying `EXISTS` to it asserts that `ledger.plain` exists, which
+    // is the one thing that is false. The qualifier check answers with the
+    // namespace the name is actually held in.
+    if (Status s = catalog_.CheckRelationQualifier(qualifier, name, existing.value(), byte_offset);
+        !s.ok()) {
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    }
+    return DispatchOutcome{"EXISTS oid=" + std::to_string(existing.value()), false};
 }
 
 void CommandDispatcher::EndDdlScope(const Session& session) {

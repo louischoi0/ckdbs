@@ -24,6 +24,8 @@
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 
+#include "armed_race.hpp"
+
 // **One assertion registry, reserved into from more than one core** (AT-S5d,
 // AT-R15, D1).
 //
@@ -56,46 +58,11 @@
 namespace kds::exec {
 namespace {
 
+using testing_race::ArmedStore;
+using testing_race::Rendezvous;
+
 inline constexpr catalog::Oid kOid = 4000;
 inline constexpr int kThreads = 2;
-
-// `btree_race_test.cpp`'s rendezvous, for its reason: two threads started
-// together drift apart after a few calls, and the window each cell is about
-// opens only when both are inside the same step at once.
-class Rendezvous {
-  public:
-    explicit Rendezvous(int parties) noexcept : parties_(parties) {}
-
-    void Wait() noexcept {
-        const int generation = generation_.load(std::memory_order_acquire);
-        if (waiting_.fetch_add(1, std::memory_order_acq_rel) + 1 == parties_) {
-            waiting_.store(0, std::memory_order_release);
-            generation_.fetch_add(1, std::memory_order_acq_rel);
-            return;
-        }
-        while (generation_.load(std::memory_order_acquire) == generation) {
-            std::this_thread::yield();
-        }
-    }
-
-  private:
-    const int parties_;
-    std::atomic<int> waiting_{0};
-    std::atomic<int> generation_{0};
-};
-
-std::unique_ptr<storage::DevicePageStore> ArmedStore(
-    std::unique_ptr<storage::MemoryPageDevice>& device) {
-    auto made = storage::MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
-    EXPECT_TRUE(made.ok()) << made.status().message();
-    device = std::move(made.value());
-    auto store = storage::DevicePageStore::Open(*device, /*first_new_page_id=*/16);
-    EXPECT_TRUE(store.ok()) << store.status().message();
-    // Armed: the page latch queues a second core only where the store is
-    // shared, and the chain cell below needs it to.
-    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/16);
-    return std::move(store.value());
-}
 
 // `GROUP BY (v) CHECK COUNT(*) <= bound` on `(id, v)`, built by hand with a
 // chain rooted in `store` - what `CreateAssertion`'s build hands `Adopt`,
@@ -406,7 +373,6 @@ TEST(AssertionRaceTest, EightCoresReservingIntoOneCabinLoseNoEntryAndCountEveryO
         << "an entry was appended to a page the chain no longer reaches";
     for (int t = 0; t < kWriters; ++t) EXPECT_EQ(SnapshotCount(enforcer, t), kPerThread);
 }
-
 
 // `GROUP BY (g) CHECK SUM(a) <= bound` on `(id, g, a)`.
 LiveAssertion SumCap(storage::PageStore& store, std::uint64_t id, std::int64_t bound) {

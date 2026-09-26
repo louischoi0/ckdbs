@@ -217,6 +217,8 @@ measured** unless a stage runs a measurement, in which case under
 
 ### AT-S17 — one name, one row - Q2: the held page
 
+*Built 2026-09-26 - AT-6's AT-S17 row.*
+
 - **What.** `CREATE TABLE` (`CommandDispatcher::HandleCreateTableSql` →
   `Catalog::FindTableOidByName` → `Catalog::CreateTable`), `ALTER TABLE ...
   RENAME TO` (`Catalog::RenameTable`), and `CREATE NAMESPACE`

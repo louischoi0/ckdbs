@@ -1385,6 +1385,13 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         return layout.status();
     }
 
+    // The name, asked early so a taken one - or one an open drop holds -
+    // costs no oid and no page. Not the answer that binds: that is asked
+    // again under page 6 at the insert below.
+    if (Status s = CheckNameFree(name, kTypeTable, trx_id, /*own_drop_frees=*/true); !s.ok()) {
+        return s;
+    }
+
     // The oid, issued before any page is formatted so every page of the
     // relation carries it from birth (page.md §2a). An oid burned by a
     // failure below is fine by this function's own argument: an oid counts
@@ -1496,9 +1503,23 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         if (written != nullptr) written->push_back(ref);
     };
     CatalogRowRef ref;
-    if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name, trx_id, &ref);
-        !s.ok()) {
-        return s;
+    {
+        // **One name, one row** (AT-S17, `catalog.md` CT7): `sys.objects`'
+        // root page held exclusive across the binding check and the insert,
+        // so no other core writes the name in between. Only page 6's own
+        // chain growth and the WAL nest under it. A create that loses here
+        // has burned an oid and its pages, which a failure anywhere below
+        // already does.
+        auto names = store_.Get(kCatalogPageObjects);
+        if (!names.ok()) return names.status();
+        if (Status s = CheckNameFree(name, kTypeTable, trx_id, /*own_drop_frees=*/true);
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name, trx_id, &ref);
+            !s.ok()) {
+            return s;
+        }
     }
     ref.oid = new_oid;
     note(ref);
@@ -1577,15 +1598,39 @@ StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::Read
     return Status::NotFound("no table with this name");
 }
 
-StatusOr<bool> Catalog::NameHeldByPendingDrop(std::string_view name,
-                                              const txn::ReadView& view) {
-    // Its own walk rather than `ScanAll`, for one reason: the answer is in
-    // the tuple *header*, and `ScanAll` hands out decoded rows only. A row
-    // this view cannot see is one whose last writer is still in flight -
-    // and on a `sys.objects` row that writer can only be a `DROP TABLE`'s
-    // retype, since nothing else overwrites one under a transaction.
-    bool held = false;
-    Status inner = Status::OK();
+namespace {
+
+// Refused rather than allowed: spurious if that transaction commits its
+// drop, and it names an object the asker may no longer see - but allowing
+// it is the outcome that corrupts, because the drop's rollback restores
+// the name beside whatever took it (`catalog.md` CT7). Retryable: the name
+// is free once that transaction resolves.
+Status PendingDropRefusal(std::string_view kind, std::string_view name) {
+    return Status::TxnConflict(std::string(kind) + " '" + std::string(name) +
+                               "' is being dropped by a transaction that has not committed; "
+                               "the name is not free until that transaction resolves");
+}
+
+}  // namespace
+
+Status Catalog::CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id,
+                              bool own_drop_frees) {
+    const bool table = live_type == kTypeTable;
+    const std::string_view kind = table ? "relation" : "namespace";
+    const Oid dropped_type = table ? kTypeDroppedTable : kTypeDroppedNamespace;
+    // One walk, reading each row of the name by its type and its header's
+    // stamp: a live row is taken, whoever wrote it and whether or not it
+    // has committed (the unfiltered duplicate check); a tombstone whose
+    // stamp the check view cannot see is a drop still undecided. **The view
+    // is the instance's** (AN-S2), so a drop open on another core is in
+    // flight here too - the dispatcher's test this replaced minted one only
+    // when the asking core had DDL open. It is minted with no own id, and
+    // the asker's own drop is classified by its stamp instead. Not through
+    // the name cache either: an absence is not cached, and a presence the
+    // cache still remembers is one the page has already let go of.
+    const txn::ReadView view =
+        txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
+    Status verdict = Status::OK();
     Status walked = heap::ChainVisit(
         store_, kCatalogPageObjects, storage::PageAccess::kRead,
         [&](PageId, heap::PageView& page,
@@ -1595,25 +1640,38 @@ StatusOr<bool> Catalog::NameHeldByPendingDrop(std::string_view name,
                 if (tuple.status().code() == StatusCode::kNotFound) {
                     return storage::VisitControl::kContinue;
                 }
-                inner = tuple.status();
                 return tuple.status();
             }
-            if (view.Visible(tuple.value().trx_id)) return storage::VisitControl::kContinue;
-            auto row = SysObjectRow::Decode(tuple.value().payload);
-            if (!row.ok()) {
-                inner = row.status();
-                return row.status();
+            const std::uint64_t stamp = tuple.value().trx_id;
+            if (tuple.value().deleted && view.Visible(stamp)) {
+                return storage::VisitControl::kContinue;
             }
-            if (row.value().type_oid == kTypeDroppedTable &&
-                NameView(row.value().name) == name) {
-                held = true;
+            auto row = SysObjectRow::Decode(tuple.value().payload);
+            if (!row.ok()) return row.status();
+            if (NameView(row.value().name) != name) return storage::VisitControl::kContinue;
+            if (row.value().type_oid == live_type) {
+                verdict = Status::AlreadyExists("a " + std::string(kind) + " named '" +
+                                                std::string(name) + "' already exists");
                 return storage::VisitControl::kStop;
             }
-            return storage::VisitControl::kContinue;
+            if (row.value().type_oid != dropped_type || view.Visible(stamp)) {
+                return storage::VisitControl::kContinue;
+            }
+            if (own_trx_id != txn::kNoTrxId && stamp == own_trx_id) {
+                if (own_drop_frees) return storage::VisitControl::kContinue;
+                // Not retryable: the only transaction it waits on is the
+                // asker's own.
+                verdict = Status::Unsupported(
+                    std::string(kind) + " '" + std::string(name) +
+                    "' is being dropped by this transaction, and a rename is not undone by its "
+                    "rollback - commit the drop first");
+                return storage::VisitControl::kStop;
+            }
+            verdict = PendingDropRefusal(kind, name);
+            return storage::VisitControl::kStop;
         });
-    if (!inner.ok()) return inner;
     if (!walked.ok()) return walked;
-    return held;
+    return verdict;
 }
 
 // ALTER TABLE's catalog half (docs/spec/alter.md, workplan ALT02). Both
@@ -1641,20 +1699,22 @@ Status CheckRenameName(std::string_view what, std::string_view name) {
 
 }  // namespace
 
-Status Catalog::RenameTable(Oid table_oid, std::string_view new_name) {
+Status Catalog::RenameTable(Oid table_oid, std::string_view new_name,
+                            std::uint64_t own_trx_id) {
     if (Status s = CheckRenameName("table", new_name); !s.ok()) return s;
 
-    // **Check-then-write, no longer atomic by construction.** It was while
-    // DDL ran on core 0 alone and the event loop serialised it; since AT-S5
-    // a DDL runs where its session is, and nothing a rename holds covers a
-    // second relation renamed to the same name from another core. Nothing
-    // here closes that race (`RegisterPattern`'s held root page is the
-    // shape that would).
-    if (auto taken = FindTableOidByName(new_name); taken.ok()) {
-        return Status::AlreadyExists("a relation named '" + std::string(new_name) +
-                                      "' already exists");
-    } else if (taken.status().code() != StatusCode::kNotFound) {
-        return taken.status();
+    // **Check and rewrite under one hold** (AT-S17), `CreateTable`'s: the
+    // row being renamed and the name being taken are both on `sys.objects`,
+    // so page 6 held across the pair is the whole of it. A rename is not
+    // transactional (it lands for good, logged under no transaction), so
+    // even this session's open drop of the name holds it - that drop's
+    // rollback would restore the name beside a rename nothing takes back -
+    // and `own_trx_id` only makes that refusal say so instead of retryable.
+    auto names = store_.Get(kCatalogPageObjects);
+    if (!names.ok()) return names.status();
+    if (Status s = CheckNameFree(new_name, kTypeTable, own_trx_id, /*own_drop_frees=*/false);
+        !s.ok()) {
+        return s;
     }
 
     auto acted = ForFirstRow<SysObjectRow>(
@@ -1689,8 +1749,12 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
                              std::string_view new_name) {
     if (Status s = CheckRenameName("column", new_name); !s.ok()) return s;
 
-    // Sibling collision and old-name existence in one read, before any
-    // write - the same core-local atomicity argument RenameTable makes.
+    // Sibling collision and old-name existence in one read, and the rewrite,
+    // **under one hold of `sys.columns`' root page** (AT-S17): `HandleAlter`
+    // holds no relation lock, so without it two cores renaming two columns
+    // of one relation onto one name both pass the read.
+    auto columns = store_.Get(kCatalogPageColumns);
+    if (!columns.ok()) return columns.status();
     auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
     bool found_old = false;
@@ -1834,33 +1898,30 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
                                       "' is a well-known catalog object");
     }
 
-    // Check-then-write - `RenameTable`'s shape, with its race across cores
-    // since AT-S5 (stated there) - and the same absence of a tombstone
-    // race: a dropped
-    // namespace's name is free the instant the retype lands, and unlike
-    // `DROP TABLE` there is no `NameHeldByPendingDrop` equivalent owed
-    // here yet, because nothing but this function creates one and no
-    // reader resolves a namespace under a view. **AF-T3 owes that check**
-    // the moment `CREATE NAMESPACE` becomes a transactional statement two
-    // sessions can run at once.
-    // **Unfiltered, and deliberately** - `CREATE TABLE`'s duplicate-name
-    // check for its reason (`ddl-transactional.md` §6): resolving this
-    // under a view would hide another transaction's uncommitted namespace
-    // of this name and let both creates succeed, leaving two rows claiming
-    // one name. Unfiltered, the second is refused while the first is open,
-    // which is the conservative half and the one that cannot corrupt
-    // anything. Every *resolution* route filters; this is a collision
-    // check, not a resolution.
-    if (auto taken = FindNamespaceOidByName(name); taken.ok()) {
-        return Status::AlreadyExists("a namespace named '" + std::string(name) +
-                                      "' already exists");
-    } else if (taken.status().code() != StatusCode::kNotFound) {
-        return taken.status();
-    }
-
+    // **Check and insert under one hold** (AT-S17), `CreateTable`'s: page 6
+    // held across both, so no other core writes the name in between. The
+    // check is **unfiltered** - `CREATE TABLE`'s duplicate-name check for
+    // its reason (`ddl-transactional.md` §6): resolving it under a view
+    // would hide another transaction's uncommitted namespace of this name
+    // and let both creates succeed. And it asks after a **pending drop**,
+    // which this function owed from the moment AF-T3 made `DROP NAMESPACE`
+    // a statement a transaction could hold open: the retype frees the name
+    // at once and its rollback restores it. Every *resolution* route
+    // filters; this is a collision check, not a resolution.
+    //
+    // The oid is issued first, so the hold nests nothing but page 6's own
+    // chain growth - `GenerateUserOid`'s first use seeds from `sys.columns`
+    // too. A refusal burns it, which `CreateTable`'s argument permits.
     auto generated_oid = GenerateUserOid();
     if (!generated_oid.ok()) return generated_oid.status();
     const Oid new_oid = generated_oid.value();
+
+    auto names = store_.Get(kCatalogPageObjects);
+    if (!names.ok()) return names.status();
+    if (Status s = CheckNameFree(name, kTypeNamespace, trx_id, /*own_drop_frees=*/true);
+        !s.ok()) {
+        return s;
+    }
 
     CatalogRowRef where;
     // `namespace_oid = new_oid`: a namespace's own namespace is itself,
@@ -3145,12 +3206,21 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
                                        "' was declared NO CABIN");
     }
 
+    // Issued before the hold below, so the hold nests no other catalog
+    // page; a refused create burns it, which the row-id sequence permits.
+    auto cabin_id = AllocateRowId(kSysCabinsTable);
+    if (!cabin_id.ok()) return cabin_id.status();
+
+    // **One cabin per column** (AT-S17, `catalog.md` CT7's shape for a key
+    // that is not a name): `sys.cabins`' root page held exclusive across
+    // the check and the insert, so an operator's `CREATE CABIN` and the
+    // controller's, or two operators', on two cores cannot both find the
+    // column bare. Two rows for one column leave one set nothing serves.
+    auto held = store_.Get(kCatalogPageCabins);
+    if (!held.ok()) return held.status();
     if (FindCabinOnColumn(rel_oid, col_pos).ok()) {
         return Status::AlreadyExists("catalog: this column already has a cabin");
     }
-
-    auto cabin_id = AllocateRowId(kSysCabinsTable);
-    if (!cabin_id.ok()) return cabin_id.status();
 
     SysCabinRow row{};
     row.cabin_id = cabin_id.value();
@@ -3370,7 +3440,7 @@ StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
     return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats, nullptr, txn_);
 }
 
-Status Catalog::CheckIndexDef(const IndexDef& def) {
+Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
     if (def.key_cols.empty()) {
         return Status::InvalidArgument("catalog: an index needs at least one key column");
     }
@@ -3467,9 +3537,9 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
         }
     }
 
-    if (FindIndexByName(def.name).ok()) {
-        return Status::AlreadyExists("catalog: an index named '" + def.name + "' already exists");
-    }
+    // The early answer, before anything is built; `CreateIndex` asks again
+    // under the held page, which is the answer that binds.
+    if (Status s = CheckIndexNameFree(def.name, own_trx_id); !s.ok()) return s;
 
     // The anchor's entry table, asked **here** so that a refusal costs no
     // pages: both build paths reach the seed only after the whole tree is
@@ -3491,7 +3561,7 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
     // Re-checked here even when the caller already asked: this is the door
     // every non-DDL caller comes through, and a check that only runs when
     // someone remembers to ask is not a check.
-    if (Status s = CheckIndexDef(def); !s.ok()) return s;
+    if (Status s = CheckIndexDef(def, trx_id); !s.ok()) return s;
 
     // A caller that formatted pages already pre-issued the oid to stamp
     // them (IndexDef::index_oid); allocate only when it did not.
@@ -3518,8 +3588,21 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
         row.covered_cols[i] = def.covered_cols[i];
     }
 
-    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageIndexes, row, trx_id, where); !s.ok()) {
-        return s;
+    // **One name, one row** (AT-S17): `sys.indexes`' root page held
+    // exclusive across the name check and the insert. Index names are
+    // instance-wide and the relation `X` this DDL holds covers its own
+    // relation only, so a second core creating an index of this name on
+    // another relation passed `CheckIndexDef`'s check alongside this one.
+    // Nothing but the relation's own chain growth nests under it.
+    {
+        auto names = store_.Get(kCatalogPageIndexes);
+        if (!names.ok()) return names.status();
+        if (Status s = CheckIndexNameFree(def.name, trx_id); !s.ok()) return s;
+        if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageIndexes, row, trx_id,
+                                 where);
+            !s.ok()) {
+            return s;
+        }
     }
     if (where != nullptr) {
         where->oid = row.index_oid;
@@ -3628,9 +3711,8 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
     if (!acted.value()) {
         // Understood and declined, not "simply wrong": the index is there
         // and named correctly, and a transaction nobody here can wait for
-        // is in the middle of removing it. The wording matches
-        // `RefuseIfNameHeldByPendingDrop`'s for the table case, so the two
-        // read as one rule; the caller appends the byte position.
+        // is in the middle of removing it. The caller appends the byte
+        // position.
         if (already_marked) {
             return Status::Unsupported(
                 "the index is being dropped by a transaction that has not committed; it is "
@@ -3720,6 +3802,50 @@ StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name) {
         if (NameView(row.name) == name) return row;
     }
     return Status::NotFound("no index by that name");
+}
+
+Status Catalog::CheckIndexNameFree(std::string_view name, std::uint64_t own_trx_id) {
+    // Its own walk, for `CheckNameFree`'s reason one relation over: the
+    // answer is in the tuple header. An index's drop **delete-marks** its
+    // row rather than retyping it, and `ListIndexes`' unfiltered read
+    // settles a mark by *this core's* in-flight test (`ScanAll`, DT9) - so
+    // another core's open `DROP INDEX` read as done here, and its rollback
+    // restored the name beside the one this create took. The check view is
+    // the instance's, minted with no own id: the asker's own drop is
+    // classified by its stamp.
+    const txn::ReadView view =
+        txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
+    Status verdict = Status::OK();
+    Status walked = heap::ChainVisit(
+        store_, kCatalogPageIndexes, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                return tuple.status();
+            }
+            // A mark whose deleter this view sees is gone; any other row of
+            // the name - live, or marked by a drop still undecided - holds it.
+            const std::uint64_t stamp = tuple.value().trx_id;
+            if (tuple.value().deleted && view.Visible(stamp)) {
+                return storage::VisitControl::kContinue;
+            }
+            auto row = SysIndexRow::Decode(tuple.value().payload);
+            if (!row.ok()) return row.status();
+            if (NameView(row.value().name) != name) return storage::VisitControl::kContinue;
+            const bool pending_elsewhere =
+                tuple.value().deleted && !(own_trx_id != txn::kNoTrxId && stamp == own_trx_id);
+            verdict = pending_elsewhere
+                          ? PendingDropRefusal("index", name)
+                          : Status::AlreadyExists("catalog: an index named '" +
+                                                  std::string(name) + "' already exists");
+            return storage::VisitControl::kStop;
+        });
+    if (!walked.ok()) return walked;
+    return verdict;
 }
 
 StatusOr<SysIndexRow> Catalog::FindIndexOnColumn(Oid table_oid, std::uint32_t col_pos) {

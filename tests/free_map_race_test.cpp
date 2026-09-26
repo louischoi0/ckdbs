@@ -12,6 +12,8 @@
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
+#include "armed_race.hpp"
+
 // **The free map with more than one thread in it** (AM-S3).
 //
 // `alloc_race_test.cpp` is this file's sibling and the precedent: it asked
@@ -57,18 +59,7 @@ PageId IdIn(int region, int n) {
     return FreeMapRegionBase(static_cast<std::uint32_t>(region)) + 8 + static_cast<PageId>(n);
 }
 
-std::unique_ptr<DevicePageStore> ArmedStore(std::unique_ptr<MemoryPageDevice>& device) {
-    auto made = MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
-    EXPECT_TRUE(made.ok()) << made.status().message();
-    device = std::move(made.value());
-    auto store = DevicePageStore::Open(*device, /*first_new_page_id=*/16);
-    EXPECT_TRUE(store.ok()) << store.status().message();
-    // Armed, for `alloc_race_test.cpp`'s reason: the question exists only
-    // where the store is shared, and a store is only shared where it is
-    // armed.
-    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/16);
-    return std::move(store.value());
-}
+using testing_race::ArmedStore;
 
 // **Creation racing reads, which is the defect itself.** Four writers each
 // own sixteen regions and place pages in them, so a `map_regions_`

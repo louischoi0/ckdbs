@@ -212,20 +212,32 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
         }
     }
 
+    auto access = OpenAssertions(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
     // §3.1's duplicate-name check. Made here rather than at the parser
     // because it is the catalog's question and this is the door every caller
     // comes through. `CreateAssertion` also checks it *before* the build,
     // which buys failing before the scan rather than after; this one is the
-    // guard that cannot be reached past.
+    // guard that cannot be reached past - **because the relation's root page
+    // is held exclusive from it through the insert** (AT-S17), so no other
+    // core publishes the name in between. Assertion names are instance-wide
+    // and the build's relation `X` fences its own relation only.
+    //
+    // What nests under the hold is this relation's own var-heap chain: the
+    // check resolves spilled names after its walk and the encode below
+    // appends spills before the insert. Nothing takes the root under one of
+    // those pages - `DeleteAssertion` resolves before it walks for the
+    // same reason (`parser-v2.md` I15's R1) - so the order is root, then
+    // var-heap, and never the other way.
+    auto names = store.Get(rel.desc_page_id);
+    if (!names.ok()) return names.status();
     auto existing = FindAssertionByName(catalog, store, name);
     if (!existing.ok()) return existing.status();
     if (existing.value().has_value()) {
         return Status::AlreadyExists("assertion \"" + std::string(name) + "\" already exists");
     }
-
-    auto access = OpenAssertions(catalog);
-    if (!access.ok()) return access.status();
-    const catalog::TableAccess& rel = *access.value();
 
     // The pk is not among these: it is carried by the Keystone word and never
     // also as a body column (invariant 11), so EncodeRow takes the columns

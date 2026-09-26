@@ -78,21 +78,8 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
                                    "'; expected 'read committed' or 'repeatable read'");
 }
 
-ReadView TransactionManager::MintView(std::uint64_t own_trx_id, bool held) noexcept {
+ReadView TransactionManager::MintCheckView(std::uint64_t own_trx_id) const noexcept {
     ReadView view;
-    // **A held snapshot is announced before it is taken** (AN-8 §8.5 C1,
-    // `instance_visibility.hpp`'s "reclamation" note). Between this mint
-    // and the publication that follows it - after a WAL append in `Begin`,
-    // inside `RegisterReader` for an autocommit statement - a pass on
-    // another core would otherwise see no reader on this core, drop an
-    // entry above the ceiling this is about to read, and raise the floor
-    // past it; the view would then answer that transaction committed at an
-    // LSN above its own snapshot. Lowering the slot to a value at or below
-    // the ceiling first closes that: a pass that misses this store is
-    // ordered before it, and the ceiling read below is ordered after, so
-    // whatever that pass dropped the ceiling already covers. The next
-    // `PublishCoreBounds` recomputes the slot exactly.
-    if (held) visibility_->LowerSnapshotBound(core_, visibility_->SnapshotCeiling());
     // The ceiling every commit at or below which is already in the window
     // (AN-R9): one load, and the whole of what a snapshot is.
     view.snapshot_lsn = visibility_->SnapshotCeiling();
@@ -126,11 +113,20 @@ ReadView TransactionManager::MintView(std::uint64_t own_trx_id, bool held) noexc
 }
 
 ReadView TransactionManager::MintReadView(std::uint64_t own_trx_id) noexcept {
-    return MintView(own_trx_id, /*held=*/true);
-}
-
-ReadView TransactionManager::MintCheckView(std::uint64_t writer_trx_id) noexcept {
-    return MintView(writer_trx_id, /*held=*/false);
+    // **A held snapshot is announced before it is taken** (AN-8 §8.5 C1,
+    // `instance_visibility.hpp`'s "reclamation" note). Between this mint
+    // and the publication that follows it - after a WAL append in `Begin`,
+    // inside `RegisterReader` for an autocommit statement - a pass on
+    // another core would otherwise see no reader on this core, drop an
+    // entry above the ceiling this is about to read, and raise the floor
+    // past it; the view would then answer that transaction committed at an
+    // LSN above its own snapshot. Lowering the slot to a value at or below
+    // the ceiling first closes that: a pass that misses this store is
+    // ordered before it, and the ceiling read below is ordered after, so
+    // whatever that pass dropped the ceiling already covers. The next
+    // `PublishCoreBounds` recomputes the slot exactly.
+    visibility_->LowerSnapshotBound(core_, visibility_->SnapshotCeiling());
+    return MintCheckView(own_trx_id);
 }
 
 StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
@@ -774,7 +770,7 @@ bool TransactionManager::ResolvedForEveryReader(std::uint64_t trx_id) const {
     // commit: one published (the horizon), one a commit in flight may cap
     // a future mint to (the pending-commit markers), or one minted and not
     // yet published - which lowered its core's slot *before* it read the
-    // ceiling (`MintView`). Read after the lookup, the bound is ordered
+    // ceiling (`MintReadView`). Read after the lookup, the bound is ordered
     // after the commit's publication; a mint that this read does not see
     // stored its slot after this read, and so read the ceiling after the
     // publication too, and covers the commit. Read *before* the lookup the
