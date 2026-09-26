@@ -1,18 +1,20 @@
-# `docs/blueprint/`
+# `docs/conceptnotes/`
 
-**Concept notes.** Opened 2026-09-08 on the operator's word, with CN-1.
+**Concept notes.** Opened 2026-09-08 on the operator's word, with CN-1, as
+`docs/blueprint/`; renamed `docs/conceptnotes/` on 2026-09-26 on the
+operator's word.
 
-A blueprint is what a plan is not and what a spec is not: an idea recorded
+A concept note is what a plan is not and what a spec is not: an idea recorded
 with its reasoning, its boundaries and the decisions it leaves open,
 before anything is built and possibly before anything ever is. It opens no
 stage, gates nothing, and licenses no code.
 
-One rule, and it is the reason this bucket is separate from the three
-`CLAUDE.md` already names:
+One rule, and it is the reason this bucket is separate from the other three
+buckets under `docs/`:
 
 - **`docs/spec/`** states what is built. **`docs/rules/`** states what
   holds everywhere. **`docs/inflight/`** states what is missing from what
-  is built. **`docs/blueprint/`** states what has not been decided to
+  is built. **`docs/conceptnotes/`** states what has not been decided to
   build at all. A reader who cannot tell which of the four they are in
   will read a concept as a contract.
 
@@ -32,7 +34,7 @@ authority and the note is history.
 
 | note | subject | status |
 |---|---|---|
-| `cn-1-agent-operable-optimization-surface.md` | An external agent as an ordinary SQL client, and the levers a database would have to expose for a machine operator to drive it safely | CONCEPT; five operator decisions open, and a measurement gate before any of it is built |
+| `cn1-agent-operable-optimization-surface.md` | An external agent as an ordinary SQL client, and the levers a database would have to expose for a machine operator to drive it safely | CONCEPT; five operator decisions open, and a measurement gate before any of it is built |
 | `cn2-loose-foreign-keys-and-tuple-completeness.md` | Loose foreign keys, and a completeness verdict over a tuple's references | CONCEPT; four operator answers recorded (§4), the rest open in §8 |
 | `cn3-supersede-and-chain-id-succession.md` | Retiring a tuple and chaining a successor to it, over issue-once ids | CONCEPT; operator decision record in §11, seven decisions open in §10; ordered after CN-2 |
 | `cn4-transition-constraints.md` | A column's allowed state changes — initial states, `old => new` edges, deletable states — as a row-local constraint | CONCEPT; eleven operator decisions open, T9 shared with CN-3 |

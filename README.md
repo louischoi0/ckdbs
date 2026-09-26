@@ -22,13 +22,13 @@ What the engine guarantees today, and what the application may forget:
 | **Advisory learning that cannot change an answer.** Every structure the engine learns — trails, hints, engine-created Cabins — may cost performance if wrong, never a result | verifies the database's own optimizations | built, with its own test family |
 | **Chosen durability.** `strict` / `group` / `relaxed` per transaction, with the loss window stated | wonders what an acknowledgment meant | built |
 | **A repeatable plan.** A `pattern_id` names one plan forever | tunes around a planner that changes its mind | built |
-| **Transition constraints.** A column's legal state changes — initial states, `old => new` edges, deletable states — declared with the column | checks `if (old == X && new == Y)` in every writer | concept, [CN-4](docs/blueprint/cn4-transition-constraints.md) |
-| **At-most-once execution.** A client token claimed on arrival and carried by the commit record, answering both "did it commit?" and "do not run this twice" | builds idempotency tables and outcome lookups | concept, [CN-5](docs/blueprint/cn5-commit-outcome-and-idempotency.md) |
-| **A cache that cannot disagree with the data.** A typed, unlogged, TTL-bearing relation under the ordinary MVCC, read by `GET` inside SQL, written in the same transaction as the rows it caches | keeps a second store consistent with the first | concept, [CN-6](docs/blueprint/cn6-in-engine-cache-relations.md) |
-| **Identity succession.** Retiring a tuple and chaining a successor to it, so an old id resolves to the tuple that replaced it | joins across "the same customer, re-registered" | concept, [CN-3](docs/blueprint/cn3-supersede-and-chain-id-succession.md) |
-| **Machine-operable tuning.** The optimizer's levers exposed as data and settings an external agent can drive safely | employs a DBA, or asks an agent to guess at one | concept, [CN-1](docs/blueprint/cn-1-agent-operable-optimization-surface.md) |
+| **Transition constraints.** A column's legal state changes — initial states, `old => new` edges, deletable states — declared with the column | checks `if (old == X && new == Y)` in every writer | concept, [CN-4](docs/conceptnotes/cn4-transition-constraints.md) |
+| **At-most-once execution.** A client token claimed on arrival and carried by the commit record, answering both "did it commit?" and "do not run this twice" | builds idempotency tables and outcome lookups | concept, [CN-5](docs/conceptnotes/cn5-commit-outcome-and-idempotency.md) |
+| **A cache that cannot disagree with the data.** A typed, unlogged, TTL-bearing relation under the ordinary MVCC, read by `GET` inside SQL, written in the same transaction as the rows it caches | keeps a second store consistent with the first | concept, [CN-6](docs/conceptnotes/cn6-in-engine-cache-relations.md) |
+| **Identity succession.** Retiring a tuple and chaining a successor to it, so an old id resolves to the tuple that replaced it | joins across "the same customer, re-registered" | concept, [CN-3](docs/conceptnotes/cn3-supersede-and-chain-id-succession.md) |
+| **Machine-operable tuning.** The optimizer's levers exposed as data and settings an external agent can drive safely | employs a DBA, or asks an agent to guess at one | concept, [CN-1](docs/conceptnotes/cn1-agent-operable-optimization-surface.md) |
 
-Rows marked *concept* are recorded in [`docs/blueprint/`](docs/blueprint/) with their reasoning, their boundaries and the decisions they leave open. A concept note opens no stage and licenses no code; it is listed here because it is where the engine is pointed, not because it exists.
+Rows marked *concept* are recorded in [`docs/conceptnotes/`](docs/conceptnotes/) with their reasoning, their boundaries and the decisions they leave open. A concept note opens no stage and licenses no code; it is listed here because it is where the engine is pointed, not because it exists.
 
 ---
 
@@ -320,7 +320,7 @@ The design is specification-first: every subsystem has a spec carrying its decis
 | DDL (`ALTER TABLE`, `DROP TABLE`, bulk insert, transactional DDL) | `docs/spec/alter.md`, `docs/spec/drop-table.md`, `docs/spec/bulkinsert.md`, `docs/spec/ddl-transactional.md` |
 | Id issue-once contract | `docs/rules/keystoneid-invariant.md`, `docs/rules/keystoneid-k0-findings.md` |
 | C++ rules | `docs/rules/rules.md` |
-| Concepts not yet decided to build | `docs/blueprint/` |
+| Concepts not yet decided to build | `docs/conceptnotes/` |
 | Active work orders and ratifications | `instructions/v3.0.0/` |
 | **What is missing, and what a restart loses** | **`docs/inflight/known-gaps.md`** |
 
@@ -343,7 +343,7 @@ The stone metaphor is deliberate — a *keystone* holds the structure up, a *way
 | **Borrow** | A scoped right to a page or tuple: a *lock* (transaction-scoped, waitable by parking) or a *latch* (critical-section-scoped, never held across a park) |
 | **Read view** | A snapshot LSN plus the viewing transaction's id; visibility is answered from the instance's commit floor and window, never from a copied list |
 | **Durability class** | Per-transaction WAL acknowledgment semantics: `strict`, `group`, `relaxed` |
-| **Concept note (CN)** | A `docs/blueprint/` file recording an idea, its reasoning, its boundaries and its open decisions before anything is built — it opens no stage and licenses no code |
+| **Concept note (CN)** | A `docs/conceptnotes/` file recording an idea, its reasoning, its boundaries and its open decisions before anything is built — it opens no stage and licenses no code |
 | **KWP** | The KDS Wire Protocol: length-prefixed binary frames, handshake with authentication, extended PARSE/BIND/EXECUTE, chunked streaming, per-transaction durability selection |
 
 ## Roadmap
@@ -351,7 +351,7 @@ The stone metaphor is deliberate — a *keystone* holds the structure up, a *way
 1. **Advisory acceleration** — trails skip descents for recurring patterns; Cabins serve non-pk equality for observed values. *Built.*
 2. **Self-managing structures** — the Cabin controller decides which Cabins exist, from measured cost and decayed demand, under a budget and a kill switch. *Built; the relayout half stays shadow-only behind its gates and SUS-1.*
 3. **M3 Uniformity** *(active, `workorder-at-m3-uniformity.md`)* — one execution model on every core: ownership, placement, the cross-core pipeline and the ring transport retired; every statement on its session's core over shared memory. Stages S0–S9 landed; S10–S13 (ring-kind cleanup, transport deletion, prose sweep, measurement) open.
-4. **Invariants in the engine** — the concept notes in `docs/blueprint/`, in whatever order the operator rules: CN-1 (agent-operable optimization surface), CN-2 (loose foreign keys and tuple completeness), CN-3 (supersede and chain), CN-4 (transition constraints), CN-5 (commit outcome and idempotency), CN-6 (in-engine cache relations). Each waits on a measurement gate or an operator decision recorded in the note itself.
+4. **Invariants in the engine** — the concept notes in `docs/conceptnotes/`, in whatever order the operator rules: CN-1 (agent-operable optimization surface), CN-2 (loose foreign keys and tuple completeness), CN-3 (supersede and chain), CN-4 (transition constraints), CN-5 (commit outcome and idempotency), CN-6 (in-engine cache relations). Each waits on a measurement gate or an operator decision recorded in the note itself.
 5. **Hands-off operation** — everything needed to run KDS exposed as data and levers: the workload inspectable (`sys.patterns`, `SHOW ACCESS`, `SHOW RELAYOUT`, `SHOW CABIN_OPTIMIZER`), every optimization evaluable before it acts, every action a flag or a threshold with a promotion metric. Who — or what — sits in the operator seat is deliberately left open.
 
 One property makes the last step sane rather than reckless, and it is structural: everything in the autonomous loop is advisory or value-granularly revocable by invariant, so the worst mistake any operator — scripted, automated, or human — can make through these surfaces costs performance, never correctness.
