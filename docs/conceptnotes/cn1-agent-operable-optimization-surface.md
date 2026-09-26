@@ -11,7 +11,8 @@ Relation to AR0/AR1: this note builds nothing. Where it names existing
 structures it names them to place the concept, not to change them (§5).
 Proposed location if kept: `docs/concepts/` (does not exist; operator's
 choice, §8) — **answered 2026-09-08: the operator chose `docs/blueprint/`,
-which is where this file is and which this note's filing created.**
+which is where this file is and which this note's filing created.** **Renamed to
+`docs/conceptnotes/` on 2026-09-26 on the operator's word.**
 
 ---
 
@@ -173,7 +174,8 @@ Guideline discipline, restated for this item:
 ## 8. Operator decisions this note leaves open
 
 1. Whether the note is kept in-tree, and where (`docs/concepts/` proposed).
-   **Answered 2026-09-08: kept, at `docs/blueprint/`.**
+   **Answered 2026-09-08: kept, at `docs/blueprint/`** — renamed
+   `docs/conceptnotes/` on 2026-09-26 on the operator's word.
 2. Whether the agent's key observation is a dedicated verb or its own
    `SELECT` (§5 row 1).
 3. Whether residency priority is a lever at all in v3.0.0, given AR0's
