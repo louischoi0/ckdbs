@@ -12,6 +12,15 @@ questions and they need two arms of the same shape:
   anyway: the relation-level `IX`. That is R3's price, alone, and it is the
   number AR2 E12 is waiting on.
 
+**AT-S13** (`workorder-at-m3-uniformity.md`, the row marks the cells)
+reruns C3 on the engine where the shape exists - since AT-S5 a write runs
+where its session is - and adds two things: `--pin-core C`, a second pool
+on `--port` whose sessions are all held on core `C`, labelled
+`<label>-pinned` and interleaved with the spread pool (the affinity route
+AT-S9 deleted, emulated, for E7); and an `insert-omitted` arm (D20's row-id
+price, spread against pinned). On a `cores = 1` server spread and pinned
+are one arrangement, which is the proof `--pin-core` runs first.
+
 Why a new driver rather than a flag on `multicore_benchmark.py`: that one
 measures N *non-interfering relations*, one connection each, and its own
 docstring calls parity the honest expectation. C3 is the opposite shape -
@@ -121,6 +130,50 @@ class Session:
             pass
 
 
+def meta_by_core(sessions):
+    """One `SHOW META` per distinct core the pool reached, keyed by core.
+
+    The wait breakdown AT-S13's results file owes is read from these - the
+    per-group polled time, the idle block, the lock family's counters - and
+    `SHOW META` answers for the core its session is on, so a spread pool is
+    asked once per core it reached and a pinned pool once.
+    """
+    seen = {}
+    for s in sessions:
+        if s.core is not None and s.core not in seen:
+            seen[s.core] = s.conn.send_command("SHOW META")
+    return seen
+
+
+def open_pool(host, port, count, pin_core=None, max_connects=None):
+    """`count` sessions, and how many connections it took to get them.
+
+    **Pinned** (`pin_core` set, AT-S13's E7 and D20 cells): a client cannot
+    choose its core under SO_REUSEPORT, so this opens connections until
+    `count` of them landed on `pin_core` and closes the rest -
+    `multicore_benchmark.py --peer-listeners`' arrangement. It stands in for
+    the affinity route AT-S9 deleted: every session of the arm on one core,
+    the reactor serialising them, beside the same sessions spread.
+    """
+    if pin_core is None:
+        return [Session(host, port, i) for i in range(count)], count
+    limit = max_connects if max_connects is not None else 64 * count
+    kept, opened = [], 0
+    while len(kept) < count:
+        if opened >= limit:
+            for s in kept:
+                s.close()
+            raise SystemExit(f"--pin-core {pin_core}: {opened} connections landed "
+                             f"{len(kept)} on core {pin_core}, short of {count}")
+        s = Session(host, port, len(kept))
+        opened += 1
+        if s.core == str(pin_core):
+            kept.append(s)
+        else:
+            s.close()
+    return kept, opened
+
+
 def run_arm(sessions, name, statement_for, ops, detail=""):
     """`ops` statements per session, every session at once, one merged Phase.
 
@@ -172,7 +225,7 @@ def setup(conn, rows):
 
 
 def arms(sessions, rows, ops):
-    """The five arms, in the order a block runs them."""
+    """The six arms, in the order a block runs them."""
     hot = 1
 
     def upd_hot(slot, k):
@@ -187,10 +240,19 @@ def arms(sessions, rows, ops):
     def ping(slot, k):
         return "SHOW META"
 
+    # AT-S13's D20 arm: the pk omitted, so every insert bumps the relation's
+    # one row-id mark in place (AT-S10b, no per-core cache) and appends at
+    # the tree's tail. Spread against pinned it prices what cross-core
+    # contention costs an insert into one relation - the sys.tables page and
+    # the tail leaf together; nothing here separates the two.
+    def ins_omitted(slot, k):
+        return f"INSERT INTO {RELATION} VALUES ({k})"
+
     return [
         ("update-hot", upd_hot, "every session on one row - the tuple X, fought over"),
         ("update-disjoint", upd_disjoint, "one row each - R3's relation IX, alone"),
         ("update-disjoint-again", upd_disjoint, "the noise floor: the row above, repeated"),
+        ("insert-omitted", ins_omitted, "pk omitted: one mark, one tail, every session (D20)"),
         ("select-hot", sel_hot, "control: a read takes no borrow"),
         ("ping", ping, "control: SHOW META resolves no relation"),
     ]
@@ -210,6 +272,9 @@ def main():
     p.add_argument("--rows", type=int, default=256)
     p.add_argument("--ops", type=int, default=2000, help="statements per session per arm")
     p.add_argument("--blocks", type=int, default=4, help="blocks the ops are split into")
+    p.add_argument("--pin-core", type=int, default=None,
+                   help="AT-S13: also run every arm on --port with every session held on this "
+                        "core, labelled <label>-pinned, interleaved with the spread pool")
     p.add_argument("--prove", action="store_true",
                    help="AO-0 item 23's proof run: label the report as a driver check "
                         "and refuse to emit a priced summary")
@@ -221,30 +286,38 @@ def main():
     if args.rows < args.sessions:
         raise SystemExit("--rows must be at least --sessions, or the disjoint arm is not disjoint")
 
-    ports = [(args.label, args.port)]
+    # (label, port, pinned core or None). A pinned pool is a second label on
+    # the same server, so its arms interleave with the spread pool's exactly
+    # as an A/B's do.
+    ports = [(args.label, args.port, None)]
+    if args.pin_core is not None:
+        ports.append((f"{args.label}-pinned", args.port, args.pin_core))
     if args.ab_port is not None:
-        ports.append((args.ab_label, args.ab_port))
+        ports.append((args.ab_label, args.ab_port, None))
 
     before = host_state()
     results = {}
     pools = {}
-    for label, port in ports:
-        admin = ServerConnection(args.host, port)
-        setup(admin, args.rows)
-        admin_core = admin.send_command("SHOW META")
-        pools[label] = (
-            [Session(args.host, port, i) for i in range(args.sessions)], admin, admin_core)
+    admins = {}
+    for label, port, pin in ports:
+        if port not in admins:
+            admin = ServerConnection(args.host, port)
+            setup(admin, args.rows)
+            admins[port] = admin
+        sessions, opened = open_pool(args.host, port, args.sessions, pin)
+        pools[label] = (sessions, opened)
 
+    meta_before = {label: meta_by_core(pools[label][0]) for label, _, _ in ports}
     per_block = max(1, args.ops // args.blocks)
     for name, builder, detail in arms(None, args.rows, args.ops):
-        for label, _ in ports:
+        for label, _, _ in ports:
             results.setdefault(label, {})[name] = Phase(name, detail)
         for block in range(args.blocks):
             # The alternation: an arm whose cost drifts must not
             # systematically favour whichever side went first.
             order = ports if block % 2 == 0 else list(reversed(ports))
-            for label, _ in order:
-                sessions, _, _ = pools[label]
+            for label, _, _ in order:
+                sessions, _ = pools[label]
                 phase = run_arm(sessions, name, builder, per_block, detail)
                 merged = results[label][name]
                 merged.latencies.extend(phase.latencies)
@@ -254,6 +327,7 @@ def main():
                     merged.first_error = phase.first_error
 
     after = host_state()
+    meta_after = {label: meta_by_core(pools[label][0]) for label, _, _ in ports}
 
     print()
     if args.prove:
@@ -263,21 +337,23 @@ def main():
         print()
     print(f"sessions={args.sessions} rows={args.rows} ops/arm/session={per_block * args.blocks} "
           f"blocks={args.blocks}")
-    for label, _ in ports:
-        sessions, _, meta = pools[label]
+    for label, _, pin in ports:
+        sessions, opened = pools[label]
         cores = sorted({s.core for s in sessions if s.core is not None})
-        print(f"  {label}: cores accepted on = {', '.join(cores) if cores else 'unknown'}")
+        pinned = f" (pinned: {opened} connections opened to keep {len(sessions)})" \
+            if pin is not None else ""
+        print(f"  {label}: cores accepted on = {', '.join(cores) if cores else 'unknown'}{pinned}")
     print(f"host before: {before['loadavg']}   competing: {before['competing'] or 'none'}")
     print(f"host after : {after['loadavg']}   competing: {after['competing'] or 'none'}")
     print()
 
-    head = f"{'arm':<24}" + "".join(f"{label:>34}" for label, _ in ports)
+    head = f"{'arm':<24}" + "".join(f"{label:>34}" for label, _, _ in ports)
     print(head)
     print(f"{'':<24}" + "".join(f"{'p50us':>9}{'p99us':>9}{'qps':>9}{'err':>7}"
                                 for _ in ports))
     for name, _, _ in arms(None, args.rows, args.ops):
         row = f"{name:<24}"
-        for label, _ in ports:
+        for label, _, _ in ports:
             ph = results[label][name]
             s = ph.summary()
             row += f"{s['p50_us']:>9}{s['p99_us']:>9}{s['qps']:>9.0f}{s['errors']:>7}"
@@ -287,13 +363,19 @@ def main():
     # looked up: `disjoint` against its own repeat is what any other delta
     # has to beat to be a finding.
     print()
-    for label, _ in ports:
+    for label, _, _ in ports:
         a = results[label]["update-disjoint"].summary()
         b = results[label]["update-disjoint-again"].summary()
         hot = results[label]["update-hot"].summary()
         floor = abs(a["p50_us"] - b["p50_us"])
         print(f"{label}: noise floor (disjoint vs its repeat) p50 = {floor:.1f} us; "
               f"hot - disjoint p50 = {hot['p50_us'] - a['p50_us']:.1f} us")
+    # AT-S13: spread against pinned, per write arm, on the one server.
+    if args.pin_core is not None:
+        spread, pinned = results[args.label], results[f"{args.label}-pinned"]
+        for name in ("update-hot", "update-disjoint", "insert-omitted"):
+            d = spread[name].summary()["p50_us"] - pinned[name].summary()["p50_us"]
+            print(f"{name}: spread - pinned p50 = {d:.1f} us")
 
     if args.json:
         payload = {
@@ -305,15 +387,21 @@ def main():
             "blocks": args.blocks,
             "host_before": before,
             "host_after": after,
+            "show_meta_before": meta_before,
+            "show_meta_after": meta_after,
+            "pools": {label: {"port": port, "pin_core": pin, "opened": pools[label][1],
+                              "cores": sorted({s.core for s in pools[label][0]
+                                               if s.core is not None})}
+                      for label, port, pin in ports},
             "arms": {label: {n: results[label][n].summary() for n in results[label]}
-                     for label, _ in ports},
+                     for label, _, _ in ports},
         }
         with open(args.json, "w") as f:
             json.dump(payload, f, indent=2)
         print(f"\nraw summaries: {args.json}")
 
-    for label, _ in ports:
-        sessions, admin, _ = pools[label]
+    for label, _, _ in ports:
+        sessions, _ = pools[label]
         for s in sessions:
             s.close()
 
