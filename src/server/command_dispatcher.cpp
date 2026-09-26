@@ -5918,7 +5918,7 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
                   std::uint64_t pk) -> StatusOr<txn::TransactionManager::RowLocation> {
         auto access = catalog_.InitTableAccess(static_cast<catalog::Oid>(rel_oid));
         if (!access.ok()) return access.status();
-        const PkLookup found = LocateByPk(*access.value(), pk);
+        PkLookup found = LocateByPk(*access.value(), pk, storage::PageAccess::kWrite);
         if (found.kind != PkLookup::Kind::kAt) {
             // kAbsent means the row is gone, kScan means the relation has no
             // descent to ask. Neither is a location, and rollback may not
@@ -5928,12 +5928,14 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
                                     std::to_string(rel_oid) +
                                     " could not be relocated for rollback");
         }
-        return txn::TransactionManager::RowLocation{found.at.page_id, found.at.slot};
+        return txn::TransactionManager::RowLocation{found.at.page_id, found.at.slot,
+                                                    std::move(found.at.leaf)};
     };
 }
 
 CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAccess& access,
-                                                          std::uint64_t pk) {
+                                                          std::uint64_t pk,
+                                                          storage::PageAccess mode) {
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         // The tree *is* the relation's storage, so its answer is
         // authoritative in both directions: a hit is where the row lives,
@@ -5941,13 +5943,11 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
         // visit the same leaf and find the same nothing. This is the one
         // place a point lookup may skip the scan on a miss, and it is
         // allowed precisely because it is not a hint.
-        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, pk);
+        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, pk, mode);
         if (found.ok()) {
-            // Carrying the leaf out is what keeps the caller from asking
-            // the store for a page the descent just held.
-            return PkLookup{
-                PkLookup::Kind::kAt,
-                TupleLocation{found.value().page_id, found.value().slot}};
+            // The leaf rides out held, in `mode`: the caller reads or writes
+            // the slot through it and never re-fetches (AT-0 item 12).
+            return PkLookup{PkLookup::Kind::kAt, std::move(found.value())};
         }
         if (found.status().code() == StatusCode::kNotFound) {
             return PkLookup{PkLookup::Kind::kAbsent, {}};
@@ -7604,18 +7604,18 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // produces the identical result - the locator picks the slot to look
     // at, never which rows match.
     if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
-        const PkLookup found = LocateByPk(ta, *pk);
+        PkLookup found = LocateByPk(ta, *pk, storage::PageAccess::kWrite);
         if (found.kind == PkLookup::Kind::kAbsent) {
             return {"UPDATED 0", false, 0};  // no such row, on the tree's authority
         }
         if (found.kind == PkLookup::Kind::kAt) {
-            // Get(), not the span the locator carried out: the descent
-            // fetched that leaf read-only, so writing through it would
-            // leave the frame clean and the overwrite would never be
-            // written back. Same frame, one hash lookup, dirty flag set.
-            auto bytes = page_store_.Get(found.at.page_id);
-            if (bytes.ok()) {
-                heap::PageView page(bytes.value().bytes());
+            // Through the leaf the descent holds exclusive and dirty, never a
+            // re-fetch: a shared lookup then `Get()` let a divide on another
+            // core renumber the slot in between, and `apply` found another
+            // row, declined it on the WHERE, and answered `UPDATED 0` for a
+            // row that exists (AT-0 item 12).
+            {
+                heap::PageView page(found.at.leaf.bytes());
                 if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
                     return {ErrorReply(s), false, 0, s};
                 }
@@ -8977,14 +8977,14 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // contract: the locator picks the slot to look at, never which rows
     // match, so falling through to the scan produces the identical answer.
     if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
-        const PkLookup found = LocateByPk(ta, *pk);
+        PkLookup found = LocateByPk(ta, *pk, storage::PageAccess::kWrite);
         if (found.kind == PkLookup::Kind::kAbsent) {
             return {"DELETED 0", false, 0};
         }
         if (found.kind == PkLookup::Kind::kAt) {
-            auto bytes = page_store_.Get(found.at.page_id);
-            if (bytes.ok()) {
-                heap::PageView page(bytes.value().bytes());
+            // UPDATE's point arm states why the hold, not a re-fetch.
+            {
+                heap::PageView page(found.at.leaf.bytes());
                 if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
                     return {ErrorReply(s), false, 0, s};
                 }

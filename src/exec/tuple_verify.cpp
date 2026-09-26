@@ -44,14 +44,19 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
     }
 
     out.outcome = VerifyOutcome::kOk;
-    out.page = page;
+    out.ref = std::move(bytes.value());
+    out.page = heap::PageView(out.ref.bytes());
     return out;
 }
 
 std::uint32_t CurrentRelayoutEpoch(storage::PageStore& store, PageId page_id) {
     auto bytes = store.GetForRead(page_id);
     if (!bytes.ok()) return 0;
-    return static_cast<std::uint32_t>(storage::GetRelayoutEpoch(bytes.value().bytes()));
+    return CurrentRelayoutEpoch(heap::PageView(bytes.value().bytes()));
+}
+
+std::uint32_t CurrentRelayoutEpoch(const heap::PageView& page) {
+    return static_cast<std::uint32_t>(page.RelayoutEpoch());
 }
 
 }  // namespace kds::exec

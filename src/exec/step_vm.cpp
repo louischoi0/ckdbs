@@ -557,17 +557,22 @@ private:
             // what makes "results identical with the memo on and off" a
             // property of the structure rather than of the test data.
             if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key.value()) {
-                ++stats_.For(step.step_id).probe_memo_hits;
                 NoteFetch();
                 ++stats_.For(step.step_id).pages_fetched;
-                auto bytes = store_.GetForRead(memo_page_);
-                if (bytes.ok()) {
-                    heap::PageView page(bytes.value().bytes());
-                    co_return AcceptTupleAt(steps, index, step, access, memo_page_, page,
-                                         memo_slot_);
+                // Through the one verifier, as a trail or a Cabin hint is:
+                // a divide renumbers the leaf's slots and bumps its epoch,
+                // and until AT-0 item 12's stage this hit read the slot
+                // unchecked, so the residual dropped whatever row had taken
+                // it and the statement answered zero rows.
+                VerifiedTuple verified =
+                    VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_);
+                if (verified.ok()) {
+                    ++stats_.For(step.step_id).probe_memo_hits;
+                    co_return AcceptTupleAt(steps, index, step, access, memo_page_,
+                                         *verified.page, memo_slot_);
                 }
-                // The page went away. Fall through to the descent rather
-                // than fail: the memo is an accelerator, never an oracle.
+                // Moved or gone. Fall through to the descent rather than
+                // fail: the memo is an accelerator, never an oracle.
                 memo_valid_ = false;
             }
 
@@ -585,13 +590,11 @@ private:
                 memo_key_ = key.value();
                 memo_page_ = found.value().page_id;
                 memo_slot_ = found.value().slot;
-                // Re-fetched by id rather than carried out of the lookup:
-                // the span Location used to carry outlived the descent's
-                // pin (workplan-pageref.md Shape C). A hash hit on a
-                // still-resident frame, held for the read below.
-                auto leaf_page = store_.GetForRead(found.value().page_id);
-                if (!leaf_page.ok()) co_return leaf_page.status();
-                heap::PageView leaf(leaf_page.value().bytes());
+                memo_epoch_ = CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
+                // Read through the leaf the lookup still holds, never a
+                // re-fetch by id: a divide between the two renumbers the
+                // slot (AT-0 item 12).
+                heap::PageView leaf(found.value().leaf.bytes());
                 co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                      found.value().slot);
             }
@@ -1401,9 +1404,8 @@ private:
                 co_return found.status();
             }
 
-            auto bytes = store_.GetForRead(found.value().page_id);
-            if (!bytes.ok()) co_return bytes.status();
-            heap::PageView page(bytes.value().bytes());
+            // The leaf the lookup holds, not a re-fetch (AT-0 item 12).
+            heap::PageView page(found.value().leaf.bytes());
             if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
                                          found.value().slot);
                 !s.ok()) {
@@ -1504,7 +1506,8 @@ private:
                 if (verified.ok()) {
                     ++step_stats.cabin_hint_hits;
                     cabins_->NoteHint(key.cabin_id, /*ok=*/true);
-                    serve_scratch_.push_back(Located{entry.pk, entry.page_id, entry.slot});
+                    serve_scratch_.push_back(
+                        Located{entry.pk, entry.page_id, entry.slot, entry.page_epoch});
                     continue;
                 }
                 ++step_stats.cabin_hint_misses;
@@ -1536,18 +1539,19 @@ private:
             // Healed in place. The hint was wrong and the pk was right,
             // which is C6's whole shape: authority in the pk, speed in the
             // location, and the location repaired from the authority. The
-            // healed page's *current* epoch is stamped with it (the rule
-            // lives in CurrentRelayoutEpoch, beside the check that reads
-            // it). One extra fetch, on the heal path only, which
-            // storage-stability makes rare.
+            // epoch stamped with it is read off the leaf the lookup holds,
+            // so it is the epoch the slot is valid under - a re-fetch after
+            // the hold could read a divide's epoch beside a pre-divide slot
+            // (AT-0 item 12).
             // **The heal, by index** (AT-S7): the store writes it under
             // the partition's latch, so the descent above never ran under
             // one.
             const PageId healed_page = found.value().page_id;
             const std::uint16_t healed_slot = found.value().slot;
-            entries.Heal(i, healed_page, healed_slot,
-                         CurrentRelayoutEpoch(store_, healed_page));
-            serve_scratch_.push_back(Located{entry.pk, healed_page, healed_slot});
+            const std::uint32_t healed_epoch =
+                CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
+            entries.Heal(i, healed_page, healed_slot, healed_epoch);
+            serve_scratch_.push_back(Located{entry.pk, healed_page, healed_slot, healed_epoch});
         }
 
         // Moved out of the member for phase 2, for the reason spelled out in
@@ -1593,24 +1597,41 @@ private:
 
         // Phase 2. The page is fetched per entry rather than carried out of
         // phase 1: `AcceptTupleAt` descends into the next step, and anything
-        // below it may fetch, so a page view held across entries is exactly
-        // the span R1 forbids.
+        // below it may fetch, so holding every entry's page across the loop
+        // is a pin per entry for the whole serve.
+        //
+        // **So the location is verified again here** (AT-0 item 12's
+        // stage). Phase 1's hold ended with phase 1, and a divide on another
+        // core in between renumbers the leaf: read unchecked, the slot is
+        // another row, which this step's residual may well accept - a row
+        // served twice and the moved one never. A miss re-descends, which on
+        // a btree relation is authoritative and hands back the leaf held.
         for (const Located& at : located) {
             if (stopped_) break;
             NoteFetch();
             ++step_stats.pages_fetched;
-            auto bytes = store_.GetForRead(at.page_id);
-            if (!bytes.ok()) {
-                // The page went away between the two phases. Nothing evicts
-                // and nothing frees pages, so this is unreachable today -
-                // and it is a skip rather than an error because a Cabin
-                // entry pointing at nothing is a dead entry, which §5 says
-                // to drop on sight.
-                ++step_stats.cabin_hint_misses;
+            VerifiedTuple verified = VerifyTupleAt(store_, at.page_id, at.slot, at.pk, at.epoch);
+            if (verified.ok()) {
+                if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id,
+                                             *verified.page, at.slot);
+                    !s.ok()) {
+                    co_return s;
+                }
                 continue;
             }
-            heap::PageView page(bytes.value().bytes());
-            if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
+            ++step_stats.cabin_hint_misses;
+            // A heap relation moves no tuple, so a miss there is a row
+            // purged between the phases - a dead entry, which §5 says to
+            // drop on sight.
+            if (!is_btree) continue;
+            auto found = btree::BtreeLookup(store_, access.desc_page_id, at.pk);
+            if (!found.ok()) {
+                if (found.status().code() == StatusCode::kNotFound) continue;
+                co_return found.status();
+            }
+            heap::PageView page(found.value().leaf.bytes());
+            if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id,
+                                         page, found.value().slot);
                 !s.ok()) {
                 co_return s;
             }
@@ -2510,6 +2531,7 @@ private:
     std::uint64_t memo_key_ = 0;
     PageId memo_page_ = kInvalidPageId;
     std::uint16_t memo_slot_ = 0;
+    std::uint32_t memo_epoch_ = 0;  // the leaf's relayout epoch at the descent
 
     // ---- Cabin (docs/spec/cabin.md) --------------------------------------
     //
@@ -2574,6 +2596,7 @@ private:
         std::uint64_t pk = 0;
         PageId page_id = kInvalidPageId;
         std::uint16_t slot = 0;
+        std::uint32_t epoch = 0;  // the page's relayout epoch the slot was valid under
     };
     std::vector<Located> serve_scratch_;
     std::unordered_set<std::uint64_t> seen_pks_;

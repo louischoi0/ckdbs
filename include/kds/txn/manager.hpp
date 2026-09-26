@@ -492,9 +492,15 @@ public:
     // Unset is a valid configuration: without it a moved row is reported
     // rather than compensated wrongly, which is the safe half of the same
     // rule.
+    //
+    // The location comes back with its leaf **held exclusive**, and the
+    // compensation writes through that hold: a `(page, slot)` re-fetched
+    // after the locator returned could have been renumbered by another
+    // divide in between (AT-0 item 12).
     struct RowLocation {
         PageId page_id = kInvalidPageId;
         std::uint16_t slot = 0;
+        storage::PageRef leaf;
     };
     // Passed to Abort rather than stored on the manager: the implementation
     // belongs to the dispatcher, which is shorter-lived than the manager it

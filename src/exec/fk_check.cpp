@@ -93,13 +93,11 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
             if (found.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
             return found.status();
         }
-        // Re-fetched by id rather than carried out of the lookup: the span
-        // Location used to carry outlived the descent's pin
-        // (workplan-pageref.md Shape C), where this fetch is a hash hit on
-        // a still-resident frame and the ref holds it for the read below.
-        auto leaf_page = store.GetForRead(found.value().page_id);
-        if (!leaf_page.ok()) return leaf_page.status();
-        heap::PageView leaf(leaf_page.value().bytes());
+        // Read through the leaf the lookup still holds. A re-fetch by id
+        // lost it to a divide on another core, which renumbers the slot, and
+        // with no residual here the wrong row decided the verdict (AT-0
+        // item 12).
+        heap::PageView leaf(found.value().leaf.bytes());
         auto tuple = leaf.ReadTuple(found.value().slot);
         if (!tuple.ok()) {
             // A retired slot the index still points at - an insert this
@@ -203,8 +201,13 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 const stats::CabinEntry entry = set.At(i);
                 if (!seen.insert(entry.pk).second) continue;  // v→v′→v round trip
 
+                // The page the slot is read from is **held** from the moment
+                // the slot is vouched for - by the verifier or by the
+                // descent - to the read: a re-fetch between the two can meet
+                // a divide's renumbered leaf (AT-0 item 12).
                 PageId at_page = kInvalidPageId;
                 std::uint16_t at_slot = 0;
+                storage::PageRef held;
                 if (entry.hint_valid()) {
                     VerifiedTuple verified = VerifyTupleAt(store, entry.page_id, entry.slot,
                                                            entry.pk, entry.page_epoch);
@@ -212,6 +215,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     if (verified.ok()) {
                         at_page = entry.page_id;
                         at_slot = entry.slot;
+                        held = std::move(verified.ref);
                     }
                 }
                 if (at_page == kInvalidPageId) {
@@ -233,15 +237,14 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     }
                     at_page = found.value().page_id;
                     at_slot = found.value().slot;
+                    held = std::move(found.value().leaf);
                 }
 
                 if (budget != nullptr) {
                     if (Status s = budget->ChargeRow(); !s.ok()) return s;
                 }
 
-                auto bytes = store.GetForRead(at_page);
-                if (!bytes.ok()) return bytes.status();
-                heap::PageView page(bytes.value().bytes());
+                heap::PageView page(held.bytes());
                 // **The heal, by index** (AT-S7): the store writes the
                 // hint under its partition's latch, so a page read never
                 // happens under one. A no-op in substance for a verified
@@ -249,8 +252,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 // just verified - and the real heal for a descended one,
                 // whose epoch has to come from the page this fetch just
                 // read rather than from a 0 that would miss forever.
-                set.Heal(i, at_page, at_slot,
-                         static_cast<std::uint32_t>(page.RelayoutEpoch()));
+                set.Heal(i, at_page, at_slot, CurrentRelayoutEpoch(page));
                 auto tuple = page.ReadTuple(at_slot);
                 if (!tuple.ok()) {
                     if (tuple.status().code() == StatusCode::kNotFound) continue;

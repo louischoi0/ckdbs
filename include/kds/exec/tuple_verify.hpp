@@ -88,9 +88,14 @@ enum class VerifyOutcome : std::uint8_t {
 struct VerifiedTuple {
     VerifyOutcome outcome = VerifyOutcome::kPageGone;
 
-    // The page's bytes, set only when `outcome == kOk`, so the caller reads
-    // the row without asking the store for a page this call just had in
-    // hand. Empty otherwise.
+    // The page, **held**, and a view of it, set only when `outcome == kOk`,
+    // so the caller reads the row without asking the store for a page this
+    // call just had in hand. Empty otherwise. The view is valid for exactly
+    // as long as `ref` is: until AT-0 item 12's stage the ref was dropped at
+    // this function's return and the view outlived its pin and its page
+    // latch, so a divide on another core could renumber the slot the
+    // verification had just vouched for.
+    storage::PageRef ref;
     std::optional<heap::PageView> page;
 
     bool ok() const noexcept { return outcome == VerifyOutcome::kOk; }
@@ -123,5 +128,11 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
 // the harmless direction is the one that re-checks rather than the one that
 // rejects.
 std::uint32_t CurrentRelayoutEpoch(storage::PageStore& store, PageId page_id);
+
+// The same rule on a page the caller already **holds** - which is the one
+// to use when the location being stamped came from that hold (a descent's
+// leaf, AT-0 item 12): a re-fetch after the hold is gone can read a divide's
+// epoch beside a pre-divide slot.
+std::uint32_t CurrentRelayoutEpoch(const heap::PageView& page);
 
 }  // namespace kds::exec

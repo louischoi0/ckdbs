@@ -389,10 +389,11 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             }
             entry.page_id = found.value().page_id;
             entry.slot = found.value().slot;
-            // The healed page's current epoch, through the one producer the
-            // read path's heal also uses - a stamp of 0 against a bumped
-            // page misses on every later resolve and re-heals forever.
-            entry.page_epoch = CurrentRelayoutEpoch(store_, entry.page_id);
+            // The healed page's epoch, read off the leaf the lookup holds -
+            // the epoch the slot is valid under, as the read path's heal
+            // stamps it (AT-0 item 12). A stamp of 0 against a bumped page
+            // misses on every later resolve and re-heals forever.
+            entry.page_epoch = CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
             entry.flags |= stats::kCabinHintValid;
             rebuilt.push_back(entry);
         }

@@ -160,16 +160,16 @@ class Rendezvous {
     std::atomic<int> generation_{0};
 };
 
-// ~1 KB payloads: several tuples per leaf, which is what a *divide* needs.
+// 64-byte tuples: many per leaf, which is what a *divide* needs.
 // The one-per-leaf filler above can only ever append - `SplitLeafAndInsert`
 // refuses a page with fewer than two live tuples - and a divide is the only
 // split that *moves* a key out from under a reader.
 inline constexpr std::size_t kSmallFiller = 56;
 
-std::vector<std::byte> MakeSmallTuple(std::uint64_t id) {
+std::vector<std::byte> MakeSmallTuple(std::uint64_t id, std::size_t filler = kSmallFiller) {
     auto word = Keystone::Encode(id, 0, 0);
     EXPECT_TRUE(word.ok()) << word.status().message();
-    std::vector<std::byte> out(kKeystoneWordSize + kSmallFiller, std::byte{0xCD});
+    std::vector<std::byte> out(kKeystoneWordSize + filler, std::byte{0xCD});
     std::uint64_t v = word.ok() ? word.value() : 0;
     for (std::size_t i = 0; i < kKeystoneWordSize; ++i) {
         out[i] = static_cast<std::byte>(v & 0xFF);
@@ -286,6 +286,126 @@ TEST(BtreeRaceTest, ALookupDoesNotMissARowADivideMovedUnderIt) {
         EXPECT_TRUE(found.ok()) << "id " << id << " is gone after the run: "
                                 << found.status().message();
     }
+}
+
+TEST(BtreeRaceTest, ALookupsSlotStillHoldsItsRowWhenTheCallerReadsIt) {
+    // **The payload half** (AT-0 item 12, marked (a)). The cell above proves
+    // a lookup's *status*; this one proves the `(page, slot)` it hands back
+    // is still the row when the caller reads it. A divide rebuilds the old
+    // leaf and renumbers its slots (`SplitLeafAndInsert`), so a lookup that
+    // dropped its leaf at return and left the caller to re-fetch by id
+    // handed out a slot another row could take in between - a point
+    // `SELECT` answered zero rows through its residual, and an FK check
+    // decided its verdict on the wrong row. What makes it hold now is
+    // `Location::leaf`: the read reaches the slot through the lookup's own
+    // shared hold, so a divider cannot take the leaf until it is let go.
+    //
+    // **The window cannot be forced from outside, so it is sampled.** The
+    // page latch has no queue (`page_latch.hpp`), and the gap the pre-fix
+    // shape left is between two lines of one caller - no rendezvous reaches
+    // inside it. The cell above's rendezvous puts the divider on the
+    // reader's leaf every round, ~1 KB tuples make most of its inserts a
+    // divide (eight to a leaf, where the cell above's 64 bytes fit ~110),
+    // and `kRepeats` fresh trees turn a rare interleaving into a reliable
+    // one.
+    //
+    // **Mutation**: `BtreeLookup` releases the leaf and re-fetches it by id
+    // before returning - the pre-fix callers' shape moved into the function.
+    // **This cell kills it only 3-4 runs in 10** (measured at these
+    // constants, 2026-09-26): what it adds is real threads on an armed latch.
+    // The kill every run is `btree_test.cpp`'s
+    // `ALookupsSlotIsStillItsRowWhenTheCallerReadsIt`, whose store runs the
+    // divide on the re-fetch itself.
+    constexpr int kRepeats = 10;
+    // 600 rows at ~1 KB is ~75 leaves, and ~150 after the divider: well
+    // under an internal node's 678 separators, which `root_moved` checks.
+    constexpr std::uint64_t kRows = 600;
+    constexpr std::size_t kDividingFiller = 1000;
+    constexpr int kProbesPerRound = 8;
+    constexpr int kYieldsWhileHeld = 4;
+
+    std::vector<std::string> wrong;
+    std::mutex wrong_latch;
+    for (int repeat = 0; repeat < kRepeats; ++repeat) {
+        std::unique_ptr<storage::MemoryPageDevice> device;
+        auto store = ArmedStore(device);
+        ASSERT_NE(store, nullptr);
+
+        auto created = store->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        PageId current_root = created.value().first;
+        ASSERT_TRUE(FormatRoot(created.value().second.bytes(), /*owner_oid=*/0).ok());
+        created.value().second.Release();
+
+        for (std::uint64_t n = 1; n <= kRows; ++n) {
+            const std::uint64_t id = n * 10;
+            auto r = BtreeInsert(*store, current_root, id, MakeSmallTuple(id, kDividingFiller),
+                                 /*trx_id=*/1,
+                                 /*owner_oid=*/0);
+            ASSERT_TRUE(r.ok()) << "prefill " << id << ": " << r.status().message();
+            if (r.value().new_root != kInvalidPageId) current_root = r.value().new_root;
+        }
+
+        Rendezvous gate(kThreads);
+        std::atomic<bool> root_moved{false};
+        std::vector<std::thread> threads;
+        threads.reserve(kThreads);
+        threads.emplace_back([&] {
+            SetCurrentCore(0);
+            for (std::uint64_t n = 1; n <= kRows; ++n) {
+                gate.Wait();
+                const std::uint64_t id = n * 10 + 5;  // sorts *inside* a full leaf
+                auto r = BtreeInsert(*store, current_root, id, MakeSmallTuple(id, kDividingFiller),
+                                     /*trx_id=*/1, /*owner_oid=*/0);
+                if (r.ok() && r.value().new_root != kInvalidPageId) {
+                    root_moved.store(true, std::memory_order_release);
+                }
+            }
+        });
+        threads.emplace_back([&] {
+            SetCurrentCore(1);
+            for (std::uint64_t n = 1; n <= kRows; ++n) {
+                gate.Wait();
+                for (int probe = 0; probe < kProbesPerRound; ++probe) {
+                    const std::uint64_t id = (n + static_cast<std::uint64_t>(probe % 4)) * 10;
+                    if (id > kRows * 10) continue;
+                    auto found = BtreeLookup(*store, current_root, id);
+                    if (!found.ok()) continue;  // the cell above owns the status
+                    // Held across a few yields, as a caller's read is: the
+                    // divider arrives, spins on this hold, and takes the
+                    // leaf the instant the next probe's gap would open.
+                    for (int y = 0; y < kYieldsWhileHeld; ++y) std::this_thread::yield();
+                    heap::PageView leaf(found.value().leaf.bytes());
+                    auto payload = leaf.PayloadAt(found.value().slot, leaf.slot_count());
+                    std::string why;
+                    if (!payload.ok()) {
+                        why = "slot gone: " + payload.status().message();
+                    } else if (auto got = KeystoneIdOfPayload(payload.value()); !got.ok()) {
+                        why = "undecodable: " + got.status().message();
+                    } else if (got.value() != id) {
+                        why = "holds " + std::to_string(got.value());
+                    }
+                    if (!why.empty()) {
+                        const std::lock_guard<std::mutex> held(wrong_latch);
+                        wrong.push_back(std::to_string(id) + " (" + why + ")");
+                    }
+                }
+            }
+        });
+        for (std::thread& thread : threads) thread.join();
+        SetCurrentCore(0);
+
+        ASSERT_FALSE(root_moved.load(std::memory_order_acquire))
+            << "the root grew a level during the concurrent phase; this cell no longer "
+               "isolates the lookup's hold";
+    }
+
+    std::string named;
+    for (std::size_t i = 0; i < wrong.size() && i < 8; ++i) named += " " + wrong[i];
+    EXPECT_TRUE(wrong.empty()) << wrong.size()
+                               << " lookup(s) handed back a slot that no longer held the row "
+                                  "asked for:"
+                               << named;
 }
 
 TEST(BtreeRaceTest, AScanOfTheChainStillReturnsEveryRowInOrder) {

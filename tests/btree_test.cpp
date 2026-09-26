@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <set>
 #include <string>
 #include <vector>
@@ -1188,6 +1189,119 @@ TEST(BtreeTest, AGrowThatDiesPromotingItsSeparatorLeavesTheLeafChainAlone) {
     }
     EXPECT_EQ(scanned, (std::vector<std::uint64_t>{10, 20, 30}))
         << "a scan must read the ids in ascending order, page by page";
+}
+
+// A store that runs one action the **second** time a chosen page is
+// fetched, and forwards everything else. It puts another core's divide
+// exactly where a caller that re-fetches a lookup's page by id would meet
+// it: after the descent's fetch, before the caller's read - a window no
+// barrier reaches, because it lies between two lines of one caller
+// (`btree_race_test.cpp` samples the same window with real threads).
+class DivideOnRefetchStore final : public storage::PageStore {
+public:
+    explicit DivideOnRefetchStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
+
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
+    }
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        return inner_.CreateNewUnpinned();
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        if (action_ && page_id == watched_ && ++fetches_ == 2) {
+            auto action = std::move(action_);  // disarmed first: the action fetches too
+            action_ = nullptr;
+            fired_ = true;
+            action();
+        }
+        return inner_.GetUnpinned(page_id);
+    }
+
+    void OnSecondFetch(PageId page_id, std::function<void()> action) {
+        watched_ = page_id;
+        fetches_ = 0;
+        action_ = std::move(action);
+    }
+    void Disarm() noexcept { action_ = nullptr; }
+    bool fired() const noexcept { return fired_; }
+
+private:
+    storage::InMemoryPageStore& inner_;
+    PageId watched_ = kInvalidPageId;
+    int fetches_ = 0;
+    bool fired_ = false;
+    std::function<void()> action_;
+};
+
+// **A lookup's slot is the row when the caller reads it** (AT-0 item 12,
+// marked (a)). A divide re-inserts the staying half of a leaf and moves the
+// upper half to a new page (`SplitLeafAndInsert`), so the `(page, slot)` of
+// a key in the upper half names something else once it has run. Until the
+// item, `BtreeLookup` dropped its leaf at return and every caller re-fetched
+// by id: a point `SELECT` then answered zero rows through its residual and
+// an FK check decided its verdict on another row. `Location::leaf` is the
+// descent's own hold, so there is no second fetch for a divide to precede.
+//
+// **Mutation**: `BtreeLookup` releases the leaf and re-fetches it by id
+// before returning - the pre-fix callers' shape moved into the function.
+// The store's action fires on that re-fetch and the read below meets the
+// divided leaf, every run.
+TEST(BtreeTest, ALookupsSlotIsStillItsRowWhenTheCallerReadsIt) {
+    storage::InMemoryPageStore backing(64);
+    DivideOnRefetchStore store(backing);
+    Tree tree(store);
+
+    // Ascending ids append, so the first leaf fills in key order and the
+    // second opens when it is full. 1016 bytes is eight to a leaf.
+    constexpr std::size_t kFiller = 1016;
+    std::uint64_t id = 0;
+    while (true) {
+        id += 10;
+        ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << "id " << id;
+        auto leaf = BtreeSeekLeaf(store, tree.root, 10);
+        ASSERT_TRUE(leaf.ok()) << leaf.status().message();
+        auto bytes = store.GetForRead(leaf.value());
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        if (heap::PageView(bytes.value().bytes()).next_page_id() != kInvalidPageId) break;
+    }
+    auto first = BtreeSeekLeaf(store, tree.root, 10);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    std::uint64_t upper = 0;  // the first leaf's highest key: it moves in a divide
+    {
+        auto bytes = store.GetForRead(first.value());
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        heap::PageView leaf(bytes.value().bytes());
+        upper = 10 * static_cast<std::uint64_t>(leaf.slot_count());
+    }
+    ASSERT_GE(upper, 30u) << "the first leaf must hold enough rows to divide";
+
+    // Another core's divide of that leaf: 15 sorts inside it.
+    store.OnSecondFetch(first.value(), [&] {
+        ASSERT_TRUE(tree.Insert(15, kFiller).ok()) << "the divide must land";
+    });
+
+    auto found = BtreeLookup(store, tree.root, upper);
+    ASSERT_TRUE(found.ok()) << found.status().message();
+    {
+        heap::PageView leaf(found.value().leaf.bytes());
+        auto payload = leaf.PayloadAt(found.value().slot, leaf.slot_count());
+        ASSERT_TRUE(payload.ok()) << "slot " << found.value().slot << " of page "
+                                  << found.value().page_id << ": " << payload.status().message();
+        auto got = KeystoneIdOfPayload(payload.value());
+        ASSERT_TRUE(got.ok()) << got.status().message();
+        EXPECT_EQ(got.value(), upper) << "the lookup's slot held another row when it was read";
+    }
+    EXPECT_FALSE(store.fired()) << "the lookup fetched its own leaf twice";
+    found.value().leaf.Release();
+    store.Disarm();
+
+    // The divide the cell guards against is real: once it runs, the key has
+    // left the page the lookup named.
+    if (!store.fired()) ASSERT_TRUE(tree.Insert(15, kFiller).ok());
+    auto moved = BtreeLookup(store, tree.root, upper);
+    ASSERT_TRUE(moved.ok()) << moved.status().message();
+    EXPECT_NE(moved.value().page_id, found.value().page_id)
+        << "the divide must move the key, or the cell proves nothing";
 }
 
 TEST(BtreeTest, AnIdBelowItsLeafsMinKeyIsRefused) {

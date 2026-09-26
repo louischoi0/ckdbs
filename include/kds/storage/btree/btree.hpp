@@ -106,19 +106,24 @@ namespace kds::btree {
 // shared with the heap chain and live in insert_placement.hpp:
 // `kMaxBtreeDepth`, `StructuralChange`, `InsertPlacement`.
 
-// Where a tuple lives: what a descent hands back to a reader.
+// Where a tuple lives, and the leaf it lives in, **held**: what a descent
+// hands back to a reader or a writer.
+//
+// `slot` is true only while `leaf` is held. A divide on another core
+// rebuilds the leaf and renumbers its slots (`SplitLeafAndInsert`), so a
+// `(page_id, slot)` read after the hold is gone can name a different row -
+// which, until AT-0 item 12 (operator, marked (a)), is what every caller
+// did: the lookup dropped the leaf at its return and each caller re-fetched
+// by id, so a point `SELECT` answered zero rows for a row that exists and a
+// point `UPDATE` wrote a row it never matched. Hold `leaf` for as long as
+// the slot is read or written, and never carry `page_id`/`slot` past it.
+//
+// A bare span rode here until 2026-08-13 and outlived the descent's pin; a
+// `PageRef` *is* the pin, and the page latch with it (AM-S1).
 struct Location {
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;
-    // There is deliberately no bytes field. One rode here until 2026-08-13
-    // - "the leaf's bytes, still resident from the descent" - and under the
-    // pin model (workplan-pageref.md) that sentence stopped being true the
-    // moment the descent returned: the span outlived its pin, which is a
-    // use-after-free the day anything faults in between. Its one
-    // production consumer already re-fetched by page_id (a hash hit on a
-    // resident frame, and the fetch is what marks the write path dirty),
-    // so the field's saving was zero and its hazard was real. A caller
-    // reads the tuple by fetching page_id, holding the ref it gets back.
+    storage::PageRef leaf;
 };
 
 // Formats `page` as a brand-new relation's root: an empty leaf with
@@ -160,8 +165,15 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
 // Fails with NotFound if no live tuple in that leaf carries `id` - which,
 // because the descent is exact, means the row does not exist. The answer
 // is **authoritative**: the tree is the relation's storage, not a hint
-// over it.
-StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id);
+// over it - and so is the payload, because the leaf comes back held.
+//
+// `access` is how the leaf is held: `kRead` shared, `kWrite` exclusive and
+// marked dirty, for a caller that writes the slot it was handed. A writer
+// must ask for `kWrite` rather than re-fetch: the latch is never upgraded,
+// so dropping a shared hold to take an exclusive one reopens the window
+// `Location` exists to close.
+StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id,
+                               storage::PageAccess access = storage::PageAccess::kRead);
 
 // Calls `fn` once per slot of every leaf, left to right - which is pk
 // order page by page, tuples within a leaf staying unordered exactly as in

@@ -425,12 +425,17 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     // paid on every compensation rather than only on relations that can
     // move rows - a rollback is rare, and a check that runs only where a
     // bug is expected is a check nobody trusts.
+    //
+    // **The page the identity is checked on is the page compensated**, held
+    // exclusive from the check to the write: a relocation hands its leaf
+    // back held, not a `(page, slot)` to re-fetch, because a divide between
+    // the two renumbers the slot again (AT-0 item 12).
     PageId page_id = entry.page_id;
     std::uint16_t slot = entry.slot;
+    auto bytes = store_.Get(page_id);
+    if (!bytes.ok()) return bytes.status();
     {
-        auto probe = store_.Get(page_id);
-        if (!probe.ok()) return probe.status();
-        heap::PageView view(probe.value().bytes());
+        heap::PageView view(bytes.value().bytes());
         bool matches = false;
         if (auto payload = view.PayloadAt(slot, view.slot_count()); payload.ok()) {
             if (auto id = KeystoneIdOfPayload(payload.value()); id.ok()) {
@@ -449,15 +454,17 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
                     std::to_string(page_id) + " slot " + std::to_string(slot) +
                     ", and no row locator is installed to find it");
             }
+            // Released first: the locator's descent takes a leaf exclusive,
+            // and the leaf the row moved within can be this one.
+            bytes.value().Release();
             auto found = locate_row(entry.rel_oid, entry.pk);
             if (!found.ok()) return found.status();
             page_id = found.value().page_id;
             slot = found.value().slot;
+            bytes.value() = std::move(found.value().leaf);
         }
     }
 
-    auto bytes = store_.Get(page_id);
-    if (!bytes.ok()) return bytes.status();
     heap::PageView page(bytes.value().bytes());
 
     // ---- Catalog pages are compensated, and never logged ----------------

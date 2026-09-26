@@ -55,6 +55,13 @@ struct Descent {
     // down and reclaim it mid-operation. Peak pins (MG03): 1 here, and 2 for the
     // span of `LeafStillCoversKey`, which takes the right sibling shared
     // and drops it before the descent returns (AT-S5c).
+    //
+    // **And the hold is the answer, not only the bytes** (AT-0 item 12).
+    // The ref carries the page latch, so while it lives no divide can
+    // renumber the leaf: `BtreeLookup` hands this same ref out as
+    // `Location::leaf` rather than dropping it, because a caller that
+    // re-fetched by id read a slot another core's divide had already
+    // given to a different row.
     storage::PageRef leaf;
 };
 
@@ -900,20 +907,34 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
 // it off the hot path: a hit is authoritative however the chain has moved
 // since - the row is *here* - so nothing needs asking. Only an empty-handed
 // lookup owes a reason, and it pays one resident-page read to give one.
-StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id) {
+//
+// **A write lookup owes none**: `DescendTo` asked coverage under the
+// exclusive hold it returns, and every splice must write this leaf, so a
+// miss there is already proved (AT-0 item 12).
+//
+// **The leaf leaves held** (AT-0 item 12, marked (a)). The hit is
+// authoritative only for as long as the slot is: a divide renumbers the
+// leaf, so the hold the descent took is the one handed to the caller.
+StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id,
+                               storage::PageAccess access) {
+    const bool for_write = access == storage::PageAccess::kWrite;
     for (int attempt = 0; attempt <= kMaxDescentRestarts; ++attempt) {
-        auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
+        auto descent = DescendTo(store, root, id, /*leaf_for_write=*/for_write);
         if (!descent.ok()) return descent.status();
         const PageId leaf_id = descent.value().path[descent.value().depth];
         heap::PageView leaf(descent.value().leaf.bytes());
 
         auto slot = FindSlotForId(leaf, id, leaf.slot_count());
-        if (slot.ok()) return Location{leaf_id, slot.value()};
+        if (slot.ok()) return Location{leaf_id, slot.value(), std::move(descent.value().leaf)};
         if (slot.status().code() != StatusCode::kNotFound) return slot.status();
 
-        auto covers = LeafStillCoversKey(store, leaf, id);
-        if (!covers.ok()) return covers.status();
-        if (covers.value()) {
+        bool covered = for_write;
+        if (!covered) {
+            auto covers = LeafStillCoversKey(store, leaf, id);
+            if (!covers.ok()) return covers.status();
+            covered = covers.value();
+        }
+        if (covered) {
             return Status::NotFound("no tuple with primary key " + std::to_string(id) +
                                     " in leaf " + std::to_string(leaf_id));
         }

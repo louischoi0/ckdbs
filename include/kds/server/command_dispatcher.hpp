@@ -353,17 +353,6 @@ Status StatusFromErrorReply(std::string_view reply);
 // victim waited on: a row and its holder, or a core's transaction.
 Status DeadlockVictim(const std::string& waited_for);
 
-// Where a tuple lives, as a point lookup reports it. Local to the
-// dispatcher because it is the shape of an answer to "skip the scan and
-// look here", not a storage-layer concept.
-struct TupleLocation {
-    PageId page_id = kInvalidPageId;
-    std::uint16_t slot = 0;
-    // No bytes field, for btree.hpp Location's reason: a span here outlived
-    // the pin that made it valid, and every reader already re-fetches by
-    // page_id. Deleted with its one producer 2026-08-13.
-};
-
 // **The statement limits a config file sets, as one value** (AT-S8). Every
 // core accepts sessions, so every core's dispatcher must run under the same
 // ones; while they travelled as five separate arguments and setters, a
@@ -1964,29 +1953,25 @@ private:
     //            produces the same answer. Every heap relation lands here,
     //            having no pk index to descend.
     //   kAt      look at this (page, slot) - a btree descent, which is
-    //            authoritative.
+    //            authoritative - through `at.leaf`, which the descent
+    //            **holds** in the mode asked for. A writer asks `kWrite`
+    //            and writes through that hold; re-fetching the page by id
+    //            reopens the window a divide renumbers the slot in (AT-0
+    //            item 12).
     //   kAbsent  **no such row**, on authority. Only a btree descent can
     //            say this, so a heap relation never produces it.
     struct PkLookup {
         enum class Kind { kScan, kAt, kAbsent };
         Kind kind = Kind::kScan;
-        TupleLocation at;
+        btree::Location at;
     };
-    PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
+    PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk,
+                        storage::PageAccess mode);
 
     // The row-relocation callback a rollback needs when a leaf division has
     // moved rows this transaction wrote (txn/manager.hpp's RowLocator).
     // Built per abort, never stored on the manager - see the definition.
     txn::TransactionManager::RowLocator RowLocatorForRollback();
-
-    // The bytes of the page a located tuple sits on, for a reader. Reuses
-    // the span the locator carried out when it has one, and fetches
-    // read-only when it does not.
-    //
-    // Read paths only. A writer must go through page_store_.Get() even
-    // when TupleLocation::page is populated: the span is the same frame
-    // either way, but only Get() marks it dirty, and a write to a frame
-    // nothing will write back is a write that never happened.
 
     // The pk value a WHERE clause is a *bare* equality against, or nullopt
     // if it is anything else - no WHERE, more than one condition, a non-pk
