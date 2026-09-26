@@ -19,9 +19,10 @@ reproduced**, and the first obligation of each stage is to reproduce it.
 
 **Placed on the operator's word** ("Place the order", 2026-09-26). The
 body from §1 on is the order as issued against `1f9592a`; `main` had moved
-by placement, and four things the body says are no longer true of the
-tree. They are corrected here rather than in the body, so the order reads
-as issued and this section is what binds where the two disagree.
+by placement. Items 1-3 are what the body says that is no longer true,
+item 4 is a finding the body could not have, and item 5 lists smaller
+drifts. They are recorded here rather than in the body, so the order
+reads as issued and this section is what binds where the two disagree.
 
 1. **E7 is decided.** The operator marked it on 2026-09-26, *"local as
    default"* (`2b41d31`; `raft-marks-2026-09-26.md` §1), after AT-S13's
@@ -30,16 +31,17 @@ as issued and this section is what binds where the two disagree.
    default (AT-0 item 2), read after AX"* is **struck** - AT-9 records E7
    as marked, and AX (the in-flight predicate) remains the owner of the
    cross-core refusal part of AT-S13's price.
-2. **AT-S14 is built**, as AT-0 item 12's stage, before placement: `974a844`,
-   review `08f6162`, rows `9be2d02`, pushed at `6b0694d`, suite
-   2959/2959 on the merged tree. AT-6 carries its row under AT-S14. Two
-   things differ from §4's S14: **no SQL-level cell** was written for
-   `step_vm` or `fk_check` - the kill is a storage-level cell whose store
-   runs another core's divide on the looked-up leaf's re-fetch (10 in 10
-   against the pre-fix shape) plus a threaded cell; and the survey found
-   the window wider than the item - the point `UPDATE`/`DELETE`, rollback's
-   relocation, and `VerifyTupleAt` dropping its own hold - all closed there.
-   Whether the SQL-level cells are still owed is the operator's.
+2. **AT-S14 is built**, before placement, as AT-0 item 12's stage
+   (AT-6's AT-S14 row owns the detail); suite 2959/2959 at `eceecb3`, the
+   merged tree pushed as `6b0694d` (Debug, one pre-existing disabled
+   cell). Its cells are **storage-level** - a forwarding store that runs
+   another core's divide on the looked-up leaf's re-fetch, a threaded
+   race cell, and `AWriteLookupHoldsItsLeafExclusiveAndItsMissIsAuthoritative`
+   - and **no SQL-level cell** for `step_vm` or `fk_check` was written, as
+   §4's S14 asks; whether those are still owed is the operator's. Its
+   survey found the window wider than §4 names (the point `UPDATE`/`DELETE`,
+   rollback's relocation, `VerifyTupleAt` dropping its own hold) and
+   closed it there.
 3. **AT-S20's "Rows first" is done**: AT-6's rows for AT-S10a/b/c/e, AT-S4
    folded into AT-S10b, the stale last row removed, `index.md` carried
    past AT-S9 (`e0b81e1`, review `8483701`). AT-S20 keeps AT-9 and the
@@ -49,10 +51,16 @@ as issued and this section is what binds where the two disagree.
    `docs/inflight/bugs/an-insert-is-logged-after-its-leaf-is-released.md`.
    An `INSERT` appends its full-page images, `HEAP_INSERT` and `page_lsn`
    stamp after its leaf is released, on the single-cooperative-thread
-   argument AT-S5 retired (`wal.md` §11, `command_dispatcher.hpp`'s
+   argument AT-S5 retired (`wal.md` §11a, `command_dispatcher.hpp`'s
    ordering note). It is AT's by §2's first conclusion, **and this order
    gives it no stage**: it is the operator's whether it becomes AT-S21
    (gating S19's §8 and S20) or is carried by AT-9.
+5. **Smaller drifts.** §3's *"Record the word verbatim"* is not met for
+   Q1-Q3: the verbal word is not held, and `raft-marks-2026-09-26.md` §4
+   says so. §1's first row and §4's S14 cite
+   `a-lookups-location-is-stale-before-its-caller-reads-it.md`, which
+   AT-S14 deleted (`974a844`) - read it at `1f9592a`. §6's "the
+   blueprint's" is `docs/conceptnotes/` since `c835464`.
 
 ---
 

@@ -15,7 +15,7 @@ images of every page the insert changed, the spills, the index writes,
 
 Both places that justify that order give one reason:
 `include/kds/server/command_dispatcher.hpp`'s ordering note and
-`docs/spec/wal.md` §11 - *"the server is a single cooperative thread, no
+`docs/spec/wal.md` §11a - *"the server is a single cooperative thread, no
 flush can interleave between the mutation and the `page_lsn` stamp"*. It
 has been false since AT-S5 put a write on every core, and since AT-S10b
 every core's trx-id carve flushes the pool from its own thread.
