@@ -69,8 +69,8 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
         // the minimum over cores, so the scan begins at or before every
         // undecided prepare. A decision is written after the prepare it
         // decides, so if the prepare is in this scan and no decision is,
-        // none was ever made. This is `cross-owner-txn.md` §2c's retention
-        // obligation collapsing into the ordinary redo-start floor.
+        // none was ever made - there is no second stream whose segments
+        // could have been recycled out from under the question.
         //
         // **Only a volume written before AT-S6 reaches this.** Nothing has
         // prepared since 2PC retired there, and AT-S18 removed the floor

@@ -1251,9 +1251,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // order that asked for this said "from `Writer::syncs()`"; the source
     // says otherwise, and the reading would have been ~0 on every cell it
     // was wanted for. `WalManager::Sync()` performs every sync a caller is
-    // parked on - a commit's, a prepare's `RequestDurable`, a client
-    // `SYNC`, the checkpoint gate - on the reactor itself, and only D3's
-    // loss-window tick is handed to the writer thread (`manager.cpp:249`).
+    // parked on - a commit's, a client `SYNC`, the checkpoint gate - on
+    // the reactor itself, and only D3's loss-window tick is handed to the
+    // writer thread (`manager.cpp`'s `DrainOnce`).
     // A peer core starts no writer thread of its own (`expeditor.cpp` does,
     // for core 0 alone), so its `writer_syncs()` is structurally zero.
     //

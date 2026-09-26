@@ -142,12 +142,10 @@ TEST_F(RecoveryTest, ACoordinatorsCommitIsFoundInTheSameScan) {
     EXPECT_EQ(undo.calls, 0) << "a committed participant owes no rollback";
 }
 
-// **Absence is a decision, and only because of the floor.** The engine
-// that wrote the prepare (before AT-S6) floored its redo start at the
-// oldest live prepare and folded the minimum over cores, so a scan that
-// contains the prepare contains any decision made after it. No decision in the scan therefore means none was ever made -
-// which is the retention obligation of `cross-owner-txn.md` §2c collapsing
-// into the ordinary floor, there being no second stream to have recycled.
+// **Absence is a decision, and only because of the floor** the engine
+// that wrote the prepare kept (`recovery.cpp` states it): a scan that
+// contains the prepare contains any decision made after it, so no decision
+// in the scan means none was ever made.
 TEST_F(RecoveryTest, AnUndecidedPrepareIsARollback) {
     WritePreparedPair(/*participant_txn=*/12, /*coordinator_txn=*/88,
                       /*coordinator_core=*/3, RecordType::kPad);

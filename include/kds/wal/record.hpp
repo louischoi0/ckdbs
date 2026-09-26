@@ -192,11 +192,12 @@ enum class RecordType : std::uint8_t {
     // every page record: the envelope names the anchor page, the payload
     // the slot.
     kAnchorUpdate = 26,
-    // **The participant's prepare** (R6-3, `instructions/v2.4.0/2pc.md` D4):
-    // this core has made a cross-owner transaction's work durable in *its
-    // own* stream and may no longer abort it unilaterally. **No writer since
-    // AT-S6** retired 2PC; a log written before then may carry one, and
-    // recovery still resolves it. The envelope's txn_id is this core's
+    // **The participant's prepare** (R6-3, `instructions/v2.4.0/2pc.md` D4),
+    // **written only by a pre-AT engine**: 2PC retired at AT-S6 and the
+    // emitter at AT-S18, and recovery still resolves one a log written
+    // before then carries. It said this core had made a cross-owner
+    // transaction's work durable in *its own* stream and could no longer
+    // abort it unilaterally. The envelope's txn_id is this core's
     // **own** transaction id - D2 gave every participant a local id from
     // its own window, so no foreign id entered this stream - and the payload names the coordinator's
     // `(core, session_id, transaction_id)`, which is the only handle

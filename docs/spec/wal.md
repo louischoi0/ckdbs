@@ -143,7 +143,7 @@ Fuzzy checkpoints, run as a `system`-group task per core — **each core checkpo
 1. Emit `CHECKPOINT_BEGIN` carrying the active-transaction table (each entry with the transaction's `last_undo_ptr`, `docs/spec/txn.md` §3.3) and the dirty-page table (`BufferPool::DirtyTable()` — `{page_id → recLSN}`, `docs/spec/page.md` §8).
 2. Flush dirty pages under §8-1, paced across the checkpoint window (`docs/spec/page.md` §13 checkpoint spreading) and SLO-throttled — the checkpointer never floods the foreground. **Each page is copied under its page latch, shared, and cleaned only if nothing re-dirtied it after the copy** (AT-S8 step 1b, `page.md` §6): writeback on one core used to copy another core's half-written page and clear its dirty mark and recLSN, so a committed change could drop out of the next checkpoint's dirty table and the redo start pass it. **And a page another writeback has claimed is waited for and looked at again** (AT-S10e, `page.md` §8), so an older copy never lands after a newer one: without it the disk could sit one write behind a frame that read clean, a loss this checkpoint's anchor would then persist past.
 3. Emit `CHECKPOINT_END`; **after it is durable**, persist the redo start (`min(recLSN)`) into the superblock anchor (§14-3). recLSN 0 — a page dirtied but described by no record — is skipped, not `min()`ed in; with no logged page in the snapshot the redo start is the `CHECKPOINT_BEGIN` LSN itself. The floor at the oldest live `TXN_PREPARE` that stood here went at AT-S18 with the last way to prepare (§3).
-4. Segments wholly below the redo start are recyclable once archived (§13) — **except that a coordinator's stream may not recycle a segment holding a cross-owner decision until every participant of that transaction has made its own terminal record durable**, and a participant's pre-durable acknowledgement does not discharge this (`docs/spec/cross-owner-txn.md` §2c). A retention policy keyed on a core's own checkpoint alone is locally correct and silently recovers another core's committed transaction as aborted.
+4. Segments wholly below the redo start are recyclable once archived (§13). The cross-owner exception that stood here - a coordinator's stream holding a decision until every participant's terminal record was durable - binds nothing: one stream holds both halves (AM-S4(d)), nothing prepares (AT-S6), and a pre-AT volume's prepare and decision lie at or above the redo start its writer published (§3).
 
 Cadence is the RTO knob: more frequent ⇒ shorter recovery + more FPI volume.
 
@@ -185,7 +185,7 @@ Transaction ids come from `docs/spec/txn.md` §4.2's block-reserved allocator ov
 
 ## 12. Recovery `[PROPOSED]`
 
-Restartable, and once per log — which is once per instance (§3). Core 0 runs the three phases over the whole log before any peer is constructed, and a prepared participant is resolved from the same log: absence of a decision is abort (`docs/spec/cross-owner-txn.md` §2c). A peer runs no pass.
+Restartable, and once per log — which is once per instance (§3). Core 0 runs the three phases over the whole log before any peer is constructed, and a pre-AT volume's prepared participant is resolved from the same log: absence of a decision is abort (§3). A peer runs no pass.
 
 1. **Analysis:** from the superblock's redo start — the fold's, slot 0 — scan to the durable end (§4.2 torn-tail rule); rebuild dirty-page and transaction tables; classify winners (commit record seen) and losers. A `PAGE_HANDOFF` is neither erased from the dirty-page table nor seeded into it (§3).
 2. **Redo:** replay idempotently (§9), restoring `FULL_PAGE_IMAGE`s first per page; a checksum-failed page (`docs/spec/page.md` §10) with an available FPI is restored from it. Redo reconstructs crash-time state including uncommitted changes and undo pages. It neither refuses a page carrying another core's stream stamp nor restamps what it applies: those were the PL-C rules, and with one log a peer's stamp inside this scan's scope is that core owning its page rather than evidence of an unlogged crossing (§3, `docs/spec/page.md` §2b).
@@ -207,7 +207,7 @@ The tuple MVCC header, `PAGE_INIT` as the sole logger of `min_key`, the superblo
 
 ## 15. Open Decisions — do not assume
 
-The open decisions of this subsystem are unrecorded here. The one retention rule that is *not* open — a coordinator's stream may not recycle a segment holding a decision until every participant's terminal record is durable — is §11-4.
+The open decisions of this subsystem are unrecorded here.
 
 ## 16. Testing Requirements
 

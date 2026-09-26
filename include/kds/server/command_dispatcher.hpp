@@ -1975,9 +1975,9 @@ private:
 
     // **The allowance, taken and given back structurally** (AO-S6d). The
     // argument for it is the one the `DispatchAsync` site already makes
-    // about a hand-placed pair: it is
-    // correct today and silently wrong the day a `co_await` or an early
-    // `co_return` appears between the two lines. There are three of them
+    // about a hand-placed pair: it is correct today and silently wrong the
+    // day a `co_await` or an early `co_return` appears between the two
+    // lines. There are three of them
     // now - the statement's own dispatch, the write-block re-run and the
     // probe arm's resume - and the third sits inside a loop next to a
     // suspension point, which is exactly the shape the argument names.

@@ -528,8 +528,8 @@ TEST_F(CoreRuntimeTest, EveryCoreMayWriteTheCatalogPages) {
     peer.value()->store().SetResidentLimit(kFirstUserPageId);
     {
         const CurrentCoreGuard as_the_peer(1);
-        auto tables = peer.value()->store().Get(catalog::kCatalogPageTables);
-        EXPECT_TRUE(tables.ok()) << tables.status().message();
+        const Status tables = peer.value()->store().Get(catalog::kCatalogPageTables).status();
+        EXPECT_TRUE(tables.ok()) << tables.message();
 
         auto own = peer.value()->store().CreateNew();
         ASSERT_TRUE(own.ok()) << own.status().message();
@@ -1373,26 +1373,21 @@ TEST_F(CoreRuntimeTest, APeerOnASharedPoolTakesNoBudgetOfItsOwn) {
 }
 
 TEST_F(CoreRuntimeTest, APeerInsertsIntoARelationItCreatedEndToEnd) {
-    // PW1c-5's e2e: the interim guard is gone, and a peer with every
-    // funding piece - fault grant, write grant (rule 6's acquisition
-    // restamp inside it), a row-id block, a trx-id block - runs a
-    // single-row INSERT into its own heap relation and reads it back.
+    // PW1c-5's e2e: a peer runs a single-row INSERT into a heap relation
+    // core 0 created and reads it back. It needed every funding piece -
+    // fault grant, write grant, a row-id block, a trx-id block - until
+    // each retired: the grants at AW-S1b, when the peer began writing
+    // through core 0's frame table, and the id blocks at AT-S10b, when it
+    // began carving its transaction ids and bumping the relation's mark
+    // itself.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "owned", TwoColumnSchema(),
                                     catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
-    auto row = catalog2.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-
-    // **The write grant this cell opened with went with the grants**
-    // (AW-S1b): the peer wrote through core 0's frame table, so the pages
-    // core 0 formatted for a relation it owns were writable from the moment
-    // they existed. **The id half of funding went at AT-S10b**: the peer
-    // carves its transaction ids and bumps the relation's mark itself.
 
     const auto ins = peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (7)").response;
     EXPECT_NE(ins.rfind("ERR", 0), 0u) << "the funded INSERT must run: " << ins;
@@ -1511,7 +1506,6 @@ TEST_F(CoreRuntimeTest, APeerGrowsABtreeWithoutMovingItsSysTablesRow) {
 
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-
 
     for (int i = 0; i < 600; ++i) {
         const auto ins =
@@ -1750,10 +1744,10 @@ TEST_F(CoreRuntimeTest, APeerMayWriteTheStatisticsRelationsAndHasWrittenNothing)
     {
         const CurrentCoreGuard as_the_peer(1);
         // Writable since AT-S5.
-        auto stats = peer.value()->store().Get(catalog::kCatalogPageAccessStats);
-        EXPECT_TRUE(stats.ok()) << stats.status().message();
-        auto patterns = peer.value()->store().Get(catalog::kCatalogPagePatterns);
-        EXPECT_TRUE(patterns.ok()) << patterns.status().message();
+        const Status stats = peer.value()->store().Get(catalog::kCatalogPageAccessStats).status();
+        EXPECT_TRUE(stats.ok()) << stats.message();
+        const Status patterns = peer.value()->store().Get(catalog::kCatalogPagePatterns).status();
+        EXPECT_TRUE(patterns.ok()) << patterns.message();
     }
 
     // And nothing on core 0's side was written by the peer existing.
@@ -2049,12 +2043,6 @@ void CoreRuntimeTest::OpenCrossOwnerFkPair(ForeignIndexRig& rig, const std::stri
                              base + "p) BTREE")
                   .response.substr(0, 3),
               "CRE");
-    auto parent_oid = rig.catalog2->FindTableOidByName(base + "p");
-    ASSERT_TRUE(parent_oid.ok()) << parent_oid.status().message();
-    auto child_oid = rig.catalog2->FindTableOidByName(base + "c");
-    ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
-    auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
-    ASSERT_TRUE(parent_row.ok());
     // The sync was funding's precondition while `AdmitWritePages` faulted
     // each granted page before restamping it (until AW-S1b); kept, as the
     // harmless shape every rig cell was written against.
@@ -2092,8 +2080,8 @@ TEST_F(CoreRuntimeTest, APeersDdlRunsOnThePeerAndCoreZeroSeesIt) {
     rig.peer->store().SetResidentLimit(kFirstUserPageId);
     {
         const CurrentCoreGuard as_the_peer(1);
-        auto tables = rig.peer->store().Get(catalog::kCatalogPageTables);  // AT-S5
-        EXPECT_TRUE(tables.ok()) << tables.status().message();
+        const Status tables = rig.peer->store().Get(catalog::kCatalogPageTables).status();
+        EXPECT_TRUE(tables.ok()) << tables.message();  // AT-S5
     }
 
     // **CB6: the peer sees its own DDL.** It was a race while the DDL
@@ -2502,13 +2490,6 @@ TEST_F(CoreRuntimeTest, AnInsertWithAParentFromAnotherCoreResolvesItAndWritesThe
                              "BTREE")
                   .response.substr(0, 3),
               "CRE");
-
-    auto parent_oid = rig.catalog2->FindTableOidByName("aiparent");
-    ASSERT_TRUE(parent_oid.ok()) << parent_oid.status().message();
-    auto child_oid = rig.catalog2->FindTableOidByName("aichild");
-    ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
-    auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
-    ASSERT_TRUE(parent_row.ok());
 
     // The sync was funding's precondition while `AdmitWritePages` faulted
     // each granted page before restamping it (until AW-S1b); kept.

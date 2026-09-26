@@ -77,10 +77,6 @@ public:
     // writes are only findable in the WAL inside the replay range, which
     // does not always contain them.
     virtual std::vector<CheckpointActiveTxn> Snapshot() const = 0;
-    // `OldestPreparedLsn`, the floor a live `TXN_PREPARE` put under the
-    // redo start (R6-4), went at AT-S18: nothing has prepared since 2PC
-    // retired at AT-S6, and a pre-AT volume's prepare is resolved by the
-    // mount scan before any checkpoint of this engine runs (`recovery.cpp`).
 };
 
 // No transactions, for a core that is only replaying or only doing

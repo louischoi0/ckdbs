@@ -240,11 +240,10 @@ TEST_F(MountRecoveryTest, ADurableAbortOwesUndoNothing) {
 // checkpoint's prepare floor at AT-S18, so this engine never writes the
 // record and never holds a prepared transaction live. A volume written
 // before AT-S6 can still carry one, and **this pass resolves it before the
-// mount serves anything**: the coordinator's decision is a record of the
-// same log, a commit makes the participant a winner, and absence of a
-// decision - sound because the writing engine floored its redo start at
-// every live prepare - makes it a loser that undo rolls back. After the
-// pass no prepared transaction exists, which is why the floor could go.
+// mount serves anything** - a coordinator's commit makes the participant a
+// winner, no decision makes it a loser (`recovery.cpp` says why absence is
+// sound). After the pass no prepared transaction exists, which is why the
+// floor could go.
 
 TEST_F(MountRecoveryTest, APreAtPrepareWhoseCoordinatorCommittedMountsAsAWinner) {
     WritePreparedParticipant(/*participant_txn=*/7, /*coordinator_txn=*/9,
@@ -255,12 +254,18 @@ TEST_F(MountRecoveryTest, APreAtPrepareWhoseCoordinatorCommittedMountsAsAWinner)
     EXPECT_EQ(r.value().prepared, 1u);
     EXPECT_EQ(r.value().prepared_committed, 1u);
     EXPECT_EQ(r.value().prepared_aborted, 0u);
+    // Two winners: the coordinator's own commit is a record of this log
+    // too, and the participant joins it. A loser verdict would leave one.
+    EXPECT_EQ(r.value().winners, 2u) << "the verdict, which the page below cannot tell apart";
     EXPECT_EQ(r.value().losers, 0u);
     EXPECT_EQ(r.value().transactions_rolled_back, 0u) << "a committed participant owes no rollback";
 
+    // Redo ran. The row is on the page in the rollback cell too: its
+    // insert predates RV10's undo record, so no compensation removes it
+    // (`ALoserRecoversInsteadOfRefusingTheMount`).
     auto page = store_.GetUnpinned(kPage);
     ASSERT_TRUE(page.ok()) << page.status().message();
-    EXPECT_EQ(heap::PageView(page.value()).slot_count(), 1u) << "the participant's row was redone";
+    EXPECT_EQ(heap::PageView(page.value()).slot_count(), 1u);
 }
 
 TEST_F(MountRecoveryTest, APreAtPrepareWithNoDecisionMountsAsARollback) {

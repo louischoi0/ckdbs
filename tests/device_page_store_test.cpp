@@ -553,8 +553,9 @@ TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesThe
 
 TEST(DevicePageStoreOwnershipTest, ASharedStoreAdmitsAPeersSystemWriteAsItsUserWrite) {
     // Until AT-S5 this cell pinned `ResidentBytes`' write gate refusing a
-    // peer a system page, `InvalidArgument` and never retryable. The gate is gone with the arm it enforced: every
-    // core dirties every page, and what keeps a catalog page from tearing
+    // peer a system page, `InvalidArgument` and never retryable. The gate
+    // is gone with the arm it enforced: every core dirties every page, and
+    // what keeps a catalog page from tearing
     // is the page latch across cores (`catalog.md` CT5). Same two page ids,
     // the opposite reading of the first.
     auto device = MakeDevice(64, 0);
