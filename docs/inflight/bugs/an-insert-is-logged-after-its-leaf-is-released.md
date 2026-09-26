@@ -37,6 +37,18 @@ every core's trx-id carve flushes the pool from its own thread.
 Heap relations have the same shape (`ChainInsert`), reached by two cores
 growing or filling one chain.
 
+**The index write carries a third, found by reading at AT-S15** (on
+`at-s15-index-leaf-coverage`, from `4d1e970`): `exec::AppendIndexEntry`
+takes the entry bytes it logs by **re-reading the leaf at the returned
+slot** after `IndexInsert` has released it (`src/exec/index_maintain.cpp`,
+*"re-read from the page rather than rebuilt here"*). Another core's insert
+into that leaf in between shifts the slot, so the `INDEX_INSERT` record
+carries another row's entry: redo re-inserts that one (or refuses the mount
+with `Corruption` when the sorted position disagrees with the record's slot,
+`src/wal/redo.cpp` `ApplyIndexInsert`), and this row's entry is not in the
+log at all. The same fix covers it: log under the hold, from the bytes the
+tree placed.
+
 ## Cost
 
 A quiet wrong answer after a crash: a duplicated row, a row in a leaf

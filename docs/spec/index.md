@@ -527,7 +527,8 @@ Building before publishing is what makes an index **complete or absent, never
 partial** — a failed build leaves an unreachable tree and no catalog row,
 where the reverse order leaves a declared index missing rows, which is a wrong
 answer with a right answer's shape. Nothing can observe the half-built tree:
-DDL is one statement on one cooperative thread. A split during the build moves
+it is reachable only through the catalog row, which is published after the
+build, and the build holds the relation `X` (AT-S5e). A split during the build moves
 the root, so the root written into the catalog row is the one the build ended
 at, not the page first allocated.
 
@@ -692,10 +693,47 @@ is the code it always was. Redo of these records is `docs/spec/wal.md`'s.
 
 ### 12.2 Cross-core
 
-> **IX14 — nothing.** An index hangs off its relation's catalog row and has
-> no owner field, so `crosscore.md` M1's co-location rule is structural here
-> exactly as it is for the Cabin, the var-heap and Waystone pages. A peer core
-> cannot `CREATE INDEX` for the same reason it cannot `CREATE TABLE`.
+> **IX14 — every core writes one index, and an insert's descent re-checks
+> the leaf it lands on (AT-S15).**
+
+An index hangs off its relation's catalog row and has no owner field; since
+AT-S5 a write runs where its session is, and since AT-S5e `CREATE INDEX`
+does too, so two cores maintain one index concurrently. The pages carry the
+page latch (`page.md` §6). A descent is not latch-coupled - it releases a
+parent before reading the child, and a write descent drops the leaf's shared
+hold before taking it exclusive - so another core's divide can run inside
+either gap and leave the descent holding a leaf that has given the key to a
+new right sibling.
+
+- **The write side checks coverage.** Once the leaf is held exclusive,
+  `IndexInsert` asks whether the key still sorts below the right sibling's
+  first entry; if not, the descent starts over, at most
+  `storage::kMaxDescentRestarts` more times, then refuses `TxnConflict`
+  (retryable). It is the clustered tree's check (`heap-and-tuple.md` §5,
+  AT-S5c) with one difference: an index leaf has no immutable `min_key`, so
+  the bound is the sibling's first entry.
+- **That bound rests on a premise: no index entry is ever removed.** The
+  right sibling's first entry equals the separator its divide copied up only
+  while nothing takes entries out (§2's maintenance is append-only). A change
+  that removes index entries revisits the check in the same change
+  (`index_tree.hpp`, "Concurrency").
+- **A stale root** - a core whose memo predates a level growth
+  (`Catalog::UpdateIndexRoot` bumps the schema word; the memo drops at the
+  next task boundary) - routes a key outside its subtree to a leaf that no
+  longer covers it, every attempt alike, and is refused retryable rather than
+  placed where no descent from the current root looks.
+- **The read side checks nothing, and the reason is directional.** A probe's
+  seek names where a forward walk along `right_sibling` starts; a divide only
+  moves entries right, so an outrun seek lands left of the key and the walk
+  reaches it. No caller treats one leaf's silence as the index's.
+- **Open: the walk back up.** A divide inserts its separator into the
+  parents the descent recorded, holding none of them; a parent another core
+  divided meanwhile can take it on the wrong side
+  (`docs/inflight/bugs/a-secondary-index-descent-is-not-revalidated-across-cores.md`,
+  window 2). Since the coverage check, what that costs is not a lost row:
+  a misplaced separator still bounds its child from below, so probes find
+  everything, and inserts over the affected range are refused
+  `TxnConflict` on every attempt.
 
 ---
 

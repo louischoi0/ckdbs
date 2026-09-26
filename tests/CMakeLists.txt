@@ -46,6 +46,7 @@ add_executable(kds_tests
     btree_race_test.cpp
     index_key_test.cpp
     index_tree_test.cpp
+    index_race_test.cpp
     index_ddl_test.cpp
     assertion_ddl_test.cpp
     assertion_catalog_test.cpp
