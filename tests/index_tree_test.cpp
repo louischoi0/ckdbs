@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <random>
 #include <string>
 #include <vector>
@@ -417,6 +418,199 @@ TEST(IndexTreeTest, AnOrdinaryInsertReportsNoStructureAndASplitReportsBoth) {
         if (c.is_new_page) ++new_pages;
     }
     EXPECT_EQ(2, new_pages) << "the sibling and the root are new; the split page is rewritten";
+}
+
+
+// ---- Two cores in one index (AT-S15) ------------------------------------
+//
+// Since AT-S5 a write runs where its session is, so two cores maintain one
+// index. A write descent cannot hold what it found: the leaf's shared hold
+// goes before the exclusive one is asked for (a page latch is never
+// upgraded), and there is no latch coupling, so the parent is released
+// before the leaf is read at all. Another core's divide can run in either
+// gap. These cells put it there by hand, on the one fetch each gap ends
+// with; `index_race_test.cpp` asks the same question with real threads.
+//
+// **Mutation**: drop the coverage arm from `DescendTo` (the `break` on a
+// leaf that no longer covers the key) and the first two cells misplace
+// the entry; the third admits it into a subtree the root no longer
+// reaches - each killed 20 runs in 20. A check that compared the leaf's
+// right link across the re-fetch alone - the first draft AT-S5c rejected -
+// passes the first cell every run and fails the second and third every run.
+
+// A store that runs one action on the `nth` fetch of a chosen page, in
+// either mode, and forwards everything else. It is the barrier the window
+// needs: the action runs after the fetch before it and ahead of the one it
+// is attached to, which is exactly where a second core's divide lands.
+class DivideOnFetchStore final : public storage::PageStore {
+public:
+    explicit DivideOnFetchStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
+
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
+    }
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        return inner_.CreateNewUnpinned();
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        Tick(page_id);
+        return inner_.GetUnpinned(page_id);
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override {
+        Tick(page_id);
+        return inner_.GetForReadUnpinned(page_id);
+    }
+
+    void OnFetch(PageId page_id, int nth, std::function<void()> action) {
+        watched_ = page_id;
+        nth_ = nth;
+        fetches_ = 0;
+        action_ = std::move(action);
+    }
+    bool fired() const noexcept { return fired_; }
+
+private:
+    void Tick(PageId page_id) {
+        if (action_ && page_id == watched_ && ++fetches_ == nth_) {
+            auto action = std::move(action_);  // disarmed first: the action fetches too
+            action_ = nullptr;
+            fired_ = true;
+            action();
+        }
+    }
+
+    storage::InMemoryPageStore& inner_;
+    PageId watched_ = kInvalidPageId;
+    int nth_ = 0;
+    int fetches_ = 0;
+    bool fired_ = false;
+    std::function<void()> action_;
+};
+
+// A two-leaf index whose **left** leaf is full, so the next entry routed
+// there divides it. Keys 0..per_leaf ascending divide the root leaf at its
+// midpoint (keys 0..338 stay, 339.. move); then keys 0..338 again under
+// pk 2 refill the left half. Returns the left leaf.
+PageId BuildFullLeftLeaf(Fixture& f) {
+    const std::uint16_t per_leaf = MaxLeafEntries(f.layout);
+    for (std::uint32_t k = 0; k <= per_leaf; ++k) EXPECT_TRUE(f.Insert(k, 1).ok()) << k;
+    const std::uint32_t kept = per_leaf / 2;
+    for (std::uint32_t k = 0; k < kept; ++k) EXPECT_TRUE(f.Insert(k, 2).ok()) << k;
+
+    std::vector<std::byte> zero(f.layout.sort_key_width(), std::byte{0});
+    auto left = IndexSeekLeaf(f.store, f.root, f.layout, zero);
+    EXPECT_TRUE(left.ok()) << left.status().message();
+    auto bytes = f.store.GetForRead(left.value());
+    EXPECT_TRUE(bytes.ok()) << bytes.status().message();
+    EXPECT_TRUE(IndexLeafView(bytes.value().bytes()).IsFull())
+        << "the left leaf must be full, or the other core's insert does not divide it";
+    return left.value();
+}
+
+// **The tree's structural invariant**, asked of the whole chain rather
+// than of one key: every sort key sits at or above the one before it,
+// across leaf boundaries. An entry placed in a leaf that had given its key
+// to the right sibling is the first thing this sees.
+void ExpectSortKeysAscend(Fixture& f) {
+    std::vector<std::byte> previous;
+    Status s = IndexVisit(
+        f.store, f.root, f.layout, storage::PageAccess::kRead,
+        [&](PageId page_id, IndexLeafView& leaf,
+            std::uint16_t idx) -> StatusOr<storage::VisitControl> {
+            auto key = leaf.SortKey(idx);
+            if (!key.ok()) return key.status();
+            if (!previous.empty()) {
+                EXPECT_LE(std::memcmp(previous.data(), key.value().data(), previous.size()), 0)
+                    << "entry " << idx << " of leaf " << page_id << " (key "
+                    << KeyOf(key.value().subspan(0, f.layout.key_width))
+                    << ") sorts below the entry before it";
+            }
+            previous.assign(key.value().begin(), key.value().end());
+            return storage::VisitControl::kContinue;
+        });
+    ASSERT_TRUE(s.ok()) << s.message();
+}
+
+// A's key: in the left leaf's **upper** half, so another core's divide
+// moves its place to the new right sibling. B's sorts low and stays left.
+constexpr std::uint32_t kKeyA = 300;
+constexpr std::uint32_t kKeyB = 10;
+constexpr std::uint64_t kPkNew = 3;  // neither 1 nor 2: the pks the fill used
+
+void ExpectAsEntryReachable(Fixture& f) {
+    EXPECT_EQ((std::vector<std::uint64_t>{1, 2, kPkNew}), f.Probe(kKeyA))
+        << "a probe for A's key must find A's entry beside the two the fill placed";
+    ExpectSortKeysAscend(f);
+}
+
+TEST(IndexTreeTest, ALeafDividedBetweenTheSharedReadAndTheExclusiveRefetchIsNotWrittenPast) {
+    // **The re-fetch window.** A's descent reads the leaf shared, drops it,
+    // and asks for it exclusive (fetches 1 and 2 of the leaf). B's divide
+    // runs between the two.
+    Fixture f;
+    const PageId left = BuildFullLeftLeaf(f);
+    DivideOnFetchStore store(f.store);
+    store.OnFetch(left, /*nth=*/2, [&] { ASSERT_TRUE(f.Insert(kKeyB, kPkNew).ok()); });
+
+    auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kPkNew, {}, /*owner_oid=*/0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
+    EXPECT_NE(left, placed.value().page_id)
+        << "A's entry landed in the leaf that had already given its key away";
+    ExpectAsEntryReachable(f);
+}
+
+TEST(IndexTreeTest, ALeafDividedBeforeTheDescentReadsItIsNotWrittenPast) {
+    // **The outrun.** The root is read and released before the leaf is
+    // asked for, so B's divide can run before A has touched the leaf at all
+    // (fetch 1). A comparison of the leaf across A's own two fetches sees
+    // one unchanged leaf here; only a question of coverage sees the move.
+    Fixture f;
+    const PageId left = BuildFullLeftLeaf(f);
+    DivideOnFetchStore store(f.store);
+    store.OnFetch(left, /*nth=*/1, [&] { ASSERT_TRUE(f.Insert(kKeyB, kPkNew).ok()); });
+
+    auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kPkNew, {}, /*owner_oid=*/0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
+    EXPECT_NE(left, placed.value().page_id)
+        << "A's entry landed in the leaf that had already given its key away";
+    ExpectAsEntryReachable(f);
+}
+
+TEST(IndexTreeTest, AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree) {
+    // **A stale root** (`Catalog::UpdateIndexRoot`'s note): a core whose
+    // memo still names the pre-growth root descends into what is now the
+    // new root's leftmost subtree. For a key that subtree no longer covers,
+    // the coverage check refuses the insert retryable rather than placing
+    // it where no descent from the current root looks.
+    Fixture f;
+    const std::uint16_t per_leaf = MaxLeafEntries(f.layout);
+    for (std::uint32_t k = 0; k < per_leaf; ++k) ASSERT_TRUE(f.Insert(k, 1).ok()) << k;
+    const PageId stale = f.root;
+    ASSERT_TRUE(f.Insert(kKeyB, 2).ok());  // B divides the root leaf and grows a level
+    ASSERT_NE(stale, f.root) << "the root must have grown, or there is no stale root";
+    auto before = IndexEntryCount(f.store, f.root, f.layout);
+    ASSERT_TRUE(before.ok()) << before.status().message();
+
+    auto refused = IndexInsert(f.store, stale, f.layout, Key(600), kPkNew, {}, /*owner_oid=*/0);
+    ASSERT_FALSE(refused.ok()) << "an entry for key 600 was placed through a stale root, in page "
+                               << refused.value().page_id;
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+    auto after = IndexEntryCount(f.store, f.root, f.layout);
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    EXPECT_EQ(before.value(), after.value()) << "a refused insert wrote an entry";
+
+    // **Inside** the stale root's subtree the placement is the right one:
+    // the old root is the new root's leftmost child, so the leaf it routes
+    // to is the leaf the current root routes to. What a stale root still
+    // gets wrong is the walk back up past it, when such an insert divides
+    // - window 2, AT-S16's - and this insert does not divide.
+    auto inside = IndexInsert(f.store, stale, f.layout, Key(5), kPkNew, {}, /*owner_oid=*/0);
+    ASSERT_TRUE(inside.ok()) << inside.status().message();
+    EXPECT_EQ(kInvalidPageId, inside.value().new_root);
+    EXPECT_EQ((std::vector<std::uint64_t>{1, kPkNew}), f.Probe(5));
+    ExpectSortKeysAscend(f);
 }
 
 }  // namespace
