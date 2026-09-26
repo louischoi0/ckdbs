@@ -2515,7 +2515,10 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     const Status renamed =
         stmt.rename_column
             ? catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name)
-            : catalog_.RenameTable(oid.value(), stmt.new_name);
+            : catalog_.RenameTable(oid.value(), stmt.new_name,
+                                   session.in_explicit_txn() && session.transaction() != nullptr
+                                       ? session.transaction()->id()
+                                       : txn::kNoTrxId);
     if (!renamed.ok()) {
         return {ErrorReply(renamed), false, 0, renamed};
     }
@@ -3971,12 +3974,15 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // Registered before the status is read: a create that failed partway
         // still left rows on the page, and those are exactly the rows a
         // rollback has to retire.
+        const bool wrote_rows = !ddl.written.empty();
         NoteDdlRows(ddl);
         if (!oid.ok()) {
             // The name taken by another core between the early check and
             // the catalog's held one (AT-S17): the reply a second arrival
-            // gets, `EXISTS`, which is not an `ERR` and poisons nothing.
-            if (oid.status().code() == StatusCode::kAlreadyExists) {
+            // gets, `EXISTS`, which is not an `ERR` and poisons nothing -
+            // and only while nothing was written, since a non-`ERR` reply
+            // lets autocommit commit whatever was.
+            if (oid.status().code() == StatusCode::kAlreadyExists && !wrote_rows) {
                 if (auto exists = ExistingRelationReply(stmt.schema, stmt.table_name,
                                                         stmt.table_byte_offset);
                     exists.has_value()) {

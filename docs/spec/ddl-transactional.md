@@ -101,8 +101,10 @@ Built, and what each gets:
   leaves no relation and no rows. **One name, one row on every core since
   AT-S17**: the duplicate check and the insert are one hold of
   `sys.objects`' root page, and the check refuses a name another core's
-  open drop has freed (`catalog.md` CT7, which also covers `RENAME TO`,
-  `CREATE NAMESPACE`, `RENAME COLUMN`, index and assertion names).
+  open drop has freed, answering `TXN_CONFLICT retryable=1` where it was a
+  bare `ERR` asked on one core only (`catalog.md` CT7, which also covers
+  `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, index and assertion
+  names, and a column's cabin).
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
   §5a is the whole argument. In autocommit it retires its dependent rows;
   inside a transaction it delete-marks them.

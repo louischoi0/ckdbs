@@ -25,8 +25,8 @@
 // 0 and the reactor ran it to completion; AT-S5 made a DDL run where its
 // session is, so two cores could both find a name free and both write it -
 // two rows claiming one name, and resolution answering whichever it met
-// first. `docs/inflight/bugs/two-cores-can-create-one-name-twice.md` found
-// it by reading; these cells reproduce it and pin the close.
+// first. `docs/inflight/bugs/two-cores-can-create-one-name-twice.md` (at
+// `4d1e970`; deleted by this stage) found it by reading; these cells reproduce it and pin the close.
 //
 // Driven on two catalogs over one armed store, one per thread and each
 // thread its own core, because the window is between two latch holds and
@@ -140,10 +140,9 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneTableNameLeaveOneRow) {
     // dispatcher's duplicate check - and only then do both write. Before
     // AT-S17 both writes landed, every round.
     //
-    // **Mutations**: drop the name check under `CreateTable`'s hold (both
-    // succeed every round, since the rendezvous orders both lookups first);
-    // keep the check and drop the hold (the second succeeds whenever both
-    // checks run before either insert). Each killed 10 in 10.
+    // **Mutations**: drop the binding check under `CreateTable`'s hold,
+    // keeping the unheld early one; keep it and drop the hold. Each killed
+    // 20 in 20 (and 10 in 10 against the stage's first, wider hold).
     TwoCatalogs cats;
     Rendezvous gate(kThreads);
     const Schema schema = PkAnd({"v"});
@@ -354,6 +353,38 @@ TEST(CatalogNameRaceTest, TwoCoresPublishingOneAssertionNameOnTwoRelationsLeaveO
             rows += def.name == Name("cap", round) ? 1 : 0;
         }
         EXPECT_EQ(rows, 1) << rows << " assertions named " << Name("cap", round);
+    }
+}
+
+TEST(CatalogNameRaceTest, TwoCoresCreatingACabinOnOneColumnLeaveOneRow) {
+    // Not a name but the same shape, found by AT-S17's review: one cabin per
+    // (relation, column), checked and inserted two holds apart, and reached
+    // by an operator's `CREATE CABIN` racing another's or the controller's.
+    //
+    // **Mutation**: drop the hold in `CreateCabin` - killed 20 in 20.
+    TwoCatalogs cats;
+    std::vector<Oid> rels;
+    for (int round = 0; round < kRounds; ++round) {
+        auto oid = cats[0].CreateTable(kNamespacePublic, Name("k", round), PkAnd({"v"}),
+                                       ClusteredType::kBtree);
+        ASSERT_TRUE(oid.ok()) << oid.status().message();
+        rels.push_back(oid.value());
+    }
+    Rendezvous gate(kThreads);
+    auto out = OnTwoCores([&](int core, int round) {
+        gate.Wait();
+        return cats[core].CreateCabin(rels[static_cast<std::size_t>(round)], 1).status();
+    });
+    ExpectOneWinnerPerRound(out);
+
+    auto cabins = cats.Fresh()->ListCabins();
+    ASSERT_TRUE(cabins.ok()) << cabins.status().message();
+    for (int round = 0; round < kRounds; ++round) {
+        int rows = 0;
+        for (const SysCabinRow& row : cabins.value()) {
+            rows += row.rel_oid == rels[static_cast<std::size_t>(round)] ? 1 : 0;
+        }
+        EXPECT_EQ(rows, 1) << rows << " cabins on " << Name("k", round) << ".v";
     }
 }
 

@@ -710,7 +710,7 @@ private:
     // What that cost is not a tidiness: `TransactionManager::Commit` fails
     // only *before* `PublishCommit`, so the transaction is still active,
     // and `Release` refuses to free an active one. The object stayed in
-    // `live_` for the life of the process, `MintView` counted it in flight
+    // `live_` for the life of the process, `MintCheckView` counted it in flight
     // for every later view, and - since AO-S6c-a gave every writer a
     // borrow - its tenancies were never released either, so every later
     // writer of a row it touched parked until the fault net and was told a

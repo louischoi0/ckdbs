@@ -197,5 +197,46 @@ TEST(CatalogNameRigTest, AnIndexCreateOnOneCoreIsRefusedWhileAnotherCoresDropOfI
     EXPECT_EQ(named, 1);
 }
 
+TEST(CatalogNameRigTest, ItsOwnOpenDropIsRefusedAsNotRetryable) {
+    // The two own-transaction cases, which a retry can never clear because
+    // the only transaction they wait on is the asker's (AT-S17's review,
+    // findings 1 and 2):
+    //
+    //   - recreating an index inside the transaction that drops it keeps
+    //     the refusal it had before AT-S17 - the name is the dropped
+    //     index's until the drop commits - and not `TXN_CONFLICT`;
+    //   - renaming onto a name the transaction is dropping is refused
+    //     `UNSUPPORTED`: the rename is not undone by the drop's rollback.
+    //
+    // `DROP TABLE t; CREATE TABLE t` in one transaction stays admitted
+    // (`ATransactionMayDropAndRecreateOneNameItself`).
+    //
+    // **Mutations**: either check ignoring the asker's own id - each half
+    // answers `TXN_CONFLICT retryable=1`, 3 runs in 3.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE u (id int64, v int64)").response, "CREATED"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE INDEX ix ON t (v)").response, "CREATED INDEX"));
+
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("DROP INDEX ix", &ddl).response, "DROPPED INDEX"));
+    const std::string again = d0.Dispatch("CREATE INDEX ix ON t (v)", &ddl).response;
+    EXPECT_TRUE(StartsWith(again, "ERR")) << again;
+    EXPECT_NE(again.find("already exists"), std::string::npos) << again;
+    EXPECT_EQ(again.find("retryable=1"), std::string::npos) << again;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("DROP TABLE t", &ddl).response, "DROPPED TABLE"));
+    const std::string renamed = d0.Dispatch("ALTER TABLE u RENAME TO t", &ddl).response;
+    EXPECT_TRUE(StartsWith(renamed, "ERR UNSUPPORTED retryable=0")) << renamed;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    EXPECT_EQ(RelationsNamed(*rig, "t"), 1);
+    EXPECT_EQ(RelationsNamed(*rig, "u"), 1);
+}
+
 }  // namespace
 }  // namespace kds::server

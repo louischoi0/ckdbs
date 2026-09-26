@@ -116,14 +116,14 @@ inline constexpr int kRounds = 6;
 inline constexpr int kThreads = 2;
 
 // **The rendezvous (`armed_race.hpp`), and why the cell is worth nothing
-// without it.** Measured: with the threads merely started together and left to walk the
-// chain, the mutant below survived **three runs in six** - the two drift
-// apart after a few inserts, and once they are on different leaves neither
-// is queued on the other's latch and the window never opens. What produces
-// it is both threads entering `BtreeInsert` for the *same* leaf at the same
-// instant: one takes the share, the other queues on the exclusive, and the
-// release hands the leaf straight to a splitter while the first is still
-// between its two fetches. So they are re-synchronised before every insert
+// without it.** Measured: with the threads merely started together and left
+// to walk the chain, the mutant below survived **three runs in six** - the
+// two drift apart after a few inserts, and once they are on different leaves
+// neither is queued on the other's latch and the window never opens. What
+// produces it is both threads entering `BtreeInsert` for the *same* leaf at
+// the same instant: one takes the share, the other queues on the exclusive,
+// and the release hands the leaf straight to a splitter while the first is
+// still between its two fetches. So they are re-synchronised before every insert
 // rather than only at the start.
 
 // 64-byte tuples: many per leaf, which is what a *divide* needs.

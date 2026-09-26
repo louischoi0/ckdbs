@@ -113,8 +113,9 @@ Refusals, each with a byte: a missing or non-identifier name is
 `InvalidArgument`; `ADD`/`DROP`/`MODIFY`/`SET` after the table name is
 `NotImplemented` with AL1's reason, and any other verb there is
 `InvalidArgument` ("expected RENAME"); `RENAME` to an existing name is
-`AlreadyExists`, and to a name an uncommitted `DROP TABLE` holds is
-`TxnConflict`; renaming a column to a sibling's name is
+`AlreadyExists`, to a name another transaction's uncommitted `DROP TABLE`
+holds is `TxnConflict`, and to one the renaming transaction's own open drop
+holds is `Unsupported` (commit the drop first); renaming a column to a sibling's name is
 `AlreadyExists`; a `sys.*` relation is refused outright (the catalog's
 names are load-bearing for bootstrap and are nobody's to change).
 
@@ -123,7 +124,7 @@ names are load-bearing for bootstrap and are nobody's to change).
 - New table name: non-empty, fits `kCatalogNameMax`, no existing relation
   carries it, and no drop that has not committed holds it - a rename lands
   for good, so a drop's rollback would restore the name beside it; that
-  holds for the renaming session's own open drop too. The check and the
+  holds for the renaming transaction's own open drop too. The check and the
   rewrite are one hold of `sys.objects`' root page, which is what makes
   them one act across cores (`catalog.md` CT7, AT-S17); until AT-S5 the
   event loop did, DDL being core 0's.

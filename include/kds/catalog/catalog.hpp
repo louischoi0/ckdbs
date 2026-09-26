@@ -561,7 +561,10 @@ public:
     // name is not the one that was asked for); a taken name is
     // AlreadyExists; a relation outside the public namespace is refused -
     // the catalog's own names are load-bearing for bootstrap (AL7).
-    Status RenameTable(Oid table_oid, std::string_view new_name);
+    // `own_trx_id` is the renaming session's open transaction, or
+    // `txn::kNoTrxId`: it only classifies a refusal (`CheckNameFree`).
+    Status RenameTable(Oid table_oid, std::string_view new_name,
+                       std::uint64_t own_trx_id = txn::kNoTrxId);
     Status RenameColumn(Oid table_oid, std::string_view old_name, std::string_view new_name);
 
     // DROP TABLE's catalog half (docs/spec/drop-table.md DT1-DT3, workplan
@@ -1200,7 +1203,9 @@ public:
     // declaration that could never work should be refused by name before it
     // walks a relation, not after, and certainly not as a page-type error
     // from inside the build.
-    Status CheckIndexDef(const IndexDef& def);
+    // `own_trx_id` is the declaring transaction's, for the name check's
+    // own-drop case (`CheckIndexNameFree`), or `txn::kNoTrxId`.
+    Status CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id = txn::kNoTrxId);
 
     // Retires the row. Retired rather than delete-marked, for DropCabin()'s
     // reason: a catalog read has no snapshot to filter a mark against, so a
@@ -1340,38 +1345,35 @@ private:
 
     // **Is `name` free for a new `live_type` row** (`kTypeTable` or
     // `kTypeNamespace`) - the check every write that gives a `sys.objects`
-    // row a name makes, and makes **under the relation's root page held
-    // exclusive** (AT-S17, the AT-close order's Q2): the caller takes page
-    // 6 before calling and keeps it through its insert or rewrite, so the
-    // check and the write are one act across cores, as `RegisterPattern`'s
-    // are on page 9. Held, nothing else can write a `sys.objects` row
-    // between the two, because every such write enters the chain at page 6.
+    // row a name makes (`catalog.md` CT7). **Binding only under page 6
+    // held exclusive** across the check and the caller's insert or rewrite
+    // (AT-S17, the AT-close order's Q2), as `RegisterPattern`'s is on page
+    // 9; asked unheld, it is an early refusal and nothing more.
     //
-    // Two questions, both answered here so no caller can ask one:
+    // Two questions, in one walk so no caller can ask one:
     //
     //   - **A live row of the name**, unfiltered (`ddl-transactional.md`'s
     //     duplicate check): another transaction's uncommitted row counts,
-    //     whichever core wrote it, because a row is on the page from the
-    //     moment it is written. `AlreadyExists`.
-    //   - **A tombstone whose drop has not committed.** A drop frees a name
-    //     the instant it runs - the retype is an in-place overwrite and a
-    //     catalog row has no undo chain (§5a) - but its rollback rewrites
-    //     the row live again, so a name taken meanwhile leaves two live rows
-    //     claiming it. Asked under a latest-state check view with
-    //     `own_trx_id` as its own, so another transaction's pending drop
-    //     holds the name on every core and the caller's own does not
-    //     (`DROP TABLE t; CREATE TABLE t` in one transaction still works).
-    //     `TxnConflict`: the name is free once that transaction resolves,
-    //     which is what the retryable code means (status.hpp).
-    //
-    // With no transaction manager there is no pending drop to ask about.
-    Status CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id);
+    //     whichever core wrote it. `AlreadyExists`.
+    //   - **A tombstone whose drop has not committed**, on any core: its
+    //     rollback rewrites the row live again, beside whatever took the
+    //     name meanwhile. `TxnConflict` - free once that transaction
+    //     resolves. The drop of `own_trx_id` (the asker's transaction, or
+    //     `txn::kNoTrxId`) frees the name when `own_drop_frees` - `DROP
+    //     TABLE t; CREATE TABLE t` in one transaction, which the create's
+    //     own rollback undoes with it - and otherwise is `Unsupported`: a
+    //     rename is not undone by that rollback.
+    Status CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id,
+                         bool own_drop_frees);
 
     // `CheckNameFree` for an index's name, over `sys.indexes`: a live row
     // of the name is `AlreadyExists`, and one delete-marked by a drop the
-    // instance's check view cannot see yet is `TxnConflict`. Held under
-    // page 8 by `CreateIndex`; asked unheld by `CheckIndexDef`, whose answer
-    // is the early one.
+    // instance's check view cannot see yet is `TxnConflict` - unless the
+    // drop is `own_trx_id`'s, which keeps the name `AlreadyExists` until it
+    // commits, as it did before AT-S17 (recreating an index inside the
+    // transaction that drops it is not admitted). Held under page 8 by
+    // `CreateIndex`; asked unheld by `CheckIndexDef`, whose answer is the
+    // early one.
     Status CheckIndexNameFree(std::string_view name, std::uint64_t own_trx_id);
 
     // The uncached sys.columns scan behind BuildSchemaFromColumns(). Split

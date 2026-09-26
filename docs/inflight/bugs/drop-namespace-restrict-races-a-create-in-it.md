@@ -1,6 +1,6 @@
 # DROP NAMESPACE's RESTRICT races a create in the namespace
 
-**Found by reading, not reproduced.** Verified at `5a0dfbf` on
+**Found by reading, not reproduced.** Verified at `1635263` on
 `at-s17-one-name-one-row`, by AT-S17's survey of the name-taking writes
 (`catalog.md` CT7). Not a name: a relation's *membership*, which is why
 AT-S17 does not close it.
