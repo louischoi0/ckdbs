@@ -427,9 +427,9 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     // bug is expected is a check nobody trusts.
     //
     // **The page the identity is checked on is the page compensated**, held
-    // exclusive from the check to the write: a relocation hands its leaf
-    // back held, not a `(page, slot)` to re-fetch, because a divide between
-    // the two renumbers the slot again (AT-0 item 12).
+    // exclusive from the check to the write; a relocation hands its leaf
+    // back held rather than a `(page, slot)` to re-fetch (btree.hpp
+    // `Location`).
     PageId page_id = entry.page_id;
     std::uint16_t slot = entry.slot;
     auto bytes = store_.Get(page_id);
@@ -454,8 +454,8 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
                     std::to_string(page_id) + " slot " + std::to_string(slot) +
                     ", and no row locator is installed to find it");
             }
-            // Released first: the locator's descent takes a leaf exclusive,
-            // and the leaf the row moved within can be this one.
+            // Released first, so the compensation holds exactly one page:
+            // the one the locator hands back.
             bytes.value().Release();
             auto found = locate_row(entry.rel_oid, entry.pk);
             if (!found.ok()) return found.status();

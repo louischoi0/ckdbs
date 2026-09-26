@@ -5918,7 +5918,7 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
                   std::uint64_t pk) -> StatusOr<txn::TransactionManager::RowLocation> {
         auto access = catalog_.InitTableAccess(static_cast<catalog::Oid>(rel_oid));
         if (!access.ok()) return access.status();
-        PkLookup found = LocateByPk(*access.value(), pk, storage::PageAccess::kWrite);
+        PkLookup found = LocateByPk(*access.value(), pk);
         if (found.kind != PkLookup::Kind::kAt) {
             // kAbsent means the row is gone, kScan means the relation has no
             // descent to ask. Neither is a location, and rollback may not
@@ -5934,8 +5934,7 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
 }
 
 CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAccess& access,
-                                                          std::uint64_t pk,
-                                                          storage::PageAccess mode) {
+                                                          std::uint64_t pk) {
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         // The tree *is* the relation's storage, so its answer is
         // authoritative in both directions: a hit is where the row lives,
@@ -5943,10 +5942,10 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
         // visit the same leaf and find the same nothing. This is the one
         // place a point lookup may skip the scan on a miss, and it is
         // allowed precisely because it is not a hint.
-        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, pk, mode);
+        // Exclusive, because every caller writes the slot it is handed.
+        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, pk,
+                                        storage::PageAccess::kWrite);
         if (found.ok()) {
-            // The leaf rides out held, in `mode`: the caller reads or writes
-            // the slot through it and never re-fetches (AT-0 item 12).
             return PkLookup{PkLookup::Kind::kAt, std::move(found.value())};
         }
         if (found.status().code() == StatusCode::kNotFound) {
@@ -7604,41 +7603,37 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // produces the identical result - the locator picks the slot to look
     // at, never which rows match.
     if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
-        PkLookup found = LocateByPk(ta, *pk, storage::PageAccess::kWrite);
+        PkLookup found = LocateByPk(ta, *pk);
         if (found.kind == PkLookup::Kind::kAbsent) {
             return {"UPDATED 0", false, 0};  // no such row, on the tree's authority
         }
         if (found.kind == PkLookup::Kind::kAt) {
-            // Through the leaf the descent holds exclusive and dirty, never a
-            // re-fetch: a shared lookup then `Get()` let a divide on another
-            // core renumber the slot in between, and `apply` found another
-            // row, declined it on the WHERE, and answered `UPDATED 0` for a
-            // row that exists (AT-0 item 12).
-            {
-                heap::PageView page(found.at.leaf.bytes());
-                if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
-                    return {ErrorReply(s), false, 0, s};
-                }
-                // **AO-S3b: `apply` now answers OK for a row it declined to
-                // write**, so the count below is no longer proof that it
-                // did. Without this test a point UPDATE against a held row
-                // renders `UPDATED 0` - a success reply for a write that
-                // never happened, and an autocommit commit on top of it.
-                // There is exactly one row in scope here, so nothing was
-                // written and nothing can be resumed from: the conflict is
-                // the answer, and `EndWrite` keeps the blocker that makes
-                // `DispatchAsync` wait for the holder and run the whole
-                // statement again - the pre-AO-S3b behaviour of this arm.
-                if (parked_on_row) {
-                    return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
-                }
-                if (logging(LogLevel::kTrace)) {
-                    log_->Trace("query", "pk " + std::to_string(*pk) + " updated at " +
-                                             std::to_string(found.at.page_id) + ":" +
-                                             std::to_string(found.at.slot));
-                }
-                return {"UPDATED " + std::to_string(updated), false, updated};
+            // Through the leaf the descent holds exclusive and dirty (btree.hpp
+            // `Location`): a shared lookup then `Get()` let a divide renumber
+            // the slot, and `apply` declined another row on the WHERE.
+            heap::PageView page(found.at.leaf.bytes());
+            if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
             }
+            // **AO-S3b: `apply` now answers OK for a row it declined to
+            // write**, so the count below is no longer proof that it
+            // did. Without this test a point UPDATE against a held row
+            // renders `UPDATED 0` - a success reply for a write that
+            // never happened, and an autocommit commit on top of it.
+            // There is exactly one row in scope here, so nothing was
+            // written and nothing can be resumed from: the conflict is
+            // the answer, and `EndWrite` keeps the blocker that makes
+            // `DispatchAsync` wait for the holder and run the whole
+            // statement again - the pre-AO-S3b behaviour of this arm.
+            if (parked_on_row) {
+                return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
+            }
+            if (logging(LogLevel::kTrace)) {
+                log_->Trace("query", "pk " + std::to_string(*pk) + " updated at " +
+                                         std::to_string(found.at.page_id) + ":" +
+                                         std::to_string(found.at.slot));
+            }
+            return {"UPDATED " + std::to_string(updated), false, updated};
         }
     }
 
@@ -8977,26 +8972,24 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // contract: the locator picks the slot to look at, never which rows
     // match, so falling through to the scan produces the identical answer.
     if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
-        PkLookup found = LocateByPk(ta, *pk, storage::PageAccess::kWrite);
+        PkLookup found = LocateByPk(ta, *pk);
         if (found.kind == PkLookup::Kind::kAbsent) {
             return {"DELETED 0", false, 0};
         }
         if (found.kind == PkLookup::Kind::kAt) {
-            // UPDATE's point arm states why the hold, not a re-fetch.
-            {
-                heap::PageView page(found.at.leaf.bytes());
-                if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
-                    return {ErrorReply(s), false, 0, s};
-                }
-                // AO-S3b, and UPDATE's point arm states the argument: a
-                // held row leaves `mark` answering OK with nothing marked,
-                // and rendering the count would answer `DELETED 0` for a
-                // row this statement is waiting on.
-                if (parked_on_row) {
-                    return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
-                }
-                return {"DELETED " + std::to_string(deleted), false, deleted};
+            // Through the held leaf, as UPDATE's point arm (btree.hpp `Location`).
+            heap::PageView page(found.at.leaf.bytes());
+            if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
             }
+            // AO-S3b, and UPDATE's point arm states the argument: a
+            // held row leaves `mark` answering OK with nothing marked,
+            // and rendering the count would answer `DELETED 0` for a
+            // row this statement is waiting on.
+            if (parked_on_row) {
+                return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
+            }
+            return {"DELETED " + std::to_string(deleted), false, deleted};
         }
     }
 

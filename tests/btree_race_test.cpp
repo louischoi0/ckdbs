@@ -16,6 +16,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/storage/page_latch.hpp"
 
 // **The clustered B+ tree with more than one core in it** (AT-S5c, D3).
 //
@@ -203,7 +204,7 @@ TEST(BtreeRaceTest, ALookupDoesNotMissARowADivideMovedUnderIt) {
 
     // Dense enough to fill leaves, and spaced by ten so the divider below
     // has somewhere to land *inside* one. **Sized against the root like the
-    // other two**: 600 rows at ~1 KB is well under an internal node's 678
+    // other two**: 600 rows of 64 bytes is well under an internal node's 678
     // separators even after the divider doubles the leaf count, and
     // `root_moved` below is what says so rather than this arithmetic.
     constexpr std::uint64_t kRows = 600;
@@ -304,10 +305,10 @@ TEST(BtreeRaceTest, ALookupsSlotStillHoldsItsRowWhenTheCallerReadsIt) {
     // page latch has no queue (`page_latch.hpp`), and the gap the pre-fix
     // shape left is between two lines of one caller - no rendezvous reaches
     // inside it. The cell above's rendezvous puts the divider on the
-    // reader's leaf every round, ~1 KB tuples make most of its inserts a
-    // divide (eight to a leaf, where the cell above's 64 bytes fit ~110),
-    // and `kRepeats` fresh trees turn a rare interleaving into a reliable
-    // one.
+    // reader's leaf every round, ~1 KB tuples make its inserts divide far
+    // more often (eight to a leaf, where the cell above's 64 bytes fit
+    // ~110), and `kRepeats` fresh trees turn a rare interleaving into a
+    // reliable one.
     //
     // **Mutation**: `BtreeLookup` releases the leaf and re-fetches it by id
     // before returning - the pre-fix callers' shape moved into the function.
@@ -326,6 +327,9 @@ TEST(BtreeRaceTest, ALookupsSlotStillHoldsItsRowWhenTheCallerReadsIt) {
 
     std::vector<std::string> wrong;
     std::mutex wrong_latch;
+    // Counted so the cell cannot pass by reading nothing or dividing nothing.
+    std::atomic<std::uint64_t> probes_read{0};
+    std::atomic<std::uint64_t> inserts_landed{0};
     for (int repeat = 0; repeat < kRepeats; ++repeat) {
         std::unique_ptr<storage::MemoryPageDevice> device;
         auto store = ArmedStore(device);
@@ -357,6 +361,7 @@ TEST(BtreeRaceTest, ALookupsSlotStillHoldsItsRowWhenTheCallerReadsIt) {
                 const std::uint64_t id = n * 10 + 5;  // sorts *inside* a full leaf
                 auto r = BtreeInsert(*store, current_root, id, MakeSmallTuple(id, kDividingFiller),
                                      /*trx_id=*/1, /*owner_oid=*/0);
+                if (r.ok()) inserts_landed.fetch_add(1, std::memory_order_relaxed);
                 if (r.ok() && r.value().new_root != kInvalidPageId) {
                     root_moved.store(true, std::memory_order_release);
                 }
@@ -371,6 +376,7 @@ TEST(BtreeRaceTest, ALookupsSlotStillHoldsItsRowWhenTheCallerReadsIt) {
                     if (id > kRows * 10) continue;
                     auto found = BtreeLookup(*store, current_root, id);
                     if (!found.ok()) continue;  // the cell above owns the status
+                    probes_read.fetch_add(1, std::memory_order_relaxed);
                     // Held across a few yields, as a caller's read is: the
                     // divider arrives, spins on this hold, and takes the
                     // leaf the instant the next probe's gap would open.
@@ -400,12 +406,54 @@ TEST(BtreeRaceTest, ALookupsSlotStillHoldsItsRowWhenTheCallerReadsIt) {
                "isolates the lookup's hold";
     }
 
+    EXPECT_GT(probes_read.load(), 0u) << "no lookup succeeded, so nothing was checked";
+    EXPECT_GT(inserts_landed.load(), 0u) << "no divider insert landed, so nothing moved";
+
     std::string named;
     for (std::size_t i = 0; i < wrong.size() && i < 8; ++i) named += " " + wrong[i];
     EXPECT_TRUE(wrong.empty()) << wrong.size()
                                << " lookup(s) handed back a slot that no longer held the row "
                                   "asked for:"
                                << named;
+}
+
+TEST(BtreeRaceTest, AWriteLookupHoldsItsLeafExclusiveAndItsMissIsAuthoritative) {
+    // **The writer's half** (AT-0 item 12). A point `UPDATE`/`DELETE` and
+    // rollback's relocation ask `BtreeLookup` for `kWrite` and write through
+    // the leaf it returns, where they used to look up shared and `Get()` the
+    // page after - a window a divide on another core could renumber the
+    // slot in. So the returned leaf must be held **exclusive**, which the
+    // latch word says directly; and a write lookup's miss skips the
+    // coverage ask, because `DescendTo` asked it under that same hold.
+    std::unique_ptr<storage::MemoryPageDevice> device;
+    auto store = ArmedStore(device);
+    ASSERT_NE(store, nullptr);
+
+    auto created = store->CreateNew();
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    PageId root = created.value().first;
+    ASSERT_TRUE(FormatRoot(created.value().second.bytes(), /*owner_oid=*/0).ok());
+    created.value().second.Release();
+
+    // One per leaf, so id 10's leaf has a right sibling and is not the
+    // rightmost: the leaf a miss would owe a coverage ask on.
+    for (std::uint64_t id = 10; id <= 40; id += 10) {
+        auto r = BtreeInsert(*store, root, id, MakeTuple(id), /*trx_id=*/1, /*owner_oid=*/0);
+        ASSERT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
+        if (r.value().new_root != kInvalidPageId) root = r.value().new_root;
+    }
+
+    auto found = BtreeLookup(*store, root, 10, storage::PageAccess::kWrite);
+    ASSERT_TRUE(found.ok()) << found.status().message();
+    auto word = store->latch_word_for_test(found.value().page_id);
+    ASSERT_TRUE(word.ok()) << word.status().message();
+    EXPECT_TRUE(storage::DecodePageLatch(word.value()).exclusive)
+        << "a write lookup must hand its leaf back held exclusive";
+    found.value().leaf.Release();
+
+    auto absent = BtreeLookup(*store, root, 15, storage::PageAccess::kWrite);
+    ASSERT_FALSE(absent.ok());
+    EXPECT_EQ(absent.status().code(), StatusCode::kNotFound) << absent.status().message();
 }
 
 TEST(BtreeRaceTest, AScanOfTheChainStillReturnsEveryRowInOrder) {

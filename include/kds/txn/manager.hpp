@@ -494,9 +494,7 @@ public:
     // rule.
     //
     // The location comes back with its leaf **held exclusive**, and the
-    // compensation writes through that hold: a `(page, slot)` re-fetched
-    // after the locator returned could have been renumbered by another
-    // divide in between (AT-0 item 12).
+    // compensation writes through that hold (btree.hpp `Location`).
     struct RowLocation {
         PageId page_id = kInvalidPageId;
         std::uint16_t slot = 0;

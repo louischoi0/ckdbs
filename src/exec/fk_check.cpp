@@ -93,10 +93,8 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
             if (found.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
             return found.status();
         }
-        // Read through the leaf the lookup still holds. A re-fetch by id
-        // lost it to a divide on another core, which renumbers the slot, and
-        // with no residual here the wrong row decided the verdict (AT-0
-        // item 12).
+        // Through the held leaf (btree.hpp `Location`): with no residual
+        // here, a renumbered slot would decide the verdict on another row.
         heap::PageView leaf(found.value().leaf.bytes());
         auto tuple = leaf.ReadTuple(found.value().slot);
         if (!tuple.ok()) {
@@ -201,10 +199,9 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 const stats::CabinEntry entry = set.At(i);
                 if (!seen.insert(entry.pk).second) continue;  // v→v′→v round trip
 
-                // The page the slot is read from is **held** from the moment
-                // the slot is vouched for - by the verifier or by the
-                // descent - to the read: a re-fetch between the two can meet
-                // a divide's renumbered leaf (AT-0 item 12).
+                // Held from the moment the slot is vouched for - by the
+                // verifier or by the descent - to the read (btree.hpp
+                // `Location`).
                 PageId at_page = kInvalidPageId;
                 std::uint16_t at_slot = 0;
                 storage::PageRef held;

@@ -109,17 +109,15 @@ namespace kds::btree {
 // Where a tuple lives, and the leaf it lives in, **held**: what a descent
 // hands back to a reader or a writer.
 //
-// `slot` is true only while `leaf` is held. A divide on another core
-// rebuilds the leaf and renumbers its slots (`SplitLeafAndInsert`), so a
-// `(page_id, slot)` read after the hold is gone can name a different row -
-// which, until AT-0 item 12 (operator, marked (a)), is what every caller
-// did: the lookup dropped the leaf at its return and each caller re-fetched
-// by id, so a point `SELECT` answered zero rows for a row that exists and a
-// point `UPDATE` wrote a row it never matched. Hold `leaf` for as long as
-// the slot is read or written, and never carry `page_id`/`slot` past it.
-//
-// A bare span rode here until 2026-08-13 and outlived the descent's pin; a
-// `PageRef` *is* the pin, and the page latch with it (AM-S1).
+// **`slot` is true only while `leaf` is held** (AT-0 item 12). A divide on
+// another core rebuilds the leaf and renumbers its slots
+// (`SplitLeafAndInsert`), so a `(page_id, slot)` read after the hold is
+// gone can name a different row: a point read answers zero rows through
+// its residual, a point write declines the row it was sent to, an FK check
+// decides on another row. Read or write the slot through `leaf`, and never
+// re-fetch `page_id` to reach it. `leaf` is a `PageRef` - the pin and the
+// page latch (AM-S1) - and every other site in the engine cites this
+// comment rather than restating it.
 struct Location {
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;

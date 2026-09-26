@@ -56,12 +56,9 @@ struct Descent {
     // span of `LeafStillCoversKey`, which takes the right sibling shared
     // and drops it before the descent returns (AT-S5c).
     //
-    // **And the hold is the answer, not only the bytes** (AT-0 item 12).
-    // The ref carries the page latch, so while it lives no divide can
-    // renumber the leaf: `BtreeLookup` hands this same ref out as
-    // `Location::leaf` rather than dropping it, because a caller that
-    // re-fetched by id read a slot another core's divide had already
-    // given to a different row.
+    // `BtreeLookup` hands this same ref out as `Location::leaf`: the latch
+    // it carries is what keeps a divide from renumbering the slot the
+    // caller reads (btree.hpp `Location`).
     storage::PageRef leaf;
 };
 
@@ -910,11 +907,10 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
 //
 // **A write lookup owes none**: `DescendTo` asked coverage under the
 // exclusive hold it returns, and every splice must write this leaf, so a
-// miss there is already proved (AT-0 item 12).
+// miss there is already proved.
 //
-// **The leaf leaves held** (AT-0 item 12, marked (a)). The hit is
-// authoritative only for as long as the slot is: a divide renumbers the
-// leaf, so the hold the descent took is the one handed to the caller.
+// **The leaf leaves held**: a hit is the descent's own hold, handed to the
+// caller (btree.hpp `Location`).
 StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id,
                                storage::PageAccess access) {
     const bool for_write = access == storage::PageAccess::kWrite;

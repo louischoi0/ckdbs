@@ -1953,11 +1953,8 @@ private:
     //            produces the same answer. Every heap relation lands here,
     //            having no pk index to descend.
     //   kAt      look at this (page, slot) - a btree descent, which is
-    //            authoritative - through `at.leaf`, which the descent
-    //            **holds** in the mode asked for. A writer asks `kWrite`
-    //            and writes through that hold; re-fetching the page by id
-    //            reopens the window a divide renumbers the slot in (AT-0
-    //            item 12).
+    //            authoritative - through `at.leaf`, held **exclusive**:
+    //            every caller writes the slot (btree.hpp `Location`).
     //   kAbsent  **no such row**, on authority. Only a btree descent can
     //            say this, so a heap relation never produces it.
     struct PkLookup {
@@ -1965,8 +1962,7 @@ private:
         Kind kind = Kind::kScan;
         btree::Location at;
     };
-    PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk,
-                        storage::PageAccess mode);
+    PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
 
     // The row-relocation callback a rollback needs when a leaf division has
     // moved rows this transaction wrote (txn/manager.hpp's RowLocator).

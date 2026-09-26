@@ -560,10 +560,9 @@ private:
                 NoteFetch();
                 ++stats_.For(step.step_id).pages_fetched;
                 // Through the one verifier, as a trail or a Cabin hint is:
-                // a divide renumbers the leaf's slots and bumps its epoch,
-                // and until AT-0 item 12's stage this hit read the slot
-                // unchecked, so the residual dropped whatever row had taken
-                // it and the statement answered zero rows.
+                // the memo outlives the descent's hold, and a divide
+                // renumbers the slot and bumps the epoch (btree.hpp
+                // `Location`).
                 VerifiedTuple verified =
                     VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_);
                 if (verified.ok()) {
@@ -590,11 +589,8 @@ private:
                 memo_key_ = key.value();
                 memo_page_ = found.value().page_id;
                 memo_slot_ = found.value().slot;
-                memo_epoch_ = CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
-                // Read through the leaf the lookup still holds, never a
-                // re-fetch by id: a divide between the two renumbers the
-                // slot (AT-0 item 12).
-                heap::PageView leaf(found.value().leaf.bytes());
+                heap::PageView leaf(found.value().leaf.bytes());  // btree.hpp `Location`
+                memo_epoch_ = CurrentRelayoutEpoch(leaf);
                 co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                      found.value().slot);
             }
@@ -1404,7 +1400,7 @@ private:
                 co_return found.status();
             }
 
-            // The leaf the lookup holds, not a re-fetch (AT-0 item 12).
+            // The leaf the lookup holds (btree.hpp `Location`).
             heap::PageView page(found.value().leaf.bytes());
             if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
                                          found.value().slot);
@@ -1541,8 +1537,7 @@ private:
             // location, and the location repaired from the authority. The
             // epoch stamped with it is read off the leaf the lookup holds,
             // so it is the epoch the slot is valid under - a re-fetch after
-            // the hold could read a divide's epoch beside a pre-divide slot
-            // (AT-0 item 12).
+            // the hold could read a divide's epoch beside a pre-divide slot.
             // **The heal, by index** (AT-S7): the store writes it under
             // the partition's latch, so the descent above never ran under
             // one.
@@ -1600,12 +1595,12 @@ private:
         // below it may fetch, so holding every entry's page across the loop
         // is a pin per entry for the whole serve.
         //
-        // **So the location is verified again here** (AT-0 item 12's
-        // stage). Phase 1's hold ended with phase 1, and a divide on another
-        // core in between renumbers the leaf: read unchecked, the slot is
-        // another row, which this step's residual may well accept - a row
-        // served twice and the moved one never. A miss re-descends, which on
-        // a btree relation is authoritative and hands back the leaf held.
+        // **So the location is verified again here**: phase 1's hold ended
+        // with phase 1 (btree.hpp `Location`), and read unchecked a
+        // renumbered slot is another row this step's residual may accept -
+        // one row served twice and the moved one never. A miss re-descends,
+        // which on a btree relation is authoritative and hands back the leaf
+        // held.
         for (const Located& at : located) {
             if (stopped_) break;
             NoteFetch();
@@ -1624,6 +1619,8 @@ private:
             // purged between the phases - a dead entry, which §5 says to
             // drop on sight.
             if (!is_btree) continue;
+            NoteFetch();
+            ++step_stats.pages_fetched;
             auto found = btree::BtreeLookup(store_, access.desc_page_id, at.pk);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) continue;
