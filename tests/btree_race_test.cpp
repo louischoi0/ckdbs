@@ -18,6 +18,8 @@
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/page_latch.hpp"
 
+#include "armed_race.hpp"
+
 // **The clustered B+ tree with more than one core in it** (AT-S5c, D3).
 //
 // `btree_test.cpp` is this file's sibling and asks every structural
@@ -75,6 +77,9 @@
 namespace kds::btree {
 namespace {
 
+using testing_race::ArmedStore;
+using testing_race::Rendezvous;
+
 // One tuple per leaf, so every insert into a populated leaf restructures
 // it. `btree_test.cpp` derives the number; it is repeated rather than
 // shared because a test that imports another test's constants breaks in
@@ -91,21 +96,6 @@ std::vector<std::byte> MakeTuple(std::uint64_t id) {
         v >>= 8;
     }
     return out;
-}
-
-std::unique_ptr<storage::DevicePageStore> ArmedStore(
-    std::unique_ptr<storage::MemoryPageDevice>& device) {
-    auto made = storage::MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
-    EXPECT_TRUE(made.ok()) << made.status().message();
-    device = std::move(made.value());
-    auto store = storage::DevicePageStore::Open(*device, /*first_new_page_id=*/16);
-    EXPECT_TRUE(store.ok()) << store.status().message();
-    // Armed, for `free_map_race_test.cpp`'s reason: the question exists only
-    // where the store is shared, and a store is only shared where it is
-    // armed. Here it is also what makes the window reachable at all - an
-    // unarmed latch never queues the second writer.
-    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/16);
-    return std::move(store.value());
 }
 
 // The leaves this workload walks, and the ids that reach them. The ids are
@@ -125,8 +115,8 @@ inline constexpr std::uint64_t kStride = 1000;
 inline constexpr int kRounds = 6;
 inline constexpr int kThreads = 2;
 
-// **The rendezvous, and why the cell is worth nothing without it.**
-// Measured: with the threads merely started together and left to walk the
+// **The rendezvous (`armed_race.hpp`), and why the cell is worth nothing
+// without it.** Measured: with the threads merely started together and left to walk the
 // chain, the mutant below survived **three runs in six** - the two drift
 // apart after a few inserts, and once they are on different leaves neither
 // is queued on the other's latch and the window never opens. What produces
@@ -135,31 +125,6 @@ inline constexpr int kThreads = 2;
 // release hands the leaf straight to a splitter while the first is still
 // between its two fetches. So they are re-synchronised before every insert
 // rather than only at the start.
-//
-// A generation counter rather than a count alone: a thread that leaves the
-// barrier and arrives at the next one before its partner has left the first
-// would otherwise be counted into the wrong round.
-class Rendezvous {
-  public:
-    explicit Rendezvous(int parties) noexcept : parties_(parties) {}
-
-    void Wait() noexcept {
-        const int generation = generation_.load(std::memory_order_acquire);
-        if (waiting_.fetch_add(1, std::memory_order_acq_rel) + 1 == parties_) {
-            waiting_.store(0, std::memory_order_release);
-            generation_.fetch_add(1, std::memory_order_acq_rel);
-            return;
-        }
-        while (generation_.load(std::memory_order_acquire) == generation) {
-            std::this_thread::yield();
-        }
-    }
-
-  private:
-    const int parties_;
-    std::atomic<int> waiting_{0};
-    std::atomic<int> generation_{0};
-};
 
 // 64-byte tuples: many per leaf, which is what a *divide* needs.
 // The one-per-leaf filler above can only ever append - `SplitLeafAndInsert`
