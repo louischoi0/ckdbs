@@ -64,15 +64,19 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
         // the table this pass just built, not a second file to open.
         //
         // **Absence means aborted, and that is sound rather than a
-        // default.** The checkpoint's redo start is floored by the oldest
-        // live TXN_PREPARE (`checkpointer.cpp`), and the fold takes the
-        // minimum over cores (`superblock_checkpoint_anchor.hpp`), so the
-        // scan begins at or before every undecided prepare. A decision is
-        // written after the prepare it decides, so if the prepare is in
-        // this scan and no decision is, none was ever made. This is
-        // `cross-owner-txn.md` §2c's retention obligation collapsing into
-        // the ordinary redo-start floor - there is no second stream whose
-        // segments could have been recycled out from under the question.
+        // default.** The engine that wrote a TXN_PREPARE floored every
+        // checkpoint's redo start at its oldest live prepare, and folded
+        // the minimum over cores, so the scan begins at or before every
+        // undecided prepare. A decision is written after the prepare it
+        // decides, so if the prepare is in this scan and no decision is,
+        // none was ever made. This is `cross-owner-txn.md` §2c's retention
+        // obligation collapsing into the ordinary redo-start floor.
+        //
+        // **Only a volume written before AT-S6 reaches this.** Nothing has
+        // prepared since 2PC retired there, and AT-S18 removed the floor
+        // with the emitter: this pass resolves every prepare before the
+        // completion checkpoint, so no checkpoint of this engine ever sees
+        // one live.
         for (const auto& [participant_txn_id, prepared] : out.analysis.prepared_txns) {
             auto state = out.analysis.transactions.find(participant_txn_id);
             if (state == out.analysis.transactions.end()) {

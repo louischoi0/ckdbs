@@ -117,10 +117,9 @@ struct MountRecovery {
     // ---- What the cross-owner resolution decided (R6-4) ----
     //
     // `prepared` is what analysis found; the two below are how they
-    // resolved and sum to it. All three are 0 on every stream that never
-    // took part in a cross-owner transaction, which is every stream until
-    // R6-8 opens that path - so a nonzero one is the mount saying it
-    // finished a two-phase commit somebody else started.
+    // resolved and sum to it. All three are 0 on every stream written
+    // since AT-S6 retired 2PC - so a nonzero one is the mount saying it
+    // finished a two-phase commit a pre-AT engine started.
     std::uint64_t prepared = 0;
     std::uint64_t prepared_committed = 0;
     std::uint64_t prepared_aborted = 0;
@@ -211,8 +210,9 @@ struct MountRecovery {
 // **A prepared transaction is resolved inside this pass** (AR0 M0, AL-R5;
 // AM-S4(d)). The participant's TXN_PREPARE and its coordinator's decision
 // are records of the same log, so the scan that found the first found the
-// second, and absence of a decision is abort - sound because the redo
-// start is floored by the oldest live prepare.
+// second, and absence of a decision is abort - sound because the engine
+// that wrote the prepare floored its redo start at the oldest live one.
+// Only a volume written before AT-S6 carries one: nothing prepares since.
 //
 // `wal_dir` and `anchors` stood here for the other topology: they named
 // the coordinator's *own* stream, another file in that directory, and the

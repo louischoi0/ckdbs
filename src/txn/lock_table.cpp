@@ -423,17 +423,6 @@ void LockTable::ClearWaitFor(std::uint64_t waiter) {
     if (erased != 0) wait_edge_count_.fetch_sub(erased, std::memory_order_release);
 }
 
-void LockTable::ClearWaitFor(std::uint64_t waiter, std::uint64_t holder) {
-    if (wait_edge_count_.load(std::memory_order_acquire) == 0) return;
-    LatchGuard guard(wait_latch_.get());
-    auto gone = std::remove_if(wait_edges_.begin(), wait_edges_.end(), [&](const auto& e) {
-        return e.first == waiter && e.second == holder;
-    });
-    const auto erased = static_cast<std::size_t>(wait_edges_.end() - gone);
-    wait_edges_.erase(gone, wait_edges_.end());
-    if (erased != 0) wait_edge_count_.fetch_sub(erased, std::memory_order_release);
-}
-
 std::size_t LockTable::WaitEdgeCount() const {
     LatchGuard guard(wait_latch_.get());
     return wait_edges_.size();

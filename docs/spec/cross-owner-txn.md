@@ -63,7 +63,7 @@ undecided-prepare arm is unreachable — held before a line was written.
 | one instant on every core under RR (AN-S3) | one core, one view (`txn.md` §5) |
 | bound a wait on a row held by a prepared transaction | the lock family's fault net, `lock_wait_fault_net_ms` |
 | end a participant's context at the coordinator's decide | nothing to end |
-| resolve an in-doubt participant at mount | nothing to resolve; `wal.md`'s mount scan carries what replaced it |
+| resolve an in-doubt participant at mount | the mount scan, for a volume written before AT-S6 only (`wal.md`); nothing in this engine prepares, and AT-S18 deleted the emitter, the runtime prepared state and the checkpoint's prepare floor |
 
 ## What is not retired with it
 

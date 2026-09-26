@@ -412,11 +412,10 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
 }
 
 StatusOr<std::size_t> DevicePageStore::FlushMaps() {
-    // **It reaches `device_.WritePage` without asking `MayWrite`**, which
-    // answers yes for every core and page since AT-S5 anyway. It used to
-    // carry a check of its own - a leased store dropped its map writes
-    // rather than publishing a copy taken at its own mount - and AW-S1b
-    // removed the copy along with the lease.
+    // **Every core's store publishes the maps.** It used to carry a check
+    // of its own - a leased store dropped its map writes rather than
+    // publishing a copy taken at its own mount - and AW-S1b removed the
+    // copy along with the lease.
     //
     // **Copy under the hold, write outside it** (AM-S3). The rule this class
     // has had since AM-S2 2b is that device work does not run under the
@@ -715,10 +714,10 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // which every core faults every page - so the predicate it called
     // answered `true` unconditionally from AM-S2 step 3 onwards and the
     // check was dead on every mountable volume before it was deleted.
-    // The write gate that stood here - `mark_dirty && !MayWrite(page_id)`,
-    // `InvalidArgument` to a peer dirtying a system page - went at AT-S5
-    // with the arm it enforced; `MayWrite` says what serialises the page
-    // instead.
+    // The write gate that stood here - `InvalidArgument` to a peer dirtying
+    // a system page - went at AT-S5 with the arm it enforced, and the
+    // predicate it asked at AT-S18; what serialises each shared page is
+    // `crosscore.md` CC11's.
 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
@@ -954,23 +953,6 @@ bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
     auto bytes = std::make_unique<Page>();
     if (!device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes)).ok()) return false;
     return PageIsAllZero(*bytes);
-}
-
-bool DevicePageStore::MayWrite(PageId) const noexcept {
-    // **Every core writes every page** (AT-S5; `crosscore.md` CC11 as
-    // rewritten, `catalog.md` CT5). The arm that stood here - the system
-    // range writable by core 0 alone - was the last enforcement of the rule
-    // AR0-5 retired: one writer as the serialisation mechanism for the
-    // superblock, the free map and the catalog pages. What serialises each
-    // now is named where it is written: the page latch across cores and
-    // the no-park-under-a-span rule within one for a catalog row's bytes
-    // (`catalog.hpp`, `AdmitExplicitRowId`'s hook); the map's own
-    // `map_latch_` for allocation (AM-S3); the schema word for every core's
-    // memo (AT-S2); and page 0's ceiling, which every core's
-    // `TrxIdSequence::Carve` raises under the superblock latch since
-    // AT-S10b. The seam stays and answers yes; `ResidentBytes` no longer
-    // asks.
-    return true;
 }
 
 StatusOr<PageId> DevicePageStore::ClaimNextFreeIdLocked(std::uint32_t* missing_region) {
@@ -1275,10 +1257,6 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
                                 " is not resident, so its page_lsn cannot be stamped");
     }
 
-    // Nothing on the write path asks `MayWrite` since AT-S5. This path
-    // skipped it deliberately before then (the 25059bf review's C-6): rule
-    // 6's acquisition restamp had to dirty a page *before* its write grant
-    // existed, and the grants went at AW-S1b.
     SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
     // PW1c-3, PL §9 rule 4: the core that last wrote the page. Rides the
     // LSN stamp because the two answered one question - *whose* offset is
