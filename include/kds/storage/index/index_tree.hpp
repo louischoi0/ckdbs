@@ -58,8 +58,10 @@
 // it rather than storing it twice (`already_present`). Nothing reclaims an
 // index entry, so a duplicate is permanent; and a probe that resolved one
 // pk twice would emit its row twice. The check is complete for a duplicate
-// in the leaf the descent lands on, which is where an exact duplicate always
-// sorts. Deduplicating *by pk* is the read path's job, not this file's.
+// in the leaf the descent lands on, which misses one only when a run of
+// equal sort keys straddles a leaf boundary (index_tree.cpp's
+// `FindExactDuplicate`). Deduplicating *by pk* is the read path's job, not
+// this file's.
 //
 // ---- Concurrency ---------------------------------------------------------
 //

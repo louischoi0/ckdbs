@@ -61,7 +61,12 @@ struct Descent {
 // divide keeps its lower half. The day an entry can be removed, the
 // sibling's first entry can rise above the separator, and this test would
 // then send a key the sibling does not cover back to the sibling - revisit
-// it then, with the removal.
+// it then, with the removal. **And it assumes every linked sibling has its
+// separator in a parent.** A run of equal sort keys can make a divide whose
+// promotion is refused after the sibling is linked
+// (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`);
+// every insert over that sibling's range then routes here, fails this test
+// and exhausts the restarts - refused on every attempt, not misplaced.
 //
 // The caller holds this leaf; the sibling is taken shared and released
 // here. The order is leaf-then-right-neighbour, which is a walk's order,
@@ -110,12 +115,10 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
 // land in either gap - and on a secondary index, whose keys are not a
 // sequence, a divide is the ordinary insert, not the rare one.
 //
-// **What is checked is coverage itself**, once the leaf is held exclusive:
-// `LeafStillCoversKey` above, asked of the chain as it stands. Comparing the
-// leaf across this descent's own two fetches would miss the second gap,
-// where the divide runs before the leaf is read at all. Once `Get` returns
-// the leaf stays exclusive for the life of the `Descent`, and every divide
-// must write this leaf, so the answer cannot go stale under the caller.
+// **What is checked is coverage itself** (`LeafStillCoversKey`), once the
+// leaf is held exclusive - not the leaf across this descent's own two
+// fetches, which misses the second gap. Every divide must write this leaf,
+// so the answer cannot go stale under the `Descent` that holds it.
 //
 // **Progress** is btree.cpp's argument, and it holds here for the same
 // reason: `IndexInsert` keeps the descent's exclusive hold on the old leaf
@@ -224,10 +227,12 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const Inde
 
 // The byte-identical entry already in this leaf, if there is one.
 //
-// Complete for the leaf the descent lands on, which is where an exact
-// duplicate always sorts: entries sharing a sort key are contiguous, and the
-// descent for that sort key lands on the first leaf that can hold it. The
-// scan is over exactly those neighbours.
+// Complete for the leaf the descent lands on. Entries sharing a sort key
+// are contiguous, but a run of them longer than half a leaf can straddle a
+// divide, and the descent lands on the run's *right* part - so a
+// byte-identical entry in the left part is missed and stored twice, which
+// the probe's pk dedup absorbs
+// (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`).
 StatusOr<bool> FindExactDuplicate(IndexLeafView& leaf, std::span<const std::byte> entry,
                                    std::size_t sort_key_len, std::uint16_t* at) {
     const std::uint16_t n = leaf.entry_count();

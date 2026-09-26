@@ -527,7 +527,8 @@ Building before publishing is what makes an index **complete or absent, never
 partial** — a failed build leaves an unreachable tree and no catalog row,
 where the reverse order leaves a declared index missing rows, which is a wrong
 answer with a right answer's shape. Nothing can observe the half-built tree:
-DDL is one statement on one cooperative thread. A split during the build moves
+it is reachable only through the catalog row, which is published after the
+build, and the build holds the relation `X` (AT-S5e). A split during the build moves
 the root, so the root written into the catalog row is the one the build ended
 at, not the page first allocated.
 
@@ -729,7 +730,10 @@ new right sibling.
   parents the descent recorded, holding none of them; a parent another core
   divided meanwhile can take it on the wrong side
   (`docs/inflight/bugs/a-secondary-index-descent-is-not-revalidated-across-cores.md`,
-  window 2).
+  window 2). Since the coverage check, what that costs is not a lost row:
+  a misplaced separator still bounds its child from below, so probes find
+  everything, and inserts over the affected range are refused
+  `TxnConflict` on every attempt.
 
 ---
 

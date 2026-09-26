@@ -42,10 +42,16 @@ must let it.
 
 ## What it costs
 
-A **quiet wrong answer**: a mis-placed separator makes a subtree
-unreachable for a range of keys, so `SELECT ... WHERE v = k` through the
-index returns fewer rows than the relation holds. No refusal, no
-corruption error - each page's own checks pass.
+**A refusal that does not clear, since AT-S15; before it, a quiet wrong
+answer.** A separator placed in the wrong half of a parent is still the
+lower bound of the child it points at, so a descent never lands to the
+*right* of a key's leaf - it lands left of it. A probe walks forward and
+still finds every row (at the cost of pages). An insert over the affected
+key range lands on a leaf whose right sibling now bounds it below the key,
+and AT-S15's coverage check refuses it `TxnConflict` on every attempt:
+nothing repairs the parent, so the range stays unwritable. Before AT-S15
+those inserts were admitted into the leaf the stale route reached, out of
+chain order, and a probe then missed them.
 
 ## The fix
 
