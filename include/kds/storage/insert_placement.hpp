@@ -55,6 +55,15 @@ struct StructuralChange {
 // structural-change bound below is derived from it.
 inline constexpr std::uint16_t kMaxBtreeDepth = 16;
 
+// How many times a write descent may start over, having found its leaf no
+// longer covers its key, before it gives up and asks the caller to retry
+// (AT-S5c for the clustered tree, AT-S15 for the index tree). Each tree's
+// `DescendTo` carries its own progress argument; the bound is here so that
+// a pathological stream of splits - or a stale root, which fails the same
+// way every attempt - ends in a refusal a client can read rather than in a
+// loop nothing reports.
+inline constexpr int kMaxDescentRestarts = 4;
+
 // One insert records at most: the new page, the old page whose link moved,
 // **two** nodes per level it propagated a split back up (`depth <=
 // kMaxBtreeDepth - 1`, since depth indexes a kMaxBtreeDepth-element path),

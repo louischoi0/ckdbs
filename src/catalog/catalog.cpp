@@ -2343,8 +2343,9 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
             // on the **CREATE-time** root of a relation another core may
             // have grown, which is exactly the silent wrong answer this
             // stage exists to remove, and for the *index* roots filled from
-            // this same anchor there is no coverage check underneath to
-            // refuse the consequence.
+            // this same anchor the coverage check underneath (AT-S15)
+            // refuses only a key outside the stale subtree, not the level
+            // growth a divide there would make.
             //
             // Refusing is recoverable and admitting is not, which is the
             // rule this engine states elsewhere; a caller that cannot read
@@ -3669,9 +3670,12 @@ Status Catalog::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root,
     // the stale root, its `UpdateIndexRoot` republishes a root whose
     // subtree does not contain the other core's entries at all. The
     // clustered root's twin has carried this since AT-S5c; the index root
-    // is the same defect one structure over, and unlike the clustered case
-    // there is no coverage check underneath to refuse it (`index_tree.cpp`
-    // has none), so it is silent.
+    // is the same defect one structure over. **Since AT-S15 the index has
+    // the coverage check underneath too** (`index_tree.cpp`'s
+    // `LeafStillCoversKey`): a key outside the stale subtree is refused
+    // retryable instead of placed. What it does not refuse is the level
+    // growth from a stale root - that is the divide's walk up, AT-S16's -
+    // so this bump is still what bounds the window to one task.
     //
     // `BumpWord` and not `BumpVersion`, for `UpdateRelationDescPage`'s
     // reason exactly: this core's entry was just repaired in place and

@@ -58,15 +58,38 @@
 // it rather than storing it twice (`already_present`). Nothing reclaims an
 // index entry, so a duplicate is permanent; and a probe that resolved one
 // pk twice would emit its row twice. The check is complete for a duplicate
-// in the leaf the descent lands on, which is where an exact duplicate always
-// sorts. Deduplicating *by pk* is the read path's job, not this file's.
+// in the leaf the descent lands on, which misses one only when a run of
+// equal sort keys straddles a leaf boundary (index_tree.cpp's
+// `FindExactDuplicate`). Deduplicating *by pk* is the read path's job, not
+// this file's.
 //
-// Concurrency: none of its own, like btree.hpp. A descent takes and releases
-// each page through the PageStore; the caller holds the pin/latch discipline
-// (CLAUDE.md's page-latch consistency model). No latch coupling and no
-// B-link protocol, because there is no concurrent mutation to protect
-// against - the server is one cooperative thread per core and nothing here
-// suspends.
+// ---- Concurrency ---------------------------------------------------------
+//
+// Every page is taken and released through the PageStore, whose `PageRef`
+// carries the page latch (shared for `GetForRead`, exclusive for `Get`).
+// There is no latch coupling: a descent releases a parent before it reads
+// the child. Since AT-S5 two cores write one index, so a divide on one can
+// run inside another's descent; `IndexInsert` answers it the way the
+// clustered tree does (AT-S5c) - once its leaf is held exclusive it asks
+// whether the leaf **still covers** the sort key, and a stale descent starts
+// over, a bounded number of times (`storage::kMaxDescentRestarts`).
+// index_tree.cpp's `DescendTo` carries the argument; `IndexSeekLeaf` needs
+// no such check, and says why.
+//
+// **The check rests on a premise this file states because nothing enforces
+// it: no index entry is ever removed.** An index leaf has no immutable
+// `min_key`, so a leaf's upper bound is read off its right sibling's first
+// entry, which equals the separator the sibling's divide copied up only
+// while entries are never taken out. A change that removes index entries
+// (a purge, a `DELETE` that reclaims them) must revisit
+// `LeafStillCoversKey` in the same change.
+//
+// **What is not closed here** is the walk back up: a divide inserts its
+// separator into the parents the descent recorded, holding none of them,
+// and a parent another core divided meanwhile can take it on the wrong
+// side (window 2, `docs/inflight/bugs/a-secondary-index-descent-is-not-revalidated-across-cores.md`,
+// AT-S16's). A stale root reaches the same walk when an insert it placed
+// correctly divides past it.
 
 namespace kds::index {
 

@@ -38,9 +38,62 @@ struct Descent {
     std::array<PageId, storage::kMaxBtreeDepth> path{};
     std::uint16_t depth = 0;
     // The leaf, held: the pin rides in the struct (btree.cpp's Descent
-    // says why; the same Shape C lived here). Peak pins (MG03): 1.
+    // says why; the same Shape C lived here). Peak pins (MG03): 1, and 2
+    // for the span of `LeafStillCoversKey`, which takes the right sibling
+    // shared and drops it before the descent returns.
     storage::PageRef leaf;
 };
+
+// **Does this leaf still hold `sort_key`?** (AT-S15: AT-S5c's question,
+// one structure over.)
+//
+// A leaf covers `[its lower bound, right sibling's first sort key)`. A
+// divide moves the **upper** half of a leaf to a new page spliced in on its
+// right, so the upper end is the one that moves and the only one asked.
+// The lower end does not move: it is the separator that routes here, which
+// nothing rewrites, and a leaf never gives away its lowest entries.
+//
+// **Unlike the clustered tree there is no `min_key` to ask**, so the upper
+// end is read off the right sibling's first entry. That is the separator
+// its divide copied up, and it stays the sibling's first entry **only
+// because nothing removes an index entry today** (index_tree.hpp): an
+// insert routed to the sibling sorts at or above it, and the sibling's own
+// divide keeps its lower half. The day an entry can be removed, the
+// sibling's first entry can rise above the separator, and this test would
+// then send a key the sibling does not cover back to the sibling - revisit
+// it then, with the removal. **And it assumes every linked sibling has its
+// separator in a parent.** A run of equal sort keys can make a divide whose
+// promotion is refused after the sibling is linked
+// (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`);
+// every insert over that sibling's range then routes here, fails this test
+// and exhausts the restarts - refused on every attempt, not misplaced.
+//
+// The caller holds this leaf; the sibling is taken shared and released
+// here. The order is leaf-then-right-neighbour, which is a walk's order,
+// and nothing in this file holds a page and asks for the one to its left
+// or below it: the divide's walk up is bottom-up (a leaf, then its parent),
+// and a descent releases a parent before it reads the child.
+StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView& leaf,
+                                  const IndexLayout& layout,
+                                  std::span<const std::byte> sort_key) {
+    const PageId right = leaf.right_sibling();
+    if (right == kInvalidPageId) return true;  // the rightmost leaf holds every key above it
+    auto bytes = store.GetForRead(right);
+    if (!bytes.ok()) return bytes.status();
+    if (Status s = RequireType(bytes.value().bytes(), right, PageType::kIndexLeaf); !s.ok()) {
+        return s;
+    }
+    IndexLeafView sibling(AsPage(bytes.value().bytes()));
+    if (Status s = sibling.CheckAgainst(layout, right); !s.ok()) return s;
+    auto low = sibling.SortKey(0);
+    if (!low.ok()) {
+        // A divide leaves both halves non-empty and nothing removes an
+        // entry, so a right sibling with none is not a state the tree makes.
+        return Status::Corruption("index leaf " + std::to_string(right) +
+                                  " is a right sibling holding no entries");
+    }
+    return std::memcmp(sort_key.data(), low.value().data(), sort_key.size()) < 0;
+}
 
 // Follows child pointers for `sort_key` from `root`, recording the path and
 // validating every page's stored widths against `layout` on the way - the
@@ -51,59 +104,100 @@ struct Descent {
 // read-only; `leaf_for_write` says whether the *leaf* is about to be
 // mutated, which is what keeps a read-only statement from scheduling a
 // write-back of everything it read (page_store.hpp).
+//
+// ---- The window, and what closes it (AT-S15) ----------------------------
+//
+// btree.cpp's `DescendTo` states it for the clustered tree, and every word
+// of it holds here: a write descent drops the leaf's shared hold before it
+// asks for the exclusive one (a page latch is never upgraded), and it
+// releases each parent before it reads the child (no latch coupling). Since
+// AT-S5 a write runs where its session is, so another core's divide can
+// land in either gap - and on a secondary index, whose keys are not a
+// sequence, a divide is the ordinary insert, not the rare one.
+//
+// **What is checked is coverage itself** (`LeafStillCoversKey`), once the
+// leaf is held exclusive - not the leaf across this descent's own two
+// fetches, which misses the second gap. Every divide must write this leaf,
+// so the answer cannot go stale under the `Descent` that holds it.
+//
+// **Progress** is btree.cpp's argument, and it holds here for the same
+// reason: `IndexInsert` keeps the descent's exclusive hold on the old leaf
+// across its whole walk up, so a re-descent that meets the leaf waits until
+// the parent carries the separator that routes it past. **A stale root**
+// (`Catalog::UpdateIndexRoot`'s note) fails every attempt alike - it routes
+// a key outside its subtree to that subtree's rightmost leaf, whose right
+// sibling now bounds it - and exhausts the bound into a retryable refusal
+// instead of an entry placed where no descent from the current root looks.
 StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexLayout& layout,
                             std::span<const std::byte> sort_key, bool leaf_for_write) {
-    Descent d;
-    PageId current = root;
-    for (;;) {
-        if (d.depth >= storage::kMaxBtreeDepth) {
-            return Status::Corruption("index descent from page " + std::to_string(root) +
-                                      " exceeded " + std::to_string(storage::kMaxBtreeDepth) +
-                                      " levels; the child pointers are cyclic or corrupt");
-        }
-        d.path[d.depth] = current;
+    for (int attempt = 0; attempt <= storage::kMaxDescentRestarts; ++attempt) {
+        Descent d;
+        PageId current = root;
+        // Every path out of this loop returns, except the one `break` below
+        // - the leaf gave the key away and the descent starts over.
+        for (;;) {
+            if (d.depth >= storage::kMaxBtreeDepth) {
+                return Status::Corruption("index descent from page " + std::to_string(root) +
+                                          " exceeded " + std::to_string(storage::kMaxBtreeDepth) +
+                                          " levels; the child pointers are cyclic or corrupt");
+            }
+            d.path[d.depth] = current;
 
-        auto bytes = store.GetForRead(current);
-        if (!bytes.ok()) return bytes.status();
+            auto bytes = store.GetForRead(current);
+            if (!bytes.ok()) return bytes.status();
 
-        if (IsLeafPage(bytes.value().bytes())) {
-            if (Status s = IndexLeafView(AsPage(bytes.value().bytes())).CheckAgainst(layout, current);
+            if (IsLeafPage(bytes.value().bytes())) {
+                if (Status s =
+                        IndexLeafView(AsPage(bytes.value().bytes())).CheckAgainst(layout, current);
+                    !s.ok()) {
+                    return s;
+                }
+                if (!leaf_for_write) {
+                    d.leaf = std::move(bytes.value());
+                    return d;
+                }
+                // Re-fetch for write: the frame is already resident, so this
+                // is a hash lookup that flips the dirty flag. The read handle
+                // is dropped **first**: it holds the page's latch shared, and
+                // a page latch is never upgraded (AM-S1, page_latch.hpp).
+                bytes.value().Release();
+                auto writable = store.Get(current);
+                if (!writable.ok()) return writable.status();
+                const IndexLeafView relatched(AsPage(writable.value().bytes()));
+                auto covers = LeafStillCoversKey(store, relatched, layout, sort_key);
+                if (!covers.ok()) return covers.status();
+                if (!covers.value()) {
+                    break;  // a divide took the key's place to the right; start over
+                }
+                d.leaf = std::move(writable.value());
+                return d;
+            }
+
+            if (Status s =
+                    RequireType(bytes.value().bytes(), current, PageType::kIndexInternal);
                 !s.ok()) {
                 return s;
             }
-            if (!leaf_for_write) {
-                d.leaf = std::move(bytes.value());
-                return d;
+            IndexInternalView node(AsPage(bytes.value().bytes()));
+            if (Status s = node.CheckAgainst(layout, current); !s.ok()) return s;
+
+            current = node.ChildFor(sort_key);
+            if (current == kInvalidPageId) {
+                return Status::Corruption("index node " + std::to_string(d.path[d.depth]) +
+                                          " routed to an invalid child");
             }
-            // Re-fetch for write: the frame is already resident, so this is
-            // a hash lookup that flips the dirty flag.
-            //
-            // The read handle is dropped **first**: it holds the page's
-            // latch shared, and a page latch is never upgraded (AM-S1,
-            // page_latch.hpp). This is btree.cpp's Descend shape, and the
-            // census (`KDS_TEST_PAGE_LATCH=1`) named this line in every
-            // index-insert cell. Nothing can evict between the release and
-            // the re-fetch on a single-threaded core.
-            bytes.value().Release();
-            auto writable = store.Get(current);
-            if (!writable.ok()) return writable.status();
-            d.leaf = std::move(writable.value());
-            return d;
+            ++d.depth;
         }
-
-        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexInternal); !s.ok()) {
-            return s;
-        }
-        IndexInternalView node(AsPage(bytes.value().bytes()));
-        if (Status s = node.CheckAgainst(layout, current); !s.ok()) return s;
-
-        current = node.ChildFor(sort_key);
-        if (current == kInvalidPageId) {
-            return Status::Corruption("index node " + std::to_string(d.path[d.depth]) +
-                                      " routed to an invalid child");
-        }
-        ++d.depth;
     }
+    // Retryable, for btree.cpp's reason: nothing about the statement is
+    // wrong, and the client's retry crosses a task boundary, where the
+    // root is re-read from the anchor.
+    return Status::TxnConflict(
+        "index descent from page " + std::to_string(root) + " gave up after " +
+        std::to_string(storage::kMaxDescentRestarts + 1) +
+        " attempts: each leaf it reached had already given the key away. Either the index is "
+        "being divided faster than a descent can cross it, or this core is descending from a "
+        "root that has since grown a level");
 }
 
 StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const IndexLayout& layout) {
@@ -133,10 +227,12 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const Inde
 
 // The byte-identical entry already in this leaf, if there is one.
 //
-// Complete for the leaf the descent lands on, which is where an exact
-// duplicate always sorts: entries sharing a sort key are contiguous, and the
-// descent for that sort key lands on the first leaf that can hold it. The
-// scan is over exactly those neighbours.
+// Complete for the leaf the descent lands on. Entries sharing a sort key
+// are contiguous, but a run of them longer than half a leaf can straddle a
+// divide, and the descent lands on the run's *right* part - so a
+// byte-identical entry in the left part is missed and stored twice, which
+// the probe's pk dedup absorbs
+// (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`).
 StatusOr<bool> FindExactDuplicate(IndexLeafView& leaf, std::span<const std::byte> entry,
                                    std::size_t sort_key_len, std::uint16_t* at) {
     const std::uint16_t n = leaf.entry_count();
@@ -340,6 +436,16 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     return out;
 }
 
+// **No coverage check here, and the reason is directional** (AT-S15, by
+// btree.cpp's `BtreeSeekLeaf` argument). A seek names where a probe's walk
+// starts, and the walk goes *forward* along `right_sibling` until its high
+// bound. A divide only ever moves entries to the right, so a seek outrun
+// by one - the parent read before another core's divide, the leaf after -
+// lands to the **left** of where the key went, and the walk reaches that
+// page next. A stale root lands further left, and the walk covers the
+// distance. Landing early costs pages; landing late would cost rows, and
+// nothing moves an entry left. Unlike `BtreeLookup` there is no miss to
+// prove: no caller treats one leaf's silence as the index's.
 StatusOr<PageId> IndexSeekLeaf(storage::PageStore& store, PageId root, const IndexLayout& layout,
                                std::span<const std::byte> sort_key) {
     if (sort_key.size() != layout.sort_key_width()) {

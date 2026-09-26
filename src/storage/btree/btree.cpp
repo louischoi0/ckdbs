@@ -113,17 +113,14 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& lea
     return key < heap::PageView(bytes.value().bytes()).min_key();
 }
 
-// How many times a descent may start over before it gives up and asks the
-// caller to retry (AT-S5c). A restart happens when another core split the
-// leaf this descent was routed to, so the key belongs on a page that did
-// not exist when the parent was read. **A restart makes progress rather
-// than spinning**, and that is a property of the split rather than of this
-// bound: a splitter holds the old leaf exclusive across its own
-// `PromoteSeparator`, so a re-descent blocks on that leaf and is granted it
-// only once the parent carries the new separator. The bound is here so that
-// a pathological stream of splits ends in a refusal a client can read
-// rather than in a loop nothing reports.
-constexpr int kMaxDescentRestarts = 4;
+// A restart happens when another core split the leaf this descent was
+// routed to, so the key belongs on a page that did not exist when the
+// parent was read. **A restart makes progress rather than spinning**, and
+// that is a property of the split rather than of the bound
+// (`storage::kMaxDescentRestarts`): a splitter holds the old leaf exclusive
+// across its own `PromoteSeparator`, so a re-descent blocks on that leaf and
+// is granted it only once the parent carries the new separator.
+using storage::kMaxDescentRestarts;
 
 // Follows child pointers for `key` from `root`, recording the path.
 //
