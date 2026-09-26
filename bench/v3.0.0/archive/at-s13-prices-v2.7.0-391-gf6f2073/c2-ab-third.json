@@ -1,0 +1,254 @@
+{
+  "driver": "lock_contention_benchmark.py",
+  "prove_run": false,
+  "sessions": 8,
+  "rows": 256,
+  "ops_per_session_per_arm": 2000,
+  "blocks": 4,
+  "host_before": {
+    "loadavg": "1.15 1.39 0.67 3/305 481307",
+    "competing": [
+      "481299 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790310309633-vhlqdh.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cat /proc/loadavg; pgrep -a -f \"cc1plus|cmake --build|ctest|kds_tests\" | cut -c1-100; python3 tools/lock_contention_benchmark.py --port 15591 --label head --ab-port 15592 --ab-label preat --sessions 8 --rows 256 --ops 2000 --blocks 4 --json /home/cdkbs/at-s13/out/c2-ab-third.json 2>&1 | grep -E \"host|update|insert|select|ping\" | head -10; python3 /home/cdkbs/at-s13/breakdown.py /home/cdkbs/at-s13/out/c2-ab-third.json' < /dev/null && pwd -P >| /tmp/claude-9875-cwd",
+      "481305 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790310309633-vhlqdh.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cat /proc/loadavg; pgrep -a -f \"cc1plus|cmake --build|ctest|kds_tests\" | cut -c1-100; python3 tools/lock_contention_benchmark.py --port 15591 --label head --ab-port 15592 --ab-label preat --sessions 8 --rows 256 --ops 2000 --blocks 4 --json /home/cdkbs/at-s13/out/c2-ab-third.json 2>&1 | grep -E \"host|update|insert|select|ping\" | head -10; python3 /home/cdkbs/at-s13/breakdown.py /home/cdkbs/at-s13/out/c2-ab-third.json' < /dev/null && pwd -P >| /tmp/claude-9875-cwd"
+    ]
+  },
+  "host_after": {
+    "loadavg": "1.58 1.47 0.70 1/305 481704",
+    "competing": [
+      "481299 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790310309633-vhlqdh.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cat /proc/loadavg; pgrep -a -f \"cc1plus|cmake --build|ctest|kds_tests\" | cut -c1-100; python3 tools/lock_contention_benchmark.py --port 15591 --label head --ab-port 15592 --ab-label preat --sessions 8 --rows 256 --ops 2000 --blocks 4 --json /home/cdkbs/at-s13/out/c2-ab-third.json 2>&1 | grep -E \"host|update|insert|select|ping\" | head -10; python3 /home/cdkbs/at-s13/breakdown.py /home/cdkbs/at-s13/out/c2-ab-third.json' < /dev/null && pwd -P >| /tmp/claude-9875-cwd",
+      "481305 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790310309633-vhlqdh.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cat /proc/loadavg; pgrep -a -f \"cc1plus|cmake --build|ctest|kds_tests\" | cut -c1-100; python3 tools/lock_contention_benchmark.py --port 15591 --label head --ab-port 15592 --ab-label preat --sessions 8 --rows 256 --ops 2000 --blocks 4 --json /home/cdkbs/at-s13/out/c2-ab-third.json 2>&1 | grep -E \"host|update|insert|select|ping\" | head -10; python3 /home/cdkbs/at-s13/breakdown.py /home/cdkbs/at-s13/out/c2-ab-third.json' < /dev/null && pwd -P >| /tmp/claude-9875-cwd"
+    ]
+  },
+  "show_meta_before": {
+    "head": {
+      "0": "version=17 create_time=1790387279 last_mount_time=1790387279 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=9 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 undo_pages_live=2 undo_pages_recycled=1774 wal_syncs=1866 wal_interval_syncs=1766 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=163031711 sched_iterations=516831 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=151609536 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=6687156 sched_foreground_polls=385080 sched_foreground_consumed_us=644092 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=10075 recovery_redo_us=10536 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=6443 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0"
+    },
+    "preat": {
+      "0": "version=17 create_time=1790387279 last_mount_time=1790387279 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=6 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 undo_pages_live=2 undo_pages_recycled=888 wal_syncs=968 wal_interval_syncs=900 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=163028465 sched_iterations=335712 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=157243534 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=3168816 sched_foreground_polls=192802 sched_foreground_consumed_us=668789 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=10979 recovery_redo_us=9605 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=7002 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0"
+    }
+  },
+  "show_meta_after": {
+    "head": {
+      "0": "version=17 create_time=1790387279 last_mount_time=1790387279 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=9 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 undo_pages_live=2 undo_pages_recycled=2217 wal_syncs=2329 wal_interval_syncs=2210 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=173633215 sched_iterations=617284 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=159488114 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=8269890 sched_foreground_polls=481081 sched_foreground_consumed_us=726814 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=10075 recovery_redo_us=10536 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=6443 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0"
+    },
+    "preat": {
+      "0": "version=17 create_time=1790387279 last_mount_time=1790387279 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=6 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 undo_pages_live=2 undo_pages_recycled=1330 wal_syncs=1431 wal_interval_syncs=1344 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=173630026 sched_iterations=436304 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=165056852 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=4780328 sched_foreground_polls=288803 sched_foreground_consumed_us=780283 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=10979 recovery_redo_us=9605 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=7002 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0"
+    }
+  },
+  "pools": {
+    "head": {
+      "port": 15591,
+      "pin_core": null,
+      "opened": 8,
+      "cores": [
+        "0"
+      ]
+    },
+    "preat": {
+      "port": 15592,
+      "pin_core": null,
+      "opened": 8,
+      "cores": [
+        "0"
+      ]
+    }
+  },
+  "arms": {
+    "head": {
+      "update-hot": {
+        "phase": "update-hot",
+        "detail": "every session on one row - the tuple X, fought over",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.854146,
+        "qps": 18732.1,
+        "mean_us": 420.4,
+        "p0_us": 44.8,
+        "p25_us": 251.7,
+        "p50_us": 365.3,
+        "p95_us": 832.0,
+        "p99_us": 1135.9,
+        "max_us": 10559.0
+      },
+      "update-disjoint": {
+        "phase": "update-disjoint",
+        "detail": "one row each - R3's relation IX, alone",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.845061,
+        "qps": 18933.5,
+        "mean_us": 415.4,
+        "p0_us": 47.6,
+        "p25_us": 248.3,
+        "p50_us": 359.8,
+        "p95_us": 829.5,
+        "p99_us": 1136.8,
+        "max_us": 7424.8
+      },
+      "update-disjoint-again": {
+        "phase": "update-disjoint-again",
+        "detail": "the noise floor: the row above, repeated",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.850105,
+        "qps": 18821.2,
+        "mean_us": 417.0,
+        "p0_us": 44.2,
+        "p25_us": 247.7,
+        "p50_us": 363.6,
+        "p95_us": 836.9,
+        "p99_us": 1138.9,
+        "max_us": 6270.3
+      },
+      "insert-omitted": {
+        "phase": "insert-omitted",
+        "detail": "pk omitted: one mark, one tail, every session (D20)",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.848622,
+        "qps": 18854.1,
+        "mean_us": 416.9,
+        "p0_us": 46.1,
+        "p25_us": 247.9,
+        "p50_us": 359.8,
+        "p95_us": 841.0,
+        "p99_us": 1155.6,
+        "max_us": 6771.0
+      },
+      "select-hot": {
+        "phase": "select-hot",
+        "detail": "control: a read takes no borrow",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 1.057872,
+        "qps": 15124.7,
+        "mean_us": 521.7,
+        "p0_us": 53.5,
+        "p25_us": 327.4,
+        "p50_us": 460.9,
+        "p95_us": 1024.0,
+        "p99_us": 1379.1,
+        "max_us": 12673.7
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "control: SHOW META resolves no relation",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.84135,
+        "qps": 19017.1,
+        "mean_us": 407.6,
+        "p0_us": 41.2,
+        "p25_us": 237.7,
+        "p50_us": 356.4,
+        "p95_us": 852.0,
+        "p99_us": 1168.5,
+        "max_us": 4313.4
+      }
+    },
+    "preat": {
+      "update-hot": {
+        "phase": "update-hot",
+        "detail": "every session on one row - the tuple X, fought over",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.85518,
+        "qps": 18709.5,
+        "mean_us": 419.8,
+        "p0_us": 42.9,
+        "p25_us": 246.9,
+        "p50_us": 359.7,
+        "p95_us": 836.2,
+        "p99_us": 1183.3,
+        "max_us": 8656.9
+      },
+      "update-disjoint": {
+        "phase": "update-disjoint",
+        "detail": "one row each - R3's relation IX, alone",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.854259,
+        "qps": 18729.7,
+        "mean_us": 419.4,
+        "p0_us": 40.7,
+        "p25_us": 247.9,
+        "p50_us": 359.9,
+        "p95_us": 848.3,
+        "p99_us": 1197.6,
+        "max_us": 9594.4
+      },
+      "update-disjoint-again": {
+        "phase": "update-disjoint-again",
+        "detail": "the noise floor: the row above, repeated",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.848782,
+        "qps": 18850.5,
+        "mean_us": 416.4,
+        "p0_us": 44.7,
+        "p25_us": 244.9,
+        "p50_us": 362.2,
+        "p95_us": 834.2,
+        "p99_us": 1160.4,
+        "max_us": 6967.3
+      },
+      "insert-omitted": {
+        "phase": "insert-omitted",
+        "detail": "pk omitted: one mark, one tail, every session (D20)",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.862207,
+        "qps": 18557.0,
+        "mean_us": 423.2,
+        "p0_us": 39.9,
+        "p25_us": 245.3,
+        "p50_us": 360.4,
+        "p95_us": 833.8,
+        "p99_us": 1165.4,
+        "max_us": 15282.2
+      },
+      "select-hot": {
+        "phase": "select-hot",
+        "detail": "control: a read takes no borrow",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 1.045566,
+        "qps": 15302.7,
+        "mean_us": 514.8,
+        "p0_us": 50.6,
+        "p25_us": 324.9,
+        "p50_us": 461.8,
+        "p95_us": 1022.7,
+        "p99_us": 1352.9,
+        "max_us": 2700.4
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "control: SHOW META resolves no relation",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.820244,
+        "qps": 19506.4,
+        "mean_us": 398.0,
+        "p0_us": 39.9,
+        "p25_us": 223.4,
+        "p50_us": 349.9,
+        "p95_us": 862.8,
+        "p99_us": 1178.4,
+        "max_us": 1973.0
+      }
+    }
+  }
+}
