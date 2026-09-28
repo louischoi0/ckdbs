@@ -317,8 +317,8 @@ are AT-S13's, quoted from its results file, and R8.3's two mutants, run
 here at `3de6d62`.
 
 Drafted before its gate - AT-S21 landed - was met, on the operator's word
-of 2026-09-28; R8.1's row 10 is the one that waits for S21 (AT-6's AT-S19
-row).
+of 2026-09-28; R8.1's row 10 was the one that waited for S21, and it now
+reads as landed (AT-6's AT-S19 row).
 
 ### R0. The decision, as built
 
@@ -540,7 +540,7 @@ otherwise.
 | 7 | a relation's namespace | `CreateTable` re-checks the namespace live under page 6; `DROP NAMESPACE` holds page 6 across a RESTRICT over `sys.objects` | `CatalogNameRaceTest.ACreateThatResolvedANamespaceAnotherCoreDroppedIsRefused`, `ADropBetweenACreatesTwoRowsIsRefused`, `ACreateAndADropOfItsNamespaceAtOneInstantLeaveNoOrphan`; `CatalogNameRigTest.ANamespaceDropOnOneCoreIsRefusedWhileAnotherCoresDropOfItsLastRelationIsOpen`, `ACreateOnOneCoreIsRefusedIntoAnotherCoresUncommittedNamespace`. **Two holds unkilled** by any cell (0/10 each), the seam named and not built (AT-S17b's row) | AT-S17b |
 | 8 | the assertion directory | one registry for the instance; its directory latch spans the header change and its record; an admission holds its contribution to its reservation | `AssertionRaceTest`'s seven; `ExpeditorTest.APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt` | AT-S5d |
 | 9 | the index build and the assertion build | `CREATE`/`DROP INDEX` and the `CREATE ASSERTION` build take the relation `X`; a writer's `IX` ahead of its admission; the word moved before the decide releases | `DdlFenceRigTest`'s five. **Two of AT-S5e's cells are gone** (R8.3) | AT-S5e |
-| 10 | a record logged after its page is released | an insert appends and stamps under the holds that placed it, index entries under the index tree's hold | `insert_log_crash_rig_test.cpp` - windows 1-3, the mid-chain link, two cores spilling into one var-heap page. **On `worktree-at-s21-log-under-hold` at `801aa61`, not landed** | AT-S21 |
+| 10 | a record logged after its page is released | an insert appends and stamps under the holds that placed it, index entries under the index tree's hold | `insert_log_crash_rig_test.cpp` - windows 1-3, the mid-chain link, two cores spilling into one var-heap page. fix `801aa61`, review `d8893e2`, in the tree with S21's landing | AT-S21 |
 | 11 | the FK forward window | **open**. D9(a)'s `S` on the parent tuple at the hoist, held to the decide - ratified as a design, not built (`raft-marks-2026-09-28.md` §6) | `known-gaps.md`, Foreign keys | owner: the following letter (AT-0 item 6) |
 | 12 | the in-flight predicate | **open**. `IsInFlight` is the core's live set. A write meeting an undecided holder on another core is **refused**, retryably - a refusal, not a wrong answer (`known-gaps.md`, Locks). `ScanAll`'s DT9 gate is core-local too, and each consumer AT reached is defended beside it: `DROP INDEX` by the relation `X` and the word's move (AT-S5e), a name by `CheckNameFree`'s instance check view (AT-S17), a namespace's RESTRICT by `CheckObjects`' stamp classification (AT-S17b) | `known-gaps.md`, Locks | owner: AX (AX-S1/S2, AX-Q1/Q2) |
 
@@ -606,7 +606,7 @@ R8.1's #11, `a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.m
 (`assertion.md` §7, since AR0 M0) and
 `two-cores-growing-one-heap-chain-can-orphan-a-page.md`
 (`heap-and-tuple.md` §4.1a, unscheduled while SUS-1 holds; existing heap
-relations stay exposed). **AT-S21's survey adds entries** once it lands -
+relations stay exposed). **AT-S21's survey adds entries** -
 `records-appended-after-their-page-is-released.md` and three beside it -
 and one of that entry's rows, `AllocateCatalogPage` writing through a span
 whose pin is gone, is wrong without a crash. §7.2's *"nothing else"* is
@@ -629,7 +629,7 @@ AT's own rows.
 ### R10. For ratification
 
 What the operator is asked to ratify is R0-R9: the amendment as built at
-`3de6d62`, with AT-S21's row as it reads once S21 lands.
+`3de6d62`, with AT-S21's row as landed.
 
 **Where the tree departs from the body or a mark on it, the departure was
 either the operator's already or is ratified here.** Already the
