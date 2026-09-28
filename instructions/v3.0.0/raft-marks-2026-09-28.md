@@ -86,3 +86,36 @@ CLA asked what that meant for the stage in progress and for the placed text:
 | **Mark** | **D9(a) is ratified in this shape**: the child's forward check takes **`IS` on the parent relation and `S` on the parent tuple at the hoist, held to its decide**; no escalation; no persisted bit; the **cross-core wait is AX's**, not a gate on D9(a). **Building it is the following letter's** (the AT-close order's §7.4, #5), and the window stays open in `known-gaps.md` until then |
 | **Bears on** | D8's mark (§5): the FK parent row is closed by exactly this held `S`, and E3 retires once its two-core cells pass - so E3 waits on this build |
 | **Recorded at** | `ar0-architecture-revision.md` AR0-M4, `index.md` |
+
+## 7. AR0-5-R — ratified
+
+Recorded on `worktree-ratify-ar0-5-r` from `5dc4081`
+(`v2.7.0-460-g5dc4081`). AT-S19's draft was already on `main` and its
+gate - S21 landed - was not met:
+
+| | |
+|---|---|
+| **Word** | *"start AT-S19"* |
+| **Question** | *"AT-S19 is already drafted and on origin/main ... Its work-order gate is 'S21 landed, and the word'. AT-S21 is built and reviewed ... but not merged. What should CLA do?"* |
+| **Answer chosen** | *"Land S21, then close S19 (Recommended)"* |
+
+AT-S21 landed on `main` at `5dc4081` on the operator's *"merge and push"*,
+and then:
+
+| | |
+|---|---|
+| **Word** | *"ratify AR0-5-R"* |
+| **Mark** | **AR0-5-R is ratified**: R0-R9, the amendment as built at `3de6d62` with AT-S21's row as landed, and R10's split with it - the departures R10 lists as already the operator's stay recorded rather than re-decided, and those it lists as *"ratified by this text and by no earlier word"* are ratified by this word - among them **AR0 D3**, answered in practice by the log stream's core-0 placement (`known-gaps.md`, Decisions the revision has not taken). **The body and AR0-5-V are not ratified**: they stay as the record of what was proposed on 2026-09-05, and where they and AR0-5-R disagree AR0-5-R governs |
+| **Answers** | AT-0 item 1 (`workorder-at-m3-uniformity.md`): AR0-5 is no longer a governing draft. AT-S19's gate - S14-S17, S17b, S21 landed, and the word - is met |
+| **Does not settle** | By R10's own terms, R8.3's lost cells and R8.4's open entries are recorded, not accepted: two mutants survived the full suite at `3de6d62` (`known-gaps.md`, Testing), and restoring the cells is still the operator's decision; R8.4's entries stay AT-S20's to re-read and AT-9's to carry. R8.1's two open members stay with their owners - the FK forward window with the following letter (§6 here), the in-flight predicate with AX |
+| **Recorded at** | `ar0-5-amendment-uniformity.md` (status and R10), `known-gaps.md`'s D3 entry, `CLAUDE.md`'s open-decisions line, AT-0 item 1 and AT-6's AT-S19 rows in `workorder-at-m3-uniformity.md`, `workorder-at-close-ar0-5-left-open.md`'s AT-S19, `index.md` |
+
+## 8. AT-0 item 3 — the borrow cap stays 65,536
+
+| | |
+|---|---|
+| **Word** | *"[decision] AT-0 item 3: maintainconstratintmaxcapnumber:65,536."* (as typed) |
+| **Mark** | **`max_locks_per_txn` stays 65,536** (`kMaxLocksPerTxnDefault`), and its unit is **the transaction**: with no participants since AT-S6 there is one `Transaction` per transaction, so the per-`Transaction` count AO-R10 built at AO-S2 is now per transaction across cores. The narrowing - one cap per transaction where a cross-owner transaction used to have one per participant - is stated, not changed: the value is kept as CLA's proposal put it |
+| **Answers** | AT-0 item 3 (`workorder-at-m3-uniformity.md`); the question `raft-marks-2026-09-08.md` §1 left open ("per transaction across cores ... or per local transaction") until AT's uniformity work asked it again |
+| **Builds nothing** | The value and the counting site are unchanged; `lock_table_test.cpp`'s pin of 65,536 stands |
+| **Recorded at** | AT-0 item 3 and AT-6's AT-S6 row in `workorder-at-m3-uniformity.md`, `txn.md` §5, `lock_table.hpp`'s cap note, `index.md` |

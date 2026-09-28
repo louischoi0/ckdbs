@@ -246,7 +246,9 @@
 //
 // ---- The cap (AO-R10, E2) -------------------------------------------------
 //
-// `max_locks_per_txn` = 65,536 entries per transaction. Reaching it
+// `max_locks_per_txn` = 65,536 entries per transaction - per transaction
+// across cores, since AT-S6 left one `Transaction` per transaction (AT-0
+// item 3, kept 2026-09-28). Reaching it
 // refuses `ResourceExhausted`, non-retryable because a retry meets the same
 // cap. **A cap refuses, it never truncates**, and there is no escalation
 // (AR2-R4): escalation would convert fine borrows into a coarse one

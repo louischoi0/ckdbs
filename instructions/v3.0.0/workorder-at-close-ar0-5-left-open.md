@@ -281,7 +281,8 @@ measured** unless a stage runs a measurement, in which case under
 ### AT-S19 — AR0-5 revised for ratification
 
 *Drafted 2026-09-28, ahead of S21's landing on the operator's word - AT-6's
-AT-S19 row.*
+AT-S19 row. Ratified 2026-09-28 after S21 landed (`raft-marks-2026-09-28.md`
+§7).*
 
 - **What.** Append **AR0-5-R** to `ar0-5-amendment-uniformity.md`: the
   amendment as built, section by section, so the operator ratifies one

@@ -1,7 +1,8 @@
 # AR0-5 — Amendment to AR0: ownership retired completely; system relations treated uniformly
 
-Status: DRAFT amendment to `instructions/v3.0.0/ar0-architecture-revision.md`,
-pending operator ratification
+Status: amendment to `instructions/v3.0.0/ar0-architecture-revision.md`.
+**AR0-5-R ratified 2026-09-28** (`raft-marks-2026-09-28.md` §7); the body
+and AR0-5-V are not, and stand as the record of what was proposed
 Author: CLA, 2026-09-05, against `410377e`
 Scope: AR0 §2 (the ownership decomposition), D3, D4, D10, D11; AM-R5;
 AR2 R5/R12/E7/E13; AO-1 and the AO-S5 cell; `core_runtime.hpp`'s three
@@ -15,7 +16,8 @@ the source read of 2026-09-05 at `410377e`, which is what the tree says
 wherever the body disagrees. Every `path:line` in the body below is the
 corrected one; AR0-5-V records what each was in the draft and why it drifted.
 **AR0-5-R is appended after it** (AT-S19, 2026-09-28): the amendment as
-built, section by section, and the one text put for ratification. The body
+built, section by section, and the one text put for ratification -
+**ratified 2026-09-28** (`raft-marks-2026-09-28.md` §7). The body
 and AR0-5-V stay as written.
 
 ---
@@ -652,3 +654,6 @@ taken).
 It does not ratify R8.3's lost cells or R8.4's open entries as acceptable;
 it records them. The word is recorded verbatim in a `raft-marks-*.md`, and
 AT-0 item 1 closes there.
+
+**Ratified 2026-09-28** on the operator's word *"ratify AR0-5-R"*
+(`raft-marks-2026-09-28.md` §7), at `5dc4081`, after AT-S21 landed.

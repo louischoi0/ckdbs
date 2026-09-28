@@ -623,8 +623,10 @@ there is no second core's registration to be answered by.
   appends under one latch, with a single writer thread — and the work order
   says so outright: *"every core still appends, which is where AL-R1
   departs from D3(a)."* That is a D-item settled in practice, against the
-  proposal, and shipped at the cutover. It is not awaiting the word; it is
-  awaiting someone noticing it was answered.
+  proposal, and shipped at the cutover. **Ratified 2026-09-28** with
+  AR0-5-R, whose R10 takes R0's core-0 placements, the log stream among them,
+  as D3 answered in practice (`raft-marks-2026-09-28.md` §7; verified at
+  `5dc4081`).
 
   The remaining twelve are CLA's proposals awaiting the word. **Three are
   marked `[quiet-wrong]` by AR0 itself — D7, D8, D9 — and only D7 is still

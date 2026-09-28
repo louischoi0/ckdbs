@@ -842,7 +842,9 @@ because the key that conflicted may be any of them.
 
 **One refusal in this family is not retryable and is not a conflict**: a
 transaction that reaches `max_locks_per_txn` is refused `ResourceExhausted`
-carrying `wire::ResourceDetail::kLockCap` (AO-R10, AO-S6c-c). A retry meets
+carrying `wire::ResourceDetail::kLockCap` (AO-R10, AO-S6c-c). The cap is
+65,536 per transaction across cores - one `Transaction` per transaction
+since AT-S6 retired the participants (AT-0 item 3, marked 2026-09-28). A retry meets
 the same cap, so the bit is 0 and the client's fix is a shorter transaction
 rather than a later one.
 
