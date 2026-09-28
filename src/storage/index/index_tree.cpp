@@ -200,6 +200,89 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
         "root that has since grown a level");
 }
 
+// ---- The parents a divide writes, found before it writes (AT-S16) --------
+//
+// btree.cpp's `SecureParents` states the window, the ruling (Q1:
+// re-validate the recorded parent, re-descend on a miss), why every parent
+// is found and held before anything is written, the root's grown-over mark,
+// why the holds cannot deadlock, and why a restart makes progress - and
+// every word of it holds here, where a divide is the ordinary insert rather
+// than the below-mark one. The one difference is the question: routing is
+// asked of the entry's sort key, which is exact for the same reason - the
+// node below is held, and every change to the range routed to it is a
+// divide of it.
+struct Parents {
+    // held[i] is the parent of the node one level below it - held[0] the
+    // leaf's - taken exclusive and checked to route the key to that node.
+    std::array<storage::PageRef, storage::kMaxBtreeDepth> held;
+    std::uint16_t count = 0;
+};
+
+// The node one level above `path[below]` that routes `sort_key` to it,
+// held exclusive: the recorded one first, then descents from the named
+// root, `path[0]`, which rewrite the path above `below`.
+StatusOr<storage::PageRef> FetchParent(storage::PageStore& store, const IndexLayout& layout,
+                                       std::array<PageId, storage::kMaxBtreeDepth>& path,
+                                       std::uint16_t below, std::span<const std::byte> sort_key) {
+    const PageId child = path[below];
+    const std::uint16_t at = static_cast<std::uint16_t>(below - 1);
+    auto internal = [&](const storage::PageRef& ref, PageId page_id) -> Status {
+        if (Status s = RequireType(ref.bytes(), page_id, PageType::kIndexInternal); !s.ok()) {
+            return s;
+        }
+        return IndexInternalView(ref.bytes()).CheckAgainst(layout, page_id);
+    };
+    for (int attempt = 0; attempt <= storage::kMaxDescentRestarts; ++attempt) {
+        if (attempt > 0) {
+            if (at == 0) break;  // the recorded parent *is* the named root
+            PageId current = path[0];
+            for (std::uint16_t i = 0; i < at; ++i) {
+                auto bytes = store.GetForRead(current);
+                if (!bytes.ok()) return bytes.status();
+                if (Status s = internal(bytes.value(), current); !s.ok()) return s;
+                current = IndexInternalView(bytes.value().bytes()).ChildFor(sort_key);
+                path[i + 1] = current;
+            }
+        }
+        auto parent = store.Get(path[at]);
+        if (!parent.ok()) return parent.status();
+        if (Status s = internal(parent.value(), path[at]); !s.ok()) return s;
+        if (IndexInternalView(parent.value().bytes()).ChildFor(sort_key) == child) {
+            return std::move(parent.value());
+        }
+    }
+    return Status::TxnConflict(
+        "index insert could not find the parent of page " + std::to_string(child) +
+        ": the path its descent recorded from root " + std::to_string(path[0]) +
+        " is stale - no node at that level routes the key to the page any more, because the "
+        "root has since been grown past. Nothing was written");
+}
+
+StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descent,
+                                const IndexLayout& layout, std::span<const std::byte> sort_key) {
+    Parents out;
+    std::array<PageId, storage::kMaxBtreeDepth> path = descent.path;
+    for (std::uint16_t below = descent.depth; below > 0; --below) {
+        auto parent = FetchParent(store, layout, path, below, sort_key);
+        if (!parent.ok()) return parent.status();
+        const bool full = IndexInternalView(parent.value().bytes()).IsFull(layout);
+        out.held[out.count++] = std::move(parent.value());
+        if (!full) return out;
+    }
+    // Full all the way up: the divide grows a level over the named root,
+    // which is held - the leaf, or the last parent taken.
+    const bool grown_over = out.count == 0
+                                ? IndexLeafView(descent.leaf.bytes()).grown_over()
+                                : IndexInternalView(out.held[out.count - 1].bytes()).grown_over();
+    if (grown_over) {
+        return Status::TxnConflict(
+            "index insert would grow a level over page " + std::to_string(descent.path[0]) +
+            ", which is no longer the root: another core grew one over it after this core read "
+            "it. Nothing was written");
+    }
+    return out;
+}
+
 StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const IndexLayout& layout) {
     PageId current = root;
     for (std::uint16_t level = 0;; ++level) {
@@ -317,6 +400,12 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // Unlike the clustered tree, which refuses this case, dividing is the
     // ordinary path here - see the header for why that decides nothing about
     // heap pages.
+    //
+    // The parents the divide will write are found and held first (AT-S16):
+    // a refusal there leaves the tree as it was, the entry not inserted.
+    auto parents = SecureParents(store, descent.value(), layout, entry.subspan(0, sort_key_len));
+    if (!parents.ok()) return parents.status();
+
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
     auto& [new_leaf_id, new_leaf_bytes_ref] = created.value();
@@ -359,17 +448,24 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
     out.Record(new_leaf_id, /*is_new_page=*/true);
     out.Record(leaf_id, /*is_new_page=*/false);
+    // Both are written; the descent's hold on the leaf is what keeps a
+    // descent from outrunning the promotion, so these two pins go now.
+    new_leaf_bytes_ref.Release();
+    leaf_again.value().Release();
 
-    // ---- Propagate the separator up --------------------------------------
+    // ---- Propagate the separator up the secured parents ------------------
+    //
+    // Each is already held (`SecureParents`), and every one but the last is
+    // full by construction. A held frame is never a victim and its bytes do
+    // not move, so a parent's view stays valid across the CreateNew() below.
     PageId child = new_leaf_id;
     std::uint16_t old_root_level = 0;  // the root is a leaf unless proven otherwise
 
-    for (int d = static_cast<int>(descent.value().depth) - 1; d >= 0; --d) {
-        const PageId parent_id = descent.value().path[static_cast<std::uint16_t>(d)];
-        auto parent_bytes = store.Get(parent_id);
-        if (!parent_bytes.ok()) return parent_bytes.status();
-        IndexInternalView parent(AsPage(parent_bytes.value().bytes()));
-        old_root_level = parent.level();
+    for (std::uint16_t i = 0; i < parents.value().count; ++i) {
+        const PageId parent_id = parents.value().held[i].page_id();
+        IndexInternalView parent(parents.value().held[i].bytes());
+        const std::uint16_t level = parent.level();
+        old_root_level = level;
 
         if (!parent.IsFull(layout)) {
             if (Status s = parent.InsertEntry(layout, sep, child); !s.ok()) return s;
@@ -379,14 +475,6 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
         // A full internal node divides too, and its median separator is
         // *pushed* up rather than copied - see IndexInternalView::SplitInto.
-        //
-        // `level` is read out before the allocation and `parent` is not
-        // touched after it: CreateNew() may hand back a new frame, which
-        // leaves every span taken earlier stale. Today's stores never move
-        // one; a buffer pool with eviction will, and a view outliving its
-        // fetch is the shape that would not fail until then.
-        const std::uint16_t level = parent.level();
-
         auto created_node = store.CreateNew();
         if (!created_node.ok()) return created_node.status();
         auto& [new_node_id, new_node_bytes_ref] = created_node.value();
@@ -397,17 +485,13 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                                         owner_oid);
         if (!new_node.ok()) return new_node.status();
 
-        auto parent_again = store.Get(parent_id);
-        if (!parent_again.ok()) return parent_again.status();
-        IndexInternalView left_node(AsPage(parent_again.value().bytes()));
-
         std::array<std::byte, kMaxIndexEntryWidth> up_buf{};
         std::span<std::byte> pushed(up_buf.data(), sort_key_len);
-        if (Status s = left_node.SplitInto(new_node.value(), pushed); !s.ok()) return s;
+        if (Status s = parent.SplitInto(new_node.value(), pushed); !s.ok()) return s;
 
         // The pending (sep -> child) belongs to whichever half now covers it.
         IndexInternalView& into =
-            std::memcmp(sep.data(), pushed.data(), sort_key_len) < 0 ? left_node : new_node.value();
+            std::memcmp(sep.data(), pushed.data(), sort_key_len) < 0 ? parent : new_node.value();
         if (Status s = into.InsertEntry(layout, sep, child); !s.ok()) return s;
 
         out.Record(new_node_id, /*is_new_page=*/true);
@@ -431,6 +515,15 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     if (!new_root.ok()) return new_root.status();
     if (Status s = new_root.value().InsertEntry(layout, sep, child); !s.ok()) return s;
 
+    // And the old root is marked, last, under the hold `SecureParents` took
+    // (btree.cpp's `PromoteSeparator` says why last). A root here always
+    // divided first, so its image is already recorded.
+    if (parents.value().count == 0) {
+        IndexLeafView(descent.value().leaf.bytes()).MarkGrownOver();
+    } else {
+        IndexInternalView(parents.value().held[parents.value().count - 1].bytes())
+            .MarkGrownOver();
+    }
     out.Record(new_root_id, /*is_new_page=*/true);
     out.new_root = new_root_id;
     return out;

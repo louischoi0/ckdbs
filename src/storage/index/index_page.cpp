@@ -135,6 +135,14 @@ bool IndexLeafView::IsFull() const {
     return h.nr_entries >= static_cast<std::uint16_t>(kIndexEntrySpace / h.entry_width);
 }
 
+bool IndexLeafView::grown_over() const { return (ReadHeader().flags & kIndexFlagGrownOver) != 0; }
+
+void IndexLeafView::MarkGrownOver() {
+    IndexLeafHeaderFields h = ReadHeader();
+    h.flags = static_cast<std::uint16_t>(h.flags | kIndexFlagGrownOver);
+    WriteHeader(h);
+}
+
 StatusOr<std::span<const std::byte>> IndexLeafView::Entry(std::uint16_t idx) const {
     const IndexLeafHeaderFields h = ReadHeader();
     if (idx >= h.nr_entries) {
@@ -356,6 +364,14 @@ StatusOr<PageId> IndexInternalView::Child(std::uint16_t idx) const {
 
 bool IndexInternalView::IsFull(const IndexLayout& layout) const {
     return entry_count() >= MaxInternalEntries(layout);
+}
+
+bool IndexInternalView::grown_over() const { return (ReadHeader().flags & kIndexFlagGrownOver) != 0; }
+
+void IndexInternalView::MarkGrownOver() {
+    IndexInternalHeaderFields h = ReadHeader();
+    h.flags = static_cast<std::uint16_t>(h.flags | kIndexFlagGrownOver);
+    WriteHeader(h);
 }
 
 int IndexInternalView::FindSlot(std::span<const std::byte> sort_key) const {

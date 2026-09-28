@@ -90,6 +90,12 @@ std::uint16_t InternalView::level() const { return ReadHeader().level; }
 std::uint16_t InternalView::entry_count() const { return ReadHeader().nr_entries; }
 PageId InternalView::leftmost_child() const { return ReadHeader().leftmost_child; }
 
+void InternalView::MarkGrownOver() {
+    BtreeInternalHeaderFields h = ReadHeader();
+    h.flags = static_cast<std::uint16_t>(h.flags | kInternalFlagGrownOver);
+    WriteHeader(h);
+}
+
 StatusOr<BtreeInternalEntryFields> InternalView::Entry(std::uint16_t idx) const {
     const std::uint16_t n = entry_count();
     if (idx >= n) {

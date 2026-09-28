@@ -4,7 +4,6 @@
 #include <cstring>
 #include <functional>
 #include <random>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -15,6 +14,7 @@
 #include "kds/storage/page_header.hpp"
 
 #include "act_on_fetch_store.hpp"
+#include "tree_structure.hpp"
 
 // The secondary index tree (docs/spec/index.md §4, workplan IX02).
 //
@@ -574,112 +574,26 @@ TEST(IndexTreeTest, AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree
 // A divide inserts its separator into the parents its descent recorded,
 // and the descent held none of them. Another core's divide of one of them
 // in between moves the child to a new node the recorded parent no longer
-// routes to (window 2 of
-// `docs/inflight/bugs/a-secondary-index-descent-is-not-revalidated-across-cores.md`).
+// routes to (window 2 of the index-descent entry AT-S12 filed, closed and
+// deleted at AT-S16).
 // A 1,000-byte key puts eight entries in a leaf and eight in a node, so a
 // few hundred inserts build every shape these cells need.
+//
+// **Mutations** (2026-09-28, 20 runs each, all killed 20/20): `FetchParent`
+// accepting the recorded parent without asking it (the first cell);
+// `SecureParents` growing over a marked root (the `*GrewOver*` cells).
 
-bool IsIndexLeaf(std::span<const std::byte, kPageSize> page) {
-    return storage::RawPageType(page) == static_cast<std::uint8_t>(PageType::kIndexLeaf);
-}
-
-// The node at `level` on the tree's leftmost spine.
 PageId LeftmostAtLevel(Fixture& f, std::uint16_t level) {
-    PageId node = f.root;
-    for (;;) {
-        auto bytes = f.store.GetForRead(node);
-        EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-        if (IsIndexLeaf(bytes.value().bytes())) return level == 0 ? node : kInvalidPageId;
-        IndexInternalView view(bytes.value().bytes());
-        if (view.level() == level) return node;
-        node = view.leftmost_child();
-    }
+    return testing_race::IndexLeftmostAtLevel(f.store, f.root, level);
 }
-
-// Every child a node routes to, leftmost first.
 std::vector<PageId> ChildrenOf(Fixture& f, PageId node) {
-    auto bytes = f.store.GetForRead(node);
-    EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-    IndexInternalView view(bytes.value().bytes());
-    std::vector<PageId> out{view.leftmost_child()};
-    for (std::uint16_t i = 0; i < view.entry_count(); ++i) {
-        auto child = view.Child(i);
-        EXPECT_TRUE(child.ok()) << child.status().message();
-        out.push_back(child.value());
-    }
-    return out;
+    return testing_race::IndexChildren(f.store, node);
 }
-
 bool NodeIsFull(Fixture& f, PageId node) {
-    auto bytes = f.store.GetForRead(node);
-    EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-    if (IsIndexLeaf(bytes.value().bytes())) return IndexLeafView(bytes.value().bytes()).IsFull();
-    return IndexInternalView(bytes.value().bytes()).IsFull(f.layout);
+    return testing_race::IndexPageIsFull(f.store, node, f.layout);
 }
-
-// **The tree's structural invariant, asked of every node** - btree_test.cpp's
-// `CheckSubtree` over sort keys: each separator sits inside the range its
-// parent routes to its node, every leaf entry inside the range the path to
-// its leaf names, and the descent reaches every leaf the sibling chain
-// does. An empty bound is unbounded.
-void CheckIndexSubtree(Fixture& f, PageId node, const std::vector<std::byte>& lo,
-                       const std::vector<std::byte>& hi, std::set<PageId>& leaves) {
-    const std::size_t width = f.layout.sort_key_width();
-    auto inside = [&](std::span<const std::byte> key) {
-        return (lo.empty() || std::memcmp(key.data(), lo.data(), width) >= 0) &&
-               (hi.empty() || std::memcmp(key.data(), hi.data(), width) < 0);
-    };
-    auto bytes = f.store.GetForRead(node);
-    ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    if (IsIndexLeaf(bytes.value().bytes())) {
-        leaves.insert(node);
-        IndexLeafView leaf(bytes.value().bytes());
-        for (std::uint16_t i = 0; i < leaf.entry_count(); ++i) {
-            auto key = leaf.SortKey(i);
-            ASSERT_TRUE(key.ok()) << key.status().message();
-            EXPECT_TRUE(inside(key.value()))
-                << "entry " << i << " of leaf " << node << " (key "
-                << KeyOf(key.value().subspan(0, f.layout.key_width))
-                << ") sits outside the range the path to it routes there";
-        }
-        return;
-    }
-    IndexInternalView view(bytes.value().bytes());
-    std::vector<std::pair<std::vector<std::byte>, PageId>> children{{lo, view.leftmost_child()}};
-    for (std::uint16_t i = 0; i < view.entry_count(); ++i) {
-        auto sep = view.Separator(i);
-        auto child = view.Child(i);
-        ASSERT_TRUE(sep.ok() && child.ok());
-        EXPECT_TRUE(inside(sep.value()))
-            << "separator " << i << " of node " << node << " (key "
-            << KeyOf(sep.value().subspan(0, f.layout.key_width))
-            << ") sits outside the range its parent routes to the node";
-        children.emplace_back(std::vector<std::byte>(sep.value().begin(), sep.value().end()),
-                              child.value());
-    }
-    bytes.value().Release();
-    for (std::size_t i = 0; i < children.size(); ++i) {
-        const std::vector<std::byte>& child_hi =
-            i + 1 < children.size() ? children[i + 1].first : hi;
-        CheckIndexSubtree(f, children[i].second, children[i].first, child_hi, leaves);
-    }
-}
-
 void ExpectEverySeparatorBoundsItsSubtree(Fixture& f) {
-    std::set<PageId> reached;
-    CheckIndexSubtree(f, f.root, {}, {}, reached);
-    std::set<PageId> chained;
-    Status s = IndexVisit(f.store, f.root, f.layout, storage::PageAccess::kRead,
-                          [&](PageId page_id, IndexLeafView&,
-                              std::uint16_t) -> StatusOr<storage::VisitControl> {
-                              chained.insert(page_id);
-                              return storage::VisitControl::kContinue;
-                          });
-    ASSERT_TRUE(s.ok()) << s.message();
-    for (PageId leaf : chained) {
-        EXPECT_EQ(1u, reached.count(leaf))
-            << "leaf " << leaf << " is on the sibling chain and no descent reaches it";
-    }
+    testing_race::ExpectIndexSeparatorsBoundTheirSubtrees(f.store, f.root, f.layout);
 }
 
 TEST(IndexTreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHoldingItsLeaf) {

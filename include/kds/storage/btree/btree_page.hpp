@@ -90,6 +90,9 @@ static_assert(offsetof(BtreeInternalHeaderFields, reserved1) == kInternalReserve
 static_assert(sizeof(BtreeInternalHeaderFields) == kInternalHeaderSize);
 
 inline constexpr std::uint16_t kInternalFlagInitialized = 0x1;
+// A root was grown over this node (AT-S16): heap_page.hpp's
+// `kHeaderFlagGrownOver`, for the case where the old root was internal.
+inline constexpr std::uint16_t kInternalFlagGrownOver = 0x2;
 
 // ---- Entry --------------------------------------------------------------
 
@@ -140,6 +143,11 @@ public:
     std::uint16_t entry_count() const;
     PageId leftmost_child() const;
     bool IsFull() const { return entry_count() >= kInternalMaxEntries; }
+
+    // `kInternalFlagGrownOver`. The caller holds the node exclusive for
+    // either, for heap::PageView's reason.
+    bool grown_over() const { return (ReadHeader().flags & kInternalFlagGrownOver) != 0; }
+    void MarkGrownOver();
 
     // The entry at `idx`. Fails with OutOfRange past entry_count().
     StatusOr<BtreeInternalEntryFields> Entry(std::uint16_t idx) const;

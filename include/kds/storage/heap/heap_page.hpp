@@ -84,6 +84,16 @@ static_assert(offsetof(HeapPageHeaderFields, min_key) == kHeaderMinKeyOffset);
 static_assert(sizeof(HeapPageHeaderFields) == kHeaderSize);
 
 inline constexpr std::uint16_t kHeaderFlagInitialized = 0x1;
+// **A root was grown over this page** (AT-S16) - meaningful on a
+// `kBtreeLeaf` only, and set on exactly one: a leaf that was the tree's
+// root when a split reached past it. It says the page has a parent, which
+// nothing else on the page can say, and a core whose memo still names the
+// page as the root reads it before growing a second root over it
+// (btree.cpp's `SecureParents`). Never cleared: an old root stays its
+// grower's leftmost child. A page written before the bit existed carries
+// 0, which claims nothing - the same argument that let `relayout_epoch`
+// take a zeroed word without a format event.
+inline constexpr std::uint16_t kHeaderFlagGrownOver = 0x2;
 
 // ---- Slot directory entry ---------------------------------------------
 
@@ -230,6 +240,12 @@ public:
 
     PageId next_page_id() const;
     void set_next_page_id(PageId next);
+
+    // `kHeaderFlagGrownOver`, on a B+ tree leaf. The caller holds the page
+    // exclusive to mark it; a reader that must act on the answer holds it
+    // exclusive too, since only a holder of the page can grow over it.
+    bool grown_over() const;
+    void MarkGrownOver();
 
     // The common header's relayout epoch (docs/spec/physical-optimizer.md
     // R4), surfaced here because the callers that need it at tuple-access

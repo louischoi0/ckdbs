@@ -710,9 +710,11 @@ public:
 
     // The per-operation pin ceiling (MG04, `docs/workplan-pageref.md` §7's
     // open decision, given a first value here). Derivation, from the MG03
-    // audit rather than from air: a btree grow path holds at most 4
-    // (SplitLeafAndInsert's leaf + created leaf, stacked under
-    // PromoteSeparator's parent + created node per level), an outer chain
+    // audit rather than from air: a btree grow path holds `3 + k` for a
+    // split that divides `k` full levels - its leaf and the `k` parents
+    // `SecureParents` holds (AT-S16), plus a level's created node and
+    // re-fetch (btree.cpp's `PromoteSeparator`) - 4 in the ordinary case of
+    // one parent with room; an outer chain
     // walk adds 1, and index maintenance stacked under a statement adds 2
     // more of its own split path. 8 bounds that with one frame of slack;
     // the debug assert in PinFrame() is what turns the estimate into a

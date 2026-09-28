@@ -94,7 +94,7 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
 // here. The order is always leaf-then-right-neighbour, which is the order a
 // scan takes, so it closes no cycle: **nothing anywhere holds a page and
 // asks for the one to its left**, and the only other multi-page hold in
-// this file is bottom-up (a leaf, then its parent, in `PromoteSeparator`).
+// this file is bottom-up (a leaf, then its parents, in `SecureParents`).
 // A split reads `next_page_id` and never fetches the page it names.
 StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& leaf,
                                    std::uint64_t key) {
@@ -351,12 +351,14 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     std::vector<BtreeInternalEntryFields> entries;
     std::uint16_t level = 0;
     PageId leftmost = kInvalidPageId;
+    bool grown_over = false;
     {
         auto bytes = store.Get(node_id);
         if (!bytes.ok()) return bytes.status();
         InternalView node(bytes.value().bytes());
         level = node.level();
         leftmost = node.leftmost_child();
+        grown_over = node.grown_over();
         const std::uint16_t n = node.entry_count();
         entries.reserve(static_cast<std::size_t>(n) + 1);
         for (std::uint16_t i = 0; i < n; ++i) {
@@ -415,6 +417,9 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     auto rebuilt =
         InternalView::CreateEmpty(AsPage(again.value().bytes()), level, leftmost, old_owner);
     if (!rebuilt.ok()) return rebuilt.status();
+    // An old root keeps its mark through the rebuild: a core whose memo
+    // still names it is what the mark is read by (`SecureParents`).
+    if (grown_over) rebuilt.value().MarkGrownOver();
     for (std::size_t k = 0; k < m; ++k) {
         if (Status s = rebuilt.value().InsertEntry(entries[k].sep_key, entries[k].child);
             !s.ok()) {
@@ -427,32 +432,158 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     return InternalDivision{median.sep_key, right_id};
 }
 
-// ---- Propagate a new subtree's separator up the descent path -------------
+// ---- The parents a split writes, found before it writes (AT-S16) ---------
+//
+// **The window.** A split puts its separator into the parents its descent
+// recorded, and the descent held none of them: it releases each node
+// before reading the child. Until AT-S5 nothing could run in between. Since
+// then another core can divide a recorded parent first - which moves the
+// upper half of its children, and possibly the one this split came from,
+// to a new node - and a separator put into the recorded parent then lands
+// in the half that no longer routes to its subtree. The append path is no
+// exception: two appends serialise on the tail leaf, but a below-mark
+// divide under the same parent does not wait for either.
+//
+// **The ruling** (Q1, 2026-09-26): re-validate the recorded parent, and
+// re-descend for the real one on a miss. An internal node carries no
+// bounds of its own, so the question is asked as routing - *does it still
+// send the insert's key to the node below?* - which is exact because that
+// node is held: every change to the range routed to it is a divide of it,
+// and a divide of it needs the hold this insert has.
+//
+// **Every parent is found before anything is written.** The split goes
+// only as far up as the nodes are full, so this climbs while they are,
+// holding each parent exclusive, and stops at the first with room or at
+// the root. A refusal here - a path no descent can revalidate - therefore
+// leaves the tree exactly as it found it, instead of a divided node whose
+// new half no parent routes to.
+//
+// **The root** is the one node with no parent to ask. A split that reaches
+// past it grows a level, and marks it (`MarkGrownOver`, under the hold it
+// already has): the mark is the only thing on the page that says it now
+// has a parent. A core whose memo still names it - another core grew over
+// it, published or not, and a memo drops at the next task boundary - finds
+// the mark here and is refused before it writes, instead of growing a
+// second root over it (the operator's word of 2026-09-28).
+//
+// **Nothing can deadlock on these holds.** They are taken bottom-up, a
+// level at a time, and a re-descent reads only above everything this
+// insert holds. No code holds a node and asks for one below it or to its
+// left: a descent releases each node before the next, and `LeafStillCoversKey`
+// reads rightward.
+//
+// **A restart makes progress rather than spinning**, by `DescendTo`'s
+// argument one level up: a divider holds every node it writes until its
+// insert returns, so a re-descent either blocks on the node it divided or
+// reads it after its separator is in place. An attempt fails only when a
+// divide on its route both starts and finishes between two of its reads.
+// `storage::kMaxDescentRestarts` bounds the attempts, and what exhausts it
+// in practice is a **stale path**: the root the caller named has been grown
+// past, and no descent from it reaches the node that now holds the child.
+// That refusal is retryable - the retry crosses a task boundary and reads
+// the current root - and nothing was written.
+struct Parents {
+    // held[i] is the parent of the node one level below it - held[0] the
+    // leaf's - taken exclusive and checked to route the key to that node.
+    std::array<storage::PageRef, storage::kMaxBtreeDepth> held;
+    std::uint16_t count = 0;
+};
+
+// The node one level above `path[below]` that routes `key` to it, held
+// exclusive. The recorded one first - the case where nothing moved - and
+// then descents from the named root, `path[0]`, which rewrite the path
+// above `below`.
+StatusOr<storage::PageRef> FetchParent(storage::PageStore& store,
+                                       std::array<PageId, storage::kMaxBtreeDepth>& path,
+                                       std::uint16_t below, std::uint64_t key) {
+    const PageId child = path[below];
+    const std::uint16_t at = static_cast<std::uint16_t>(below - 1);
+    for (int attempt = 0; attempt <= kMaxDescentRestarts; ++attempt) {
+        if (attempt > 0) {
+            if (at == 0) break;  // the recorded parent *is* the named root
+            PageId current = path[0];
+            for (std::uint16_t i = 0; i < at; ++i) {
+                auto bytes = store.GetForRead(current);
+                if (!bytes.ok()) return bytes.status();
+                if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal);
+                    !s.ok()) {
+                    return s;
+                }
+                current = InternalView(bytes.value().bytes()).ChildFor(key);
+                path[i + 1] = current;
+            }
+        }
+        auto parent = store.Get(path[at]);
+        if (!parent.ok()) return parent.status();
+        if (Status s = RequireType(parent.value().bytes(), path[at], PageType::kBtreeInternal);
+            !s.ok()) {
+            return s;
+        }
+        if (InternalView(parent.value().bytes()).ChildFor(key) == child) {
+            return std::move(parent.value());
+        }
+    }
+    return Status::TxnConflict(
+        "btree insert of key " + std::to_string(key) + " could not find the parent of page " +
+        std::to_string(child) + ": the path its descent recorded from root " +
+        std::to_string(path[0]) + " is stale - no node at that level routes the key to the page "
+        "any more, because the root has since been grown past. Nothing was written");
+}
+
+StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descent,
+                                std::uint64_t key) {
+    Parents out;
+    std::array<PageId, storage::kMaxBtreeDepth> path = descent.path;
+    for (std::uint16_t below = descent.depth; below > 0; --below) {
+        auto parent = FetchParent(store, path, below, key);
+        if (!parent.ok()) return parent.status();
+        const bool full = InternalView(parent.value().bytes()).IsFull();
+        out.held[out.count++] = std::move(parent.value());
+        if (!full) return out;
+    }
+    // Full all the way up: the split grows a level over the named root,
+    // which is held - the leaf, or the last parent taken.
+    const bool grown_over = out.count == 0
+                                ? heap::PageView(descent.leaf.bytes()).grown_over()
+                                : InternalView(out.held[out.count - 1].bytes()).grown_over();
+    if (grown_over) {
+        return Status::TxnConflict(
+            "btree insert of key " + std::to_string(key) + " would grow a level over page " +
+            std::to_string(descent.path[0]) + ", which is no longer the root: another core grew "
+            "one over it after this core read it. Nothing was written");
+    }
+    return out;
+}
+
+// ---- Propagate a new subtree's separator up the secured parents ----------
 //
 // Shared by both ways a leaf grows: the append-split above and the true
 // division in SplitLeafAndInsert. `sep` is the new subtree's low key and
 // `child` the page that holds it; `out` carries whatever the caller has
-// already recorded, and comes back with the ancestors appended.
-// Peak pins (MG03): 3, and not cumulative across levels - both locals are
-// per-iteration, so a level's pins drop before the next is fetched. The
-// append path holds 2 (the parent and the created node); the *divide* path
-// holds 3, because DivideInternalNode runs with `parent_bytes` still held
-// and itself holds its created node and its re-fetch of the same node
-// together. Stacked under SplitLeafAndInsert's 2 - which are alive across
-// the tail call below - the whole grow path holds at most 5, under
-// DevicePageStore::kPinCeiling with three frames of slack.
+// already recorded, and comes back with the ancestors appended. Every
+// parent it writes is already held (`SecureParents`), and every one but the
+// last is full by construction.
+// Peak pins (MG03): the leaf and the `k` secured parents stay held
+// throughout; on top of them a level holds 1 (the created node) on the
+// append path and 2 on the *divide* path, where DivideInternalNode holds its
+// created node and a re-fetch of the node it divides. Those drop before the
+// next level, and SplitLeafAndInsert releases its own two before the call,
+// so a split holds at most `3 + k` - under DevicePageStore::kPinCeiling for
+// k <= 5, and dividing six 678-way levels takes more leaves than a page id
+// can name.
 StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
-                                                     const Descent& descent, std::uint64_t sep,
-                                                     PageId child,
+                                                     const Descent& descent, Parents& parents,
+                                                     std::uint64_t sep, PageId child,
                                                      storage::InsertPlacement out,
                                                      std::uint64_t owner_oid) {
     std::uint16_t old_root_level = 0;  // the root is a leaf unless proven otherwise
+    // Whether the page a growth marks already has an image recorded: a leaf
+    // root's split path records the leaf, and a divided root records itself.
+    bool root_recorded = descent.depth == 0;
 
-    for (int d = static_cast<int>(descent.depth) - 1; d >= 0; --d) {
-        const PageId parent_id = descent.path[static_cast<std::uint16_t>(d)];
-        auto parent_bytes = store.Get(parent_id);
-        if (!parent_bytes.ok()) return parent_bytes.status();
-        InternalView parent(parent_bytes.value().bytes());
+    for (std::uint16_t i = 0; i < parents.count; ++i) {
+        const PageId parent_id = parents.held[i].page_id();
+        InternalView parent(parents.held[i].bytes());
 
         if (!parent.IsFull()) {
             if (Status s = parent.InsertEntry(sep, child); !s.ok()) return s;
@@ -484,6 +615,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
             sep = divided.value().sep;
             child = divided.value().child;
             old_root_level = level;
+            root_recorded = true;
             continue;
         }
 
@@ -498,6 +630,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
         out.Record(new_node_id, /*is_new_page=*/false, 0);
         child = new_node_id;
         old_root_level = level;
+        root_recorded = false;  // the right-split leaves this node as it was
     }
 
     // The split reached past the root: grow a level. The old root becomes
@@ -514,6 +647,17 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
     if (!new_root.ok()) return new_root.status();
     if (Status s = new_root.value().InsertEntry(sep, child); !s.ok()) return s;
 
+    // And the old root is marked, under the hold `SecureParents` took, so
+    // no core that still names it as the root grows a second one over it.
+    // **Last, after everything that can fail**: a mark left by a growth
+    // whose allocation failed would claim a parent that does not exist and
+    // refuse every later growth of the tree.
+    if (parents.count == 0) {
+        heap::PageView(descent.leaf.bytes()).MarkGrownOver();
+    } else {
+        InternalView(parents.held[parents.count - 1].bytes()).MarkGrownOver();
+    }
+    if (!root_recorded) out.Record(old_root, /*is_new_page=*/false, 0);
     out.Record(new_root_id, /*is_new_page=*/false, 0);
     out.new_root = new_root_id;
     return out;
@@ -547,7 +691,8 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
 // payload alone would resurrect a row some snapshot has already been told
 // is gone.
 StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
-                                                       const Descent& descent, PageId leaf_id,
+                                                       const Descent& descent, Parents& parents,
+                                                       PageId leaf_id,
                                                        std::uint64_t id,
                                                        std::span<const std::byte> payload,
                                                        std::uint64_t trx_id,
@@ -569,12 +714,14 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     std::uint64_t old_min_key = 0;
     PageId old_next = kInvalidPageId;
     std::uint64_t old_epoch = 0;
+    bool old_grown_over = false;
 
     {
         heap::PageView leaf(descent.leaf.bytes());
         old_min_key = leaf.min_key();
         old_next = leaf.next_page_id();
         old_epoch = leaf.RelayoutEpoch();
+        old_grown_over = leaf.grown_over();
 
         const std::uint16_t n = leaf.slot_count();
         live.reserve(n);
@@ -656,6 +803,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     auto rebuilt = heap::PageView::CreateEmptyAs(AsPage(old_bytes.value().bytes()), old_min_key,
                                                   PageType::kBtreeLeaf, old_owner);
     if (!rebuilt.ok()) return rebuilt.status();
+    if (old_grown_over) rebuilt.value().MarkGrownOver();  // DivideInternalNode's reason
 
     for (std::size_t k = 0; k < split_at; ++k) {
         auto slot = rebuilt.value().InsertTuple(live[k].bytes, live[k].trx_id, live[k].undo_ptr);
@@ -709,7 +857,13 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     out.Record(new_leaf_id, /*is_new_page=*/false, 0);
     out.Record(leaf_id, /*is_new_page=*/false, 0);
 
-    return PromoteSeparator(store, descent, split_key, new_leaf_id, std::move(out), owner_oid);
+    // Both are written; the descent's hold on the leaf is what keeps a
+    // descent from outrunning the promotion, so these two pins go now
+    // rather than stacking under every level the promotion climbs.
+    new_leaf_bytes_ref.Release();
+    old_bytes.value().Release();
+    return PromoteSeparator(store, descent, parents, split_key, new_leaf_id, std::move(out),
+                            owner_oid);
 }
 
 }  // namespace
@@ -794,11 +948,18 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // leaf - which only a caller-supplied, possibly descending id can do
     // (docs/spec/heap-and-tuple.md section 4.1) - the leaf must genuinely divide,
     // which is SplitLeaf's job.
+    //
+    // Either shape writes a separator into the parents, so they are found
+    // and held first (`SecureParents`, AT-S16): a refusal there leaves the
+    // tree as it was, with the tuple not inserted.
+    auto parents = SecureParents(store, descent.value(), id);
+    if (!parents.ok()) return parents.status();
+
     auto max_id = MaxLiveId(leaf);
     if (!max_id.ok()) return max_id.status();
     if (id < max_id.value()) {
-        return SplitLeafAndInsert(store, descent.value(), leaf_id, id, payload, trx_id,
-                                  owner_oid);
+        return SplitLeafAndInsert(store, descent.value(), parents.value(), leaf_id, id, payload,
+                                  trx_id, owner_oid);
     }
 
     // The leaf this one is being spliced in *front of*, read before anything
@@ -861,8 +1022,8 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // `sep` is the new subtree's low key, which is exactly the new leaf's
     // min_key - the same number, never a separately derived boundary
     // (btree_page.hpp's routing rule).
-    auto promoted = PromoteSeparator(store, descent.value(), /*sep=*/id, /*child=*/new_leaf_id,
-                                     std::move(out), owner_oid);
+    auto promoted = PromoteSeparator(store, descent.value(), parents.value(), /*sep=*/id,
+                                     /*child=*/new_leaf_id, std::move(out), owner_oid);
     if (!promoted.ok()) return promoted.status();
 
     // **Infallible, which is what makes the ordering above worth anything.**
