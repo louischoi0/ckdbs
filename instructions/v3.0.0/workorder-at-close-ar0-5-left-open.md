@@ -507,6 +507,8 @@ carries it"*, and Q1 has decided it and S16 carries it.
 
 #### AT-S22 — a covering index keeps a row if any of its entries survives (#4)
 
+*Built 2026-09-28 - AT-6's AT-S22 row.*
+
 - **What.** In `step_vm.cpp`'s index probe (the `IndexVisitFrom`
   callback), a pk is recorded in `seen_pks_` only **after** its entry
   passes `CoveredRowSurvives`. A row whose stale entry fails the filter is

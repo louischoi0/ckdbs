@@ -459,6 +459,9 @@ TEST(IndexContractTest, AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved) {
         ASSERT_EQ(i->Run(reader, "COMMIT").substr(0, 6), "COMMIT");
         EXPECT_EQ(i->Run(sql), "id") << "a fresh reader sees the new c";
     }
+    // The indexed instance probed, or the cell tested nothing.
+    EXPECT_NE(db.Run("ANALYZE " + sql).find("IndexProbe"), std::string::npos)
+        << db.Run("ANALYZE " + sql);
 }
 
 // ---- Damage: a corrupted index page must fail, not mis-answer ------------
