@@ -382,7 +382,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
         out.page_id = leaf_id;
         out.slot = dup_at;
         out.already_present = true;
-        return out;
+        return out;  // nothing written, nothing to log: no hold handed out
     }
 
     if (auto slot = leaf.InsertEntry(entry); slot.ok()) {
@@ -391,6 +391,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
         // Nothing recorded: the entry alone describes what changed, which is
         // what lets the caller log one small INDEX_INSERT instead of an 8 KB
         // page image. `changes()` is for pages no record type describes.
+        out.held.push_back(std::move(descent.value().leaf));
         return out;  // the common case: one page touched
     } else if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();
@@ -406,6 +407,14 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // a refusal there leaves the tree as it was, the entry not inserted.
     auto parents = SecureParents(store, descent.value(), layout, entry.subspan(0, sort_key_len));
     if (!parents.ok()) return parents.status();
+    // What the caller logs under (AT-S21): the leaf and every parent the
+    // divide writes, handed out still held once it is done.
+    auto hand_out = [&] {
+        out.held.push_back(std::move(descent.value().leaf));
+        for (std::uint16_t i = 0; i < parents.value().count; ++i) {
+            out.held.push_back(std::move(parents.value().held[i]));
+        }
+    };
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
@@ -476,6 +485,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
         if (!parent.IsFull(layout)) {
             if (Status s = parent.InsertEntry(layout, sep, child); !s.ok()) return s;
             out.Record(parent_id, /*is_new_page=*/false);
+            hand_out();
             return out;  // absorbed; the tree did not grow
         }
 
@@ -532,6 +542,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     }
     out.Record(new_root_id, /*is_new_page=*/true);
     out.new_root = new_root_id;
+    hand_out();
     return out;
 }
 

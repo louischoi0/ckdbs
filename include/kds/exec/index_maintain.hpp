@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <functional>
 #include <vector>
 
 #include "kds/base/status.hpp"
@@ -84,6 +85,15 @@ struct IndexWrite {
     std::vector<PageId> restructured;
 };
 
+// What maintenance hands each write to, **while the tree still holds the
+// pages it names** (AT-S21): the leaf, and on a divide the parents it
+// wrote. A caller with a log appends and stamps here, from bytes read under
+// that hold; the hold drops when the call returns. Before AT-S21 the writes
+// were collected and logged after the heap write, by which time another
+// core's insert could have shifted the slot - and the entry was re-read at
+// that slot, so the record could carry another row's.
+using IndexWriteLog = std::function<Status(const IndexWrite&)>;
+
 // Appends this row's entries to every index on `access` that the write
 // touched.
 //
@@ -108,7 +118,7 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                        std::span<const std::byte> row, std::uint64_t pk,
                        std::span<const parser::AstValue> previous = {},
-                       std::vector<IndexWrite>* logged = nullptr);
+                       const IndexWriteLog* log = nullptr);
 
 // The same append, for **one** index and with no catalog.
 //
@@ -129,6 +139,6 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
                                   std::uint64_t pk,
                                   std::span<const parser::AstValue> previous = {},
-                                  std::vector<IndexWrite>* logged = nullptr);
+                                  const IndexWriteLog* log = nullptr);
 
 }  // namespace kds::exec

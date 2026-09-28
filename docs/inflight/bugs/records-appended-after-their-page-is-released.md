@@ -11,8 +11,7 @@ maintenance and its spills; these it does not, and each is named here.
 `wal.md` §8-1: a record is generated, appended and its page's `page_lsn`
 stamped while the page is held. Each path below mutates the page, lets the
 hold go, and appends later. Two costs follow from that shape, in the
-entry `an-insert-is-logged-after-its-leaf-is-released.md` described for the
-insert: **a writeback between the mutation and the stamp** puts the change
+shape the insert's entry described (closed at AT-S21): **a writeback between the mutation and the stamp** puts the change
 on disk ahead of its record (the store's gate compares against the old
 `page_lsn`), and **a slot-relative record** logged after another core's
 write to the same page lands out of order, which redo refuses

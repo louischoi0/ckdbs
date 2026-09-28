@@ -313,6 +313,14 @@ struct ChainAppendResult {
     // heap path gives for the same question.
     PageId linked_page_id = kInvalidPageId;
 
+    // The page the value landed in, and - when the chain grew - the old
+    // tail whose link reaches it, still held (AT-S21): a value's record is
+    // slot-relative, and another core's append to the same page between the
+    // write and its record would log the two out of order, which redo
+    // refuses. The caller logs and stamps, then drops them.
+    storage::PageRef value_page;
+    storage::PageRef linked_page;
+
     bool grew() const noexcept { return created_page_id != kInvalidPageId; }
 };
 

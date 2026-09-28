@@ -115,6 +115,16 @@ struct AppendedSpill {
     // no chain walk reaches.
     PageId created_page_id = kInvalidPageId;
     PageId linked_page_id = kInvalidPageId;
+
+    // The pages this append wrote, still held until the caller has logged
+    // it (AT-S21): a `VARHEAP_APPEND` names a slot, and another core's append
+    // to the page between the write and its record logs the two out of the
+    // order redo replays. Its record cannot come sooner - RV3 puts the
+    // spill's undo record first, and that needs the slot this append chose -
+    // so the hold lasts until the caller logs. A page an earlier spill of the
+    // same row already holds is not held twice (`VarHeapSink`).
+    storage::PageRef held_value;
+    storage::PageRef held_linked;
 };
 
 // Where EncodeRow() puts a value that does not fit inline: one relation's

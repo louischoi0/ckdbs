@@ -3,8 +3,10 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "kds/base/common.hpp"
+#include "kds/storage/page_store.hpp"
 
 // What one tuple insert did: where the tuple landed, and every page the
 // insert created or restructured on the way.
@@ -91,6 +93,16 @@ struct InsertPlacement {
 
     std::array<StructuralChange, kMaxStructuralChanges> structural{};
     std::uint8_t n_structural = 0;
+
+    // **The pages the insert changed, still held** (AT-S21, `wal.md` §8-1):
+    // the page the tuple landed in and every page it rewrote that another
+    // writer could reach - a B+ tree's leaf and the parents `SecureParents`
+    // took, a heap chain's tail. A page the insert created needs no hold of
+    // its own: it is reachable only through one of these. The caller
+    // appends and stamps every record naming them, then drops the holds -
+    // before a commit's durability wait, which must not run under a latch.
+    // Empty on a placement that holds nothing.
+    std::vector<PageRef> held;
 
     // In the order redo has to apply them, and always before the
     // `HEAP_INSERT` that describes the tuple itself. Empty for the

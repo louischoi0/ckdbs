@@ -337,7 +337,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
         // existing page took the value, and the append record describes it
         // completely.
         return ChainAppendResult{VarHeapPtr{tail_id, slot.value()}, kInvalidPageId,
-                                 kInvalidPageId};
+                                 kInvalidPageId, std::move(tail.value()), {}};
     }
     if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();  // a real failure, not a full page
@@ -370,7 +370,8 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
 
     // Both halves of the growth reported, because neither is described by the
     // append record the caller is about to write (ChainAppendResult).
-    return ChainAppendResult{VarHeapPtr{new_id, new_slot.value()}, new_id, tail_id};
+    return ChainAppendResult{VarHeapPtr{new_id, new_slot.value()}, new_id, tail_id,
+                             std::move(new_bytes_ref), std::move(tail.value())};
 }
 
 StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr ptr,

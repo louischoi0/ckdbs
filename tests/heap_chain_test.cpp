@@ -65,7 +65,8 @@ std::vector<ChainInsertResult> FillChain(storage::PageStore& store, PageId head,
         auto r = ChainInsert(store, head, id, MakeTuple(id, filler), /*trx_id=*/1, /*owner_oid=*/0);
         EXPECT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
         if (!r.ok()) break;
-        placed.push_back(r.value());
+        placed.push_back(std::move(r.value()));
+        placed.back().held.Release();  // the placement only, not its hold
     }
     return placed;
 }
@@ -197,7 +198,7 @@ TEST(HeapChainTest, ANewPagesMinKeyIsTheIdThatCausedTheGrowth) {
         auto r = ChainInsert(store, head, id, MakeTuple(id, 1016), /*trx_id=*/1, /*owner_oid=*/0);
         ASSERT_TRUE(r.ok()) << r.status().message();
         if (r.value().grew_chain) {
-            growth = r.value();
+            growth = std::move(r.value());
             break;
         }
     }
@@ -220,7 +221,7 @@ TEST(HeapChainTest, GrowthStampsTheOwnerOidOnTheNewPage) {
                              /*owner_oid=*/4001);
         ASSERT_TRUE(r.ok()) << r.status().message();
         if (r.value().grew_chain) {
-            growth = r.value();
+            growth = std::move(r.value());
             break;
         }
     }

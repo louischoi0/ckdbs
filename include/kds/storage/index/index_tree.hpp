@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <vector>
 #include <span>
 
 #include "kds/base/status.hpp"
@@ -134,6 +135,12 @@ struct IndexInsertResult {
     // bytes describe completely.
     std::array<IndexChange, kMaxIndexChanges> structural{};
     std::uint8_t n_structural = 0;
+
+    // The leaf the entry landed in and the parents `SecureParents` took,
+    // still held (AT-S21): an `INDEX_INSERT` names a slot, and another
+    // core's insert into the leaf between the write and its record shifts
+    // it. The caller logs from the page under this hold, then drops it.
+    std::vector<storage::PageRef> held;
 
     std::span<const IndexChange> changes() const {
         return std::span<const IndexChange>(structural.data(), n_structural);

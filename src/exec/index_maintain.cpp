@@ -60,7 +60,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
                                   std::uint64_t pk,
                                   std::span<const parser::AstValue> previous,
-                                  std::vector<IndexWrite>* logged) {
+                                  const IndexWriteLog* log) {
     const bool is_update = !previous.empty();
 
     index::IndexLayout layout;
@@ -155,26 +155,28 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
 
     // A byte-identical entry was already there, so no page changed and there
     // is nothing to log (index_tree.hpp).
-    if (logged != nullptr && !placed.value().already_present) {
+    if (log != nullptr && !placed.value().already_present) {
         IndexWrite write;
         write.page_id = placed.value().page_id;
         write.slot = placed.value().slot;
-        write.entry.assign(key.begin(), key.end());
-        // The pk and the covered bytes as the tree composed them - re-read
-        // from the page rather than rebuilt here, so the record and the page
+        // The entry as the tree composed it - pk and covered bytes included -
+        // read at its slot **under the hold the tree handed out** (AT-S21),
+        // so the slot is still this entry's and the record and the page
         // cannot disagree about what was written.
         auto page = store.GetForRead(placed.value().page_id);
         if (!page.ok()) return page.status();
-        index::IndexLeafView leaf(std::span<std::byte, kPageSize>(page.value().bytes().data(), kPageSize));
+        index::IndexLeafView leaf(
+            std::span<std::byte, kPageSize>(page.value().bytes().data(), kPageSize));
         auto stored = leaf.Entry(placed.value().slot);
         if (!stored.ok()) return stored.status();
         write.entry.assign(stored.value().begin(), stored.value().end());
+        page.value().Release();
         for (const index::IndexChange& change : placed.value().changes()) {
             write.restructured.push_back(change.page_id);
         }
-        logged->push_back(std::move(write));
+        if (Status s = (*log)(write); !s.ok()) return s;
     }
-    return placed.value().new_root;
+    return placed.value().new_root;  // the holds drop here, after the log
 }
 
 Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
@@ -182,13 +184,13 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                        std::span<const std::byte> row, std::uint64_t pk,
                        std::span<const parser::AstValue> previous,
-                       std::vector<IndexWrite>* logged) {
+                       const IndexWriteLog* log) {
     // The one test a relation with no index pays.
     if (access.indexes.empty()) return Status::OK();
 
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
         auto moved = AppendIndexEntry(store, access, ix, values, first_col_pos, row, pk,
-                                      previous, logged);
+                                      previous, log);
         if (!moved.ok()) return moved.status();
         if (moved.value() == kInvalidPageId) continue;
 

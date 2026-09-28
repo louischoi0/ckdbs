@@ -234,12 +234,35 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             auto appended = varheap::ChainAppend(*varheap.store, varheap.root, bytes,
                                                  varheap.owner_oid);
             if (!appended.ok()) return appended.status().WithContext("column '" + NameOf() + "'");
-            const varheap::ChainAppendResult& grew = appended.value();
+            varheap::ChainAppendResult& grew = appended.value();
 
             if (varheap.appended != nullptr) {
+                // One hold per page: a row's spills usually share the tail,
+                // and a pin per value would stack against the store's pin
+                // ceiling for no latch it does not already have.
+                auto held_already = [&](const storage::PageRef& ref) {
+                    for (const AppendedSpill& prior : *varheap.appended) {
+                        if (prior.held_value.valid() &&
+                            prior.held_value.page_id() == ref.page_id()) {
+                            return true;
+                        }
+                        if (prior.held_linked.valid() &&
+                            prior.held_linked.page_id() == ref.page_id()) {
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+                if (grew.value_page.valid() && held_already(grew.value_page)) {
+                    grew.value_page.Release();
+                }
+                if (grew.linked_page.valid() && held_already(grew.linked_page)) {
+                    grew.linked_page.Release();
+                }
                 varheap.appended->push_back(
                     AppendedSpill{grew.ptr, std::vector<std::byte>(bytes.begin(), bytes.end()),
-                                  grew.created_page_id, grew.linked_page_id});
+                                  grew.created_page_id, grew.linked_page_id,
+                                  std::move(grew.value_page), std::move(grew.linked_page)});
             }
 
             return storage::EncodeSpilledCell(cell,

@@ -120,18 +120,21 @@
 //   - A full scan of either is a left-to-right walk of the same
 //     `next_page_id` links, so `SELECT *` returns rows in the same order.
 //
-// ---- Ordering: the records are appended after the page is mutated -------
+// ---- Ordering: an insert's records are appended under its holds (AT-S21) --
 //
-// ChainInsert() writes the tuple into the page frame, and only then are
-// the records appended and page_lsn stamped. That is safe here, and the
-// reason is narrow enough to be worth stating: the server is a single
-// cooperative thread (sched.md), the checkpoint and drain tasks are other
-// tasks on it, and nothing suspends between the mutation and the stamp -
-// so no flush can observe the page in between. What protects the interval
-// is the store's WAL gate (device_page_store.hpp): once page_lsn is
-// stamped, no write-back can outrun the log. A path that ever suspends
-// mid-statement must generate the record while holding the page latch
-// instead, which is what wal.md section 8-1 actually asks for.
+// The storage call writes the tuple and hands back the pages it changed,
+// still held (`InsertPlacement::held`: the leaf and the parents a split
+// secured, a heap chain's tail); index maintenance logs each entry under the
+// index tree's hold; every spill keeps its var-heap page held. `LogInsert`
+// appends and stamps under those holds, then drops them - before an own
+// transaction's commit, whose durability wait must not run under a latch.
+// That is wal.md section 8-1. It used to be justified the other way - one
+// cooperative thread, so no flush could observe the page between the
+// mutation and the stamp - and that stopped being true at AT-S5, when a
+// write began running on every core: another core could divide the leaf
+// the record names, write back a parent whose split was not yet logged, or
+// shift the index entry the record was re-read from
+// (`insert_log_crash_rig_test.cpp`).
 
 namespace kds::sched {
 // Only the pointer is held here; `set_scheduler_view` below says what for.
@@ -617,7 +620,7 @@ public:
     // reservation and undo are written, immediately before the row's own
     // record is appended. A two-core cell puts another core's divide, a
     // forced writeback or another core's index insert there - the three
-    // windows `an-insert-is-logged-after-its-leaf-is-released.md` named.
+    // windows the insert's logging bug entry named (AT-S21 closed it).
     // Unset in production, where it costs one empty-function test per row.
     void SetBeforeInsertLogForTest(std::function<void()> hook) {
         before_insert_log_for_test_ = std::move(hook);
@@ -1196,6 +1199,16 @@ private:
     // dangling entry is dropped by verification, a row with no entry is
     // lost.
     Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
+    Status LogIndexWrite(const exec::IndexWrite& write, std::uint64_t txn_id);
+
+    // What `MaintainIndexes` hands each write to (AT-S21). With a manager
+    // owning the transaction the write is logged there and then, under the
+    // index tree's hold, with the transaction's id; without one - the
+    // own-transaction configuration, whose `TXN_BEGIN` `LogInsert` writes -
+    // it is collected into `pending` for `LogInsert`, as before. Null with
+    // no log.
+    exec::IndexWriteLog IndexWriteLogFor(const WriteScope& scope,
+                                         std::vector<exec::IndexWrite>& pending);
 
     // Both statements take the relation `X` before their first catalog write
     // and build where the session is (AT-S5e); the owner-built arm of
@@ -1877,10 +1890,14 @@ private:
     Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t pk,
                       const std::vector<exec::AppendedSpill>& spills);
 
-    Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
+    // Logs an insert **under the holds its placement handed out** (AT-S21,
+    // `wal.md` §8-1): `placed.held` and every spill's pages, released here
+    // once the row's record is stamped - and before an own transaction's
+    // commit, whose durability wait must not run under a latch.
+    Status LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      std::uint64_t owner_oid,
-                     const std::vector<exec::AppendedSpill>& spills = {},
+                     std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
 

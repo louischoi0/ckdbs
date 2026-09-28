@@ -91,6 +91,11 @@ struct ChainInsertResult {
     // both - the new page's contents are worthless to redo if the link
     // that makes it reachable was never recorded.
     PageId linked_from = kInvalidPageId;
+
+    // The tail, still held (AT-S21): the page the tuple landed in, or - when
+    // the chain grew - the page whose link reaches it, which is the only way
+    // to the new one. The caller logs, stamps, and drops it.
+    storage::PageRef held;
 };
 
 // Follows the chain from `head` and returns its last page id (the page

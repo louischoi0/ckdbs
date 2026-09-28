@@ -932,6 +932,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     if (auto slot = leaf.InsertTuple(payload, trx_id); slot.ok()) {
         out.page_id = leaf_id;
         out.slot = slot.value();
+        out.held.push_back(std::move(descent.value().leaf));
         return out;  // the common case: no structural change at all
     } else if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();  // a real failure, not a full leaf
@@ -951,12 +952,22 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // tree as it was, with the tuple not inserted.
     auto parents = SecureParents(store, descent.value(), id);
     if (!parents.ok()) return parents.status();
+    // What the caller logs under (AT-S21): the leaf and every parent the
+    // split writes, handed out still held once the split is done.
+    auto hand_out = [&](storage::InsertPlacement& placed) {
+        placed.held.push_back(std::move(descent.value().leaf));
+        for (std::uint16_t i = 0; i < parents.value().count; ++i) {
+            placed.held.push_back(std::move(parents.value().held[i]));
+        }
+    };
 
     auto max_id = MaxLiveId(leaf);
     if (!max_id.ok()) return max_id.status();
     if (id < max_id.value()) {
-        return SplitLeafAndInsert(store, descent.value(), parents.value(), leaf_id, id, payload,
-                                  trx_id, owner_oid);
+        auto divided = SplitLeafAndInsert(store, descent.value(), parents.value(), leaf_id, id,
+                                          payload, trx_id, owner_oid);
+        if (divided.ok()) hand_out(divided.value());
+        return divided;
     }
 
     // The leaf this one is being spliced in *front of*, read before anything
@@ -993,7 +1004,15 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     }
     out.page_id = new_leaf_id;
     out.slot = new_slot.value();
-    out.Record(new_leaf_id, /*is_new_page=*/true, /*min_key=*/id);
+    // **A PAGE_INIT describes this page only at the tail** (AT-S21's
+    // survey). It formats an empty leaf whose right link is invalid, and the
+    // HEAP_INSERT that follows fills the tuple - which is the whole page when
+    // the chain ends here. A caller-supplied id appends *mid-chain*, where
+    // the new leaf's link names the page to its right, and no record carried
+    // it: redo rebuilt the leaf with no link and every leaf past it fell off
+    // the chain after a crash - a scan answered short, a point lookup still
+    // found the rows. A full image carries the link.
+    out.Record(new_leaf_id, /*is_new_page=*/right_sibling == kInvalidPageId, /*min_key=*/id);
 
     // ---- The separator first, the sibling link last (H9) -----------------
     //
@@ -1044,6 +1063,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // among them is not load-bearing; what matters is that all of them
     // precede the HEAP_INSERT the caller emits for the tuple.
     promoted.value().Record(leaf_id, /*is_new_page=*/false, 0);
+    hand_out(promoted.value());
     return promoted;
 }
 

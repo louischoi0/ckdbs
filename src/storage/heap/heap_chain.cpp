@@ -125,7 +125,8 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
     if (slot.ok()) {
         if (tail_hint != nullptr) *tail_hint = tail_id.value();
         return ChainInsertResult{tail_id.value(), slot.value(), /*grew_chain=*/false,
-                                 /*linked_from=*/kInvalidPageId};
+                                 /*linked_from=*/kInvalidPageId,
+                                 std::move(tail_bytes.value())};
     }
     if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();  // a real failure, not a full page
@@ -168,7 +169,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 
     if (tail_hint != nullptr) *tail_hint = new_id;
     return ChainInsertResult{new_id, new_slot.value(), /*grew_chain=*/true,
-                             /*linked_from=*/tail_id.value()};
+                             /*linked_from=*/tail_id.value(), std::move(tail_bytes.value())};
 }
 
 StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, PageId head,

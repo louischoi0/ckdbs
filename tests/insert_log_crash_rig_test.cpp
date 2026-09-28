@@ -18,7 +18,8 @@
 #include "tree_structure.hpp"
 
 // **Every insert logged under the hold that placed it** (AT-S21, the
-// AT-close order's §7.3; `docs/inflight/bugs/an-insert-is-logged-after-its-leaf-is-released.md`).
+// AT-close order's §7.3; the bug entry it closes, `an-insert-is-logged-after-its-leaf-is-
+// released.md`, is deleted by it).
 //
 // An insert placed its row, let its pages go, and appended their records
 // afterwards, on a single-cooperative-thread argument AT-S5 retired. Each
@@ -99,6 +100,21 @@ std::multiset<std::uint64_t> Ids(CommandDispatcher& d, const std::string& sql) {
     return out;
 }
 
+// The ids one set has and the other lacks, for a failure worth reading.
+std::string Diff(const std::multiset<std::uint64_t>& got,
+                 const std::set<std::uint64_t>& want) {
+    std::ostringstream out;
+    out << "missing:";
+    for (std::uint64_t id : want) {
+        if (got.count(id) == 0) out << ' ' << id;
+    }
+    out << "; extra or repeated:";
+    for (std::uint64_t id : got) {
+        if (want.count(id) == 0 || got.count(id) > 1) out << ' ' << id;
+    }
+    return out.str();
+}
+
 void Ok(CommandDispatcher& d, const std::string& sql) {
     const std::string reply = d.Dispatch(sql).response;
     ASSERT_FALSE(StartsWith(reply, "ERR")) << sql << " -> " << reply;
@@ -142,6 +158,19 @@ private:
     std::thread thread_;
 };
 
+// **Core 1 carves its transaction-id window before the seam.** A core's
+// first transaction carves a block of ids and persists page 0 through the
+// store's `Sync()`, which waits out every held dirty frame - core 0's too,
+// held by the fix until its record is stamped. Carved during the seam,
+// core 1 would wait on that and never reach the window the cell is about,
+// fixed or not; one write before the seam carves 4096 ids
+// (`txn::kTrxIdBlockSize`), more than any cell here spends.
+void CarveOnCoreOne(CommandDispatcher& d1, std::uint64_t id, std::set<std::uint64_t>& ids) {
+    CurrentCoreGuard as(1);
+    Ok(d1, "INSERT INTO t VALUES (" + std::to_string(id) + ", 1)");
+    ids.insert(id);
+}
+
 // 400 rows at ids 10, 20, ... 4000, in two leaves; the first is full.
 std::set<std::uint64_t> Fill(CommandDispatcher& d0) {
     std::set<std::uint64_t> ids;
@@ -169,6 +198,7 @@ TEST(InsertLogCrashRigTest, ARowWhoseLeafAnotherCoreDividedBeforeItWasLoggedReco
         CurrentCoreGuard as(0);
         Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
         ids = Fill(d0);
+        CarveOnCoreOne(d1, 4010, ids);
 
         std::unique_ptr<OtherCore> other;
         // One-shot by `other`, not by resetting the hook from inside it:
@@ -201,8 +231,7 @@ TEST(InsertLogCrashRigTest, ARowWhoseLeafAnotherCoreDividedBeforeItWasLoggedReco
     ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
     Expeditor& db = *mounted.value();
     const auto got = Ids(db.dispatcher(), "SELECT id FROM t");
-    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end()))
-        << "row 15 came back " << got.count(15) << " times";
+    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end())) << Diff(got, ids);
     ExpectTreeWhole(db);
 }
 
@@ -285,6 +314,7 @@ TEST(InsertLogCrashRigTest, AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCore
         Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
         Ok(d0, "CREATE INDEX ix ON t (v)");
         ids = Fill(d0);
+        CarveOnCoreOne(d1, 4010, ids);
 
         std::unique_ptr<OtherCore> other;
         // One-shot by `other`, not by resetting the hook from inside it:
@@ -316,6 +346,102 @@ TEST(InsertLogCrashRigTest, AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCore
     const auto got = Ids(db.dispatcher(), "SELECT id FROM t");
     EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end()));
     ExpectTreeWhole(db);
+}
+
+
+TEST(InsertLogCrashRigTest, AMidChainAppendSplitKeepsItsRightLinkAcrossACrash) {
+    // **Found by this stage's first window-1 run, and older than it.** One
+    // core, no race. 15 divides the first leaf; the rows after it fill the
+    // lower half back up and divide it again; the last, 992, sorts past
+    // every row of the full leaf it lands in and opens a new leaf there - an
+    // append-split **mid-chain**, whose right link names the leaf holding
+    // 1000. That leaf was logged as a `PAGE_INIT`, which formats a page with
+    // no link, and redo rebuilt it so: after the crash a scan ended at 992
+    // while a point lookup still found 1000 and up.
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        ids = Fill(d0);
+        Ok(d0, "INSERT INTO t VALUES (15, 0)");
+        ids.insert(15);
+        for (std::uint64_t id = 11; id < 1000; id += 10) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id) + ", 0)");
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id + 1) + ", 0)");
+            ids.insert(id);
+            ids.insert(id + 1);
+        }
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+    const auto got = Ids(mounted.value()->dispatcher(), "SELECT id FROM t");
+    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end())) << Diff(got, ids);
+    ExpectTreeWhole(*mounted.value());
+}
+
+TEST(InsertLogCrashRigTest, TwoCoresSpillingIntoOneVarHeapPageRecoverInTheOrderTheyWrote) {
+    // **The spill window** (AT-S21's survey). Core 0's row spills a value
+    // into the var-heap tail; before its `VARHEAP_APPEND` is appended, core
+    // 1's rows spill into the same page after it. A var-heap record names a
+    // slot and redo refuses one that is not the page's next, so core 0's
+    // record, logged after core 1's, refused the mount.
+    const std::string long_a(200, 'a');
+    const std::string long_b(200, 'b');
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CommandDispatcher& d1 = rig->core(1).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, s varchar) BTREE");
+        // Enough short rows for two clustered leaves, so core 1's rows below
+        // land in a leaf core 0 does not hold: what they share is the
+        // var-heap tail, and nothing else.
+        for (std::uint64_t k = 1; k <= 400; ++k) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(k * 10) + ", 'x')");
+            ids.insert(k * 10);
+        }
+        Ok(d0, "INSERT INTO t VALUES (15, '" + long_a + "')");
+        ids.insert(15);
+        {
+            CurrentCoreGuard as(1);
+            Ok(d1, "INSERT INTO t VALUES (5000, 'y')");  // core 1's carve (above)
+            ids.insert(5000);
+        }
+
+        std::unique_ptr<OtherCore> other;
+        d0.SetBeforeInsertLogForTest([&] {
+            if (other != nullptr) return;
+            other = std::make_unique<OtherCore>([&] {
+                for (std::uint64_t id = 6000; id < 6010; ++id) {
+                    Ok(d1, "INSERT INTO t VALUES (" + std::to_string(id) + ", '" + long_b + "')");
+                }
+            });
+            other->Wait();
+        });
+        Ok(d0, "INSERT INTO t VALUES (25, '" + long_a + "')");
+        d0.SetBeforeInsertLogForTest(nullptr);
+        ASSERT_NE(other, nullptr) << "the seam never ran; the cell tested nothing";
+        other->Join();
+        ids.insert(25);
+        for (std::uint64_t id = 6000; id < 6010; ++id) ids.insert(id);
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    const auto got = Ids(db.dispatcher(), "SELECT id FROM t");
+    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end())) << Diff(got, ids);
+    EXPECT_NE(db.dispatcher().Dispatch("SELECT s FROM t WHERE id = 25").response.find(long_a),
+              std::string::npos)
+        << "row 25's spilled value did not come back";
 }
 
 }  // namespace

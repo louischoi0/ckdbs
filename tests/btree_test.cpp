@@ -161,8 +161,8 @@ TEST(BtreeTest, EveryPageASplitCreatesCarriesTheOwnerOid) {
                              /*owner_oid=*/4001);
         ASSERT_TRUE(r.ok()) << r.status().message();
         if (r.value().new_root != kInvalidPageId) {
-            split = r.value();
             root = r.value().new_root;
+            split = std::move(r.value());
             grew = true;
         }
     }
@@ -443,7 +443,8 @@ TEST(BtreeTest, EveryInsertedIdIsFoundWhereTheInsertSaidItLanded) {
     for (std::uint64_t id = 1; id <= 40; ++id) {
         auto r = tree.Insert(id, kOnePerLeafFiller);
         ASSERT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
-        placed.push_back(r.value());
+        placed.push_back(std::move(r.value()));
+        placed.back().held.clear();  // the placement only, not its holds
     }
 
     for (std::uint64_t id = 1; id <= 40; ++id) {

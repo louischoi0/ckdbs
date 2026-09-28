@@ -4060,33 +4060,51 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
 
 Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& writes,
                                          std::uint64_t txn_id) {
-    if (wal_ == nullptr) return Status::OK();
-
     for (const exec::IndexWrite& write : writes) {
-        // A split's pages take full page images and **no** INDEX_INSERT: the
-        // images are taken after the entry is in, so emitting both would
-        // apply it twice. Same instrument the clustered tree's internal
-        // nodes take, and for the same reason - no record type describes an
-        // entry-array division (wal/record.hpp).
-        if (!write.restructured.empty()) {
-            for (PageId page_id : write.restructured) {
-                if (Status s = LogFullPageImage(page_id, txn_id); !s.ok()) return s;
-            }
-            continue;
-        }
-
-        std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
-        const wal::IndexInsertPayload fields{write.slot,
-                                             static_cast<std::uint16_t>(write.entry.size())};
-        if (auto n = wal::EncodeIndexInsert(buf, fields, write.entry); !n.ok()) {
-            return n.status();
-        }
-        auto rec = wal_->Append(
-            wal::RecordSpec{wal::RecordType::kIndexInsert, txn_id, write.page_id}, buf);
-        if (!rec.ok()) return rec.status();
-        if (Status s = page_store_.StampPageLsn(write.page_id, rec.value()); !s.ok()) return s;
+        if (Status s = LogIndexWrite(write, txn_id); !s.ok()) return s;
     }
     return Status::OK();
+}
+
+Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint64_t txn_id) {
+    if (wal_ == nullptr) return Status::OK();
+    // A split's pages take full page images and **no** INDEX_INSERT: the
+    // images are taken after the entry is in, so emitting both would apply
+    // it twice. Same instrument the clustered tree's internal nodes take,
+    // and for the same reason - no record type describes an entry-array
+    // division (wal/record.hpp).
+    if (!write.restructured.empty()) {
+        for (PageId page_id : write.restructured) {
+            if (Status s = LogFullPageImage(page_id, txn_id); !s.ok()) return s;
+        }
+        return Status::OK();
+    }
+
+    std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
+    const wal::IndexInsertPayload fields{write.slot,
+                                         static_cast<std::uint16_t>(write.entry.size())};
+    if (auto n = wal::EncodeIndexInsert(buf, fields, write.entry); !n.ok()) {
+        return n.status();
+    }
+    auto rec = wal_->Append(
+        wal::RecordSpec{wal::RecordType::kIndexInsert, txn_id, write.page_id}, buf);
+    if (!rec.ok()) return rec.status();
+    return page_store_.StampPageLsn(write.page_id, rec.value());
+}
+
+exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
+                                                        std::vector<exec::IndexWrite>& pending) {
+    if (wal_ == nullptr) return nullptr;
+    if (scope.txn != nullptr) {
+        const std::uint64_t txn_id = scope.txn->id();
+        return [this, txn_id](const exec::IndexWrite& write) {
+            return LogIndexWrite(write, txn_id);
+        };
+    }
+    return [&pending](const exec::IndexWrite& write) {
+        pending.push_back(write);
+        return Status::OK();
+    };
 }
 
 Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id) {
@@ -4134,10 +4152,10 @@ Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_
     return Status::OK();
 }
 
-Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
+Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
                                     std::uint64_t owner_oid,
-                                    const std::vector<exec::AppendedSpill>& spills,
+                                    std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
     if (wal_ == nullptr) return Status::OK();
@@ -4201,6 +4219,16 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
         wal::RecordSpec{wal::RecordType::kHeapInsert, txn_id, placed.page_id}, payload);
     if (!rec.ok()) return rec.status();
     if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
+
+    // Every record naming a page this insert holds is appended and stamped,
+    // so the holds go - here, and not at the caller's return: an own
+    // transaction's commit below may wait on durability, which never runs
+    // under a latch.
+    placed.held.clear();
+    for (exec::AppendedSpill& spill : spills) {
+        spill.held_value.Release();
+        spill.held_linked.Release();
+    }
 
     // The commit and its wait belong to whoever owns the transaction. When
     // a manager does, EndWrite() performs both.
@@ -5112,10 +5140,10 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // Collected only when there is a log to write to, so the unlogged path
     // stays the code it always was.
     std::vector<exec::IndexWrite> index_writes;
+    const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
     if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, body,
                                           /*first_col_pos=*/1, encoded.value(), row_id,
-                                          /*previous=*/{},
-                                          wal_ != nullptr ? &index_writes : nullptr);
+                                          /*previous=*/{}, log_index ? &log_index : nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("index", "maintaining the indexes of table oid " +
@@ -5178,9 +5206,8 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
 
     if (before_insert_log_for_test_) before_insert_log_for_test_();
 
-    // Logged after the page is mutated and before the client is answered -
-    // see the ordering note in this class's header for why that is safe
-    // here and what would break it.
+    // Logged under the holds the placement handed out, and before the client
+    // is answered - this class's header's ordering note (AT-S21).
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded.value(),
                              WriterId(scope), oid, spills, index_writes,
@@ -5278,6 +5305,7 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
 
             out.page_id = placed.value().page_id;
             out.slot = placed.value().slot;
+            out.held.push_back(std::move(placed.value().held));
             if (placed.value().grew_chain) {
                 // Chain growth in the shared vocabulary, in the order redo
                 // applies it: the old tail's image (which already carries
@@ -5297,9 +5325,7 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
                                              trx_id, access.oid);
             if (!placed.ok()) return placed.status();
 
-            out.page_id = placed.value().page_id;
-            out.slot = placed.value().slot;
-            return placed.value();
+            return std::move(placed.value());
         }
     }
     return Status::Corruption("relation oid " + std::to_string(access.oid) +
@@ -7492,10 +7518,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // that moved no key and no covered column appends nothing, which is
         // what keeps an index from growing by an entry per write forever.
         std::vector<exec::IndexWrite> index_writes;
+        const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
         if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row.value(),
                                               /*first_col_pos=*/0, encoded.value(), id.value(),
-                                              previous,
-                                              wal_ != nullptr ? &index_writes : nullptr);
+                                              previous, log_index ? &log_index : nullptr);
             !s.ok()) {
             return s;
         }
