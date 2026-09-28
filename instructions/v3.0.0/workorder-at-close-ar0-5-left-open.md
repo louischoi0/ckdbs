@@ -460,6 +460,8 @@ carries it"*, and Q1 has decided it and S16 carries it.
 
 #### AT-S21 — every insert logged under the hold that placed it (#2)
 
+*Built 2026-09-28 - AT-6's AT-S21 row.*
+
 - **What.** `wal.md` §8-1 made true of the insert path: the record is
   generated, appended and the `page_lsn` stamped **while the page it names
   is held**. `storage::InsertPlacement` carries the held leaf, as AT-S14's
