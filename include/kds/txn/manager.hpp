@@ -596,16 +596,10 @@ public:
     // running transaction now answers true.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
 
-    // The lowest id among transactions still running here, or `UINT64_MAX`
-    // when none is. **Everything below it is settled**, which is the whole
-    // point: `IsInFlight` is a walk, and a caller asking about many ids can
-    // take this once and answer most of them by comparison.
-    //
-    // Sound because `live_` holds every running transaction on this core:
-    // an id below the smallest of them cannot be one of them. It moves in
-    // both directions as transactions begin and end, so it is a value to
-    // take per pass and not to cache across one.
-    std::uint64_t OldestActiveTrxId() const noexcept;
+    // **`IsInFlight`'s partner** (AX-S2): no id below this is running on
+    // any core and none will begin, for as long as the caller holds it -
+    // the instance's floor candidate, whose comment carries the argument.
+    std::uint64_t NoneInFlightBelow() const noexcept { return visibility_->FloorCandidate(); }
 
     // ---- Reader registration (docs/workplan-reader-registration.md) -----
     //
@@ -686,6 +680,13 @@ private:
     // first also on a READ COMMITTED statement boundary and on a reader
     // registering or releasing.
     void PublishCoreBounds() noexcept;
+
+    // The lowest id among transactions running **on this core**, or
+    // `UINT64_MAX` with none: this core's floor term, which
+    // `PublishCoreBounds` publishes. **Private since AX-S2**, because a
+    // per-core bound that reads like the instance's is what DT9's scan took
+    // by mistake; `NoneInFlightBelow()` is the instance's.
+    std::uint64_t OldestActiveTrxId() const noexcept;
 
     // The horizon's term: the oldest `snapshot_lsn` over this core's active
     // transactions and leased readers, `kUnboundedBound` with none.

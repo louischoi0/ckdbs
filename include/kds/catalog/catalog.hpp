@@ -1442,14 +1442,13 @@ private:
     // Armed by the `CommandDispatcher` constructor, so it is null for
     // bootstrap, for recovery and for a test over a bare store; every
     // core's `CoreRuntime` builds a dispatcher, so every serving catalog is
-    // armed. **The predicate is this core's** (`IsInFlight` walks one
-    // core's live set), so a mark written by another core's open
-    // transaction reads as settled here. That was harmless while DDL ran
-    // on core 0 alone (`ddl-transactional.md` §5b's core-0 scope); since
-    // AT-S5 a peer's DDL writes marks too, and what stands between that and
-    // a wrong answer is the DDL's relation `X` where one is taken, not this
-    // predicate. Null is the pre-DT9 answer: a mark counts the moment it is
-    // written.
+    // armed. **The predicate is the instance's since AX-S2**
+    // (`ddl-transactional.md` §5b): a mark written by another core's open
+    // transaction stays unsettled here until that transaction decides.
+    // Until then it read as settled - `IsInFlight` walked one core's live
+    // set and the scan's bound was that core's - and what stood between
+    // that and a wrong answer was the DDL's relation `X`. Null is the
+    // pre-DT9 answer: a mark counts the moment it is written.
     const txn::TransactionManager* txn_ = nullptr;
     // RV3: null means unlogged catalog writes, the pre-RV3 engine.
     wal::WalManager* wal_ = nullptr;

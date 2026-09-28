@@ -4,11 +4,12 @@
 //
 // DT9 (`ddl-transactional.md` §5b): an unfiltered catalog read - what index
 // maintenance resolves with - counts a delete-mark only once its deleter is
-// no longer in flight. `ScanAll` answers most marks by a comparison against
-// the oldest running transaction and asks `IsInFlight` only above it. Both
-// were the reading core's: AX-S1 made `IsInFlight` the instance's, and the
-// comparison stayed this core's, so on a core running nothing it was
-// `UINT64_MAX` - every mark settled, the tables never asked. Core 0's
+// no longer in flight. `ScanAll` answers most marks by one comparison
+// against a bound and asks `IsInFlight` only above it. Both were the reading
+// core's: AX-S1 made `IsInFlight` the instance's, and the bound stayed this
+// core's oldest running id, so on a core running nothing it was
+// `UINT64_MAX` - every mark settled, the tables never asked. Since AX-S2 the
+// bound is the instance's floor candidate. Core 0's
 // uncommitted `DROP INDEX` then read as done on core 1, which is the isolation
 // §5a promised and could not keep across cores (AX-Q2).
 //
@@ -56,7 +57,7 @@ int IndexesNamed(TwoCoreRig& rig, std::uint32_t core, std::string_view name) {
 TEST(Dt9AcrossCoresRigTest, APeerStillResolvesAnIndexWhoseDropIsOpenOnAnotherCore) {
     // Red at `353d465`: core 1 answered 0 while the drop was open.
     //
-    // **Mutation**: `ScanAll` taking this core's `OldestActiveTrxId()` again
+    // **Mutation**: `ScanAll`'s bound as this core's oldest running id again
     // - core 1, running nothing, counts the mark settled without asking.
     auto rig = OpenRig();
     ASSERT_NE(rig, nullptr);

@@ -225,14 +225,13 @@ drop.
 **Where it lives.** One arm of one function — `ScanAll`'s delete-mark
 branch in `src/catalog/catalog.cpp`, the only *reader* of a catalog
 delete-mark in the tree. `ScanAll` takes
-`TransactionManager::OldestActiveTrxId()` once per scan: a deleter below
-it is settled by definition (`live_` holds every running transaction on
-this core, so an id below the smallest of them is not one of them), and
-only a mark whose deleter is at or above it pays the
-`TransactionManager::IsInFlight` walk — a walk of the live list rather
-than a minted `ReadView`, because the caller wants one bit and a view is a
-528-byte array copy. With nothing running the manager is not consulted at
-all.
+`TransactionManager::NoneInFlightBelow()` once per scan — the instance's
+floor candidate, below which no transaction is running on any core and
+none will begin, so it holds for the whole scan however many transactions
+another core begins meanwhile. A deleter below it is settled; only a mark
+whose deleter is at or above it asks `TransactionManager::IsInFlight`,
+which reads every core's in-flight table (`instance_visibility.hpp`,
+AX-S1) — one bit, where a minted `ReadView` would be a view.
 
 **"No longer in flight" is safe to read as "committed"** for exactly one
 reason, and it is an ordering fact rather than a definition:
@@ -253,16 +252,18 @@ ask about, and may have one that is not its own (the transaction-id
 ceiling is unlogged, `txn/trx_id.hpp`, so a crash can reissue the block);
 §5c removes the question by retiring every such mark at mount.
 
-**The predicate is core-local, and no cross-core claim leans on it.**
-`IsInFlight` answers about one core's `live_` list. A `DROP INDEX` is
-isolated on every core not because another core can see its deleter but
-because it holds the relation `X` and moves the schema word before
-releasing it (§5e): a writer that resolved the relation while the mark's
-deleter was in flight writes nothing until the decide, and re-resolves
-after it. A core-0 `DROP INDEX` on a
-peer-owned relation was refused inside a transaction for exactly this
-predicate's scope until AT-S5e; any other cross-core DDL that would lean on
-it needs the same `X`.
+**The predicate is the instance's since AX-S2**
+(`instructions/v3.0.0/workorder-ax-inflight-publication.md`, AX-Q2). Until
+AX-S1 `IsInFlight` answered about one core's `live_` list, and until AX-S2
+the scan's bound was that core's oldest running id — `UINT64_MAX` on a core
+running nothing — so a mark another core's open drop had written read as
+settled on every other core. Now a peer resolves the index an open
+`DROP INDEX` marked, as the dropping core does, and stops resolving it at
+the commit. What made the cross-core drop sound before this is unchanged
+and still needed for a writer: it holds the relation `X` and moves the
+schema word before releasing it (§5e), so a writer that resolved the
+relation while the drop was open writes nothing until the decide and
+re-resolves after it.
 
 **The cache learns it at both endings.** `EndDdlScope` invalidates the
 catalog cache unconditionally when a DDL-holding transaction resolves,
@@ -393,8 +394,8 @@ while the DDL is undecided parks on the slot and re-runs after the decide.
 the schema word before its borrows are released
 (`Transaction::NoteWroteCatalog`), so the re-run's task boundary drops the
 memo it resolved while the DDL was open - which matters for a rolled-back
-`DROP INDEX`, whose index another core's memo had left out, DT9's predicate
-being core-local (§5b). And a writer's *first* intention checks that the
+`DROP INDEX`, whose index another core's memo had left out while DT9's
+predicate was core-local (§5b, until AX-S2). And a writer's *first* intention checks that the
 word has not moved since its own boundary (`Catalog::MemoIsCurrent`): the
 intention comes after the resolution, and a DDL could have taken the
 relation, published and released in between; moved, the statement runs
@@ -406,11 +407,10 @@ one core's `IsInFlight` and would read a DDL on another core as finished.
 concurrent writer, so the finished index holds every row, and nothing names
 it until its commit; a rollback orphans the tree as a dropped index's
 pages orphan. A `DROP INDEX` inside a transaction is admitted: a writer on
-another core may resolve the relation while the drop is open and leave the
-index out - its core cannot see the deleter in flight (§5b) - but it writes
-nothing until the drop decides, and the decide moves the word before it
-releases, so the writer re-resolves and maintains the index a rollback
-restored.
+another core resolves the relation with the index still in it (§5b, since
+AX-S2), and in any case writes nothing until the drop decides, and the
+decide moves the word before it releases, so the writer re-resolves and
+maintains the index a rollback restored.
 
 **What it replaced**, briefly, because the citations outlive it. From
 PW1c-6b until AT-S5e a relation another core owned had its index built

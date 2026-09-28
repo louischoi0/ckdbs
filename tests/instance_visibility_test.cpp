@@ -1248,6 +1248,33 @@ TEST_F(VisibilityWiringTest, BeginPastTheInFlightCapIsRefusedNamingItAndSpendsNo
     EXPECT_TRUE(again.ok()) << again.status().message();
 }
 
+TEST_F(VisibilityWiringTest, NoTransactionBegunAfterTheBoundIsTakenFallsBelowIt) {
+    // AX-S2: `ScanAll` takes `NoneInFlightBelow()` once and meets
+    // delete-marks for the rest of the scan, so the bound must hold for a
+    // transaction that begins *after* it was read - one whose mark the scan
+    // can reach. Nothing is running anywhere here, so a bound on running
+    // ids alone would be `UINT64_MAX`, and a drop begun on core 0 mid-scan
+    // would read as decided on core 1 without the tables being asked.
+    //
+    // **Mutation**: `NoneInFlightBelow` as the minimum of the slots'
+    // `oldest_unresolved` alone - the first expectation fails.
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    // **Load-bearing**: core 0 carves first, so its window sits below core
+    // 1's. That also kills a bound on the reading core's own cursor, and on
+    // every core's oldest running id beside the reader's own cursor.
+    CommitOne(*core0);
+    CommitOne(*core1);
+    const std::uint64_t bound = core1->NoneInFlightBelow();
+    auto txn = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+    EXPECT_GE(txn.value()->id(), bound)
+        << "a transaction begun after the bound was read sits below it";
+    EXPECT_TRUE(core1->IsInFlight(txn.value()->id()));
+    ASSERT_TRUE(core0->Commit(*txn.value(), wal::DurabilityClass::kRelaxed).ok());
+    core0->Release(*txn.value());
+}
+
 TEST_F(VisibilityWiringTest, AManagerTornDownWithAnOpenTransactionRetiresItsId) {
     // The visibility outlives the manager, so an id a torn-down core left
     // published would read as in flight on every core for the life of the

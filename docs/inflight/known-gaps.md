@@ -542,7 +542,7 @@ there is no second core's registration to be answered by.
   **AX-S1 made the predicate the instance's** (`instance_visibility.hpp`'s
   in-flight tables), so on `ax-s1-inflight-publication` the same site now
   parks on a peer's holder - read from the code, not driven: no cell runs a
-  cross-core row wait. What stays open, both AX-S2's (the wait sites) and
+  cross-core row wait. What stays open, both AX-S2b's (the wait sites) and
   both retryable, never a wrong answer:
 
   - **No wake.** The `WaitUntil` predicate is re-polled when the waiter's
@@ -559,7 +559,7 @@ there is no second core's registration to be answered by.
 
   A holder that never decides now costs a cross-core writer the 1 s fault
   net and its defect warning, as a same-core writer already paid. Owner:
-  `instructions/v3.0.0/workorder-ax-inflight-publication.md` AX-S2, and
+  `instructions/v3.0.0/workorder-ax-inflight-publication.md` AX-S2b (named at AX-S2, not yet started), and
   `docs/spec/txn.md` §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,

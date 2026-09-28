@@ -237,3 +237,71 @@ per its row: the comments saying `IsInFlight` is per-core, in
 later paragraphs.
 
 **Suite**: 3008/3008 in Debug after the review's changes, the one disabled cell pre-existing (`HeapSuspensionIsLifted`); 3007/3007 before them. The six mutants were re-run after the review and killed again. Overhead not measured.
+
+### AX-S2 — built 2026-09-28, the DT9 half
+
+On `worktree-ax-s2-inflight-consumers` from `353d465`
+(`v2.7.0-465-g353d465`), on the operator's *"start AX-S2"*
+(`raft-marks-2026-09-28.md` §10). The reproduction landed first, red at
+`353d465`, as `213fd81`.
+
+**What was still wrong after AX-S1.** `ScanAll`'s delete-mark gate asks
+`IsInFlight` only for a deleter at or above a bound it takes once per scan,
+and the bound was this core's oldest running id - `UINT64_MAX` on a core
+running nothing - so an idle peer counted core 0's uncommitted `DROP INDEX`,
+and a `DROP TABLE`'s index marks, as settled and never asked the tables
+AX-S1 had built. The two rig cells (`dt9_across_cores_rig_test.cpp`) are
+that, both red at `353d465`.
+
+**What landed.** The bound is `TransactionManager::NoneInFlightBelow()`,
+which is `InstanceVisibility::FloorCandidate()` - the minimum of every
+attached core's oldest running id **and issue cursor** - reused rather than
+named twice. `OldestActiveTrxId()` stays per-core, because it is the core's
+own floor term, and is **private** now, on the review's word: a public
+per-core bound reading like the instance's is what the scan took.
+`ddl-transactional.md` §5b and §5e say the predicate is the instance's, and
+`catalog.hpp`'s `txn_` comment with them. **AX-Q2's behaviour is built**: a
+peer resolves an index an open drop marked until the drop commits. At one
+core every answer the scan gives is unchanged - the review checked the idle
+case (the bound is the cursor, above every issued id) and the commit's gap
+between the raised bound and the retire (already decided by then).
+
+**What it corrected in this order, again.** AX-R3's and §3's *"the minimum
+of `oldest_unresolved`"* - CLA's own first draft of the fix - **is unsound
+for a scan**: the bound is read once, before any page, and a transaction
+another core begins mid-scan, from a window below that stale bound, writes
+a mark the scan would count as settled. With each core's cursor in the
+minimum, anything begun after the read sits at or above it; a core not yet
+attached carves its first window above every published cursor.
+`NoTransactionBegunAfterTheBoundIsTakenFallsBelowIt` pins it, and is the
+only cell that tells the two shapes apart.
+
+**Four mutants, four kills**: the per-core bound back (both rig cells), the
+bound on running ids alone (the unit cell), `IsInFlight` walking `live_`
+(eight cells across AX-S1's and these), the in-flight arm dropped from the
+gate (both rig cells).
+
+**The review** (`critics-developer`, one pass) found no defect; it verified
+the late attach against `TrxIdSequence`'s carve, the publication order in
+`Begin` and `PublishBounds`, the abort and commit gaps and previous-mount
+marks. Taken: `OldestActiveTrxId` private; the argument stated once, at
+`FloorCandidate`, with the late-attach clause it lacked; `catalog.hpp`'s
+false comment; the rig header's tense; a note that the unit cell's two
+`CommitOne` calls are load-bearing. Rejected: nothing.
+
+**Not built here - the wake, carried as AX-S2b.** The `known-gaps.md` Locks
+entry AX-S1 rewrote named AX-S2 for two things this stage does not do: a
+writer waiting on a holder on another core is re-polled rather than kicked,
+and its re-run can meet the holder's borrow before the release. Both close
+if the row wait parks on the holder's lock slot, as `AwaitRelationLock`'s
+wait already does - flipped at the release, after the retire. That changes
+`BorrowChain`'s refused arm and `NoteBlockingWriter`'s repeatable-read rule,
+which is not the §3 row's exit, so it is its own sub-stage and waits for the
+word. The ScanAll cost moved too: a low idle cursor sends more marks to the
+tables - Σ of running counts, zero when idle - unmeasured, and the catalog
+read sits behind the cache.
+
+**Suite**: 3011/3011 in Debug before the review's changes and after them,
+the one disabled cell pre-existing. The mutants ran before the review; the
+first can no longer be written as it was, `OldestActiveTrxId` being private
+now. Overhead not measured.

@@ -488,6 +488,16 @@ public:
     // How far the floor could rise if no reader held it back: the minimum
     // over attached cores of that core's cursor and its oldest unresolved
     // transaction. `kUnboundedBound` when no core has attached.
+    //
+    // **Also the in-flight tables' short-circuit** (AX-S2): no id below it
+    // is running, and none will begin - an attached core's next id is at or
+    // above its cursor, and a core not yet attached opens its first window
+    // by a carve from the superblock's high-water, above every published
+    // cursor - so a caller that takes it *once* and then meets ids over
+    // time, a catalog scan meeting delete-marks, may answer every id below
+    // it "not in flight" without asking `InFlight`. The oldest unresolved
+    // id alone would not do: a transaction that begins after the read, on a
+    // core whose window sits below it, would read as decided.
     std::uint64_t FloorCandidate() const noexcept;
 
     // How many cores have published a cursor.
