@@ -404,15 +404,15 @@ TEST_F(CatalogTest, DroppingARelationRetiresItsRangeRowsAndNoOthers) {
 // calling it a system relation. Both cells below fail on that spelling and
 // pass on `IsSystemNamespace`.
 //
-// No syntax is needed to reach the case: `CreateTable` has always taken
-// the namespace as its first argument, and only the dispatcher's two call
-// sites hard-code `kNamespacePublic`.
-constexpr Oid kAfTestNamespace = kUserOidStart + 1;
-
+// No syntax is needed to reach the case: `CreateTable` takes the namespace
+// as its first argument. It must name one that exists since AT-S17b, which
+// checks under page 6's hold - these cells used to pass a bare oid.
 TEST_F(CatalogTest, ARelationInAUserNamespaceIsRenamableAndDroppable) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto ns = catalog_.CreateNamespace("af_test");
+    ASSERT_TRUE(ns.ok()) << ns.status().message();
 
-    auto oid = catalog_.CreateTable(kAfTestNamespace, "orders_line", MinimalPkSchema(),
+    auto oid = catalog_.CreateTable(ns.value(), "orders_line", MinimalPkSchema(),
                                     ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 

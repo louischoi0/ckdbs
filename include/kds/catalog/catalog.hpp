@@ -1366,6 +1366,28 @@ private:
     Status CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id,
                          bool own_drop_frees);
 
+    // **A relation's namespace, asked where its membership is written**
+    // (AT-S17b, the AT-close order's §7.3): a relation's `sys.objects` row
+    // carries its `namespace_oid`, so page 6 held exclusive is what makes
+    // a create's membership and a drop's RESTRICT one act. Both binding
+    // only under that hold, `CheckNameFree`'s rule, and both over the same
+    // unfiltered walk and instance check view.
+    //
+    // `CheckNamespaceLive`: the namespace a `CREATE TABLE` names is still
+    // there, and not only another transaction's. Its retype by a drop that
+    // has committed - or by the asker's own - is `NotFound`; by another
+    // transaction's that has not, and its row while another transaction's
+    // create of it has not committed, are `TxnConflict`, retryable. A
+    // well-known namespace is always live.
+    Status CheckNamespaceLive(Oid namespace_oid, std::uint64_t own_trx_id);
+    // `CheckNamespaceEmpty`: `DROP NAMESPACE`'s RESTRICT. A relation row in
+    // it - live, whoever wrote it and whether or not it has committed - is
+    // `InvalidArgument` naming the relation; a relation's tombstone whose
+    // drop has not committed counts too, since its rollback puts the
+    // relation back: `InvalidArgument` when the drop is the asker's own
+    // (commit it first), `TxnConflict` when it is another transaction's.
+    Status CheckNamespaceEmpty(Oid namespace_oid, std::uint64_t own_trx_id);
+
     // `CheckNameFree` for an index's name, over `sys.indexes`: a live row
     // of the name is `AlreadyExists`, and one delete-marked by a drop the
     // instance's check view cannot see yet is `TxnConflict` - unless the

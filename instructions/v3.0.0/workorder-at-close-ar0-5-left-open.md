@@ -437,6 +437,8 @@ carries it"*, and Q1 has decided it and S16 carries it.
 
 #### AT-S17b — a relation's namespace, taken under the held page (#3)
 
+*Built 2026-09-28 - AT-6's AT-S17b row.*
+
 - **What.** CT7's held page extended to membership, the shape the entry
   names: `Catalog::CreateTable` re-checks under its hold of page 6
   (`sys.objects`) that the namespace it names is still live; and

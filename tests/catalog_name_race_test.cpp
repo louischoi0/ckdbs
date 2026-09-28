@@ -14,8 +14,10 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
+#include "act_on_fetch_store.hpp"
 #include "armed_race.hpp"
 
 // **One name, one row** (AT-S17, the AT-close order's Q2: the held page).
@@ -386,6 +388,160 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingACabinOnOneColumnLeaveOneRow) {
         }
         EXPECT_EQ(rows, 1) << rows << " cabins on " << Name("k", round) << ".v";
     }
+}
+
+// ---- A relation's namespace (AT-S17b, the AT-close order's §7.3) ----------
+//
+// Not a name but its membership. `DROP NAMESPACE` is RESTRICT, and it asked
+// `sys.tables`; `CREATE TABLE ns.t` resolves `ns`, then writes `t`'s
+// `sys.objects` row under page 6's hold and its `sys.tables` row after it.
+// Nothing held across either pair, so a drop could pass its RESTRICT check
+// between a create's resolution and its write, or between its two rows -
+// and leave a relation in a dropped namespace
+// (`docs/inflight/bugs/drop-namespace-restrict-races-a-create-in-it.md`, at
+// `9898b15`; deleted by this stage).
+
+// Every relation's namespace, as the pages hold it, is live.
+void ExpectNoRelationInADroppedNamespace(Catalog& fresh) {
+    auto spaces = fresh.ListNamespaces();
+    ASSERT_TRUE(spaces.ok()) << spaces.status().message();
+    auto tables = fresh.ListTables();
+    ASSERT_TRUE(tables.ok()) << tables.status().message();
+    for (const SysObjectRow& t : tables.value()) {
+        if (t.namespace_oid == kNamespacePublic || t.namespace_oid == kNamespaceSys) continue;
+        bool live = false;
+        for (const SysObjectRow& ns : spaces.value()) live |= ns.oid == t.namespace_oid;
+        EXPECT_TRUE(live) << "relation '" << NameView(t.name) << "' is in namespace oid "
+                          << t.namespace_oid << ", which is dropped";
+    }
+}
+
+TEST(CatalogNameRaceTest, ACreateThatResolvedANamespaceAnotherCoreDroppedIsRefused) {
+    // The entry's order: core 1 resolves `ns`, core 0's RESTRICT check and
+    // retype run, then core 1 writes `t`. Exactly one of the two succeeds -
+    // the drop - and the create is refused rather than landing in it.
+    //
+    // **Mutation**: drop `CreateTable`'s `CheckNamespaceLive` - killed 3/3.
+    TwoCatalogs cats;
+    std::vector<Oid> spaces;
+    for (int round = 0; round < kRounds; ++round) {
+        auto ns = cats[0].CreateNamespace(Name("ns", round));
+        ASSERT_TRUE(ns.ok()) << ns.status().message();
+        spaces.push_back(ns.value());
+    }
+    Rendezvous gate(kThreads);
+    const Schema schema = PkAnd({"v"});
+    auto out = OnTwoCores([&](int core, int round) -> Status {
+        const Oid ns = spaces[static_cast<std::size_t>(round)];
+        if (core == 0) {
+            gate.Wait();  // core 1 has resolved `ns`
+            const Status dropped = cats[0].DropNamespace(ns);
+            gate.Wait();  // released only after the RESTRICT check and the retype
+            return dropped;
+        }
+        const auto seen = cats[1].FindNamespaceOidByName(Name("ns", round));
+        gate.Wait();
+        gate.Wait();
+        if (!seen.ok()) return seen.status();
+        return cats[1].CreateTable(seen.value(), Name("t", round), schema,
+                                   ClusteredType::kBtree)
+            .status();
+    });
+    for (int round = 0; round < kRounds; ++round) {
+        EXPECT_TRUE(out[0][static_cast<std::size_t>(round)].ok())
+            << "round " << round << ": the drop, " << out[0][static_cast<std::size_t>(round)].message();
+        EXPECT_FALSE(out[1][static_cast<std::size_t>(round)].ok())
+            << "round " << round << ": a relation was created in a namespace dropped under it";
+    }
+    ExpectNoRelationInADroppedNamespace(*cats.Fresh());
+}
+
+TEST(CatalogNameRaceTest, ADropBetweenACreatesTwoRowsIsRefused) {
+    // The other order of arrival, and the one no rendezvous outside the
+    // catalog reaches: the drop runs after `t`'s `sys.objects` row is
+    // written and before its `sys.tables` row, which a RESTRICT check of
+    // `sys.tables` finds empty. Put there by hand, on the create's first
+    // fetch of page 7, over one in-memory store two catalogs share. Red at
+    // `9898b15`; the RESTRICT check reading `sys.objects` is what closes it.
+    storage::InMemoryPageStore backing(128);
+    testing_race::ActOnFetchStore store(backing);
+    std::atomic<Oid> oid_sequence{0};
+    std::atomic<std::uint64_t> schema_word{0};
+    std::atomic<std::uint64_t> marks{0};
+    std::array<std::unique_ptr<Catalog>, kThreads> cats;
+    for (auto& c : cats) {
+        c = std::make_unique<Catalog>(store);
+        c->SetOidSequence(&oid_sequence);
+        c->SetSchemaWord(&schema_word);
+        c->SetMarkCounter(&marks);
+    }
+    ASSERT_TRUE(cats[0]->Bootstrap().ok());
+    auto ns = cats[0]->CreateNamespace("ledger");
+    ASSERT_TRUE(ns.ok()) << ns.status().message();
+
+    Status dropped = Status::OK();
+    bool objects_row_written = false;
+    store.OnFetch(kCatalogPageTables, /*nth=*/1, [&] {
+        auto tables = cats[0]->ListTables();
+        ASSERT_TRUE(tables.ok()) << tables.status().message();
+        for (const SysObjectRow& t : tables.value()) objects_row_written |= NameView(t.name) == "t";
+        dropped = cats[0]->DropNamespace(ns.value());
+    });
+    const auto created =
+        cats[1]->CreateTable(ns.value(), "t", PkAnd({"v"}), ClusteredType::kBtree);
+    ASSERT_TRUE(store.fired()) << "the drop never ran; the cell tested nothing";
+    ASSERT_TRUE(objects_row_written)
+        << "the drop ran before the create's sys.objects row; this is the other cell's order";
+    EXPECT_NE(dropped.ok(), created.ok())
+        << "drop '" << dropped.message() << "', create '" << created.status().message() << "'";
+    EXPECT_FALSE(dropped.ok()) << "the drop passed RESTRICT with a relation half-written in it";
+
+    Catalog fresh(backing);
+    ExpectNoRelationInADroppedNamespace(fresh);
+}
+
+TEST(CatalogNameRaceTest, ACreateAndADropOfItsNamespaceAtOneInstantLeaveNoOrphan) {
+    // Both at the door, nothing between them but the holds: core 1's
+    // create checks the namespace live and writes its row, core 0's drop
+    // checks it empty and retypes it - each under page 6's hold, so one
+    // happens entirely before the other. Exactly one succeeds.
+    //
+    // **What this cell does not kill, stated because it was run**
+    // (2026-09-28, 10 runs each): dropping `DropNamespace`'s hold, and
+    // asking `CreateTable`'s live check before its hold - 0/10 both. Each
+    // needs the other call to run whole inside a gap of a few instructions
+    // (the drop between its RESTRICT check and its retype; the create
+    // between its check and its insert), which two threads merely started
+    // together do not reach. **A seam that would reach them exists and is
+    // not built** (AT-S17b's review): a store wrapping the armed one that
+    // overrides the public `FetchPinned` - not the raw fetch
+    // `ActOnFetchStore` hooks, which bypasses the latch - keeps the inner
+    // latch, and firing on page 6's second fetch lands between the drop's
+    // check and its retype (or, with the create's check hoisted, at its
+    // hold) with the other call started from there. Both holds are CT7's
+    // shape, argued at their sites.
+    TwoCatalogs cats;
+    std::vector<Oid> spaces;
+    for (int round = 0; round < kRounds; ++round) {
+        auto ns = cats[0].CreateNamespace(Name("ns", round));
+        ASSERT_TRUE(ns.ok()) << ns.status().message();
+        spaces.push_back(ns.value());
+    }
+    Rendezvous gate(kThreads);
+    const Schema schema = PkAnd({"v"});
+    auto out = OnTwoCores([&](int core, int round) -> Status {
+        const Oid ns = spaces[static_cast<std::size_t>(round)];
+        gate.Wait();
+        if (core == 0) return cats[0].DropNamespace(ns);
+        return cats[1].CreateTable(ns, Name("t", round), schema, ClusteredType::kBtree).status();
+    });
+    for (int round = 0; round < kRounds; ++round) {
+        const Status& drop = out[0][static_cast<std::size_t>(round)];
+        const Status& create = out[1][static_cast<std::size_t>(round)];
+        EXPECT_NE(drop.ok(), create.ok()) << "round " << round << ": drop '" << drop.message()
+                                          << "', create '" << create.message() << "'";
+    }
+    ExpectNoRelationInADroppedNamespace(*cats.Fresh());
 }
 
 }  // namespace
