@@ -18,9 +18,9 @@ with `path:line` at `8f9a887`; everything else `[design]`, including every
 statement about Linux md, filesystems, NVMe drives and other vendors'
 products, which comes from CLA's training knowledge and is to be re-checked
 before a work order cites it. Nothing is `[measured]`.
-Relation to `docs/inflight/`: §4 names four properties of the WAL as built
-that bound this layout. Their record is in `docs/inflight/`, not here: three
-entries in `known-gaps.md` under WAL and one in `bugs/` (§9 O3).
+Relation to `docs/inflight/`: §4 names five properties of the WAL as built
+that bound this layout. They are recorded in `docs/inflight/`, not here; §9 O3
+says where.
 
 ---
 
@@ -161,7 +161,7 @@ mirrors it** (PostgreSQL, MySQL, SQL Server). This note takes the second;
 - XFS or ext4 both serve: neither lacks anything §2's preallocate, prewrite
   and `fdatasync` pattern needs. Mount with `noatime`.
 - Set `wal_dir = <mount point>` in `kds.conf`.
-- The service unit raises `LimitNOFILE` (§4 C3).
+- The service unit raises `LimitNOFILE`, as proposed (§4 C3, §9 O6).
 
 ```
 mdadm --create /dev/md/kdswal --level=1 --raid-devices=2 --metadata=1.2 \
@@ -172,42 +172,45 @@ mount -o noatime /dev/md/kdswal /var/lib/kds/wal
 
 ## 4. What the engine as built does to the device
 
-Each item is `[source-read]` for the code, with its record in `docs/inflight/`
-(§9 O3), and `[design]` for the consequence to this layout. None was measured.
+Each item points at its record in `docs/inflight/`, where the code is cited.
+What follows each pointer is the `[design]` consequence for this layout. None
+was measured.
 
-- **C1 — The log is never recycled.**
-  - Code: a segment is recyclable only once archived, and archiving does not
-    exist. `Open` refuses a gap in segment numbering, so old segments cannot
-    be deleted by hand either (`known-gaps.md`, WAL).
-  - Consequence: the WAL device's capacity is the instance's lifetime. A
-    small dedicated log device, the usual reason to separate one, is the
+- **C1 — The log is never recycled, and old segments cannot be removed by
+  hand** (`known-gaps.md`, WAL).
+  - The WAL device's capacity is the instance's lifetime.
+  - A small dedicated log device, the usual reason to separate one, is the
     device this hurts most.
-- **C2 — Every sync covers every segment ever created**
-  (`src/wal/file_log_device.cpp:365-377`, a correctness rule; `known-gaps.md`,
+- **C2 — Every sync covers every segment ever created** (`known-gaps.md`,
   WAL).
-  - Consequence, with C1: the `fdatasync` calls per commit grow with the
-    instance's age. On PLP drives each call is cheap, but the calls are not
-    free.
+  - With C1, the number of `fdatasync` calls per commit grows with the
+    instance's age.
+  - On PLP drives each call is cheap, but the calls are not free.
 - **C3 — One open descriptor per segment, and nothing raises the limit**
-  (`src/wal/file_log_device.cpp:208-239`;
-  `bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`).
-  - Consequence: at a soft limit of 1024 the instance stops at about 64 GiB
-    of cumulative log. Connections may be refused before that. After a
-    restart the mount fails, because `Open` opens every segment. The unit
-    raises the limit (§3.3). The cause is C1.
-- **C4 — A segment roll runs inside the instance's append latch.**
-  - Code: this is specified behaviour and an accepted cost, not a defect
-    (`docs/spec/wal.md:114`, `include/kds/wal/stream.hpp:35-43`). Its
-    follow-on was never priced (`known-gaps.md`, WAL). The path runs from the
-    latch in `src/wal/stream.cpp:210-219`, through `:142-148` and `:63-64`, to
-    `src/wal/file_log_device.cpp:96-124` and `:287`.
-  - Consequence: once per 64 MiB of log, every core's append waits for a
-    segment-sized write. The slower member's sequential write bandwidth sets
-    the length of that wait, which makes the bandwidth a device-selection
-    criterion (§5) and a number every shipped unit records (§6).
+  (`bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`).
+  - At a soft limit of 1024, the roll that meets the limit, at about 64 GiB of
+    cumulative log, can leave a stranded segment behind.
+  - After that, every append fails, and the next mount refuses the log until
+    the stranded segment is removed.
+  - Raising the limit prevents this; it does not repair it. The cause is C1.
+- **C4 — A segment roll does I/O inside the instance's append latch**
+  (`known-gaps.md`, WAL; deliberate per `include/kds/wal/stream.hpp:35-43`).
+  - Once per 64 MiB of log, every core's append waits for a segment-sized
+    write.
+  - The slower member's sequential write bandwidth sets the length of that
+    wait. That makes the bandwidth a device-selection criterion (§5) and a
+    number every shipped unit records (§6).
+- **C5 — A roll's header is not synced**
+  (`bugs/a-power-loss-after-a-segment-roll-leaves-an-unheadered-tail.md`).
+  - A power loss between a roll and the next sync leaves a last segment the
+    mount refuses.
+  - **PLP does not close this window.** PLP protects what has reached the
+    drive; this header is still in the host's page cache.
+  - The simulator's crash model cannot produce this state, so only §6's power
+    cut would find it on a unit.
 
-**C1 and C3 stop a long-running instance whatever the device is; C2 and C4
-degrade it.**
+**C1 and C3 stop a long-running instance whatever the device is. C5 stops a
+mount after an ill-timed power loss. C2 and C4 degrade the instance.**
 
 ## 5. Sizing
 
@@ -217,11 +220,12 @@ degrade it.**
   §2) + max(log volume, syncs × 4 KiB).
   - The second term is there because a buffered partial tail page is written
     whole on every sync, and the record bytes land inside it.
-  - Example: 5,000 syncs/s × 4 KiB ≈ 20 MB/s ≈ 1.7 TB/day, for any log
-    volume below that rate.
+  - Example: at 5,000 syncs/s, the second term is at least
+    5,000 × 4 KiB ≈ 20 MB/s ≈ 1.7 TB/day. The first term adds the day's log
+    volume on top.
 - **Endurance**: choose the drive so that DWPD × capacity ≥ daily host writes.
-  - 1.7 TB/day is 0.9 DWPD on a 1.92 TB drive, and 1.8 DWPD on a 960 GB
-    drive.
+  - 1.7 TB/day alone needs at least 0.9 DWPD on a 1.92 TB drive and 1.8 DWPD
+    on a 960 GB drive. These are lower bounds, before the log volume.
 - **Capacity**
   - While C1 stands: daily log volume × intended days of operation.
   - After recycling exists: checkpoint interval × log rate, plus headroom for
@@ -243,16 +247,17 @@ degrade it.**
 3. **Member pull.** Pull one member under load. Check the degraded
    transition and that the alert arrives, then measure commit p99 during the
    rebuild and how long the rebuild takes.
-4. **Power cut.** Cut power under load — not a process kill: `sim/` covers
-   crashes, not PLP. md resync plus KDS recovery must return exactly the
-   acknowledged commits.
+4. **Power cut.** Cut power under load; a process kill is not a substitute.
+   `sim/` models neither PLP nor §4 C5's durable, unheadered segment. md
+   resync plus KDS recovery must return exactly the acknowledged commits, and
+   the cuts must include some timed at a segment roll.
 5. **Burn-in.** Burn in every unit before shipment.
 
 ## 7. What this note does not license
 
-- **No engine change.** Segment recycling, a background roll, a descriptor
-  cap and engine-level log multiplexing each need a work order the operator
-  has not issued.
+- **No engine change.** Segment recycling, a background roll, a synced roll
+  header, a descriptor cap and engine-level log multiplexing each need a
+  work order the operator has not issued.
 - **No new configuration key.** If one is ever needed, it re-scopes an
   existing setting (`CLAUDE.md`, Working Rules).
 - **No performance claim.** Every number in §5 is an estimate; the §6 checks
@@ -278,10 +283,12 @@ Engine-side:
   `known-gaps.md`, C3 and C4 in `bugs/`.
   - **Answered 2026-09-28** `[operator]`: *"C1~C4도 inflight에 기록해줘"* —
     record C1 to C4 in `docs/inflight/` too.
-  - As filed, C1, C2 and C4 are `known-gaps.md` entries under WAL. C4 is
-    recorded as an accepted, unpriced cost, because the spec states it
-    (`docs/spec/wal.md:114`). C3 is
-    `bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`.
+  - **As filed:**
+    - C1, C2 and C4 are `known-gaps.md` entries under WAL. C4 is filed as a
+      spec self-contradiction plus an unpriced cost, not as a defect, because
+      `stream.hpp` makes the behaviour deliberate.
+    - C3 is a `bugs/` file.
+    - C5 was found while filing and has its own `bugs/` file.
 - **O4 — Whether segment recycling waits for archiving.** Today §11-4 ties
   them together, so recycling cannot exist before wal.md §13's archive seam.
   The alternative is to recycle below the redo start with no archive, which
