@@ -202,10 +202,11 @@ was measured.
     number every shipped unit records (§6).
 - **C5 — A roll's header is not synced**
   (`bugs/a-power-loss-after-a-segment-roll-leaves-an-unheadered-tail.md`).
-  - A power loss between a roll and the next sync leaves a last segment the
-    mount refuses.
+  - A power loss between a roll and the next sync can leave a last segment
+    the mount refuses.
   - **PLP does not close this window.** PLP protects what has reached the
-    drive; this header is still in the host's page cache.
+    drive. Until a sync or kernel writeback, this header may still be in the
+    host's page cache (the bug file says why).
   - The simulator's crash model cannot produce this state, so only §6's power
     cut would find it on a unit.
 
@@ -279,7 +280,7 @@ mount after an ill-timed power loss. C2 and C4 degrade the instance.**
 
 Engine-side:
 
-- **O3 — Where C1 to C4 are recorded.** CLA proposed: C1 and C2 in
+- **O3 — Where C1 to C4 are recorded** (and C5, found while filing). CLA proposed: C1 and C2 in
   `known-gaps.md`, C3 and C4 in `bugs/`.
   - **Answered 2026-09-28** `[operator]`: *"C1~C4도 inflight에 기록해줘"* —
     record C1 to C4 in `docs/inflight/` too.

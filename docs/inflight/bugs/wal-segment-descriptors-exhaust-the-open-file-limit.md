@@ -12,7 +12,7 @@ the life of the process:
 - `Open` opens **every** segment on the device at mount and keeps each one
   (`src/wal/file_log_device.cpp:208-239`).
 - `Sync` needs all of them, because it syncs every segment
-  (`src/wal/file_log_device.cpp:365-377`).
+  (`src/wal/file_log_device.cpp:365-405`).
 
 The log is never recycled (`known-gaps.md`, WAL, "The log is never
 recycled"), so the number of descriptors grows by one for every 64 MiB of log
@@ -41,30 +41,39 @@ descriptors are free again.
 
 Verified at `8f9a887` on `cn9-wal-device-mirror`, 2026-09-28, while writing
 CN-9 §4 C3. The stranding path was found by that change's second
-`critics-developer` pass and re-read at `dec4729`. This is found by reading,
-not reproduced.
+`critics-developer` pass, and it and this reproduction were re-read at
+`d0d1d1b`. Found by reading, not reproduced.
 
 ## Smallest reproduction
 
-A cell over `FileLogDevice`. `Open` takes the segment size as a parameter
-(`include/kds/wal/file_log_device.hpp:60-62`) and checks only that it is
-non-zero, so a small size works.
+A cell that drives the rolls through `WalStream`, because only
+`WalStream::StartSegment` writes a segment header (`src/wal/stream.cpp:79`).
+Bare `CreateSegment` calls would leave every segment headerless. Run the cell
+in a subprocess, or restore the limit afterwards.
 
-1. Lower the process's soft `RLIMIT_NOFILE` to the descriptors already open
-   plus 32.
-2. Call `FileLogDevice::Open(dir, 0, 64 * 1024)`, then `CreateSegment(n)` for
-   n = 0, 1, … until it fails. **Expected:** the 32nd call returns `IoError`
-   from "open directory". `ErrnoStatus` maps `EMFILE` to its default case
-   (`src/wal/file_log_device.cpp:25-35`), so "Too many open files" appears
-   only in the message. `wal-0-31.log` is left on disk.
-3. Call `CreateSegment(31)` again. **Expected:** `AlreadyExists`
-   (`src/wal/file_log_device.cpp:134-136`).
-4. Destroy the device. Open the directory again with `FileLogDevice::Open`,
-   then open a `WalStream` over it. **Expected:**
+1. Lower the soft `RLIMIT_NOFILE` to the lowest free descriptor number plus
+   32. The limit bounds descriptor numbers, not a count.
+2. Call `FileLogDevice::Open(dir, 0, 64 * 1024)`. `Open` checks only that the
+   size is non-zero (`include/kds/wal/file_log_device.hpp:60-62`).
+3. Call `WalStream::Open(device, 0, kMinRingCapacity)`, which is 64 KiB
+   (`include/kds/wal/stream.hpp:116`).
+4. `Append` records until an `Append` fails. **Expected:**
+   - The failure is `IoError` from "open directory", and a headerless
+     `wal-0-<n>.log` is left on disk.
+   - `ErrnoStatus` maps `EMFILE` to its default case
+     (`src/wal/file_log_device.cpp:23-34`), so "Too many open files" appears
+     only in the message.
+5. `Append` again. **Expected:** `AlreadyExists`
+   (`src/wal/file_log_device.cpp:134-136`). The stream is still sealed, so
+   `Roll` reruns `StartSegment(segment_count())` into the same name.
+6. Destroy both objects. Open the device and a stream over it again, with the
+   same `64 * 1024`; the default 64 MiB fails `Open`'s size check at
+   `src/wal/file_log_device.cpp:229-232`. **Expected:**
    - `FileLogDevice::Open` succeeds.
    - `WalStream::Open` returns `Corruption` "magic mismatch"
      (`src/wal/stream.cpp:53`, `:101`; `src/wal/record.cpp:231-232`).
-   - After removing `wal-0-31.log`, both opens succeed.
+   - After removing `wal-0-<n>.log`, both opens succeed and the stream
+     resumes on segment n−1.
 
 ## What it costs
 
@@ -77,19 +86,21 @@ No wrong answer: every failure is a refused operation.
     descriptor count does next.
   - The limit is process-wide. A new connection's `accept` can meet it before
     a roll does.
-  - The descriptors in use are the segments plus the data file, the client
-    sockets and the listener.
+  - Besides the segments, the process holds the data file and the log file.
+    Each core holds its epoll and waker descriptors and, under SO_REUSEPORT,
+    its own listener. Then come the client sockets and the debug port, among
+    others.
 - **At the next mount.**
   - The mount opens the log before any socket exists
     (`src/server/expeditor.cpp:752`), so it usually has room to open every
     segment.
   - It then adopts the stranded segment, whose size matches, and refuses it as
-    `Corruption` (reproduction step 4).
+    `Corruption` (reproduction step 6).
   - Raising the limit does not restore the mount. Removing the stranded
     segment does: it is the highest-numbered, so removing it leaves no gap for
     `Open` to refuse.
-  - A mount refused by the descriptor count alone needs a lower limit at
-    restart than the running process had.
+  - A mount can be refused on the descriptor count alone only if the
+    restart's limit is lower than the running process's was.
 
 At a soft limit of 1024, a common service-manager default, this happens at
 about 1000 segments, about 64 GiB of cumulative log. That figure is
@@ -100,8 +111,14 @@ which is why no run here has met it.
 
 Not decided, and not only this file's.
 
-- **Always:** `CreateSegment`'s `SyncDirectory` failure should remove the file
-  as its other failure points do. This is local and stops the stranding.
+- **Always, and local:** `FileLogDevice` should open the directory descriptor
+  once, in `Open`, and keep it.
+  - The roll that meets the limit then fails at the segment open and creates
+    no file, which removes the stranding by construction.
+  - It also saves one `open` per roll.
+  - Removing the file when `SyncDirectory` fails is the weaker alternative. It
+    leaves an unlink that is not durable, after a directory `fsync` that
+    failed.
 - **For the symptom:** close a segment's descriptor once the segment is sealed
   and synced. That breaks `Sync`'s every-segment rule, which would then need a
   record of which segments still owe a sync. That record is exactly what

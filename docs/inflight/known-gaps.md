@@ -216,16 +216,21 @@ statement about an engine that no longer exists; re-verify or strike it.
 - **Every sync covers every segment ever created, so its cost grows with
   the log.** Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C2).
   - `FileLogDevice::Sync` `fdatasync`s every open segment
-    (`src/wal/file_log_device.cpp:365-377`,
+    (`src/wal/file_log_device.cpp:365-405`,
     `include/kds/wal/stream.hpp:53-58`). Its comment forbids narrowing that
-    to the tail, for two reasons: recovery can rewrite an earlier segment,
-    and a roll can land between the stream capturing its watermark and the
-    device sync. That rule is correct.
+    to the tail, for two reasons.
+    - The second reason is real: a roll can land between the stream
+      capturing its watermark and the device sync.
+    - The first reason, a partial write into an earlier segment, names no
+      writer at `d0d1d1b`. The only `LogDevice::WriteAt` callers are the
+      new segment's header (`src/wal/stream.cpp:79`) and the tail flush
+      (`:254`).
   - With the entry above, every durable-point advance therefore issues one
     `fdatasync` for each segment the instance has ever written.
-  - Syncing the segments *written* since the last sync would be enough:
-    the previous tail, any new segment, and any segment recovery rewrote.
-    Nothing records which those are.
+  - Syncing the segments *written* since the last sync would be enough.
+    Under today's writers, that is the previous tail plus any segment
+    created since the last sync copied `segments_`. Nothing records which
+    those are.
   - `wal.md:46`'s *"issued once, over one file"* describes the logical log,
     not the calls the device makes.
 
@@ -250,10 +255,9 @@ statement about an engine that no longer exists; re-verify or strike it.
     prices this as material"*. AL-S8's files measure the single stream, not
     the roll.
 
-  Cost: once per 64 MiB of log, every core's append waits until a
-  segment-sized write reaches the WAL device. The wait lasts as long as the
-  slower member's sequential write on a mirror, whose members write in
-  parallel. Owner: `docs/spec/wal.md` §6 for the contradiction, and
+  Cost: once per 64 MiB of log, every core's append waits through a
+  latched `posix_fallocate`, a 64 MiB prewrite and two `fsync`s. What that
+  means for a device is CN-9 §4 C4's. Owner: `docs/spec/wal.md` §6 for the contradiction, and
   `wal/stream.hpp`'s latch protocol for the cost. Price it first: the
   CLAUDE.md rule is to re-measure the premise before building the fix.
 
