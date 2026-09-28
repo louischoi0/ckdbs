@@ -141,6 +141,17 @@ ReadView TransactionManager::MintReadView(std::uint64_t own_trx_id) noexcept {
 }
 
 StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
+    // **Refused before anything is spent** (AX-R4): a transaction this core
+    // cannot publish would read as not in flight on every other core while
+    // it runs, so past the cap there is no transaction rather than an
+    // unpublished one. Asked before the id is issued and the begin record
+    // appended, so a refusal leaves neither behind.
+    if (visibility_->InFlightFull(core_)) {
+        return Status::ResourceExhausted(
+            "core " + std::to_string(core_) + " already has " +
+            std::to_string(kInFlightSlotsPerCore) +
+            " transactions in flight, the most one core publishes (kInFlightSlotsPerCore)");
+    }
     auto id = ids_.Next();
     if (!id.ok()) return id.status();
 
@@ -162,6 +173,11 @@ StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
     }
 
     live_.push_back(std::move(txn));
+    // **In flight for every core from here** (AX-R2): after the begin
+    // record and the push, so a failure of either publishes nothing to take
+    // back, and before the handle is returned, so nothing this transaction
+    // writes can be read anywhere before its id answers "in flight".
+    visibility_->PublishInFlight(core_, live_.back()->id_);
     // After the push: `OldestActiveTrxId()` and `LocalSnapshotBound()` read
     // `live_`, and this transaction is exactly what may have lowered both.
     PublishCoreBounds();
@@ -343,6 +359,15 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     // the rows it just made visible as not yet committed. The entry and the
     // ceiling are both in by here, which is all the marker was for.
     pending.reset();
+    // **Out of the in-flight table here, and both neighbours are
+    // load-bearing** (AX-R2). After the window entry *and* the marker, so a
+    // peer that finds the id gone - a writer parked on it, re-running at
+    // once - mints a view that sees this commit, rather than one still
+    // capped below it that refuses the write it was waiting to make: AN-R9's
+    // "no instant in neither record" for every core. Before the schema word
+    // and the borrows, so a peer woken by either finds this transaction
+    // decided - an open `DROP INDEX`'s mark read as settled, not as live.
+    visibility_->RetireInFlight(core_, txn.id_);
     // And the schema word, when this transaction wrote the catalog (AT-S5e):
     // before the release, so a writer it wakes cannot re-run through a
     // boundary that predates the decide.
@@ -556,6 +581,10 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
 
     txn.trail_.clear();
     txn.active_ = false;
+    // After the compensations, which is what lets "not in flight" mean "no
+    // rollback is coming" on every core (`manager.hpp`'s `IsInFlight`); before
+    // the schema word and the borrows, as at commit.
+    visibility_->RetireInFlight(core_, txn.id_);
     // **No window entry** (AN-R2). A loser is invisible by absence, and its
     // page changes have just been physically undone above - which is the
     // same fact the floor rests on, so nothing is owed here beyond letting
@@ -734,10 +763,7 @@ std::uint64_t TransactionManager::OldestActiveTrxId() const noexcept {
 }
 
 bool TransactionManager::IsInFlight(std::uint64_t trx_id) const noexcept {
-    for (const std::unique_ptr<Transaction>& t : live_) {
-        if (t->id_ == trx_id) return t->active_;
-    }
-    return false;
+    return visibility_->InFlight(trx_id, core_);
 }
 
 StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {

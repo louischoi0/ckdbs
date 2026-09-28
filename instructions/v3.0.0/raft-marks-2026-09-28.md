@@ -119,3 +119,18 @@ and then:
 | **Answers** | AT-0 item 3 (`workorder-at-m3-uniformity.md`); the question `raft-marks-2026-09-08.md` §1 left open ("per transaction across cores ... or per local transaction") until AT's uniformity work asked it again |
 | **Builds nothing** | The value and the counting site are unchanged; `lock_table_test.cpp`'s pin of 65,536 stands |
 | **Recorded at** | AT-0 item 3 and AT-6's AT-S6 row in `workorder-at-m3-uniformity.md`, `txn.md` §5, `lock_table.hpp`'s cap note, `index.md` |
+
+## 9. AX-S1 started, and AX-Q1 and AX-Q2 marked
+
+Recorded on `worktree-ax-s1-inflight-publication` from `8627f0d`
+(`v2.7.0-462-g8627f0d`), after a session-planning report put AX-S1 first
+among three candidates - its sequencing condition, AM-S6's measurement, met
+since M1 closed, and no word to start it recorded (AT-9's carry item 4):
+
+| | |
+|---|---|
+| **Word** | *"take 1, AX-S1 — Q1 and Q2 as proposed"* |
+| **Mark** | **AX-S1 starts**, and both of AX's operator items are marked **as CLA proposed them**: **AX-Q1** - `kInFlightSlotsPerCore` is **1,024**, and `Begin` past it is refused rather than admitted unpublished; **AX-Q2** - DT9 on a peer changes behaviour, a peer no longer counting another core's uncommitted drop as done |
+| **Answers** | AX-Q1 and AX-Q2 (`workorder-ax-inflight-publication.md` §4); AX §5's sequencing condition, which the word supersedes whatever its state |
+| **Does not settle** | AX-S2 and AX-S3 are not started by it: Q2 is the behaviour AX-S2 builds, marked here so AX-S2 does not wait on it |
+| **Recorded at** | `workorder-ax-inflight-publication.md` §4 and §6, `instance_visibility.hpp`'s cap note, `index.md` |

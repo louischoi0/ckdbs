@@ -527,28 +527,40 @@ there is no second core's registration to be answered by.
 
 ## Locks
 
-- **A write that meets an undecided holder on another core is refused, not
-  made to wait.** Found by AT-S13's review, measured on `at-s13-prices` at
-  `896af54` (2026-09-26). `CommandDispatcher::NoteBlockingWriter` parks the
-  statement only when `txn_->IsInFlight(trx)`, and
-  `TransactionManager::IsInFlight` walks **this core's** `live_`. A holder on
-  another core reads as not in flight, so the writer is refused
-  `TXN_CONFLICT retryable=1` where AO-S3 promised a wait for the decide.
-  The holder's-core premise ("holders are this core's by CC3") stopped
-  holding at AT-S5, when writes began running where their session is;
-  AT-S5e closed the same shape for DDL and AT-S5f for a foreign-key parent,
-  and nothing closed it for a plain row. Evidence: AT-S13's cell 1 server
-  log (`bench/v3.0.0/archive/at-s13-prices-v2.7.0-391-gf6f2073/s8-kds.log`)
-  carries 7 refusals reading *"row id=1 is held by transaction N … in
-  14us"*, which only an undecided holder elsewhere produces, beside 3,422
-  first-updater-wins refusals (*"was written by"*) that the log cannot
-  split between a holder committed after the snapshot and one still in
-  flight on another core. **A refusal, retryable, never a wrong answer** -
-  and part of cell 1's 4-6% hot-row refusal price is this gap rather than
-  spreading itself. The fix is the instance's in-flight answer (the
-  visibility window's slots already publish each core's live transactions,
-  `txn.md` §4.1) in place of the core's; not built. Owner: `docs/spec/txn.md`
-  §5.
+- **A write that meets an undecided holder on another core waits, but on a
+  poll: nothing kicks it when the holder decides.** Found by AT-S13's review,
+  measured on `at-s13-prices` at `896af54` (2026-09-26) as a *refusal*:
+  `CommandDispatcher::NoteBlockingWriter` parks only when
+  `txn_->IsInFlight(trx)`, and until AX-S1 that walked **this core's**
+  `live_`, so a holder on another core read as decided and the writer was
+  refused `TXN_CONFLICT retryable=1` where AO-S3 promised a wait. AT-S13's
+  cell 1 server log
+  (`bench/v3.0.0/archive/at-s13-prices-v2.7.0-391-gf6f2073/s8-kds.log`)
+  carries 7 refusals of that shape, part of cell 1's 4-6% hot-row refusal
+  price.
+
+  **AX-S1 made the predicate the instance's** (`instance_visibility.hpp`'s
+  in-flight tables), so on `ax-s1-inflight-publication` the same site now
+  parks on a peer's holder - read from the code, not driven: no cell runs a
+  cross-core row wait. What stays open, both AX-S2's (the wait sites) and
+  both retryable, never a wrong answer:
+
+  - **No wake.** The `WaitUntil` predicate is re-polled when the waiter's
+    reactor runs, and a decide on another core kicks nothing, so an idle
+    waiter sees it at the end of its idle block (`max_idle_block_ms`,
+    10 ms by default) - up to that much per cross-core conflict, where the
+    refusal was immediate. The tuple ask (`command_dispatcher.cpp`'s
+    `BorrowChain`) passes no wake slot; `WaitForParentRowWriter` is the
+    shape that has one.
+  - **A re-run can meet the holder's borrow before its release.** The
+    holder leaves the in-flight table before `locks_->Release`, by design
+    (`manager.cpp`'s commit), so a woken writer can meet the tuple `X`
+    still held and be refused there.
+
+  A holder that never decides now costs a cross-core writer the 1 s fault
+  net and its defect warning, as a same-core writer already paid. Owner:
+  `instructions/v3.0.0/workorder-ax-inflight-publication.md` AX-S2, and
+  `docs/spec/txn.md` §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
   and AT's quiet-wrong defence is sequenced as though it covered every

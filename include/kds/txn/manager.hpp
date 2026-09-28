@@ -302,6 +302,8 @@ public:
         // past a cursor it has never seen, so a core that has not published
         // one is a core the floor treats as unattached (instance_visibility.hpp).
         PublishCoreBounds();
+        // This core's in-flight table (AX-S1), before its first `Begin`.
+        visibility_->AttachInFlight(core_);
         // **And the floor with it.** At mount both of the floor's terms sit
         // at the post-recovery high-water - `TrxIdSequence` opens its window
         // at the superblock's `next_trx_id`, and no core will ever issue
@@ -349,11 +351,22 @@ public:
     // them parked forever. The transactions themselves are about to cease
     // to exist, so their tenancies must too - a crash reaches the same
     // state by rolling the losers back at mount (AO-R13).
+    //
+    // **And retires their ids from the in-flight table** (AX-S1), first as
+    // at a decide: the visibility is the instance's and outlives this
+    // manager, and an id left published would answer "in flight" on every
+    // core for the life of the instance - a wait on it would end only at
+    // its fault net, and DT9 would never settle its delete-marks. **Not in
+    // flight is not compensated here**, the one place `IsInFlight`'s "no
+    // rollback is coming" does not hold: these writes are rolled back at
+    // mount. Production never reaches it - `Expeditor` rolls back every
+    // session before its cores go - and a fixture tearing a core down
+    // mid-transaction is what does.
     ~TransactionManager() {
-        if (locks_ != nullptr) {
-            for (auto& txn : live_) {
-                if (txn != nullptr) locks_->Release(txn->id_, txn->borrows_);
-            }
+        for (auto& txn : live_) {
+            if (txn == nullptr) continue;
+            if (txn->active_) visibility_->RetireInFlight(core_, txn->id_);
+            if (locks_ != nullptr) locks_->Release(txn->id_, txn->borrows_);
         }
         undo_.SetHorizonSource(nullptr);
     }
@@ -569,17 +582,18 @@ public:
     // counted, and is already invisible to every read view.
     std::size_t ActiveCount() const noexcept;
 
-    // Whether `trx_id` is still running **on this manager's core**. The
-    // membership test a `ReadView` runs, without minting one to learn a
-    // single bit. Its user is the unfiltered catalog read
-    // (`ddl-transactional.md` §5b), which reads a false answer as
-    // "committed" - sound only because `Abort` compensates the whole trail
-    // *before* it clears `active_`, so an inactive transaction is one no
-    // rollback is coming for.
+    // Whether `trx_id` is still running **on any core of the instance**
+    // (AX-S1): this core's in-flight table first, then every other core's
+    // (`instance_visibility.hpp`'s "in-flight tables" note). A false answer
+    // means "decided" - committed, or rolled back with every compensation
+    // already applied, because `Abort` retires the id only after the trail
+    // is undone - so an id that is not in flight is one no rollback is
+    // coming for, on whichever core it ran.
     //
-    // **Per-core, and the caller must know it**: a transaction on another
-    // core answers false. Sound for its one user only while CC3 refuses
-    // cross-core writes.
+    // **Per-core until AX-S1**, when a transaction on another core answered
+    // false. Its callers were written against that and AX-S2 is the stage
+    // that re-reads them; what changes for each at S1 is that a peer's
+    // running transaction now answers true.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
 
     // The lowest id among transactions still running here, or `UINT64_MAX`

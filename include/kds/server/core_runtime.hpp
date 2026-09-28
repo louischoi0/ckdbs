@@ -486,6 +486,9 @@ public:
     // This core's transaction-id sequence: its own window over the
     // ceiling it was handed (`Config::trx_id_ceiling`), exposed for tests.
     txn::TrxIdSequence& trx_ids() noexcept { return *trx_ids_; }
+    // This core's transaction manager, exposed for tests: a cell asks one
+    // core what it answers about another core's transaction (AX-S1).
+    txn::TransactionManager& transactions() noexcept { return *txn_manager_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
     // **The instance's Cabin store** since AT-S7, or this runtime's own
     // where nobody handed it one (a fixture), or null under `cabins = off`.

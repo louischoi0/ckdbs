@@ -3,7 +3,9 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -1051,6 +1053,219 @@ TEST(InstanceVisibilityTest, AReclaimedWinnerIsNeverAnsweredUncommitted) {
     EXPECT_EQ(violations.load(), 0u)
         << "a reclaimed winner was answered uncommitted: the floor and the window were read "
            "on either side of a Reclaim() pass";
+}
+
+// ---- AX-S1: the in-flight tables ------------------------------------------
+//
+// `instructions/v3.0.0/workorder-ax-inflight-publication.md`. An id is in
+// its core's table exactly while its transaction is running, and every core
+// reads every table. The manager cells use `VisibilityWiringTest`'s two
+// managers over one visibility; the two-core rig's are in
+// `inflight_publication_rig_test.cpp`.
+
+TEST(InstanceVisibilityTest, AnIdPublishedOnOneCoreIsInFlightForEveryCoreUntilRetired) {
+    InstanceVisibility vis;
+    vis.AttachInFlight(kCore0);
+    EXPECT_FALSE(vis.InFlight(7, kCore0)) << "nothing is in flight on a fresh instance";
+    vis.PublishInFlight(kCore0, 7);
+    EXPECT_TRUE(vis.InFlight(7, kCore0));
+    EXPECT_TRUE(vis.InFlight(7, kCore1))
+        << "a peer asking its own table first still finds core 0's id";
+    EXPECT_EQ(vis.InFlightCount(kCore0), 1u);
+    EXPECT_EQ(vis.InFlightCount(kCore1), 0u);
+    vis.RetireInFlight(kCore0, 7);
+    EXPECT_FALSE(vis.InFlight(7, kCore1));
+    EXPECT_EQ(vis.InFlightCount(kCore0), 0u);
+    // Retiring what is not there is a no-op, and id 0 - the empty place -
+    // is never in flight.
+    vis.RetireInFlight(kCore0, 7);
+    vis.RetireInFlight(kCore1, 7);
+    EXPECT_FALSE(vis.InFlight(0, kCore0));
+}
+
+TEST(InstanceVisibilityTest, ASwapRemoveNeverHidesALiveIdFromAScanItInterleavesWith) {
+    // **The direction argument, driven** (the header's "in-flight tables"
+    // note). `[A, B, X]`, and a reader looking for X while the writer
+    // retires A - which copies X down into A's place and clears X's old one.
+    // The retire is run just before each place the scan reads, so every
+    // point it can land at between two reads is covered once.
+    //
+    // **Mutation**: scan upward in `HoldsIn` (`0 .. count`, or the work
+    // order's `[0, count + 1)`): the retire landing before place 1 lets the
+    // scan read A at 0, then B at 1 and 0 at 2, and X is missed while it
+    // was never out of the table.
+    constexpr std::uint64_t kA = 11;
+    constexpr std::uint64_t kB = 12;
+    constexpr std::uint64_t kX = 13;
+    for (std::uint32_t land_before = 0; land_before < 3; ++land_before) {
+        InstanceVisibility vis;
+        vis.AttachInFlight(kCore0);
+        vis.PublishInFlight(kCore0, kA);
+        vis.PublishInFlight(kCore0, kB);
+        vis.PublishInFlight(kCore0, kX);
+        const CoreInFlightTable* table = vis.in_flight_table(kCore0);
+        ASSERT_NE(table, nullptr);
+        bool retired = false;
+        const bool found = InstanceVisibility::HoldsIn(*table, kX, [&](std::uint32_t place) {
+            if (!retired && place == land_before) {
+                vis.RetireInFlight(kCore0, kA);
+                retired = true;
+            }
+        });
+        EXPECT_TRUE(found) << "X was in the table throughout and the scan missed it, with A "
+                              "retired just before place "
+                           << land_before;
+        // What the swap-remove left, whether or not the scan ran into it.
+        if (!retired) vis.RetireInFlight(kCore0, kA);
+        EXPECT_EQ(vis.InFlightCount(kCore0), 2u);
+        EXPECT_TRUE(vis.InFlight(kX, kCore1));
+        EXPECT_TRUE(vis.InFlight(kB, kCore1));
+        EXPECT_FALSE(vis.InFlight(kA, kCore1));
+    }
+}
+
+TEST(InstanceVisibilityTest, AScanFindsALiveIdAcrossSeveralMovesAndAReusedPlace) {
+    // The same argument over a longer script: one op lands just before
+    // each place the scan reads, so X is moved, a place it left is reused
+    // by a new id, and a second id is moved over that one - all inside one
+    // scan. What it pins beyond the cell above is that no sequence of
+    // swap-removes and publishes can carry a live id *above* the reader.
+    //
+    //   before place 3: retire A  -> [X, B, C]      (X moved 3 -> 0)
+    //   before place 2: publish Y -> [X, B, C, Y]   (place 3 reused)
+    //   before place 1: retire B  -> [X, Y, C]      (Y moved 3 -> 1)
+    //   before place 0: retire C  -> [X, Y]
+    constexpr std::uint64_t kA = 21;
+    constexpr std::uint64_t kB = 22;
+    constexpr std::uint64_t kC = 23;
+    constexpr std::uint64_t kX = 24;
+    constexpr std::uint64_t kY = 25;
+    InstanceVisibility vis;
+    vis.AttachInFlight(kCore0);
+    for (std::uint64_t id : {kA, kB, kC, kX}) vis.PublishInFlight(kCore0, id);
+    const CoreInFlightTable* table = vis.in_flight_table(kCore0);
+    ASSERT_NE(table, nullptr);
+    int ops = 0;
+    const bool found = InstanceVisibility::HoldsIn(*table, kX, [&](std::uint32_t place) {
+        ++ops;
+        if (place == 3) vis.RetireInFlight(kCore0, kA);
+        if (place == 2) vis.PublishInFlight(kCore0, kY);
+        if (place == 1) vis.RetireInFlight(kCore0, kB);
+        if (place == 0) vis.RetireInFlight(kCore0, kC);
+    });
+    EXPECT_TRUE(found);
+    EXPECT_EQ(ops, 4) << "the script did not run before every place";
+    EXPECT_EQ(vis.InFlightCount(kCore0), 2u);
+    EXPECT_TRUE(vis.InFlight(kX, kCore1));
+    EXPECT_TRUE(vis.InFlight(kY, kCore1));
+}
+
+TEST(InstanceVisibilityTest, ATableIsFullAtTheCapAndHasRoomAgainAfterARetire) {
+    InstanceVisibility vis;
+    EXPECT_FALSE(vis.InFlightFull(kCore0)) << "a core that never attached has room";
+    vis.AttachInFlight(kCore0);
+    for (std::uint64_t id = 1; id <= kInFlightSlotsPerCore; ++id) {
+        ASSERT_FALSE(vis.InFlightFull(kCore0)) << "full before the cap, at " << id;
+        vis.PublishInFlight(kCore0, id);
+    }
+    EXPECT_TRUE(vis.InFlightFull(kCore0));
+    EXPECT_FALSE(vis.InFlightFull(kCore1)) << "the cap is per core";
+    EXPECT_TRUE(vis.InFlight(1, kCore1));
+    EXPECT_TRUE(vis.InFlight(kInFlightSlotsPerCore, kCore1));
+    vis.RetireInFlight(kCore0, 1);
+    EXPECT_FALSE(vis.InFlightFull(kCore0));
+    EXPECT_TRUE(vis.InFlight(kInFlightSlotsPerCore, kCore1))
+        << "the last id, moved into the first place, is still found";
+}
+
+TEST_F(VisibilityWiringTest, APeerSeesAnotherCoresTransactionInFlightUntilItCommits) {
+    // AX-S1's exit, first half. Before AX-S1 the peer's `IsInFlight` walked
+    // its own `live_` and answered false for core 0's transaction from the
+    // start.
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    auto txn = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+    const std::uint64_t id = txn.value()->id();
+    EXPECT_TRUE(core1->IsInFlight(id))
+        << "a peer answered not-in-flight for core 0's open transaction";
+    EXPECT_TRUE(core0->IsInFlight(id));
+    ASSERT_TRUE(core0->Commit(*txn.value(), wal::DurabilityClass::kRelaxed).ok());
+    EXPECT_FALSE(core1->IsInFlight(id));
+    EXPECT_FALSE(core0->IsInFlight(id));
+    // Decided and not yet released is decided: the handle outliving its end
+    // does not keep the id published.
+    EXPECT_EQ(vis_.InFlightCount(kCore0), 0u);
+    core0->Release(*txn.value());
+}
+
+TEST_F(VisibilityWiringTest, APeerSeesAnotherCoresTransactionInFlightUntilItRollsBack) {
+    // The second half. An abort writes no window entry (AN-R2), so before
+    // AX-S1 nothing another core could read told a rolled-back transaction
+    // from a running one.
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    auto txn = core1->Begin(IsolationLevel::kRepeatableRead);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+    const std::uint64_t id = txn.value()->id();
+    EXPECT_TRUE(core0->IsInFlight(id));
+    ASSERT_TRUE(core1->Abort(*txn.value()).ok());
+    EXPECT_FALSE(core0->IsInFlight(id));
+    EXPECT_EQ(vis_.InFlightCount(kCore1), 0u);
+    core1->Release(*txn.value());
+}
+
+TEST_F(VisibilityWiringTest, BeginPastTheInFlightCapIsRefusedNamingItAndSpendsNothing) {
+    // AX-R4: past the cap there is no transaction, never an unpublished
+    // one - and the refusal comes before the id and the begin record, so it
+    // leaves neither behind. `cores = 1`'s one new answer.
+    auto core0 = Attach();
+    std::vector<Transaction*> open;
+    open.reserve(kInFlightSlotsPerCore);
+    for (std::uint32_t i = 0; i < kInFlightSlotsPerCore; ++i) {
+        auto txn = core0->Begin(IsolationLevel::kReadCommitted);
+        ASSERT_TRUE(txn.ok()) << "refused below the cap, at " << i << ": "
+                              << txn.status().message();
+        open.push_back(txn.value());
+    }
+    const std::uint64_t cursor = ids_->peek();
+    const wal::Lsn tail = wal_->appended_lsn();
+    auto refused = core0->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_NE(refused.status().message().find("kInFlightSlotsPerCore"), std::string::npos)
+        << refused.status().message();
+    EXPECT_NE(refused.status().message().find(std::to_string(kInFlightSlotsPerCore)),
+              std::string::npos)
+        << refused.status().message();
+    EXPECT_EQ(ids_->peek(), cursor) << "the refusal spent an id";
+    EXPECT_EQ(wal_->appended_lsn(), tail) << "the refusal appended a record";
+    EXPECT_EQ(core0->ActiveCount(), kInFlightSlotsPerCore);
+
+    // One decide makes room for one more.
+    ASSERT_TRUE(core0->Commit(*open.front(), wal::DurabilityClass::kRelaxed).ok());
+    auto again = core0->Begin(IsolationLevel::kReadCommitted);
+    EXPECT_TRUE(again.ok()) << again.status().message();
+}
+
+TEST_F(VisibilityWiringTest, AManagerTornDownWithAnOpenTransactionRetiresItsId) {
+    // The visibility outlives the manager, so an id a torn-down core left
+    // published would read as in flight on every core for the life of the
+    // instance - a wait on it ending only at the fault net.
+    //
+    // **Mutation**: drop the retire from `~TransactionManager` - the peer
+    // still answers true below.
+    auto core1 = AttachPeer();
+    std::uint64_t id = 0;
+    {
+        auto core0 = Attach();
+        auto txn = core0->Begin(IsolationLevel::kReadCommitted);
+        ASSERT_TRUE(txn.ok()) << txn.status().message();
+        id = txn.value()->id();
+        ASSERT_TRUE(core1->IsInFlight(id));
+    }
+    EXPECT_FALSE(core1->IsInFlight(id));
+    EXPECT_EQ(vis_.InFlightCount(kCore0), 0u);
 }
 
 }  // namespace

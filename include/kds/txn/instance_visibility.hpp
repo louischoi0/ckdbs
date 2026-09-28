@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 
 #include "kds/base/latch.hpp"
@@ -164,6 +165,43 @@
 // under a page span**: `ReadView::Visible` runs where a tuple is decoded,
 // and the one thing that makes that sound is that nothing holding this
 // latch touches a page. Never held across a suspension point.
+//
+// ---- The in-flight tables (AX-S1) -----------------------------------------
+//
+// **Which transactions are running, instance-wide**
+// (`instructions/v3.0.0/workorder-ax-inflight-publication.md`). A decided
+// transaction is told apart from a running one by the window only when it
+// committed: a loser is invisible by absence (AN-R2), so "no entry" is both
+// "aborted" and "still running", and no bound on the slots above separates
+// them either. A table per core does: an id is in its core's table exactly
+// while `Transaction::active_` is true, and nothing else is published
+// (AX-R2, the operator's "active bit only").
+//
+// **Single writer, and no latch.** Only the issuing core writes its table;
+// every core reads it. A publish stores the id at `ids[count]` and then
+// raises `count`; a retire swap-removes - the last entry is copied into the
+// freed position, **then** the tail is cleared, **then** `count` is lowered -
+// every store release, every load acquire.
+//
+// **A reader scans from `count - 1` down to 0, and the direction is the
+// correctness argument, not a preference.** A swap-remove moves an id only
+// *downward*, and the copy is ordered before the clear of the place it left.
+// A descending reader that reads a place after its clear therefore sees the
+// copy, which sits at a place it has not reached yet. An ascending reader can
+// miss a live id: over `[A, B, X]` it reads A at 0, the writer retires A (X
+// copied to 0, 2 cleared), and the reader then reads B at 1 and 0 at 2 - X
+// was never absent and the scan never saw it. The work order's AX-R1 scanned
+// `[0, count + 1)` ascending, which is that miss; `HoldsIn`'s cell drives it.
+//
+// **A stale answer errs one way only.** A reader can find an id its core has
+// just retired - answering "in flight" for a transaction a moment decided,
+// which every consumer re-asks or reads as the conservative answer - but it
+// cannot miss an id whose publication happened before its question.
+//
+// A table is allocated when its core's manager attaches and freed with the
+// instance, so an instance pays `kInFlightSlotsPerCore` ids per attached core
+// and nothing for a slot that never attached - and a publication allocates
+// nothing and cannot fail.
 
 namespace kds::txn {
 
@@ -197,6 +235,22 @@ struct CoreVisibilitySlot {
     // LSN is above this, so a snapshot capped by it cannot cover the
     // commit (the header's "snapshot ceiling" note).
     std::atomic<std::uint64_t> pending_commit_bound{kUnboundedBound};
+};
+
+// **The in-flight cap, per core** (AX-R4; AX-Q1 marked as proposed by the
+// operator on 2026-09-28). 1,024 ids of 8 bytes is 8 KiB a core. Past it,
+// `TransactionManager::Begin` refuses `ResourceExhausted` rather than admit
+// a transaction it cannot publish: an unpublished one reads as "not in
+// flight" on every other core while it runs, which is a wrong answer where
+// the cap is a refusal.
+inline constexpr std::uint32_t kInFlightSlotsPerCore = 1024;
+
+// One core's running transactions (the header's "in-flight tables" note).
+// The live ids are `ids[0, count)`; 0 is an empty place, and no transaction
+// is ever issued id 0 (`wal::kNoTxnId`).
+struct CoreInFlightTable {
+    std::atomic<std::uint32_t> count{0};
+    std::array<std::atomic<std::uint64_t>, kInFlightSlotsPerCore> ids{};
 };
 
 class InstanceVisibility {
@@ -242,6 +296,64 @@ public:
     // answer is used rather than carried on the view.
     bool AnyUnresolved() const noexcept {
         return cores_with_unresolved_.load(std::memory_order_acquire) != 0;
+    }
+
+    // ---- The in-flight tables (the header's note) -------------------------
+
+    // Builds `core`'s table if it has none. By that core alone, before its
+    // first `PublishInFlight` - `TransactionManager`'s constructor.
+    void AttachInFlight(std::uint32_t core);
+
+    // Whether `core`'s table has no place left for another id. The caller
+    // asks before it issues one, so a refusal spends nothing.
+    bool InFlightFull(std::uint32_t core) const noexcept;
+
+    // `trx_id` is running on `core`. Called by that core alone, once
+    // `Transaction::active_` is true and before anything the transaction
+    // writes can be read elsewhere; the table must be attached and
+    // `InFlightFull(core)` false. **No guard for the second**: `Begin`
+    // asks and publishes in one synchronous call on the only core that
+    // writes the count, and a publication that silently did nothing would
+    // be the unpublished running transaction AX-R4 refuses to make.
+    void PublishInFlight(std::uint32_t core, std::uint64_t trx_id) noexcept;
+
+    // `trx_id` has decided on `core`. Called by that core alone, where
+    // `active_` falls - after a commit's window entry is in, after an
+    // abort's compensations - so a reader that finds it gone finds the
+    // decision with it. Not in the table: a no-op.
+    void RetireInFlight(std::uint32_t core, std::uint64_t trx_id) noexcept;
+
+    // **Whether `trx_id` is running on any core.** `first_core`'s table is
+    // read first, since a caller asks mostly about its own core's
+    // transactions and at `cores = 1` that is the only table there is.
+    bool InFlight(std::uint64_t trx_id, std::uint32_t first_core) const noexcept;
+
+    // How many ids `core` has published and not retired; 0 for a core that
+    // never published. What the cells read.
+    std::uint32_t InFlightCount(std::uint32_t core) const noexcept;
+
+    // `core`'s table, or null before its first publication.
+    const CoreInFlightTable* in_flight_table(std::uint32_t core) const noexcept {
+        return core < in_flight_.size() ? in_flight_[core].load(std::memory_order_acquire)
+                                        : nullptr;
+    }
+
+    // **The scan, with a seam between places.** `before_place(i)` runs just
+    // before place `i` is read; `InFlight` passes one that does nothing. The
+    // seam is for the cell that retires an id between two reads of one scan
+    // - the interleaving the header's direction argument is about, which two
+    // threads reach only by luck.
+    template <typename BeforePlace>
+    static bool HoldsIn(const CoreInFlightTable& table, std::uint64_t trx_id,
+                        BeforePlace&& before_place) {
+        // Downward from the count the load returns (the header says why the
+        // direction is the argument). The count is never above the cap: a
+        // publication past it is refused before it is made.
+        for (std::uint32_t i = table.count.load(std::memory_order_acquire); i-- > 0;) {
+            before_place(i);
+            if (table.ids[i].load(std::memory_order_acquire) == trx_id) return true;
+        }
+        return false;
     }
 
     // This core's oldest live snapshot LSN, `kUnboundedBound` with none.
@@ -416,6 +528,13 @@ private:
     void NoteSlot(std::uint32_t core) noexcept;
 
     std::array<CoreVisibilitySlot, server::kMaxWalCores> slots_{};
+
+    // The in-flight tables: owned here, each written by its core alone,
+    // which is also the only writer of its pointer - so the owning array is
+    // touched by one thread per index and never read by another, and a
+    // reader reaches a table only through `in_flight_`.
+    std::array<std::unique_ptr<CoreInFlightTable>, server::kMaxWalCores> in_flight_owned_{};
+    std::array<std::atomic<const CoreInFlightTable*>, server::kMaxWalCores> in_flight_{};
 
     // How many cores report an unresolved transaction, maintained by
     // `PublishOldestUnresolved` alone: only the owning core writes a slot,

@@ -171,6 +171,75 @@ bool InstanceVisibility::PinsFloor(std::uint32_t core) const noexcept {
     return cursor == FloorCandidate();
 }
 
+bool InstanceVisibility::InFlightFull(std::uint32_t core) const noexcept {
+    const CoreInFlightTable* table = in_flight_table(core);
+    return table != nullptr &&
+           table->count.load(std::memory_order_relaxed) >= kInFlightSlotsPerCore;
+}
+
+void InstanceVisibility::AttachInFlight(std::uint32_t core) {
+    if (core >= in_flight_owned_.size() || in_flight_owned_[core] != nullptr) return;
+    // The pointer is stored release after the table is built, so a reader
+    // that loads it reaches a table whose every place reads 0; `NoteSlot`
+    // brings the core inside every walk's bound.
+    in_flight_owned_[core] = std::make_unique<CoreInFlightTable>();
+    in_flight_[core].store(in_flight_owned_[core].get(), std::memory_order_release);
+    NoteSlot(core);
+}
+
+void InstanceVisibility::PublishInFlight(std::uint32_t core, std::uint64_t trx_id) noexcept {
+    if (core >= in_flight_owned_.size() || in_flight_owned_[core] == nullptr) return;
+    CoreInFlightTable& table = *in_flight_owned_[core];
+    // Only this core writes the count, so a relaxed read of its own value
+    // is exact.
+    const std::uint32_t n = table.count.load(std::memory_order_relaxed);
+    // The id before the count: a reader that sees the raised count sees
+    // the id at its place.
+    table.ids[n].store(trx_id, std::memory_order_release);
+    table.count.store(n + 1, std::memory_order_release);
+}
+
+void InstanceVisibility::RetireInFlight(std::uint32_t core, std::uint64_t trx_id) noexcept {
+    if (core >= in_flight_owned_.size() || in_flight_owned_[core] == nullptr) return;
+    CoreInFlightTable& table = *in_flight_owned_[core];
+    const std::uint32_t n = table.count.load(std::memory_order_relaxed);
+    for (std::uint32_t p = 0; p < n; ++p) {
+        if (table.ids[p].load(std::memory_order_relaxed) != trx_id) continue;
+        const std::uint32_t last = n - 1;
+        // **Copy, clear, lower - in that order** (the header's direction
+        // argument). The copy moves the last id *down*, to a place a
+        // descending reader has not reached yet; clearing its old place
+        // only after it lets a reader that reads the cleared place see the
+        // copy.
+        if (p != last) {
+            table.ids[p].store(table.ids[last].load(std::memory_order_relaxed),
+                               std::memory_order_release);
+        }
+        table.ids[last].store(0, std::memory_order_release);
+        table.count.store(last, std::memory_order_release);
+        return;
+    }
+}
+
+bool InstanceVisibility::InFlight(std::uint64_t trx_id, std::uint32_t first_core) const noexcept {
+    // Id 0 marks an empty place, so it cannot be asked about by a scan -
+    // and no transaction is issued it, so "no" is the answer anyway.
+    if (trx_id == 0) return false;
+    // Every attached core once, starting at `first_core`: the rotation is a
+    // permutation of `[0, in_use)` whatever `first_core` is.
+    const std::uint32_t in_use = slots_in_use_.load(std::memory_order_acquire);
+    for (std::uint32_t k = 0; k < in_use; ++k) {
+        const CoreInFlightTable* table = in_flight_table((first_core + k) % in_use);
+        if (table != nullptr && HoldsIn(*table, trx_id, [](std::uint32_t) {})) return true;
+    }
+    return false;
+}
+
+std::uint32_t InstanceVisibility::InFlightCount(std::uint32_t core) const noexcept {
+    const CoreInFlightTable* table = in_flight_table(core);
+    return table != nullptr ? table->count.load(std::memory_order_acquire) : 0;
+}
+
 std::uint64_t InstanceVisibility::PublishCommit(std::uint64_t trx_id, std::uint64_t commit_lsn) {
     bool reclaim = false;
     {
