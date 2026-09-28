@@ -147,8 +147,10 @@ struct StepStats {
     // it honestly: a covered column saves a base *descent*, never a base
     // read, because visibility still requires the tuple (spec §7). So
     // `index_entries_filtered` counts descents avoided and nothing else -
-    // if it is zero, a COVERING clause bought exactly the write cost it
-    // added.
+    // one per row **every** entry of which the filter rejected (AT-S22: a
+    // row one entry rejects and another passes is resolved, and counts
+    // nothing here) - and if it is zero, a COVERING clause bought exactly
+    // the write cost it added.
     std::uint64_t index_entries_scanned = 0;
     std::uint64_t index_entries_filtered = 0;
     std::uint64_t index_rows_resolved = 0;

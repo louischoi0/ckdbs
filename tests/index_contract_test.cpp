@@ -427,6 +427,13 @@ TEST(IndexContractTest, ARowWhoseKeyAndCoveredColumnMovedTogetherSurvivesItsStal
     const std::string plan = db.Run("ANALYZE " + sql);
     EXPECT_NE(plan.find("IndexRange"), std::string::npos) << plan;
     EXPECT_NE(plan.find("index_scanned=2"), std::string::npos) << plan;
+    // `index_filtered` is descents avoided: none here, since the row's
+    // second entry passed and the row was resolved...
+    EXPECT_EQ(plan.find("index_filtered="), std::string::npos) << plan;
+    // ...and one, not two, when both of its entries fail.
+    const std::string none = "SELECT id FROM t WHERE a >= 1 AND a <= 10 AND c = 99";
+    EXPECT_EQ(db.Run(none), plain.Run(none));
+    EXPECT_EQ(MeterOf(db.Run("ANALYZE " + none), "index_filtered"), 1u);
 }
 
 TEST(IndexContractTest, AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved) {
