@@ -777,7 +777,8 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   session's, then the transaction's.
 - Exactly two isolation levels: `READ COMMITTED` (default, read view per
   statement) and `REPEATABLE READ` (read view per transaction).
-  `SERIALIZABLE` is refused as out of scope, not open. The precedence chain
+  `SERIALIZABLE` is refused as out of scope, not open, and `READ UNCOMMITTED`
+  is refused as not supported - both by name, with their reasons. The precedence chain
   is config key → `SET ISOLATION LEVEL` (session, next transaction) →
   `BEGIN ISOLATION LEVEL` (this transaction).
 - No nested transactions, no savepoints: a second `BEGIN` is an error.

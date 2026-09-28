@@ -620,7 +620,7 @@ added at AR2-A's request.
 |---|---|---|---|
 | E1 | Lock mode set | **ratified (AR2-A)** | `IS`, `IX`, `S`, `X` only; no `SIX`, no update mode in v1 |
 | E2 | Per-transaction borrow cap, `max_locks_per_txn`: its value and its refusal code | constant; user-visible — deferred to M2 (AR2-A) | 65,536; `ResourceExhausted`, non-retryable, never escalate (R4) — the one refusal the model keeps, because a cap cannot be waited out |
-| E3 | FK reverse check with no covering Bound structure | quiet-wrong — deferred to M3 (AR2-A) | child **relation** `S` fence as the coarse arm; slice fence once AR1's supporting Cabin covers the column (R7, §5.1) |
+| E3 | FK reverse check with no covering Bound structure | quiet-wrong — deferred to M3 (AR2-A). **Retires once the two-core cells pass** (operator, 2026-09-28, D8 ratified as revised - `raft-marks-2026-09-28.md` §5): the FK's write skew is closed from the parent row by D9(a)'s held `S`, so no child-side fence is needed | child **relation** `S` fence as the coarse arm; slice fence once AR1's supporting Cabin covers the column (R7, §5.1) |
 | E4 | Slice key | **ratified (AR2-A)** | `(rel_oid, [lo, hi))`, page as hint only (R6) |
 | E5 | Affinity and wait collector | spec (R2 of `physical-optimizer.md`) — deferred to M3, amended (AR2-A) | per lock unit: grant counts, wait counts and wait time, decayed by that spec's R1; grants feed `sys.ranges.owner_core` per AR0-M5, waits are the optimizer's move signal (R8); not a `sys.access_stats` extension |
 | E6 | Observational bank rule under the LSN view | OPEN, AN's | keep the rule's content; AN-S2 re-expresses the test (R11) |

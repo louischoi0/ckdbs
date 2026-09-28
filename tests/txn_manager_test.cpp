@@ -638,6 +638,19 @@ TEST(IsolationLevelTest, SerializableIsRefusedWithItsReason) {
         << parsed.status().message();
 }
 
+// READ UNCOMMITTED is declined by the operator's word on D1 (2026-09-28):
+// refused by name, as a level the engine will not offer, and never mistaken
+// for a typo.
+TEST(IsolationLevelTest, ReadUncommittedIsRefusedByName) {
+    for (const char* text : {"read uncommitted", "READ UNCOMMITTED", "ru"}) {
+        auto parsed = ParseIsolationLevel(text);
+        EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported) << text;
+        EXPECT_NE(parsed.status().message().find("exactly two isolation levels"),
+                  std::string::npos)
+            << parsed.status().message();
+    }
+}
+
 TEST(IsolationLevelTest, AnUnknownLevelNamesWhatWasGiven) {
     auto parsed = ParseIsolationLevel("snapshot");
     EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
