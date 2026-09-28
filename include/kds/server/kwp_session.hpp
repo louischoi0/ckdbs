@@ -111,7 +111,8 @@ namespace kds::server {
 // waits whose event was human-or-network-scale (the index and assertion
 // builds' reply deadlines, which went with their ships at AT-S5e and
 // AT-S5d) against 10 s for the machine-scale ones (`kShippedStatementDeadlineNs`,
-// `kTxnPhaseDeadlineNs`). **An idle portal waits on a client**, so it takes
+// `kTxnPhaseDeadlineNs`, which went with statement shipping and 2PC at
+// AT-S6). **An idle portal waits on a client**, so it takes
 // the first number, and reusing one rather than inventing a third is the
 // point.
 //

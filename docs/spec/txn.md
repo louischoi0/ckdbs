@@ -1,6 +1,6 @@
 # KDS Transactions & MVCC
 
-How KDS isolates concurrent statements and what a reader sees. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/spec/wal.md`, `docs/spec/heap-and-tuple.md` (§3.2, the tuple MVCC header), `docs/spec/cross-owner-txn.md` (a transaction that touches more than one core).
+How KDS isolates concurrent statements and what a reader sees. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/spec/wal.md`, `docs/spec/heap-and-tuple.md` (§3.2, the tuple MVCC header), `docs/spec/cross-owner-txn.md` (retired at AT-S6: no transaction touches more than one core).
 
 ---
 
@@ -27,9 +27,9 @@ the shipping as scope, with no constant of its own.
 `kds.txn_lifetime_ceiling` (60 s, **provisional**: set by the operator,
 not measured, and re-read when AS-E measures the lifetime distribution;
 no `kTxnLifetimeCeilingNs` exists in the tree). Wall-clock from `BEGIN`. A
-transaction past it would be aborted by a sweep and the abort would surface at its next statement **as an ordinary
-abort** — §4.1 stays literally true, because no reader is ever told its
-snapshot expired.
+transaction past it would be aborted by a sweep and the abort would
+surface at its next statement **as an ordinary abort** — §4.1 stays
+literally true, because no reader is ever told its snapshot expired.
 
 **What it costs, stated rather than discovered**: a long *busy*
 transaction is aborted, where a bound on *idleness* accepted it. That was
@@ -37,14 +37,14 @@ the earlier proposal, and the operator's numbers say this engine does not
 serve that shape.
 
 **Three exemptions**, each with its reason so none is later struck as a
-special case. **Only the third is built**; 1 and 2 are `[PROPOSED]` and
-described here so the instance-wide sweep is not written without them:
+special case. **None is built**: 1 and 2 are `[PROPOSED]` and described
+here so the instance-wide sweep is not written without them, and 3 went
+with AT-S6:
 
 1. **DDL** — a single statement holding relation `X`. Aborting a
    `CREATE INDEX` at 60 s gains nothing and forbids large indexes. No
-   ceiling. `[PROPOSED]` — nothing exempts it today because nothing
-   reaches it: DDL is never a shipped statement and so never an enrolled
-   context.
+   ceiling. `[PROPOSED]` — nothing exempts it today because no sweep
+   exists to reach it.
 2. **Background read views** (the Cabin build, the checkpoint, the
    relayout survey) — they hold undo like any view, so the ceiling would
    apply, but the response is not abort: the task **re-mints its view and
