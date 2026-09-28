@@ -39,3 +39,4 @@ authority and the note is history.
 | `cn3-supersede-and-chain-id-succession.md` | Retiring a tuple and chaining a successor to it, over issue-once ids | CONCEPT; operator decision record in §11, seven decisions open in §10; ordered after CN-2 |
 | `cn4-transition-constraints.md` | A column's allowed state changes — initial states, `old => new` edges, deletable states — as a row-local constraint | CONCEPT; eleven operator decisions open, T9 shared with CN-3 |
 | `cn5-commit-outcome-and-idempotency.md` | A client-chosen token the commit record carries, answering both "did it commit?" and "run this at most once" | CONCEPT; ten operator decisions open |
+| `cn9-dedicated-mirrored-wal-device.md` | `wal_dir` on its own pair of PLP NVMe drives in md RAID1, for a KDS appliance, and the four properties of the WAL as built that bound it | CONCEPT; six operator decisions open (§9), two of them engine-side |
