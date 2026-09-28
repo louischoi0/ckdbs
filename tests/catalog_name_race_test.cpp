@@ -420,6 +420,8 @@ TEST(CatalogNameRaceTest, ACreateThatResolvedANamespaceAnotherCoreDroppedIsRefus
     // The entry's order: core 1 resolves `ns`, core 0's RESTRICT check and
     // retype run, then core 1 writes `t`. Exactly one of the two succeeds -
     // the drop - and the create is refused rather than landing in it.
+    //
+    // **Mutation**: drop `CreateTable`'s `CheckNamespaceLive` - killed 3/3.
     TwoCatalogs cats;
     std::vector<Oid> spaces;
     for (int round = 0; round < kRounds; ++round) {
@@ -459,7 +461,8 @@ TEST(CatalogNameRaceTest, ADropBetweenACreatesTwoRowsIsRefused) {
     // catalog reaches: the drop runs after `t`'s `sys.objects` row is
     // written and before its `sys.tables` row, which a RESTRICT check of
     // `sys.tables` finds empty. Put there by hand, on the create's first
-    // fetch of page 7, over one in-memory store two catalogs share.
+    // fetch of page 7, over one in-memory store two catalogs share. Red at
+    // `9898b15`; the RESTRICT check reading `sys.objects` is what closes it.
     storage::InMemoryPageStore backing(128);
     testing_race::ActOnFetchStore store(backing);
     std::atomic<Oid> oid_sequence{0};
@@ -495,6 +498,45 @@ TEST(CatalogNameRaceTest, ADropBetweenACreatesTwoRowsIsRefused) {
 
     Catalog fresh(backing);
     ExpectNoRelationInADroppedNamespace(fresh);
+}
+
+TEST(CatalogNameRaceTest, ACreateAndADropOfItsNamespaceAtOneInstantLeaveNoOrphan) {
+    // Both at the door, nothing between them but the holds: core 1's
+    // create checks the namespace live and writes its row, core 0's drop
+    // checks it empty and retypes it - each under page 6's hold, so one
+    // happens entirely before the other. Exactly one succeeds.
+    //
+    // **What this cell does not kill, stated because it was run**
+    // (2026-09-28, 10 runs each): dropping `DropNamespace`'s hold, and
+    // asking `CreateTable`'s live check before its hold - 0/10 both. Each
+    // needs the other call to run whole inside a gap of a few instructions
+    // (the drop between its RESTRICT check and its retype; the create
+    // between its check and its insert), which two threads merely started
+    // together do not reach, and no seam short of a hook in the catalog
+    // puts them there on an armed store: a wrapping store would bypass the
+    // latch the hold is. Both holds are CT7's shape, argued at their sites.
+    TwoCatalogs cats;
+    std::vector<Oid> spaces;
+    for (int round = 0; round < kRounds; ++round) {
+        auto ns = cats[0].CreateNamespace(Name("ns", round));
+        ASSERT_TRUE(ns.ok()) << ns.status().message();
+        spaces.push_back(ns.value());
+    }
+    Rendezvous gate(kThreads);
+    const Schema schema = PkAnd({"v"});
+    auto out = OnTwoCores([&](int core, int round) -> Status {
+        const Oid ns = spaces[static_cast<std::size_t>(round)];
+        gate.Wait();
+        if (core == 0) return cats[0].DropNamespace(ns);
+        return cats[1].CreateTable(ns, Name("t", round), schema, ClusteredType::kBtree).status();
+    });
+    for (int round = 0; round < kRounds; ++round) {
+        const Status& drop = out[0][static_cast<std::size_t>(round)];
+        const Status& create = out[1][static_cast<std::size_t>(round)];
+        EXPECT_NE(drop.ok(), create.ok()) << "round " << round << ": drop '" << drop.message()
+                                          << "', create '" << create.message() << "'";
+    }
+    ExpectNoRelationInADroppedNamespace(*cats.Fresh());
 }
 
 }  // namespace

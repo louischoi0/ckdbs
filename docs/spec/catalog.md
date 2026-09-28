@@ -271,6 +271,20 @@ first use seeds from `sys.columns`, and `AllocateRowId` writes
 **What it does not cover.** The hold holds a name only until its latch
 drops; what keeps a later check from admitting a name an open transaction
 has taken or given up is the two questions above, not the latch.
-`DROP NAMESPACE`'s RESTRICT check against a relation being created in the
-namespace on another core is a different pair of holds, and open
-(`docs/inflight/bugs/drop-namespace-restrict-races-a-create-in-it.md`).
+
+**A relation's namespace is taken under the same hold** (AT-S17b, the
+AT-close order's §7.3). A relation's `sys.objects` row carries its
+`namespace_oid`, so membership is written where the name is. `CreateTable`
+asks, under page 6's hold, that the namespace it was handed is still there
+(`CheckNamespaceLive`); `DropNamespace` holds page 6 across its RESTRICT
+check and its retype, and the check reads **`sys.objects`**
+(`CheckNamespaceEmpty`) rather than `sys.tables`, which a create writes after
+page 6's hold drops. The create is refused, or the drop sees its row - on any
+core. Both use `CheckNameFree`'s walk and instance check view, so an undecided
+drop counts across cores: a namespace another transaction is dropping is
+`TxnConflict` to a create; a relation another transaction is dropping is still
+in its namespace, `TxnConflict` to the RESTRICT (the asker's own drop
+`InvalidArgument`, as before). The `sys.tables` check this replaced settled a
+relation drop's delete-mark by the asking core's in-flight test (DT9), so it
+read another core's open `DROP TABLE` as done. `CreateTable` now refuses a
+namespace oid no row names, which two cells had leaned on.

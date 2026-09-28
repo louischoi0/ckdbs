@@ -1516,6 +1516,9 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
             !s.ok()) {
             return s;
         }
+        // And the membership (AT-S17b): the namespace the caller resolved
+        // is still there, asked under the hold its drop's RESTRICT takes.
+        if (Status s = CheckNamespaceLive(namespace_oid, trx_id); !s.ok()) return s;
         if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name, trx_id, &ref);
             !s.ok()) {
             return s;
@@ -1611,28 +1614,21 @@ Status PendingDropRefusal(std::string_view kind, std::string_view name) {
                                "the name is not free until that transaction resolves");
 }
 
-}  // namespace
-
-Status Catalog::CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id,
-                              bool own_drop_frees) {
-    const bool table = live_type == kTypeTable;
-    const std::string_view kind = table ? "relation" : "namespace";
-    const Oid dropped_type = table ? kTypeDroppedTable : kTypeDroppedNamespace;
-    // One walk, reading each row of the name by its type and its header's
-    // stamp: a live row is taken, whoever wrote it and whether or not it
-    // has committed (the unfiltered duplicate check); a tombstone whose
-    // stamp the check view cannot see is a drop still undecided. **The view
-    // is the instance's** (AN-S2), so a drop open on another core is in
-    // flight here too - the dispatcher's test this replaced minted one only
-    // when the asking core had DDL open. It is minted with no own id, and
-    // the asker's own drop is classified by its stamp instead. Not through
-    // the name cache either: an absence is not cached, and a presence the
-    // cache still remembers is one the page has already let go of.
+// **Every `sys.objects` row as a check reads it** - the one walk
+// `CheckNameFree`, `CheckNamespaceLive` and `CheckNamespaceEmpty` share. A
+// delete-mark the view has seen is gone; every other row is handed to `fn`
+// with its header's stamp and whether the view can see it - a tombstone the
+// view cannot see is a drop still undecided. **The view is the instance's**
+// (AN-S2), minted with no own id, so a transaction open on another core is
+// in flight here too and the asker's own is told apart by its stamp. `fn`
+// returns a verdict to stop on, or OK to go on.
+template <typename Fn>
+Status CheckObjects(storage::PageStore& store, const txn::TransactionManager* txn, Fn fn) {
     const txn::ReadView view =
-        txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
+        txn != nullptr ? txn->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
     Status verdict = Status::OK();
     Status walked = heap::ChainVisit(
-        store_, kCatalogPageObjects, storage::PageAccess::kRead,
+        store, kCatalogPageObjects, storage::PageAccess::kRead,
         [&](PageId, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             auto tuple = page.ReadTuple(slot);
@@ -1648,30 +1644,100 @@ Status Catalog::CheckNameFree(std::string_view name, Oid live_type, std::uint64_
             }
             auto row = SysObjectRow::Decode(tuple.value().payload);
             if (!row.ok()) return row.status();
-            if (NameView(row.value().name) != name) return storage::VisitControl::kContinue;
-            if (row.value().type_oid == live_type) {
-                verdict = Status::AlreadyExists("a " + std::string(kind) + " named '" +
-                                                std::string(name) + "' already exists");
-                return storage::VisitControl::kStop;
-            }
-            if (row.value().type_oid != dropped_type || view.Visible(stamp)) {
-                return storage::VisitControl::kContinue;
-            }
-            if (own_trx_id != txn::kNoTrxId && stamp == own_trx_id) {
-                if (own_drop_frees) return storage::VisitControl::kContinue;
-                // Not retryable: the only transaction it waits on is the
-                // asker's own.
-                verdict = Status::Unsupported(
-                    std::string(kind) + " '" + std::string(name) +
-                    "' is being dropped by this transaction, and a rename is not undone by its "
-                    "rollback - commit the drop first");
-                return storage::VisitControl::kStop;
-            }
-            verdict = PendingDropRefusal(kind, name);
-            return storage::VisitControl::kStop;
+            verdict = fn(row.value(), stamp, !view.Visible(stamp));
+            return verdict.ok() ? storage::VisitControl::kContinue : storage::VisitControl::kStop;
         });
     if (!walked.ok()) return walked;
     return verdict;
+}
+
+}  // namespace
+
+Status Catalog::CheckNameFree(std::string_view name, Oid live_type, std::uint64_t own_trx_id,
+                              bool own_drop_frees) {
+    const bool table = live_type == kTypeTable;
+    const std::string_view kind = table ? "relation" : "namespace";
+    const Oid dropped_type = table ? kTypeDroppedTable : kTypeDroppedNamespace;
+    // Each row of the name read by its type and its header's stamp
+    // (`CheckObjects`): a live row is taken, whoever wrote it and whether
+    // or not it has committed (the unfiltered duplicate check); a tombstone
+    // still undecided is a drop whose rollback restores the name. The
+    // dispatcher's test this replaced minted a view only when the asking
+    // core had DDL open. Not through the name cache either: an absence is
+    // not cached, and a presence the cache still remembers is one the page
+    // has already let go of.
+    return CheckObjects(store_, txn_, [&](const SysObjectRow& row, std::uint64_t stamp,
+                                          bool undecided) -> Status {
+        if (NameView(row.name) != name) return Status::OK();
+        if (row.type_oid == live_type) {
+            return Status::AlreadyExists("a " + std::string(kind) + " named '" +
+                                         std::string(name) + "' already exists");
+        }
+        if (row.type_oid != dropped_type || !undecided) return Status::OK();
+        if (own_trx_id != txn::kNoTrxId && stamp == own_trx_id) {
+            if (own_drop_frees) return Status::OK();
+            // Not retryable: the only transaction it waits on is the
+            // asker's own.
+            return Status::Unsupported(
+                std::string(kind) + " '" + std::string(name) +
+                "' is being dropped by this transaction, and a rename is not undone by its "
+                "rollback - commit the drop first");
+        }
+        return PendingDropRefusal(kind, name);
+    });
+}
+
+Status Catalog::CheckNamespaceLive(Oid namespace_oid, std::uint64_t own_trx_id) {
+    // The well-known two are the registry's (`InitWellKnownObjects`), have
+    // no page row, and cannot be dropped (`DropNamespace`).
+    if (namespace_oid == kNamespaceSys || namespace_oid == kNamespacePublic) {
+        return Status::OK();
+    }
+    bool found = false;
+    Status verdict = CheckObjects(store_, txn_, [&](const SysObjectRow& row,
+                                                    std::uint64_t stamp,
+                                                    bool undecided) -> Status {
+        if (row.oid != namespace_oid) return Status::OK();
+        if (row.type_oid == kTypeNamespace) {
+            found = true;
+            return Status::OK();
+        }
+        if (row.type_oid != kTypeDroppedNamespace) return Status::OK();
+        if (undecided && !(own_trx_id != txn::kNoTrxId && stamp == own_trx_id)) {
+            return PendingDropRefusal("namespace", NameView(row.name));
+        }
+        return Status::NotFound("namespace '" + std::string(NameView(row.name)) +
+                                "' has been dropped");
+    });
+    if (!verdict.ok()) return verdict;
+    if (!found) {
+        return Status::NotFound("no namespace with oid " + std::to_string(namespace_oid));
+    }
+    return Status::OK();
+}
+
+Status Catalog::CheckNamespaceEmpty(Oid namespace_oid, std::uint64_t own_trx_id) {
+    // `sys.objects` and not `sys.tables`: a create's `sys.objects` row is
+    // the one written under page 6's hold, and its `sys.tables` row comes
+    // after it is dropped - a RESTRICT check of page 7 could pass between
+    // the two. Read unfiltered, `sys.tables`' delete-mark counted an open
+    // relation drop as a relation still there; here the drop is a retype,
+    // visible at once, so an undecided tombstone is what counts.
+    return CheckObjects(store_, txn_, [&](const SysObjectRow& row, std::uint64_t stamp,
+                                          bool undecided) -> Status {
+        if (row.namespace_oid != namespace_oid || row.oid == namespace_oid) return Status::OK();
+        const bool live = row.type_oid == kTypeTable;
+        if (!live && !(row.type_oid == kTypeDroppedTable && undecided)) return Status::OK();
+        const std::string still = "namespace oid " + std::to_string(namespace_oid) +
+                                  " cannot be dropped: relation '" +
+                                  std::string(NameView(row.name)) + "' is still in it";
+        // Another transaction's drop is retryable; the asker's own is not,
+        // and was refused before AT-S17b too - commit it first.
+        if (!live && !(own_trx_id != txn::kNoTrxId && stamp == own_trx_id)) {
+            return Status::TxnConflict(still + " until its drop, not yet committed, resolves");
+        }
+        return Status::InvalidArgument(still);
+    });
 }
 
 // ALTER TABLE's catalog half (docs/spec/alter.md, workplan ALT02). Both
@@ -1957,21 +2023,17 @@ Status Catalog::DropNamespace(Oid namespace_oid, std::uint64_t trx_id,
     // **RESTRICT, asked before anything is written** - the rule DROP TABLE
     // already uses for foreign keys and assertions. A cascade here would
     // delete relations whose data has nothing to do with the namespace;
-    // emptying it silently would be worse. `sys.tables` rather than
-    // `sys.objects` because that is where a relation's namespace is a
-    // *relation* fact rather than an object one, and it is the row AF-T2's
-    // placement will read.
-    auto tables = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
-    if (!tables.ok()) return tables.status();
-    for (const SysTableRow& row : tables.value()) {
-        if (row.namespace_oid != namespace_oid) continue;
-        // Names the relation that blocked it, not just a count: the user's
-        // next act is to drop or move that relation, and a message saying
-        // "3 relations" sends them to a catalog query first.
-        return Status::InvalidArgument("namespace oid " + std::to_string(namespace_oid) +
-                                        " cannot be dropped: relation '" +
-                                        std::string(NameView(row.name)) + "' is still in it");
-    }
+    // emptying it silently would be worse. The refusal names the relation
+    // that blocked it, not a count: the user's next act is to drop or move
+    // that relation.
+    //
+    // **Under page 6 held exclusive through the retype** (AT-S17b): a
+    // create's membership is written under the same hold, and it checks
+    // the namespace is live there (`CreateTable`), so the two are one act
+    // across cores - the create is refused, or the drop sees its row.
+    auto names = store_.Get(kCatalogPageObjects);
+    if (!names.ok()) return names.status();
+    if (Status s = CheckNamespaceEmpty(namespace_oid, trx_id); !s.ok()) return s;
 
     const bool transactional = trx_id != kBootstrapXid;
     PageId retyped_page = kInvalidPageId;

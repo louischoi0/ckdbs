@@ -152,7 +152,8 @@ name is free for reuse — the same rule DROP TABLE already follows.
   live, and
   refused for the two reserved spellings `sys` and `public`
   (`well_known.hpp` says why each).
-- `DROP NAMESPACE <name>` — permitted **only when empty**; no `CASCADE`,
+- `DROP NAMESPACE <name>` — permitted **only when empty**, asked under the hold a
+  create's membership is written under (`catalog.md` CT7, AT-S17b); no `CASCADE`,
   a cascade being a multi-relation DDL nobody has specified. The refusal
   **names the relation** that blocked it, because the user's next act is to
   drop or move that relation. The row is **retyped to

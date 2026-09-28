@@ -238,5 +238,38 @@ TEST(CatalogNameRigTest, ItsOwnOpenDropIsRefusedAsNotRetryable) {
     EXPECT_EQ(RelationsNamed(*rig, "u"), 1);
 }
 
+TEST(CatalogNameRigTest, ANamespaceDropOnOneCoreIsRefusedWhileAnotherCoresDropOfItsLastRelationIsOpen) {
+    // AT-S17b's other flavour. Core 0 drops `ledger.t` inside a transaction
+    // and leaves it open; core 1 drops `ledger`. The RESTRICT check read
+    // `sys.tables` unfiltered, where core 0's delete-mark was settled by
+    // *core 1's* in-flight test (DT9) - so it saw core 0's open drop as
+    // done, dropped the namespace, and core 0's rollback put `t` back into
+    // it. It reads `sys.objects` since, through the instance check view:
+    // the undecided retype counts, and the drop is refused retryable.
+    //
+    // **Mutation**: `CheckNamespaceEmpty` ignoring an undecided relation
+    // tombstone - killed 3/3.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE NAMESPACE ledger").response, "CREATED"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE ledger.t (id int64, v int64) BTREE").response,
+                           "CREATED"));
+
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    const std::string dropped = d0.Dispatch("DROP TABLE ledger.t", &ddl).response;
+    ASSERT_TRUE(StartsWith(dropped, "DROPPED")) << dropped;
+
+    const std::string restrict = d1.Dispatch("DROP NAMESPACE ledger").response;
+    EXPECT_TRUE(StartsWith(restrict, "ERR")) << restrict;
+    EXPECT_NE(restrict.find("still in it"), std::string::npos) << restrict;
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    EXPECT_EQ(NamespacesNamed(*rig, "ledger"), 1) << "t came back into a dropped namespace";
+    EXPECT_EQ(RelationsNamed(*rig, "t"), 1);
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -255,7 +255,10 @@ TEST_F(AlterTableTest, ARelationInAUserNamespaceIsNotASystemRelation) {
     id.notnull = true;
     schema.columns.push_back(id);
 
-    auto oid = boot_->catalog.CreateTable(catalog::kUserOidStart + 1, "orders_line", schema,
+    // A namespace that exists: `CreateTable` checks since AT-S17b.
+    auto ns = boot_->catalog.CreateNamespace("af_test");
+    ASSERT_TRUE(ns.ok()) << ns.status().message();
+    auto oid = boot_->catalog.CreateTable(ns.value(), "orders_line", schema,
                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
