@@ -187,6 +187,8 @@ measured** unless a stage runs a measurement, in which case under
 
 ### AT-S16 — the walk up, both trees (window 2) - Q1: re-validate and re-descend
 
+*Built 2026-09-28 - AT-6's AT-S16 row.*
+
 - **What.** Close the separator's walk up the recorded path in
   `src/storage/btree/btree.cpp` (`PromoteSeparator`, `DivideInternalNode`)
   and in `index_tree.cpp`'s divide, by Q1's ruling: before inserting the
