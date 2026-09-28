@@ -431,6 +431,18 @@ combined with owner-core group-key serialization. **No latches, no waiting,
 no deadlock.**" — is a decision-record entry that D8 with D12 contradicts.
 It is struck by whichever work order lands D8, not by this record.
 
+**Ratified as revised, 2026-09-28** (`raft-marks-2026-09-28.md` §5):
+*"write skew is closed by named units, not gap locks - the assertion group
+via registre reservation, the FK parent row via D9(a)`s held S. GROUP BY
+is the declaration; E3 retires once the two-core cells pass"*. The mark
+above - gap locks on every predicate column and every referenced key, and
+an explicit locked-key declaration - is **replaced**: no gap locks; an
+assertion's group is closed by the registry's reservation, an FK's parent
+row by D9(a)'s `S` held by the child's writer, and the `GROUP BY` list is
+the declaration (item 4 above). Items 1 and 3 fall away with the gap
+locks; item 2 is closed from the parent row. **E3** retires once the
+two-core cells pass - the following letter's, with D9(a).
+
 ### AR0-M4 — D9: (a)
 
 A shared row lock on the parent row, held for the child transaction's
