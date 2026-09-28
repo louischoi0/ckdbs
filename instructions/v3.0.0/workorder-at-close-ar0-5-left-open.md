@@ -61,6 +61,19 @@ reads as issued and this section is what binds where the two disagree.
    `a-lookups-location-is-stale-before-its-caller-reads-it.md`, which
    AT-S14 deleted (`974a844`) - read it at `1f9592a`. §6's "the
    blueprint's" is `docs/conceptnotes/` since `c835464`.
+6. Amendment 1 (§7) adds AT-S17b, AT-S21 and AT-S22, starts AT-S16, and
+   extends S19's §8 list and S20's carry list; where §7 and §1-§6
+   disagree, §7 binds.
+7. **Drift at Amendment 1's placement** (2026-09-28, on
+   `at-s16-walk-up-revalidate` at `40b6324`). The operator's word
+   (`raft-marks-2026-09-26.md` §5) ordered AT-S16 finished before the
+   amendment was placed, so §7 is placed over a built S16: §7.1's *"S16 ...
+   not started"* and §7.3's *"AT-S16 - started by this amendment"* are true
+   of the amendment as issued. §7.3's first-commit clause for the btree
+   entry's *"The fix"* is moot: AT-S16 deleted that entry, and the index
+   entry §7.1 lists for window 2, as its stage's rule asks (AT-6's AT-S16
+   row). §7.5's *"S16, S17b and S22 start together"* reads, from here, as
+   S17b and S22 startable, and S21's build no longer waiting on S16.
 
 ---
 
@@ -355,3 +368,204 @@ S19 follows S14-S17. S20 is last.
 - It does not decide E7.
 - It runs no performance measurement; a stage that finds it must, says so
   and asks.
+
+---
+
+## 7. Amendment 1
+
+*Issued 2026-09-26 against `main` at `1f230e4` (`v2.7.0-424-g1f230e4`) by
+CLA, for the operator; placed 2026-09-28 on the operator's word
+(`raft-marks-2026-09-26.md` §5). The body below is the amendment as issued;
+§0 items 6 and 7 are what binds where it and the tree now disagree.*
+
+Claim tags as in the order. Every bug statement below is `[source-read]`
+from its `docs/inflight/bugs/` entry at `1f230e4`; only #4 is reproduced,
+and that only by a scratch cell.
+
+### 7.1 Background
+
+At `1f230e4` AT-S14, S15, S17 and S18 are built; S16, S19 and S20 are not
+started. The four stages' reviews found more of §1's family, and one
+defect older than AT. The quiet-wrong ledger now reads:
+
+| # | entry | reached by | reproduced | owner before this amendment |
+|---|---|---|---|---|
+| 1 | `a-btree-divide-can-promote-into-a-parent-another-core-divided.md` | concurrent below-mark named-pk inserts | no | AT-S16 (Q1 marked) |
+| 2 | `an-insert-is-logged-after-its-leaf-is-released.md` | any concurrent insert into one leaf or chain, **then a crash** | no | none - §0 item 4 left it to the operator |
+| 3 | `drop-namespace-restrict-races-a-create-in-it.md` | concurrent `DROP NAMESPACE` and `CREATE TABLE ns.t` | no | none |
+| 4 | `a-covered-filter-after-pk-dedup-drops-a-row.md` | **one core**: a covering-index range probe over a row whose key and covered column moved together | **yes** (scratch, at `4860e96`) | none |
+| 5 | `known-gaps.md` Foreign keys: the forward check holds nothing | concurrent parent `DELETE` and child write | no | the following letter (D9(a)) |
+| 6 | `a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.md` | recovery of a large cabin | no | none; since AR0 M0 |
+| 7 | `two-cores-growing-one-heap-chain-can-orphan-a-page.md` | two cores growing one chain of an **existing** heap relation (SUS-1 stops new ones only) | no | none |
+
+And two entries that are no longer quiet-wrong, recorded so the ledger is
+whole: the secondary index's walk up (window 2) became **a refusal that
+does not clear** at AT-S15 (`a-secondary-index-descent-is-not-revalidated-across-cores.md`,
+owned by AT-S16); and `a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`
+is a refusal that does not clear on one core, and needs a decision on
+`index.md` IX4a.
+
+### 7.2 Conclusions
+
+- **#1, #2 and #3 are AT's**, by the order's §2 first conclusion: each is a
+  window AT-S5 opened. AT does not close with them open.
+- **#4 is taken into AT** though AT did not open it: it is reproduced, on
+  one core, in the index-probe code AT-S15 and AT-S16 are already in, and
+  its fix is small. The operator may strike AT-S22 and issue it on its own;
+  nothing else in this amendment depends on it.
+- **#5, #6, #7 are carried by AT-9**, each to a named owner (§7.5). #5 is
+  new semantics; #6 is a recovery-contract change AR0 M0 opened; #7 is in
+  a suspended storage kind whose fix is known.
+- At AT's close the quiet-wrong ledger is #5, #6, #7 and nothing else, and
+  AT-9 says so in those words.
+
+### 7.3 Stages
+
+The order's §4 discipline applies to each without restatement: fresh clone,
+survey by source read, reproduction **first** and red on the unfixed tree
+(barrier plus rounds), fix, mutants killed on repeated runs,
+`critics-developer` applied in the next commit, suite green with its count,
+the bug entry deleted, specs and `CLAUDE.md` updated, overhead not measured.
+
+#### AT-S16 — started by this amendment
+
+No change to §4's S16. The word to start it is given with this amendment.
+Its first commit also brings
+`a-btree-divide-can-promote-into-a-parent-another-core-divided.md`'s *"The
+fix"* to the tree - it still says *"which is a decision. No work order
+carries it"*, and Q1 has decided it and S16 carries it.
+
+#### AT-S17b — a relation's namespace, taken under the held page (#3)
+
+- **What.** CT7's held page extended to membership, the shape the entry
+  names: `Catalog::CreateTable` re-checks under its hold of page 6
+  (`sys.objects`) that the namespace it names is still live; and
+  `Catalog::DropNamespace` holds page 6 across a RESTRICT check that reads
+  **`sys.objects`** - where a create's row lands under the same hold -
+  rather than `sys.tables` (page 7), which the create writes after the hold
+  is dropped.
+- **Survey.** Every other write that names a namespace or reads membership
+  (`RENAME` into a namespace, `CREATE INDEX` / `CREATE ASSERTION` if they
+  name one, `SHOW NAMESPACES`), and whether a RESTRICT scan of `sys.objects`
+  sees exactly what the scan of `sys.tables` saw on one core - the
+  transactional flavours the entry says are already covered must stay
+  covered.
+- **Cells.** The entry's reproduction in `catalog_name_race_test.cpp`'s
+  two-catalog shape: a barrier after core 1 resolves `ns` and before it
+  writes `t`, released after core 0's RESTRICT scan. Exactly one of the two
+  succeeds; never a relation in a dropped namespace. Both orders of arrival.
+- **Size** S. **Gate** the word. Independent of every other stage.
+
+#### AT-S21 — every insert logged under the hold that placed it (#2)
+
+- **What.** `wal.md` §8-1 made true of the insert path: the record is
+  generated, appended and the `page_lsn` stamped **while the page it names
+  is held**. `storage::InsertPlacement` carries the held leaf, as AT-S14's
+  `Location` does; `CommandDispatcher::LogInsert` appends the full-page
+  images, spills, `HEAP_INSERT` and the stamp under it; the hold is
+  released after the stamp.
+- **All three windows the entry names**:
+  1. the record naming a slot another core renumbered (btree leaf);
+  2. a writeback between the mutation and the stamp;
+  3. `exec::AppendIndexEntry` taking the `INDEX_INSERT` bytes by
+     re-reading the leaf at the returned slot after `IndexInsert` released
+     it (`src/exec/index_maintain.cpp`). The index insert logs from the
+     bytes the tree placed, under the tree's hold.
+  And the heap path: `ChainInsert` has the same shape; the survey says
+  whether it takes the same fix here (proposed: yes, since existing heap
+  relations still serve writes) - it does **not** take #7's fix, which is
+  AT-9's.
+- **Prose.** `wal.md` §11a's *"Records are appended after the page is
+  mutated, not while it is latched"* paragraph and
+  `command_dispatcher.hpp`'s ordering note are rewritten: their reason (one
+  cooperative thread) has been false since AT-S5, and the rule they
+  excepted from now holds. The survey finds every other path §11a's
+  exception still covers (update, delete, DDL writes, assertion records)
+  and lists each with whether it logs under its hold; any that does not is
+  either fixed here or recorded as a bug entry by name. **This list is the
+  stage's main output** - #2 is the insert instance of a rule that may be
+  broken elsewhere.
+- **Hold across the append.** A held page latch now spans a WAL append.
+  The survey states that the append never parks (the log buffer's
+  back-pressure path is the one to check) and never takes a page latch, so
+  no park-under-pin and no new latch order; if either is false, the stage
+  stops and reports.
+- **Cells.** The entry's reproduction for window 1 (two cores, below-mark
+  named-pk inserts into one full leaf, a barrier between A's release and
+  A's append, released after B's divide is logged; crash; mount; the row
+  appears once, in a leaf that covers it). Window 2: a forced writeback of
+  A's leaf between mutation and stamp; crash before A's record is durable;
+  mount; the row is absent. Window 3: the index record carries this row's
+  entry, and redo does not refuse the mount. Each recovery cell checks the
+  tree's structure after mount, not only the one row.
+- **Done.** `WalGoldenLog.TheSingleCoreScriptWritesThePinnedBytes` passes
+  unchanged - on one core the records, their order and their bytes do not
+  move; if the golden log moves, the stage explains why before re-pinning.
+- **Size** L. **Gate** the word. **Runs after S16**, because both change
+  the divide path's hold discipline and S21's window-1 cell needs S16's
+  divide; the survey may start at once.
+
+#### AT-S22 — a covering index keeps a row if any of its entries survives (#4)
+
+- **What.** In `step_vm.cpp`'s index probe (the `IndexVisitFrom`
+  callback), a pk is recorded in `seen_pks_` only **after** its entry
+  passes `CoveredRowSurvives`. A row whose stale entry fails the filter is
+  then not claimed, and its current entry is judged on its own. The pk
+  dedup still stops a row resolving twice.
+- **Why it is still correct.** Maintenance is append-only, so every
+  version that moved a covered column has an entry; keeping the row when
+  any entry survives is still a superset, and the row's own visibility
+  check decides it. Write that argument at the site.
+- **Counts.** `index_entries_filtered` changes for a row with several
+  entries. The survey finds every contract cell that pins it; each is
+  re-pinned with the reason in the commit, not silently.
+- **Cells.** The entry's SQL reproduction, committed (`ix ON t (a) COVERING
+  (c)`, the key-and-covered update, the range probe answering row 1), with
+  and without the index, both answers equal. The entry's second case: an
+  older snapshot when only `c` moved. One core; no rig.
+- **Size** S. **Gate** the word. Independent of every other stage; may land
+  first.
+
+### 7.4 What S19 and S20 gain
+
+**AT-S19's §8 list** (the family, each with its defence and its cell, or
+its owner if open) adds: the insert's log under its hold (S21), the
+namespace membership (S17b), and - as outside the family but found in its
+code - the covering filter (S22). Its gate becomes **S14-S17, S17b, S21
+landed** (S22 is not a gate: it is not a window AT-S5 opened).
+
+**AT-S20's AT-9 carry list** adds, each with its owner named:
+
+- #5, the FK forward window → the following letter, D9(a); and **AR0 D7**,
+  the one AR0 `[quiet-wrong]` decision still unmarked → the same letter;
+- #6 → `docs/spec/assertion.md` §7 (AS6a's recovery contract); a stage in
+  whatever letter next takes the assertion subsystem;
+- #7 → `docs/spec/heap-and-tuple.md` §4.1a; unscheduled while SUS-1
+  holds, and AT-9 states that existing heap relations remain exposed;
+- the equal-sort-key runs → an operator decision on `index.md` IX4a
+  (split point that never cuts a run, the covered bytes or a uniquifier in
+  the sort order, or duplicate separators admitted);
+- whatever S21's survey lists as logging outside its hold and did not fix;
+- §0 item 2's open question - whether SQL-level cells for `step_vm` and
+  `fk_check` are still owed by AT-S14 - answered or carried.
+
+AT-S20's gate becomes **S14-S19, S17b, S21, S22**.
+
+### 7.5 Order
+
+```
+S16 ────────── S21 ─┐
+S17b ───────────────┼── S19 ── S20
+S22 ────────────────┘
+```
+
+S16, S17b and S22 start together. S21's survey may start at once; its
+build follows S16. S19 follows S16, S17b and S21; S20 follows everything.
+
+### 7.6 What this amendment does not do
+
+- It does not close #5, #6 or #7, and does not decide IX4a.
+- It opens no following letter; AT-0 item 6 is unchanged.
+- It runs no measurement. S21 puts a WAL append under a page latch; if its
+  survey or review finds that could cost enough to matter, it says so and
+  asks rather than measuring on its own account.
