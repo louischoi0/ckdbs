@@ -80,7 +80,13 @@ number is only the compiled `kTxnLifetimeCeilingNs` today.
 
 ### The levels
 
-KDS supports exactly two isolation levels.
+KDS supports exactly two isolation levels, **by the operator's word on
+AR0 D1** (2026-09-28, `raft-marks-2026-09-28.md` §4): `READ COMMITTED` and
+`REPEATABLE READ`. `READ UNCOMMITTED` is **not supported** and is refused by
+name, `Unsupported` - not as an unknown spelling, because it is a level SQL
+defines and this engine declines. Its mechanism would have been cheap (no
+`xmax`, the newest version is the one on the page); the level is declined,
+not unbuilt.
 
 | Level | Read view | Meaning |
 |---|---|---|

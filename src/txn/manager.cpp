@@ -74,6 +74,17 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
             "engine's lock family fences key intervals rather than predicates and tracks no "
             "row-level reads");
     }
+    if (folded == "read uncommitted" || folded == "ru") {
+        // Not supported, by the operator's word on D1 (2026-09-28): the
+        // engine offers two levels, RC and RR. Refused by name rather than
+        // as an unknown spelling - it is a level SQL defines and this
+        // engine declines, not a typo - and `Unsupported` because a client
+        // that waits for it waits forever: the mechanism would be cheap
+        // (no `xmax`, the newest version is the page's), the answer is no.
+        return Status::Unsupported(
+            "READ UNCOMMITTED is not supported: this engine offers exactly two isolation levels, "
+            "READ COMMITTED and REPEATABLE READ, and a read of uncommitted data is neither");
+    }
     return Status::InvalidArgument("unknown isolation level '" + std::string(text) +
                                    "'; expected 'read committed' or 'repeatable read'");
 }

@@ -341,6 +341,17 @@ The three levels do not stand alike:
   whether D1 stands or returns for re-decision. AN-D9 carries the
   mechanism; the question lives here.
 
+**Re-marked on the levels, 2026-09-28** (`raft-marks-2026-09-28.md` §4):
+*"RU(read uncommitted) - do not support, this project only propose 2
+levels (RR, RC)"*. RU leaves the condition as SR left it on 2026-09-03: the
+engine offers **RR and RC**, and RU is refused by name (`Unsupported`,
+`txn.md` §1). AO-0 item 8 - which order carries RU - is answered: none.
+**What the word does not address is (b) itself**; CLA reads the condition as
+narrowed to RR and RC, with (b) standing on it, and records that reading
+here rather than inferring a withdrawal from silence. Both levels have been
+instance-wide since AN-S2 (a commit-LSN snapshot over the instance read
+view), which is what "per-core RR" above asked about.
+
 ### AR0-M2 — D2: (a)
 
 A shared partitioned lock table, partition count 64 x cores, compiled out
@@ -419,6 +430,18 @@ so the work order does not rediscover them:
 combined with owner-core group-key serialization. **No latches, no waiting,
 no deadlock.**" — is a decision-record entry that D8 with D12 contradicts.
 It is struck by whichever work order lands D8, not by this record.
+
+**Ratified as revised, 2026-09-28** (`raft-marks-2026-09-28.md` §5):
+*"write skew is closed by named units, not gap locks - the assertion group
+via registre reservation, the FK parent row via D9(a)`s held S. GROUP BY
+is the declaration; E3 retires once the two-core cells pass"*. The mark
+above - gap locks on every predicate column and every referenced key, and
+an explicit locked-key declaration - is **replaced**: no gap locks; an
+assertion's group is closed by the registry's reservation, an FK's parent
+row by D9(a)'s `S` held by the child's writer, and the `GROUP BY` list is
+the declaration (item 4 above). Items 1 and 3 fall away with the gap
+locks; item 2 is closed from the parent row. **E3** retires once the
+two-core cells pass - the following letter's, with D9(a).
 
 ### AR0-M4 — D9: (a)
 
