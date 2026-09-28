@@ -67,6 +67,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "kds/storage/file_page_device.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/txn/instance_visibility.hpp"
 #include "kds/txn/lock_table.hpp"
@@ -89,6 +90,13 @@ public:
         // so an idle reactor's block is the whole block; a cell that wants
         // production's tick turns it on.
         sched::MonoTimeNs wal_drain_interval_ns = 0;
+        // **A volume a crash can be taken of** (AT-S21). Off, the pages
+        // live in a `MemoryPageDevice` as they always have. On, they live
+        // in `kds.db` in the rig's directory, beside the log in `wal/` -
+        // `Expeditor::Open`'s layout for `data_file` and `wal_dir` - so
+        // `Snapshot()` can copy what a crash would leave and
+        // `MountSnapshot()` can bring it up through production's mount.
+        bool file_backed = false;
     };
 
     static StatusOr<std::unique_ptr<TwoCoreRig>> Open() { return Open(Options{}); }
@@ -120,6 +128,36 @@ public:
     }
 
     CoreRuntime& core(std::uint32_t id) noexcept { return *cores_[id]; }
+
+    // **What a crash at this instant would leave** (AT-S21), for a
+    // `file_backed` rig: the log flushed - not synced, a flushed record is
+    // in the file, which is what a kill leaves of it - and then the data
+    // file and the log directory copied to `to`. The pages are whatever the
+    // store has written back so far and nothing else: nothing here syncs
+    // the pool, so a dirty frame is lost exactly as a crash loses it.
+    //
+    // `flush_log = false` takes the crash before the flush: the log file
+    // holds only what the writer had already put there.
+    Status Snapshot(const std::filesystem::path& to, bool flush_log = true) {
+        if (!options_.file_backed) {
+            return Status::InvalidArgument("a snapshot needs a file_backed rig");
+        }
+        if (flush_log) {
+            if (Status s = wal_->Flush(); !s.ok()) return s;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(to, ec);
+        if (ec) return Status::IoError("snapshot: " + ec.message());
+        std::filesystem::copy_file(dir_ / "kds.db", to / "kds.db",
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) return Status::IoError("snapshot: " + ec.message());
+        std::filesystem::copy(dir_ / "wal", to / "wal",
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::overwrite_existing,
+                              ec);
+        if (ec) return Status::IoError("snapshot: " + ec.message());
+        return Status::OK();
+    }
     storage::DevicePageStore& store() noexcept { return *store_; }
     sched::SimWakerTable& wake() noexcept { return *sim_; }
     // The real table under the sim: what was actually written, and the
@@ -177,9 +215,16 @@ private:
         std::filesystem::create_directories(dir_);
 
         // ---- The volume: `Expeditor::Open`'s stack, over memory --------
-        auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/64);
-        if (!device.ok()) return device.status();
-        device_ = std::move(device.value());
+        // (or over `kds.db`, when a cell will take a crash of it).
+        if (options_.file_backed) {
+            auto device = storage::FilePageDevice::Open((dir_ / "kds.db").string());
+            if (!device.ok()) return device.status();
+            device_ = std::move(device.value());
+        } else {
+            auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/64);
+            if (!device.ok()) return device.status();
+            device_ = std::move(device.value());
+        }
         auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
         if (!store.ok()) return store.status();
         store_ = std::move(store.value());
@@ -194,7 +239,8 @@ private:
         if (Status s = store_->Sync(); !s.ok()) return s;
 
         // The instance's one stream, its writer, and the gate (AR0 M0).
-        auto log_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
+        std::filesystem::create_directories(dir_ / "wal");
+        auto log_device = wal::FileLogDevice::Open((dir_ / "wal").string(), /*core_id=*/0);
         if (!log_device.ok()) return log_device.status();
         log_device_ = std::move(log_device.value());
         wal::WalManagerConfig wal_config;
@@ -276,7 +322,7 @@ private:
     Options options_;
     std::filesystem::path dir_;
     sched::SystemClock clock_;
-    std::unique_ptr<storage::MemoryPageDevice> device_;
+    std::unique_ptr<storage::PageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;
     std::unique_ptr<wal::FileLogDevice> log_device_;

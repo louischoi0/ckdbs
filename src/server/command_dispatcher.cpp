@@ -5176,6 +5176,8 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // unobservable.
     if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return ErrorReply(s);
 
+    if (before_insert_log_for_test_) before_insert_log_for_test_();
+
     // Logged after the page is mutated and before the client is answered -
     // see the ordering note in this class's header for why that is safe
     // here and what would break it.

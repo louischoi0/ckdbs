@@ -57,6 +57,7 @@ add_executable(kds_tests
     assertion_race_test.cpp
     catalog_name_race_test.cpp
     catalog_name_rig_test.cpp
+    insert_log_crash_rig_test.cpp
     ddl_fence_rig_test.cpp
     index_maintain_test.cpp
     index_compile_test.cpp

@@ -612,7 +612,20 @@ public:
     // it on each connection's session at accept.
     txn::IsolationLevel default_isolation() const noexcept { return default_isolation_; }
 
+    // **A test seam, and the only one on the insert path** (AT-S21): runs
+    // once per `INSERT` row, after the row is placed and its indexes,
+    // reservation and undo are written, immediately before the row's own
+    // record is appended. A two-core cell puts another core's divide, a
+    // forced writeback or another core's index insert there - the three
+    // windows `an-insert-is-logged-after-its-leaf-is-released.md` named.
+    // Unset in production, where it costs one empty-function test per row.
+    void SetBeforeInsertLogForTest(std::function<void()> hook) {
+        before_insert_log_for_test_ = std::move(hook);
+    }
+
 private:
+    std::function<void()> before_insert_log_for_test_;
+
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
     DispatchOutcome HandleBegin(std::string_view args, Session& session);
     DispatchOutcome HandleCommit(Session& session);
