@@ -397,6 +397,70 @@ TEST(IndexContractTest, ASpilledCoveredValueKeepsItsRowRatherThanDecidingIt) {
         << "a spilled covered value was decided from the entry: " << plan;
 }
 
+// ---- A row with several entries under a covering filter (AT-S22) -------
+//
+// Maintenance is append-only, so one row can own several entries, and a
+// stale one can be the first the walk meets. The covering filter judges an
+// entry by its own covered bytes; the pk dedup stops a row resolving twice.
+// If the dedup claims the pk before the filter has passed the entry, a
+// stale entry that fails the filter takes the row down with it, and the
+// current entry - which would pass - is skipped as a duplicate: a quiet
+// wrong answer, the one kind index.md §1 forbids outright.
+
+TEST(IndexContractTest, ARowWhoseKeyAndCoveredColumnMovedTogetherSurvivesItsStaleEntry) {
+    // The entry's reproduction: (2, pk 1, c = 10) is walked before
+    // (5, pk 1, c = 20), and only the second passes `c = 20`.
+    Instance db(/*indexes=*/true);
+    Instance plain(/*indexes=*/true);
+    for (Instance* i : {&db, &plain}) {
+        i->Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    }
+    db.Ok("CREATE INDEX ix ON t (a) COVERING (c)");
+    for (Instance* i : {&db, &plain}) {
+        i->Ok("INSERT INTO t VALUES (2, 10)");
+        i->Ok("UPDATE t SET a = 5, c = 20 WHERE id = 1");
+    }
+
+    const std::string sql = "SELECT id FROM t WHERE a >= 1 AND a <= 10 AND c = 20";
+    EXPECT_EQ(plain.Run(sql), "id\\n1");
+    EXPECT_EQ(db.Run(sql), plain.Run(sql)) << "the stale entry dropped the row";
+    const std::string plan = db.Run("ANALYZE " + sql);
+    EXPECT_NE(plan.find("IndexRange"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("index_scanned=2"), std::string::npos) << plan;
+    // `index_filtered` is descents avoided: none here, since the row's
+    // second entry passed and the row was resolved...
+    EXPECT_EQ(plan.find("index_filtered="), std::string::npos) << plan;
+    // ...and one, not two, when both of its entries fail.
+    const std::string none = "SELECT id FROM t WHERE a >= 1 AND a <= 10 AND c = 99";
+    EXPECT_EQ(db.Run(none), plain.Run(none));
+    EXPECT_EQ(MeterOf(db.Run("ANALYZE " + none), "index_filtered"), 1u);
+}
+
+TEST(IndexContractTest, AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved) {
+    // The entry's second case: an update of `c` alone appends an entry with
+    // the same (key, pk), which sorts to the front of its run - so an older
+    // snapshot, whose version carries the old `c`, meets the new entry
+    // first, and the new `c` fails its predicate.
+    Instance db(/*indexes=*/true);
+    Instance plain(/*indexes=*/true);
+    for (Instance* i : {&db, &plain}) {
+        i->Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    }
+    db.Ok("CREATE INDEX ix ON t (a) COVERING (c)");
+    const std::string sql = "SELECT id FROM t WHERE a = 2 AND c = 10";
+    for (Instance* i : {&db, &plain}) {
+        i->Ok("INSERT INTO t VALUES (2, 10)");
+        Session reader;
+        ASSERT_EQ(i->Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+        ASSERT_EQ(i->Run(reader, sql), "id\\n1");
+        i->Ok("UPDATE t SET c = 20 WHERE id = 1");
+        EXPECT_EQ(i->Run(reader, sql), "id\\n1")
+            << (i == &db ? "the indexed" : "the plain") << " reader lost its version's row";
+        ASSERT_EQ(i->Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+        EXPECT_EQ(i->Run(sql), "id") << "a fresh reader sees the new c";
+    }
+}
+
 // ---- Damage: a corrupted index page must fail, not mis-answer ------------
 
 TEST(IndexContractTest, ACorruptedIndexPageFailsRatherThanReturningWrongRows) {

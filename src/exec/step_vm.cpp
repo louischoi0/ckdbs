@@ -1289,6 +1289,7 @@ private:
         StepStats& step_stats = stats_.For(step.step_id);
         index_scratch_.clear();
         seen_pks_.clear();
+        filtered_pks_.clear();
 
         auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, *low);
         if (!first.ok()) co_return first.status();
@@ -1323,26 +1324,46 @@ private:
                 // emit its row twice.
                 const std::uint64_t pk =
                     index::GetIndexPk(entry.value().subspan(ix->key_width));
-                if (!seen_pks_.insert(pk).second) return storage::VisitControl::kContinue;
+                if (seen_pks_.count(pk) != 0) return storage::VisitControl::kContinue;
 
                 // The covering filter (§7). A row this entry's own values
                 // already disqualify never costs a base descent - which is
                 // the whole of what covering buys, since visibility still
                 // requires the tuple.
+                //
+                // **An entry judges itself, never its row** (AT-S22). The
+                // pk is claimed only once an entry passes, so a stale entry
+                // that fails - walked first, because the key moved with the
+                // covered column, or because a same-(key, pk) entry sorts to
+                // the front of its run - cannot drop a row whose other entry
+                // would pass. Keeping the row when *any* entry survives is
+                // still a superset: maintenance is append-only, so every
+                // version that wrote a key or covered value has an entry
+                // carrying it, the version a snapshot sees among them, and
+                // the base read's own residual and visibility decide the
+                // row. Claiming first was the one direction that costs rows.
                 if (layout.covered_width > 0) {
                     auto kept = CoveredRowSurvives(step, access, *ix,
                                                    entry.value().subspan(sort_key_width));
                     if (!kept.ok()) return kept.status();
                     if (!kept.value()) {
-                        ++step_stats.index_entries_filtered;
+                        filtered_pks_.insert(pk);
                         return storage::VisitControl::kContinue;
                     }
                 }
 
+                seen_pks_.insert(pk);
                 index_scratch_.push_back(pk);
                 return storage::VisitControl::kContinue;
             });
         if (!walked.ok()) co_return walked;
+
+        // A descent avoided is a row every one of whose entries failed:
+        // counted once per row, after the walk, since a later entry of a
+        // row an earlier one failed may still bring it back.
+        for (const std::uint64_t pk : filtered_pks_) {
+            if (seen_pks_.count(pk) == 0) ++step_stats.index_entries_filtered;
+        }
 
         // **Sorted, and this is a correctness property rather than a
         // locality one.** The walk collects pks in *index key* order; a scan
@@ -2604,6 +2625,9 @@ private:
     // regression once.
     std::vector<std::uint64_t> index_scratch_;
     parser::AstValue covered_scratch_;
+    // The pks at least one entry of which the covering filter rejected -
+    // counted as descents avoided only if no entry of theirs passed.
+    std::unordered_set<std::uint64_t> filtered_pks_;
 
     // A correlated index probe's per-row bounds (IndexProbe::key_from): the
     // compile-time padding templates with the outer row's value encoded into

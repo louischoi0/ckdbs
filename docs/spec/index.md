@@ -331,6 +331,19 @@ On a probe returning 10 rows from 10,000 entries, that is the whole cost.
 columns avoided, and nothing else. If it is zero, a `COVERING` clause bought
 exactly the write cost it added.
 
+**An entry judges itself, never its row** (AT-S22). Maintenance is
+append-only, so a row can own several entries, and a stale one can be walked
+first: its key moved with a covered column, or an update of a covered column
+alone appended an entry with the same `(key, pk)`, which sorts to the front of
+its run. So the probe claims a pk for its dedup only once one of its entries
+passes the filter, and keeps the row when **any** entry does. That is still a
+superset - every version that wrote a key or covered value has an entry
+carrying it, the version a snapshot sees among them, and the base read's
+residual and visibility decide the row - where claiming the pk at the first
+entry dropped a row whose stale entry failed and whose current one would have
+passed. `index_filtered` counts a row once, and only if every one of its
+entries failed.
+
 The entry-side test is **conservative by construction**: it answers "drop
 this row" only when a residual predicate the entry's own values can decide
 says so. A predicate on an uncovered column, an operand that is not a
