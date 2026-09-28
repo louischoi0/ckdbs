@@ -53,6 +53,35 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
+- **The lock family's statement-level cells went with the 2PC suite, and
+  nothing pins the bind's `IS` or the deadlock detector.** Verified at
+  `3de6d62` on `at-s19-ar0-5-revised` (2026-09-28), by AT-S19's survey
+  (`ar0-5-amendment-uniformity.md` AR0-5-R, R8.3). AT-S6 (`ac4bd64`)
+  deleted `tests/txn_2pc_protocol_test.cpp` whole with the 2PC service; the
+  file also hosted five fixtures that test no 2PC - `LockDeadlockTest`
+  (32 cells), `MidWalkWaitTest` (11), `LockCapTest` (5), `LockCapOfOneTest`
+  (3), `FailedCommitTest` (2) - and the commit's message counts only the
+  twelve cells it retired with their premise. At `3de6d62` none of those
+  names is under `tests/` but `AReadDeclaresItsPositionAndGivesItBack`
+  (`read_borrow_rig_test.cpp`), and no test calls `LockTable::NoteWaitFor`
+  or `WaitEdgeCount`. The lost cells include AT-S1's four bind declarations,
+  AT-S3's catalog-row cell, AT-S5e's two build cells, the deadlock
+  detector's cycles, the borrow cap, the mid-walk park and `DROP TABLE`'s
+  wait for a reader; the premise of each still holds.
+
+  **Measured**, one full Debug suite per mutant at `3de6d62`, both
+  surviving at 2991/2991 (one pre-existing disabled cell): the compiler's
+  bind declaring nothing (`step_compiler.cpp`, AT-R1's line), and
+  `NoteWaitFor` never finding a cycle (AO-R7). So `CLAUDE.md`'s *"a waiter
+  that would close a cycle is refused naming deadlock"* and AR0-5's own
+  quiet-wrong defence are built and pinned by no cell. The cells are in
+  `git show ac4bd64^:tests/txn_2pc_protocol_test.cpp`. All five derive from
+  `Txn2pcBlockedWriterTest` over `Txn2pcParticipantTest`, the participant
+  machinery AT-S6 deleted - which is why they went with the file, and the
+  base a restoration has to rebuild. Owner: the
+  operator's decision whether a stage restores them before AT's close
+  (`workorder-at-close-ar0-5-left-open.md` AT-S20's carry list otherwise).
+
 - **The assertion scan's floor is a fixed defect with no regression test
   under it.** Verified at AM-S0(a) by reverting the fix: every cell in
   `tests/expeditor_test.cpp` stays green. The defect
