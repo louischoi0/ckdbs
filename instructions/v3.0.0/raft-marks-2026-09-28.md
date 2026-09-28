@@ -134,3 +134,16 @@ since M1 closed, and no word to start it recorded (AT-9's carry item 4):
 | **Answers** | AX-Q1 and AX-Q2 (`workorder-ax-inflight-publication.md` §4); AX §5's sequencing condition, which the word supersedes whatever its state |
 | **Does not settle** | AX-S2 and AX-S3 are not started by it: Q2 is the behaviour AX-S2 builds, marked here so AX-S2 does not wait on it |
 | **Recorded at** | `workorder-ax-inflight-publication.md` §4 and §6, `instance_visibility.hpp`'s cap note, `index.md` |
+
+## 10. AX-S2 started
+
+Recorded on `worktree-ax-s2-inflight-consumers` from `353d465`
+(`v2.7.0-465-g353d465`), after AX-S1 landed on `main` at `353d465` on the
+operator's *"merge and push"*:
+
+| | |
+|---|---|
+| **Word** | *"start AX-S2"* |
+| **Mark** | **AX-S2 starts**: the consumers of the instance's in-flight answer (`workorder-ax-inflight-publication.md` §3), with AX-Q2's behaviour - a peer no longer counts another core's uncommitted drop as done - marked at §9 |
+| **Does not settle** | AX-S3, the prose, is not started by it |
+| **Recorded at** | `workorder-ax-inflight-publication.md` §6, `index.md` |
