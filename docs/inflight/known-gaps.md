@@ -62,9 +62,11 @@ statement about an engine that no longer exists; re-verify or strike it.
   (32 cells), `MidWalkWaitTest` (11), `LockCapTest` (5), `LockCapOfOneTest`
   (3), `FailedCommitTest` (2) - and the commit's message counts only the
   twelve cells it retired with their premise. At `3de6d62` none of those
-  names is under `tests/` but `AReadDeclaresItsPositionAndGivesItBack`
-  (`read_borrow_rig_test.cpp`), and no test calls `LockTable::NoteWaitFor`
-  or `WaitEdgeCount`. The lost cells include AT-S1's four bind declarations,
+  cells exists under `tests/` - `AReadDeclaresItsPositionAndGivesItBack`
+  survived only in a comment at `read_borrow_rig_test.cpp:24` citing it as
+  proof that a real read takes its borrow, corrected by AT-S19 to say no
+  cell does - and no test calls
+  `LockTable::NoteWaitFor` or `WaitEdgeCount`. The lost cells include AT-S1's four bind declarations,
   AT-S3's catalog-row cell, AT-S5e's two build cells, the deadlock
   detector's cycles, the borrow cap, the mid-walk park and `DROP TABLE`'s
   wait for a reader; the premise of each still holds.

@@ -316,12 +316,9 @@ cells - or the AT-7 item that corrects the body. The `[measured]` claims
 are AT-S13's, quoted from its results file, and R8.3's two mutants, run
 here at `3de6d62`.
 
-**Written ahead of its gate, on the operator's word of 2026-09-28** ("Draft
-now, land after S21"): §7.4 gates S19 on S14-S17, S17b and **S21 landed**.
-S14-S17, S17b and S22 are on `main`; **AT-S21 is built on
-`worktree-at-s21-log-under-hold` at `801aa61` and not landed**. R8's row
-for it says so, and this section lands only after S21 does, with that row
-re-read against S21's landed commits.
+Drafted before its gate - AT-S21 landed - was met, on the operator's word
+of 2026-09-28; R8.1's row 10 is the one that waits for S21 (AT-6's AT-S19
+row).
 
 ### R0. The decision, as built
 
@@ -374,7 +371,7 @@ memory only. It differs from §2.1 in three places.
   `TableAccess*` inside another core's statement.
 - **Written down in `catalog.md`** (AT-S2c; AT-7 item 3): CT1 the
   lock-then-word order, CT2 bump-at-the-write and ask-at-the-boundary, CT6
-  the instance's words (AT-0 item 11 carries the struct question).
+  the instance's words (AT-S5b; AT-0 item 11 carries the struct question).
 
 **The relation `IS` is taken at resolve time** (AT-R1, the operator's
 ruling of 2026-09-09; built at AT-S1): the compiler declares every
@@ -384,8 +381,8 @@ non-blocking** (`TryAcquire`): a reader holding `IS` blocks a DDL's `X`,
 and a reader arriving while a DDL holds `X` is refused and reads on. That
 second direction is made right by DT1, catalog MVCC and catalog-only DDL,
 not by the lock (AT-7 item 10); AT-0 item 10 kept it non-blocking on CLA's
-proposal under the operator's word of 2026-09-09, and `read_borrow.hpp`
-names the condition that reopens it - the first DDL that moves data.
+proposal under the operator's word of 2026-09-09, and names the condition
+that reopens it - the first DDL that moves data.
 **Retired**: `kCatalogInvalidate`, `InvalidateCatalog()` and the retryable
 table-not-found clause (AT-S2a; the clause was `core_runtime.hpp`'s, not
 `crosscore.md` §5's, AT-7 item 7); `InvalidateFromPeer` survives as
@@ -430,16 +427,12 @@ a system-range page placed by a claim under both latches (AT-S5b, D2).
 | AR0 D3 | struck | struck; AL-R1's every-core-appends and one writer thread |
 | AR0 D4 | struck; shared allocators | struck; R1's allocator row. The free map is under `map_latch_`, not "their page latch" (AT-7 item 12) |
 | AR0 D10 | the only place affinity is read | provisional 0, **and nothing is stored for it to weigh** (R1) |
-| AR0 D11 | `sys.range_affinity` stays absent | unchanged |
-| AM-R5 | log-core and free-map clauses struck | as written |
 | AR2 R5 | struck: tuple `X` on the `sys.tables` row | **struck at AT-S5, by the page latch and not a tuple `X`**: the admission writes the row in place outside the caller's transaction, so a row lock has no contender (AT-S3; AT-7 item 11) |
 | AR2 R12 / E7 | routing loses its target; E7 not closed | **routing retired** (AT-S9); **E7 marked local** after AT-S13's cell 1 (R1) |
 | AR2 E13 | closed: yes | **answered no** (AT-S3; AT-7 item 11) - the body's row carries it inline |
 | AO-1 | ends at M3 | ended: writes at AT-S5, reads at AT-S6 |
 | AO census row 10 | retired with the leases | retired at AT-S10b; a peer's first write no longer answers `TXN_CONFLICT retryable=1` |
 | AO-S5 cell | "no `MayWrite` call site exists" | stronger: **`MayWrite` does not exist** (AT-S18; `grep -rn MayWrite include src`, less `Session::MayWriteOn`, answers nothing at `3de6d62`) |
-| AN-R13 | kept | kept (R2.2) |
-| AN-Q1 / AN-S1 | unchanged | unchanged |
 | `core_runtime.hpp` asymmetries 1-3 | struck by M3's close | 2 rewritten at AW-S1b (AT-3 A); 1 and 3 struck at AT-S12 (`f48d213`) |
 | `crosscore.md` CC11, CC13 | CC11 struck; CC13 a local write | CC11 rewritten whole at AT-S5; CC13's flush retired at AT-S7 with ring kind 39 |
 | the `(M5)` census | twelve sites | eight at `df8cc5f` under the body's own command, more under its rule (AT-7 item 4); **closed at AT-S12** by a grep to the rule, re-run here: `grep -rn -E '\(M5\)\|\bM5\b'` over `include src tests sim tools docs/spec docs/rules manual CLAUDE.md`, less `FK-M5`/`K-M5`/`AR0-M5`, answers nothing at `3de6d62` |
@@ -448,6 +441,8 @@ a system-range page placed by a claim under both latches (AT-S5b, D2).
 | `RemoteCheckpointAnchor` | one checkpoint task, any core | retired at AT-S8 with ring kind 16, **not as one task**: R2.3 |
 | Placement (NS10) | retired unless kept as the hint's initial value | retired at AT-S9; `placement` refused by name |
 | `core_count` pinning | unpinned once D17 lands | unpinned at AT-S9: nothing names a core on disk, and a mount at another `cores` records the count |
+
+AR0 D11, AM-R5, AN-R13 and AN-Q1/AN-S1 stand as §3 wrote them.
 
 ### R4. The retire list, closed (§4)
 
@@ -513,8 +508,8 @@ the old engine's own swing, with a ~0.4 s stall in three of seven runs that
 unit (S3) → the route (S5) and its five sub-stages (S5b-f) → 2PC (S6) →
 statistics and Cabin (S7) → checkpoint and listener (S8) → placement (S9)
 → the ring's consumers, the allocators among them (S10a-e) → prose (S12) →
-prices (S13) → the family's windows (S14-S17, S17b, S21, S22) → this
-section. **Two reorderings, each for a reason in the tree**: E13 built no
+prices (S13) → the family's windows (S14-S17, S17b, S21), the covering
+filter (S22) and the retired predicates (S18) → this section. **Two reorderings, each for a reason in the tree**: E13 built no
 unit, so it gates nothing (AT-7 item 11); and the allocators follow the
 route (AT-7 item 12). **AR1's AQ/AR did not ride AT's tail**; they are the
 following letter's (AT-0 item 6). The Cabin store's unification did
@@ -577,33 +572,33 @@ the stages that opened or met them; the row in AT-6 carries each.
 | a join inside `BEGIN` on a peer blind to its own writes | the pipeline route retired (`ShippedReadOwnWrite.AJoinInsideATransactionOnAPeerSeesItsOwnWrites`, not run against the engine before) | AT-S9 |
 
 **R8.3 The cells the family lost** `[measured]`. AT-S6 (`ac4bd64`) deleted
-`tests/txn_2pc_protocol_test.cpp` whole with the 2PC service. The file
-also hosted fixtures that test no 2PC: `LockDeadlockTest` (32 cells),
-`MidWalkWaitTest` (11), `LockCapTest` (5), `LockCapOfOneTest` (3),
-`FailedCommitTest` (2), and part of `Txn2pcBlockedWriterTest`, all five
-derived from it and it from `Txn2pcParticipantTest` - the participant
-machinery the stage deleted, which is why they went with the file. The
-commit's message counts twelve cells retired with their premise, and none
-of these is among them. At `3de6d62`, 31 of the 32 `LockDeadlockTest`
-names and every one of the others appears nowhere under `tests/`
-(`AReadDeclaresItsPositionAndGivesItBack` survives in
-`read_borrow_rig_test.cpp`), and no test calls `LockTable::NoteWaitFor`
-or `WaitEdgeCount`. Among the lost cells are AT-S1's four bind cells
-(family #1), AT-S5e's two (#9), AT-S3's one, the deadlock detector's, the
-borrow cap's, the mid-walk park's and `DROP TABLE`'s wait for a reader;
-the premise of each of these still holds. **Two mutants, one full suite each, on the
-Debug tree built here, both survive at 2991/2991** (one pre-existing
-disabled cell):
+`tests/txn_2pc_protocol_test.cpp` whole, and with it every cell of five
+fixtures built over its 2PC participant fixture that test no 2PC - among
+them AT-S1's four bind cells (#1), AT-S5e's two (#9), AT-S3's one, the
+deadlock detector's, the borrow cap's and `DROP TABLE`'s wait for a reader.
+None of them was counted among the twelve that commit retired, and the
+premise of each still holds; `known-gaps.md` (Testing) carries the
+inventory. **Two mutants, one full Debug suite each at `3de6d62`, both
+survive at 2991/2991** (one pre-existing disabled cell):
 
-- **M1**: `step_compiler.cpp`'s bind declares nothing - family #1's
-  defence removed. No cell fails.
-- **M2**: `LockTable::NoteWaitFor` never finds a cycle - AO-R7's victim
-  rule removed. No cell fails.
+- **M1**: `src/exec/step_compiler.cpp:1375`'s `declare->Position(...)`
+  replaced by a no-op - the compiler's bind declares nothing. No cell
+  fails. The write verbs' declaration at resolve lost its cells in the same
+  deletion and was not mutated.
+- **M2**: `src/txn/lock_table.cpp:381`'s `if (at == waiter) return true;`
+  made a `break` - `NoteWaitFor` never finds a cycle, AO-R7's victim rule
+  removed. No cell fails.
 
-So at `3de6d62` family #1's defence is **built and pinned by no cell**,
-and so is `CLAUDE.md`'s *"a waiter that would close a cycle is refused
-naming deadlock"*. `known-gaps.md` (Testing) records this. Restoring the
-cells is not this section's work: the operator's.
+So at `3de6d62` the compiler's bind - family #1's defence - is built and
+pinned by no cell, and so is `CLAUDE.md`'s *"a waiter that would close a
+cycle is refused naming deadlock"*. **The cell §8 promised was never
+written**: *"AT's first cell is the inverted case - the word deliberately
+not bumped"*. AT-S1 built before the word existed, so its cells had no
+word to leave unbumped, and its one cell of the lock blocking a DDL
+through a statement - a parked remote producer - went with the protocol at
+AT-S10a. What remains is the lock below any statement
+(`ReadBorrowRigTest.ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer`).
+Restoring the cells is the operator's decision, not this section's.
 
 **R8.4 Open at this writing, with owners.** The AT-close order's §7.2
 names AT's quiet-wrong ledger at its close as #5, #6 and #7, which are
@@ -622,13 +617,14 @@ carry them.
 
 The body is corrected by AT-7 items **1** (§4's M3 list is stale in four
 entries), **2** (`MayWrite` is one arm), **3** (§2.1's `catalog.md` did not
-exist), **4** (the `(M5)` census), **6** (D17 against AR2's E8; D17's
-bytes, E8's verb), **7** (§2.1's retryable clause is `core_runtime.hpp`'s),
+exist), **4** (the `(M5)` census), **7** (§2.1's retryable clause is
+`core_runtime.hpp`'s),
 **8** (AR0 §8 step 6 and D22 define M3 differently; split, not amended),
 **10** (§8 overstates what the lock alone gives), **11** (§3's R5 and E13
 assume a transactional row) and **12** (§7's allocators before the route).
-Items 5 and 9 correct other documents (AU's AU-S5 count; the D19 mark's
-premise), and items 13-17 correct AT's own rows.
+Items 5, 6 and 9 correct other documents (AU's AU-S5 count; AR2's E8,
+which D17 wins over; the D19 mark's premise), and items 13-17 correct
+AT's own rows.
 
 ### R10. For ratification
 
@@ -638,14 +634,20 @@ What the operator is asked to ratify is R0-R9: the amendment as built at
 **Where the tree departs from the body or a mark on it, the departure was
 either the operator's already or is ratified here.** Already the
 operator's, and recorded rather than re-decided: D17's reserved bytes and
-the ranges' retirement (AT-S9's rulings), the row-id cache's removal
-(2026-09-25), the Cabin store's shape (AT-0 item 9), the checkpoint's shape
-(AT-S8), 2PC's retirement and the `IS` at resolve (2026-09-09), E7 local
-(2026-09-26). **Ratified by this text and by no earlier word**: D18's
-statistic not stored (R6); the trx-id ceiling under a latch rather than a
-CAS (R1); D19's fallback on an inbox and a kick rather than a ring (R6);
-the word moved at the decide and asked only at task boundaries (R2.1); and
-the core-0 placements R0 lists.
+the ranges' retirement (AT-S9's rulings; R6, R5); the row-id cache's
+removal (2026-09-25; R1); one Cabin store partitioned (AT-0 item 9; R3);
+the checkpoint's shape (AT-S8; R2.3); 2PC's retirement, the `IS` at
+resolve and, under the blanket word of that day, its non-blocking ask
+(2026-09-09; R2.1); E7 local (2026-09-26; R1); and core 0 accepting under
+D19's fallback, which is D19's own mark (R6). **Ratified by this text and
+by no earlier word**: D18's statistic not stored (R6); the trx-id ceiling
+under a latch rather than a CAS, and no extent cache where D20 named one
+(R1); the Cabin partition keyed by `cabin_id` where AT-0 item 9 proposed
+`expr_id` (R3); D19's fallback on an inbox and a kick rather than a ring
+(R6); the word moved at the decide and asked only at task boundaries
+(R2.1); and R0's other core-0 placements, the log stream among them - AR0
+D3 answered in practice (`known-gaps.md`, Decisions the revision has not
+taken).
 
 It does not ratify R8.3's lost cells or R8.4's open entries as acceptable;
 it records them. The word is recorded verbatim in a `raft-marks-*.md`, and
