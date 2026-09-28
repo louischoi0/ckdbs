@@ -1210,6 +1210,15 @@ private:
     exec::IndexWriteLog IndexWriteLogFor(const WriteScope& scope,
                                          std::vector<exec::IndexWrite>& pending);
 
+    // `VarHeapSink::on_append` for a row `pk` of `rel_oid` (AT-S21's
+    // review): with a manager owning the transaction, the spill's undo record
+    // (`NoteSpills`) and then its records (`exec::LogSpill`), under the
+    // var-heap page's hold. Null without a manager, whose spills are
+    // collected and logged by `LogInsert`.
+    std::function<Status(const exec::AppendedSpill&)> SpillLogFor(const WriteScope& scope,
+                                                                  std::uint32_t rel_oid,
+                                                                  std::uint64_t pk);
+
     // Both statements take the relation `X` before their first catalog write
     // and build where the session is (AT-S5e); the owner-built arm of
     // PW1c-6b-3 went with the per-core structures it served.
@@ -1891,13 +1900,14 @@ private:
                       const std::vector<exec::AppendedSpill>& spills);
 
     // Logs an insert **under the holds its placement handed out** (AT-S21,
-    // `wal.md` §8-1): `placed.held` and every spill's pages, released here
-    // once the row's record is stamped - and before an own transaction's
-    // commit, whose durability wait must not run under a latch.
+    // `wal.md` §8-1), released here once the row's record is stamped - and
+    // before an own transaction's commit, whose durability wait must not run
+    // under a latch. `spills` is the manager-less path's: with a manager
+    // each spill was noted and logged at its append (`SpillLogFor`).
     Status LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      std::uint64_t owner_oid,
-                     std::vector<exec::AppendedSpill>& spills,
+                     const std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
 

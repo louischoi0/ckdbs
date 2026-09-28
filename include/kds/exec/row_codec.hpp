@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -116,15 +117,6 @@ struct AppendedSpill {
     PageId created_page_id = kInvalidPageId;
     PageId linked_page_id = kInvalidPageId;
 
-    // The pages this append wrote, still held until the caller has logged
-    // it (AT-S21): a `VARHEAP_APPEND` names a slot, and another core's append
-    // to the page between the write and its record logs the two out of the
-    // order redo replays. Its record cannot come sooner - RV3 puts the
-    // spill's undo record first, and that needs the slot this append chose -
-    // so the hold lasts until the caller logs. A page an earlier spill of the
-    // same row already holds is not held twice (`VarHeapSink`).
-    storage::PageRef held_value;
-    storage::PageRef held_linked;
 };
 
 // Where EncodeRow() puts a value that does not fit inline: one relation's
@@ -144,6 +136,18 @@ struct VarHeapSink {
     // (page.md §2a). A chain is per-relation, so the caller that knows
     // `root` knows this too; 0 only where no relation exists to name.
     std::uint64_t owner_oid = 0;
+    // **Logs each spill while its page is still held** (AT-S21, its
+    // review's C1). Called right after the append, under the holds
+    // `varheap::ChainAppend` hands back and before they drop: the caller
+    // writes the spill's undo record and then its `VARHEAP_APPEND` there -
+    // RV3's order - so the page is never held past this call. When set, the
+    // spill is **not** pushed to `appended`: it is fully noted and logged.
+    //
+    // Why not hold the page until the row is logged: an insert would then
+    // hold the var-heap tail and ask for the clustered leaf, and a reader
+    // holds the leaf and asks for the var-heap page to resolve the spill -
+    // two cores deadlocked on page latches that never time out.
+    const std::function<Status(const AppendedSpill&)>* on_append = nullptr;
 
     bool usable() const noexcept { return store != nullptr && root != kInvalidPageId; }
 };

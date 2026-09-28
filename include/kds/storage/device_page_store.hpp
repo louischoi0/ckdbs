@@ -716,7 +716,10 @@ public:
     // (btree.cpp's `PromoteSeparator`) - 3 in the ordinary case of one
     // parent with room, and `k` is at most 6 on a 678-way tree. **An
     // index's `k` has no such bound** (index_tree.cpp's walk up): open,
-    // AT-S16's review F1; an outer chain
+    // AT-S16's review F1. **Since AT-S21 an insert keeps its leaf and
+    // parents held until its record is stamped**, so an index's split path
+    // stacks on the clustered one's for the statement's tail rather than
+    // following it; an outer chain
     // walk adds 1, and index maintenance stacked under a statement adds 2
     // more of its own split path. 8 bounds the ordinary case with room to
     // spare, and a clustered split under an outer walk up to `k = 5`;

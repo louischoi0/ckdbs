@@ -4092,6 +4092,18 @@ Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint
     return page_store_.StampPageLsn(write.page_id, rec.value());
 }
 
+std::function<Status(const exec::AppendedSpill&)> CommandDispatcher::SpillLogFor(
+    const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t pk) {
+    if (scope.txn == nullptr) return nullptr;
+    const std::uint64_t txn_id = scope.txn->id();
+    return [this, &scope, rel_oid, pk, txn_id](const exec::AppendedSpill& spill) -> Status {
+        // RV3's order: the undo record that can release the value, then the
+        // records that make it durable.
+        if (Status s = NoteSpills(scope, rel_oid, pk, {spill}); !s.ok()) return s;
+        return exec::LogSpill(wal_, page_store_, spill, txn_id, rel_oid);
+    };
+}
+
 exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
                                                         std::vector<exec::IndexWrite>& pending) {
     if (wal_ == nullptr) return nullptr;
@@ -4155,7 +4167,7 @@ Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_
 Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
                                     std::uint64_t owner_oid,
-                                    std::vector<exec::AppendedSpill>& spills,
+                                    const std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
     if (wal_ == nullptr) return Status::OK();
@@ -4225,10 +4237,6 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     // transaction's commit below may wait on durability, which never runs
     // under a latch.
     placed.held.clear();
-    for (exec::AppendedSpill& spill : spills) {
-        spill.held_value.Release();
-        spill.held_linked.Release();
-    }
 
     // The commit and its wait belong to whoever owns the transaction. When
     // a manager does, EndWrite() performs both.
@@ -5089,10 +5097,14 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         }
     }
 
+    // With a manager, each spill is noted and logged at its append, under
+    // its page's hold (`SpillLogFor`); `spills` then stays empty.
     std::vector<exec::AppendedSpill> spills;
+    const auto log_spill = SpillLogFor(scope, oid, row_id);
     auto encoded = exec::EncodeRow(
         ta.schema, ta.layout, row_id, body,
-        exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills, ta.oid});
+        exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills, ta.oid,
+                          log_spill ? &log_spill : nullptr});
     if (!encoded.ok()) {
         return ErrorReply(encoded.status());
     }
@@ -7429,10 +7441,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // statement *read* out of the var-heap to evaluate the WHERE clause.
         std::vector<exec::AppendedSpill> appended_spills;
         const bool collect_spills = wal_ != nullptr || scope.txn != nullptr;
+        // With a manager, noted and logged at each append (`SpillLogFor`),
+        // under the var-heap page's hold - this leaf's hold outside it, the
+        // order a reader takes too; `appended_spills` then stays empty.
+        const auto log_spill = SpillLogFor(scope, ta.oid, id.value());
         auto encoded = exec::EncodeRow(
             ta.schema, ta.layout, id.value(), body,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
-                              collect_spills ? &appended_spills : nullptr, ta.oid});
+                              collect_spills ? &appended_spills : nullptr, ta.oid,
+                              log_spill ? &log_spill : nullptr});
         if (!encoded.ok()) return encoded.status();
 
         // HOT-style in-place overwrite - see PageView::OverwriteTuple's

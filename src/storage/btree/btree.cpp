@@ -1057,9 +1057,9 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // reached the state this ordering exists to prevent.
     leaf.set_next_page_id(new_leaf_id);
 
-    // Redo order: the new leaf's PAGE_INIT (which the HEAP_INSERT then
-    // fills), then the ancestors, then the old leaf's image carrying the
-    // link that reaches it. The images are self-contained, so the order
+    // Redo order: the new leaf's record (a PAGE_INIT the HEAP_INSERT then
+    // fills at the tail, its image mid-chain), then the ancestors, then the
+    // old leaf's image carrying the link that reaches it. The images are self-contained, so the order
     // among them is not load-bearing; what matters is that all of them
     // precede the HEAP_INSERT the caller emits for the tuple.
     promoted.value().Record(leaf_id, /*is_new_page=*/false, 0);

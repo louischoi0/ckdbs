@@ -13,52 +13,57 @@ namespace kds::exec {
 Status LogSpills(wal::WalManager* wal, storage::PageStore& store,
                  const std::vector<AppendedSpill>& spills, std::uint64_t env_txn,
                  std::uint64_t owner_oid) {
-    if (wal == nullptr) return Status::OK();
-
     for (const AppendedSpill& spill : spills) {
-        // ---- The page the append created ---------------------------------
-        //
-        // `varheap::ChainAppend` grows a chain through the store's plain
-        // allocation path, and a VARHEAP_APPEND does not say its page is new -
-        // so without this record redo meets an append naming a page nothing
-        // creates, and refuses the mount. `wal::ApplyPageInit` already formats
-        // a kVarHeap page, so this is the record nobody wrote rather than an
-        // applier nobody built.
-        //
-        // Unstamped, for the reason the heap path gives for a new tuple page:
-        // the append below lands in exactly this page and stamps it.
-        if (spill.created_page_id != kInvalidPageId) {
-            if (auto rec = wal::LogPageInit(wal, env_txn, spill.created_page_id,
-                                            PageType::kVarHeap, /*min_key=*/0, owner_oid);
-                !rec.ok()) {
-                return rec.status();
-            }
-        }
-
-        // ---- The link that made it reachable -----------------------------
-        //
-        // A full page image, because no record type describes a next-page
-        // link. Losing it is the quieter half of the same defect: the value
-        // page survives redo and no chain walk ever reaches it.
-        if (spill.linked_page_id != kInvalidPageId) {
-            if (Status s = storage::LogFullPageImage(wal, store, env_txn, spill.linked_page_id);
-                !s.ok()) {
-                return s;
-            }
-        }
-
-        // ---- The value itself --------------------------------------------
-        std::vector<std::byte> vh(wal::kVarHeapAppendFixedSize + spill.value.size());
-        const wal::VarHeapAppendPayload vh_fields{
-            spill.ptr.slot, 0, static_cast<std::uint32_t>(spill.value.size())};
-        if (auto n = wal::EncodeVarHeapAppend(vh, vh_fields, spill.value); !n.ok()) {
-            return n.status();
-        }
-        auto rec = wal->Append(
-            wal::RecordSpec{wal::RecordType::kVarHeapAppend, env_txn, spill.ptr.page_id}, vh);
-        if (!rec.ok()) return rec.status();
-        if (Status s = store.StampPageLsn(spill.ptr.page_id, rec.value()); !s.ok()) return s;
+        if (Status s = LogSpill(wal, store, spill, env_txn, owner_oid); !s.ok()) return s;
     }
+    return Status::OK();
+}
+
+Status LogSpill(wal::WalManager* wal, storage::PageStore& store, const AppendedSpill& spill,
+                std::uint64_t env_txn, std::uint64_t owner_oid) {
+    if (wal == nullptr) return Status::OK();
+    // ---- The page the append created ---------------------------------
+    //
+    // `varheap::ChainAppend` grows a chain through the store's plain
+    // allocation path, and a VARHEAP_APPEND does not say its page is new -
+    // so without this record redo meets an append naming a page nothing
+    // creates, and refuses the mount. `wal::ApplyPageInit` already formats
+    // a kVarHeap page, so this is the record nobody wrote rather than an
+    // applier nobody built.
+    //
+    // Unstamped, for the reason the heap path gives for a new tuple page:
+    // the append below lands in exactly this page and stamps it.
+    if (spill.created_page_id != kInvalidPageId) {
+        if (auto rec = wal::LogPageInit(wal, env_txn, spill.created_page_id,
+                                        PageType::kVarHeap, /*min_key=*/0, owner_oid);
+            !rec.ok()) {
+            return rec.status();
+        }
+    }
+
+    // ---- The link that made it reachable -----------------------------
+    //
+    // A full page image, because no record type describes a next-page
+    // link. Losing it is the quieter half of the same defect: the value
+    // page survives redo and no chain walk ever reaches it.
+    if (spill.linked_page_id != kInvalidPageId) {
+        if (Status s = storage::LogFullPageImage(wal, store, env_txn, spill.linked_page_id);
+            !s.ok()) {
+            return s;
+        }
+    }
+
+    // ---- The value itself --------------------------------------------
+    std::vector<std::byte> vh(wal::kVarHeapAppendFixedSize + spill.value.size());
+    const wal::VarHeapAppendPayload vh_fields{
+        spill.ptr.slot, 0, static_cast<std::uint32_t>(spill.value.size())};
+    if (auto n = wal::EncodeVarHeapAppend(vh, vh_fields, spill.value); !n.ok()) {
+        return n.status();
+    }
+    auto rec = wal->Append(
+        wal::RecordSpec{wal::RecordType::kVarHeapAppend, env_txn, spill.ptr.page_id}, vh);
+    if (!rec.ok()) return rec.status();
+    if (Status s = store.StampPageLsn(spill.ptr.page_id, rec.value()); !s.ok()) return s;
     return Status::OK();
 }
 

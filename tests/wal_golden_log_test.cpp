@@ -31,8 +31,15 @@ namespace kds::sim {
 namespace {
 
 // Pinned on `worktree-v3.0.0-arch-revision` from the engine at `d15b5ac`
-// (`v2.7.0-134-gd15b5ac`), before AL-S1a touched the stream.
-constexpr std::uint32_t kGoldenLogCrc = 0x07b052c3u;
+// (`v2.7.0-134-gd15b5ac`), before AL-S1a touched the stream, as
+// 0x07b052c3. **Re-pinned at AT-S21** (on `at-s21-log-under-hold`), and for
+// one reason: a spill is noted and logged at its append, under its var-heap
+// page's hold - its UNDO_WRITE then its VARHEAP_APPEND - where it was noted
+// after the row's placement and logged inside `LogInsert`. Row 6 is the
+// script's one spill (the updates spill nothing and no index exists), so its
+// two spill records move ahead of the row's own undo record and `HEAP_INSERT`;
+// RV3's undo-before-append order holds, and no record's bytes change.
+constexpr std::uint32_t kGoldenLogCrc = 0xb89d4f16u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

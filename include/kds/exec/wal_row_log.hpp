@@ -29,6 +29,11 @@ namespace kds::exec {
 
 // The spilled values, each preceded by the page that had to exist for it:
 // the extracted body of the dispatcher's LogSpills, which now delegates.
+// One spill's records - `LogSpills`' body - for a caller that logs each
+// spill as it is appended, under its page's hold (`VarHeapSink::on_append`).
+Status LogSpill(wal::WalManager* wal, storage::PageStore& store, const AppendedSpill& spill,
+                std::uint64_t env_txn, std::uint64_t owner_oid);
+
 Status LogSpills(wal::WalManager* wal, storage::PageStore& store,
                  const std::vector<AppendedSpill>& spills, std::uint64_t env_txn,
                  std::uint64_t owner_oid);

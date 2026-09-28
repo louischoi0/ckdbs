@@ -95,7 +95,8 @@ public:
         // in `kds.db` in the rig's directory, beside the log in `wal/` -
         // `Expeditor::Open`'s layout for `data_file` and `wal_dir` - so
         // `Snapshot()` can copy what a crash would leave and
-        // `MountSnapshot()` can bring it up through production's mount.
+        // a cell can bring the copy up through production's mount
+        // (`Expeditor::Open`; `insert_log_crash_rig_test.cpp`'s `Mount`).
         bool file_backed = false;
     };
 

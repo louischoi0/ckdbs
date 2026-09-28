@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -442,6 +444,83 @@ TEST(InsertLogCrashRigTest, TwoCoresSpillingIntoOneVarHeapPageRecoverInTheOrderT
     EXPECT_NE(db.dispatcher().Dispatch("SELECT s FROM t WHERE id = 25").response.find(long_a),
               std::string::npos)
         << "row 25's spilled value did not come back";
+}
+
+// ---- The spill's hold against a reader's (AT-S21's review, C1) ----------
+//
+// The fix's first shape held each spill's var-heap page until the row was
+// logged - past the row's placement. An insert then held the var-heap tail
+// and asked for the clustered leaf, while a reader holds the leaf and asks
+// for the var-heap page to resolve the value: two cores stopped on page
+// latches, which never time out. Reproduced by the review, 2 runs in 2, as
+// "no progress for 10 s". A spill is noted and logged at its append now,
+// and its hold drops before the row is placed.
+//
+// **A deadlock cannot be joined**, so these cells watch for progress and,
+// finding none for 10 s, fail and end the process - one ctest cell, since
+// each runs alone.
+void RaceSpillingInsertsAgainst(const std::string& reader_sql) {
+    auto opened = TwoCoreRig::Open();
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    auto rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    const std::string big = "'" + std::string(1000, 'z') + "'";
+    {
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, s varchar) BTREE");
+        Ok(d0, "INSERT INTO t VALUES (1, " + big + ")");
+    }
+    {
+        CurrentCoreGuard as(1);
+        Ok(d1, "INSERT INTO t VALUES (2, " + big + ")");  // core 1's carve, outside the race
+    }
+    std::atomic<std::uint64_t> written{0};
+    std::atomic<std::uint64_t> read{0};
+    std::atomic<bool> stop{false};
+    std::thread writer([&] {
+        CurrentCoreGuard as(0);
+        for (std::uint64_t id = 10; id < 1500 && !stop; ++id) {
+            d0.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " + big + ")");
+            ++written;
+        }
+        stop = true;
+    });
+    std::thread reader([&] {
+        CurrentCoreGuard as(1);
+        while (!stop) {
+            d1.Dispatch(reader_sql);
+            ++read;
+        }
+    });
+    std::uint64_t seen_w = 0;
+    std::uint64_t seen_r = 0;
+    auto moved = std::chrono::steady_clock::now();
+    while (!stop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (written != seen_w || read != seen_r) {
+            seen_w = written;
+            seen_r = read;
+            moved = std::chrono::steady_clock::now();
+        } else if (std::chrono::steady_clock::now() - moved > std::chrono::seconds(10)) {
+            std::fprintf(stderr,
+                         "DEADLOCK: no progress for 10 s; writer rows=%llu reader ops=%llu\n",
+                         static_cast<unsigned long long>(seen_w),
+                         static_cast<unsigned long long>(seen_r));
+            std::fflush(stderr);
+            std::_Exit(3);
+        }
+    }
+    writer.join();
+    reader.join();
+}
+
+TEST(InsertLogCrashRigTest, ASpillingInsertAndASpillReadingSelectBothFinish) {
+    RaceSpillingInsertsAgainst("SELECT s FROM t");
+}
+
+TEST(InsertLogCrashRigTest, ASpillingInsertAndASpillingUpdateBothFinish) {
+    RaceSpillingInsertsAgainst("UPDATE t SET s = '" + std::string(1000, 'x') + "'");
 }
 
 }  // namespace
