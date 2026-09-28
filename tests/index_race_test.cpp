@@ -16,6 +16,9 @@
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
+#include "armed_race.hpp"
+#include "tree_structure.hpp"
+
 // **The secondary index with more than one core in it** (AT-S15).
 //
 // `index_tree_test.cpp` puts another core's divide into each gap of an
@@ -70,46 +73,11 @@ std::uint32_t KeyOf(std::span<const std::byte> key) {
     return v;
 }
 
-std::unique_ptr<storage::DevicePageStore> ArmedStore(
-    std::unique_ptr<storage::MemoryPageDevice>& device) {
-    auto made = storage::MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
-    EXPECT_TRUE(made.ok()) << made.status().message();
-    device = std::move(made.value());
-    auto store = storage::DevicePageStore::Open(*device, /*first_new_page_id=*/16);
-    EXPECT_TRUE(store.ok()) << store.status().message();
-    // Armed: an unarmed latch never queues the second writer, and the
-    // window is only reachable where the store is shared.
-    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/16);
-    return std::move(store.value());
-}
-
-// `btree_race_test.cpp`'s rendezvous, for its reason: two threads started
-// together drift onto different leaves within a few inserts, and then
-// neither is queued on the other's latch. Re-synchronised before every
-// insert, they reach one leaf at one instant. A generation counter, so a
-// thread that leaves and re-arrives before its partner has left is not
-// counted into the wrong round.
-class Rendezvous {
-  public:
-    explicit Rendezvous(int parties) noexcept : parties_(parties) {}
-
-    void Wait() noexcept {
-        const int generation = generation_.load(std::memory_order_acquire);
-        if (waiting_.fetch_add(1, std::memory_order_acq_rel) + 1 == parties_) {
-            waiting_.store(0, std::memory_order_release);
-            generation_.fetch_add(1, std::memory_order_acq_rel);
-            return;
-        }
-        while (generation_.load(std::memory_order_acquire) == generation) {
-            std::this_thread::yield();
-        }
-    }
-
-  private:
-    const int parties_;
-    std::atomic<int> waiting_{0};
-    std::atomic<int> generation_{0};
-};
+// `armed_race.hpp`'s store and rendezvous, for `btree_race_test.cpp`'s
+// reasons: an unarmed latch never queues the second writer, and two threads
+// merely started together drift onto different leaves within a few inserts.
+using testing_race::ArmedStore;
+using testing_race::Rendezvous;
 
 // Regions a stride apart, each prefilled to one leaf's worth, so a round's
 // two inserts land inside one existing leaf rather than past the chain's
@@ -249,6 +217,153 @@ TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
     EXPECT_EQ(0, misplaced_runs) << misplaced_runs << " of " << kRepeats
                                  << " runs left an entry where a probe cannot find it; first: "
                                  << first_failure;
+}
+
+// ---- The walk back up (AT-S16) ------------------------------------------
+//
+// The cell above excludes a root that divides; this one is about the
+// divide's walk up, and **aims each round at it**, on
+// `index_tree_test.cpp`'s shape: a 1,000-byte key puts eight entries in a
+// leaf and eight in a node; P is a full level-1 node; LA, P's last leaf,
+// is full, and so is LB, the leaf holding the end of a run of key 0 at P's
+// far left. Thread 0 divides LB, which divides P and moves LA to P's new
+// sibling; thread 1 divides LA and promotes into P. Both leave one
+// rendezvous; whichever reaches P second walks up into a parent the other
+// divided. A fresh tree a round. A grown root is published after the
+// insert returns, as the dispatcher does, and a refusal is the client's to
+// retry from the root it reads next.
+//
+// **What is asserted is the whole tree**: every separator over its subtree
+// (`tree_structure.hpp`) and every entry found by a probe from the root.
+//
+// **Mutations** (2026-09-28, 20 runs each): the unfixed walk up (as at
+// `f0ad197`) killed 20/20; `FetchParent` accepting the recorded parent
+// without asking it, 20/20. The root's mark is `index_tree_test.cpp`'s
+// `*GrewOver*` cells' to kill (20/20); this cell's rounds do not reach it.
+constexpr std::uint16_t kWideKey = 1000;  // eight to a leaf, eight to a node
+constexpr int kWalkRounds = 40;
+constexpr int kRetries = 64;
+
+std::vector<std::byte> WideKey(std::uint32_t v) {
+    std::vector<std::byte> out(kWideKey, std::byte{0});
+    for (std::uint16_t i = 0; i < 4; ++i) {
+        out[kWideKey - 1 - i] = static_cast<std::byte>((v >> (8 * i)) & 0xFF);
+    }
+    return out;
+}
+
+std::vector<std::byte> WideSortKey(const IndexLayout& layout, std::uint32_t key,
+                                   std::uint64_t pk) {
+    std::vector<std::byte> out(layout.sort_key_width());
+    EXPECT_TRUE(EncodeIndexSortKey(layout, WideKey(key), pk, out).ok());
+    return out;
+}
+
+TEST(IndexRaceTest, TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree) {
+    const IndexLayout layout{kWideKey, 0};
+    for (int round = 0; round < kWalkRounds; ++round) {
+        std::unique_ptr<storage::MemoryPageDevice> device;
+        auto store = ArmedStore(device);
+        ASSERT_NE(store, nullptr);
+        auto created = store->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        PageId first_root = created.value().first;
+        ASSERT_TRUE(FormatRoot(created.value().second.bytes(), layout, /*owner_oid=*/0).ok());
+        created.value().second.Release();
+
+        std::vector<std::pair<std::uint32_t, std::uint64_t>> placed;
+        auto insert = [&](std::uint32_t key, std::uint64_t pk) {
+            auto r = IndexInsert(*store, first_root, layout, WideKey(key), pk, {}, 0);
+            ASSERT_TRUE(r.ok()) << "setup " << key << "/" << pk << ": " << r.status().message();
+            if (r.value().new_root != kInvalidPageId) first_root = r.value().new_root;
+            placed.emplace_back(key, pk);
+        };
+        for (std::uint32_t k = 1; k <= 600; ++k) insert(k * 10, 1);
+        const PageId parent = testing_race::IndexLeftmostAtLevel(*store, first_root, 1);
+        std::uint64_t pk = 2;
+        while (!testing_race::IndexPageIsFull(*store, parent, layout)) insert(0, pk++);
+
+        const PageId leaf_a = testing_race::IndexChildren(*store, parent).back();
+        std::uint32_t key_a = 0;
+        {
+            auto bytes = store->GetForRead(leaf_a);
+            ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+            IndexLeafView view(bytes.value().bytes());
+            auto last = view.SortKey(static_cast<std::uint16_t>(view.entry_count() - 1));
+            ASSERT_TRUE(last.ok()) << last.status().message();
+            key_a = KeyOf(last.value().subspan(0, kWideKey));
+        }
+        ASSERT_GT(key_a, 0u);
+        while (!testing_race::IndexPageIsFull(*store, leaf_a, layout)) insert(key_a, pk++);
+        for (;;) {  // LB: the leaf the next key-0 entry lands in, filled without dividing
+            auto leaf_b = IndexSeekLeaf(*store, first_root, layout, WideSortKey(layout, 0, pk));
+            ASSERT_TRUE(leaf_b.ok()) << leaf_b.status().message();
+            ASSERT_NE(leaf_a, leaf_b.value());
+            if (testing_race::IndexPageIsFull(*store, leaf_b.value(), layout)) break;
+            insert(0, pk++);
+        }
+        ASSERT_TRUE(testing_race::IndexPageIsFull(*store, parent, layout));
+
+        std::atomic<PageId> root{first_root};
+        Rendezvous gate(kThreads);
+        std::vector<std::string> errors;
+        std::mutex errors_latch;
+        const std::pair<std::uint32_t, std::uint64_t> mine[kThreads] = {{0, pk}, {key_a, pk + 1}};
+
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&, t] {
+                SetCurrentCore(static_cast<std::uint32_t>(t));
+                const auto [key, entry_pk] = mine[t];
+                gate.Wait();
+                Status last = Status::OK();
+                for (int attempt = 0; attempt < kRetries; ++attempt) {
+                    auto r = IndexInsert(*store, root.load(std::memory_order_acquire), layout,
+                                         WideKey(key), entry_pk, {}, 0);
+                    if (r.ok()) {
+                        if (r.value().new_root != kInvalidPageId) {
+                            root.store(r.value().new_root, std::memory_order_release);
+                        }
+                        return;
+                    }
+                    last = r.status();
+                    if (last.code() != StatusCode::kTxnConflict) break;
+                    std::this_thread::yield();
+                }
+                const std::lock_guard<std::mutex> held(errors_latch);
+                errors.push_back(std::to_string(key) + ": " + last.message());
+            });
+        }
+        for (std::thread& thread : threads) thread.join();
+        SetCurrentCore(0);
+        ASSERT_TRUE(errors.empty()) << errors.size() << " insert(s) failed, first: " << errors[0];
+        placed.insert(placed.end(), std::begin(mine), std::end(mine));
+
+        const PageId final_root = root.load();
+        testing_race::ExpectIndexSeparatorsBoundTheirSubtrees(*store, final_root, layout);
+        for (const auto& [key, entry_pk] : placed) {
+            const std::vector<std::byte> k = WideKey(key);
+            auto leaf = IndexSeekLeaf(*store, final_root, layout, WideSortKey(layout, key, 0));
+            ASSERT_TRUE(leaf.ok()) << leaf.status().message();
+            bool found = false;
+            Status probed = IndexVisitFrom(
+                *store, leaf.value(), layout, storage::PageAccess::kRead,
+                [&](PageId, IndexLeafView& page,
+                    std::uint16_t idx) -> StatusOr<storage::VisitControl> {
+                    auto entry = page.Entry(idx);
+                    if (!entry.ok()) return entry.status();
+                    const int cmp = std::memcmp(entry.value().data(), k.data(), k.size());
+                    if (cmp < 0) return storage::VisitControl::kContinue;
+                    if (cmp > 0) return storage::VisitControl::kStop;
+                    if (GetIndexPk(entry.value().subspan(kWideKey)) == entry_pk) found = true;
+                    return storage::VisitControl::kContinue;
+                });
+            ASSERT_TRUE(probed.ok()) << probed.message();
+            EXPECT_TRUE(found) << "round " << round << ": a probe for key " << key
+                               << " missed pk " << entry_pk;
+        }
+        if (::testing::Test::HasFailure()) break;  // one round's damage is the report
+    }
 }
 
 }  // namespace

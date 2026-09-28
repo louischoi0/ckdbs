@@ -13,6 +13,9 @@
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/page_header.hpp"
 
+#include "act_on_fetch_store.hpp"
+#include "tree_structure.hpp"
+
 // The secondary index tree (docs/spec/index.md §4, workplan IX02).
 //
 // What separates this from btree_test.cpp is the thing the whole page class
@@ -438,54 +441,7 @@ TEST(IndexTreeTest, AnOrdinaryInsertReportsNoStructureAndASplitReportsBoth) {
 // right link across the re-fetch alone - the first draft AT-S5c rejected -
 // passes the first cell every run and fails the second and third every run.
 
-// A store that runs one action on the `nth` fetch of a chosen page, in
-// either mode, and forwards everything else. It is the barrier the window
-// needs: the action runs after the fetch before it and ahead of the one it
-// is attached to, which is exactly where a second core's divide lands.
-class DivideOnFetchStore final : public storage::PageStore {
-public:
-    explicit DivideOnFetchStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
-
-    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
-        return inner_.CreateAtUnpinned(page_id);
-    }
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
-        return inner_.CreateNewUnpinned();
-    }
-    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
-        Tick(page_id);
-        return inner_.GetUnpinned(page_id);
-    }
-    StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override {
-        Tick(page_id);
-        return inner_.GetForReadUnpinned(page_id);
-    }
-
-    void OnFetch(PageId page_id, int nth, std::function<void()> action) {
-        watched_ = page_id;
-        nth_ = nth;
-        fetches_ = 0;
-        action_ = std::move(action);
-    }
-    bool fired() const noexcept { return fired_; }
-
-private:
-    void Tick(PageId page_id) {
-        if (action_ && page_id == watched_ && ++fetches_ == nth_) {
-            auto action = std::move(action_);  // disarmed first: the action fetches too
-            action_ = nullptr;
-            fired_ = true;
-            action();
-        }
-    }
-
-    storage::InMemoryPageStore& inner_;
-    PageId watched_ = kInvalidPageId;
-    int nth_ = 0;
-    int fetches_ = 0;
-    bool fired_ = false;
-    std::function<void()> action_;
-};
+using DivideOnFetchStore = testing_race::ActOnFetchStore;
 
 // A two-leaf index whose **left** leaf is full, so the next entry routed
 // there divides it. Keys 0..per_leaf ascending divide the root leaf at its
@@ -611,6 +567,155 @@ TEST(IndexTreeTest, AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree
     EXPECT_EQ(kInvalidPageId, inside.value().new_root);
     EXPECT_EQ((std::vector<std::uint64_t>{1, kPkNew}), f.Probe(5));
     ExpectSortKeysAscend(f);
+}
+
+// ---- The walk back up across cores (AT-S16) -----------------------------
+//
+// A divide inserts its separator into the parents its descent recorded,
+// and the descent held none of them. Another core's divide of one of them
+// in between moves the child to a new node the recorded parent no longer
+// routes to (window 2 of the index-descent entry AT-S12 filed, closed and
+// deleted at AT-S16).
+// A 1,000-byte key puts eight entries in a leaf and eight in a node, so a
+// few hundred inserts build every shape these cells need.
+//
+// **Mutations** (2026-09-28, 20 runs each, all killed 20/20): `FetchParent`
+// accepting the recorded parent without asking it (the first cell);
+// `SecureParents` growing over a marked root (the `*GrewOver*` cells).
+
+PageId LeftmostAtLevel(Fixture& f, std::uint16_t level) {
+    return testing_race::IndexLeftmostAtLevel(f.store, f.root, level);
+}
+std::vector<PageId> ChildrenOf(Fixture& f, PageId node) {
+    return testing_race::IndexChildren(f.store, node);
+}
+bool NodeIsFull(Fixture& f, PageId node) {
+    return testing_race::IndexPageIsFull(f.store, node, f.layout);
+}
+void ExpectEverySeparatorBoundsItsSubtree(Fixture& f) {
+    testing_race::ExpectIndexSeparatorsBoundTheirSubtrees(f.store, f.root, f.layout);
+}
+
+TEST(IndexTreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHoldingItsLeaf) {
+    // **Window 2.** P is a full level-1 node; A's key goes to P's last leaf
+    // LA, which is full, so A divides LA and promotes into P. B's inserts
+    // run on A's walk-up fetch of P and divide a leaf at P's other end,
+    // which divides P: LA moves to P's new sibling. Promoting into the
+    // recorded P then puts A's separator in the half that no longer
+    // routes to LA.
+    Fixture f(Layout(/*key_width=*/1000));
+    for (std::uint32_t k = 1; k <= 600; ++k) ASSERT_TRUE(f.Insert(k * 10, 1).ok()) << k;
+    const PageId parent = LeftmostAtLevel(f, 1);
+    const PageId grandparent = LeftmostAtLevel(f, 2);
+    ASSERT_NE(kInvalidPageId, grandparent) << "the tree must be at least three levels";
+
+    // Key 0 under rising pks sorts below everything, so it lands in P's
+    // first leaf; each of its divides adds one separator to P.
+    std::uint64_t pk = 2;
+    while (!NodeIsFull(f, parent)) ASSERT_TRUE(f.Insert(0, pk++).ok());
+    ASSERT_FALSE(NodeIsFull(f, grandparent))
+        << "P's parent must have room, or B's divide of P grows the tree past A's root";
+
+    const PageId leaf = ChildrenOf(f, parent).back();
+    std::uint32_t key_a = 0;
+    {
+        auto bytes = f.store.GetForRead(leaf);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        IndexLeafView view(bytes.value().bytes());
+        auto last = view.SortKey(static_cast<std::uint16_t>(view.entry_count() - 1));
+        ASSERT_TRUE(last.ok()) << last.status().message();
+        key_a = KeyOf(last.value().subspan(0, f.layout.key_width));
+    }
+    ASSERT_GT(key_a, 0u) << "LA must hold keys above the run B inserts";
+    while (!NodeIsFull(f, leaf)) ASSERT_TRUE(f.Insert(key_a, pk++).ok());
+
+    const std::uint64_t pk_a = pk++;
+    DivideOnFetchStore store(f.store);
+    store.OnFetch(parent, /*nth=*/2, [&] {
+        while (ChildrenOf(f, parent).back() == leaf) ASSERT_TRUE(f.Insert(0, pk++).ok());
+    });
+    const PageId root_before = f.root;
+    auto placed = IndexInsert(store, f.root, f.layout, Key(key_a, f.layout.key_width), pk_a, {},
+                              /*owner_oid=*/0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    ASSERT_TRUE(store.fired()) << "B's divide never ran; the cell tested nothing";
+    ASSERT_EQ(root_before, f.root) << "B's divide must not have grown the tree";
+    ASSERT_EQ(kInvalidPageId, placed.value().new_root);
+
+    ExpectEverySeparatorBoundsItsSubtree(f);
+    // An insert over A's new leaf's range routes there. Before the fix its
+    // descent reached LA, whose right sibling bounds it below the key, and
+    // was refused on every attempt.
+    ASSERT_TRUE(f.Insert(key_a, pk++).ok());
+    const auto pks = f.Probe(key_a);
+    EXPECT_NE(pks.end(), std::find(pks.begin(), pks.end(), pk_a)) << "a probe misses A's entry";
+    ExpectEverySeparatorBoundsItsSubtree(f);
+}
+
+// A stale-root cell's second core: inserts key 0 under rising pks through
+// `root`, which it keeps naming, until one insert has to divide a leaf -
+// returning that insert's outcome. The ones before it land inside the stale
+// root's subtree, which is still the right place for them.
+StatusOr<IndexInsertResult> InsertUntilADivide(Fixture& f, PageId root, std::uint64_t& pk) {
+    for (int i = 0; i < 64; ++i) {
+        const std::size_t before = f.Walk().size();
+        auto out = IndexInsert(f.store, root, f.layout, Key(0, f.layout.key_width), pk++, {},
+                               /*owner_oid=*/0);
+        if (!out.ok()) {
+            EXPECT_EQ(before, f.Walk().size()) << "a refused insert wrote an entry";
+            return out;
+        }
+        EXPECT_EQ(before + 1, f.Walk().size());
+        if (out.value().restructured()) return out;
+    }
+    ADD_FAILURE() << "no insert divided a leaf; the cell tested nothing";
+    return Status::NotFound("no insert divided a leaf");
+}
+
+TEST(IndexTreeTest, ARootAnotherCoreGrewOverIsNotGrownOverASecondTime) {
+    // **The fork.** R is a full root at level 1. B's insert divides it and
+    // grows a level; B's further inserts refill R through the new root. A -
+    // whose memo still names R, and a memo drops only at the next task
+    // boundary - then divides a leaf under full R: it must not divide R and
+    // grow a second root over it, because whichever root is published last,
+    // the other one's half is gone.
+    Fixture f(Layout(/*key_width=*/1000));
+    std::uint32_t k = 1;
+    while (LeftmostAtLevel(f, 1) != f.root || !NodeIsFull(f, f.root)) {
+        ASSERT_TRUE(f.Insert(k * 10, 1).ok()) << k;
+        ++k;
+    }
+    const PageId stale = f.root;
+    std::uint64_t pk = 2;
+    while (f.root == stale) ASSERT_TRUE(f.Insert(k++ * 10, 1).ok());  // B grows over R
+    while (!NodeIsFull(f, stale)) ASSERT_TRUE(f.Insert(0, pk++).ok());  // and refills it
+
+    auto refused = InsertUntilADivide(f, stale, pk);
+    ASSERT_FALSE(refused.ok()) << "A grew root " << refused.value().new_root
+                               << " over a page B had already grown one over";
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+    ExpectEverySeparatorBoundsItsSubtree(f);
+    ASSERT_TRUE(f.Insert(0, pk++).ok()) << "the retry, from the current root";
+    ExpectEverySeparatorBoundsItsSubtree(f);
+}
+
+TEST(IndexTreeTest, ALeafRootAnotherCoreGrewOverIsNotGrownOverASecondTime) {
+    // The same fork on a tree's first growth: B's insert divides the root
+    // leaf and grows a level over it; A, still naming the leaf as the root,
+    // fills it back up and divides it.
+    Fixture f(Layout(/*key_width=*/1000));
+    const PageId stale = f.root;
+    std::uint32_t k = 1;
+    while (f.root == stale) ASSERT_TRUE(f.Insert(k++ * 10, 1).ok());
+    std::uint64_t pk = 2;
+
+    auto refused = InsertUntilADivide(f, stale, pk);
+    ASSERT_FALSE(refused.ok()) << "A grew root " << refused.value().new_root
+                               << " over a leaf B had already grown one over";
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+    ExpectEverySeparatorBoundsItsSubtree(f);
+    ASSERT_TRUE(f.Insert(0, pk++).ok()) << "the retry, from the current root";
+    ExpectEverySeparatorBoundsItsSubtree(f);
 }
 
 }  // namespace

@@ -84,12 +84,11 @@
 // (a purge, a `DELETE` that reclaims them) must revisit
 // `LeafStillCoversKey` in the same change.
 //
-// **What is not closed here** is the walk back up: a divide inserts its
-// separator into the parents the descent recorded, holding none of them,
-// and a parent another core divided meanwhile can take it on the wrong
-// side (window 2, `docs/inflight/bugs/a-secondary-index-descent-is-not-revalidated-across-cores.md`,
-// AT-S16's). A stale root reaches the same walk when an insert it placed
-// correctly divides past it.
+// **The walk back up is checked too** (AT-S16): a divide finds, asks and
+// holds every parent it writes before it writes anything, re-descending
+// from the root on a miss, and marks a root a level grows over so that a
+// core whose memo names a stale root is refused rather than growing a
+// second one. index_tree.cpp's `SecureParents` carries it.
 
 namespace kds::index {
 

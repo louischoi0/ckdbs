@@ -15,6 +15,9 @@
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
 
+#include "act_on_fetch_store.hpp"
+#include "tree_structure.hpp"
+
 // The clustered B+ tree: descent, the split that moves nothing, the level
 // growth above it, and the point lookup the whole structure exists for.
 //
@@ -1519,6 +1522,276 @@ TEST(InternalViewTest, AFullNodeRefusesAnotherEntryRatherThanOverrunningThePage)
     auto past_end = node.value().Entry(kInternalMaxEntries);
     EXPECT_FALSE(past_end.ok());
     EXPECT_EQ(past_end.status().code(), StatusCode::kOutOfRange);
+}
+
+// ---- The walk back up across cores (AT-S16) -----------------------------
+//
+// A split promotes its separator into the parents its descent recorded.
+// The descent held none of them - it releases each node before reading
+// the child - and since AT-S5 another core can divide one in between.
+// These cells put that divide on the one fetch the walk up starts with
+// (`ActOnFetchStore`): the parent's second fetch by the inserting call,
+// its first being the descent's own read. `btree_race_test.cpp` asks the
+// same question with real threads.
+//
+// **Mutations** (2026-09-28, 20 runs each, all killed 20/20): `FetchParent`
+// accepting the recorded parent without asking it (the first two cells);
+// `SecureParents` growing over a marked root (the `*GrewOver*` cells). A
+// divide's rebuild dropping the mark, internal or leaf, is killed by
+// `AnOldRootKeepsItsMarkWhenItIsDividedLater`. Marking the old root before
+// the new root's allocation, where a failed grow leaves a mark with no
+// root above it, is killed by `AGrowThatDiesPromotingItsSeparatorLeavesTheLeafChainAlone`
+// - found that way, during the stage. Deleting the right-split's record of
+// the old root it marks is killed by `AGrowthRecordsTheOldRootItMarks` - a
+// mutant AT-S16's review found no cell for.
+
+// Ids k * 10 for k = 1..n, one tuple per leaf: every insert after the first
+// splits, and each split promotes one separator.
+std::vector<std::uint64_t> FillOnePerLeaf(Tree& tree, std::uint64_t n) {
+    std::vector<std::uint64_t> ids;
+    for (std::uint64_t k = 1; k <= n; ++k) {
+        EXPECT_TRUE(tree.Insert(k * 10, kOnePerLeafFiller).ok()) << "id " << k * 10;
+        ids.push_back(k * 10);
+    }
+    return ids;
+}
+
+void ExpectEveryIdFound(storage::PageStore& store, PageId root,
+                        const std::vector<std::uint64_t>& ids) {
+    for (std::uint64_t id : ids) {
+        auto found = BtreeLookup(store, root, id);
+        EXPECT_TRUE(found.ok()) << "id " << id << ": " << found.status().message();
+    }
+}
+
+TEST(BtreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHoldingItsLeaf) {
+    // **Window 2.** 686 leaves: the root's leftmost child P is full (678
+    // separators), and its last leaf holds 6790. A's 6795 appends a leaf
+    // after it and promotes 6795 into P. B's 15, an interior key, promotes
+    // into full P first and divides it: P keeps the lower half, and the
+    // leaf A split moves to P's new sibling. Promoting into the recorded P
+    // then puts 6795 where no descent for it looks.
+    storage::InMemoryPageStore backing(128);
+    testing_race::ActOnFetchStore store(backing);
+    Tree tree(store);
+    auto ids = FillOnePerLeaf(tree, kInternalMaxEntries + 8);
+
+    PageId parent = kInvalidPageId;
+    {
+        auto root = store.GetForRead(tree.root);
+        ASSERT_TRUE(root.ok()) << root.status().message();
+        parent = InternalView(root.value().bytes()).leftmost_child();
+        auto p = store.GetForRead(parent);
+        ASSERT_TRUE(p.ok()) << p.status().message();
+        InternalView view(p.value().bytes());
+        ASSERT_TRUE(view.IsFull()) << "P must be full, or B's promotion does not divide it";
+        ASSERT_EQ(view.level(), 1u);
+    }
+
+    constexpr std::uint64_t kA = 6795;
+    store.OnFetch(parent, /*nth=*/2, [&] {
+        ASSERT_TRUE(tree.Insert(15, kOnePerLeafFiller).ok()) << "B's divide must land";
+    });
+    auto placed = BtreeInsert(store, tree.root, kA, MakeTuple(kA, kOnePerLeafFiller),
+                              /*trx_id=*/1, /*owner_oid=*/0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    ASSERT_TRUE(store.fired()) << "B's divide never ran; the cell tested nothing";
+    ASSERT_EQ(kInvalidPageId, placed.value().new_root);
+
+    auto found = BtreeLookup(store, tree.root, kA);
+    ASSERT_TRUE(found.ok()) << "A's row: " << found.status().message();
+    EXPECT_EQ(placed.value().page_id, found.value().page_id);
+    found.value().leaf.Release();
+    ids.push_back(15);
+    ExpectEveryIdFound(store, tree.root, ids);
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+}
+
+TEST(BtreeTest, AnInsertWhoseParentAnotherCoreGrewPastIsRefusedBeforeItWritesAnything) {
+    // **A root grown under the walk.** 679 leaves: the root R is one full
+    // internal node. A's 6800 appends at the tail and would promote into R.
+    // B's 15 divides R first and grows a level over it, so the leaf A split
+    // is now under R's new sibling - a page A's root cannot reach. What A
+    // can do is refuse, retryable, **before** it has written a page; what
+    // it must not do is promote 6800 into R's lower half.
+    storage::InMemoryPageStore backing(128);
+    testing_race::ActOnFetchStore store(backing);
+    Tree tree(store);
+    auto ids = FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId stale = tree.root;
+    {
+        auto root = store.GetForRead(stale);
+        ASSERT_TRUE(root.ok()) << root.status().message();
+        ASSERT_EQ(storage::RawPageType(root.value().bytes()),
+                  static_cast<std::uint8_t>(PageType::kBtreeInternal));
+        ASSERT_TRUE(InternalView(root.value().bytes()).IsFull());
+    }
+
+    constexpr std::uint64_t kA = 6800;
+    store.OnFetch(stale, /*nth=*/2, [&] {
+        ASSERT_TRUE(tree.Insert(15, kOnePerLeafFiller).ok()) << "B's divide must land";
+    });
+    auto refused = BtreeInsert(store, stale, kA, MakeTuple(kA, kOnePerLeafFiller),
+                               /*trx_id=*/1, /*owner_oid=*/0);
+    ASSERT_TRUE(store.fired()) << "B's divide never ran; the cell tested nothing";
+    ASSERT_NE(stale, tree.root) << "B must have grown a level, or no root is stale";
+    ASSERT_FALSE(refused.ok()) << "A placed 6800 through a root that no longer reaches its leaf";
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+
+    auto leaves = BtreeLeafCount(store, tree.root);
+    ASSERT_TRUE(leaves.ok()) << leaves.status().message();
+    EXPECT_EQ(kInternalMaxEntries + 2u, leaves.value()) << "the refused insert wrote a leaf";
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+
+    // The client's retry reads the current root and lands.
+    ASSERT_TRUE(tree.Insert(kA, kOnePerLeafFiller).ok());
+    ids.push_back(15);
+    ids.push_back(kA);
+    ExpectEveryIdFound(store, tree.root, ids);
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+}
+
+TEST(BtreeTest, ARootAnotherCoreGrewOverIsNotGrownOverASecondTime) {
+    // **The fork.** A core whose memo still names R - B grew a level over
+    // it, and a memo drops only at the next task boundary - divides R and
+    // would grow a second root over it. Whichever root is published last,
+    // the other one's half is gone. B's 6800 appends and grows R_B over the
+    // full R without touching R's entries; A's 15 then needs R divided.
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    auto ids = FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId stale = tree.root;
+    ASSERT_TRUE(tree.Insert(6800, kOnePerLeafFiller).ok());
+    ASSERT_NE(stale, tree.root) << "B's append must grow a level over R";
+
+    auto refused = BtreeInsert(store, stale, 15, MakeTuple(15, kOnePerLeafFiller),
+                               /*trx_id=*/1, /*owner_oid=*/0);
+    ASSERT_FALSE(refused.ok()) << "A grew root " << refused.value().new_root
+                               << " over a page B had already grown one over";
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+
+    auto leaves = BtreeLeafCount(store, tree.root);
+    ASSERT_TRUE(leaves.ok()) << leaves.status().message();
+    EXPECT_EQ(kInternalMaxEntries + 2u, leaves.value()) << "the refused insert wrote a leaf";
+    ASSERT_TRUE(tree.Insert(15, kOnePerLeafFiller).ok()) << "the retry, from the current root";
+    ids.push_back(6800);
+    ids.push_back(15);
+    ExpectEveryIdFound(store, tree.root, ids);
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+}
+
+TEST(BtreeTest, ALeafRootAnotherCoreGrewOverIsNotGrownOverASecondTime) {
+    // The same fork one level down, on a tree's first growth: the root is a
+    // full leaf, B's append grows a level over it without moving a tuple,
+    // and A - still naming the leaf as the root - divides it for a key
+    // inside it.
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    constexpr std::size_t kFiller = 1016;  // eight to a leaf
+    std::vector<std::uint64_t> ids;
+    PageId stale = tree.root;
+    for (std::uint64_t id = 10; stale == tree.root; id += 10) {
+        ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << "id " << id;
+        ids.push_back(id);
+    }
+    ASSERT_GE(ids.size(), 3u) << "the leaf must hold enough rows to divide";
+
+    auto refused = BtreeInsert(store, stale, 15, MakeTuple(15, kFiller), /*trx_id=*/1,
+                               /*owner_oid=*/0);
+    ASSERT_FALSE(refused.ok()) << "A grew root " << refused.value().new_root
+                               << " over a leaf B had already grown one over";
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+
+    ASSERT_TRUE(tree.Insert(15, kFiller).ok()) << "the retry, from the current root";
+    ids.push_back(15);
+    ExpectEveryIdFound(store, tree.root, ids);
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+}
+
+TEST(BtreeTest, AnOldRootKeepsItsMarkWhenItIsDividedLater) {
+    // An old root is an ordinary node once grown over, and a divide
+    // **rebuilds** the page it divides - which zeroes the header flags the
+    // mark lives in. A core whose memo still names the old root is what the
+    // mark is for, and nothing stops it outliving the divide.
+    //
+    // The leaf: B's append grows a level over the full root leaf, a
+    // current-root insert of 15 divides it, and A - still naming it as the
+    // root - fills it back up and divides it for a key inside it.
+    {
+        storage::InMemoryPageStore store(128);
+        Tree tree(store);
+        constexpr std::size_t kFiller = 1016;  // eight to a leaf
+        std::vector<std::uint64_t> ids;
+        const PageId stale = tree.root;
+        for (std::uint64_t id = 10; stale == tree.root; id += 10) {
+            ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << "id " << id;
+            ids.push_back(id);
+        }
+        ASSERT_TRUE(tree.Insert(15, kFiller).ok());  // divides the old root leaf
+        ids.push_back(15);
+        {
+            auto bytes = store.GetForRead(stale);
+            ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+            ASSERT_TRUE(heap::PageView(bytes.value().bytes()).grown_over())
+                << "the divide's rebuild dropped the old root leaf's mark";
+        }
+        Status last = Status::OK();
+        for (std::uint64_t id = 11; id < 15; ++id) {
+            auto r = BtreeInsert(store, stale, id, MakeTuple(id, kFiller), /*trx_id=*/1,
+                                 /*owner_oid=*/0);
+            if (!r.ok()) {
+                last = r.status();
+                break;
+            }
+            ASSERT_EQ(kInvalidPageId, r.value().new_root)
+                << "id " << id << " grew a second root over the old root leaf";
+            ids.push_back(id);
+        }
+        EXPECT_EQ(StatusCode::kTxnConflict, last.code())
+            << "the refill never reached a divide; the cell tested nothing";
+        ExpectEveryIdFound(store, tree.root, ids);
+        testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+    }
+    // The internal node: B's append grows a level over the full root R,
+    // and a current-root insert of 15 divides R.
+    {
+        storage::InMemoryPageStore store(128);
+        Tree tree(store);
+        FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+        const PageId stale = tree.root;
+        ASSERT_TRUE(tree.Insert(6800, kOnePerLeafFiller).ok());
+        ASSERT_TRUE(tree.Insert(15, kOnePerLeafFiller).ok());
+        auto bytes = store.GetForRead(stale);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        InternalView view(bytes.value().bytes());
+        ASSERT_FALSE(view.IsFull()) << "15 must have divided the old root";
+        EXPECT_TRUE(view.grown_over()) << "the divide's rebuild dropped the old root's mark";
+    }
+}
+
+TEST(BtreeTest, AGrowthRecordsTheOldRootItMarks) {
+    // The mark is a write, so the old root owes redo an image. A divided
+    // root records itself and a leaf root's split path records the leaf;
+    // a right-split at a full internal root writes nothing else into it, so
+    // that branch records it for the mark alone - every page an insert
+    // writes is described by a record, or redo rebuilds it without the
+    // write.
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId old_root = tree.root;
+    auto grown = tree.Insert(6800, kOnePerLeafFiller);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    ASSERT_NE(old_root, tree.root) << "the append must grow a level over the full root";
+
+    bool recorded = false;
+    for (const storage::StructuralChange& c : grown.value().changes()) {
+        if (c.page_id == old_root) recorded = true;
+    }
+    EXPECT_TRUE(recorded) << "the marked old root has no image for redo";
+    auto bytes = store.GetForRead(old_root);
+    ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+    EXPECT_TRUE(InternalView(bytes.value().bytes()).grown_over());
 }
 
 }  // namespace

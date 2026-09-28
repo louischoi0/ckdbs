@@ -721,19 +721,34 @@ new right sibling.
   (`Catalog::UpdateIndexRoot` bumps the schema word; the memo drops at the
   next task boundary) - routes a key outside its subtree to a leaf that no
   longer covers it, every attempt alike, and is refused retryable rather than
-  placed where no descent from the current root looks.
+  placed where no descent from the current root looks. Inside its subtree the
+  placement is right, and a divide it causes is placed right too, up to the
+  stale root itself, which the root's mark (below) refuses to grow over.
 - **The read side checks nothing, and the reason is directional.** A probe's
   seek names where a forward walk along `right_sibling` starts; a divide only
   moves entries right, so an outrun seek lands left of the key and the walk
   reaches it. No caller treats one leaf's silence as the index's.
-- **Open: the walk back up.** A divide inserts its separator into the
-  parents the descent recorded, holding none of them; a parent another core
-  divided meanwhile can take it on the wrong side
-  (`docs/inflight/bugs/a-secondary-index-descent-is-not-revalidated-across-cores.md`,
-  window 2). Since the coverage check, what that costs is not a lost row:
-  a misplaced separator still bounds its child from below, so probes find
-  everything, and inserts over the affected range are refused
-  `TxnConflict` on every attempt.
+- **The walk back up finds its parents before it writes** (AT-S16). A
+  divide's separator goes into the parents the descent recorded, which the
+  descent held none of, so another core can divide one first and move the
+  divided child to the new half. Once the leaf is known to divide,
+  `IndexInsert` climbs while the nodes are full, taking each parent
+  exclusive and asking it whether it still routes the entry's sort key to
+  the node below - exact, because that node is held and every change to its
+  range is a divide of it. On a miss it re-descends from the root it was
+  given, bounded by `storage::kMaxDescentRestarts`. Only then does it write,
+  so a refusal - `TxnConflict`, retryable, naming a stale path - leaves the
+  tree as it found it. It is the clustered tree's walk (`heap-and-tuple.md`
+  §5), which states why the holds cannot deadlock and why a restart makes
+  progress.
+- **A root is marked when a level grows over it** (AT-S16,
+  `kIndexFlagGrownOver` in the leaf or internal header's `flags`, the
+  operator's word of 2026-09-28). The mark is the only thing on the page that
+  says it now has a parent. A stale root's insert that would grow a level
+  over it finds the mark under its hold and is refused before it writes,
+  instead of growing a second root whose publication would drop the other
+  one's half. A page written before the mark existed carries 0, which claims
+  nothing; the mark is never cleared and survives a divide of the page.
 
 ---
 

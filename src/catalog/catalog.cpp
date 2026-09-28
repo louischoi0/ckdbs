@@ -3755,9 +3755,10 @@ Status Catalog::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root,
     // is the same defect one structure over. **Since AT-S15 the index has
     // the coverage check underneath too** (`index_tree.cpp`'s
     // `LeafStillCoversKey`): a key outside the stale subtree is refused
-    // retryable instead of placed. What it does not refuse is the level
-    // growth from a stale root - that is the divide's walk up, AT-S16's -
-    // so this bump is still what bounds the window to one task.
+    // retryable instead of placed, **and since AT-S16 a level growth from a
+    // stale root is refused as well** - the old root carries a grown-over
+    // mark (`SecureParents`). So a stale memo costs refusals, never a second
+    // root; this bump is what bounds those refusals to one task.
     //
     // `BumpWord` and not `BumpVersion`, for `UpdateRelationDescPage`'s
     // reason exactly: this core's entry was just repaired in place and

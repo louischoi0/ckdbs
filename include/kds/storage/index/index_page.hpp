@@ -189,6 +189,9 @@ static_assert(offsetof(IndexInternalHeaderFields, reserved0) == kIndexInternalRe
 static_assert(sizeof(IndexInternalHeaderFields) == kIndexInternalHeaderSize);
 
 inline constexpr std::uint16_t kIndexFlagInitialized = 0x1;
+// A root was grown over this page (AT-S16), on a leaf or an internal node:
+// heap_page.hpp's `kHeaderFlagGrownOver`, which states the argument.
+inline constexpr std::uint16_t kIndexFlagGrownOver = 0x2;
 
 // Where each page's entry array starts: 32 + 16.
 inline constexpr std::size_t kIndexLeafEntriesOffset =
@@ -263,6 +266,11 @@ public:
 
     bool IsFull() const;
 
+    // `kIndexFlagGrownOver`. The caller holds the page exclusive for either,
+    // for heap::PageView's reason.
+    bool grown_over() const;
+    void MarkGrownOver();
+
     // Index of the first entry whose sort key is >= `sort_key`, or
     // `entry_count()` if there is none. `sort_key` is a full
     // `key_width + kIndexPkWidth` bytes; a caller holding less pads with
@@ -313,6 +321,11 @@ public:
     StatusOr<PageId> Child(std::uint16_t idx) const;
 
     bool IsFull(const IndexLayout& layout) const;
+
+    // `kIndexFlagGrownOver`. The caller holds the page exclusive for either,
+    // for heap::PageView's reason.
+    bool grown_over() const;
+    void MarkGrownOver();
 
     // The child a descent for `sort_key` must follow: the child of the last
     // entry whose separator is <= `sort_key`, or `leftmost_child` if there

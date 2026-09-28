@@ -133,6 +133,14 @@ void PageView::set_next_page_id(PageId next) {
     std::memcpy(page_.data() + kNextPageIdOffset, &next, sizeof(next));
 }
 
+bool PageView::grown_over() const { return (ReadHeader().flags & kHeaderFlagGrownOver) != 0; }
+
+void PageView::MarkGrownOver() {
+    HeapPageHeaderFields h = ReadHeader();
+    h.flags = static_cast<std::uint16_t>(h.flags | kHeaderFlagGrownOver);
+    WriteHeader(h);
+}
+
 StatusOr<std::uint16_t> PageView::InsertTuple(std::span<const std::byte> payload,
                                                std::uint64_t trx_id, std::uint64_t undo_ptr) {
     if (payload.size() > kPageSize) {

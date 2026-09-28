@@ -19,6 +19,7 @@
 #include "kds/storage/page_latch.hpp"
 
 #include "armed_race.hpp"
+#include "tree_structure.hpp"
 
 // **The clustered B+ tree with more than one core in it** (AT-S5c, D3).
 //
@@ -671,6 +672,102 @@ TEST(BtreeRaceTest, TheLeafChainStillAscendsAfterConcurrentSplits) {
     }
     EXPECT_GT(leaves_walked, static_cast<std::size_t>(kLeaves))
         << "the concurrent phase split nothing; the cell asserts over a tree it did not stress";
+}
+
+// ---- The walk back up (AT-S16) ------------------------------------------
+//
+// Every cell above keeps the root below full, by assertion, so none of
+// them can report a separator promoted into a parent another core divided
+// as its own. This one is about exactly that, and **aims each round at
+// it**: one tuple to a leaf, so every insert promotes a separator, into a
+// tree whose parent P is full. Thread 0 inserts 15 - the far left of P,
+// which divides it - and thread 1 inserts 6795, promoting from P's last
+// leaf, which that divide moves to P's new sibling. Both leave the same
+// rendezvous; whichever reaches P second walks up into a parent the other
+// divided. A fresh tree a round, alternating two shapes: P the root itself
+// (679 leaves: the divide grows a level, the loser's root is stale) and P
+// the root's leftmost child (686 leaves: the loser re-descends to P's new
+// sibling). A grown root is published after the insert returns, as the
+// dispatcher does, and a refusal is the client's to retry from the root it
+// reads next.
+//
+// **What is asserted is the whole tree**: every separator over its subtree
+// (`tree_structure.hpp`), and every id found by a lookup from the root.
+//
+// **Mutations** (2026-09-28, 20 runs each): the unfixed walk up (as at
+// `f0ad197`) killed 20/20; `FetchParent` accepting the recorded parent
+// without asking it, 20/20. `SecureParents` growing over a marked root
+// survives here, 0/20 - the loser's stale root is refused one step
+// earlier, by the recorded parent that no longer routes to its leaf - and
+// is `btree_test.cpp`'s `*GrewOver*` cells' to kill, 20/20.
+inline constexpr int kWalkRounds = 40;
+inline constexpr int kRetries = 64;
+
+TEST(BtreeRaceTest, TwoCoresPromotingIntoOneParentLeaveEverySeparatorOverItsSubtree) {
+    for (int round = 0; round < kWalkRounds; ++round) {
+        std::unique_ptr<storage::MemoryPageDevice> device;
+        auto store = ArmedStore(device);
+        ASSERT_NE(store, nullptr);
+        auto created = store->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        PageId first_root = created.value().first;
+        ASSERT_TRUE(FormatRoot(created.value().second.bytes(), /*owner_oid=*/0).ok());
+        created.value().second.Release();
+
+        const std::uint64_t leaves = kInternalMaxEntries + (round % 2 == 0 ? 1 : 8);
+        std::vector<std::uint64_t> ids;
+        for (std::uint64_t k = 1; k <= leaves; ++k) {
+            auto r = BtreeInsert(*store, first_root, k * 10, MakeTuple(k * 10), /*trx_id=*/1,
+                                 /*owner_oid=*/0);
+            ASSERT_TRUE(r.ok()) << "prefill " << k * 10 << ": " << r.status().message();
+            if (r.value().new_root != kInvalidPageId) first_root = r.value().new_root;
+            ids.push_back(k * 10);
+        }
+
+        std::atomic<PageId> root{first_root};
+        Rendezvous gate(kThreads);
+        std::vector<std::string> errors;
+        std::mutex errors_latch;
+        const std::uint64_t mine[kThreads] = {15, kInternalMaxEntries * 10 + 5};
+
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&, t] {
+                SetCurrentCore(static_cast<std::uint32_t>(t));
+                const std::uint64_t id = mine[t];
+                gate.Wait();
+                Status last = Status::OK();
+                for (int attempt = 0; attempt < kRetries; ++attempt) {
+                    auto r = BtreeInsert(*store, root.load(std::memory_order_acquire), id,
+                                         MakeTuple(id), /*trx_id=*/1, /*owner_oid=*/0);
+                    if (r.ok()) {
+                        if (r.value().new_root != kInvalidPageId) {
+                            root.store(r.value().new_root, std::memory_order_release);
+                        }
+                        return;
+                    }
+                    last = r.status();
+                    if (last.code() != StatusCode::kTxnConflict) break;
+                    std::this_thread::yield();
+                }
+                const std::lock_guard<std::mutex> held(errors_latch);
+                errors.push_back(std::to_string(id) + ": " + last.message());
+            });
+        }
+        for (std::thread& thread : threads) thread.join();
+        SetCurrentCore(0);
+        ASSERT_TRUE(errors.empty()) << errors.size() << " insert(s) failed, first: " << errors[0];
+        ids.insert(ids.end(), std::begin(mine), std::end(mine));
+
+        const PageId final_root = root.load();
+        testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(*store, final_root);
+        for (std::uint64_t id : ids) {
+            auto found = BtreeLookup(*store, final_root, id);
+            EXPECT_TRUE(found.ok()) << "round " << round << ", id " << id << ": "
+                                    << found.status().message();
+        }
+        if (::testing::Test::HasFailure()) break;  // one round's damage is the report
+    }
 }
 
 }  // namespace

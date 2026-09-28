@@ -66,3 +66,16 @@ only so the day's words are in one place.
 The order's §3 is the ruling text; this table restates it and adds
 nothing. **If the operator's verbal word differed from CLA's proposal on
 any of the three, that row is wrong** and the stage it gates stops.
+
+## 5. Amendment 1 to the AT-close order - placed
+
+The amendment asks for the operator's word on it to be recorded here,
+verbatim. It was given on **2026-09-28**, with the amendment's text pasted
+after it:
+
+| | |
+|---|---|
+| **Word** | *"ignore AT-S16 things, but follow what remains:"* |
+| **And, asked what that meant** | *"Finish S16 too"*, and for the placed text, *"finish AT-S16 first"* (the questions as put: `raft-marks-2026-09-28.md` §3) |
+| **Mark** | Amendment 1 is placed as the order's §7, after AT-S16 was finished; §0 items 6 and 7 record it and what drifted |
+| **Recorded at** | `workorder-at-close-ar0-5-left-open.md` §0 items 6-7 and §7 |
