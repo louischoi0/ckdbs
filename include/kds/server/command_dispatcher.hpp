@@ -231,9 +231,20 @@ struct DispatchOutcome {
     // answer there is the retryable conflict itself. So the block is a
     // property of served connections, and a fixture sees the pre-R6-5
     // behaviour.
+    //
+    // **AX-S2b: where the lock names the holder, the wait is on its slot.**
+    // `slot` is the wake the refused unit ask registered (`BorrowChain`),
+    // flipped by the holder's release from whichever core releases and
+    // followed by a kick to this core - so a waiter asleep in its idle block
+    // is woken, and its re-run meets the unit free rather than a decided
+    // holder that has not released it yet. Null where nothing named a unit
+    // - an assertion's group, a dispatcher with no lock table, a holder only
+    // the header names - and there the wait polls `IsInFlight`.
     struct WriteBlock {
         std::uint64_t trx_id = 0;  // the undecided writer being waited for
         std::uint64_t pk = 0;      // the row it holds
+        txn::LockKey key{};        // the unit `slot` is registered on
+        std::shared_ptr<txn::LockWaitSlot> slot;
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
@@ -2182,6 +2193,12 @@ private:
     // outlives the DDL transaction whose ask registered it - which it must,
     // because that transaction is unwound before the park it is for.
     std::optional<DispatchOutcome::LockWait> lock_wait_ = std::nullopt;
+    // **AX-S2b: the wake a refused unit ask registered**, on the same
+    // statement-scoped terms. `BorrowChain` sets it; `DispatchAndStage`'s
+    // end is the one place it leaves - into `write_block` when the blocker
+    // recorded is the holder it names, dropped from the table otherwise - so
+    // no exit of a statement can leave a registration behind.
+    std::optional<DispatchOutcome::LockWait> blocking_wake_ = std::nullopt;
     std::size_t statement_trail_mark_ = 0;
 
     // **The fault net every wait in this file is bounded by**, and the

@@ -383,17 +383,31 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
                 deadlocked = true;
                 break;
             }
-            // Settles the moment the transaction is decided, whichever way:
-            // a committed one releases the row to a re-read, an aborted one
-            // puts the old version back, and both are "no longer in doubt".
-            // One clock read and one walk of this core's live set per
-            // turn, which is the predicate shape every park in this file
-            // uses.
-            const std::function<bool()> decided = [this, block, deadline_ns] {
-                return !txn_->IsInFlight(block.trx_id) || NowNs() >= deadline_ns;
+            // **On the unit's slot where the lock named the holder**
+            // (AX-S2b): the release flips it and kicks this core, whichever
+            // core released, and the re-run then finds the unit free. Where
+            // no unit was named the wait settles the moment the transaction
+            // is decided, whichever way - a committed one releases the row
+            // to a re-read, an aborted one puts the old version back - on a
+            // poll that nothing kicks (`known-gaps.md`, Locks).
+            const std::function<bool()> released = [this, block, deadline_ns] {
+                const bool freed = block.slot != nullptr ? txn::LockWaitReady(block.slot)
+                                                         : !txn_->IsInFlight(block.trx_id);
+                return freed || NowNs() >= deadline_ns;
             };
-            co_await sched::WaitUntil{&decided};
-            if (txn_->IsInFlight(block.trx_id)) break;  // the net, not the decision
+            co_await sched::WaitUntil{&released};
+            // Dropped however the wait ended, as `AwaitRelationLock` drops
+            // its own - and cleared on the outcome, so an exit below that
+            // refuses the statement has nothing left to drop.
+            if (block.slot != nullptr) {
+                locks_->DropWake(block.key, block.slot);
+                out->write_block->slot.reset();
+            }
+            // The net, not the decision.
+            if (block.slot != nullptr ? !txn::LockWaitReady(block.slot)
+                                      : txn_->IsInFlight(block.trx_id)) {
+                break;
+            }
             if (logging(LogLevel::kDebug)) {
                 log_->Debug("lock", "core " + std::to_string(core_id_) + " held a write of " +
                                         held_name(block.pk) + " until transaction " +
@@ -821,6 +835,18 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // re-run re-resolves the parent anyway.
     if (blocking_writer_ != 0 && !lock_wait_.has_value()) {
         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
+        // The unit's wake travels with the block only when it names the
+        // holder the block waits for (AX-S2b): a busy parent recorded
+        // before the walk, or a group reserver, is not who that slot is on.
+        if (blocking_wake_.has_value() && blocking_wake_->holder == blocking_writer_) {
+            outcome.write_block->key = blocking_wake_->key;
+            outcome.write_block->slot = std::move(blocking_wake_->slot);
+        }
+    }
+    // Whatever was not handed to a wait leaves the table here.
+    if (blocking_wake_.has_value()) {
+        locks_->DropWake(blocking_wake_->key, blocking_wake_->slot);
+        blocking_wake_.reset();
     }
     // **The refusal, installed where the path that raised it could not
     // carry one.** `InsertOneRow` answers a rendered string and leaves
@@ -8031,6 +8057,11 @@ void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session
         }
     }
     out.parked_mid_walk = false;
+    // A wait refused before it parked - the victim, or the net read at the
+    // loop's top - still holds its unit's registration (AX-S2b).
+    if (out.write_block.has_value() && out.write_block->slot != nullptr) {
+        locks_->DropWake(out.write_block->key, out.write_block->slot);
+    }
     out.write_block.reset();
     out.response = ErrorReply(refused);
     // The carried status, not only the rendered line - see the declaration.
@@ -8223,8 +8254,19 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // DDL's claim on the object, which asks the table itself
     // (`BorrowRelationForDdl`) because it needs its own wait.
     if (unit.unit == txn::LockUnit::kRelation) return true;
-    auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker);
+    // **With a wake, where the statement can park** (AX-S2b): a refusal
+    // leaves a registration on the unit so the holder's release kicks this
+    // core, which the row wait - `NoteBlockingWriter`'s - had nothing of
+    // until then. Kept on `blocking_wake_`, where the statement's end
+    // either hands it to the wait or drops it.
+    std::shared_ptr<txn::LockWaitSlot> unit_wake;
+    auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker,
+                                    may_park_ ? &unit_wake : nullptr);
     if (!under.ok()) return refused(under.status());
+    if (!under.value() && unit_wake != nullptr) {
+        if (blocking_wake_.has_value()) locks_->DropWake(blocking_wake_->key, blocking_wake_->slot);
+        blocking_wake_ = DispatchOutcome::LockWait{unit, *blocker, std::move(unit_wake)};
+    }
     return under.value();
 }
 

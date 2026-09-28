@@ -124,5 +124,119 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     EXPECT_EQ(rig->locks().EntryCount(), 0u);
 }
 
+TEST(RowWaitWakeRigTest, AWaitRefusedAsFutileLeavesNoRegistrationOnTheRow) {
+    // The registration is made at the ask, before anyone decides whether
+    // the statement will wait for it. A repeatable-read writer meeting the
+    // row's own undecided writer is refused rather than parked - its view
+    // could never see that commit (`NoteBlockingWriter`) - so its wake is
+    // handed to no wait, and `DispatchAndStage`'s end is what drops it.
+    //
+    // **Mutation**: that drop removed - the leaked registration keeps the
+    // row's entry alive after both transactions have decided.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
+    Session holder;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
+    ASSERT_FALSE(
+        StartsWith(d0.Dispatch("UPDATE t SET v = 1 WHERE id = 1", &holder).response, "ERR"));
+    Session reader;
+    ASSERT_TRUE(StartsWith(
+        d1.Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader).response, "BEGIN"));
+
+    Statement update{&reader, "UPDATE t SET v = 2 WHERE id = 1"};
+    Statement rollback{&reader, "ROLLBACK"};
+    Statement commit{&holder, "COMMIT"};
+    rollback.go.store(false, std::memory_order_release);
+    commit.go.store(false, std::memory_order_release);
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, update)));
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, rollback)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, commit)));
+    rig->Start();
+
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); }));
+    EXPECT_TRUE(StartsWith(update.out.response, "ERR")) << update.out.response;
+    commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }));
+    rollback.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(
+        KickUntil(*rig, 1, [&] { return rollback.done.load(std::memory_order_acquire); }));
+    rig->Stop();
+    EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
+}
+
+TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOtherProceeds) {
+    // A on core 0 holds row 1 and waits for row 2; B on core 1 holds row 2
+    // and asks for row 1. B's registration closes the cycle, so B is the
+    // victim (AO-R7) - refused before it parks, which is the one exit where
+    // the wake its ask registered is still on the outcome and
+    // `RefuseParkedWrite` drops it. B's rollback releases row 2, which
+    // flips A's slot and kicks core 0, and A's re-run takes the row.
+    //
+    // **Mutation**: the drop in `RefuseParkedWrite` removed - B's
+    // registration on row 1 outlives it and the entry with it. Also the
+    // statement-level cross-core cycle the lost `LockDeadlockTest` cells
+    // (`known-gaps.md`, Testing: R8.3) no longer pin.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0), (2, 0)").response, "ERR"));
+    Session a;
+    Session b;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &a).response, "BEGIN"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("UPDATE t SET v = 1 WHERE id = 1", &a).response, "ERR"));
+    ASSERT_TRUE(StartsWith(d1.Dispatch("BEGIN", &b).response, "BEGIN"));
+    ASSERT_FALSE(StartsWith(d1.Dispatch("UPDATE t SET v = 2 WHERE id = 2", &b).response, "ERR"));
+
+    Statement a_waits{&a, "UPDATE t SET v = 10 WHERE id = 2"};
+    Statement a_commit{&a, "COMMIT"};
+    Statement b_closes{&b, "UPDATE t SET v = 20 WHERE id = 1"};
+    Statement b_rollback{&b, "ROLLBACK"};
+    a_commit.go.store(false, std::memory_order_release);
+    b_closes.go.store(false, std::memory_order_release);
+    b_rollback.go.store(false, std::memory_order_release);
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, a_waits)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, a_commit)));
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, b_closes)));
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, b_rollback)));
+    rig->Start();
+
+    // A has met row 2 and parked, and core 0 has gone to sleep over it.
+    ASSERT_TRUE(Within(2000ms, [&] { return rig->core(0).scheduler().idle_blocks() >= 1; }));
+    ASSERT_FALSE(a_waits.done.load(std::memory_order_acquire)) << a_waits.out.response;
+
+    b_closes.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return b_closes.done.load(std::memory_order_acquire); }));
+    EXPECT_TRUE(StartsWith(b_closes.out.response, "ERR")) << b_closes.out.response;
+    EXPECT_NE(b_closes.out.response.find("deadlock"), std::string::npos) << b_closes.out.response;
+    EXPECT_FALSE(a_waits.done.load(std::memory_order_acquire)) << "the survivor was refused too";
+
+    b_rollback.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(
+        KickUntil(*rig, 1, [&] { return b_rollback.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return a_waits.done.load(std::memory_order_acquire); }));
+    EXPECT_TRUE(StartsWith(a_waits.out.response, "UPDATED 1")) << a_waits.out.response;
+    a_commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return a_commit.done.load(std::memory_order_acquire); }));
+    rig->Stop();
+    EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
+}
+
 }  // namespace
 }  // namespace kds::server
