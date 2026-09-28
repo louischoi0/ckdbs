@@ -1374,9 +1374,11 @@ private:
     // unfiltered walk and instance check view.
     //
     // `CheckNamespaceLive`: the namespace a `CREATE TABLE` names is still
-    // there. Its retype by a drop that has committed - or by the asker's
-    // own - is `NotFound`; by another transaction's that has not is
-    // `TxnConflict`, retryable. A well-known namespace is always live.
+    // there, and not only another transaction's. Its retype by a drop that
+    // has committed - or by the asker's own - is `NotFound`; by another
+    // transaction's that has not, and its row while another transaction's
+    // create of it has not committed, are `TxnConflict`, retryable. A
+    // well-known namespace is always live.
     Status CheckNamespaceLive(Oid namespace_oid, std::uint64_t own_trx_id);
     // `CheckNamespaceEmpty`: `DROP NAMESPACE`'s RESTRICT. A relation row in
     // it - live, whoever wrote it and whether or not it has committed - is

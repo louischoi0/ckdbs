@@ -512,9 +512,14 @@ TEST(CatalogNameRaceTest, ACreateAndADropOfItsNamespaceAtOneInstantLeaveNoOrphan
     // needs the other call to run whole inside a gap of a few instructions
     // (the drop between its RESTRICT check and its retype; the create
     // between its check and its insert), which two threads merely started
-    // together do not reach, and no seam short of a hook in the catalog
-    // puts them there on an armed store: a wrapping store would bypass the
-    // latch the hold is. Both holds are CT7's shape, argued at their sites.
+    // together do not reach. **A seam that would reach them exists and is
+    // not built** (AT-S17b's review): a store wrapping the armed one that
+    // overrides the public `FetchPinned` - not the raw fetch
+    // `ActOnFetchStore` hooks, which bypasses the latch - keeps the inner
+    // latch, and firing on page 6's second fetch lands between the drop's
+    // check and its retype (or, with the create's check hoisted, at its
+    // hold) with the other call started from there. Both holds are CT7's
+    // shape, argued at their sites.
     TwoCatalogs cats;
     std::vector<Oid> spaces;
     for (int round = 0; round < kRounds; ++round) {

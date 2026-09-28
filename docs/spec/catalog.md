@@ -281,8 +281,9 @@ check and its retype, and the check reads **`sys.objects`**
 (`CheckNamespaceEmpty`) rather than `sys.tables`, which a create writes after
 page 6's hold drops. The create is refused, or the drop sees its row - on any
 core. Both use `CheckNameFree`'s walk and instance check view, so an undecided
-drop counts across cores: a namespace another transaction is dropping is
-`TxnConflict` to a create; a relation another transaction is dropping is still
+drop counts across cores: a namespace another transaction is dropping -
+or is still creating, whose rollback would leave the relation in nothing
+(AT-S17b's review) - is `TxnConflict` to a create; a relation another transaction is dropping is still
 in its namespace, `TxnConflict` to the RESTRICT (the asker's own drop
 `InvalidArgument`, as before). The `sys.tables` check this replaced settled a
 relation drop's delete-mark by the asking core's in-flight test (DT9), so it

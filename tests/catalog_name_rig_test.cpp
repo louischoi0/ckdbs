@@ -271,5 +271,29 @@ TEST(CatalogNameRigTest, ANamespaceDropOnOneCoreIsRefusedWhileAnotherCoresDropOf
     EXPECT_EQ(RelationsNamed(*rig, "t"), 1);
 }
 
+TEST(CatalogNameRigTest, ACreateOnOneCoreIsRefusedIntoAnotherCoresUncommittedNamespace) {
+    // Core 0 creates `ledger` inside an open transaction; core 1, with no
+    // DDL of its own open, resolves `ledger.t` unfiltered and is handed the
+    // uncommitted namespace's oid. `CheckNamespaceLive` took any live row as
+    // live, so the create landed, and core 0's rollback left `t` in a
+    // namespace that never existed. Red before the undecided-create arm.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    const std::string made = d0.Dispatch("CREATE NAMESPACE ledger", &ddl).response;
+    ASSERT_TRUE(StartsWith(made, "CREATED")) << made;
+
+    const std::string t = d1.Dispatch("CREATE TABLE ledger.t (id int64, v int64) BTREE").response;
+    EXPECT_TRUE(StartsWith(t, "ERR TXN_CONFLICT")) << t;
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    EXPECT_EQ(NamespacesNamed(*rig, "ledger"), 0);
+    EXPECT_EQ(RelationsNamed(*rig, "t"), 0) << "t was left in a rolled-back namespace";
+}
+
 }  // namespace
 }  // namespace kds::server
