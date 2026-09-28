@@ -61,8 +61,12 @@ D2 is lost, because of the order in which the watermark moves:
 
 1. `flushed_lsn_` enters the new segment only after the header write
    (`src/wal/stream.cpp:79`, then `:85`).
-2. A `Sync` publishes the watermark it captured before its device sync
-   (`src/wal/stream.cpp:271-280`).
+2. Every publisher publishes a watermark read from `flushed_lsn_` before its
+   device sync. `WalStream::Sync` captures it under the latch
+   (`src/wal/stream.cpp:270-283`). On an attached core, `WalManager` reads
+   `flushed_lsn()` after a flush (`src/wal/manager.cpp:197`, `:257`), and
+   `WalWriter` publishes that requested target (`src/wal/writer.cpp:72`,
+   `:93-97`).
 3. The device sync covers every segment that existed when it started.
 
 So any durable point inside the new segment means an `fdatasync` covered the

@@ -72,8 +72,9 @@ in a subprocess, or restore the limit afterwards.
    - `FileLogDevice::Open` succeeds.
    - `WalStream::Open` returns `Corruption` "magic mismatch"
      (`src/wal/stream.cpp:53`, `:101`; `src/wal/record.cpp:231-232`).
-   - After removing `wal-0-<n>.log`, both opens succeed and the stream
-     resumes on segment n−1.
+   - After removing `wal-0-<n>.log`, both opens succeed. The stream resumes
+     at the end of segment n−1, and the next `Append` rolls into a new
+     segment n.
 
 ## What it costs
 
@@ -86,7 +87,8 @@ No wrong answer: every failure is a refused operation.
     descriptor count does next.
   - The limit is process-wide. A new connection's `accept` can meet it before
     a roll does.
-  - Besides the segments, the process holds the data file and the log file.
+  - Besides the segments, the process holds the data file and the
+    diagnostic log (`log_file`).
     Each core holds its epoll and waker descriptors and, under SO_REUSEPORT,
     its own listener. Then come the client sockets and the debug port, among
     others.
@@ -114,7 +116,8 @@ Not decided, and not only this file's.
 - **Always, and local:** `FileLogDevice` should open the directory descriptor
   once, in `Open`, and keep it.
   - The roll that meets the limit then fails at the segment open and creates
-    no file, which removes the stranding by construction.
+    no file. That removes this stranding by construction; a failed directory
+    `fsync` still leaves the file.
   - It also saves one `open` per roll.
   - Removing the file when `SyncDirectory` fails is the weaker alternative. It
     leaves an unlink that is not durable, after a directory `fsync` that
