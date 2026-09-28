@@ -14,6 +14,9 @@ it carries that number and not a work-order letter. **AR0-5-V is appended**:
 the source read of 2026-09-05 at `410377e`, which is what the tree says
 wherever the body disagrees. Every `path:line` in the body below is the
 corrected one; AR0-5-V records what each was in the draft and why it drifted.
+**AR0-5-R is appended after it** (AT-S19, 2026-09-28): the amendment as
+built, section by section, and the one text put for ratification. The body
+and AR0-5-V stay as written.
 
 ---
 
@@ -294,3 +297,358 @@ landed there, and `txn::kTrxIdBlockSize` is *defined* at
 **Nothing in §§2.2's design, 5 or 7 changed.** The
 corrections are citations only: no primitive, no retire decision and no
 operator item was altered by the read.
+
+---
+
+## AR0-5-R — the amendment as built, for ratification
+
+Written 2026-09-28 by CLA for the operator, as AT-S19
+(`workorder-at-close-ar0-5-left-open.md` §4, extended by its §7.4), on
+`at-s19-ar0-5-revised` from `3de6d62` (`v2.7.0-450-g3de6d62`). **The body
+above and AR0-5-V are left as written: they are the record of what was
+proposed on 2026-09-05. This section is the one text put for
+ratification**, and where it and the body disagree it states the tree.
+Its sections carry the body's numbers, so R2 is read against §2.
+
+Claim tags as in the body. Every claim cites the stage that built it -
+its row in `workorder-at-m3-uniformity.md` AT-6 carries the commits and
+cells - or the AT-7 item that corrects the body. The `[measured]` claims
+are AT-S13's, quoted from its results file, and R8.3's two mutants, run
+here at `3de6d62`.
+
+Drafted before its gate - AT-S21 landed - was met, on the operator's word
+of 2026-09-28; R8.1's row 10 is the one that waits for S21 (AT-6's AT-S19
+row).
+
+### R0. The decision, as built
+
+§0's sentence is what was built, with two qualifications the tree adds.
+
+- **The system pages are protected by latches, not by the lock family.**
+  The catalog pages are written under the page latch across cores and, within
+  one core, under the rule that no task parks under a page span (AT-R11 as
+  corrected at AT-S3; `catalog.md` CT5); the free map under `map_latch_`
+  (AM-S3); page 0 under the superblock latch (AT-S8, AT-S10b). No lock unit
+  protects a `sys.*` row: E13 is answered no (R3). The lock family's part is
+  the relation `IS`/`X` around the catalog's *readers* and DDL (R2.1).
+- **Core 0 keeps placements, and none is an authority.** The one log
+  stream is core 0's object, every peer's manager attached to it and
+  appending under its latch (AR0 M0); the delete-mark
+  purge runs there (AT-S5, `ddl-transactional.md` §5d); only core 0
+  snapshots the instance's assertion registry at a checkpoint (AT-S5d's
+  D-1); the Cabin controller's cadence ticks there (AT-S8); the mount's
+  recovery runs once per log, on the stream's core (`wal.md`), and the
+  registry's resume with it (AT-S5d); and under D19's
+  fallback core 0 accepts (AT-S10c). A write on any other core is refused by
+  none of them.
+
+### R1. AR0 §2, as built (§1's table)
+
+| property | AR0-5 §1 | as built |
+|---|---|---|
+| write-serialization authority | unchanged | unchanged. The last owner gate, `MayWrite`'s arm, went at AT-S5 with its replacement named (AT-R11); the predicate itself at AT-S18 (`854aefe`) |
+| execution affinity | retained only as a statistic; whether it survives is D18 | **no statistic is stored** (AT-S9, R6's D18): NS10's verb *"declares the affinity of"* (E8), a declaration nothing reads until AS-E. **Nothing routes**: both remote routes retired at AT-S9, and E7 is marked **local** for every verb (the operator, 2026-09-26, `raft-marks-2026-09-26.md` §1) |
+| allocator authority | retired: `fetch_add` sequences, page 0 by CAS, authority-free per-core caches | retired, in three shapes rather than one. **Trx ids**: each core carves its own 4,096-id window from the instance's one `SuperBlock`, reading and raising the ceiling **under the superblock latch** - not by CAS (AT-S10b). **Row ids**: no cache; every core bumps `sys.tables.next_id` in place under its page latch, because a per-core block breaks invariant 11's issue-order sequence (AT-S10b; invariant 11 amended on the operator's word, 2026-09-25). **Pages**: the one free map under its latch (`map_latch_`), no per-core extent cache (AW-S1b). **Object oids**, which §2.2 did not list: one `Expeditor` atomic, CAS-seeded and issued by `fetch_add` (AT-S5b, D0) |
+
+AR0 §2's six pk-immutability derivations stand; two lost their object -
+there is no route and no new range (AT-S9) - which takes away a reason and
+not the rule (invariant 11).
+
+### R2. The three primitives, as built (§2)
+
+**R2.1 The schema version word** (AT-S2a, D21). One atomic on `Expeditor`,
+memory only. It differs from §2.1 in three places.
+
+- **Bumped at the catalog write**, before the DDL's `X` is released, and
+  **moved again at the decide** of any transaction that wrote catalog rows,
+  commit or abort, before it releases its borrows (AT-S5e's C1,
+  `Transaction::NoteWroteCatalog`). §2.1 said "incremented once at the
+  commit"; a rollback that released first let a woken writer keep a stale
+  memo. A btree or index root repoint bumps it too (AT-S5c).
+- **Asked at task boundaries, never inside a read** (AT-S2a's review):
+  `Revalidate()` at `DispatchAndStage`'s head and the named handlers. §2.1's
+  "relation resolution compares the word" was built first and freed a live
+  `TableAccess*` inside another core's statement.
+- **Written down in `catalog.md`** (AT-S2c; AT-7 item 3): CT1 the
+  lock-then-word order, CT2 bump-at-the-write and ask-at-the-boundary, CT6
+  the instance's words (AT-S5b; AT-0 item 11 carries the struct question).
+
+**The relation `IS` is taken at resolve time** (AT-R1, the operator's
+ruling of 2026-09-09; built at AT-S1): the compiler declares every
+relation it binds - `FROM`, `JOIN`, subquery - between the name and the
+schema, and the three write verbs declare at resolve. **The ask is
+non-blocking** (`TryAcquire`): a reader holding `IS` blocks a DDL's `X`,
+and a reader arriving while a DDL holds `X` is refused and reads on. That
+second direction is made right by DT1, catalog MVCC and catalog-only DDL,
+not by the lock (AT-7 item 10); AT-0 item 10 kept it non-blocking on CLA's
+proposal under the operator's word of 2026-09-09, and names the condition
+that reopens it - the first DDL that moves data.
+**Retired**: `kCatalogInvalidate`, `InvalidateCatalog()` and the retryable
+table-not-found clause (AT-S2a; the clause was `core_runtime.hpp`'s, not
+`crosscore.md` §5's, AT-7 item 7); `InvalidateFromPeer` survives as
+`DropCache` for the two post-redo drops.
+
+**R2.2 Shared allocators** (AT-S10b, which carried AT-S4).
+
+- **Two lease families retired, not three** (AT-3 H; AT-7 item 1): the
+  extent lease went at AW-S1b (`af86026`), before AT; the trx-id and
+  row-id leases, their services, refills and spent `TxnConflict`s at
+  AT-S10b (`59ed9c0`).
+- **After the route, not before** (AT-7 item 12): an allocator's persist
+  half is a page-0 or `sys.tables` write, which `MayWrite`'s last arm
+  refused to every core but 0 until AT-S5.
+- **D20 as built** is R1's allocator row: 4,096 stands for trx-id windows,
+  the row-id cache is superseded by invariant 11, and there is no extent
+  cache.
+- **AN-R13 is kept**, as the body's §3 corrected it: the idle burn is a
+  carve on any core (AT-S10b).
+- **Priced** `[measured]` at AT-S13 (`v2.7.0-391-gf6f2073`, cell 3):
+  omitted-pk inserts spread over `cores = 8` against the same sessions
+  pinned to one core cost +9.9 and +12.3 µs of ~360 µs - the one mark and
+  the tail leaf together, not separated.
+
+**R2.3 The writer thread** is unchanged. AR0-5 named nothing else about the
+log's neighbours, and AT built three: **every core keeps its own
+checkpointer and live table, and `wal::CheckpointGate` admits one run at a
+time** for the instance, the cadences staggered (AT-S8) - one checkpoint
+over one core's table would leave a peer's loser un-undone; a writeback
+copies each page under its page latch and cleans only what the copy
+covered (AT-S8 step 1b, `Frame::dirty_gen`); and two writebacks of one page
+land in copy order (AT-S10e, `Frame::writing`).
+
+**What stays special about system pages** is AT-R11 as corrected at AT-S3,
+with page 0 under the superblock latch where AT-R11 said "CAS at S4", and
+a system-range page placed by a claim under both latches (AT-S5b, D2).
+
+### R3. Standing items, as built (§3's table)
+
+| item | AR0-5 §3 | as built |
+|---|---|---|
+| AR0 D3 | struck | struck; AL-R1's every-core-appends and one writer thread |
+| AR0 D4 | struck; shared allocators | struck; R1's allocator row. The free map is under `map_latch_`, not "their page latch" (AT-7 item 12) |
+| AR0 D10 | the only place affinity is read | provisional 0, **and nothing is stored for it to weigh** (R1) |
+| AR2 R5 | struck: tuple `X` on the `sys.tables` row | **struck at AT-S5, by the page latch and not a tuple `X`**: the admission writes the row in place outside the caller's transaction, so a row lock has no contender (AT-S3; AT-7 item 11) |
+| AR2 R12 / E7 | routing loses its target; E7 not closed | **routing retired** (AT-S9); **E7 marked local** after AT-S13's cell 1 (R1) |
+| AR2 E13 | closed: yes | **answered no** (AT-S3; AT-7 item 11) - the body's row carries it inline |
+| AO-1 | ends at M3 | ended: writes at AT-S5, reads at AT-S6 |
+| AO census row 10 | retired with the leases | retired at AT-S10b; a peer's first write no longer answers `TXN_CONFLICT retryable=1` |
+| AO-S5 cell | "no `MayWrite` call site exists" | stronger: **`MayWrite` does not exist** (AT-S18; `grep -rn MayWrite include src`, less `Session::MayWriteOn`, answers nothing at `3de6d62`) |
+| `core_runtime.hpp` asymmetries 1-3 | struck by M3's close | 2 rewritten at AW-S1b (AT-3 A); 1 and 3 struck at AT-S12 (`f48d213`) |
+| `crosscore.md` CC11, CC13 | CC11 struck; CC13 a local write | CC11 rewritten whole at AT-S5; CC13's flush retired at AT-S7 with ring kind 39 |
+| the `(M5)` census | twelve sites | eight at `df8cc5f` under the body's own command, more under its rule (AT-7 item 4); **closed at AT-S12** by a grep to the rule, re-run here: `grep -rn -E '\(M5\)\|\bM5\b'` over `include src tests sim tools docs/spec docs/rules manual CLAUDE.md`, less `FK-M5`/`K-M5`/`AR0-M5`, answers nothing at `3de6d62` |
+| `page.md` §6 | AM-S5's | rewritten at AT-S12 |
+| `cabin.md` §4b; per-core `CabinStore` | one store partitioned by `expr_id` | **one store partitioned 16 ways by `cabin_id`** (AT-S7; AT-0 item 9, AR1 §11's second shape on the operator's word); a reader holds a `CabinSet` handle. §4b's scope rule struck at AT-S7, its span rule at AT-S10a; **§6's owner argument replaced by the announce** (AT-S7) |
+| `RemoteCheckpointAnchor` | one checkpoint task, any core | retired at AT-S8 with ring kind 16, **not as one task**: R2.3 |
+| Placement (NS10) | retired unless kept as the hint's initial value | retired at AT-S9; `placement` refused by name |
+| `core_count` pinning | unpinned once D17 lands | unpinned at AT-S9: nothing names a core on disk, and a mount at another `cores` records the count |
+
+AR0 D11, AM-R5, AN-R13 and AN-Q1/AN-S1 stand as §3 wrote them.
+
+### R4. The retire list, closed (§4)
+
+Every M3 entry, and where it went:
+
+| §4's M3 entry | retired by |
+|---|---|
+| `MayWrite`'s remaining arms | **one arm** (AT-7 item 2), at AT-S5 (`091be8c`); the predicate at AT-S18 |
+| `TrxIdLease`/`TrxIdRefill`/`MaybeRefillTrxIds`; `RowIdLeaseTable`/`RowIdRefill`/`MaybeRefillRowIds`; both services; two spent refusals | AT-S10b |
+| `LeasedIdSource`/`ExtentRefill`/`MaybeRefillLease`; `extent_lease_service.hpp`; the extent refusal | **AW-S1b, before AT** (AT-3 A) |
+| `kCatalogInvalidate`, `InvalidateCatalog()`, the retryable not-found clause | AT-S2a; the kind struck at AT-S2b |
+| `AccessBatch`, `kAccessStatsBatch` | AT-S7 |
+| Waystone's peer default | AT-S7 |
+| per-core `CabinStore`; `cabin.md` §4b | AT-S7; the span rule at AT-S10a |
+| `StatementShipServer`/`Client` for writes; the named-pk ship | AT-S5; **reads too** at AT-S6 (AT-0 item 4, D18's first shape), services deleted |
+| `owner_core` semantics; NS10 placement; `core_placement.hpp` | AT-S9; the columns are **reserved bytes**, not dropped (R6's D17) |
+| `RemoteCheckpointAnchor` | AT-S8 |
+| `core_count` pinned | AT-S9 |
+| CC11, CC13, the `(M5)` comments, asymmetries 1-3, `Expeditor`'s "core 0 owns …" | AT-S5 (CC11), AT-S7 (CC13), AT-S12 (the rest) |
+
+The M1 and M2 entries were retired on schedule by the milestones that owned
+them (AT-3 A); at `3de6d62` `MayFault` survives only as the record at
+`device_page_store.hpp:460`, and the grant machinery not at all.
+
+**Retired by AT beyond §4**, each with its ownership premise: the
+cross-owner transaction and 2PC (AT-S6); the foreign-key probe protocol and
+its intent tables (AT-S5f); the index and assertion build services (AT-S5e,
+AT-S5d); range opening and insert spreading (AT-S9); the remote-step
+protocol (AT-S10a); the ring transport, AU-S6's list, AT-S11 struck
+(AT-S10d); `peer_listeners` (AT-S8); `in_doubt_ceiling_ms`, re-scoped to
+`lock_wait_fault_net_ms` at 1 s (AT-S6); the dead code AT-S6 left
+(AT-S18).
+
+### R5. What does not change, as built (§5)
+
+Five of §5's six bullets hold. **The second does not**: *"the range as the
+unit of id allocation and export; `range_size_ids`"* changed at AT-S9 - no
+range is opened, `range_size_ids` is refused by name, and a relation split
+before AT-S9 keeps its ranges, each its own chain, read and written whole.
+Beside the others: `Expeditor` holds more of the database than §5 listed -
+the assertion registry (AT-S5d), the Cabin store (AT-S7), the optimizer
+surface (AT-S8), the oid sequence and the delete-mark count (AT-S5b); and
+**G2 is `[measured]`** at AT-S13's cell 2 (`v2.7.0-391-gf6f2073`): +0.1 and
+-0.3 µs of ~16.5 µs a statement at `cores = 1` against `df8cc5f`, inside
+the old engine's own swing, with a ~0.4 s stall in three of seven runs that
+`df8cc5f` never shows (`known-gaps.md`, open).
+
+### R6. The operator items, as marked and as built (§6)
+
+| # | marked 2026-09-05 (`raft-marks-2026-09-05.md` §2) | as built |
+|---|---|---|
+| D17 | columns dropped on AT's own format event; a pre-M3 value ignored on read | **reserved, not dropped**, on the operator's ruling at AT-S9: written 0, never read, no row size changes, **no format event**; `SysTableRow` gained the offset asserts it lacked. A pre-AT volume mounts unchanged (`SysTableRowTest.TheRetiredOwnerCoreWordIsWrittenZeroAndNeverRead`) |
+| D18 | affinity kept as a statistic and optimizer hint, weight 0 until AS-E; NS10's placement deleted | placement deleted; **the statistic is not stored**, because nothing reads it until AS-E - CLA's proposal, stated to the operator at AT-S9 and ratified with this text |
+| D19 | every core listens; fallback: core 0 accepts and hands off, a ring consumer AU-S5 must list | every core listens (AT-S8), the TLS/SCRAM refusal removed (AT-0 item 8). **The fallback is built on an inbox and a kick, not a ring** (AT-S10c, `ConnectionHandoff`), AR0-6 having retired the ring (AT-S10d) |
+| D20 | 4,096 for trx-id and row-id caches; one extent | R1's allocator row |
+| D21 | word in `Expeditor`, memory only, bumped before `X` releases | as marked, and moved again at the decide (R2.1) |
+| D22 | M3 is "Uniformity", letter AT | as marked |
+
+### R7. The order, as built (§7)
+
+§7 read *word → catalog borrow → allocators → leases → statistics and Cabin
+→ placement → prose*. Built: the `IS` (S1) → the word (S2a-c) → E13, no
+unit (S3) → the route (S5) and its five sub-stages (S5b-f) → 2PC (S6) →
+statistics and Cabin (S7) → checkpoint and listener (S8) → placement (S9)
+→ the ring's consumers, the allocators among them (S10a-e) → prose (S12) →
+prices (S13) → the family's windows (S14-S17, S17b, S21), the covering
+filter (S22) and the retired predicates (S18) → this section. **Two reorderings, each for a reason in the tree**: E13 built no
+unit, so it gates nothing (AT-7 item 11); and the allocators follow the
+route (AT-7 item 12). **AR1's AQ/AR did not ride AT's tail**; they are the
+following letter's (AT-0 item 6). The Cabin store's unification did
+(AT-S7).
+
+### R8. The quiet-wrong surface is a family (§8, rewritten)
+
+§8 named one surface - a statement executing against a stale schema - and
+defended it with the relation `IS`. The defence holds, and the surface is
+not one. **The route (AT-S5) opened a family, all of one shape**: a
+structure whose soundness rested on one core running a write to completion
+is now written by two cores (`workorder-at-close-ar0-5-left-open.md` §1).
+§8 also overstated what the lock alone gives: the `IS` defends the
+reader-wins direction only (AT-7 item 10, R2.1).
+
+**R8.1 The family**, each member with its defence and its cell, or its
+owner if open. The cells named are at `3de6d62` unless the row says
+otherwise.
+
+| # | surface | defence | cells | stage |
+|---|---|---|---|---|
+| 1 | a stale schema executed | the relation `IS` at the bind (AT-R1); the word as fast path (CT1); DDL-wins by DT1, catalog MVCC and catalog-only DDL | **none pins the bind** - R8.3. The word's: `CatalogTest.AReaderDropsOnlyAtItsBoundaryNeverInsideARead`, `AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen`, `TxnSessionTest.ARollbackAndACommitOfADdlBothBumpTheSchemaWord`, `ReadBorrowRigTest.APeerCreatesARelationAndCoreZeroResolvesItAtItsBoundary`; the lock's, below any statement: `ReadBorrowRigTest.ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer` | AT-S1, AT-S2a |
+| 2 | the leaf descent | coverage asked of the chain after the exclusive fetch, restarts bounded; the lookup checks coverage on a miss | `BtreeRaceTest.TheLeafChainStillAscendsAfterConcurrentSplits`, `AScanOfTheChainStillReturnsEveryRowInOrder`, `ALookupDoesNotMissARowADivideMovedUnderIt` | AT-S5c |
+| 3 | the lookup's payload | `BtreeLookup` returns the held leaf; `VerifiedTuple` keeps its hold | `BtreeTest.ALookupsSlotIsStillItsRowWhenTheCallerReadsIt`, `BtreeRaceTest.ALookupsSlotStillHoldsItsRowWhenTheCallerReadsIt`, `AWriteLookupHoldsItsLeafExclusiveAndItsMissIsAuthoritative` | AT-S14 |
+| 4 | the index leaf | `LeafStillCoversKey`, restarts bounded; a stale index root refused. Premise: no index entry is removed (`index.md` IX14) | `IndexTreeTest.ALeafDividedBetweenTheSharedReadAndTheExclusiveRefetchIsNotWrittenPast`, `ALeafDividedBeforeTheDescentReadsItIsNotWrittenPast`, `AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree`; `IndexRaceTest.TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt` | AT-S15 |
+| 5 | the walk up, both trees | every parent a split writes found and held before it writes, re-descent on a miss (Q1); a root grown over is marked (the operator's choice, `raft-marks-2026-09-28.md` §2) | `IndexTreeTest.APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHoldingItsLeaf`, `ARootAnotherCoreGrewOverIsNotGrownOverASecondTime`, `ALeafRootAnotherCoreGrewOverIsNotGrownOverASecondTime` and `btree_test.cpp`'s twins; `BtreeTest.AnOldRootKeepsItsMarkWhenItIsDividedLater`, `AGrowthRecordsTheOldRootItMarks`; `BtreeRaceTest.TwoCoresPromotingIntoOneParentLeaveEverySeparatorOverItsSubtree`, `IndexRaceTest.TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree` | AT-S16 |
+| 6 | one name, one row | check and write under one exclusive hold of the relation's root page (Q2, CT7); the check sees another transaction's open drop | `CatalogNameRaceTest`'s seven write cells; `CatalogNameRigTest`'s six | AT-S17 |
+| 7 | a relation's namespace | `CreateTable` re-checks the namespace live under page 6; `DROP NAMESPACE` holds page 6 across a RESTRICT over `sys.objects` | `CatalogNameRaceTest.ACreateThatResolvedANamespaceAnotherCoreDroppedIsRefused`, `ADropBetweenACreatesTwoRowsIsRefused`, `ACreateAndADropOfItsNamespaceAtOneInstantLeaveNoOrphan`; `CatalogNameRigTest.ANamespaceDropOnOneCoreIsRefusedWhileAnotherCoresDropOfItsLastRelationIsOpen`, `ACreateOnOneCoreIsRefusedIntoAnotherCoresUncommittedNamespace`. **Two holds unkilled** by any cell (0/10 each), the seam named and not built (AT-S17b's row) | AT-S17b |
+| 8 | the assertion directory | one registry for the instance; its directory latch spans the header change and its record; an admission holds its contribution to its reservation | `AssertionRaceTest`'s seven; `ExpeditorTest.APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt` | AT-S5d |
+| 9 | the index build and the assertion build | `CREATE`/`DROP INDEX` and the `CREATE ASSERTION` build take the relation `X`; a writer's `IX` ahead of its admission; the word moved before the decide releases | `DdlFenceRigTest`'s five. **Two of AT-S5e's cells are gone** (R8.3) | AT-S5e |
+| 10 | a record logged after its page is released | an insert appends and stamps under the holds that placed it, index entries under the index tree's hold | `insert_log_crash_rig_test.cpp` - windows 1-3, the mid-chain link, two cores spilling into one var-heap page. **On `worktree-at-s21-log-under-hold` at `801aa61`, not landed** | AT-S21 |
+| 11 | the FK forward window | **open**. D9(a)'s `S` on the parent tuple at the hoist, held to the decide - ratified as a design, not built (`raft-marks-2026-09-28.md` §6) | `known-gaps.md`, Foreign keys | owner: the following letter (AT-0 item 6) |
+| 12 | the in-flight predicate | **open**. `IsInFlight` is the core's live set. A write meeting an undecided holder on another core is **refused**, retryably - a refusal, not a wrong answer (`known-gaps.md`, Locks). `ScanAll`'s DT9 gate is core-local too, and each consumer AT reached is defended beside it: `DROP INDEX` by the relation `X` and the word's move (AT-S5e), a name by `CheckNameFree`'s instance check view (AT-S17), a namespace's RESTRICT by `CheckObjects`' stamp classification (AT-S17b) | `known-gaps.md`, Locks | owner: AX (AX-S1/S2, AX-Q1/Q2) |
+
+**Outside the family, found in its code**: a covering-index probe claimed
+a pk before the covered filter ran and dropped a row whose current entry
+passed - one core, not AT-S5's - defended by claiming only an entry that
+passes (AT-S22;
+`IndexContractTest.ARowWhoseKeyAndCoveredColumnMovedTogetherSurvivesItsStaleEntry`
+and `AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved`).
+
+**R8.2 Closed inside AT's stages and named by no list.** The family is
+wider than the AT-close order's §1 table. These were found and closed by
+the stages that opened or met them; the row in AT-6 carries each.
+
+| surface | defence | stage |
+|---|---|---|
+| two cores' creates issuing one object oid | the instance's oid sequence (`ReadBorrowRigTest.TwoCoresCreatingRelationsIssueDistinctOids`) | AT-S5b, D0 |
+| a peer's catalog chain unable to grow | a system-range placement claimed under both latches (`DevicePageStoreOwnershipTest.APeerPlacesAPageAtAChosenIdInTheSystemRange`) | AT-S5b, D2 |
+| a peer's delete-marks never purged | the instance's mark count, resettled by a delta (`ReadBorrowRigTest.APeersDeleteMarksAreSweptByTheCoreThatSweeps`) | AT-S5b, D7 |
+| a peer descending a relation's CREATE-time root; an index root repoint staled nowhere | the anchor read by every core; both repoints bump the word | AT-S5c |
+| an assertion checkpoint snapshot from every core | only core 0 snapshots the registry | AT-S5d, D-1 |
+| one transaction under two ids, a read-back seeing none of its writes | a read runs where the session is (`ShippedReadOwnWrite.ATransactionReadsItsOwnUncommittedWriteOnAPeer`) | AT-S6 |
+| a Cabin set banked by one core and served short by another | one store; the build announces; the banking gate is the instance's (`CabinStoreTest.AWriteDuringAnAnnouncedBuildIsInTheCommittedSet`, `CabinServeAcrossCores.ASetBankedByAPeerServesThisCoresQuery`) | AT-S7 |
+| one access shape admitted twice | `RecordAccess` holds `sys.access_stats`' root page (`AccessStatsTest.TwoCoresRecordingOneShapeShareItsRow`) | AT-S7 |
+| a pattern's Waystone directory claimed twice | `ClaimPatternWaystoneRoot` keeps the first (`PatternCatalogTest.ASecondDirectoryIsRefusedAndTheFirstIsAnswered`) | AT-S7 |
+| a checkpoint persisting half of another core's write | the copy under the page latch, cleaned only for what it covered (`WritebackUnderAWriterTest`'s three) | AT-S8 step 1b |
+| a trx-id ceiling read outside its latch | `Carve` reads and raises it under the superblock latch (`TrxIdSequenceTest.SequencesCarvingFromOneCeilingOnManyThreadsIssueNoIdTwice`) | AT-S10b |
+| two writebacks of one page landing out of order | `Frame::writing` (`EvictionWritebackTest.TheOlderOfTwoWritebacksOfOnePageNeverLandsLast`) | AT-S10e |
+| a join inside `BEGIN` on a peer blind to its own writes | the pipeline route retired (`ShippedReadOwnWrite.AJoinInsideATransactionOnAPeerSeesItsOwnWrites`, not run against the engine before) | AT-S9 |
+
+**R8.3 The cells the family lost** `[measured]`. AT-S6 (`ac4bd64`) deleted
+`tests/txn_2pc_protocol_test.cpp` whole, and with it every cell of five
+fixtures built over its 2PC participant fixture that test no 2PC - among
+them AT-S1's four bind cells (#1), AT-S5e's two (#9), AT-S3's one, the
+deadlock detector's, the borrow cap's and `DROP TABLE`'s wait for a reader.
+None of them was counted among the twelve that commit retired, and the
+premise of each still holds; `known-gaps.md` (Testing) carries the
+inventory. **Two mutants, one full Debug suite each at `3de6d62`, both
+survive at 2991/2991** (one pre-existing disabled cell):
+
+- **M1**: `src/exec/step_compiler.cpp:1375`'s `declare->Position(...)`
+  replaced by a no-op - the compiler's bind declares nothing. No cell
+  fails. The write verbs' declaration at resolve lost its cells in the same
+  deletion and was not mutated.
+- **M2**: `src/txn/lock_table.cpp:381`'s `if (at == waiter) return true;`
+  made a `break` - `NoteWaitFor` never finds a cycle, AO-R7's victim rule
+  removed. No cell fails.
+
+So at `3de6d62` the compiler's bind - family #1's defence - is built and
+pinned by no cell, and so is `CLAUDE.md`'s *"a waiter that would close a
+cycle is refused naming deadlock"*. **The cell §8 promised was never
+written**: *"AT's first cell is the inverted case - the word deliberately
+not bumped"*. AT-S1 built before the word existed, so its cells had no
+word to leave unbumped, and its one cell of the lock blocking a DDL
+through a statement - a parked remote producer - went with the protocol at
+AT-S10a. What remains is the lock below any statement
+(`ReadBorrowRigTest.ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer`).
+Restoring the cells is the operator's decision, not this section's.
+
+**R8.4 Open at this writing, with owners.** The AT-close order's §7.2
+names AT's quiet-wrong ledger at its close as #5, #6 and #7, which are
+R8.1's #11, `a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.md`
+(`assertion.md` §7, since AR0 M0) and
+`two-cores-growing-one-heap-chain-can-orphan-a-page.md`
+(`heap-and-tuple.md` §4.1a, unscheduled while SUS-1 holds; existing heap
+relations stay exposed). **AT-S21's survey adds entries** once it lands -
+`records-appended-after-their-page-is-released.md` and three beside it -
+and one of that entry's rows, `AllocateCatalogPage` writing through a span
+whose pin is gone, is wrong without a crash. §7.2's *"nothing else"* is
+therefore AT-S20's to re-read and AT-9's to carry; this section does not
+carry them.
+
+### R9. AT-7's corrections to the body
+
+The body is corrected by AT-7 items **1** (§4's M3 list is stale in four
+entries), **2** (`MayWrite` is one arm), **3** (§2.1's `catalog.md` did not
+exist), **4** (the `(M5)` census), **7** (§2.1's retryable clause is
+`core_runtime.hpp`'s),
+**8** (AR0 §8 step 6 and D22 define M3 differently; split, not amended),
+**10** (§8 overstates what the lock alone gives), **11** (§3's R5 and E13
+assume a transactional row) and **12** (§7's allocators before the route).
+Items 5, 6 and 9 correct other documents (AU's AU-S5 count; AR2's E8,
+which D17 wins over; the D19 mark's premise), and items 13-17 correct
+AT's own rows.
+
+### R10. For ratification
+
+What the operator is asked to ratify is R0-R9: the amendment as built at
+`3de6d62`, with AT-S21's row as it reads once S21 lands.
+
+**Where the tree departs from the body or a mark on it, the departure was
+either the operator's already or is ratified here.** Already the
+operator's, and recorded rather than re-decided: D17's reserved bytes and
+the ranges' retirement (AT-S9's rulings; R6, R5); the row-id cache's
+removal (2026-09-25; R1); one Cabin store partitioned (AT-0 item 9; R3);
+the checkpoint's shape (AT-S8; R2.3); 2PC's retirement, the `IS` at
+resolve and, under the blanket word of that day, its non-blocking ask
+(2026-09-09; R2.1); E7 local (2026-09-26; R1); and core 0 accepting under
+D19's fallback, which is D19's own mark (R6). **Ratified by this text and
+by no earlier word**: D18's statistic not stored (R6); the trx-id ceiling
+under a latch rather than a CAS, and no extent cache where D20 named one
+(R1); the Cabin partition keyed by `cabin_id` where AT-0 item 9 proposed
+`expr_id` (R3); D19's fallback on an inbox and a kick rather than a ring
+(R6); the word moved at the decide and asked only at task boundaries
+(R2.1); and R0's other core-0 placements, the log stream among them - AR0
+D3 answered in practice (`known-gaps.md`, Decisions the revision has not
+taken).
+
+It does not ratify R8.3's lost cells or R8.4's open entries as acceptable;
+it records them. The word is recorded verbatim in a `raft-marks-*.md`, and
+AT-0 item 1 closes there.
