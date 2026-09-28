@@ -76,3 +76,13 @@ CLA asked what that meant for the stage in progress and for the placed text:
 | **Answers** | AR0-M3's four inherited items: item 1 (trigger set against lock set) and item 3 (a gap needs a structure to name it in) fall away with gap locks; item 2 (the FK half named the parent's key while the phantom is child-side) is closed from the parent row instead - a child writer holding `S` on the row its forward check found blocks the parent's `DELETE`; item 4 is the mark's `GROUP BY` clause |
 | **Does not settle** | Which cells are "the two-core cells" E3 waits on: CLA reads them as the D9(a) stage's own - a parent `DELETE` on one core against a child write on another, on the two-core rig - which do not exist yet, because D9(a)'s held `S` is the following letter's (the AT-close order's §7.4, #5). **Nothing is built by this mark**; it decides what the following letter builds and what it does not |
 | **Recorded at** | `ar0-architecture-revision.md` AR0-M3, `ar2-architecture-revision-borrow-model.md`'s E3 row, `index.md` |
+
+## 6. AR0 D9 — D9(a), ratified
+
+| | |
+|---|---|
+| **Word** | *"[decision] [D9] D9(a) ratified as built: the child`s check takes IS on the parent relation and S on the parent tuple at the hoist, held to decide; no escalation, no persisted bit; cross-core wait is AX`s, not a gate."* (as typed) |
+| **What CLA found, and asked** | At `67a0030` the tree does not do this: the hoist (`ResolveForeignKeyParents`) takes no `IS` and holds no `S`; `WaitForParentRowWriter` asks for the parent tuple's `S` only on a busy verdict and releases a grant at once, and `known-gaps.md` (Foreign keys) and `foreign-keys.md` §3a record the cross-core window as open for D9(a)'s fence. Put as a question - ratify the design and build later, build it now, or something else is built - the answer chosen was *"Ratify design, build later (Recommended)"* |
+| **Mark** | **D9(a) is ratified in this shape**: the child's forward check takes **`IS` on the parent relation and `S` on the parent tuple at the hoist, held to its decide**; no escalation; no persisted bit; the **cross-core wait is AX's**, not a gate on D9(a). **Building it is the following letter's** (the AT-close order's §7.4, #5), and the window stays open in `known-gaps.md` until then |
+| **Bears on** | D8's mark (§5): the FK parent row is closed by exactly this held `S`, and E3 retires once its two-core cells pass - so E3 waits on this build |
+| **Recorded at** | `ar0-architecture-revision.md` AR0-M4, `index.md` |

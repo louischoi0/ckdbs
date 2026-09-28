@@ -477,6 +477,14 @@ lock cannot then disappear, which is *how* the check and the transaction's
 snapshot come to agree. The check is not moved onto the snapshot; the
 snapshot is defended.
 
+**Ratified, 2026-09-28** (`raft-marks-2026-09-28.md` §6): *"D9(a) ratified
+as built: the child`s check takes IS on the parent relation and S on the
+parent tuple at the hoist, held to decide; no escalation, no persisted bit;
+cross-core wait is AX`s, not a gate."* **The design is ratified; it is not
+built** - at `67a0030` the hoist holds nothing, which CLA put to the
+operator, who chose to ratify the design and build it later. Its build is
+the following letter's, and D8's E3 retirement waits on it (§5 there).
+
 ### AR0-M5 — D11: the R5 mover is retired
 
 Retired as a **data** mover; affinity rebalancing is a table update.
