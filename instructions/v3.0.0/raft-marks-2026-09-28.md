@@ -56,3 +56,13 @@ CLA asked what that meant for the stage in progress and for the placed text:
 | **Question** | *"When the amendment is placed as the order's §7, what happens to its S16 parts ...?"* |
 | **Answer given** | *"finish AT-S16 first"* |
 | **Mark** | AT-S16 is finished first. The amendment is placed after it, with the rest of what it orders following |
+
+## 4. AR0 D1 — the isolation levels
+
+| | |
+|---|---|
+| **Word** | *"[decision] [D1] isloation level: RU(read uncommitted) - do not support , this project only propose 2 levels (RR, RC)"* (as typed) |
+| **Mark** | Two isolation levels, `READ COMMITTED` and `REPEATABLE READ`. `READ UNCOMMITTED` is **not supported**: refused by name, `Unsupported` - a client waiting for it waits forever - instead of the `InvalidArgument` "unknown isolation level" it met before, which read a declined SQL level as a typo |
+| **Answers** | AO-0 item 8 (`workorder-ao-m2-lock-family.md`): no order carries RU |
+| **Does not address** | D1's option (b) itself. AR0-M1 took (b) on the premise that RU, RR and RC are all deliverable; CLA reads this word as narrowing that premise to RR and RC, with (b) standing, and says so at AR0-M1 rather than inferring a withdrawal |
+| **Recorded at** | `ar0-architecture-revision.md` AR0-M1, `txn.md` §1, `manual/sql/sql.md`, `client-manual.md`, `src/txn/manager.cpp`'s `ParseIsolationLevel` and its cell |

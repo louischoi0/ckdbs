@@ -341,6 +341,17 @@ The three levels do not stand alike:
   whether D1 stands or returns for re-decision. AN-D9 carries the
   mechanism; the question lives here.
 
+**Re-marked on the levels, 2026-09-28** (`raft-marks-2026-09-28.md` §4):
+*"RU(read uncommitted) - do not support, this project only propose 2
+levels (RR, RC)"*. RU leaves the condition as SR left it on 2026-09-03: the
+engine offers **RR and RC**, and RU is refused by name (`Unsupported`,
+`txn.md` §1). AO-0 item 8 - which order carries RU - is answered: none.
+**What the word does not address is (b) itself**; CLA reads the condition as
+narrowed to RR and RC, with (b) standing on it, and records that reading
+here rather than inferring a withdrawal from silence. Both levels have been
+instance-wide since AN-S2 (a commit-LSN snapshot over the instance read
+view), which is what "per-core RR" above asked about.
+
 ### AR0-M2 — D2: (a)
 
 A shared partitioned lock table, partition count 64 x cores, compiled out
