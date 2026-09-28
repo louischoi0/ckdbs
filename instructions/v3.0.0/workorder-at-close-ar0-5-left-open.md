@@ -507,6 +507,55 @@ carries it"*, and Q1 has decided it and S16 carries it.
   the divide path's hold discipline and S21's window-1 cell needs S16's
   divide; the survey may start at once.
 
+**Survey, at `8f9a887`** (AT-S21's first output, on `at-s21-log-under-hold`;
+source read, nothing reproduced here). Every path that mutates a logged page
+and appends its record, and whether it logs under its hold:
+
+- **Under the hold** (§8-1 already true): `UpdateInner`'s overwrite and
+  `DeleteInner`'s mark; live rollback (`TransactionManager::Compensate`) and
+  recovery's (`recovery_undo.cpp`); undo appends and undo page inits;
+  var-heap release; every catalog row helper (`OverwriteLogged`,
+  `DeleteMarkLogged`, `RetireLogged`, `InsertRow`'s existing-page and
+  link-edit arms) and the anchor (`WriteAnchorRoot`); catalog purge; the
+  assertion build, `ReserveOne` and `CommitTxn`; `DeleteAssertion`.
+- **Fixed by this stage** - the insert and what rides on it:
+  `InsertIntoRelation` + `LogInsert` on both storages, **including every
+  page a split changes** (a parent written back pointing at a leaf whose
+  image is not yet logged is a corrupt tree, which is window 2 on the
+  structure, not only on the leaf); index maintenance (`AppendIndexEntry`,
+  `LogIndexWrites` - window 3, and on `UPDATE` too); the index root
+  republish, which appended `ANCHOR_UPDATE` before the new root's image;
+  and var-heap spills (`VarHeapSink` → `LogSpills`), whose slot-relative
+  `VARHEAP_APPEND` logged out of order refuses the mount, on `INSERT` and
+  `UPDATE` alike.
+- **Recorded, not fixed**, in
+  `docs/inflight/bugs/records-appended-after-their-page-is-released.md` by
+  name: `SortedFillInner` (heap-gated), `Catalog::InsertRow`'s new-page arm
+  (which also writes through a span whose pin is gone),
+  `InsertAssertion`'s `ChainInsert`, `CREATE INDEX`'s built tree,
+  `CreateTable`'s var-heap root, and `AbortTxn`'s `ASSERT_ROLLBACK`
+  (appended before its page is taken, stamped after - a `page_lsn` that
+  can go backwards).
+- **Found beside it**, each its own entry: the var-heap sweep's shared hold
+  asking for the same page exclusive at mount
+  (`the-var-heap-sweep-upgrades-its-own-shared-hold.md`); a DDL rollback's
+  catalog compensation left unlogged on a stale premise
+  (`a-ddl-rollback-compensates-logged-catalog-pages-unlogged.md`, its
+  consequence unverified); `HEAP_DELETE_MARK` omitting the `undo_ptr` the
+  delete writes (`a-delete-marks-record-omits-the-undo-pointer-it-wrote.md`).
+- **Hold across the append** - the order's two stop conditions do not
+  hold. A WAL append never parks: a full ring drains synchronously on the
+  appender's own stack (`WalManager::Append`), and a segment roll takes the
+  stream latch only, no page latch. **Lock order**: every multi-page hold
+  takes clustered pages before index, undo or assertion-directory pages and
+  never the reverse - the one index walker (`step_vm.cpp`'s probe) collects
+  pks and descends after the walk, an undo read copies its record out and
+  releases the page, and the FK reverse check reads Cabin sets from memory -
+  so holding an insert's clustered pages until they are logged cannot close
+  a cycle. `StampPageLsn` writes `page_lsn` without asking that it rise;
+  under a hold that is sound, and the entry above names the one path where
+  it is not.
+
 #### AT-S22 — a covering index keeps a row if any of its entries survives (#4)
 
 *Built 2026-09-28 - AT-6's AT-S22 row.*
