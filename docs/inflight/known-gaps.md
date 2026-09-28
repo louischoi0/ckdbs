@@ -191,6 +191,76 @@ statement about an engine that no longer exists; re-verify or strike it.
   whichever stage next opens `core_runtime.cpp` — AM-S3 touches the same
   file.
 
+- **The log is never recycled; it grows for the instance's life.**
+  Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C1).
+  - `wal.md` §11-4 makes a segment below the redo start recyclable *once
+    archived* (`docs/spec/wal.md:146`). Archiving is `[PROPOSED]` (`:200`),
+    so no segment ever qualifies.
+  - The only removal in the device is the cleanup of a failed creation
+    (`src/wal/file_log_device.cpp:264`, `:274`, `:281`). Even that cleanup
+    is missing at one failure point, `:287`
+    (`bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`).
+  - **Nor can an operator reclaim the space by hand.**
+    `FileLogDevice::Open` requires the segments numbered from 0 with no gap,
+    and refuses the mount with `Corruption` naming the first missing one
+    (`src/wal/file_log_device.cpp:208-213`). Deleting old segments therefore
+    prevents the next mount.
+
+  Cost: the WAL device's capacity is the instance's lifetime. When it fills,
+  `CreateSegment` fails, and so does every append after it. This gap also
+  drives the two entries below and the descriptor defect in
+  `bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`. Whether
+  recycling must wait for archiving is a durability decision (CN-9 §9 O4).
+  Owner: `docs/spec/wal.md` §11 and §13.
+
+- **Every sync covers every segment ever created, so its cost grows with
+  the log.** Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C2).
+  - `FileLogDevice::Sync` `fdatasync`s every open segment
+    (`src/wal/file_log_device.cpp:365-405`,
+    `include/kds/wal/stream.hpp:53-58`). Its comment forbids narrowing that
+    to the tail, for two reasons.
+    - The second reason is real: a roll can land between the stream
+      capturing its watermark and the device sync.
+    - The first reason, a partial write into an earlier segment, names no
+      writer at `d0d1d1b`. The only `LogDevice::WriteAt` callers are the
+      new segment's header (`src/wal/stream.cpp:79`) and the tail flush
+      (`:254`).
+  - With the entry above, every durable-point advance therefore issues one
+    `fdatasync` for each segment the instance has ever written.
+  - Syncing the segments *written* since the last sync would be enough.
+    Under today's writers, that is the previous tail plus any segment
+    created since the last sync copied `segments_`. Nothing records which
+    those are.
+  - `wal.md:46`'s *"issued once, over one file"* describes the logical log,
+    not the calls the device makes.
+
+  Cost: commit latency that rises with the instance's age. Not measured.
+  Owner: `docs/spec/wal.md` §3, `wal/file_log_device.cpp`.
+
+- **A segment roll does I/O inside the instance's append latch, which
+  `wal.md` §6 both says and denies, and its cost was never priced.**
+  Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C4).
+  - `WalStream::Append` takes the stream latch and calls `Roll` under it
+    when the record does not fit (`src/wal/stream.cpp:210-219`).
+  - `Roll` reaches `CreateSegment` (`:142-148`, `:63-64`). That runs
+    `posix_fallocate`, zero-fills 64 MiB, `fsync`s the file and then
+    `fsync`s the directory (`src/wal/file_log_device.cpp:96-124`, `:287`).
+  - **The behaviour is deliberate.** The authority for it as built is
+    `include/kds/wal/stream.hpp:35-43`, which makes the latch a mutex for
+    exactly this wait.
+  - **The spec contradicts itself here.** `docs/spec/wal.md:114`, in the
+    `[PROPOSED]` §6, puts *"any segment roll"* inside the latched append,
+    and in the same sentence calls an append *"no allocation and no I/O"*.
+  - **The follow-on was never priced.** `stream.hpp` names it: *"if AL-S8
+    prices this as material"*. AL-S8's files measure the single stream, not
+    the roll.
+
+  Cost: once per 64 MiB of log, every core's append waits through a
+  latched `posix_fallocate`, a 64 MiB prewrite and two `fsync`s. What that
+  means for a device is CN-9 §4 C4's. Owner: `docs/spec/wal.md` §6 for the contradiction, and
+  `wal/stream.hpp`'s latch protocol for the cost. Price it first: the
+  CLAUDE.md rule is to re-measure the premise before building the fix.
+
 ## Multi-core state
 
 - **Closed 2026-09-03, recorded because the closure is the interesting
