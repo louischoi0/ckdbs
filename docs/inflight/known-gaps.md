@@ -585,8 +585,9 @@ there is no second core's registration to be answered by.
   **Not a defect in AO-S6e-b**, whose own "what it does not do" list states
   every one of these omissions; a gap between what M2 built and what AT is
   sequenced against. Owner:
-  `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-0 item 26, which
-  is **undecided**, and `ar0-5-amendment-uniformity.md` §7 and §8.
+  `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-0 item 26, closed as
+  mooted at AT's close (`workorder-at-m3-uniformity.md` AT-9, verified at
+  `e6d9098`), and `ar0-5-amendment-uniformity.md` §7 and §8.
 
   **Closed at AT-S1 on `m3-at`** for every shape above: the compiler
   declares each relation it binds (`step_compiler.cpp`), the three write

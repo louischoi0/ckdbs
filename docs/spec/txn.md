@@ -16,18 +16,18 @@ is the input every retention-sized quantity is derived from — undo
 retention, the visibility window, the lock-wait fault nets, and later the
 WAL-replication ack timeout.
 
-**The 10 seconds already exist under another name**:
-`kShippedStatementDeadlineNs` (`statement_ship_service.hpp`), the point
-past which a shipped statement's reply is presumed lost rather than slow.
-AN-R14 makes that coincidence a statement — the per-statement deadline
-*is* the envelope — and when statement shipping retires at AT the envelope
-survives under its own name.
+**The 10 seconds existed under another name** until AT-S6:
+`kShippedStatementDeadlineNs` (`statement_ship_service.hpp`, retired with
+statement shipping), the point past which a shipped statement's reply was
+presumed lost rather than slow. AN-R14 made that coincidence a statement —
+the per-statement deadline *is* the envelope — and the envelope survives
+the shipping as scope, with no constant of its own.
 
-**The 60 seconds are the mechanism**, `kds.txn_lifetime_ceiling`
-(`kTxnLifetimeCeilingNs`, default 60 s, **provisional**: set by the
-operator, not measured, and re-read when AS-E measures the lifetime
-distribution). Wall-clock from `BEGIN`. A transaction past it is aborted
-by a sweep and the abort surfaces at its next statement **as an ordinary
+**The 60 seconds are the mechanism AN-R14 names and nothing builds**,
+`kds.txn_lifetime_ceiling` (60 s, **provisional**: set by the operator,
+not measured, and re-read when AS-E measures the lifetime distribution;
+no `kTxnLifetimeCeilingNs` exists in the tree). Wall-clock from `BEGIN`. A
+transaction past it would be aborted by a sweep and the abort would surface at its next statement **as an ordinary
 abort** — §4.1 stays literally true, because no reader is ever told its
 snapshot expired.
 
@@ -66,17 +66,16 @@ scope and **none of it is enforced**, which is a widening of the gap AW-S3
 recorded rather than a new one: its instance-wide half was already
 unbuilt, and AT-S6 removed the narrow half that was.
 
-**Two consequences of the sweep being a periodic tick, not a deadline.**
-It rides `wal_drain_interval_ns` (1 ms by default), so a context is swept
-on the first tick after its lifetime *on which no statement or phase is in
-flight on it* — a statement in flight defers the sweep, it does not exempt
-the context, and `phase_running` is itself bounded by
-`kTxnPhaseDeadlineNs`. And **`wal_drain_interval_ns = 0` disables the
-ceiling entirely**, because that is the registration the sweep is on.
+**What the retired participant sweep did, for whoever builds the instance
+sweep.** It rode `wal_drain_interval_ns` (1 ms by default), so a context
+was swept on the first tick after its lifetime on which no statement or
+phase was in flight on it - an in-flight statement deferred the sweep, it
+did not exempt the context - and `wal_drain_interval_ns = 0` disabled the
+ceiling entirely, because that was the registration it was on.
 
 **`kds.txn_lifetime_ceiling` is a name, not yet a key.** AN-R14 asks for
-the config key; it is not registered in `Expeditor`'s key set, so the
-number is only the compiled `kTxnLifetimeCeilingNs` today.
+the config key; it is not registered in `Expeditor`'s key set, and since
+AT-S6 no compiled constant carries the number either.
 
 ### The levels
 

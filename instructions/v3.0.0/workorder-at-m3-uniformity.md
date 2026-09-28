@@ -460,6 +460,7 @@ AO-S6 did.
 | **AT-S17b** (built) | **A relation's namespace, taken under the held page** (#3 of the AT-close order's §7, Amendment 1); carried from that order's §7.3 | two catalogs over one store: the entry's order with a rendezvous, the drop between a create's two rows by a fetch hook, a free race at the door; the two-core rig for another core's open `DROP TABLE` and another core's uncommitted `CREATE NAMESPACE` | S | the word |
 | **AT-S18** (built) | **The retired predicates and AT-S6's leftovers** (AT-7 item 17); carried from `workorder-at-close-ar0-5-left-open.md` §4 | greps for each symbol answer nothing outside records of what went; the golden log unchanged; the mount scan's cell for a pre-AT `TXN_PREPARE` | M | the word |
 | **AT-S19** (ratified) | **AR0-5 revised for ratification** - AR0-5-R appended to `ar0-5-amendment-uniformity.md`; carried from `workorder-at-close-ar0-5-left-open.md` §4 and §7.4 | a text: every claim cites its stage or AT-7 item; R8.3's two mutants run over the full suite | M | S14-S17, S17b, S21 landed, and the word |
+| **AT-S20** (built) | **AT's close** - AT-9, in AO-8's form; carried from `workorder-at-close-ar0-5-left-open.md` §4 and §7.4 | every AT-0 item marked, closed or carried by name; `index.md` says CLOSED; no tag (Q3) | S | S14-S19, S17b, S21, S22 |
 
 **Order, and why it is not negotiable at two points** (AT-R13, as AT-S3
 corrected it): S1 before S2; S5 before S6–S9. Everything else may be resequenced by
@@ -504,6 +505,7 @@ the operator without breaking an argument.
 | AT-S17b | **built 2026-09-28** on `at-s17b-namespace-membership` (reproduction `a86f74c`, fix `48b3148`, review in the commit after), on the operator's word (*"merge and push, then start AT-S17b"*), from the AT-close order's §7.3. **CT7's held page extended to membership**, the entry's shape: `CreateTable` asks under its hold of page 6 that the namespace it was handed is live (`CheckNamespaceLive`), and `DropNamespace` holds page 6 across its RESTRICT check - now over `sys.objects` (`CheckNamespaceEmpty`), where a create's row lands under that hold, rather than `sys.tables`, written after it - and its retype. The three checks share one walk, `CheckObjects`, which classifies a row's stamp as decided, the asker's own or another transaction's; `CheckNameFree` moved onto it unchanged. **The survey**: no other write binds a relation to a namespace; `sys.objects`' RESTRICT differs from `sys.tables`' only in that a relation drop is a retype, visible at once, so an undecided tombstone counts; and the old check settled `sys.tables`' delete-mark by the asking core's in-flight test (DT9), reading another core's open `DROP TABLE` as done - a second cross-core hole, given a rig cell. `CreateTable` refuses a namespace oid no row names; two cells passed a bare oid and now create the namespace. **Its `critics-developer` pass found a third hole and fixed it**: another core's *uncommitted* `CREATE NAMESPACE`, whose oid an autocommit resolution on a core with no DDL open reads unfiltered - the create landed, and the rollback left the relation in a namespace that never existed; `TxnConflict` now, its rig cell red without the arm. Applied from it too: the three-way stamp classification in place of three copies of the own-stamp test, a redundant test removed, the header and CT7 given the new arm. **Mutants**: no live check killed 3/3; the undecided relation tombstone ignored, 3/3; the uncommitted-create arm removed, killed. **Not killed**: `DropNamespace` without its hold and `CreateTable`'s check before its hold, 0/10 each by a free race - **the review found a seam this stage first said did not exist**: a store wrapping the armed one that overrides the public `FetchPinned` keeps the inner latch and can fire between the drop's check and its retype. Not built; the cell says so. **Reported, not applied**: another transaction's *uncommitted create* in the namespace is refused `InvalidArgument` by the RESTRICT (as the old check did) where its *undecided drop* is `TxnConflict` - lopsided, and making the first retryable is a behaviour change the operator's; a create whose rollback also failed leaves a `sys.objects` row with no `sys.tables` row, which the new RESTRICT refuses for good where the old one let through. Specs: `catalog.md` CT7, `namespace.md`, `CLAUDE.md`'s row. The bug entry is deleted. Suite 2989/2989 at `48b3148` and 2990/2990 after the review (Debug, one pre-existing disabled cell). Overhead not measured |
 | AT-S18 | **built 2026-09-26** on the operator's word ("start S18"), on `at-s18-retired-predicates` (`854aefe`, review `9681a18`), from the AT-close order's §4. **The list re-derived at `4d1e970`**: every symbol of `f48d213`'s had no production caller, and the survey added two - `DispatchOutcome::commit_lsn` (written by `CommitLocal`, read by nothing) and `OldestPreparedLsn` with the checkpointer's prepare floor; the review added a third, `WalManager::RequestDurable` and its drain disjunct, R6-3's prepare being their one reason. **Deleted**: `MayWrite` (base, override, every call site; the cells that asserted it take the page writable through `Get` as the peer, or drop the assert ahead of the INSERT that proves the write); `CommitAck`/`CommitAckScope` and `DispatchAsync`'s ack parameter; `CommitLocal`'s out-parameter; `AdoptSnapshot` (dispatcher and manager, two cells); `next_ship_session_id_`; `Transaction::MarkPrepared`, `prepared()`, `prepare_lsn()`, `IsInDoubt`; `LogTxnPrepare`; the two-argument `ClearWaitFor`; `set_batch_target_bytes` and the member it wrote; the benchmark driver's `refill_summary`. **Kept**: `Status::UnknownOutcome`; the record type, its codec, analysis's `kPrepared`, recovery's resolution and `SHOW META`'s `recovery_prepared*`, which a pre-AT volume still needs. **AT-S6's third done-condition met**: `mount_recovery_test.cpp`'s `APreAtPrepareWhoseCoordinatorCommittedMountsAsAWinner` and `APreAtPrepareWithNoDecisionMountsAsARollback`, under a section stating that nothing replaced the prepared state because nothing prepares, and that the mount resolves a pre-AT prepare before its completion checkpoint - which is why the floor could go. **Why the floor's removal is sound** (the review's (a)): the completion checkpoint ran with a zero floor already (`NoActiveTransactions`), and a rescan of a still-covered prepare meets the mount's own `TXN_ABORT` or the coordinator's commit. Specs: `wal.md` §3 (it called the resolution arm dead weight, false for a pre-AT volume), §11-3's floor, §11-4's coordinator-stream retention exception, §12, §15; `cross-owner-txn.md`'s parts table; `crosscore.md` CC11. Comments that described a wait on a *prepared* holder, widened to any undecided one at AO-S3, corrected. Declined: a shared helper for the three hand encodings of `TXN_PREPARE`, renaming the two `...MayWrite...` cells (the claim, not the symbol). Suite 2955/2955 at `854aefe`; 2954/2955 at `9681a18`, the one a SIGPIPE in `APeerListenerServesAReadAndAWriteWithNothingGrantedAndRoutesStop`, whose client helper sends without `MSG_NOSIGNAL` (no socket path touched here; 30/30 and 200/200 in isolation after). Debug, one pre-existing disabled cell. Overhead not measured |
 | AT-S19 | **drafted 2026-09-28** on `at-s19-ar0-5-revised` from `3de6d62` (`v2.7.0-450-g3de6d62`), on the operator's word (*"start AT-S19"*), and **ahead of its gate on a second word**: asked whether to wait for AT-S21, which is built on `worktree-at-s21-log-under-hold` at `801aa61` and not landed, the operator chose *"Draft now, land after S21"*. **AR0-5-R** is appended below AR0-5-V - R0-R9 in the body's section numbers, R10 what ratifying it ratifies - and the body is left as written. **§8 is rewritten as a family** (R8.1): twelve members, ten closed - #1 with no cell pinning its bind (R8.3), #10 AT-S21's - and two open with owners (the FK forward window, the following letter's; the in-flight predicate, AX's), the covering filter beside them as outside the family; R8.2 lists thirteen more the stages closed that no list named. **Found by the survey, and the stage's main finding** (R8.3): AT-S6 (`ac4bd64`) deleted `txn_2pc_protocol_test.cpp` whole, and with it every cell of five fixtures that test no 2PC - `LockDeadlockTest`'s 32, `MidWalkWaitTest`, `LockCapTest`, `LockCapOfOneTest`, `FailedCommitTest` - uncounted in that commit's twelve retired. **Two mutants survive the full suite at 2991/2991** (Debug, one pre-existing disabled cell): the bind declaring nothing (family #1's defence) and `LockTable::NoteWaitFor` never finding a cycle (AO-R7). `known-gaps.md` (Testing) carries it; restoring the cells is the operator's. Also recorded: §5's range bullet is false since AT-S9 (R5); page 0's ceiling moves under the superblock latch, not by CAS (R1); the Cabin store is partitioned by `cabin_id`, not `expr_id` (R3). **Its `critics-developer` pass** (on `55d03de`) found three errors and fixed them: no `LockDeadlockTest` cell survives - the one name left is a comment at `tests/read_borrow_rig_test.cpp:24` still citing the deleted cell as its proof, now rewritten to say none does, and `55d03de`'s message ("31 of 32") is wrong; CT6 is AT-S5b's; R7 put S22 among the family's windows and left out S18. Its five judgement items are applied: R10's split (core 0's fallback accept is D19's own mark; the `cabin_id` key and the absent extent cache are ratified by this text); AT-7 item 6 corrects AR2, not the body; M1 measured the compiler's bind and not the write verbs'; the inverted-case cell §8 promised was never written; the reopening condition is AT-0 item 10's, not `read_borrow.hpp`'s. Cuts taken: R8.3 folded to the finding and a pointer at `known-gaps.md`, the gate paragraph, R3's four unchanged rows. **Declined**: folding R8.2 to one sentence - the stage asks each member with its cell, and R8.2 is the evidence that the surface is not one. **Ratified 2026-09-28** at `5dc4081`, after AT-S21 landed, on the operator's word (*"ratify AR0-5-R"*, `raft-marks-2026-09-28.md` §7); AT-0 item 1 closes there. **Landed ahead of AT-S21** (`55d03de`, `1231358` on `main` before `801aa61`); S21's merge rewrites R8.1's row 10, R8.4 and R10 to read it as landed. No code; the suite ran only as the mutants' baseline, 2991/2991 at `3de6d62`. Overhead not measured |
+| AT-S20 | **built 2026-09-28** on `at-s20-at-close` from `e6d9098` (`v2.7.0-461-ge6d9098`), on the operator's word (*"start AT-S20"*): **AT-9 written**, and M3 closed. It marks as built AT-0 items 7 and 9 and closes AO-0 item 26 as mooted, carries everything else once with its owner - or says it has none and names CLA's proposal as one - and corrects `txn.md` §1, which described the lifetime sweep and two constants AT-S6 deleted as present. No code; suite 2998/2998 at `e6d9098`. Overhead not measured |
 
 ---
 
@@ -517,11 +519,10 @@ the operator without breaking an argument.
 | 4 | **Answered at AT-S9: struck** - on the operator's word both remote routes retired, the fan-in and the two-step pipeline; the services and the transport stay with no producer for AT-S10/S11 to delete. **Does the remote-step protocol survive AT?** D18 keeps affinity as a weight-0 hint, so `kStep*` retains a consumer that never fires. **AU-S6 cannot reach count 0 while it lives** | design | keep it, converted by AT-S10 to shared state plus a kick (AR0-6-R1), and let AT-S11 delete the *transport* rather than the feature. If instead it is struck, say so before AT-S10 sizes its sub-stages |
 | 5 | **AO-0's carried items 9, 22, 25 and 27** — the FK split's M2 half awaiting confirmation, the bound-assertion wait's own bound, `DROP TABLE` refused because readers keep arriving, and the intention-mode-on-an-interval rule that shipped with no ruling to point at | mixed | 9 confirms with D9(a) in the following letter; 22 and 25 move with it; **27 is AT's**, because AT-S1 widens what holds an `IS` and 27 is the rule that decides what such a borrow fences |
 | 6 | **The following letter** for D7 with D1(b)'s gap locking, D9(a)'s `S` fence with `FkPendingDeleteTable`, E3, E5, E10 and AR1's AQ/AR | naming | one letter, opened after AT-S5 lands, since D9(a)'s fence and D7's gate both assume a write that no longer ships |
-| 7 | **`in_doubt_ceiling_ms`** (AO-0 item 7): refused at startup naming its successor, or kept inert until M3 re-scopes it to the fault net | user-visible | **AO-R8's own plan**: re-scope and rename the key to the net, and refuse the old spelling at the known-key check naming its successor. Deleting it would leave the net with no config key at all, against `CLAUDE.md`'s rule to re-scope rather than re-name |
+| 7 | **Closed at AT-S6** (recorded at AT-9): the key is `lock_wait_fault_net_ms`, and the old spelling is refused at startup naming its successor. **`in_doubt_ceiling_ms`** (AO-0 item 7): refused at startup naming its successor, or kept inert until M3 re-scopes it to the fault net | user-visible | **AO-R8's own plan**: re-scope and rename the key to the net, and refuse the old spelling at the known-key check naming its successor. Deleting it would leave the net with no config key at all, against `CLAUDE.md`'s rule to re-scope rather than re-name |
 | 8 | **Closed at AT-S8: the refusal is removed** - both objects were on `ServeRuntime`, read-only after `Start`, and every listener is configured from one `TcpServer::ClientSetup`. **Per-core listeners with TLS or SCRAM** (AT-3 F, AT-R12). The refusal's stated reason — the credential store and TLS context live on core 0's stack — is an ownership residue | networking | AT-S8 removes it if the credential state moves to `Expeditor` with everything else; if it is larger than that, AT-S8's row names it and it becomes its own item |
-| 9 | **The Cabin store's topology.** AR1 §11 offers two shapes — one store, or one partitioned so every write to a key reaches the same partition — and fixes neither, saying *"the store's topology is M3's"* (AT-3 G) | design | **one store, partitioned by `expr_id`**: the partition is what keeps a peer's observation off a mutex the owner holds, and `expr_id` is AR1's own named prefix. Raised as an item rather than taken as a ruling because AT-1 sends AR1's AQ/AR to a following letter, and this is the one AR1 decision AT cannot avoid |
+| 9 | **Closed at AT-S7** (recorded at AT-9): one store, partitioned by `cabin_id` rather than `expr_id`, ratified by AR0-5-R R10. **The Cabin store's topology.** AR1 §11 offers two shapes — one store, or one partitioned so every write to a key reaches the same partition — and fixes neither, saying *"the store's topology is M3's"* (AT-3 G) | design | **one store, partitioned by `expr_id`**: the partition is what keeps a peer's observation off a mutex the owner holds, and `expr_id` is AR1's own named prefix. Raised as an item rather than taken as a ruling because AT-1 sends AR1's AQ/AR to a following letter, and this is the one AR1 decision AT cannot avoid |
 | 10 | **Should a bind's `IS` wait for an in-flight DDL?** AT-S1's ask is non-blocking (AT-7 item 10). A waiting ask would close the DDL-wins direction with the lock rather than with DT1 + MVCC + catalog-only DDL, at the price of putting readers into the wait-for graph - AO-S6e-b kept them out so a DDL waiting for a reader can never cycle, and a reader holding `IS` on A while waiting for B's `X` against a DDL holding B and waiting for A's readers is a cycle no detector sees, ended only by the 11 s net | quiet-wrong class, design | **keep it non-blocking.** The three facts hold today and every DDL the engine has is catalog-only; the day a DDL moves data is the day this item reopens, and `read_borrow.hpp` names that condition. Taken as CLA's proposal on the operator's word of 2026-09-09 that CLA's proposals stand |
-
 | 11 | **One struct for the instance's catalog words, or three pointers?** AT-S5b's review costed it: the three are identical in lifetime, plumbing, default and wiring site, mirrored in three fixtures, so each new word is about a dozen edits and a struct collapses them to one. It also refuted both reasons CT6 first gave for three - a struct creates no shared *rule*, and removing a field from one is a single deletion | design, mechanical | **three at three words, one at four.** The saving is two setters and two `Config` fields; the cost is re-opening AT-S2's landed schema-word seam, which this stage may not do on its own account. `catalog.md` CT6 states it as the threshold it is rather than as a principle, so the next word decides it rather than re-arguing it |
 | 12 | **Marked (a) by the operator, 2026-09-10: `BtreeLookup` returns the held `PageRef`.** **Built 2026-09-26** on the word, as AT-S14 (AT-6's row). **Does `BtreeLookup` hand back the leaf it read, or do its callers re-check the key?** AT-S5c made the lookup's *status* authoritative across cores and left its *payload* a hint: the `(page, slot)` it returns is unheld, and all seven callers re-fetch by id, so a concurrent divide - which rebuilds the leaf and compacts its slots - hands them a different row. In `step_vm` the residual drops it and the statement answers **zero rows for a row that exists**; in `fk_check` there is no residual and it decides a constraint verdict | quiet-wrong class, design | **(a) return the held `PageRef` beside the `Location`.** It is what `Descent` already produces, it is correct by construction, and it costs a pin held across the caller's read - which every other page access in this engine already holds. The alternative, (b) a Keystone re-check at each of seven sites, is cheaper and spreads one invariant across seven places that must each remember it. Six callers change either way |
 | 13 | **Marked by the operator, 2026-09-11: CLA's proposal, taken with AT-S5e** - built there (the holder is a transaction of the statement's own; the row says why not a minted id). **How does a `CREATE ASSERTION` build fence off a writer on another core?** Found by AT-S5d's read: the build takes no relation lock, so a writer that is admitted before the directory is adopted, places its row where the scan has already passed and reaches its reservation before the adoption is in neither the scan nor the cabin (`docs/inflight/bugs/create-assertion-build-is-not-fenced-against-writers.md`). Present since AT-S5, when the owner's build stopped being the only core that wrote the relation | quiet-wrong class, design | **D6's shape, ridden with AT-S5e**: the build takes the relation `X`, which a writer's `IX` waits on. Two things D6 does not decide and this does: the build is not transactional DDL, so the `X` needs a holder - a DDL transaction around the build, or a non-transactional holder id released at the statement's end; and an `INSERT` takes its relation `IX` only at its id borrow, *after* its admission, so the `IX` moves ahead of the admission or a writer admitted before the build can still slip past it. CLA proposes the non-transactional holder, because wrapping the build in a transaction changes what a failed `CREATE ASSERTION` leaves behind, and the `IX` moved ahead of the admission |
@@ -712,3 +713,144 @@ sections and now points at them; the scope split was stated four times and
 is now stated twice, in AT-1 and AT-0 item 6; the header's decision block
 re-argued three rulings and is now a provenance line; and AT-7 restated
 AT-3 rather than stating its consequence.
+
+---
+
+## AT-9 — M3 closed, 2026-09-28
+
+**AR0 M3, Uniformity, is complete.** Every stage of AT-5 has landed on
+`main` or is struck: AT-S0 through AT-S10e, AT-S12 through AT-S19, S17b,
+S21 and S22, with AT-S11 struck into AT-S10d and AT-S4 folded into AT-S10b.
+AT-6 carries a row for each. Written as AT-S20 on `at-s20-at-close` from
+`e6d9098` (`v2.7.0-461-ge6d9098`), the commit that ratified AR0-5-R. The gate
+the AT-close order set, **S14-S19, S17b, S21, S22**, is met: S14 `974a844`,
+S15 `4860e96`, S16 `372a25f`, S17 `1635263`, S17b `48b3148`, S18 `854aefe`,
+S19 ratified at `e6d9098`, S21 `801aa61`, S22 `bb6286d`.
+
+### What M3 delivered
+
+AT-1's axis was **asymmetry → primitive**, and AR0-5-R is the section-by-section
+account of it as built; this close does not repeat it. In one line per group:
+
+| | what it is | where it lives |
+|---|---|---|
+| **The schema word and the bind's `IS`** (AT-S1, AT-S2) | every relation a statement names is declared `IS` at the bind; every core's catalog asks one word at its task boundaries; no core is told of a DDL | `catalog.md`, `txn.md` §5 |
+| **Writes, reads and DDL where the session is** (AT-S5..S5f, AT-S6) | the route, the descent re-validating, one assertion registry, the index and assertion builds under relation `X`, foreign-key checks local; 2PC and the cross-owner transaction retired | `ddl-transactional.md`, `assertion.md`, `foreign-keys.md`, `crosscore.md` |
+| **One of each for the instance** (AT-S7, AT-S8) | access statistics and the Cabin store, the checkpoint gate, the optimizer surface, the listener on every core | `cabin.md`, `wal.md`, `protocol.md` |
+| **Ownership retired** (AT-S9, AT-S10a..e) | placement, `owner_core` as reserved bytes, ranges, the remote-step protocol, the ring and its transport; ids from one mark per relation under its page latch, trx-id windows carved per core | `crosscore.md`, `heap-and-tuple.md` §4.1a |
+| **The windows AT-S5 opened** (AT-S14..S17b, AT-S21) | the held leaf, the index leaf's coverage, the walk up and the grown-over root, one name one row, a namespace's membership, every insert logged under the hold that placed it | AR0-5-R R8.1, the family of twelve |
+| **The prose** (AT-S12, AT-S18, AT-S19) | CC11/CC13, the retired predicates, AR0-5-R ratified | `crosscore.md`, `ar0-5-amendment-uniformity.md` |
+
+### What it measured
+
+AT-S13 alone, at `v2.7.0-391-gf6f2073`
+(`bench/v3.0.0/results-at-s13-prices-v2.7.0-391-gf6f2073.md`), and nothing
+else: **no AT stage carries an overhead number and none claims one.**
+
+- **Cell 1, E7**: sessions spread over `cores = 8` pay +29 to +42 µs an
+  update of ~360 µs against the same sessions pinned, about what the
+  controls pay - the arrangement, not the write path. Spread is also where
+  two cores meet on one row: **3.9-5.9% of hot-row updates refused
+  retryable**, zero pinned. The operator marked E7 **local** the same day
+  (AT-0 item 2).
+- **Cell 2, `cores = 1` against `df8cc5f`**: +0.1 and −0.3 µs of ~16.5 µs,
+  inside the old arm's swing - G2 holds to ~3%.
+- **Cell 3, D20**: omitted-pk inserts spread against pinned, +9.9 and
+  +12.3 µs of ~360 - the one mark and the tail leaf together.
+- **A ~0.4 s stall**, in three of seven runs at head and none at
+  `df8cc5f`, two of the three in cell 1 and one hitting every core at
+  once - so it is not a `cores = 1` finding, as the AT-close order's carry
+  line names it. Unexplained.
+
+Throughput is not priced: one Python client saturates before the engine.
+
+### What M3 carries forward - not closed by this close
+
+Each once, with its owner. **"The following letter"** is AT-0 item 6's: one
+letter for D7, D9(a) and E3/E5/E10, **not yet opened and not yet lettered**.
+Where no document owns an item, this close says so and names CLA's proposal
+as a proposal.
+
+1. **To the following letter**: the FK forward window and D9(a)'s `S`
+   fence (ratified as a design, `raft-marks-2026-09-28.md` §6), with
+   `FkPendingDeleteTable`; **AR0 D7**, the one `[quiet-wrong]` D-item still
+   unmarked; AR2's E3 (retiring once D9(a)'s two-core cells pass, §5
+   there), E5 and E10; AR1's AQ/AR; and AO-0 items **9** (the FK split,
+   confirmed with D9(a)), **22** and **25** (AT-0 item 5).
+2. **AO-0 item 26 closes here as mooted.** Its unbuilt proposal was the
+   fan-in producer, which AT-S9 retired and AT-S10a deleted; the relation
+   half was closed by AT-S1's bind. What stays - a nested walk, a point,
+   index or Cabin read and a write hold the relation `IS` and no slice - is
+   `txn.md` §5's statement, not an open item.
+3. **AO-0 item 27 is carried**, to the operator: shipped at AO-S6e-b as
+   `txn.md` §5 states it, and no word on it is recorded. AT-0 item 5 called
+   it AT's; AT closes without it.
+4. **A write refused, not waited, on another core's undecided holder**
+   (`known-gaps.md`, Locks) → **AX**. Only AX-S0 exists; AX-S1's sequencing
+   condition, AM-S6's measurement, has run, and no word to start it is
+   recorded. **AX-Q1** (1,024 slots a core, refusing past it) and **AX-Q2**
+   (another core's DT9 stops treating an uncommitted drop as done) are
+   unanswered. This is AR0-5-R's family member #12, and part of AT-S13 cell
+   1's refusal price.
+5. **E7** is marked local (AT-0 item 2) and nothing is left to read after
+   AX except the refusal share of cell 1, which item 4 owns.
+6. **The ~0.4 s stall** → `known-gaps.md`'s owner is *"whoever measures
+   next"*, which is no one. **CLA's proposal**: the next measurement stage
+   of any letter re-runs AT-S13's cell 1 before its own cells, starting from
+   `wal.md` §3 and `page.md` §6.
+7. **No transaction lifetime ceiling** (AN-R14's instance half) →
+   `workorder-aw-m1-close.md` §11.2 ruled it its own letter, which does not
+   exist: **unlettered**, and an abandoned explicit transaction holds the
+   read horizon for the life of the process. This close corrected
+   `txn.md` §1, which still described a sweep and two constants AT-S6
+   deleted.
+8. **AT-S7's `SHOW ACCESS` A/B, the page-11 hold in `RecordAccess` and
+   AT-S8's re-mark**, all unmeasured → the AT-close order's "next
+   measurement epoch" is defined nowhere; **CLA's proposal** is the same
+   stage as item 6.
+9. **AT-0 item 11** (one struct or three pointers) → **carried, inert**:
+   three words stand and `catalog.md` CT6 states the threshold, so the
+   fourth word decides it. AT-0 item 3 is marked (`raft-marks-2026-09-28.md`
+   §8).
+10. **R8.3's lost lock-family cells** (`known-gaps.md`, Testing): AT-S6
+    deleted `LockDeadlockTest`, `MidWalkWaitTest`, `LockCapTest`,
+    `LockCapOfOneTest` and `FailedCommitTest` with the 2PC suite, and two
+    mutants survived the full suite at `3de6d62`. The ratification
+    recorded them without accepting them; **restoring them is the
+    operator's** and no stage is named.
+11. **AT-S14's SQL-level cells** for `step_vm` and `fk_check` (the AT-close
+    order's §0 item 2): **still owed** - AT-S14 wrote storage-level cells
+    only, and none has been added since. Carried to the operator.
+12. **The equal-sort-key runs** (`index.md` IX4a, still `[PROPOSED]`) → an
+    operator decision among three shapes: a split point that never cuts a
+    run, the covered bytes or a uniquifier in the sort order, or duplicate
+    separators admitted. **`an-index-backfill-drops-an-append-failure.md`
+    waits on it.**
+13. **`docs/inflight/bugs/`**, each with its owner:
+
+    | entry | wrong answer? | owner |
+    |---|---|---|
+    | `a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.md` | yes | `assertion.md` §7 (AS6a); the letter that next takes the assertion subsystem |
+    | `assertion-reservations-stranded-by-a-failed-settle.md` | no - fails closed | the same, `assertion.md` §4.4; three options, no decision |
+    | `two-cores-growing-one-heap-chain-can-orphan-a-page.md` | yes | `heap-and-tuple.md` §4.1a; unscheduled while SUS-1 holds. **Existing heap relations remain exposed** |
+    | `records-appended-after-their-page-is-released.md` | its `AllocateCatalogPage` row: **yes, without a crash** - `catalog.cpp` writes rows through a span whose pin is gone | **none**; AT-S21's survey left it unscheduled. **CLA's proposal**: the `AllocateCatalogPage` row first, as its own stage in the following letter, since it needs no crash to be wrong |
+    | `the-var-heap-sweep-upgrades-its-own-shared-hold.md` | no - hangs or aborts at a multi-core mount | **none** (AT-S21's survey) |
+    | `a-ddl-rollback-compensates-logged-catalog-pages-unlogged.md` | unverified | **none** (AT-S21's survey) |
+    | `a-delete-marks-record-omits-the-undo-pointer-it-wrote.md` | not established | **none** (AT-S21's survey) |
+    | `a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md` | no - refuses | item 12 |
+    | `an-index-backfill-drops-an-append-failure.md` | yes, for old snapshots | after item 12 |
+    | `a-power-loss-after-a-segment-roll-leaves-an-unheadered-tail.md`, `wal-segment-descriptors-exhaust-the-open-file-limit.md` | no - the mount refuses | **undecided**; CN-9's context (`docs/conceptnotes/`), found after the AT-close order and outside its list |
+
+### What this close marks, and what it does not
+
+**Marked here, as records of what was built**: AT-0 items 7 (built at AT-S6)
+and 9 (built at AT-S7, keyed by `cabin_id`, ratified by AR0-5-R R10), whose
+rows had not said so; AO-0 item 26 (item 2 above). **Q3 as marked**
+(`raft-marks-2026-09-26.md` §4): **no tag is cut at AT's close**; v3.0.0 is
+cut when AR0 §8's chain completes - through M4, with M3's D7/FK half now in
+the following letter - and measurements keep carrying `v2.7.0-*` until then.
+
+It decides none of AT-0's or AO-0's open items, opens no letter and no
+stage, and runs no measurement. **The suite ran and is green** - 2998/2998 at
+`e6d9098` (Debug, one pre-existing disabled cell), which is what a change
+touching no source should produce. Overhead not measured.
