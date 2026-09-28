@@ -45,6 +45,20 @@ in the leaf the descent lands on, so a byte-identical entry in the left
 half of a straddling run is stored twice (reads absorb it through the pk
 dedup).
 
+**A third shape, found by reading at AT-S16's review** (on
+`at-s16-walk-up-revalidate` at `372a25f`, not reproduced). When the parent
+is **full**, the duplicate `K` meets `IndexInternalView::SplitInto` before
+it meets `InsertEntry`: the parent divides, and only then is the pending
+`K` refused. The new internal node is then linked nowhere, and every insert
+into the parent's upper half is refused `TxnConflict` - a larger range than
+the one row's. If `K` happens to be the median pushed up, `InsertEntry`
+succeeds instead, and a leaf is left covering an empty range. AT-S16's
+`SecureParents` makes a *refusal of the walk* write nothing; it does not
+make this refusal, which comes after the writes, clean. A clean refusal
+here - comparing the leaf's divide point with its separator in the held
+parent before anything is written - would not settle IX4a and is not
+applied, because this entry's fix is the operator's.
+
 ## The fix
 
 Needs a decision, not recorded anywhere: a split point that never cuts

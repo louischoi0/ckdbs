@@ -1541,7 +1541,9 @@ TEST(InternalViewTest, AFullNodeRefusesAnotherEntryRatherThanOverrunningThePage)
 // `AnOldRootKeepsItsMarkWhenItIsDividedLater`. Marking the old root before
 // the new root's allocation, where a failed grow leaves a mark with no
 // root above it, is killed by `AGrowThatDiesPromotingItsSeparatorLeavesTheLeafChainAlone`
-// - found that way, during the stage.
+// - found that way, during the stage. Deleting the right-split's record of
+// the old root it marks is killed by `AGrowthRecordsTheOldRootItMarks` - a
+// mutant AT-S16's review found no cell for.
 
 // Ids k * 10 for k = 1..n, one tuple per leaf: every insert after the first
 // splits, and each split promotes one separator.
@@ -1765,6 +1767,31 @@ TEST(BtreeTest, AnOldRootKeepsItsMarkWhenItIsDividedLater) {
         ASSERT_FALSE(view.IsFull()) << "15 must have divided the old root";
         EXPECT_TRUE(view.grown_over()) << "the divide's rebuild dropped the old root's mark";
     }
+}
+
+TEST(BtreeTest, AGrowthRecordsTheOldRootItMarks) {
+    // The mark is a write, so the old root owes redo an image. A divided
+    // root records itself and a leaf root's split path records the leaf;
+    // a right-split at a full internal root writes nothing else into it, so
+    // that branch records it for the mark alone - every page an insert
+    // writes is described by a record, or redo rebuilds it without the
+    // write.
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId old_root = tree.root;
+    auto grown = tree.Insert(6800, kOnePerLeafFiller);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    ASSERT_NE(old_root, tree.root) << "the append must grow a level over the full root";
+
+    bool recorded = false;
+    for (const storage::StructuralChange& c : grown.value().changes()) {
+        if (c.page_id == old_root) recorded = true;
+    }
+    EXPECT_TRUE(recorded) << "the marked old root has no image for redo";
+    auto bytes = store.GetForRead(old_root);
+    ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+    EXPECT_TRUE(InternalView(bytes.value().bytes()).grown_over());
 }
 
 }  // namespace

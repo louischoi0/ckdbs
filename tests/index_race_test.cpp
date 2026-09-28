@@ -16,6 +16,7 @@
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
+#include "armed_race.hpp"
 #include "tree_structure.hpp"
 
 // **The secondary index with more than one core in it** (AT-S15).
@@ -72,46 +73,11 @@ std::uint32_t KeyOf(std::span<const std::byte> key) {
     return v;
 }
 
-std::unique_ptr<storage::DevicePageStore> ArmedStore(
-    std::unique_ptr<storage::MemoryPageDevice>& device) {
-    auto made = storage::MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
-    EXPECT_TRUE(made.ok()) << made.status().message();
-    device = std::move(made.value());
-    auto store = storage::DevicePageStore::Open(*device, /*first_new_page_id=*/16);
-    EXPECT_TRUE(store.ok()) << store.status().message();
-    // Armed: an unarmed latch never queues the second writer, and the
-    // window is only reachable where the store is shared.
-    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/16);
-    return std::move(store.value());
-}
-
-// `btree_race_test.cpp`'s rendezvous, for its reason: two threads started
-// together drift onto different leaves within a few inserts, and then
-// neither is queued on the other's latch. Re-synchronised before every
-// insert, they reach one leaf at one instant. A generation counter, so a
-// thread that leaves and re-arrives before its partner has left is not
-// counted into the wrong round.
-class Rendezvous {
-  public:
-    explicit Rendezvous(int parties) noexcept : parties_(parties) {}
-
-    void Wait() noexcept {
-        const int generation = generation_.load(std::memory_order_acquire);
-        if (waiting_.fetch_add(1, std::memory_order_acq_rel) + 1 == parties_) {
-            waiting_.store(0, std::memory_order_release);
-            generation_.fetch_add(1, std::memory_order_acq_rel);
-            return;
-        }
-        while (generation_.load(std::memory_order_acquire) == generation) {
-            std::this_thread::yield();
-        }
-    }
-
-  private:
-    const int parties_;
-    std::atomic<int> waiting_{0};
-    std::atomic<int> generation_{0};
-};
+// `armed_race.hpp`'s store and rendezvous, for `btree_race_test.cpp`'s
+// reasons: an unarmed latch never queues the second writer, and two threads
+// merely started together drift onto different leaves within a few inserts.
+using testing_race::ArmedStore;
+using testing_race::Rendezvous;
 
 // Regions a stride apart, each prefilled to one leaf's worth, so a round's
 // two inserts land inside one existing leaf rather than past the chain's

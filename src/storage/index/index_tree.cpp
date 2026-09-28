@@ -71,8 +71,8 @@ struct Descent {
 // The caller holds this leaf; the sibling is taken shared and released
 // here. The order is leaf-then-right-neighbour, which is a walk's order,
 // and nothing in this file holds a page and asks for the one to its left
-// or below it: the divide's walk up is bottom-up (a leaf, then its parent),
-// and a descent releases a parent before it reads the child.
+// or below it: the divide's walk up is bottom-up (a leaf, then its
+// parents), and a descent releases a parent before it reads the child.
 StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView& leaf,
                                   const IndexLayout& layout,
                                   std::span<const std::byte> sort_key) {
@@ -254,8 +254,9 @@ StatusOr<storage::PageRef> FetchParent(storage::PageStore& store, const IndexLay
     return Status::TxnConflict(
         "index insert could not find the parent of page " + std::to_string(child) +
         ": the path its descent recorded from root " + std::to_string(path[0]) +
-        " is stale - no node at that level routes the key to the page any more, because the "
-        "root has since been grown past. Nothing was written");
+        " is stale - no node at that level routes the key to the page any more. Either that root "
+        "has since been grown past, or the index above the page is being divided faster than a "
+        "descent can cross it. Nothing was written");
 }
 
 StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descent,
@@ -414,12 +415,10 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     auto new_leaf = IndexLeafView::CreateEmpty(new_leaf_bytes, layout, owner_oid);
     if (!new_leaf.ok()) return new_leaf.status();
 
-    // CreateNew() may have handed out a new frame, so the leaf is re-fetched
-    // rather than reused (today's stores do not move frames; a buffer pool
-    // with eviction will).
-    auto leaf_again = store.Get(leaf_id);
-    if (!leaf_again.ok()) return leaf_again.status();
-    IndexLeafView left(AsPage(leaf_again.value().bytes()));
+    // Divided through the descent's own hold: a held frame is never a victim
+    // and its bytes do not move, so CreateNew() above cannot have left the
+    // view stale.
+    IndexLeafView& left = leaf;
 
     if (Status s = left.SplitInto(new_leaf.value()); !s.ok()) return s;
 
@@ -448,16 +447,23 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
     out.Record(new_leaf_id, /*is_new_page=*/true);
     out.Record(leaf_id, /*is_new_page=*/false);
-    // Both are written; the descent's hold on the leaf is what keeps a
-    // descent from outrunning the promotion, so these two pins go now.
+    // The new leaf is written; the descent's hold on the old one is what
+    // keeps a descent from outrunning the promotion, so this pin goes now.
     new_leaf_bytes_ref.Release();
-    leaf_again.value().Release();
 
     // ---- Propagate the separator up the secured parents ------------------
     //
     // Each is already held (`SecureParents`), and every one but the last is
     // full by construction. A held frame is never a victim and its bytes do
     // not move, so a parent's view stays valid across the CreateNew() below.
+    //
+    // Peak pins (MG03): the leaf, the `k` held parents and the one node a
+    // level creates - `2 + k`. **Unbounded by a constant**, unlike the
+    // clustered tree's: an index node holds as few separators as its key is
+    // wide allows (eight at a 1,000-byte key), so `k` can pass the six that
+    // DevicePageStore::kPinCeiling leaves room for, and a debug build at
+    // `cores = 1` aborts there. Open, AT-S16's review F1: the ceiling is the
+    // operator's to re-derive.
     PageId child = new_leaf_id;
     std::uint16_t old_root_level = 0;  // the root is a leaf unless proven otherwise
 
