@@ -305,3 +305,72 @@ read sits behind the cache.
 the one disabled cell pre-existing. The mutants ran before the review; the
 first can no longer be written as it was, `OldestActiveTrxId` being private
 now. Overhead not measured.
+
+### AX-S2b — built 2026-09-28, the wake; completed 2026-09-29
+
+On `worktree-ax-s2b-row-wait-wake` from `1040f60` (`v2.7.0-467-g1040f60`).
+The reproduction landed first, red at `1040f60`, as `42978b8`; the change as
+`043aee7`, **pushed on the operator's word before its `critics-developer`
+review returned** and before this row and `known-gaps.md` were written,
+which the commit message says. The word itself was given in the session and
+is not recorded verbatim anywhere in the tree, so `raft-marks-2026-09-28.md`
+has no section for it. The review, this row and the follow-up commit are
+the next session's, on the same worktree from `043aee7`.
+
+**What landed.** `BorrowChain`'s refused tuple ask passes a wake where the
+statement can park, so the refusal leaves a registration on the unit; the
+statement's end hands it to `write_block` when a blocker was recorded and
+drops it otherwise; the write-block wait parks on the slot - flipped by the
+holder's release, after its in-flight retire, with a kick to the waiter's
+core - and drops it however the wait ended; `RefuseParkedWrite` drops one a
+refusal before the park still holds. Where the refusal handed back no slot
+(an assertion's group, no lock table, a header-only holder, a cross-unit
+refusal) the wait keeps the `IsInFlight` poll. **`NoteBlockingWriter`'s
+repeatable-read rule is unchanged**, which the AX-S2 row above expected to
+move: the wake changes when a waiter re-runs, not what its view can see, so
+a repeatable-read writer meeting the row's own undecided writer is still
+refused, and the second cell pins it.
+
+**Cells** (`row_wait_wake_rig_test.cpp`, four): the release kick (red at
+`1040f60`); a futile repeatable-read wait leaving no registration; a
+cross-core row cycle refusing the waiter that closes it; and, from the
+review, **a waiter on the slot sleeping through the holder's decide until
+its release** - the holder's tuple `X` held in a ledger its `COMMIT` does
+not release, so the retire-to-release window is stretched to 50 ms.
+**Mutants**: six at `043aee7`, four killed; of the two survivors, the poll
+predicate used with a slot present is killed by the fourth cell (3/3), and
+the holder-match check was equivalent - no path that leaves a wake
+registered records a blocker other than that ask's holder - and is
+removed.
+
+**The review** (`critics-developer`, one pass, at `043aee7`) found no live
+defect: every registration is dropped once on every reachable exit (the one
+that leaves one is a coroutine destroyed at the park at shutdown, as with
+the relation wait), and the registration is written under the latch that
+observes the conflict, so no release is lost. Taken: the mutant-(a) cell;
+the slot-or-poll predicate written once, so the wait and the net check
+cannot disagree; the holder-match check removed; the hand-off an if/else;
+**a latent lost wakeup** - `TryAcquire` hands a same-key re-ask the
+registration it already holds, and the replace dropped it unconditionally,
+erasing the record being kept - closed by one identity-guarded
+`TakeLockWait` shared by both waits (unreachable today: every refused
+`BorrowChain` ends the statement); the comments that said the re-run finds
+the unit free, that the statement's end is the one place a wake leaves, and
+that the victim is the one pre-park exit; `txn.md` §5's sentence.
+**Recorded, not fixed**: three entries under `known-gaps.md`, Locks; the
+second - the first encounter inside the retire-to-release window - is a
+behaviour change and waits for the word. **Left for AX-S3**: the
+comments that call `IsInFlight` one core's live set (`command_dispatcher.cpp`
+around `AwaitRelationLock`, `WaitForParentRowWriter` and `BorrowChain`'s
+relation ask; `lock_table.hpp`'s `TryAcquire` note), per its row.
+
+**Suite**: 3014/3014 in Debug at `043aee7`; 3015/3015 after the review's
+changes, the one disabled cell pre-existing. One intermediate run failed
+`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence` under
+`-j8`, which then passed 10/10 alone and 32/32 across eight parallel copies -
+the load-sensitive rig cell of AX-S1's run. The mutant-(a) cell was re-run
+against the final window and killed again (3/3). A second
+`critics-developer` pass over the review's changes found no code defect and
+seven doc inaccuracies, all fixed; not taken: a stop guard for the cells'
+early-`ASSERT` teardown, the sibling cells' existing shape and only reached
+by a cell already failing. Overhead not measured.

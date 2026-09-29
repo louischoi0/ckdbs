@@ -593,8 +593,10 @@ always did. **What follows the detection is no longer a refusal alone**
 (M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`, until AO-S8
 moves it here): a writer meeting an undecided holder waits for its decide
 (AO-S3), on whichever core the holder runs since AX-S1 made the in-flight
-test the instance's - a cross-core wait is woken by a poll rather than a
-kick (`docs/inflight/known-gaps.md`, Locks) - a
+test the instance's - where the refused ask handed back a slot (a refusal
+on its own key) the wait is on that slot, flipped at the holder's release and kicked across
+(AX-S2b), and elsewhere it is woken by a poll rather than a kick
+(`docs/inflight/known-gaps.md`, Locks) - a
 transaction holding rows may wait because a wait-for graph in
 the instance's lock table refuses the waiter whose registration would close
 a cycle, naming deadlock (AO-S4a on one core, AO-S4b across cores), and a wait

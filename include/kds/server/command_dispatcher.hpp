@@ -232,14 +232,17 @@ struct DispatchOutcome {
     // property of served connections, and a fixture sees the pre-R6-5
     // behaviour.
     //
-    // **AX-S2b: where the lock names the holder, the wait is on its slot.**
+    // **AX-S2b: where the refused ask handed back a slot, the wait is on it.**
     // `slot` is the wake the refused unit ask registered (`BorrowChain`),
     // flipped by the holder's release from whichever core releases and
     // followed by a kick to this core - so a waiter asleep in its idle block
-    // is woken, and its re-run meets the unit free rather than a decided
-    // holder that has not released it yet. Null where nothing named a unit
-    // - an assertion's group, a dispatcher with no lock table, a holder only
-    // the header names - and there the wait polls `IsInFlight`.
+    // is woken, and its re-run comes after the release rather than between
+    // the holder's decide and its release. A wake is not a grant: a third
+    // writer can take the unit first, and the re-run is refused and parks
+    // again under the same deadline. Null where the refusal handed back no
+    // slot - an assertion's group, a dispatcher with no lock table, a holder
+    // only the header names, a cross-unit refusal (a declared range, a
+    // range fence) - and there the wait polls `IsInFlight`.
     struct WriteBlock {
         std::uint64_t trx_id = 0;  // the undecided writer being waited for
         std::uint64_t pk = 0;      // the row it holds
@@ -1026,8 +1029,10 @@ private:
     // (`lock_table.hpp`), with nothing else that will: an entry is erased
     // only when it has neither holder nor waiter, so one left behind keeps
     // its entry, its waiter and its per-release kick for the life of the
-    // instance.
-    void TakeLockWait(DispatchOutcome::LockWait wait);
+    // instance. `into` is the statement's relation wait (`lock_wait_`) or
+    // its row wake (`blocking_wake_`, AX-S2b), on the same terms.
+    void TakeLockWait(std::optional<DispatchOutcome::LockWait>& into,
+                      DispatchOutcome::LockWait wait);
 
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables(Session& session);
@@ -2194,10 +2199,10 @@ private:
     // because that transaction is unwound before the park it is for.
     std::optional<DispatchOutcome::LockWait> lock_wait_ = std::nullopt;
     // **AX-S2b: the wake a refused unit ask registered**, on the same
-    // statement-scoped terms. `BorrowChain` sets it; `DispatchAndStage`'s
-    // end is the one place it leaves - into `write_block` when the blocker
-    // recorded is the holder it names, dropped from the table otherwise - so
-    // no exit of a statement can leave a registration behind.
+    // statement-scoped terms: set by `BorrowChain`, emptied at
+    // `DispatchAndStage`'s end, then dropped by the write-block wait or
+    // `RefuseParkedWrite`. A coroutine destroyed at the park (a shutdown's
+    // detach) is the one leak, as with `lock_wait_`.
     std::optional<DispatchOutcome::LockWait> blocking_wake_ = std::nullopt;
     std::size_t statement_trail_mark_ = 0;
 

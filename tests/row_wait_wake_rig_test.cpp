@@ -30,6 +30,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
+#include "kds/txn/lock_table.hpp"
 
 namespace kds::server {
 namespace {
@@ -124,6 +125,98 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     EXPECT_EQ(rig->locks().EntryCount(), 0u);
 }
 
+// The holder's late release, on core 0's reactor once `go` is set.
+struct LateRelease {
+    txn::LockTable* table = nullptr;
+    std::uint64_t txn = 0;
+    txn::LockHoldings holdings;
+    std::function<bool()> go_pred;
+    std::atomic<bool> go{false};
+    std::atomic<bool> done{false};
+};
+
+sched::Coro RunLateRelease(LateRelease& r) {
+    r.go_pred = [&r] { return r.go.load(std::memory_order_acquire); };
+    co_await sched::WaitUntil{&r.go_pred};
+    r.table->Release(r.txn, r.holdings);
+    r.done.store(true, std::memory_order_release);
+    co_return Status::OK();
+}
+
+TEST(RowWaitWakeRigTest, AWaiterOnTheSlotSleepsThroughTheHoldersDecideUntilItsRelease) {
+    // **The window the slot closes**: the holder is retired from the
+    // in-flight table before its borrows are released (`manager.cpp`'s
+    // commit), and a re-run inside that window meets the row's `X` still
+    // held by a transaction no longer in flight - which `NoteBlockingWriter`
+    // will not wait for, so it is refused. The window is microseconds in a
+    // real commit; here it is stretched by holding the holder's tuple `X`
+    // in a ledger its `COMMIT` does not release, and releasing it late.
+    //
+    // **Mutation**: the wait's predicate polling `IsInFlight` although a
+    // slot is present - it settles at the commit, and the re-run is refused
+    // inside the stretched window (AX-S2b's surviving mutant (a)).
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
+    auto oid = rig->core(0).catalog().FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    Session holder;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
+    ASSERT_NE(holder.transaction(), nullptr);
+
+    LateRelease late;
+    late.table = &rig->locks();
+    late.txn = holder.transaction()->id();
+    ASSERT_TRUE(rig->locks()
+                    .TryAcquire(late.txn, txn::LockKey::Relation(oid.value()),
+                                txn::LockMode::kIntentionExclusive, late.holdings)
+                    .value());
+    ASSERT_TRUE(rig->locks()
+                    .TryAcquire(late.txn, txn::LockKey::Tuple(oid.value(), 1),
+                                txn::LockMode::kExclusive, late.holdings)
+                    .value());
+
+    Session waiter;
+    Statement update{&waiter, "UPDATE t SET v = 2 WHERE id = 1"};
+    Statement commit{&holder, "COMMIT"};
+    commit.go.store(false, std::memory_order_release);
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, update)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, commit)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunLateRelease(late)));
+    rig->Start();
+
+    ASSERT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
+        << "core 1 never blocked with its UPDATE parked";
+    ASSERT_FALSE(update.done.load(std::memory_order_acquire))
+        << "core 1's UPDATE did not wait: " << update.out.response;
+
+    // The holder decides and is out of the in-flight table; its `X` stays.
+    commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(StartsWith(commit.out.response, "COMMIT")) << commit.out.response;
+    ASSERT_FALSE(rig->core(1).transactions().IsInFlight(late.txn));
+    // Core 1 is run for 50 ms inside the window, well inside the 1 s net
+    // the statement's deadline is: a poll would settle now.
+    EXPECT_FALSE(KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); },
+                           50ms))
+        << "core 1's UPDATE ran between the decide and the release: " << update.out.response;
+
+    late.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return late.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); }));
+    EXPECT_TRUE(StartsWith(update.out.response, "UPDATED 1")) << update.out.response;
+    rig->Stop();
+    EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
+}
+
 TEST(RowWaitWakeRigTest, AWaitRefusedAsFutileLeavesNoRegistrationOnTheRow) {
     // The registration is made at the ask, before anyone decides whether
     // the statement will wait for it. A repeatable-read writer meeting the
@@ -176,9 +269,10 @@ TEST(RowWaitWakeRigTest, AWaitRefusedAsFutileLeavesNoRegistrationOnTheRow) {
 TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOtherProceeds) {
     // A on core 0 holds row 1 and waits for row 2; B on core 1 holds row 2
     // and asks for row 1. B's registration closes the cycle, so B is the
-    // victim (AO-R7) - refused before it parks, which is the one exit where
+    // victim (AO-R7) - refused before it parks, one of the two exits where
     // the wake its ask registered is still on the outcome and
-    // `RefuseParkedWrite` drops it. B's rollback releases row 2, which
+    // `RefuseParkedWrite` drops it (the other, the net read at the loop's
+    // top, no cell reaches). B's rollback releases row 2, which
     // flips A's slot and kicks core 0, and A's re-run takes the row.
     //
     // **Mutation**: the drop in `RefuseParkedWrite` removed - B's

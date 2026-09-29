@@ -527,40 +527,50 @@ there is no second core's registration to be answered by.
 
 ## Locks
 
-- **A write that meets an undecided holder on another core waits, but on a
-  poll: nothing kicks it when the holder decides.** Found by AT-S13's review,
-  measured on `at-s13-prices` at `896af54` (2026-09-26) as a *refusal*:
-  `CommandDispatcher::NoteBlockingWriter` parks only when
-  `txn_->IsInFlight(trx)`, and until AX-S1 that walked **this core's**
-  `live_`, so a holder on another core read as decided and the writer was
-  refused `TXN_CONFLICT retryable=1` where AO-S3 promised a wait. AT-S13's
-  cell 1 server log
+- **A write refused on its own tuple waits on that unit's slot since
+  AX-S2b; a write refused any other way still waits on a poll, and one that
+  first meets a holder between its decide and its release is refused.**
+  Found by AT-S13's review, measured on `at-s13-prices` at `896af54`
+  (2026-09-26) as a *refusal*: `CommandDispatcher::NoteBlockingWriter` parks
+  only when `txn_->IsInFlight(trx)`, and until AX-S1 that walked **this
+  core's** `live_`, so a holder on another core read as decided and the
+  writer was refused `TXN_CONFLICT retryable=1` where AO-S3 promised a wait.
+  AT-S13's cell 1 server log
   (`bench/v3.0.0/archive/at-s13-prices-v2.7.0-391-gf6f2073/s8-kds.log`)
   carries 7 refusals of that shape, part of cell 1's 4-6% hot-row refusal
-  price.
+  price. AX-S1 made the predicate the instance's, so the site parks on a
+  peer's holder; **AX-S2b** made `BorrowChain`'s refused tuple ask register
+  a wake, so that wait is on the unit's slot - flipped at the holder's
+  release, after its retire, with a kick to the waiter's core - and its
+  re-run comes after the release (`row_wait_wake_rig_test.cpp`). Verified by
+  reading on `ax-s2b-row-wait-wake` at `043aee7`, the stage's review. What
+  stays open, all retryable, never a wrong answer:
 
-  **AX-S1 made the predicate the instance's** (`instance_visibility.hpp`'s
-  in-flight tables), so on `ax-s1-inflight-publication` the same site now
-  parks on a peer's holder - read from the code, not driven: no cell runs a
-  cross-core row wait. What stays open, both AX-S2b's (the wait sites) and
-  both retryable, never a wrong answer:
+  - **A cross-unit refusal hands back no slot** (`lock_table.cpp`'s verify
+    arm), so a write refused at a declared range - a `WHERE`-less or
+    pk-range `UPDATE`/`DELETE` meeting another core's open row write - or a
+    tuple write under another core's range fence still polls `IsInFlight`:
+    nothing kicks it, an idle waiter sees the decide at the end of its idle
+    block (`max_idle_block_ms`), and its re-run can meet the holder's
+    borrow still held and be refused. Closing it is a containment wake,
+    which the table does not have.
+  - **The first encounter inside the retire-to-release window is
+    refused.** A holder that has left the in-flight table and not yet
+    released - or released just after the refusal - is "not in flight" to
+    `NoteBlockingWriter`, which declines, so the statement is refused where
+    a wait on the slot it registered would end at once. Closing it is a
+    behaviour change - record the block whenever the refusing unit's wake
+    names the holder, the repeatable-read guard ahead of it - and waits for
+    the operator's word.
+  - **A wake is not a grant.** `TryAcquire` does not queue, so a third
+    writer can take the unit between the flip and the re-run; the re-run
+    parks again under the same deadline, and under sustained contention
+    ends at the 1 s fault net naming whichever holder came last.
 
-  - **No wake.** The `WaitUntil` predicate is re-polled when the waiter's
-    reactor runs, and a decide on another core kicks nothing, so an idle
-    waiter sees it at the end of its idle block (`max_idle_block_ms`,
-    10 ms by default) - up to that much per cross-core conflict, where the
-    refusal was immediate. The tuple ask (`command_dispatcher.cpp`'s
-    `BorrowChain`) passes no wake slot; `WaitForParentRowWriter` is the
-    shape that has one.
-  - **A re-run can meet the holder's borrow before its release.** The
-    holder leaves the in-flight table before `locks_->Release`, by design
-    (`manager.cpp`'s commit), so a woken writer can meet the tuple `X`
-    still held and be refused there.
-
-  A holder that never decides now costs a cross-core writer the 1 s fault
-  net and its defect warning, as a same-core writer already paid. Owner:
-  `instructions/v3.0.0/workorder-ax-inflight-publication.md` AX-S2b (named at AX-S2, not yet started), and
-  `docs/spec/txn.md` §5.
+  A holder that never decides costs a cross-core writer the 1 s fault net
+  and its defect warning, as a same-core writer pays. Owner:
+  `instructions/v3.0.0/workorder-ax-inflight-publication.md` §6 (AX-S2b's
+  row), and `docs/spec/txn.md` §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
   and AT's quiet-wrong defence is sequenced as though it covered every
