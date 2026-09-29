@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -38,6 +39,23 @@ namespace {
 using wire::ClientFrameType;
 using wire::ServerFrameType;
 
+// The system clock plus a jump the test thread makes while the reactor
+// thread reads it - `ManualClock` is not safe across the two. At offset 0
+// it is the system clock, so every other test here is unchanged.
+class JumpableClock final : public sched::Clock {
+public:
+    sched::MonoTimeNs Now() const override {
+        return base_.Now() + offset_.load(std::memory_order_acquire);
+    }
+    void Jump(sched::MonoTimeNs delta_ns) noexcept {
+        offset_.fetch_add(delta_ns, std::memory_order_release);
+    }
+
+private:
+    sched::SystemClock base_;
+    std::atomic<sched::MonoTimeNs> offset_{0};
+};
+
 class KwpEndpointTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -60,7 +78,7 @@ protected:
         listener.Detach();
     }
 
-    sched::SystemClock clock_;
+    JumpableClock clock_;
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<CommandDispatcher> dispatcher_;
@@ -339,6 +357,58 @@ TEST_F(KwpEndpointTest, TwoConnectionsHoldSeparateSessions) {
     StopServer(a, da);
     ::close(a);
     ::close(b);
+    server.join();
+}
+
+TEST_F(KwpEndpointTest, AServedPortalIdleBeyondTheTimeoutIsReleased) {
+    // §10's 60 s bound on the served path, which `kwp_session_test.cpp`
+    // cannot reach: that test hands the session its clock, and the server
+    // built every session with none, so the sweep ran and released nothing.
+    constexpr std::uint16_t kPort = 25458;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    std::thread server([&] { RunReactor(listener.value()); });
+
+    int fd = Connect(kPort);
+    ASSERT_GE(fd, 0);
+    wire::FrameDecoder decoder;
+    ASSERT_TRUE(Handshake(fd, decoder));
+    SendFrame(fd, ClientFrameType::kParse, ParsePayload("s", "SELECT id FROM t"));
+    SendFrame(fd, ClientFrameType::kBind, BindPayload("p", "s"));
+    ASSERT_TRUE(ReadFrame(fd, decoder).has_value());  // S_PARSE_OK
+    ASSERT_TRUE(ReadFrame(fd, decoder).has_value());  // S_BIND_OK
+
+    clock_.Jump(kPortalIdleTimeoutNs + 1);
+
+    // The sweep runs on the reactor's next timer pass, which an idle block
+    // bounds; ask until it has, rather than guessing how long that is. A
+    // describe does not refresh the portal's idleness, and while the portal
+    // lives it is refused as unexecuted - a different category.
+    std::optional<wire::WireError> answer;
+    for (int attempt = 0; attempt < 250; ++attempt) {
+        wire::PayloadWriter w;
+        w.U8(2);  // portal
+        w.Str("p");
+        SendFrame(fd, ClientFrameType::kDescribe, w.Take());
+        SendFrame(fd, ClientFrameType::kSync, {});
+        auto error = ReadFrame(fd, decoder);
+        ASSERT_TRUE(error.has_value());
+        ASSERT_EQ(error->type, static_cast<std::uint8_t>(ServerFrameType::kError));
+        ASSERT_TRUE(ReadFrame(fd, decoder).has_value());  // S_READY
+        auto decoded = wire::DecodeError(error->payload);
+        ASSERT_TRUE(decoded.ok());
+        if (decoded.value().category() == wire::ErrorCategory::kResourceExhausted) {
+            answer = decoded.value();
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_TRUE(answer.has_value()) << "the portal outlived its timeout by 5 s of reactor time";
+    EXPECT_EQ(answer->detail_code(),
+              static_cast<std::uint16_t>(wire::ResourceDetail::kPortalIdleTimeout));
+
+    StopServer(fd, decoder);
+    ::close(fd);
     server.join();
 }
 

@@ -634,10 +634,41 @@ TEST_F(KwpSessionTest, APortalIdleBeyondTheTimeoutIsReleased) {
     session_->ExpireIdlePortals();
     EXPECT_EQ(session_->portal_count(), 0u);
 
+    // **Not "unknown portal"** (§7, §11): the client did hold it and was
+    // too slow, and the spec answers that `RESOURCE_EXHAUSTED` with its own
+    // detail because the client's fix differs from a misspelled name.
     auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
     ASSERT_EQ(frames.size(), 1u);
     auto err = wire::DecodeError(frames[0].payload);
     ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kResourceExhausted);
+    EXPECT_EQ(err.value().detail_code(),
+              static_cast<std::uint16_t>(wire::ResourceDetail::kPortalIdleTimeout));
+}
+
+TEST_F(KwpSessionTest, AnExpiredPortalNameIsForgottenOnceItIsBoundOrClosedAgain) {
+    // The timeout answer is about a portal the client held; a name bound
+    // afresh is a new portal, and a closed one is one the client let go.
+    Handshake();
+    Feed(ClientFrameType::kParse, Parse("s", "SELECT id FROM t"));
+    Feed(ClientFrameType::kBind, Bind("p", "s"));
+    Feed(ClientFrameType::kBind, Bind("q", "s"));
+    clock_.Advance(kPortalIdleTimeoutNs);
+    session_->ExpireIdlePortals();
+    ASSERT_EQ(session_->portal_count(), 0u);
+
+    Feed(ClientFrameType::kBind, Bind("p", "s"));
+    auto rebound = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_FALSE(rebound.empty());
+    EXPECT_NE(rebound[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << "a rebound name is a live portal";
+
+    Feed(ClientFrameType::kClose, Handle(2, "q"));
+    auto closed = Feed(ClientFrameType::kExecute, Execute("q", 0));
+    ASSERT_EQ(closed.size(), 1u);
+    auto err = wire::DecodeError(closed[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kProtocol);
     EXPECT_EQ(err.value().detail_code(),
               static_cast<std::uint16_t>(wire::ProtocolDetail::kUnknownPortal));
 }
