@@ -197,3 +197,16 @@ at `e187b2b` put the push, AY-Q9 and AY-S3 to the operator.
 | **Reading** | "AY-S3" read beside "follow CLA proposal" as the word to start the stage, whose ruling AY-R3 is CLA's proposal; both are built on one branch, the port as its own commit |
 | **Does not settle** | Any stage past S3, or any other §4 item |
 | **Recorded at** | `workorder-ay-following-letter.md` §4 (AY-Q9) and §6, `index.md`, `known-gaps.md` (Testing) |
+
+## 18. AY-S7 started
+
+Recorded on `worktree-ay-s7-allocate-catalog-page` from `267f955`
+(`v2.7.0-499-g267f955`), with AY-S3 on `main` at `267f955`.
+
+| | |
+|---|---|
+| **Word** | *"go ahead for AY-S7 (allocateCatalogPage)"* |
+| **Mark** | **AY-S7 starts**: `AllocateCatalogPage` (AY-R6), red first |
+| **Reading** | S7 is independent of the S1-S6 chain (`workorder-ay-following-letter.md` §5), so it starts ahead of S4 without moving that order |
+| **Does not settle** | AY-S4 or any other stage; any §4 item |
+| **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |

@@ -357,8 +357,7 @@ std::uint64_t UndoPkOf(std::span<const std::byte> payload) {
 StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
     for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) {
         auto created = store.CreateAt(id);
-        if (created.ok()) return std::move(created.value());
-        if (created.status().code() != StatusCode::kAlreadyExists) return created.status();
+        if (created.ok() || created.status().code() != StatusCode::kAlreadyExists) return created;
     }
     return Status::OutOfSpace(
         "catalog: the reserved catalog page range (" + std::to_string(kCatalogOverflowFirst) +

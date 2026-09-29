@@ -452,3 +452,68 @@ stage, is left as it is.
 and at `58e78c7` after the review. `origin/main` had not moved, so there was
 nothing to merge. The rig file passed 20 repeats alone and 8 × 5 in parallel.
 Overhead not measured.
+
+### AY-S7 — built 2026-09-29
+
+On `worktree-ay-s7-allocate-catalog-page` from `267f955`, on the operator's
+*"go ahead for AY-S7 (allocateCatalogPage)"* (`raft-marks-2026-09-29.md`
+§18). S7 is independent of the S1-S6 chain (§5).
+
+**The severity, restated (AY-R6).** The bug entry called the new page a
+use-after-free. In a production assembly it is not one: every catalog page
+lies under `SetResidentLimit(kFirstUserPageId)` and is never swept, so the
+frame is not reused. It is an unlatched write and a flush-before-log.
+
+**Red first**, at `09b2924` against `267f955`:
+`InsertLogCrashRigTest.AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord`.
+The cell grows a catalog chain onto `kCatalogOverflowFirst` through direct
+`CreateTable` calls. From inside the DDL undo hook, in the gap between the
+row's placement and its `HEAP_INSERT`, core 1 calls `WriteBack` on the new
+page. Unfixed, that writeback finished inside `kGive` and the snapshot file
+held the page with its row under `page_lsn` 0. It failed 3/3.
+
+The first version of the cell asserted the file's `page_lsn` equal to the
+page's final one. That is wrong: the same `CREATE` goes on writing
+`sys.columns` rows onto the page, so it was corrected to `!= 0` before the
+fix landed, and the red was re-proved against `267f955`'s `catalog.cpp`.
+
+**Built** at `68d8b18`. `AllocateCatalogPage` returns the new page's
+`PageRef`, taken exclusive by `CreateAt`. `InsertRow`'s new-page arm formats,
+logs `PAGE_INIT`, places the row, fires the hook and stamps under that hold,
+then releases it before the tail's link edit. This is AT-S21's shape. The
+cell passed 20/20. The mutant, the span return, is `267f955`'s code, where
+the cell was red. The row leaves `records-appended-after-their-page-is-released.md`.
+
+**The review** (`critics-developer`, one pass) found no correctness defect:
+
+- the production hook's undo append takes only undo pages, the WAL and
+  `StampPageLsn`, and never waits on a writeback, so the hold adds one more
+  pair of the (old tail, undo page) kind already held across the hook;
+- every early return drops the page by RAII, leaving what it left before;
+- releasing before the link edit is right.
+
+Taken:
+
+- a guard that the page is unallocated before the loop, since a tail-arm
+  event on it would pass with or without the fix;
+- `<array>`;
+- the file header, which said every cell uses the dispatcher's seam and
+  mounts;
+- the probe loop's two checks folded into one.
+
+Rejected:
+
+- **Folding the two arms' place-hook-log sequence into one helper.** It fixes
+  a separate pre-existing defect: the tail arm sets `*where` only after its
+  log succeeds, so a failed hook or append leaves a placed row that the
+  rollback never retires. That is a behaviour change with no cell, outside
+  this stage. It is recorded as
+  `a-catalog-row-placed-on-a-chains-tail-is-not-reported-when-its-logging-fails.md`.
+- **Dropping the tail re-fetch as unneeded.** `heap_chain.cpp` rests on the
+  same premise, and the two should change together.
+- **A shared two-column schema helper.** The file's cells read standalone.
+
+**Suite**: 3093/3093 in Debug (`ctest -LE heap-suspended -j8`, one
+pre-existing disabled cell) at `68d8b18`, and again with the review's changes
+applied. The rig file passed 5 repeats after the review. Overhead not
+measured.

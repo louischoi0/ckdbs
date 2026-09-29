@@ -1,5 +1,6 @@
 #include "two_core_rig.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -42,6 +43,11 @@
 // it waits; the seam gives it `kGive` and lets the first core go on, which
 // is what a real second core would see. Without the fix it finishes inside
 // that time and the window is open.
+//
+// **The catalog's new-page cell is the exception** (AY-S7): its seam is the
+// catalog's DDL undo hook, which runs in the same gap of
+// `Catalog::InsertRow`, and it mounts nothing - what it asserts is the
+// page image the writeback put in the file.
 
 namespace kds::server {
 namespace {
@@ -560,9 +566,12 @@ TEST(InsertLogCrashRigTest, AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord)
             schema.columns.push_back(col);
         }
 
+        // Unallocated before the loop, so the hook's first event on it is
+        // the new-page arm's. Were it the tail arm's, which holds its page
+        // across the hook, the cell would pass with or without the fix.
+        ASSERT_FALSE(rig->store().IsAllocated(fresh));
         std::unique_ptr<OtherCore> other;
-        // The hook's first event on the overflow range is the new-page
-        // arm's: nothing is on that page before it. One-shot by `other`.
+        // One-shot by `other`.
         cat.SetDdlUndoHook([&](const catalog::Catalog::DdlUndoEvent& event) {
             if (other != nullptr || event.page_id != fresh) return Status::OK();
             other = std::make_unique<OtherCore>([&] {
