@@ -141,7 +141,7 @@ runs. The cap refusal is the one new answer at one core, and only past
 | # | item | class | CLA proposal |
 |---|---|---|---|
 | AX-Q1 | **Marked 2026-09-28 as proposed** (`raft-marks-2026-09-28.md` §9), built at AX-S1. `kInFlightSlotsPerCore` | constant | 1,024; a refusal past it rather than an unpublished transaction |
-| AX-Q2 | **Marked 2026-09-28 as proposed** (`raft-marks-2026-09-28.md` §9); AX-S2 builds it. DT9 on peers changes behaviour: a peer stops seeing an uncommitted drop as done | user-visible | take it — it is the isolation §5a promised and could not keep across cores |
+| AX-Q2 | **Marked 2026-09-28 as proposed** (`raft-marks-2026-09-28.md` §9), built at AX-S2. DT9 on peers changes behaviour: a peer stops seeing an uncommitted drop as done | user-visible | take it — it is the isolation §5a promised and could not keep across cores |
 
 ## 5. Sequencing
 
@@ -439,3 +439,75 @@ says *"A peer may not write the catalog ... DDL runs on core 0"* and §5c
 
 **Suite**: 3015/3015 in Debug before the review's changes; after them,
 3015/3015, the one disabled cell pre-existing. Overhead not measured.
+
+## 7. AX closed, 2026-09-29
+
+**The instance in-flight publication is complete.** Every stage of §3 has
+landed on `main`, with one sub-stage the order did not plan: AX-S0
+`b83309d` (written from `bc1040e`), AX-S1 `df7d7c6` (merged at `353d465`),
+AX-S2 `1040f60` (reproduction `213fd81`), AX-S2b `043aee7` (reproduction
+`42978b8`, review `b54a769`), AX-S3 `3b95bd5` (merged at `f83f574`). Both
+operator items are marked as proposed and built (§4). Written on
+`worktree-ax-close` from `f83f574` (`v2.7.0-473-gf83f574`), on the
+operator's *"close AX"* (`raft-marks-2026-09-29.md` §2).
+
+### What AX delivered
+
+| | what it is | where it lives |
+|---|---|---|
+| **The tables** (AX-S1) | one in-flight table per core, 1,024 ids, a single writer and no latch, read downward; `Begin` refused past the cap; `IsInFlight` the instance's | `txn.md` §4.1, `rules.md` §3, `instance_visibility.hpp` |
+| **DT9 across cores** (AX-S2, AX-Q2) | `ScanAll`'s bound is `FloorCandidate()`, so a peer resolves an index another core's open drop marked until the drop commits | `ddl-transactional.md` §5b |
+| **The row wait's wake** (AX-S2b) | a write refused on its own tuple parks on that unit's slot, flipped at the holder's release after its retire and kicked across | `txn.md` §5, `known-gaps.md` Locks |
+| **The prose** (AX-S3) | no spec says the predicate is per-core; the tables declared | `txn.md`, `rules.md` §3, `crosscore.md`, `ddl-transactional.md`, `foreign-keys.md` |
+
+It closes AT-9's carry item 4 - a write on another core's in-flight holder
+waits (AX-S1), on the unit's slot with a kick when the refusal was on its
+own tuple (AX-S2b) - except items 1 and 2 below. **No AX stage was
+measured**: overhead not measured at any stage, and AX-S2 sends more of
+`ScanAll`'s delete-marks to the tables, each lookup costing the Σ of the
+cores' running counts (zero when idle) - unpriced.
+
+### What AX carries forward - not closed by this close
+
+Each once, with its owner or the statement that it has none.
+
+1. **The first encounter inside the holder's retire-to-release window is
+   refused** (`known-gaps.md`, Locks) - a behaviour change: record the
+   block whenever the refusing unit's wake names the holder. **The
+   operator's**; put on 2026-09-29 and not answered.
+2. **A cross-unit refusal hands back no slot** and still polls - a
+   `WHERE`-less or pk-range write, a range fence (`known-gaps.md`, Locks).
+   **No owner.** CLA's proposal: the following letter, which opens the lock
+   table for D9(a)'s fence; the fix itself is a containment wake, which
+   D9(a) does not need.
+3. **A wake is not a grant** (`known-gaps.md`, Locks): no action proposed;
+   recorded so a fault-net refusal under contention is read correctly.
+4. **The rollback's schema-word move has no killing cell**
+   (`known-gaps.md`, Testing) and is nearly inert behind `EndDdlScope`'s
+   bump. **No owner.** CLA's proposal: keep it until a rolled-back
+   `CREATE INDEX` cell says whether it orders anything.
+5. **AT-S13 cell 1's refusal share** (AT-9 items 4-5): AX made the
+   in-flight-holder part of those refusals a wait; how much of the 3.9-5.9%
+   that part is was never measured - the results file's 3,422 *"was written
+   by"* refusals do not say, and only its 7 *"is held by"* refusals are the
+   gap by construction. **No owner.** CLA's proposal: AT-9 item 6's stage,
+   which does not exist.
+6. **AR0-5-R R8.1 row 12 still reads "open"** and describes the per-core
+   predicate (`ar0-5-amendment-uniformity.md`). The document is ratified,
+   so the row changes on the operator's word. **The operator's.**
+7. **`manager.cpp`'s `Commit` comment still says the autocommit write scope
+   leaks a failed commit's `Transaction`** - false since `EndWrite` sends a
+   failed commit to `AbortOwnedScope`; recorded at AX-S1, not fixed at
+   AX-S3. **No owner**; a comment-only fix.
+8. **Found at AX-S3, not AX's**: `ddl-transactional.md` §3 and §5c still
+   say a peer may not write the catalog, false since AT-S5. **No owner.**
+
+### What this close marks, and what it does not
+
+**Marked here, as a record of what was built**: AX-Q2's §4 row, which said
+AX-S2 would build it. It opens nothing, decides none of the items above,
+cuts no tag (Q3), and runs no measurement. **The suite ran and is green** -
+3015/3015 at `f83f574` with this close's four documents on top (Debug, one
+pre-existing disabled cell), which is what a change touching no source
+should produce. Overhead not
+measured.

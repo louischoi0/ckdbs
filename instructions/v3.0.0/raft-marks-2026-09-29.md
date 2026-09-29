@@ -20,3 +20,15 @@ AX-S3.
 | **Mark** | **AX-S2b lands**: `b54a769` pushed to `main` (`043aee7..b54a769`, the pre-push gate green). **AX-S3 starts**: the prose (`workorder-ax-inflight-publication.md` §3) |
 | **Does not settle** | The first-encounter behaviour change (`known-gaps.md`, Locks, AX-S2b's second entry) - put in the same report and not answered, so it stays open |
 | **Recorded at** | `workorder-ax-inflight-publication.md` §6, `index.md` |
+
+## 2. AX closed
+
+Recorded on `worktree-ax-close` from `f83f574` (`v2.7.0-473-gf83f574`), after AX-S3
+landed on `main` at `f83f574` on the operator's *"merge and push"*.
+
+| | |
+|---|---|
+| **Word** | *"close AX, and list all decision needed making to ship next milestone"* |
+| **Mark** | **AX-S3 lands** (`f83f574` on `main`) and **AX closes** (`workorder-ax-inflight-publication.md` §7) |
+| **Does not settle** | Any item §7 carries - the first-encounter behaviour change among them. The list of decisions is a report, not a mark |
+| **Recorded at** | `workorder-ax-inflight-publication.md` §7, `index.md` |

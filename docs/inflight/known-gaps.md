@@ -111,7 +111,8 @@ statement about an engine that no longer exists; re-verify or strike it.
   window maintains the orphaned tree once; a rolled-back `DROP TABLE`
   bumps the word at its own write. No shape found loses an entry, so the
   move stays. Owner: none named; `txn.md` §4.1 and `ddl-transactional.md`
-  §5e.
+  §5e. Carried by AX's close
+  (`instructions/v3.0.0/workorder-ax-inflight-publication.md` §7 item 4).
 
 - **The assertion scan's floor is a fixed defect with no regression test
   under it.** Verified at AM-S0(a) by reverting the fix: every cell in
@@ -597,9 +598,11 @@ there is no second core's registration to be answered by.
     ends at the 1 s fault net naming whichever holder came last.
 
   A holder that never decides costs a cross-core writer the 1 s fault net
-  and its defect warning, as a same-core writer pays. Owner:
-  `instructions/v3.0.0/workorder-ax-inflight-publication.md` §6 (AX-S2b's
-  row), and `docs/spec/txn.md` §5.
+  and its defect warning, as a same-core writer pays. AX closed carrying
+  all three (`instructions/v3.0.0/workorder-ax-inflight-publication.md`
+  §7 items 1-3): the cross-unit refusal (item 2) has no owner, the first
+  encounter (item 1) is the operator's, and a wake not being a grant
+  (item 3) proposes no action. Spec: `docs/spec/txn.md` §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
   and AT's quiet-wrong defence is sequenced as though it covered every
