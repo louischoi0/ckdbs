@@ -94,6 +94,18 @@ statement about an engine that no longer exists; re-verify or strike it.
   message kills it 3/3. The bind's declarations and the rest of the list
   above are still pinned by nothing.
 
+- **AX-S2b's release-kick cell failed once under `-j8` and did not
+  reproduce.** On `worktree-ay-s0-order` at `14cfdfa` (sources as
+  `58198cb`), one full Debug suite failed
+  `RowWaitWakeRigTest.AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick`
+  with its assertion message not captured; the cell then passed 20/20
+  alone, 40/40 across eight parallel copies, 40/40 under a concurrent full
+  suite, and two more full suites were green. Its bounds are wall-clock
+  (`Within(2000ms)` for core 1's first idle block, `Within(1000ms)` after
+  the kick), which a loaded host can exceed. **Owner: none**; the next
+  failure should be kept with `--output-on-failure` before it is
+  attributed.
+
 - **A rollback's schema-word move has no cell that kills its removal since
   AX-S2.** Verified on `ax-s3-inflight-prose` from `b54a769` (AX-S3):
   `MoveSchemaWordIfCatalogWriter` removed from `TransactionManager::Abort`

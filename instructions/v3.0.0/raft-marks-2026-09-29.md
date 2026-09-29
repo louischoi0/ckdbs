@@ -143,3 +143,16 @@ question; each such answer is quoted as chosen.
 | **Mark** | **Taken as CLA proposed it** (`known-gaps.md`, Locks): `NoteBlockingWriter` records the block whenever the refusing unit's wake names the holder, **even when the holder is no longer in flight** - it has decided and not yet released - with the repeatable-read futile-wait guard ahead of it, so the statement parks on the slot, which the imminent release flips or already has, rather than being refused. A behaviour change: a refusal becomes a wait, never a wrong answer |
 | **Does not settle** | Where it is built. The proposal named no stage; CLA places it in **AY beside the containment wake** (§12), the same wait surface, and says so as a placement, not a mark |
 | **Recorded at** | `known-gaps.md` Locks, `workorder-ax-inflight-publication.md` §7 item 1 |
+
+## 14. AY-S0 started
+
+Recorded on `worktree-ay-s0-order` from `58198cb` (`v2.7.0-481-g58198cb`),
+after §7-§13 landed on `main` at `2b0a744` on the operator's *"merge and
+push"*, corrected at `14cfdfa` on this branch.
+
+| | |
+|---|---|
+| **Word** | *"start AY-S0"* |
+| **Mark** | **AY-S0 starts**: the work order (`workorder-ay-following-letter.md`) |
+| **Does not settle** | Any AY stage past S0, or any of the order's §4 items |
+| **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |
