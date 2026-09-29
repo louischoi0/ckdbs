@@ -592,7 +592,7 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // and that writer can be waiting for a row this transaction holds. So
     // the edge is drawn, and a registration that would close a cycle makes
     // this statement the victim (AO-R7) rather than a wait the fault net
-    // ends eleven seconds later.
+    // ends.
     Session& waiting_session = session != nullptr ? *session : autocommit_session_;
     const std::uint64_t waiter_id = waiting_session.transaction() != nullptr
                                         ? waiting_session.transaction()->id()
@@ -3456,7 +3456,7 @@ void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
 
     const txn::LockKey unit = txn::LockKey::Tuple(parent_rel, pk);
     std::uint64_t blocker = 0;
-    std::shared_ptr<txn::LockWaitSlot> wake;
+    txn::LockWake wake;
     auto took = locks_->TryAcquire(waiter->id(), unit, txn::LockMode::kShared, waiter->borrows(),
                                    &blocker, &wake);
     if (!took.ok()) {
@@ -3475,8 +3475,16 @@ void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
         locks_->ReleaseOne(waiter->id(), unit, txn::LockMode::kShared, waiter->borrows());
         return;
     }
-    if (wake == nullptr) return;  // no reactor to park on: the plain refusal stands
-    lock_wait_ = DispatchOutcome::LockWait{unit, blocker != 0 ? blocker : holder, std::move(wake)};
+    // **A parent row under a range fence waits too since AY-S2**: the
+    // refusal is found in the verify arm, on the fence's entry, and is
+    // registered there - so the wake is on the fence's key, not the row's.
+    // Before it this arm had no slot and returned, and the child was
+    // refused where it now waits for the fence's release. Tested as
+    // `BorrowChain` tests its own: a refusal without a slot is the plain
+    // busy verdict, never a park on nothing.
+    if (wake.slot == nullptr) return;
+    lock_wait_ = DispatchOutcome::LockWait{wake.key, blocker != 0 ? blocker : holder,
+                                           std::move(wake.slot)};
 }
 
 Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& child,
@@ -8137,7 +8145,7 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* 
     // yet, or that reads a different one, costs this nothing.
     const txn::LockKey unit = txn::LockKey::Relation(oid);
     std::uint64_t blocker = 0;
-    std::shared_ptr<txn::LockWaitSlot> wake;
+    txn::LockWake wake;
     // A wake is registered only where there is a reactor to park on - the
     // same condition every other wait in this file records under. Without
     // it the honest answer is the refusal itself, which is what a
@@ -8146,8 +8154,8 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* 
                                    holder->borrows(), &blocker, may_park_ ? &wake : nullptr);
     if (!took.ok()) return took.status();
     if (took.value()) return std::nullopt;
-    if (wake != nullptr) {
-        lock_wait_ = DispatchOutcome::LockWait{unit, blocker, std::move(wake), poisons};
+    if (wake.slot != nullptr) {
+        lock_wait_ = DispatchOutcome::LockWait{wake.key, blocker, std::move(wake.slot), poisons};
     }
     // Retryable, and it says who rather than what to do: a client that
     // reached this over the synchronous path has the same recourse it has
@@ -8224,13 +8232,14 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // that wait would have refused the write rather than held it.)
     const txn::LockKey relation = txn::LockKey::Relation(unit.rel_oid);
     const bool first_intention = !holdings.Holds(relation);
-    std::shared_ptr<txn::LockWaitSlot> wake;
+    txn::LockWake wake;
     auto rel = locks_->TryAcquire(id, relation, txn::LockMode::kIntentionExclusive, holdings,
                                   blocker, may_park_ ? &wake : nullptr);
     if (!rel.ok()) return refused(rel.status());
     if (!rel.value()) {
-        if (wake != nullptr) {
-            TakeLockWait(lock_wait_, DispatchOutcome::LockWait{relation, *blocker, std::move(wake)});
+        if (wake.slot != nullptr) {
+            TakeLockWait(lock_wait_,
+                         DispatchOutcome::LockWait{wake.key, *blocker, std::move(wake.slot)});
         }
         return false;
     }
@@ -8263,17 +8272,24 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // (`BorrowRelationForDdl`) because it needs its own wait.
     if (unit.unit == txn::LockUnit::kRelation) return true;
     // **With a wake, where the statement can park** (AX-S2b): a refusal
-    // leaves a registration on the unit so the holder's release kicks this
-    // core, which the row wait - `NoteBlockingWriter`'s - had nothing of
-    // until then. Kept on `blocking_wake_`, where the statement's end
-    // either hands it to the wait or drops it.
-    std::shared_ptr<txn::LockWaitSlot> unit_wake;
+    // leaves a registration so the holder's release kicks this core, which
+    // the row wait - `NoteBlockingWriter`'s - had nothing of until then.
+    // Kept on `blocking_wake_`, where the statement's end either hands it to
+    // the wait or drops it.
+    //
+    // **On the unit that refused, which since AY-S2 need not be `unit`**: a
+    // declared range refused by a row's `X`, or a row refused by a range
+    // fence, is found by the table's verify in another unit's entry and is
+    // registered there (`lock_table.hpp`, `AcquireResult::slot_key`). Until
+    // then that refusal came back with no slot and the wait was a poll of
+    // `IsInFlight` that no release kicked.
+    txn::LockWake unit_wake;
     auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker,
                                     may_park_ ? &unit_wake : nullptr);
     if (!under.ok()) return refused(under.status());
-    if (!under.value() && unit_wake != nullptr) {
+    if (!under.value() && unit_wake.slot != nullptr) {
         TakeLockWait(blocking_wake_,
-                     DispatchOutcome::LockWait{unit, *blocker, std::move(unit_wake)});
+                     DispatchOutcome::LockWait{unit_wake.key, *blocker, std::move(unit_wake.slot)});
     }
     return under.value();
 }

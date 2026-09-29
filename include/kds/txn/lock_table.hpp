@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -188,12 +189,15 @@
 // **What that argument proves is "never both granted", not "never both
 // refused".** Two overlapping asks that publish before either scans can
 // each find the other and each unwind, so both are refused and neither
-// holds anything. While the borrow is advisory and every engine caller is
-// a non-queueing `TryAcquire`, that costs one wasted round and changes no
-// verdict. It stops being free at AO-S6c, where the lock becomes the wait
-// and a mutual refusal is a livelock rather than a retry - so S6c owes a
-// bias (the lower transaction id keeps its grant, or one re-ask after the
-// unwind) and this note is where the obligation is recorded.
+// holds anything. **What that costs since the lock became the wait, and
+// since AY-S2's containment wake**: each side's scan registers a wake on
+// the other's entry under the latch that saw it, before the other's unwind
+// removes that holder - so each unwind flips the other's slot and neither
+// wait outlives the pair. A waiter that holds anything draws its edge, the
+// two edges close a cycle, and the second is refused naming deadlock
+// (AO-R7); two that hold nothing re-run. No bias is built: the pair is a
+// victim or a retry, never a wait the fault net ends
+// (`LockTableTest.TwoOverlappingAsksThatBothPublishFirstAreBothRefusedAndBothWoken`).
 //
 // ---- The wait-for graph and the victim (AO-R7, D12) -----------------------
 //
@@ -457,17 +461,34 @@ struct AcquireResult {
     bool already_held = false;
     // Set only when `granted` is false: what to park on
     // (`sched::WaitUntil` over `LockWaitReady(slot)`), and what a decide on
-    // the blocking unit flips.
+    // the blocking unit flips. `slot_key` is the unit it is registered on,
+    // which is what `DropWake` must be given.
     //
-    // **Null on exactly one refusal, and a caller must test for it**: the
-    // cross-unit conflict AO-S6b's verify finds (a fence over a tuple, or a
-    // tuple under a fence). That refusal names a blocker in another
-    // partition, and the release that would wake a waiter is the *other*
-    // unit's, which `WakeWaiters` cannot reach - so no slot is handed back
-    // rather than one nobody will ever flip. `LockWaitReady` has no null
-    // branch by design, so parking on this without the test is a crash;
-    // AO-S6c is where a cross-unit refusal becomes waitable and this
-    // exception goes. Every same-key refusal still carries a slot.
+    // **The key is the blocking entry's, not always the asked one** (AY-S2,
+    // the containment wake). A refusal found in the asked key's own entry is
+    // registered there. A cross-unit refusal - a fence over a tuple, or a
+    // tuple under a fence, found by AO-S6b's verify in another partition -
+    // is registered on **the entry whose holder refused it**, inside the scan,
+    // under the latch that observed that holder: the registration then lands
+    // either before the holder's removal, whose release flips it, or after
+    // it, in which case the scan never saw the holder and nothing refused.
+    //
+    // **Null on one refusal still, and a caller must test for it**: a
+    // *queueing* `Acquire`'s cross-unit conflict, which is given no queue
+    // position on another unit and no slot. No engine path calls `Acquire`.
+    // `LockWaitReady` has no null branch by design, so parking on this
+    // without the test is a crash.
+    std::shared_ptr<LockWaitSlot> slot;
+    LockKey slot_key{};
+};
+
+// What a non-queueing ask that asked for a wake gets back on a refusal: the
+// slot, and the unit it is registered on - `AcquireResult::slot_key`, which
+// may be another unit than the one asked for. One value rather than two out
+// parameters so a caller cannot keep the slot and drop it on the wrong key,
+// which would leave the registration, and its entry, for good.
+struct LockWake {
+    LockKey key{};
     std::shared_ptr<LockWaitSlot> slot;
 };
 
@@ -590,12 +611,17 @@ public:
     // next runs, and a read borrow's holder is no transaction it knows.
     // Untouched on a grant and by the cap.
     //
-    // The registration is the caller's to remove - `DropWake` - because the
-    // statement that took it is torn down and re-run between the ask and
-    // the grant, so no scope here outlives it.
+    // **Every refusal carries one since AY-S2**, a cross-unit one included:
+    // it is registered on the entry whose holder refused the ask, which
+    // `wake->key` names and which need not be `key` (`AcquireResult`'s
+    // `slot_key` says why the registration cannot be lost).
+    //
+    // The registration is the caller's to remove - `DropWake(wake->key,
+    // wake->slot)` - because the statement that took it is torn down and
+    // re-run between the ask and the grant, so no scope here outlives it.
     StatusOr<bool> TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
                               LockHoldings& holdings, std::uint64_t* blocker = nullptr,
-                              std::shared_ptr<LockWaitSlot>* wake = nullptr);
+                              LockWake* wake = nullptr);
 
     // Releases **one** of `holdings`' borrows, waking whoever was queued on
     // it, and drops its ledger record so the cap and `Release` see it as
@@ -672,9 +698,13 @@ public:
     //
     // `holder`, when given, receives the covering transaction's id, which
     // is what a refused caller reports as its blocker.
+    //
+    // `wake`, when given, is registered on the covering fence's entry under
+    // the latch that observed its holder, and filled in (AY-S2); the caller
+    // owns it as it owns `TryAcquire`'s.
     bool FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn,
                         LockMode want = LockMode::kExclusive,
-                        std::uint64_t* holder = nullptr) const;
+                        std::uint64_t* holder = nullptr, LockWake* wake = nullptr);
 
     // The fence's **other side** (AO-S6b): does any key interval this
     // relation holds meet `fence`, in a mode `fence`'s own mode conflicts
@@ -699,8 +729,21 @@ public:
     // `IS` is a positioned reader's declaration of where it is, not a claim
     // on the keys, so a fence-taker passes it and the two meet - if they
     // meet at all - at the relation entry.
+    //
+    // `wake` as `FenceCoversKey`'s: registered on the overlapping entry.
     bool ConflictingOverlap(const LockKey& fence, LockMode mode, std::uint64_t txn,
-                            std::uint64_t* holder) const;
+                            std::uint64_t* holder, LockWake* wake = nullptr);
+
+    // **A seam between the grant's publication and its verify** (AY-S2),
+    // for the one interleaving no single thread produces: two overlapping
+    // asks that both publish before either scans. Called with `kPublished`
+    // after the grant is written and its latch dropped, and with `kScanned`
+    // after the verify's scan and before any unwind, on the asking thread.
+    // Null in every production assembly.
+    enum class VerifyPoint : std::uint8_t { kPublished, kScanned };
+    void SetVerifyHookForTest(std::function<void(std::uint64_t txn, VerifyPoint)> hook) {
+        verify_hook_ = std::move(hook);
+    }
 
     // How many range- and slice-unit fences exist for `rel`. The gate a
     // writer reads on the `IX` it takes anyway; only nonzero costs the
@@ -807,6 +850,11 @@ private:
     // counter drifts.
     void ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held);
 
+    // Leaves a wake registration for `txn` on `e`, whose partition latch the
+    // caller holds - the latch under which it saw the holder that refused
+    // `txn` (AY-S2). Returns what `DropWake` needs.
+    LockWake RegisterWake(Entry& e, std::uint64_t txn, LockMode mode);
+
 
     // The wait-for graph, `waiter -> holder`. One entry per waiting
     // transaction, so it is bounded by the number of live transactions and
@@ -827,6 +875,7 @@ private:
     std::vector<std::atomic<std::uint64_t>> fence_counters_;
     // Borrowed; null at `cores = 1` and before `SetWakeRegistry`.
     const sched::WakeRegistry* wake_ = nullptr;
+    std::function<void(std::uint64_t, VerifyPoint)> verify_hook_;
 };
 
 }  // namespace kds::txn

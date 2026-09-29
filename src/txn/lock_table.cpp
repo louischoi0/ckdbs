@@ -124,11 +124,11 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
 
 StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, LockMode mode,
                                      LockHoldings& holdings, std::uint64_t* blocker,
-                                     std::shared_ptr<LockWaitSlot>* wake) {
+                                     LockWake* wake) {
     auto r = AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/false,
                           /*register_wake=*/wake != nullptr);
     if (!r.ok()) return r.status();
-    if (wake != nullptr && !r.value().granted) *wake = r.value().slot;
+    if (wake != nullptr && !r.value().granted) *wake = LockWake{r.value().slot_key, r.value().slot};
     // `AcquireInner` has always computed this and this wrapper has always
     // dropped it. Reported only on a refusal: `blocking_txn` is zero on a
     // grant, and writing that out would let a caller read "granted by
@@ -288,6 +288,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     // another reactor went at AT-S6.)
                     queued->core = CurrentCore();
                     result.slot = queued->slot;
+                    result.slot_key = key;
                     // **A wake is not a queue position** (AO-S6e-b). Only a
                     // queueing ask records `waiting_`, because only it is
                     // withdrawn by `Release` - a wake registration outlives
@@ -327,12 +328,18 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
     // matters here is only that this runs **after** the block above and
     // holds no partition latch of its own when it starts, so the scans may
     // take theirs one at a time (AO-R2).
+    if (verify_hook_) verify_hook_(txn, VerifyPoint::kPublished);
     std::uint64_t blocker = 0;
     bool conflicted = false;
+    // **The containment wake** (AY-S2): a refusal found here is registered
+    // on the entry that refused it, by the scan, under the latch that saw
+    // its holder - `AcquireResult::slot_key` states the argument.
+    LockWake cross;
+    LockWake* const registering = register_wake ? &cross : nullptr;
     if (fence) {
         // A fence-taker looks down: any tuple inside the interval, held in
         // a mode this fence conflicts with.
-        conflicted = ConflictingOverlap(key, mode, txn, &blocker);
+        conflicted = ConflictingOverlap(key, mode, txn, &blocker, registering);
     } else if (key.unit == LockUnit::kTuple) {
         // A tuple-taker looks up, and reads the counter first: AO-R3's
         // whole point is that the common case pays one acquire load and
@@ -341,9 +348,10 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
         // is not there yet - a false positive that costs one scan, never
         // an answer.
         if (RelationFenceCount(key.rel_oid) != 0) {
-            conflicted = FenceCoversKey(key.rel_oid, key.lo, txn, mode, &blocker);
+            conflicted = FenceCoversKey(key.rel_oid, key.lo, txn, mode, &blocker, registering);
         }
     }
+    if (verify_hook_) verify_hook_(txn, VerifyPoint::kScanned);
     if (conflicted) {
         // Unwound to exactly the state the in-latch conflict path leaves:
         // no holder record, no ledger entry, no counter movement. The
@@ -352,15 +360,14 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
         ReleaseOne(txn, key, mode, holdings);
         result.granted = false;
         result.blocking_txn = blocker;
+        result.slot = std::move(cross.slot);
+        result.slot_key = cross.key;
         // **A queueing ask is not queued here, and that is stated rather
-        // than implied.** The entry this caller would park on is its own
-        // key's, but the release that would wake it is the *other* unit's
-        // - a fence's, or a tuple's - and `WakeWaiters` wakes only the key
-        // it was given. Queuing across units therefore needs the wake to
-        // find waiters by containment, which is AO-S6c's, where the lock
-        // becomes the wait. Until then a cross-unit conflict is reported
-        // and the caller decides; the write path's `TryAcquire` never
-        // queues in the first place, so this narrows nothing it does.
+        // than implied.** A queue position is a place in *this* key's line,
+        // and the release that would admit it is the other unit's; a
+        // non-queueing ask gets the registration above instead, which is a
+        // wake and not a place. No engine path calls `Acquire`, so this
+        // narrows nothing it does.
         return result;
     }
 
@@ -601,15 +608,15 @@ std::uint64_t LockTable::RelationFenceCount(catalog::Oid rel) const {
 }
 
 bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn,
-                               LockMode want, std::uint64_t* holder) const {
+                               LockMode want, std::uint64_t* holder, LockWake* wake) {
     // Every partition, because a fence's partition is decided by its own
     // `lo` and the key being probed is not it. Reached only when the
     // relation's fence counter is nonzero (AO-R3), which is why a scan is
     // the right shape and an interval index is not: the common case does
     // not run this at all.
-    for (const Partition& part : partitions_) {
+    for (Partition& part : partitions_) {
         LatchGuard guard(part.latch);
-        for (const Entry& e : part.entries) {
+        for (Entry& e : part.entries) {
             if (e.key.rel_oid != rel || !e.key.IsFenceUnit()) continue;
             if (!e.key.ContainsKey(pk)) continue;
             for (const Tenant& h : e.holders) {
@@ -622,6 +629,7 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
                 if (h.mode != LockMode::kShared && h.mode != LockMode::kExclusive) continue;
                 if (!Compatible(h.mode, want)) {
                     if (holder != nullptr) *holder = h.txn;
+                    if (wake != nullptr) *wake = RegisterWake(e, txn, want);
                     return true;
                 }
             }
@@ -630,16 +638,25 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
     return false;
 }
 
+LockWake LockTable::RegisterWake(Entry& e, std::uint64_t txn, LockMode mode) {
+    // Under the caller's latch, the one that observed the refusing holder.
+    // A wake and not a queue position: nothing in `holdings.waiting_`, and
+    // `DropWake` by the slot is its only removal - the record the same-key
+    // arm of `AcquireInner` writes for a non-queueing ask.
+    e.waiters.push_back(Tenant{txn, mode, std::make_shared<LockWaitSlot>(), CurrentCore()});
+    return LockWake{e.key, e.waiters.back().slot};
+}
+
 bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uint64_t txn,
-                                   std::uint64_t* holder) const {
+                                   std::uint64_t* holder, LockWake* wake) {
     // The mirror of `FenceCoversKey`, and it scans every partition for the
     // mirror reason: an overlapping unit's partition is decided by its own
     // `lo`, which this interval does not name. Reached only by a
     // fence-taker, which is one statement's single ask rather than a
     // per-row cost.
-    for (const Partition& part : partitions_) {
+    for (Partition& part : partitions_) {
         LatchGuard guard(part.latch);
-        for (const Entry& e : part.entries) {
+        for (Entry& e : part.entries) {
             // One overlap test for tuples and fences alike - the
             // declaration says why it must reach both, and why a relation
             // unit's empty interval correctly matches nothing. `Overlaps`
@@ -685,6 +702,7 @@ bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uin
                 // answers drift apart.
                 if (!Compatible(h.mode, mode)) {
                     if (holder != nullptr) *holder = h.txn;
+                    if (wake != nullptr) *wake = RegisterWake(e, txn, mode);
                     return true;
                 }
             }

@@ -3,6 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <functional>
 #include <thread>
 #include <vector>
@@ -1182,12 +1184,14 @@ TEST(LockTableTest, AWakeRegistrationIsFlippedByTheReleaseAndTakesNoQueuePositio
     ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, reader).value().granted);
 
     std::uint64_t blocker = 0;
-    std::shared_ptr<LockWaitSlot> wake;
-    auto refused = table->TryAcquire(2, rel, LockMode::kExclusive, ddl, &blocker, &wake);
+    LockWake registered;
+    auto refused = table->TryAcquire(2, rel, LockMode::kExclusive, ddl, &blocker, &registered);
     ASSERT_TRUE(refused.ok()) << refused.status().message();
     EXPECT_FALSE(refused.value());
     EXPECT_EQ(blocker, 1u);
+    const std::shared_ptr<LockWaitSlot> wake = registered.slot;
     ASSERT_NE(wake, nullptr);
+    EXPECT_TRUE(registered.key == rel) << "a same-key refusal is registered on the key asked for";
     EXPECT_FALSE(LockWaitReady(wake)) << "a registration starts unflipped or the park never parks";
     EXPECT_FALSE(ddl.waiting_on().has_value())
         << "a wake is not a queue position: `Release` would withdraw one, and the statement that "
@@ -1227,15 +1231,145 @@ TEST(LockTableTest, AWakeRegistrationAdmitsNobodyAndBlocksNobody) {
     const LockKey rel = LockKey::Relation(kRel);
 
     ASSERT_TRUE(table->Acquire(1, rel, LockMode::kIntentionShared, reader).value().granted);
-    std::shared_ptr<LockWaitSlot> wake;
+    LockWake wake;
     ASSERT_FALSE(
         table->TryAcquire(2, rel, LockMode::kExclusive, ddl, /*blocker=*/nullptr, &wake).value());
-    ASSERT_NE(wake, nullptr);
+    ASSERT_NE(wake.slot, nullptr);
 
     auto second_reader = table->Acquire(3, rel, LockMode::kIntentionShared, other);
     ASSERT_TRUE(second_reader.ok()) << second_reader.status().message();
     EXPECT_TRUE(second_reader.value().granted)
         << "a waiting DDL's registration refused a compatible reader";
+}
+
+// ---- AY-S2: the containment wake -------------------------------------------
+//
+// A refusal the verify arm finds - a fence over a held tuple, a tuple under
+// a held fence - is registered on the entry whose holder refused it, under
+// the latch that saw that holder, and that holder's release flips it.
+
+TEST(LockTableTest, AFenceRefusedByARowIsWokenByTheRowsRelease) {
+    auto table = MakeTable();
+    LockHoldings row;
+    LockHoldings fence;
+    const LockKey tuple = LockKey::Tuple(kRel, 150);
+    ASSERT_TRUE(table->Acquire(1, tuple, LockMode::kExclusive, row).value().granted);
+
+    std::uint64_t blocker = 0;
+    LockWake wake;
+    auto refused =
+        table->TryAcquire(2, LockKey::Range(kRel, 100, 200), LockMode::kExclusive, fence,
+                          &blocker, &wake);
+    ASSERT_TRUE(refused.ok()) << refused.status().message();
+    EXPECT_FALSE(refused.value());
+    EXPECT_EQ(blocker, 1u);
+    ASSERT_NE(wake.slot, nullptr) << "a cross-unit refusal came back with nothing to park on";
+    EXPECT_TRUE(wake.key == tuple) << "registered somewhere other than the row that refused it";
+    EXPECT_EQ(table->WaiterCount(tuple), 1u);
+    EXPECT_TRUE(fence.empty()) << "the unwound fence left a borrow in the ledger";
+    EXPECT_FALSE(LockWaitReady(wake.slot));
+
+    // The fence's own unwind happened before the ask returned, and flips
+    // nothing of its own. The row's release is what wakes it.
+    table->Release(1, row);
+    EXPECT_TRUE(LockWaitReady(wake.slot));
+    table->DropWake(wake.key, wake.slot);
+    EXPECT_EQ(table->EntryCount(), 0u) << "the registration kept the row's entry alive";
+    EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
+}
+
+TEST(LockTableTest, ARowRefusedByAFenceIsWokenByTheFencesRelease) {
+    auto table = MakeTable();
+    LockHoldings fence;
+    LockHoldings row;
+    const LockKey range = LockKey::Range(kRel, 100, 200);
+    ASSERT_TRUE(table->Acquire(1, range, LockMode::kExclusive, fence).value().granted);
+
+    std::uint64_t blocker = 0;
+    LockWake wake;
+    auto refused =
+        table->TryAcquire(2, LockKey::Tuple(kRel, 150), LockMode::kShared, row, &blocker, &wake);
+    ASSERT_TRUE(refused.ok()) << refused.status().message();
+    EXPECT_FALSE(refused.value());
+    EXPECT_EQ(blocker, 1u);
+    ASSERT_NE(wake.slot, nullptr);
+    EXPECT_TRUE(wake.key == range) << "registered somewhere other than the fence that refused it";
+    EXPECT_FALSE(LockWaitReady(wake.slot));
+
+    table->Release(1, fence);
+    EXPECT_TRUE(LockWaitReady(wake.slot));
+    table->DropWake(wake.key, wake.slot);
+    EXPECT_EQ(table->EntryCount(), 0u);
+    EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
+}
+
+TEST(LockTableTest, TwoOverlappingAsksThatBothPublishFirstAreBothRefusedAndBothWoken) {
+    // The interleaving `lock_table.hpp`'s publish-then-verify note calls
+    // "never both granted, not never both refused": two overlapping fences
+    // each publish before either scans, each scan finds the other, and each
+    // unwinds. The seam holds both threads at both points, so the scans run
+    // after both publications and the unwinds after both scans - the one
+    // order no single thread produces.
+    //
+    // What AY-S2 owes this shape: each scan registers on the other's entry
+    // before the other's unwind removes its holder, so each unwind flips
+    // the other's slot - neither waits for the fault net - and the two
+    // edges the dispatcher draws close a cycle, so a waiter that holds
+    // anything is a deadlock victim rather than a wait (AO-R7).
+    auto table = MakeTable(/*cores=*/2);
+    std::mutex mu;
+    std::condition_variable cv;
+    int arrived[2] = {0, 0};
+    table->SetVerifyHookForTest([&](std::uint64_t, LockTable::VerifyPoint point) {
+        const int at = point == LockTable::VerifyPoint::kPublished ? 0 : 1;
+        std::unique_lock<std::mutex> lock(mu);
+        ++arrived[at];
+        cv.notify_all();
+        cv.wait(lock, [&] { return arrived[at] >= 2; });
+    });
+
+    struct Ask {
+        std::uint64_t txn;
+        LockKey key;
+        LockHoldings holdings;
+        std::uint64_t blocker = 0;
+        LockWake wake;
+        bool granted = true;
+    };
+    Ask a{1, LockKey::Range(kRel, 100, 200)};
+    Ask b{2, LockKey::Range(kRel, 150, 250)};
+    auto run = [&](Ask& ask) {
+        auto r = table->TryAcquire(ask.txn, ask.key, LockMode::kExclusive, ask.holdings,
+                                   &ask.blocker, &ask.wake);
+        ASSERT_TRUE(r.ok()) << r.status().message();
+        ask.granted = r.value();
+    };
+    std::thread ta([&] { run(a); });
+    std::thread tb([&] { run(b); });
+    ta.join();
+    tb.join();
+    table->SetVerifyHookForTest(nullptr);
+
+    ASSERT_FALSE(a.granted);
+    ASSERT_FALSE(b.granted) << "both scans ran after both publications, so both must refuse";
+    EXPECT_EQ(a.blocker, 2u);
+    EXPECT_EQ(b.blocker, 1u);
+    ASSERT_NE(a.wake.slot, nullptr);
+    ASSERT_NE(b.wake.slot, nullptr);
+    EXPECT_TRUE(a.wake.key == b.key) << "a registered somewhere other than b's fence";
+    EXPECT_TRUE(b.wake.key == a.key);
+    EXPECT_TRUE(LockWaitReady(a.wake.slot)) << "b's unwind did not wake a";
+    EXPECT_TRUE(LockWaitReady(b.wake.slot)) << "a's unwind did not wake b";
+
+    // The edges the two waits draw: the second closes the cycle.
+    EXPECT_FALSE(table->NoteWaitFor(a.txn, a.blocker));
+    EXPECT_TRUE(table->NoteWaitFor(b.txn, b.blocker)) << "the mutual refusal is not a cycle";
+    table->ClearWaitFor(a.txn);
+
+    table->DropWake(a.wake.key, a.wake.slot);
+    table->DropWake(b.wake.key, b.wake.slot);
+    EXPECT_EQ(table->EntryCount(), 0u);
+    EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
 }
 
 // ---- The wait-for graph, without a dispatcher ----------------------------

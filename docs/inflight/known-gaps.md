@@ -583,14 +583,14 @@ there is no second core's registration to be answered by.
   reading on `ax-s2b-row-wait-wake` at `043aee7`, the stage's review. What
   stays open, all retryable, never a wrong answer:
 
-  - **A cross-unit refusal hands back no slot** (`lock_table.cpp`'s verify
-    arm), so a write refused at a declared range - a `WHERE`-less or
-    pk-range `UPDATE`/`DELETE` meeting another core's open row write - or a
-    tuple write under another core's range fence still polls `IsInFlight`:
-    nothing kicks it, an idle waiter sees the decide at the end of its idle
-    block (`max_idle_block_ms`), and its re-run can meet the holder's
-    borrow still held and be refused. Closing it is a containment wake,
-    which the table does not have.
+  - ~~**A cross-unit refusal hands back no slot**~~ - **closed at AY-S2**
+    (on `ay-s2-containment-wake` from `d0e39e2`): the verify arm's scans
+    register the wake on the entry whose holder refused the ask, under the
+    latch that saw it, so a write refused at a declared range or under a
+    range fence parks on a slot the release flips and kicks
+    (`row_wait_wake_rig_test.cpp`'s declared-range cell), and a child's
+    forward check under a parent's range fence waits where it used to be
+    refused (`lock_family_test.cpp`).
   - **The first encounter inside the retire-to-release window is
     refused.** A holder that has left the in-flight table and not yet
     released - or released just after the refusal - is "not in flight" to
@@ -607,7 +607,7 @@ there is no second core's registration to be answered by.
 
   A holder that never decides costs a cross-core writer the 1 s fault net
   and its defect warning, as a same-core writer pays. AX closed carrying
-  all three (`instructions/v3.0.0/workorder-ax-inflight-publication.md`
+  all three (two remain open after AY-S2) (`instructions/v3.0.0/workorder-ax-inflight-publication.md`
   §7 items 1-3): the cross-unit refusal (item 2) is **AY's since
   2026-09-29** - the containment wake
   (`instructions/v3.0.0/raft-marks-2026-09-29.md` §12) - the first

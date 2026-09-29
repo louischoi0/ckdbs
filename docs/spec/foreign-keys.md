@@ -199,7 +199,11 @@ holds it.** The row's own borrow is what the wait is taken on: its writer
 holds the tuple `X` (AO-S6a), the lock table is the instance's (AO-S5(a)),
 and a refused `TryAcquire` leaves a wake registration whose slot the
 holder's release flips from whichever core releases. The statement then
-runs again whole.
+runs again whole. **A parent row under a range fence is waited for the same
+way** since AY-S2 - a parent `DELETE` with a pk window takes the range and
+no per-row `X`, so the child's ask meets the fence in the lock table's
+verify and is registered on the fence's entry; before AY-S2 that refusal
+carried no slot and the child was refused at once.
 
 - **A refused ask acquires nothing.** No queue position, nothing in the
   transaction's holdings, only the registration — so the check takes no

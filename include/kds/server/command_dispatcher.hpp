@@ -239,10 +239,12 @@ struct DispatchOutcome {
     // is woken, and its re-run comes after the release rather than between
     // the holder's decide and its release. A wake is not a grant: a third
     // writer can take the unit first, and the re-run is refused and parks
-    // again under the same deadline. Null where the refusal handed back no
-    // slot - an assertion's group, a dispatcher with no lock table, a holder
-    // only the header names, a cross-unit refusal (a declared range, a
-    // range fence) - and there the wait polls `IsInFlight`.
+    // again under the same deadline. Since AY-S2 a cross-unit refusal - a
+    // declared range met by a row's `X`, a row under a range fence - hands
+    // back a slot too, registered on the unit that refused it, which `key`
+    // names. Null where the refusal handed back none - an assertion's
+    // group, a dispatcher with no lock table, a holder only the header
+    // names - and there the wait polls `IsInFlight`.
     struct WriteBlock {
         std::uint64_t trx_id = 0;  // the undecided writer being waited for
         std::uint64_t pk = 0;      // the row it holds

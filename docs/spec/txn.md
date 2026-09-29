@@ -616,10 +616,14 @@ always did. **What follows the detection is no longer a refusal alone**
 (M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`, until AO-S8
 moves it here): a writer meeting an undecided holder waits for its decide
 (AO-S3), on whichever core the holder runs since AX-S1 made the in-flight
-test the instance's - where the refused ask handed back a slot (a refusal
-on its own key) the wait is on that slot, flipped at the holder's release and kicked across
-(AX-S2b), and elsewhere it is woken by a poll rather than a kick
-(`docs/inflight/known-gaps.md`, Locks) - a
+test the instance's - where the refused ask handed back a slot the wait
+is on that slot, flipped at the holder's release and kicked across
+(AX-S2b). A refusal on the ask's own key is registered there, and one the
+lock table's verify finds in another unit - a declared range met by a
+row's `X`, a row under a range fence - is registered on the unit that
+refused it (AY-S2). Where no slot comes back - a dispatcher with no lock
+table, a holder only the header names, an assertion's group - it is woken
+by a poll rather than a kick (`docs/inflight/known-gaps.md`, Locks). A
 transaction holding rows may wait because a wait-for graph in
 the instance's lock table refuses the waiter whose registration would close
 a cycle, naming deadlock (AO-S4a on one core, AO-S4b across cores), and a wait
