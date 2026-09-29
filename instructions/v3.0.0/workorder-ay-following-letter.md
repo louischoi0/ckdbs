@@ -367,5 +367,9 @@ leak. It traced the scan against the release, the holder's own unwind, a shared
 Rejected: removing the FK site's null-slot test as dead. Under the mutant that
 test turned a crash into the pre-AY-S2 refusal, and its comment now says so.
 
-**Suite**: 3080/3080 in Debug at `7d90ca7`, and again after the review, below.
-Overhead not measured.
+**Suite**: 3080/3080 in Debug (`ctest -LE heap-suspended -j8`) at
+`7d90ca7`. At `33b9433`, after the review, one run failed
+`ExpeditorTest.AtOneCoreTheDispatcherHoldsTheInstancesLockTable` at
+`Start()`. That path is untouched here; the cell did not reproduce alone or
+in 40 parallel runs, and it is recorded in `known-gaps.md` (Testing). The
+next full run was 3080/3080. Overhead not measured.

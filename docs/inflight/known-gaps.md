@@ -88,6 +88,18 @@ statement about an engine that no longer exists; re-verify or strike it.
   synchronous path poisons an explicit transaction on a row conflict - has
   a surviving cell was not checked.
 
+- **An expeditor's `Start()` failed once under `-j8` and did not
+  reproduce.** On `ay-s2-containment-wake` at `33b9433`, one full Debug
+  suite failed `ExpeditorTest.AtOneCoreTheDispatcherHoldsTheInstancesLockTable`
+  at `ASSERT_TRUE(db.Start().ok())` after 1.8 s, with the status not
+  printed, because the assertion carries no message. The cell then passed 5/5
+  alone. `ExpeditorTest.*` passed in eight parallel copies × 5 repeats, and
+  the next full suite was green. The fixture's ports come from
+  `TwoFreeLoopbackPorts()`, which probes and releases before the instance
+  binds, so a parallel test can take one in between; that reading is not
+  confirmed. **Owner: none**; adding the status to the assertion is what
+  would confirm it next time.
+
 - **AX-S2b's release-kick cell failed once under `-j8` and did not
   reproduce.** On `worktree-ay-s0-order` at `14cfdfa` (sources as
   `58198cb`), one full Debug suite failed
