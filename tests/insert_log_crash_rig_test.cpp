@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -15,7 +16,9 @@
 #include <gtest/gtest.h>
 
 #include "kds/base/current_core.hpp"
+#include "kds/catalog/catalog.hpp"
 #include "kds/server/expeditor.hpp"
+#include "kds/storage/page_header.hpp"
 
 #include "tree_structure.hpp"
 
@@ -521,6 +524,76 @@ TEST(InsertLogCrashRigTest, ASpillingInsertAndASpillReadingSelectBothFinish) {
 
 TEST(InsertLogCrashRigTest, ASpillingInsertAndASpillingUpdateBothFinish) {
     RaceSpillingInsertsAgainst("UPDATE t SET s = '" + std::string(1000, 'x') + "'");
+}
+
+// ---- A new catalog page, logged under its hold (AY-S7, AY-R6) ---------
+
+TEST(InsertLogCrashRigTest, AnotherCoresFlushOfANewCatalogPageWaitsForItsRecord) {
+    // `Catalog::InsertRow`'s new-page arm places a row on the page
+    // `AllocateCatalogPage` just created, fires the DDL undo hook, and then
+    // appends the row's `HEAP_INSERT`, whose stamp is the page's first
+    // `page_lsn`. Core 1 writes that page back from inside the hook - the
+    // gap between the row and its record. With the page held from its
+    // creation to the stamp, the writeback waits out the hold and what
+    // reaches the file carries a stamp - that record's, or a later row's on
+    // the same page, the `CREATE` going on writing `sys.columns` there. With
+    // the hold gone at the allocation, it copies the row under `page_lsn` 0
+    // ahead of the record, and the stamp that follows only re-dirties the
+    // frame.
+    TempDir snap;
+    const PageId fresh = catalog::kCatalogOverflowFirst;
+    bool flushed_in_the_gap = false;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CurrentCoreGuard as(0);
+        catalog::Catalog& cat = rig->core(0).catalog();
+
+        catalog::Schema schema;
+        for (std::uint16_t pos = 0; pos < 2; ++pos) {
+            catalog::SysColumnRow col{};
+            col.pos = pos;
+            catalog::SetName(col.name, pos == 0 ? "id" : "v");
+            col.type_val = catalog::kTypeValInt64;
+            col.len = 8;
+            col.notnull = true;
+            schema.columns.push_back(col);
+        }
+
+        std::unique_ptr<OtherCore> other;
+        // The hook's first event on the overflow range is the new-page
+        // arm's: nothing is on that page before it. One-shot by `other`.
+        cat.SetDdlUndoHook([&](const catalog::Catalog::DdlUndoEvent& event) {
+            if (other != nullptr || event.page_id != fresh) return Status::OK();
+            other = std::make_unique<OtherCore>([&] {
+                const PageId only[] = {fresh};
+                (void)rig->store().WriteBack(only);
+            });
+            flushed_in_the_gap = other->Wait();
+            return Status::OK();
+        });
+        for (int i = 0; i < 64 && other == nullptr; ++i) {
+            auto created = cat.CreateTable(catalog::kNamespacePublic, "spill" + std::to_string(i),
+                                           schema, catalog::ClusteredType::kBtree);
+            ASSERT_TRUE(created.ok()) << created.status().message();
+        }
+        cat.SetDdlUndoHook(nullptr);
+        ASSERT_NE(other, nullptr) << "the catalog never grew onto page " << fresh
+                                  << "; the cell tested nothing";
+        other->Join();
+        // The file holds what the writeback put there and nothing since.
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    EXPECT_FALSE(flushed_in_the_gap)
+        << "core 1 wrote the new page back before its record was appended";
+
+    std::ifstream file(snap.path / "kds.db", std::ios::binary);
+    std::array<std::byte, kPageSize> image{};
+    file.seekg(static_cast<std::streamoff>(fresh) * kPageSize);
+    file.read(reinterpret_cast<char*>(image.data()), kPageSize);
+    ASSERT_TRUE(file.good());
+    EXPECT_NE(storage::GetPageLsn(image), storage::kNoPageLsn)
+        << "the page reached the file with a row and no record's stamp";
 }
 
 }  // namespace
