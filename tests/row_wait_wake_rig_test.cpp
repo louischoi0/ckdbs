@@ -282,6 +282,74 @@ TEST(RowWaitWakeRigTest, AWaiterOnTheSlotSleepsThroughTheHoldersDecideUntilItsRe
     EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
 }
 
+TEST(RowWaitWakeRigTest, AFirstEncounterInsideTheRetireToReleaseWindowWaitsForTheRelease) {
+    // **B6** (AY-S3; `raft-marks-2026-09-29.md` §13). The cell above,
+    // reordered: the holder has decided - retired from the in-flight table -
+    // *before* core 1's statement first meets its row, whose `X` is still
+    // held. The refused ask registers its wake on the row as always, but
+    // `NoteBlockingWriter` returned on `!IsInFlight` before it recorded
+    // anything, so the statement was refused `TxnConflict` for a wait that
+    // would have ended at the release. It now records the block whenever the
+    // refusing unit's wake names the holder.
+    //
+    // **Mutation**: the early return restored ahead of the wake test.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
+    auto oid = rig->core(0).catalog().FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    Session holder;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
+    ASSERT_NE(holder.transaction(), nullptr);
+
+    LateRelease late;
+    late.table = &rig->locks();
+    late.txn = holder.transaction()->id();
+    ASSERT_TRUE(rig->locks()
+                    .TryAcquire(late.txn, txn::LockKey::Relation(oid.value()),
+                                txn::LockMode::kIntentionExclusive, late.holdings)
+                    .value());
+    ASSERT_TRUE(rig->locks()
+                    .TryAcquire(late.txn, txn::LockKey::Tuple(oid.value(), 1),
+                                txn::LockMode::kExclusive, late.holdings)
+                    .value());
+
+    // The holder decides first: out of the in-flight table, its `X` held.
+    ASSERT_TRUE(StartsWith(d0.Dispatch("COMMIT", &holder).response, "COMMIT"));
+    ASSERT_FALSE(rig->core(1).transactions().IsInFlight(late.txn));
+
+    Session waiter;
+    Statement update{&waiter, "UPDATE t SET v = 2 WHERE id = 1"};
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, update)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunLateRelease(late)));
+    rig->Start();
+
+    ASSERT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
+        << "core 1 never blocked";
+    // Checked without an early return: on a failure the rig must still stop
+    // before the statements on this frame go.
+    const bool answered_early = update.done.load(std::memory_order_acquire);
+    EXPECT_FALSE(answered_early)
+        << "the first encounter inside the window was answered rather than waited: "
+        << update.out.response;
+
+    late.go.store(true, std::memory_order_release);
+    EXPECT_TRUE(KickUntil(*rig, 0, [&] { return late.done.load(std::memory_order_acquire); }));
+    EXPECT_TRUE(KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); }));
+    rig->Stop();
+    if (!answered_early) {
+        EXPECT_TRUE(StartsWith(update.out.response, "UPDATED 1")) << update.out.response;
+    }
+    EXPECT_EQ(rig->locks().EntryCount(), 0u) << "a wake registration outlived its statement";
+}
+
 TEST(RowWaitWakeRigTest, AWaitRefusedAsFutileLeavesNoRegistrationOnTheRow) {
     // The registration is made at the ask, before anyone decides whether
     // the statement will wait for it. A repeatable-read writer meeting the
