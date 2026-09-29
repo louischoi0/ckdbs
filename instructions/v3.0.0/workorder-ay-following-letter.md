@@ -317,5 +317,7 @@ Rejected, as outside the stage: `ParentWriter`'s stale doc in
 `fk_cross_core_rig_test.cpp`, which describes a child-relation fence that no
 remaining cell uses. It belongs to AY-S4, the stage that writes the FK cells.
 
-**Suite**: results are recorded at the commit that lands this row.
-Overhead not measured.
+**Suite**: 3074/3074 in Debug (`ctest -LE heap-suspended -j8`) at
+`ffdcfb1`, and 3075/3075 at `ac6baae`, after the review's fault-net cell;
+`origin/main` had not moved, so there was nothing to merge. Overhead not
+measured.
