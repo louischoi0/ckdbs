@@ -321,3 +321,51 @@ remaining cell uses. It belongs to AY-S4, the stage that writes the FK cells.
 `ffdcfb1`, and 3075/3075 at `ac6baae`, after the review's fault-net cell;
 `origin/main` had not moved, so there was nothing to merge. Overhead not
 measured.
+
+### AY-S2 — built 2026-09-29
+
+On `worktree-ay-s2-containment-wake` from `d0e39e2`, on the operator's
+*"merge and push, then start AY-S2"* (`raft-marks-2026-09-29.md` §16).
+
+**Red first**, at `a3db595` against `d0e39e2`:
+`RowWaitWakeRigTest.ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore0Holds`
+- core 1's `WHERE id >= 1` meets core 0's row `X` in the verify arm; there was
+no registration on the row, and no kick to core 1 at the commit - and
+`LockDeadlockTest.AChildWhoseParentIsUnderARangeFenceWaitsForTheFence` - the
+child's tuple `S` under a range `DELETE`'s fence, answered at once with the
+busy verdict.
+
+**Built** (AY-R2), at `7d90ca7`. `FenceCoversKey` and `ConflictingOverlap`,
+given a `LockWake`, push the waiter onto the entry whose holder refused the
+ask, under the latch that observed that holder. `TryAcquire`'s wake is a
+`LockWake{key, slot}`, and so is `AcquireResult::wake`, so no caller can drop a
+registration on the asked key when the blocking one differs. The four
+dispatcher sites take the key from it. Mutual refusal is pinned at the table
+through `SetVerifyHookForTest`: both asks are refused, each is woken by the
+other's unwind, and the second edge closes a cycle. The release side needed
+nothing, as the order said.
+
+**Mutant**: with the scans registering nothing, both red cells fail again and
+three table cells fail. The FK cell crashed on a null slot until the site
+tested the slot. The threaded cell passed 200/200 and the rig cell 10/10.
+
+**The review** (`critics-developer`, one pass) found no lost wakeup and no
+leak. It traced the scan against the release, the holder's own unwind, a shared
+`S` fence, `DropWake` by slot, and every drop site. Taken:
+
+- `AcquireResult`'s `slot`/`slot_key` folded into one `LockWake`;
+- the same-key arm's push folded into `RegisterWake`;
+- two false comments in `lock_table.hpp`, "no slot is handed back" and the
+  mutual-refusal claim that ignored repeated autocommit rounds;
+- the `LockWait` doc;
+- the hook's threading contract stated;
+- a bounded wait in the threaded cell, so a regression fails rather than
+  hangs;
+- the closed gap deleted from `known-gaps.md` (Locks) rather than struck
+  through.
+
+Rejected: removing the FK site's null-slot test as dead. Under the mutant that
+test turned a crash into the pre-AY-S2 refusal, and its comment now says so.
+
+**Suite**: 3080/3080 in Debug at `7d90ca7`, and again after the review, below.
+Overhead not measured.

@@ -3479,9 +3479,12 @@ void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
     // refusal is found in the verify arm, on the fence's entry, and is
     // registered there - so the wake is on the fence's key, not the row's.
     // Before it this arm had no slot and returned, and the child was
-    // refused where it now waits for the fence's release. Tested as
-    // `BorrowChain` tests its own: a refusal without a slot is the plain
-    // busy verdict, never a park on nothing.
+    // refused where it now waits for the fence's release. Every refusal of
+    // an ask that asked for a wake carries a slot since AY-S2; the test
+    // stays so that a table that stops registering one answers the busy
+    // verdict, as before AY-S2, instead of parking on a null slot, which
+    // `LockWaitReady` answers with a crash (measured with the stage's
+    // mutant).
     if (wake.slot == nullptr) return;
     lock_wait_ = DispatchOutcome::LockWait{wake.key, blocker != 0 ? blocker : holder,
                                            std::move(wake.slot)};

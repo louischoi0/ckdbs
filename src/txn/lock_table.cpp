@@ -128,7 +128,7 @@ StatusOr<bool> LockTable::TryAcquire(std::uint64_t txn, const LockKey& key, Lock
     auto r = AcquireInner(txn, key, mode, holdings, /*queue_on_conflict=*/false,
                           /*register_wake=*/wake != nullptr);
     if (!r.ok()) return r.status();
-    if (wake != nullptr && !r.value().granted) *wake = LockWake{r.value().slot_key, r.value().slot};
+    if (wake != nullptr && !r.value().granted) *wake = r.value().wake;
     // `AcquireInner` has always computed this and this wrapper has always
     // dropped it. Reported only on a refusal: `blocking_txn` is zero on a
     // grant, and writing that out would let a caller read "granted by
@@ -259,9 +259,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     if (queued == nullptr) {
                         // Queued on the core that asked, which is the core
                         // whose reactor will poll the slot (AU-S2).
-                        entry->waiters.push_back(
-                            Tenant{txn, mode, std::make_shared<LockWaitSlot>(), CurrentCore()});
-                        queued = &entry->waiters.back();
+                        queued = &RegisterWake(*entry, txn, mode);
                     }
                     // **The wake is consumed here, under this latch.** A
                     // waiter that was woken, re-asked, and is refused again
@@ -287,8 +285,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     // cross-owner transaction that would have re-asked from
                     // another reactor went at AT-S6.)
                     queued->core = CurrentCore();
-                    result.slot = queued->slot;
-                    result.slot_key = key;
+                    result.wake = LockWake{key, queued->slot};
                     // **A wake is not a queue position** (AO-S6e-b). Only a
                     // queueing ask records `waiting_`, because only it is
                     // withdrawn by `Release` - a wake registration outlives
@@ -333,7 +330,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
     bool conflicted = false;
     // **The containment wake** (AY-S2): a refusal found here is registered
     // on the entry that refused it, by the scan, under the latch that saw
-    // its holder - `AcquireResult::slot_key` states the argument.
+    // its holder - `AcquireResult::wake` states the argument.
     LockWake cross;
     LockWake* const registering = register_wake ? &cross : nullptr;
     if (fence) {
@@ -360,8 +357,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
         ReleaseOne(txn, key, mode, holdings);
         result.granted = false;
         result.blocking_txn = blocker;
-        result.slot = std::move(cross.slot);
-        result.slot_key = cross.key;
+        result.wake = std::move(cross);
         // **A queueing ask is not queued here, and that is stated rather
         // than implied.** A queue position is a place in *this* key's line,
         // and the release that would admit it is the other unit's; a
@@ -629,7 +625,7 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
                 if (h.mode != LockMode::kShared && h.mode != LockMode::kExclusive) continue;
                 if (!Compatible(h.mode, want)) {
                     if (holder != nullptr) *holder = h.txn;
-                    if (wake != nullptr) *wake = RegisterWake(e, txn, want);
+                    if (wake != nullptr) *wake = LockWake{e.key, RegisterWake(e, txn, want).slot};
                     return true;
                 }
             }
@@ -638,13 +634,13 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
     return false;
 }
 
-LockWake LockTable::RegisterWake(Entry& e, std::uint64_t txn, LockMode mode) {
-    // Under the caller's latch, the one that observed the refusing holder.
-    // A wake and not a queue position: nothing in `holdings.waiting_`, and
-    // `DropWake` by the slot is its only removal - the record the same-key
-    // arm of `AcquireInner` writes for a non-queueing ask.
+LockTable::Tenant& LockTable::RegisterWake(Entry& e, std::uint64_t txn, LockMode mode) {
+    // Under the caller's latch, the one that observed the refusing holder,
+    // and on the core that asked, whose reactor polls the slot (AU-S2). For
+    // a non-queueing ask a wake and not a queue position: nothing in
+    // `holdings.waiting_`, and `DropWake` by the slot is its only removal.
     e.waiters.push_back(Tenant{txn, mode, std::make_shared<LockWaitSlot>(), CurrentCore()});
-    return LockWake{e.key, e.waiters.back().slot};
+    return e.waiters.back();
 }
 
 bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uint64_t txn,
@@ -702,7 +698,7 @@ bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uin
                 // answers drift apart.
                 if (!Compatible(h.mode, mode)) {
                     if (holder != nullptr) *holder = h.txn;
-                    if (wake != nullptr) *wake = RegisterWake(e, txn, mode);
+                    if (wake != nullptr) *wake = LockWake{e.key, RegisterWake(e, txn, mode).slot};
                     return true;
                 }
             }

@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <functional>
@@ -669,7 +670,7 @@ protected:
             // it must not reach the table, because it runs once per reactor
             // iteration for as long as the wait lasts.
             ++s.parks;
-            s.pred = [slot = r.value().slot] { return LockWaitReady(slot); };
+            s.pred = [slot = r.value().wake.slot] { return LockWaitReady(slot); };
             co_await sched::WaitUntil{&s.pred};
             // **And the re-check**, which is the loop going round again.
             // AO-3's finding G: a wait breaks the premise that nothing
@@ -779,11 +780,11 @@ TEST_F(BorrowsReleasedAtDecide, ACommitGivesEveryBorrowBackAndWakesWhoWasQueued)
     auto refused = table_->Acquire(999, row, LockMode::kExclusive, peer);
     ASSERT_TRUE(refused.ok());
     ASSERT_FALSE(refused.value().granted);
-    ASSERT_FALSE(LockWaitReady(refused.value().slot));
+    ASSERT_FALSE(LockWaitReady(refused.value().wake.slot));
 
     ASSERT_TRUE(mgr_->Commit(*t1, wal::DurabilityClass::kGroup).ok());
     EXPECT_TRUE(t1->borrows().empty()) << "the decide gave them all back";
-    EXPECT_TRUE(LockWaitReady(refused.value().slot)) << "and woke who was queued behind them";
+    EXPECT_TRUE(LockWaitReady(refused.value().wake.slot)) << "and woke who was queued behind them";
     EXPECT_EQ(table_->WaiterCount(row), 1u) << "a wake is not a grant";
 
     // The peer re-asks and is now admitted, which is the wait ending in the
@@ -812,7 +813,7 @@ TEST_F(BorrowsReleasedAtDecide, AnAbortGivesThemBackToo) {
     ASSERT_FALSE(refused.value().granted);
 
     ASSERT_TRUE(mgr_->Abort(*t1).ok());
-    EXPECT_TRUE(LockWaitReady(refused.value().slot));
+    EXPECT_TRUE(LockWaitReady(refused.value().wake.slot));
     auto retry = table_->Acquire(999, row, LockMode::kExclusive, peer);
     ASSERT_TRUE(retry.ok());
     EXPECT_TRUE(retry.value().granted) << "the loser's row is free the moment it decides";
@@ -908,11 +909,11 @@ TEST(LockTableTest, AWakeIsNotAGrant) {
     auto refused = table->Acquire(2, key, LockMode::kExclusive, waiter);
     ASSERT_TRUE(refused.ok());
     ASSERT_FALSE(refused.value().granted);
-    ASSERT_NE(refused.value().slot, nullptr) << "a refusal always carries what to park on";
-    EXPECT_FALSE(LockWaitReady(refused.value().slot));
+    ASSERT_NE(refused.value().wake.slot, nullptr) << "a refusal always carries what to park on";
+    EXPECT_FALSE(LockWaitReady(refused.value().wake.slot));
 
     table->WakeWaiters(key);
-    EXPECT_TRUE(LockWaitReady(refused.value().slot)) << "the slot flipped";
+    EXPECT_TRUE(LockWaitReady(refused.value().wake.slot)) << "the slot flipped";
     EXPECT_EQ(table->WaiterCount(key), 1u) << "and nothing was granted";
 
     // The woken waiter re-asks and is still refused, because the holder
@@ -920,10 +921,10 @@ TEST(LockTableTest, AWakeIsNotAGrant) {
     auto again = table->Acquire(2, key, LockMode::kExclusive, waiter);
     ASSERT_TRUE(again.ok());
     EXPECT_FALSE(again.value().granted);
-    EXPECT_EQ(again.value().slot, refused.value().slot)
+    EXPECT_EQ(again.value().wake.slot, refused.value().wake.slot)
         << "a re-ask keeps the slot the waiter is parked on; a fresh one would strand the "
            "predicate and the next decide would flip something nobody is watching";
-    EXPECT_FALSE(LockWaitReady(again.value().slot))
+    EXPECT_FALSE(LockWaitReady(again.value().wake.slot))
         << "and the re-ask consumed the wake, under the same latch that delivers one. A slot "
            "left flipped satisfies WaitUntil::await_ready on entry, so the acquire loop spins "
            "the reactor inside one resume() instead of parking - the hang this stage had to fix, "
@@ -1325,7 +1326,10 @@ TEST(LockTableTest, TwoOverlappingAsksThatBothPublishFirstAreBothRefusedAndBothW
         std::unique_lock<std::mutex> lock(mu);
         ++arrived[at];
         cv.notify_all();
-        cv.wait(lock, [&] { return arrived[at] >= 2; });
+        // Bounded, so an ask that stops reaching a point fails the cell
+        // rather than hanging the suite.
+        EXPECT_TRUE(cv.wait_for(lock, std::chrono::seconds(5), [&] { return arrived[at] >= 2; }))
+            << "the other ask never reached the same point";
     });
 
     struct Ask {

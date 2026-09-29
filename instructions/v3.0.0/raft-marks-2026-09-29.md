@@ -169,3 +169,17 @@ Recorded on `worktree-ay-s1-lock-family-cells` from `69a1f76`
 | **Mark** | **AY-S1 starts**: R8.3's cells restored (AY-R1) |
 | **Does not settle** | Any AY stage past S1, or any of the order's §4 items - AY-Q9 among them, so the seven cells it names stay out of S1 |
 | **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |
+
+## 16. AY-S1 landed, and AY-S2 started
+
+Recorded on `worktree-ay-s2-containment-wake` from `d0e39e2`
+(`v2.7.0-486-gd0e39e2`), after a session report on
+`ay-s1-lock-family-cells` at `d0e39e2` put the push, AY-Q9 and AY-S2 to the
+operator.
+
+| | |
+|---|---|
+| **Word** | *"merge and push, then start AY-S2"* |
+| **Mark** | **AY-S1 lands**: `d0e39e2` pushed to `main` (`69a1f76..d0e39e2`, the pre-push gate green). **AY-S2 starts**: the containment wake (AY-R2) |
+| **Does not settle** | AY-Q9, put in the same report and not answered, so the seven cells stay out; any stage past S2 |
+| **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |

@@ -583,14 +583,6 @@ there is no second core's registration to be answered by.
   reading on `ax-s2b-row-wait-wake` at `043aee7`, the stage's review. What
   stays open, all retryable, never a wrong answer:
 
-  - ~~**A cross-unit refusal hands back no slot**~~ - **closed at AY-S2**
-    (on `ay-s2-containment-wake` from `d0e39e2`): the verify arm's scans
-    register the wake on the entry whose holder refused the ask, under the
-    latch that saw it, so a write refused at a declared range or under a
-    range fence parks on a slot the release flips and kicks
-    (`row_wait_wake_rig_test.cpp`'s declared-range cell), and a child's
-    forward check under a parent's range fence waits where it used to be
-    refused (`lock_family_test.cpp`).
   - **The first encounter inside the retire-to-release window is
     refused.** A holder that has left the in-flight table and not yet
     released - or released just after the refusal - is "not in flight" to
@@ -607,10 +599,10 @@ there is no second core's registration to be answered by.
 
   A holder that never decides costs a cross-core writer the 1 s fault net
   and its defect warning, as a same-core writer pays. AX closed carrying
-  all three (two remain open after AY-S2) (`instructions/v3.0.0/workorder-ax-inflight-publication.md`
-  §7 items 1-3): the cross-unit refusal (item 2) is **AY's since
-  2026-09-29** - the containment wake
-  (`instructions/v3.0.0/raft-marks-2026-09-29.md` §12) - the first
+  three (`instructions/v3.0.0/workorder-ax-inflight-publication.md` §7
+  items 1-3): the cross-unit refusal (item 2), which handed back no slot,
+  **is closed by AY-S2** (on `ay-s2-containment-wake` at `7d90ca7`, the
+  containment wake; `txn.md` §5) - the first
   encounter (item 1) is **taken as a wait** (§13), placed in AY by CLA
   rather than by the mark, and a wake not being a grant (item 3) proposes
   no action. Spec: `docs/spec/txn.md` §5.

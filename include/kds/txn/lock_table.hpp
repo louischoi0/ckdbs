@@ -195,8 +195,10 @@
 // removes that holder - so each unwind flips the other's slot and neither
 // wait outlives the pair. A waiter that holds anything draws its edge, the
 // two edges close a cycle, and the second is refused naming deadlock
-// (AO-R7); two that hold nothing re-run. No bias is built: the pair is a
-// victim or a retry, never a wait the fault net ends
+// (AO-R7); two that hold nothing re-run. No bias is built: one round of the
+// pair is a victim or a retry, never a wait the fault net ends - though two
+// autocommit asks that keep meeting this way can repeat it, bounded only by
+// the net
 // (`LockTableTest.TwoOverlappingAsksThatBothPublishFirstAreBothRefusedAndBothWoken`).
 //
 // ---- The wait-for graph and the victim (AO-R7, D12) -----------------------
@@ -449,6 +451,15 @@ struct LockWaitSlot {
     std::atomic<bool> ready{false};
 };
 
+// A wake registration: the slot to park on and the unit it is registered
+// on, which may be another unit than the one asked for (`AcquireResult`).
+// One value so a caller cannot keep the slot and drop it on the wrong key,
+// which would leave the registration, and its entry, for good.
+struct LockWake {
+    LockKey key{};
+    std::shared_ptr<LockWaitSlot> slot;
+};
+
 struct AcquireResult {
     bool granted = false;
     // Set only when `granted` is false: **one** conflicting holder, which
@@ -460,9 +471,9 @@ struct AcquireResult {
     // entry was added and no cap was spent. `granted` is true.
     bool already_held = false;
     // Set only when `granted` is false: what to park on
-    // (`sched::WaitUntil` over `LockWaitReady(slot)`), and what a decide on
-    // the blocking unit flips. `slot_key` is the unit it is registered on,
-    // which is what `DropWake` must be given.
+    // (`sched::WaitUntil` over `LockWaitReady(wake.slot)`), what a decide on
+    // the blocking unit flips, and `wake.key`, the unit it is registered on
+    // and what `DropWake` must be given.
     //
     // **The key is the blocking entry's, not always the asked one** (AY-S2,
     // the containment wake). A refusal found in the asked key's own entry is
@@ -478,18 +489,7 @@ struct AcquireResult {
     // position on another unit and no slot. No engine path calls `Acquire`.
     // `LockWaitReady` has no null branch by design, so parking on this
     // without the test is a crash.
-    std::shared_ptr<LockWaitSlot> slot;
-    LockKey slot_key{};
-};
-
-// What a non-queueing ask that asked for a wake gets back on a refusal: the
-// slot, and the unit it is registered on - `AcquireResult::slot_key`, which
-// may be another unit than the one asked for. One value rather than two out
-// parameters so a caller cannot keep the slot and drop it on the wrong key,
-// which would leave the registration, and its entry, for good.
-struct LockWake {
-    LockKey key{};
-    std::shared_ptr<LockWaitSlot> slot;
+    LockWake wake;
 };
 
 // The predicate a waiter parks on. Free rather than a member so the
@@ -580,8 +580,8 @@ public:
 
     // **The non-queueing acquire** (AO-S6a). Grants and records exactly as
     // `Acquire` does when the unit is free, and on a conflict returns
-    // `false` having touched nothing: no waiter is queued, no slot is
-    // handed back, and `holdings.waiting_` is not moved. The cap still
+    // `false` with no waiter queued and `holdings.waiting_` not moved - only
+    // a wake registration left, when `wake` asks for one. The cap still
     // refuses, because a cap is not a conflict.
     //
     // **Why the engine's acquire is this one and not `Acquire`.** The two
@@ -613,8 +613,8 @@ public:
     //
     // **Every refusal carries one since AY-S2**, a cross-unit one included:
     // it is registered on the entry whose holder refused the ask, which
-    // `wake->key` names and which need not be `key` (`AcquireResult`'s
-    // `slot_key` says why the registration cannot be lost).
+    // `wake->key` names and which need not be `key` (`AcquireResult::wake`
+    // says why the registration cannot be lost).
     //
     // The registration is the caller's to remove - `DropWake(wake->key,
     // wake->slot)` - because the statement that took it is torn down and
@@ -739,7 +739,8 @@ public:
     // asks that both publish before either scans. Called with `kPublished`
     // after the grant is written and its latch dropped, and with `kScanned`
     // after the verify's scan and before any unwind, on the asking thread.
-    // Null in every production assembly.
+    // Null in every production assembly; set only while no ask is in
+    // flight, since the hook is read without a latch.
     enum class VerifyPoint : std::uint8_t { kPublished, kScanned };
     void SetVerifyHookForTest(std::function<void(std::uint64_t txn, VerifyPoint)> hook) {
         verify_hook_ = std::move(hook);
@@ -850,10 +851,11 @@ private:
     // counter drifts.
     void ReleaseHeld(std::uint64_t txn, const LockHoldings::Held& held);
 
-    // Leaves a wake registration for `txn` on `e`, whose partition latch the
+    // Leaves a waiter record for `txn` on `e`, whose partition latch the
     // caller holds - the latch under which it saw the holder that refused
-    // `txn` (AY-S2). Returns what `DropWake` needs.
-    LockWake RegisterWake(Entry& e, std::uint64_t txn, LockMode mode);
+    // `txn` (AY-S2) - and returns it. The record is valid until that latch
+    // is released.
+    Tenant& RegisterWake(Entry& e, std::uint64_t txn, LockMode mode);
 
 
     // The wait-for graph, `waiter -> holder`. One entry per waiting

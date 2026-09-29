@@ -253,8 +253,9 @@ struct DispatchOutcome {
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
-    // **AO-S6e-b: the relation unit this statement asked for and did not
-    // get**, or nullopt. Asked by a DDL's relation `X` (`DROP TABLE`,
+    // **AO-S6e-b: the unit this statement's refused ask is registered on**
+    // - the relation it asked for, or since AY-S2 the fence a foreign-key
+    // check's parent row sits under - or nullopt. Asked by a DDL's relation `X` (`DROP TABLE`,
     // `CREATE`/`DROP INDEX`, a `CREATE ASSERTION`'s build) against a
     // writer's `IX` or a reader's `IS`, and since AT-S5e by a writer's first
     // `IX` against a DDL's `X`. The wait is on the table's own slot and not

@@ -68,7 +68,7 @@ sched::Coro Borrow(LockTable& table, Session& s, std::uint64_t txn, LockKey key,
         if (!r.ok()) co_return r.status();
         if (r.value().granted) break;
         s.parks.fetch_add(1, std::memory_order_relaxed);
-        s.pred = [slot = r.value().slot] { return txn::LockWaitReady(slot); };
+        s.pred = [slot = r.value().wake.slot] { return txn::LockWaitReady(slot); };
         co_await sched::WaitUntil{&s.pred};
         // The re-check is the loop going round again (AO-3's finding G).
     }
