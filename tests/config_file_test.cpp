@@ -566,5 +566,23 @@ TEST(ExpeditorConfigTest, ExactlyTheCeilingIsAccepted) {
     EXPECT_EQ(config.cores, kMaxWalCores);
 }
 
+TEST(ExpeditorConfigTest, TcpKeepaliveDefaultsOnAndRefusesWhatTheKernelWouldNot) {
+    // CN-10 U7, the operator's answer: on by default, one setting. 0 is the
+    // off-switch; past Linux's `MAX_TCP_KEEPIDLE` is refused, not clamped.
+    Expeditor::Config config;
+    EXPECT_EQ(config.tcp_keepalive_s, kDefaultTcpKeepaliveS);
+    EXPECT_EQ(kDefaultTcpKeepaliveS, 60u);
+
+    ASSERT_TRUE(config.ApplyFile(ParseOk("tcp_keepalive_s = 0\n")).ok());
+    EXPECT_EQ(config.tcp_keepalive_s, 0u);
+    ASSERT_TRUE(config.ApplyFile(ParseOk("tcp_keepalive_s = 32767\n")).ok());
+    EXPECT_EQ(config.tcp_keepalive_s, kMaxTcpKeepaliveS);
+
+    Status past = config.ApplyFile(ParseOk("tcp_keepalive_s = 32768\n"));
+    EXPECT_EQ(past.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(past.message().find("MAX_TCP_KEEPIDLE"), std::string::npos) << past.message();
+    EXPECT_EQ(config.tcp_keepalive_s, kMaxTcpKeepaliveS) << "a refused value changes nothing";
+}
+
 }  // namespace
 }  // namespace kds::server

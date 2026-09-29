@@ -96,6 +96,7 @@ out-of-range values, each naming the file and line.
 |---|---|---|
 | `data_file` | `kds.db` | Data file path (also the positional argument). |
 | `port` | `15432` | TCP port, loopback only. |
+| `tcp_keepalive_s` | `60` | **Seconds of silence before an accepted client socket is probed.** Six probes follow a sixth of this apart, and `TCP_USER_TIMEOUT` is set to the same total, so a client that vanished without closing - power lost, a cable pulled - is reaped after about twice this. Every listener: the default port, `debug_text_port` and `kwp_port`. A live idle client is never ended - there is no idle-session timeout - **but a live client that leaves a reply unread (a zero receive window) for about twice this is**, which is what the user timeout costs. `0` turns keepalive off; above `32767` (Linux's `MAX_TCP_KEEPIDLE`) is refused at startup. |
 | `wal_dir` | `<data_file>.wal` | WAL segment directory. |
 | `cores` | `1` | Reactor cores, pinned one per CPU. **Not pinned since v3.0.0's M3**: a mount under a different count records the new one in the superblock and logs the change. Above 1 the cores share one WAL stream and one log: core 0 owns it, peers append through it, and every `fdatasync` is issued once (`docs/spec/wal.md` §3). |
 | `inline_cell_width` | `64` | Bytes every `varchar` occupies inside a tuple. **Pinned at bootstrap**, mount-checked; changing it for existing data is a rebuild, no migration. Range 16..4096. |

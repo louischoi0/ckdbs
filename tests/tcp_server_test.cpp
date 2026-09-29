@@ -637,5 +637,56 @@ TEST_F(TcpServerTest, AnAcceptedConnectionCarriesTcpKeepalive) {
     server_thread.join();
 }
 
+TEST_F(TcpServerTest, KeepaliveZeroLeavesAnAcceptedSocketUnprobed) {
+    // `tcp_keepalive_s = 0` is the off-switch, and it survives the move
+    // that hands a configured listener to its owner - a setting left out of
+    // the move constructor is silently dropped (kwp_endpoint_test.cpp's
+    // ConfigurationSurvivesTheMoveThatOwnsTheListener).
+    constexpr std::uint16_t kPort = 25423;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    TcpServer::ClientSetup setup;
+    setup.protocol = Protocol::kText;
+    setup.keepalive_s = 0;
+    listener.value().Configure(setup);
+    TcpServer moved(std::move(listener.value()));
+    ASSERT_EQ(moved.keepalive_s(), 0u);
+    std::thread server_thread([&] { RunReactor(moved); });
+
+    int client = ConnectToLoopback(kPort);
+    ASSERT_GE(client, 0);
+    ASSERT_EQ(SendAndReceiveLine(client, "PING"), "PONG");
+    const int server_side = ServerSideOf(client, kPort);
+    ASSERT_GE(server_side, 0);
+    EXPECT_EQ(IntOption(server_side, SOL_SOCKET, SO_KEEPALIVE), 0);
+
+    EXPECT_EQ(SendAndReceiveLine(client, "STOP"), "OK bye");
+    ::close(client);
+    server_thread.join();
+}
+
+TEST_F(TcpServerTest, AnAcceptedSocketDeclaresItsPeerDeadAtAboutTwiceTheIdle) {
+    // The schedule `ConfigureKeepalive` derives from the one setting: six
+    // probes a sixth of the idle apart, and TCP_USER_TIMEOUT at the same
+    // total, for a peer that vanished with data unacknowledged.
+    constexpr std::uint16_t kPort = 25424;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int client = ConnectToLoopback(kPort);
+    ASSERT_GE(client, 0);
+    ASSERT_EQ(SendAndReceiveLine(client, "PING"), "PONG");
+    const int server_side = ServerSideOf(client, kPort);
+    ASSERT_GE(server_side, 0);
+    EXPECT_EQ(IntOption(server_side, IPPROTO_TCP, TCP_KEEPINTVL), 10);
+    EXPECT_EQ(IntOption(server_side, IPPROTO_TCP, TCP_KEEPCNT), 6);
+    EXPECT_EQ(IntOption(server_side, IPPROTO_TCP, TCP_USER_TIMEOUT), 120'000);
+
+    EXPECT_EQ(SendAndReceiveLine(client, "STOP"), "OK bye");
+    ::close(client);
+    server_thread.join();
+}
+
 }  // namespace
 }  // namespace kds::server

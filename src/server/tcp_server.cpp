@@ -10,6 +10,7 @@
 
 #include <fcntl.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <string>
@@ -32,6 +33,50 @@ Status SetNonBlocking(int fd) {
 }
 
 }  // namespace
+
+Status ConfigureAcceptedSocket(int fd, std::uint32_t keepalive_s) {
+    // TCP_NODELAY, unconditionally. Without it Nagle holds a small reply
+    // until the previous one is ACKed, and a client that has several
+    // requests in flight is not sending anything to carry that ACK - so it
+    // waits out the peer's delayed-ACK timer, ~40ms, once per batch. That
+    // turned pipelining from the fastest way to talk to this server into
+    // 30x slower than one-request-at-a-time, and cost a pipelined bulk load
+    // 33% of its throughput (bench/results-bulk-insert.md Part IV). There is
+    // nothing here for Nagle to coalesce that the outbox does not already
+    // coalesce better.
+    const int nodelay = 1;
+    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+    // **Keepalive** (CN-10 §3.3, U7). A peer that vanished without a FIN -
+    // power lost, a cable pulled - leaves a connection nothing else ends,
+    // since no idle-session timeout exists (protocol.md §10). One number is
+    // configured and the rest follow from it: six probes a sixth of the idle
+    // apart, and `TCP_USER_TIMEOUT` at the same total. With the user
+    // timeout set the kernel ends the connection once that long has passed
+    // without an acknowledgement - which reaps a dead peer at about twice
+    // the idle instead of `tcp_retries2`'s ~15 minutes when data was in
+    // flight, and **also ends a live client that leaves a reply unread**
+    // (a zero window) that long: the price, stated in the manual.
+    if (keepalive_s == 0) return Status::OK();
+    const int idle_s = static_cast<int>(keepalive_s);
+    constexpr int kProbes = 6;
+    const int interval = std::max(1, idle_s / kProbes);
+    const unsigned user_timeout_ms =
+        static_cast<unsigned>(idle_s + interval * kProbes) * 1000u;
+    const int on = 1;
+    const auto set = [fd](int level, int name, const void* value, socklen_t len) {
+        return ::setsockopt(fd, level, name, value, len) == 0;
+    };
+    if (!set(SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) ||
+        !set(IPPROTO_TCP, TCP_KEEPIDLE, &idle_s, sizeof(idle_s)) ||
+        !set(IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval)) ||
+        !set(IPPROTO_TCP, TCP_KEEPCNT, &kProbes, sizeof(kProbes)) ||
+        !set(IPPROTO_TCP, TCP_USER_TIMEOUT, &user_timeout_ms, sizeof(user_timeout_ms))) {
+        return Status::IoError(std::string("keepalive setsockopt failed: ") +
+                               std::strerror(errno));
+    }
+    return Status::OK();
+}
 
 StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -71,7 +116,7 @@ StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port) {
         ::close(fd);
         return s;
     }
-    if (::listen(fd, 16) < 0) {
+    if (::listen(fd, kListenBacklog) < 0) {
         Status s = Status::IoError(std::string("listen() failed: ") + std::strerror(errno));
         ::close(fd);
         return s;
@@ -98,6 +143,7 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       // KWP on it while the KWP port served KWP too.
       protocol_(other.protocol_),
       durability_(other.durability_),
+      keepalive_s_(other.keepalive_s_),
       identity_source_(std::move(other.identity_source_)),
       next_identity_(other.next_identity_),
       server_info_(std::move(other.server_info_)),
@@ -129,6 +175,7 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         auth_gate_factory_ = std::move(other.auth_gate_factory_);
         protocol_ = other.protocol_;
         durability_ = other.durability_;
+        keepalive_s_ = other.keepalive_s_;
         identity_source_ = std::move(other.identity_source_);
         next_identity_ = other.next_identity_;
         server_info_ = std::move(other.server_info_);
@@ -232,28 +279,26 @@ void TcpServer::Detach() noexcept {
 }
 
 void TcpServer::OnListenerReadable() {
-    // One accept per event, not an EAGAIN drain loop: the backend is
-    // level-triggered (epoll_io_backend.hpp), so a still-pending
-    // connection is reported again next iteration. Bounded work per
-    // handler is what keeps one busy socket from starving the timers.
-    int client_fd = ::accept(listen_fd_, nullptr, nullptr);
-    if (client_fd < 0) return;  // EAGAIN, EINTR, or a broken listener
+    // Up to `kMaxAcceptsPerEvent` accepts, not an EAGAIN drain loop: the
+    // backend is level-triggered (epoll_io_backend.hpp), so what is left
+    // is reported again next iteration. Bounded work per handler is what
+    // keeps a burst of connections from starving the timers.
+    for (int i = 0; i < kMaxAcceptsPerEvent; ++i) {
+        int client_fd = ::accept4(listen_fd_, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        if (client_fd < 0) return;  // EAGAIN, EINTR, or a broken listener
+        SetUpAccepted(client_fd);
+    }
+}
 
-    if (!SetNonBlocking(client_fd).ok()) {
+void TcpServer::SetUpAccepted(int client_fd) {
+    // Fail closed, like the channel and the gate below: the operator asked
+    // for vanished peers to be reaped, and a connection that cannot be is
+    // one nothing would ever end.
+    if (Status s = ConfigureAcceptedSocket(client_fd, keepalive_s_); !s.ok()) {
+        if (logging(LogLevel::kWarn)) log_->Warn("client", s.message());
         ::close(client_fd);
         return;
     }
-
-    // TCP_NODELAY, unconditionally. Without it Nagle holds a small reply
-    // until the previous one is ACKed, and a client that has several
-    // requests in flight is not sending anything to carry that ACK - so it
-    // waits out the peer's delayed-ACK timer, ~40ms, once per batch. That
-    // turned pipelining from the fastest way to talk to this server into
-    // 30x slower than one-request-at-a-time. Replies are small and
-    // request/response is the whole protocol; there is nothing here for
-    // Nagle to coalesce that the outbox does not already coalesce better.
-    int nodelay = 1;
-    ::setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
     // D19's fallback (AT-S10c): the socket is set up for whichever core
     // runs it, and one routed elsewhere is that core's from here on.

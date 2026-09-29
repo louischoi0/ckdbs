@@ -75,7 +75,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_max_entries_per_value", "cores",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
             "join_build_max_rows",   "lock_wait_fault_net_ms",
-            "max_locks_per_txn",
+            "max_locks_per_txn",     "tcp_keepalive_s",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -375,6 +375,19 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // value someone sweeping this knob is entitled to. The semantics
         // have one home, at `kLockWaitFaultNetNs` (txn/lock_table.hpp).
         lock_wait_fault_net_ns = v.value() * 1'000'000ULL;
+    }
+    if (file.Has("tcp_keepalive_s")) {
+        auto v = file.GetUint("tcp_keepalive_s");
+        if (!v.ok()) return v.status();
+        // Refused rather than clamped: a value the kernel would not take is
+        // a keepalive the operator did not get.
+        if (v.value() > kMaxTcpKeepaliveS) {
+            return Status::InvalidArgument(
+                "tcp_keepalive_s = " + std::to_string(v.value()) + " is past " +
+                std::to_string(kMaxTcpKeepaliveS) +
+                ", the largest idle Linux takes (MAX_TCP_KEEPIDLE); 0 turns keepalive off");
+        }
+        tcp_keepalive_s = static_cast<std::uint32_t>(v.value());
     }
     if (file.Has("physical_optimizer")) {
         auto v = file.GetString("physical_optimizer");
@@ -1480,6 +1493,7 @@ Status Expeditor::Start() {
     TcpServer::ClientSetup client_setup;
     client_setup.protocol = Protocol::kKwp;
     client_setup.durability = config_.durability;
+    client_setup.keepalive_s = config_.tcp_keepalive_s;
 #if KDS_WITH_TLS
     if (tls_context.has_value()) {
         client_setup.channel = [ctx = &*tls_context] { return ctx->NewChannel(); };
@@ -1509,12 +1523,17 @@ Status Expeditor::Start() {
     listener.value().Configure(client_setup);
 
     // The newline text protocol's loopback debug surface (§12). A second
-    // `TcpServer` over the same dispatcher, differing in one call - which
-    // is the whole point of `set_protocol` rather than a second class.
+    // `TcpServer` over the same dispatcher, differing in its protocol -
+    // which is the whole point of `set_protocol` rather than a second class.
+    // `tcp_keepalive_s` governs it too: left unconfigured it would probe at
+    // the compiled-in 60 s whatever the file said, `0` included.
     if (config_.debug_text_port != 0) {
         auto text = TcpServer::Listen(config_.debug_text_port);
         if (!text.ok()) return text.status();
-        text.value().set_protocol(Protocol::kText);
+        TcpServer::ClientSetup text_setup;
+        text_setup.protocol = Protocol::kText;
+        text_setup.keepalive_s = config_.tcp_keepalive_s;
+        text.value().Configure(text_setup);
         text_listener.emplace(std::move(text.value()));
 #if KDS_WITH_TLS
         if (credentials.has_value()) {
@@ -1529,7 +1548,7 @@ Status Expeditor::Start() {
     // listener, existing only when asked for - kwp_port 0 means no socket
     // is opened at all, so the default instance's surface is unchanged.
     if (config_.kwp_port != 0) {
-        auto kwp = KwpLoadServer::Listen(config_.kwp_port);
+        auto kwp = KwpLoadServer::Listen(config_.kwp_port, config_.tcp_keepalive_s);
         if (!kwp.ok()) return kwp.status();
         kwp_listener.emplace(std::move(kwp.value()));
     }

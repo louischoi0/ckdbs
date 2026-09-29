@@ -343,6 +343,6 @@ frame; the session stays connected.
 | U4 | The queue timeout's default and name | Undecided; must not re-name an existing quantity |
 | U5 | Idle transactions | **Roll back past a limit, keep the session** (§3.6). Whether the limit applies to every idle transaction or only to one that blocks a waiter or holds the horizon is the operator's |
 | U6 | Session migration | **At a transaction boundary** (§3.4), triggered by admission, never mid-transaction |
-| U7 | Dead-peer detection | Keepalive on by default, with Linux's per-socket options set from one setting |
+| U7 | Dead-peer detection | Keepalive on by default, with Linux's per-socket options set from one setting <br>*Answered 2026-09-29 by the operator: on by default, one setting, `tcp_keepalive_s` = 60 (0 off). Built on `accept-path-backlog-keepalive` with §3.1's backlog and bounded accept drain; `RLIMIT_NOFILE` and the loopback bind are not.* |
 | U8 | Order | the portal bug's fix and §3.1-§3.3 first (they need U1, U2, U7, U9 only), then §3.5-§3.6, then §3.4 |
 | U9 | Handshake and authentication deadline | **A deadline of its own**, distinct from any idle-session timeout, which U1 leaves absent; its value and name undecided |

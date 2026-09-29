@@ -437,6 +437,11 @@ public:
         // (txn/lock_table.hpp), which also carries the derivation.
         sched::MonoTimeNs lock_wait_fault_net_ns = txn::kLockWaitFaultNetNs;
 
+        // `tcp_keepalive_s` (CN-10 U7), for every listener: seconds in the
+        // file, the unit `TCP_KEEPIDLE` takes. The semantics have one home,
+        // `ConfigureAcceptedSocket` (tcp_server.hpp).
+        std::uint32_t tcp_keepalive_s = kDefaultTcpKeepaliveS;
+
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a

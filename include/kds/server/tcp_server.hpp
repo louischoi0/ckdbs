@@ -59,12 +59,35 @@ enum class Protocol : std::uint8_t {
     kText,
 };
 
-// **TCP keepalive's idle time, the default of `tcp_keepalive_s`** (CN-10
-// U7, the operator's answer of 2026-09-29: on by default, one setting).
-// A connection silent this long is probed; `ConfigureKeepalive` derives the
-// probe interval and count from it, so a vanished peer is reaped in about
-// twice this. 0 turns keepalive off.
+// The default of `tcp_keepalive_s` (CN-10 U7, the operator's answer of
+// 2026-09-29: on by default, one setting). What it means is
+// `ConfigureAcceptedSocket`'s.
 inline constexpr std::uint32_t kDefaultTcpKeepaliveS = 60;
+
+// The largest idle Linux accepts for `TCP_KEEPIDLE` (`MAX_TCP_KEEPIDLE`,
+// include/net/tcp.h). A larger `tcp_keepalive_s` is refused at startup
+// rather than clamped.
+inline constexpr std::uint32_t kMaxTcpKeepaliveS = 32767;
+
+// **The accept queue's depth** (CN-10 §3.1). A handshake completes into
+// this queue whether or not the server has called accept yet, and past its
+// depth the kernel drops the SYN and the client retransmits a second later -
+// so this is the burst a listener absorbs without a stall. 4096 is Linux's
+// `SOMAXCONN` since 5.4; the kernel silently caps it at
+// `net.core.somaxconn`, so the operator's sysctl is the effective bound.
+inline constexpr int kListenBacklog = 4096;
+
+// Every accepted client socket's options, on every listener: `TCP_NODELAY`,
+// and TCP keepalive at `keepalive_s` seconds of idle (0 for none) with the
+// probe schedule and user timeout derived from it (tcp_server.cpp says how,
+// and what it costs). An error is the caller's to fail closed on.
+Status ConfigureAcceptedSocket(int fd, std::uint32_t keepalive_s);
+
+// Accepts one readable event on the listener takes before yielding to the
+// reactor. Bounded, not an EAGAIN drain, so a flood cannot starve the
+// timers (the checkpointer's cadence above all); 64 clears a 1,000-connection
+// burst in 16 reactor turns rather than 1,000.
+inline constexpr int kMaxAcceptsPerEvent = 64;
 
 class TcpServer {
 public:
@@ -161,6 +184,7 @@ public:
     // before Attach(), like the two factories above.
     void set_protocol(Protocol protocol) noexcept { protocol_ = protocol; }
     Protocol protocol() const noexcept { return protocol_; }
+    std::uint32_t keepalive_s() const noexcept { return keepalive_s_; }
 
     // The server's own class, for `S_TXN_OK`'s RELAXED flag (§9). Only the
     // KWP path reads it; the text protocol reports durability nowhere.
@@ -195,10 +219,13 @@ public:
         IdentitySource identity;
         ChannelFactory channel;
         AuthGateFactory auth;
+        // `tcp_keepalive_s` (`ConfigureAcceptedSocket`).
+        std::uint32_t keepalive_s = kDefaultTcpKeepaliveS;
     };
     void Configure(const ClientSetup& setup) {
         protocol_ = setup.protocol;
         durability_ = setup.durability;
+        keepalive_s_ = setup.keepalive_s;
         if (setup.identity) identity_source_ = setup.identity;
         if (setup.channel) channel_factory_ = setup.channel;
         if (setup.auth) auth_gate_factory_ = setup.auth;
@@ -299,6 +326,8 @@ private:
     void CloseIfOpen() noexcept;
 
     void OnListenerReadable();
+    // One accepted socket's options, then its handoff or adoption.
+    void SetUpAccepted(int client_fd);
     void OnClientEvent(int client_fd, const sched::IoEvent& event);
     void OnClientReadable(int client_fd);
     // Starts the next complete command, if the connection has one and is
@@ -365,6 +394,7 @@ private:
     AuthGateFactory auth_gate_factory_;
     Protocol protocol_ = Protocol::kKwp;
     wal::DurabilityClass durability_ = wal::DurabilityClass::kGroup;
+    std::uint32_t keepalive_s_ = kDefaultTcpKeepaliveS;
     IdentitySource identity_source_;
     // The counter behind the default identity source. Not a secret; see
     // `set_identity_source`.
