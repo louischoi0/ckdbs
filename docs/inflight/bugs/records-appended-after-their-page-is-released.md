@@ -21,7 +21,6 @@ write to the same page lands out of order, which redo refuses
 | Path | Page | Record | Severity |
 |---|---|---|---|
 | `SortedFillInner` (`command_dispatcher.cpp`) over `heap::ChainAppendBatch` | heap tail, new chain pages, link edits | `FULL_PAGE_IMAGE` per page, after the batch | **Heap-only**, so SUS-1 limits it to relations created before the suspension; another core's per-row `HEAP_INSERT` into the same tail can be logged against a page without the batch's rows |
-| `Catalog::InsertRow`, new-page arm via `AllocateCatalogPage` (`catalog.cpp`) | a new catalog overflow page | `PAGE_INIT`, `HEAP_INSERT` | `AllocateCatalogPage` returns the new page's bytes with its `PageRef` already destroyed, so the rows are written through a span to an **unpinned, unlatched** frame - a use-after-free once eviction takes it, and a flush-before-log (its `page_lsn` is 0). The old tail stays held, so no other writer reaches the page |
 | `InsertAssertion` → `heap::ChainInsert` → `exec::LogChainInsert` (`assertion_catalog.cpp`, `wal_row_log.cpp`) | `sys.assertions` tail, new page, link; spills | `PAGE_INIT`, `FULL_PAGE_IMAGE`, `VARHEAP_APPEND`, `HEAP_INSERT` | Two cores' `CREATE ASSERTION` at once: out-of-order dense slots refuse the mount |
 | `BuildIndexTree` / `Backfill` → `LogBuiltTree` (`index_ddl.cpp`) | every page of a new index tree | `FULL_PAGE_IMAGE` | The tree is unpublished, so no other writer; only a flush-before-log of `page_lsn` 0 pages |
 | `CreateTable`'s var-heap root, `varheap::CreateChain` → `LogCatPageInit` (`catalog.cpp`) | the new var-heap root | `PAGE_INIT` | Unpublished; flush-before-log only |
@@ -31,8 +30,8 @@ write to the same page lands out of order, which redo refuses
 
 Each path's own: keep the `PageRef` from the mutation to the stamp, as
 AT-S21 does for the insert. The first row is heap-gated; the two
-unpublished-tree rows cost only a flush ordering; `AllocateCatalogPage`'s
-dangling span is the one that is wrong without a crash. **That row is AY's,
-as its own stage** (operator, 2026-09-29,
-`instructions/v3.0.0/raft-marks-2026-09-29.md` §8); the others are
-unscheduled.
+unpublished-tree rows cost only a flush ordering. All are unscheduled.
+**`Catalog::InsertRow`'s new-page arm left this table at AY-S7**
+(`instructions/v3.0.0/workorder-ay-following-letter.md`): `AllocateCatalogPage`
+returns the new page's `PageRef`, held until the row's `HEAP_INSERT` stamps
+it.

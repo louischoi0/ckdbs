@@ -352,11 +352,12 @@ std::uint64_t UndoPkOf(std::span<const std::byte> payload) {
     return id.ok() ? id.value() : 0;
 }
 
-StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> AllocateCatalogPage(
-    storage::PageStore& store) {
+// The new page comes back held, exclusive: its caller writes and logs it
+// under that hold (AY-S7, `wal.md` §8-1).
+StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
     for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) {
         auto created = store.CreateAt(id);
-        if (created.ok()) return std::make_pair(id, created.value().bytes());
+        if (created.ok()) return std::move(created.value());
         if (created.status().code() != StatusCode::kAlreadyExists) return created.status();
     }
     return Status::OutOfSpace(
@@ -420,14 +421,18 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
             continue;
         }
 
+        // Held until the row's record stamps it: until then its `page_lsn`
+        // is 0, and another core's writeback would put the row on disk
+        // ahead of its record (AY-S7).
         auto created = AllocateCatalogPage(store);
         if (!created.ok()) return created.status();
-        auto [new_id, new_bytes] = created.value();
+        storage::PageRef new_page = std::move(created.value());
+        const PageId new_id = new_page.page_id();
 
         // min_key 0, like every catalog page: these rows carry no key to
         // prune by, and a nonzero min_key would be a claim about ids that
         // do not exist here.
-        auto fresh = heap::PageView::CreateEmpty(new_bytes, 0);
+        auto fresh = heap::PageView::CreateEmpty(new_page.bytes(), 0);
         if (!fresh.ok()) return fresh.status();
         // Logged before the insert below, whose record then stamps the
         // page - the DML path's new-tuple-page discipline exactly.
@@ -454,6 +459,7 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
             !s.ok()) {
             return s;
         }
+        new_page.Release();
 
         // Linked **after** the row is in it, and through a re-fetch:
         // CreateAt may have moved frames, and a link published before the
