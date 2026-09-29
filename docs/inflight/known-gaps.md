@@ -81,9 +81,10 @@ statement about an engine that no longer exists; re-verify or strike it.
   `git show ac4bd64^:tests/txn_2pc_protocol_test.cpp`. All five derive from
   `Txn2pcBlockedWriterTest` over `Txn2pcParticipantTest`, the participant
   machinery AT-S6 deleted - which is why they went with the file, and the
-  base a restoration has to rebuild. Owner: the
-  operator's decision whether a stage restores them before AT's close
-  (`workorder-at-close-ar0-5-left-open.md` AT-S20's carry list otherwise).
+  base a restoration has to rebuild. **Owner: AY's first stage**, ahead of
+  D9(a) (operator, 2026-09-29,
+  `instructions/v3.0.0/raft-marks-2026-09-29.md` §12), with AT-S14's
+  SQL-level cells in AY's FK stage.
 
   **The detector is pinned again, by one cell, since AX-S3.** On
   `ax-s3-inflight-prose` from `b54a769`, `NoteWaitFor` never finding a
@@ -600,9 +601,11 @@ there is no second core's registration to be answered by.
   A holder that never decides costs a cross-core writer the 1 s fault net
   and its defect warning, as a same-core writer pays. AX closed carrying
   all three (`instructions/v3.0.0/workorder-ax-inflight-publication.md`
-  §7 items 1-3): the cross-unit refusal (item 2) has no owner, the first
-  encounter (item 1) is the operator's, and a wake not being a grant
-  (item 3) proposes no action. Spec: `docs/spec/txn.md` §5.
+  §7 items 1-3): the cross-unit refusal (item 2) and the first encounter
+  (item 1) are **AY's since 2026-09-29** - the containment wake, and the
+  block recorded whenever the refusing unit's wake names the holder
+  (`instructions/v3.0.0/raft-marks-2026-09-29.md` §12, §13) - and a wake not
+  being a grant (item 3) proposes no action. Spec: `docs/spec/txn.md` §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
   and AT's quiet-wrong defence is sequenced as though it covered every

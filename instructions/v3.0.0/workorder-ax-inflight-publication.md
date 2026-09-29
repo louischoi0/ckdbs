@@ -473,13 +473,12 @@ Each once, with its owner or the statement that it has none.
 
 1. **The first encounter inside the holder's retire-to-release window is
    refused** (`known-gaps.md`, Locks) - a behaviour change: record the
-   block whenever the refusing unit's wake names the holder. **The
-   operator's**; put on 2026-09-29 and not answered.
+   block whenever the refusing unit's wake names the holder. **Taken
+   2026-09-29** (`raft-marks-2026-09-29.md` §13), placed in AY.
 2. **A cross-unit refusal hands back no slot** and still polls - a
    `WHERE`-less or pk-range write, a range fence (`known-gaps.md`, Locks).
-   **No owner.** CLA's proposal: the following letter, which opens the lock
-   table for D9(a)'s fence; the fix itself is a containment wake, which
-   D9(a) does not need.
+   **AY's** (`raft-marks-2026-09-29.md` §12): a containment wake, beside
+   D9(a)'s fence.
 3. **A wake is not a grant** (`known-gaps.md`, Locks): no action proposed;
    recorded so a fault-net refusal under contention is read correctly.
 4. **The rollback's schema-word move has no killing cell**
