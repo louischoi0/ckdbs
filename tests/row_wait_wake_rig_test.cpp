@@ -125,6 +125,71 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     EXPECT_EQ(rig->locks().EntryCount(), 0u);
 }
 
+TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore0Holds) {
+    // **The containment wake** (AY-S2). The same shape as the cell above,
+    // with core 1's statement declaring a range (`WHERE id >= 1`) rather
+    // than naming the row: its `X` fence meets core 0's tuple `X` in the
+    // lock table's verify arm, in another unit's entry - where until AY-S2
+    // nothing was registered, the wait fell back to a poll of `IsInFlight`,
+    // and no release kicked core 1.
+    //
+    // **Mutation**: the verify's scans registering nothing - the refusal
+    // comes back without a slot, and no kick to core 1 follows the commit.
+    TwoCoreRig::Options options;
+    options.wake.min_delay_ticks = 2;
+    options.wake.max_delay_ticks = 2;
+    auto opened = TwoCoreRig::Open(options);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0), (2, 0)").response, "ERR"));
+    Session holder;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
+    const std::string held = d0.Dispatch("UPDATE t SET v = 1 WHERE id = 1", &holder).response;
+    ASSERT_FALSE(StartsWith(held, "ERR")) << held;
+
+    Session waiter;
+    Statement update{&waiter, "UPDATE t SET v = 2 WHERE id >= 1"};
+    Statement commit{&holder, "COMMIT"};
+    commit.go.store(false, std::memory_order_release);
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, update)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, commit)));
+    rig->Start();
+
+    sched::Scheduler& peer = rig->core(1).scheduler();
+    ASSERT_TRUE(Within(2000ms, [&] { return peer.idle_blocks() >= 1; }))
+        << "core 1 never blocked with its UPDATE parked";
+    ASSERT_FALSE(update.done.load(std::memory_order_acquire))
+        << "core 1's UPDATE did not wait: " << update.out.response;
+    // Registered on the row's own entry, the unit that refused the range.
+    auto oid = rig->core(0).catalog().FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    EXPECT_EQ(rig->locks().WaiterCount(txn::LockKey::Tuple(oid.value(), 1)), 1u)
+        << "the range's refusal left no registration on the row that refused it";
+    const std::size_t kicks_to_peer_before = KicksTo(*rig, 1).size();
+
+    commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(StartsWith(commit.out.response, "COMMIT")) << commit.out.response;
+
+    const std::vector<sched::SimWakerTable::Record> to_peer = KicksTo(*rig, 1);
+    ASSERT_EQ(to_peer.size(), kicks_to_peer_before + 1) << "the decide did not kick core 1";
+    EXPECT_FALSE(update.done.load(std::memory_order_acquire))
+        << "core 1's UPDATE ran before any kick reached its reactor";
+
+    rig->wake().Advance(2);
+    ASSERT_TRUE(Within(1000ms, [&] { return update.done.load(std::memory_order_acquire); }))
+        << "core 1's UPDATE did not proceed at the kick";
+    EXPECT_TRUE(StartsWith(update.out.response, "UPDATED 2")) << update.out.response;
+    rig->Stop();
+    EXPECT_EQ(rig->locks().EntryCount(), 0u);
+}
+
 // The holder's late release, on core 0's reactor once `go` is set.
 struct LateRelease {
     txn::LockTable* table = nullptr;

@@ -639,6 +639,43 @@ TEST_F(LockDeadlockTest, ARowWaitAtTheFaultNetIsRefusedRetryablyAndNamesTheNet) 
     EXPECT_NE(Rows().find(",2"), std::string::npos) << Rows();
 }
 
+// ---- AY-S2: the containment wake ------------------------------------------
+
+TEST_F(LockDeadlockTest, AChildWhoseParentIsUnderARangeFenceWaitsForTheFence) {
+    // A parent `DELETE` with a pk window declares a range `X` and takes no
+    // tuple `X` per row, so the child's forward check - its tuple `S` on the
+    // parent row, asked because the row's header is busy - meets the fence
+    // only in the lock table's verify arm. Until AY-S2 that refusal had no
+    // slot and `WaitForParentRowWriter` returned on it, so the child was
+    // refused at once; it now waits on the fence's entry for its release.
+    //
+    // **Mutation**: the verify's scans registering nothing - the child is
+    // answered at once, with the busy verdict.
+    ASSERT_EQ(Local("CREATE TABLE p (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE").rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(Local("INSERT INTO p VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+
+    Session deleter;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &deleter).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("DELETE FROM p WHERE id > 0 AND id < 100", &deleter).response,
+              "DELETED 1");
+
+    Session child;
+    Started insert = Start("INSERT INTO c VALUES (1, 5)", child);
+    Pump();
+    ASSERT_FALSE(*insert.done) << "the child was answered instead of waiting for the fence: "
+                               << insert.out->response;
+
+    // The deleter rolls back, the parent row is live again, and the child's
+    // re-run finds it.
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &deleter).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*insert.done) << "the child never resumed after the fence was released";
+    EXPECT_EQ(insert.out->response.rfind("INSERTED", 0), 0u) << insert.out->response;
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "the fence's registration outlived the wait";
+}
+
 // ---- AT-S3: the sys.tables row has no contender the page latch does not serialise --
 //
 // E13 asked whether the relation's `sys.tables` row becomes borrowable at
