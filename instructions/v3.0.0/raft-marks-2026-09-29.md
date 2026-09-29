@@ -87,8 +87,9 @@ question; each such answer is quoted as chosen.
 | | |
 |---|---|
 | **Word** | *"A0, B6 is too"* - item A0, read with *"follow CLA proposal"* |
-| **Mark** | **The following letter opens**, one letter as AT-0 item 6 proposed, and it is **AY**: the next free letter, AR0 D16's *"work-order prefixes continue (next free letter series)"*, AP, AQ and AR being AR1 §14's and AK-AX taken. Its cargo is AT-0 item 6 as marked in part (§3, §4, §6) and the items marked below |
-| **Does not settle** | AY's rulings, stages and order, which its work order proposes (AY-S0) |
+| **Mark** | **The following letter opens**, one letter as AT-0 item 6 proposed. Its cargo is AT-0 item 6 as marked in part (§3, §4, §6) and the items below that name AY |
+| **Reading** | CLA names it **AY** by AR0 D16's proposal, itself unmarked: *"Work-order prefixes continue (next free letter series)"* - every letter AK-AX being used or reserved (AP, AQ, AR by AR1 §14) |
+| **Does not settle** | AY's rulings, stages and order, which its work order proposes (AY-S0). Whether AR1's AQ/AR - in AT-0 item 6's list - are AY's stages or their own letters, as AR1 §14 names them; AP's order stays §5's |
 | **Recorded at** | `index.md`, `workorder-at-m3-uniformity.md` AT-0 item 6 |
 
 ## 8. The unpinned catalog page - its own stage in AY
@@ -105,6 +106,7 @@ question; each such answer is quoted as chosen.
 |---|---|
 | **Word** | Item A6. The entry names two fixes and no proposal, so CLA asked *"Which fix, and in which letter?"*; answered **"This letter, chunk count (Recommended)"**: *"The next letter owns it. A snapshot carries its chunk count, so recovery knows when the base is whole without leaning on what other cores log next. This changes assertion.md §7's recovery contract."* |
 | **Mark** | AY owns `a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.md`, fixed by a **chunk count carried in the snapshot**; `assertion.md` §7's recovery contract changes with it |
+| **Does not settle** | How a pre-AY snapshot with no count is read at mount - AY's work order |
 | **Recorded at** | the bug entry, `index.md` |
 
 ## 10. AO-0 items 9, 22, 25 and 27
@@ -113,14 +115,15 @@ question; each such answer is quoted as chosen.
 |---|---|
 | **Word** | Item A7. Item 22 had no proposal, so CLA asked *"should a wait on a bound assertion's group have its own bound, shorter than the 1 s lock-wait fault net?"*; answered **"Keep one net (Recommended)"**: *"No second bound. AO-R8's one net per statement stands, and the refusal already names contention rather than a stuck holder. A group bound would be a new quantity with a new setting, for a wait that is correct."* |
 | **Mark** | **9 confirmed** (AO-R14): the FK split, F3's wait half in M2 and D9(a)'s fence in AY. **22: one net**, no group bound. **25 left as it is**: a `DROP TABLE` under a steady stream of readers can be refused `TxnConflict` at the net; readers do not queue behind it. **27 ratified as built** at AO-S6e-b: an intention mode on an interval unit neither fences nor is fenced, and a `WHERE`-less write declares `[0, kIdSpaceEnd)` rather than the relation entry |
-| **Recorded at** | `workorder-ao-m2-lock-family.md`'s AO-0 rows, `workorder-at-m3-uniformity.md` AT-0 item 5 |
+| **Recorded at** | `workorder-ao-m2-lock-family.md`'s AO-0 rows, `workorder-at-m3-uniformity.md` AT-0 item 5, `assertion.md` §6.2 |
 
 ## 11. AR2 E5 retired, E10 as proposed
 
 | | |
 |---|---|
 | **Word** | Item A8. E5's proposal feeds bytes reserved since AT-S9, so CLA asked *"What happens to E5?"*; answered **"Retire it (Recommended)"**: *"Retire E5. Everything it was to feed is gone, and a collector with no consumer is cost without a reader. If a consumer appears (AS-E, D10 non-zero), a new item states what it needs."* |
-| **Mark** | **E5 retired.** **E10 as proposed**: AY's work order re-ratifies or retires ratification AE's *"a relation with a durable auxiliary does not split"* after checking the gates one by one (AR2 §5.7, CLA's reading that every refusal but `kSpill` dissolves) - beside D7's gate, which is the same question asked from the auxiliary's side |
+| **Mark** | **E5 retired.** **E10 as proposed**, its vehicle moved from M3's work order (closed without it) to AY, where AT-0 item 6 carries it. **Its ground has gone as E5's did, and this record put no question**: nothing splits since AT-S9 and AR2 §5.7's gates went with the allocator (`crosscore.md` §6a), so the check has no gate left, and D7's gate - the only live side - is marked (§3). Put back to the operator at AY-S0 |
+| **Does not settle** | Whether E10 is retired as E5 was |
 | **Recorded at** | `ar2-architecture-revision-borrow-model.md`'s E5 and E10 rows |
 
 ## 12. AY's lock and test work
@@ -128,14 +131,15 @@ question; each such answer is quoted as chosen.
 | | |
 |---|---|
 | **Word** | Item A9. The test debt had no recorded proposal, so CLA asked *"What happens to them?"*; answered **"Letter, before D9(a) (Recommended)"**: *"Restore R8.3's cells as the letter's first stage, before D9(a) adds S waits to the same lock table, and write AT-S14's SQL-level cells in the letter's FK stage, which touches fk_check."* |
-| **Mark** | **R8.3's lost lock-family cells are AY's first stage**, ahead of D9(a) - the bind's `IS`, the borrow cap, the mid-walk park, the failed commit, `DROP TABLE`'s wait for a reader, AT-S5e's two; the deadlock detector is pinned again since AX-S3. **AT-S14's SQL-level cells** for `step_vm` and `fk_check` are written in AY's FK stage. **The cross-unit containment wake** is AY's (AX §7 item 2's proposal): a write refused at a declared range or a range fence parks on a slot the release flips, as a tuple refusal has since AX-S2b |
-| **Recorded at** | `known-gaps.md` (Testing, Locks), `workorder-ax-inflight-publication.md` §7, `workorder-at-close-ar0-5-left-open.md`'s §0 item 2 is answered by it |
+| **Mark** | **R8.3's lost lock-family cells are AY's first stage**, ahead of D9(a) - R8.3's list as `known-gaps.md` (Testing) inventories it: AT-S1's four bind declarations, AT-S3's catalog-row cell, AT-S5e's two build cells, the deadlock detector's cycles (one cell pins the detector again since AX-S3; the rest stay lost), the borrow cap, the mid-walk park, the failed commit and `DROP TABLE`'s wait for a reader. **AT-S14's SQL-level cells** for `step_vm` and `fk_check` are written in the AY stage that touches `fk_check`, which AY-S0 names. **The cross-unit containment wake** is AY's (AX §7 item 2's proposal): a write refused at a declared range or a range fence parks on a slot the release flips, as a tuple refusal has since AX-S2b |
+| **Answers** | `workorder-at-close-ar0-5-left-open.md` §0 item 2: AT-S14's SQL-level cells are still owed |
+| **Recorded at** | `known-gaps.md` (Testing, Locks), `workorder-ax-inflight-publication.md` §7, `workorder-at-close-ar0-5-left-open.md` §0 item 2 |
 
 ## 13. B6 - the first encounter inside the retire-to-release window waits
 
 | | |
 |---|---|
 | **Word** | *"A0, B6 is too"* - item B6 |
-| **Mark** | **Taken as CLA proposed it** (`known-gaps.md`, Locks): `NoteBlockingWriter` records the block whenever the refusing unit's wake names the holder, **even when the holder is no longer in flight** - it has decided and not yet released - with the repeatable-read futile-wait guard ahead of it, so the statement parks on the slot, which the imminent release flips or already has, rather than being refused. A behaviour change: a refusal becomes a wait, never an answer |
+| **Mark** | **Taken as CLA proposed it** (`known-gaps.md`, Locks): `NoteBlockingWriter` records the block whenever the refusing unit's wake names the holder, **even when the holder is no longer in flight** - it has decided and not yet released - with the repeatable-read futile-wait guard ahead of it, so the statement parks on the slot, which the imminent release flips or already has, rather than being refused. A behaviour change: a refusal becomes a wait, never a wrong answer |
 | **Does not settle** | Where it is built. The proposal named no stage; CLA places it in **AY beside the containment wake** (§12), the same wait surface, and says so as a placement, not a mark |
 | **Recorded at** | `known-gaps.md` Locks, `workorder-ax-inflight-publication.md` §7 item 1 |

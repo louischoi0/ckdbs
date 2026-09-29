@@ -440,9 +440,9 @@ clock ending it means a deadlock went undetected or a holder is stuck. A
 group is held for a transaction's length and every writer touching one
 account serialises on it, so the net is reached by ordinary contention. The
 refusal says so rather than sending an operator after a stuck holder.
-Whether a group wait should carry a shorter bound of its own is open —
-AO-0 item 22, deferred to AO-S7 because it interacts with AO-R8's
-one-net-per-statement rule.
+A group wait carries no bound of its own: one net per statement (AO-R8),
+the operator's mark on AO-0 item 22
+(`instructions/v3.0.0/raft-marks-2026-09-29.md` §10).
 
 ### 6.3 Interaction with MVCC
 

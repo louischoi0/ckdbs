@@ -38,7 +38,9 @@ reads as issued and this section is what binds where the two disagree.
    another core's divide on the looked-up leaf's re-fetch, a threaded
    race cell, and `AWriteLookupHoldsItsLeafExclusiveAndItsMissIsAuthoritative`
    - and **no SQL-level cell** for `step_vm` or `fk_check` was written, as
-   §4's S14 asks; whether those are still owed is the operator's. Its
+   §4's S14 asks; whether those are still owed is the operator's.
+   **Answered 2026-09-29**: owed, written in the AY stage that touches
+   `fk_check` (`raft-marks-2026-09-29.md` §12). Its
    survey found the window wider than §4 names (the point `UPDATE`/`DELETE`,
    rollback's relocation, `VerifyTupleAt` dropping its own hold) and
    closed it there.

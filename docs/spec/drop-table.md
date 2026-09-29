@@ -132,7 +132,7 @@ waits and registers none.
 
 Four consequences worth stating rather than discovering:
 
-- **The wait is bounded by the lock family's fault net**, 11 s
+- **The wait is bounded by the lock family's fault net**, 1 s since AT-S6
   (`txn.md` §5), and reaching it refuses the drop `TxnConflict`, retryable.
   A `DROP TABLE` under a continuous stream of readers can therefore be
   refused where it used to succeed: readers do not queue behind it, so a

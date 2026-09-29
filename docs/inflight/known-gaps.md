@@ -591,8 +591,9 @@ there is no second core's registration to be answered by.
     `NoteBlockingWriter`, which declines, so the statement is refused where
     a wait on the slot it registered would end at once. Closing it is a
     behaviour change - record the block whenever the refusing unit's wake
-    names the holder, the repeatable-read guard ahead of it - and waits for
-    the operator's word.
+    names the holder, the repeatable-read guard ahead of it - taken on the
+    operator's word of 2026-09-29
+    (`instructions/v3.0.0/raft-marks-2026-09-29.md` §13).
   - **A wake is not a grant.** `TryAcquire` does not queue, so a third
     writer can take the unit between the flip and the re-run; the re-run
     parks again under the same deadline, and under sustained contention
@@ -601,11 +602,12 @@ there is no second core's registration to be answered by.
   A holder that never decides costs a cross-core writer the 1 s fault net
   and its defect warning, as a same-core writer pays. AX closed carrying
   all three (`instructions/v3.0.0/workorder-ax-inflight-publication.md`
-  §7 items 1-3): the cross-unit refusal (item 2) and the first encounter
-  (item 1) are **AY's since 2026-09-29** - the containment wake, and the
-  block recorded whenever the refusing unit's wake names the holder
-  (`instructions/v3.0.0/raft-marks-2026-09-29.md` §12, §13) - and a wake not
-  being a grant (item 3) proposes no action. Spec: `docs/spec/txn.md` §5.
+  §7 items 1-3): the cross-unit refusal (item 2) is **AY's since
+  2026-09-29** - the containment wake
+  (`instructions/v3.0.0/raft-marks-2026-09-29.md` §12) - the first
+  encounter (item 1) is **taken as a wait** (§13), placed in AY by CLA
+  rather than by the mark, and a wake not being a grant (item 3) proposes
+  no action. Spec: `docs/spec/txn.md` §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
   and AT's quiet-wrong defence is sequenced as though it covered every
