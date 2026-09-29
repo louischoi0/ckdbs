@@ -22,10 +22,10 @@
 // inline - so no cell can hold a statement mid-walk on a reactor it shares
 // with the thing it is testing. What is held is exactly what a walk takes:
 // `Relation(oid)` in `IS` under a read holder id
-// (`command_dispatcher.cpp`'s `ReadBorrow`). **No cell says a real read
-// takes and releases it**: `LockDeadlockTest.AReadDeclaresItsPositionAndGivesItBack`
-// did, and went with `txn_2pc_protocol_test.cpp` at AT-S6
-// (`docs/inflight/known-gaps.md`, Testing).
+// (`command_dispatcher.cpp`'s `ReadBorrow`), and
+// `LockDeadlockTest.AReadDeclaresItsPositionAndGivesItBack`
+// (`lock_family_test.cpp`, restored at AY-S1) is what says a real read
+// takes and releases it.
 
 #include "two_core_rig.hpp"
 

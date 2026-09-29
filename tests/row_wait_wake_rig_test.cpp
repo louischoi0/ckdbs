@@ -280,8 +280,8 @@ TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOth
     // `NoteWaitFor` never finding a cycle - B parks, and both waits end at
     // the fault net (killed 3/3 at AX-S3, once the victim's message rather
     // than the word "deadlock" was asserted). The statement-level cross-core
-    // cycle the lost `LockDeadlockTest` cells (`known-gaps.md`, Testing:
-    // R8.3) no longer pin.
+    // cycle; the one-core cycles are `lock_family_test.cpp`'s
+    // `LockDeadlockTest` cells, restored at AY-S1.
     auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());

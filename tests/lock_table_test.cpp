@@ -1238,5 +1238,44 @@ TEST(LockTableTest, AWakeRegistrationAdmitsNobodyAndBlocksNobody) {
         << "a waiting DDL's registration refused a compatible reader";
 }
 
+// ---- The wait-for graph, without a dispatcher ----------------------------
+
+TEST(LockTableTest, AnEdgeThatClosesACycleIsRefusedAndRecordsNothing) {
+    // AO-R7 at the table (AY-S1), beside the dispatcher cells in
+    // `lock_family_test.cpp` that reach it through a parked statement. The
+    // walk goes from the holder along recorded edges; reaching the waiter
+    // means the new edge closes a cycle, and the waiter is the victim.
+    auto table = MakeTable();
+    EXPECT_FALSE(table->NoteWaitFor(1, 2)) << "1 -> 2 is a chain, not a cycle";
+    EXPECT_FALSE(table->NoteWaitFor(2, 3)) << "1 -> 2 -> 3 is a chain, not a cycle";
+    EXPECT_EQ(table->WaitEdgeCount(), 2u);
+
+    // 3 -> 1 closes the three-cycle two edges deep, which a check one edge
+    // deep would miss. Refused, and nothing recorded: the victim does not
+    // park, so an edge left behind would stand until its decide and make a
+    // later waiter's walk find a cycle through a transaction not waiting.
+    EXPECT_TRUE(table->NoteWaitFor(3, 1)) << "the three-cycle was not found";
+    EXPECT_EQ(table->WaitEdgeCount(), 2u) << "the victim's edge was recorded";
+
+    // A two-cycle and a self-wait close too.
+    EXPECT_TRUE(table->NoteWaitFor(2, 1));
+    EXPECT_TRUE(table->NoteWaitFor(4, 4)) << "a transaction waiting for itself is a cycle of one";
+
+    // A second call replaces the waiter's edge rather than adding one: a
+    // transaction waits for one thing at a time. 2 -> 4 leaves 1 -> 2 -> 4,
+    // so 3 -> 1 is a chain now.
+    EXPECT_FALSE(table->NoteWaitFor(2, 4));
+    EXPECT_EQ(table->WaitEdgeCount(), 2u);
+    EXPECT_FALSE(table->NoteWaitFor(3, 1));
+    EXPECT_EQ(table->WaitEdgeCount(), 3u);
+
+    // A cleared wait takes its edge with it, and nothing else. With 1 -> 2
+    // standing, 4 -> 3 would close 3 -> 1 -> 2 -> 4; cleared, it is a chain.
+    table->ClearWaitFor(1);
+    EXPECT_EQ(table->WaitEdgeCount(), 2u);
+    EXPECT_FALSE(table->NoteWaitFor(4, 3)) << "the cleared edge still closed a cycle";
+    EXPECT_EQ(table->WaitEdgeCount(), 3u);
+}
+
 }  // namespace
 }  // namespace kds::txn

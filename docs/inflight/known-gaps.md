@@ -53,46 +53,40 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
-- **The lock family's statement-level cells went with the 2PC suite;
-  nothing pins the bind's `IS`, and one cross-core cell pins the deadlock
-  detector (since AX-S3; below).** Verified at
-  `3de6d62` on `at-s19-ar0-5-revised` (2026-09-28), by AT-S19's survey
-  (`ar0-5-amendment-uniformity.md` AR0-5-R, R8.3). AT-S6 (`ac4bd64`)
-  deleted `tests/txn_2pc_protocol_test.cpp` whole with the 2PC service; the
-  file also hosted five fixtures that test no 2PC - `LockDeadlockTest`
-  (32 cells), `MidWalkWaitTest` (11), `LockCapTest` (5), `LockCapOfOneTest`
-  (3), `FailedCommitTest` (2) - and the commit's message counts only the
-  twelve cells it retired with their premise. At `3de6d62` none of those
-  cells exists under `tests/` - `AReadDeclaresItsPositionAndGivesItBack`
-  survived only in a comment at `read_borrow_rig_test.cpp:24` citing it as
-  proof that a real read takes its borrow, corrected by AT-S19 to say no
-  cell does - and no test calls
-  `LockTable::NoteWaitFor` or `WaitEdgeCount`. The lost cells include AT-S1's four bind declarations,
-  AT-S3's catalog-row cell, AT-S5e's two build cells, the deadlock
-  detector's cycles, the borrow cap, the mid-walk park and `DROP TABLE`'s
-  wait for a reader; the premise of each still holds.
+- **Seven of `Txn2pcBlockedWriterTest`'s own cells are still lost; R8.3's
+  53 are restored.** On `ay-s1-lock-family-cells` from `69a1f76` (AY-S1),
+  the five fixtures AT-S6 (`ac4bd64`) deleted with
+  `tests/txn_2pc_protocol_test.cpp` - `LockDeadlockTest`, `MidWalkWaitTest`,
+  `LockCapTest`, `LockCapOfOneTest`, `FailedCommitTest`, 53 cells - are back
+  in `tests/lock_family_test.cpp` on a one-core base with the 2PC
+  participant's machinery left out, with a DELETE bind cell beside them and
+  a direct `NoteWaitFor` cell in `lock_table_test.cpp`. The compiler's bind
+  declaring nothing is killed by the join and subquery cells, and
+  `NoteWaitFor` never finding a cycle by six.
 
-  **Measured**, one full Debug suite per mutant at `3de6d62`, both
-  surviving at 2991/2991 (one pre-existing disabled cell): the compiler's
-  bind declaring nothing (`step_compiler.cpp`, AT-R1's line), and
-  `NoteWaitFor` never finding a cycle (AO-R7). So `CLAUDE.md`'s *"a waiter
-  that would close a cycle is refused naming deadlock"* and AR0-5's own
-  quiet-wrong defence are built and pinned by no cell. The cells are in
-  `git show ac4bd64^:tests/txn_2pc_protocol_test.cpp`. All five derive from
-  `Txn2pcBlockedWriterTest` over `Txn2pcParticipantTest`, the participant
-  machinery AT-S6 deleted - which is why they went with the file, and the
-  base a restoration has to rebuild. **Owner: AY's first stage**, ahead of
-  D9(a) (operator, 2026-09-29,
-  `instructions/v3.0.0/raft-marks-2026-09-29.md` §12), with AT-S14's
-  SQL-level cells in AY's FK stage.
+  **What is not restored**: the seven non-2PC cells of the base fixture
+  itself (old `:3833-4156`), in no inventory before AY-S0 - the in-flight
+  writer waits, the repeatable-read refusal of a row's own writer, and the
+  FK child waiting out a parent's writer. They ran with **no lock table**
+  (`LockCap()` was `nullopt`), an arm no production assembly builds; two
+  have table-backed successors (`fk_cross_core_rig_test.cpp`'s first two
+  cells). Two of the 53 run that arm too, by `set_locks(nullptr)`:
+  `LockDeadlockTest.WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe` and
+  `MidWalkWaitTest.WithoutADetectorTheMidWalkParkIsNotOffered`. **Owner:
+  AY-Q9** (`instructions/v3.0.0/workorder-ay-following-letter.md` §4).
 
-  **The detector is pinned again, by one cell, since AX-S3.** On
-  `ax-s3-inflight-prose` from `b54a769`, `NoteWaitFor` never finding a
-  cycle survived AX-S2b's cross-core cycle cell
-  (`row_wait_wake_rig_test.cpp`), because it asserted the word "deadlock"
-  and the fault net's refusal names it too; asserting the victim's own
-  message kills it 3/3. The bind's declarations and the rest of the list
-  above are still pinned by nothing.
+  **Six more went uncounted**, the base fixture's cells that shipped or
+  prepared (old `:1596-1779` and `:4158`), named neither in AT-S6's twelve
+  nor in AY-S0's seven. Their holder was a 2PC participant; what they
+  pinned of the lock family outlives it. The fault net's refusal - retryable
+  `TxnConflict`, "fault net" on the line and on the carried status - was
+  pinned by no cell, and `LockDeadlockTest.ARowWaitAtTheFaultNetIsRefusedRetryablyAndNamesTheNet`
+  restores it (AY-S1's review). An undecided holder waited on, and a
+  waiting statement not poisoned, have the restored cells. The in-doubt
+  ceiling key's inertness went with the key. Whether
+  `ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid`'s premise - the
+  synchronous path poisons an explicit transaction on a row conflict - has
+  a surviving cell was not checked.
 
 - **AX-S2b's release-kick cell failed once under `-j8` and did not
   reproduce.** On `worktree-ay-s0-order` at `14cfdfa` (sources as

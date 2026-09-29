@@ -23,8 +23,11 @@
 //     `AResumedChildInsideATransactionWaitsRatherThanBeingToldErrAndCommitting`
 //     - AO-S6d item 16: a statement that parked on a probe and met a fence
 //     on its *resume*. There is no resume; a child meeting a fence parks on
-//     it from its first dispatch, which `Txn2pcBlockedWriterTest` and the
-//     AO-S6d fence cells already pin.
+//     it from its first dispatch, as any insert does -
+//     `lock_family_test.cpp`'s `AnInsertIntoAFencedWindowWaitsForItsHolder`
+//     pins the insert's, on a relation with no foreign key, and no cell
+//     pins it with one. `Txn2pcBlockedWriterTest`, cited here until AY-S1,
+//     went with AT-S6 and ran with no lock table (AY-Q9).
 //   - `AResumedWriteThatHasAlreadyWrittenRowsIsRefusedRatherThanParkedMidWalk`
 //     - the item-16 review's B1, which withheld the mid-walk park from a
 //     probe's resume. `resumed_from_fk_probe_` is gone: a re-run is a whole
