@@ -1,6 +1,6 @@
 # AR1 — Architecture Revision: Cabin and Function
 
-Status: DRAFT, pending operator ratification
+Status: **RATIFIED 2026-09-29** as proposed, with AR1-V's corrections taken as the proposals (`raft-marks-2026-09-29.md` §5); AP's order and AR1-V3's AL3 divergence are not settled by it
 Author: CLA, 2026-09-03, against `6ead2a0`
 Scope: `docs/spec/cabin.md` (C3, §2, §10, §12), `parser/fingerprint.hpp`,
 `catalog/rows.hpp` (`SysCabinRow`, `SysPatternRow`), a function catalog
@@ -369,6 +369,9 @@ and not what it holds.
 
 ## 12. Items for operator judgement
 
+All eight ratified 2026-09-29 as proposed, D7 and D8 as AR1-V4 and AR1-V1
+amend them (`raft-marks-2026-09-29.md` §5).
+
 | # | Item | Class | CLA proposal |
 |---|---|---|---|
 | D1 | Advisory class placement | spec | Waystone, keyed by `(fetch_id, arg)` (§9.1) |
@@ -377,8 +380,8 @@ and not what it holds.
 | D4 | `CREATE CABIN ON <rel> (<F>)` grammar; column policy stays per column | spec | as §8 |
 | D5 | Chain Cabin's auto-created supporting Cabins | cost, not correctness | admit; count them under the relation's Cabin cap |
 | D6 | `fetch_id` on `SysPatternRow`; `waystone_root` re-keyed | format | one row change, no `kFingerprintVersion` bump |
-| D7 | `SysCabinRow` revision, `column_no` dropped | format | as §7, old rows recognised on read |
-| D8 | Rule 0′ — driving-step entry checked against the instance's driving key | quiet-wrong | take it, independent of D2 |
+| D7 | `SysCabinRow` revision, `column_no` dropped | format | as §7, old rows recognised on read - **by a mechanism the work order supplies** (AR1-V4) |
+| D8 | Rule 0′ — driving-step entry checked against the instance's driving key | quiet-wrong | take it, independent of D2 - **as a wording change** (AR1-V1) |
 
 ## 13. Retired and amended
 
