@@ -32,4 +32,7 @@ write to the same page lands out of order, which redo refuses
 Each path's own: keep the `PageRef` from the mutation to the stamp, as
 AT-S21 does for the insert. The first row is heap-gated; the two
 unpublished-tree rows cost only a flush ordering; `AllocateCatalogPage`'s
-dangling span is the one that is wrong without a crash. Unscheduled.
+dangling span is the one that is wrong without a crash. **That row is AY's,
+as its own stage** (operator, 2026-09-29,
+`instructions/v3.0.0/raft-marks-2026-09-29.md` §8); the others are
+unscheduled.

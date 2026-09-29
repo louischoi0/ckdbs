@@ -38,5 +38,6 @@ another core writes, then a crash and a mount.
 Either close a base only on the next `ASSERT_*` record that is not a
 snapshot or on a `CHECKPOINT_END` rather than on any record, or make a
 snapshot carry its chunk count so recovery knows when the base is whole.
-Both are changes to AS6a's recovery contract (`assertion.md` §7), so this
-waits for a stage that owns it; no work order names one yet.
+Both are changes to AS6a's recovery contract (`assertion.md` §7). **AY owns
+it, by the second: a snapshot carries its chunk count** (operator,
+2026-09-29, `instructions/v3.0.0/raft-marks-2026-09-29.md` §9).
