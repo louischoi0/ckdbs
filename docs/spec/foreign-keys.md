@@ -341,8 +341,12 @@ instance's since AT-S7** (`cabin.md`), which removes the reason, and the
 clearing return AT-R15 took away **has not been restored**: the reverse
 check still walks after an exhausted set (`fk_check.cpp`). Restoring it is
 a change to what may answer "no children" - the one forbidden wrong answer
-of §1 - and is not decided here; until it is, the walk costs a relation
-scan the fast path would have saved, and nothing is wrong.
+of §1 - and **the operator decided on 2026-09-29 to restore it in the
+following letter (AT-0 item 6), as its own stage beside D9(a), behind
+two-core cells**
+(`instructions/v3.0.0/raft-marks-2026-09-29.md` §6). Until it lands the
+walk costs a relation scan the fast path would have saved, and nothing is
+wrong.
 
 ## 3. Reverse check — parent DELETE
 

@@ -683,10 +683,13 @@ there is no second core's registration to be answered by.
   as D3 answered in practice (`raft-marks-2026-09-28.md` §7; verified at
   `5dc4081`).
 
-  The remaining twelve are CLA's proposals awaiting the word. **Three are
-  marked `[quiet-wrong]` by AR0 itself — D7, D8, D9 — and only D7 is still
-  unmarked by the operator**: AR0-M3 marks D8 and AR0-M4 marks D9, so the
-  quiet-wrong item M3 opens against is D7 alone. *(Swept 2026-09-09 on
+  Of the remaining twelve, AR0-M and the later marks take D1(b), D2(a),
+  D7, D8, D9(a) and D11 (`CLAUDE.md`'s Open Decisions paragraph lists
+  them); the rest are CLA's proposals awaiting the word. **Three are
+  marked `[quiet-wrong]` by AR0 itself — D7, D8, D9 — and all three are
+  marked by the operator**: AR0-M3 marks D8, AR0-M4 marks D9, and AR0-M8
+  marks D7 (2026-09-29, `raft-marks-2026-09-29.md` §3), its last gate
+  lifted in the following letter. *(Swept 2026-09-09 on
   `ao-m2-close` at `cf3d0d0` at M2's close, which needed the same count; this
   paragraph read "three are marked … meaning a wrong choice converts a refusal
   into a wrong answer" and did not reach AR0-M.)* D1 carries no such tag; its

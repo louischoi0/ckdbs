@@ -285,7 +285,8 @@ Recorded by CLA on `worktree-commit-order-ratification` at `f027a3c`
 section records which D-items now carry the operator's mark, what each
 mark carries with it, and what each inherits from AR0-V's source read.
 Everything not listed stays pending — D3-D7, D10, D12, D13, D14, D16
-beyond what AL-2 records M0 consuming.
+beyond what AL-2 records M0 consuming. (D7 was marked on 2026-09-29,
+AR0-M8.)
 
 ### AR0-M1 — D1: (b), conditionally
 
@@ -546,3 +547,19 @@ RR satisfy the condition" now has a home in AR0-M1 rather than being
 forwarded to AN-D9, which was forwarding it back.
 
 Bloat applied: the amendment narration cut from ten lines to five.
+
+### AR0-M8 — D7: as proposed, its condition re-read (2026-09-29)
+
+Recorded on `worktree-ax-close` at `e52ba9b`; the words are verbatim in
+`raft-marks-2026-09-29.md` §3. **D7 is taken as proposed** - the Cabin
+invariant and its gates go, not before the lock protection exists - and
+since D8 was ratified without gap locks (`raft-marks-2026-09-28.md` §5),
+"D1(b) gap locking on Cabin keys" reads as **D8's named units**: the
+assertion group's reservation (AT-S5d) and D9(a)'s held parent-row `S`.
+Of the gates only `RefuseAuxiliaryOnSplitRelation` remains, refusing an
+index, an assertion or a foreign key on a relation split before AT-S9 - a
+Cabin there has been admitted since SB3 (`71f92f6`), which the option the
+operator chose miscounted as a fourth. **It is lifted in the following
+letter (AT-0 item 6), the letter of D9(a)**, each auxiliary admitted only
+once a cell shows its build and its maintenance cover every chain of a
+split relation.

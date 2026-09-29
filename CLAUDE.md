@@ -289,9 +289,10 @@ each spec's open-decisions section were plans against the engine the
 big-bang change replaces, and they went with `docs/inflight/` (at
 `1769487`, and in this file at `7f0193b`). **The open list for v3 is
 AR0's D1–D16**, in `instructions/v3.0.0/ar0-architecture-revision.md` §5,
-each with CLA's proposal beside it and each unratified but D15 and what
-`raft-marks-2026-09-28.md` marks (D1's levels, D8, D9(a) as a design, D3
-through AR0-5-R) — and three
+each with CLA's proposal beside it and each unratified but what AR0-M
+marks (D1(b), D2(a), D7, D8, D9(a), D11, D15; D7's last gate lifted in the
+following letter, AT-0 item 6), what `raft-marks-2026-09-28.md` re-marks
+(D1's levels, D8 as revised, D9(a) as a design) and D3 (AR0-5-R) — and three
 of them (D7, D8, D9) are marked `[quiet-wrong]` by AR0 itself, meaning a
 wrong choice converts a refusal into a wrong answer. `docs/inflight/known-gaps.md`
 tracks what is *missing*, which is a different list and does not decide
