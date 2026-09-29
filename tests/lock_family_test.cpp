@@ -1413,7 +1413,7 @@ TEST_F(LockDeadlockTest, WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe) {
 // A repeatable-read writer whose blocker is the row's own writer is still
 // refused rather than offered a wait (`NoteBlockingWriter`'s guard; its
 // cell, `ARepeatableReadWriterIsRefusedRatherThanOfferedANarrowerWait`,
-// went with AT-S6 and is one of the seven AY-Q9 holds), because a commit
+// above, ported by AY-Q9), because a commit
 // makes the row invisible to the waiter's view for the rest of its
 // transaction, so the wait could only ever pay off on the abort arm. These
 // two are the case that does not - a holder of a *unit* over the key that

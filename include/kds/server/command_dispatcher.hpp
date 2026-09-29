@@ -209,8 +209,10 @@ struct DispatchOutcome {
     std::uint16_t resource_detail = wire::kNoDetail;
 
     // A write this core is holding back because something it needs is held
-    // by a transaction that **has not decided yet** (AO-S3; R6-5 and D5 are
-    // where the narrower first version came from).
+    // by a transaction that **has not decided yet** - or since AY-S3 (B6)
+    // has decided and not yet released a unit whose wake this statement
+    // holds (AO-S3; R6-5 and D5 are where the narrower first version came
+    // from).
     //
     // Two things set it, and both mean the same: `CheckWriteConflictBlocking`
     // when the row's last writer is in flight, and the foreign-key forward
@@ -246,7 +248,7 @@ struct DispatchOutcome {
     // group, a dispatcher with no lock table, a holder only the header
     // names - and there the wait polls `IsInFlight`.
     struct WriteBlock {
-        std::uint64_t trx_id = 0;  // the undecided writer being waited for
+        std::uint64_t trx_id = 0;  // the holder being waited for
         std::uint64_t pk = 0;      // the row it holds
         txn::LockKey key{};        // the unit `slot` is registered on
         std::shared_ptr<txn::LockWaitSlot> slot;

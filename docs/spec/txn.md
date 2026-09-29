@@ -624,7 +624,8 @@ row's `X`, a row under a range fence - is registered on the unit that
 refused it (AY-S2). A holder that slot names is waited for **even once it
 has decided and not yet released** (AY-S3, B6): a decide retires before it
 releases, and a first encounter inside that window parks until the release
-rather than being refused. Where no slot comes back - a dispatcher with no lock
+rather than being refused (a repeatable-read waiter on the row's own writer
+still is, by the guard that refuses it in flight). Where no slot comes back - a dispatcher with no lock
 table, a holder only the header names, an assertion's group - it is woken
 by a poll rather than a kick (`docs/inflight/known-gaps.md`, Locks). A
 transaction holding rows may wait because a wait-for graph in

@@ -429,8 +429,10 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
         // so the edge outlives its statement. It cannot outlive its
         // *transaction*: `TransactionManager::Commit` and `Abort` clear it
         // with the borrows (AO-R6), and a stale edge matters only while the
-        // transaction it names is still in flight, since a waiter is only
-        // ever recorded against a holder `IsInFlight` admits. An RAII guard
+        // transaction it names is still in flight: a waiter is recorded
+        // against a holder `IsInFlight` admits, or since AY-S3 against a
+        // decided one its unit's wake names - which waits for nothing and
+        // whose release clears its edges, so it can close no cycle. An RAII guard
         // here would be the wrong shape: the table is instance-scoped and a
         // destructor running during teardown would reach it after its
         // owner is gone.
@@ -847,7 +849,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
         }
     } else if (blocking_wake_.has_value()) {
         // Handed to no wait - `NoteBlockingWriter` declined (a futile
-        // repeatable-read wait, a holder no longer in flight), `EndWrite`
+        // repeatable-read wait, a relation wait already carried), `EndWrite`
         // dropped the blocker, or a relation wait stands beside it - so
         // it leaves the table here.
         locks_->DropWake(blocking_wake_->key, blocking_wake_->slot);

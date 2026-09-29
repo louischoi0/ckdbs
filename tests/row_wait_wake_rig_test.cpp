@@ -208,43 +208,54 @@ sched::Coro RunLateRelease(LateRelease& r) {
     co_return Status::OK();
 }
 
+// `t` with row 1, and `holder`'s transaction open on core 0 holding the
+// relation `IX` and row 1's `X` in `late`'s own ledger - which the
+// transaction's `COMMIT` does not release, so the release comes when `late`
+// says. The stretched retire-to-release window both late-release cells use.
+void HoldRowLate(TwoCoreRig& rig, Session& holder, LateRelease& late) {
+    CommandDispatcher& d0 = rig.core(0).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
+    auto oid = rig.core(0).catalog().FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
+    ASSERT_NE(holder.transaction(), nullptr);
+    late.table = &rig.locks();
+    late.txn = holder.transaction()->id();
+    ASSERT_TRUE(rig.locks()
+                    .TryAcquire(late.txn, txn::LockKey::Relation(oid.value()),
+                                txn::LockMode::kIntentionExclusive, late.holdings)
+                    .value());
+    ASSERT_TRUE(rig.locks()
+                    .TryAcquire(late.txn, txn::LockKey::Tuple(oid.value(), 1),
+                                txn::LockMode::kExclusive, late.holdings)
+                    .value());
+}
+
 TEST(RowWaitWakeRigTest, AWaiterOnTheSlotSleepsThroughTheHoldersDecideUntilItsRelease) {
     // **The window the slot closes**: the holder is retired from the
     // in-flight table before its borrows are released (`manager.cpp`'s
     // commit), and a re-run inside that window meets the row's `X` still
-    // held by a transaction no longer in flight - which `NoteBlockingWriter`
-    // will not wait for, so it is refused. The window is microseconds in a
-    // real commit; here it is stretched by holding the holder's tuple `X`
-    // in a ledger its `COMMIT` does not release, and releasing it late.
+    // held by a transaction no longer in flight. The window is microseconds
+    // in a real commit; here it is stretched by holding the holder's tuple
+    // `X` in a ledger its `COMMIT` does not release, and releasing it late.
     //
     // **Mutation**: the wait's predicate polling `IsInFlight` although a
-    // slot is present - it settles at the commit, and the re-run is refused
-    // inside the stretched window (AX-S2b's surviving mutant (a)).
+    // slot is present (AX-S2b's mutant (a)). Until AY-S3 it settled at the
+    // commit and the re-run was refused inside the window. Since B6 the
+    // re-run waits again, on a predicate already true, so the mutant spins
+    // core 1 through the window and ends `UPDATED 1` all the same - which is
+    // why the cell asserts that core 1 **sleeps** there (re-measured, AY-S3).
     auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     CommandDispatcher& d1 = rig->core(1).dispatcher();
 
-    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
-    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
-    auto oid = rig->core(0).catalog().FindTableOidByName("t");
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
     Session holder;
-    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
-    ASSERT_NE(holder.transaction(), nullptr);
-
     LateRelease late;
-    late.table = &rig->locks();
-    late.txn = holder.transaction()->id();
-    ASSERT_TRUE(rig->locks()
-                    .TryAcquire(late.txn, txn::LockKey::Relation(oid.value()),
-                                txn::LockMode::kIntentionExclusive, late.holdings)
-                    .value());
-    ASSERT_TRUE(rig->locks()
-                    .TryAcquire(late.txn, txn::LockKey::Tuple(oid.value(), 1),
-                                txn::LockMode::kExclusive, late.holdings)
-                    .value());
+    HoldRowLate(*rig, holder, late);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
     Session waiter;
     Statement update{&waiter, "UPDATE t SET v = 2 WHERE id = 1"};
@@ -269,10 +280,16 @@ TEST(RowWaitWakeRigTest, AWaiterOnTheSlotSleepsThroughTheHoldersDecideUntilItsRe
     ASSERT_TRUE(StartsWith(commit.out.response, "COMMIT")) << commit.out.response;
     ASSERT_FALSE(rig->core(1).transactions().IsInFlight(late.txn));
     // Core 1 is run for 50 ms inside the window, well inside the 1 s net
-    // the statement's deadline is: a poll would settle now.
+    // the statement's deadline is: a poll would settle now. Kicked every
+    // millisecond, a reactor whose only task is parked blocks again after
+    // each kick; one whose task keeps re-running never blocks.
+    const std::uint64_t idle_before = rig->core(1).scheduler().idle_blocks();
     EXPECT_FALSE(KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); },
                            50ms))
         << "core 1's UPDATE ran between the decide and the release: " << update.out.response;
+    EXPECT_GE(rig->core(1).scheduler().idle_blocks(), idle_before + 2)
+        << "core 1 never slept inside the window, so its UPDATE was re-running rather than "
+           "parked on the slot";
 
     late.go.store(true, std::memory_order_release);
     ASSERT_TRUE(KickUntil(*rig, 0, [&] { return late.done.load(std::memory_order_acquire); }));
@@ -299,25 +316,10 @@ TEST(RowWaitWakeRigTest, AFirstEncounterInsideTheRetireToReleaseWindowWaitsForTh
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     CommandDispatcher& d1 = rig->core(1).dispatcher();
 
-    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
-    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
-    auto oid = rig->core(0).catalog().FindTableOidByName("t");
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
     Session holder;
-    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
-    ASSERT_NE(holder.transaction(), nullptr);
-
     LateRelease late;
-    late.table = &rig->locks();
-    late.txn = holder.transaction()->id();
-    ASSERT_TRUE(rig->locks()
-                    .TryAcquire(late.txn, txn::LockKey::Relation(oid.value()),
-                                txn::LockMode::kIntentionExclusive, late.holdings)
-                    .value());
-    ASSERT_TRUE(rig->locks()
-                    .TryAcquire(late.txn, txn::LockKey::Tuple(oid.value(), 1),
-                                txn::LockMode::kExclusive, late.holdings)
-                    .value());
+    HoldRowLate(*rig, holder, late);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
     // The holder decides first: out of the in-flight table, its `X` held.
     ASSERT_TRUE(StartsWith(d0.Dispatch("COMMIT", &holder).response, "COMMIT"));
@@ -331,10 +333,10 @@ TEST(RowWaitWakeRigTest, AFirstEncounterInsideTheRetireToReleaseWindowWaitsForTh
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunLateRelease(late)));
     rig->Start();
 
-    ASSERT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
-        << "core 1 never blocked";
     // Checked without an early return: on a failure the rig must still stop
     // before the statements on this frame go.
+    EXPECT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
+        << "core 1 never blocked";
     const bool answered_early = update.done.load(std::memory_order_acquire);
     EXPECT_FALSE(answered_early)
         << "the first encounter inside the window was answered rather than waited: "

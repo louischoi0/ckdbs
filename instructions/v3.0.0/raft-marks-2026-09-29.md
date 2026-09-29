@@ -183,3 +183,17 @@ operator.
 | **Mark** | **AY-S1 lands**: `d0e39e2` pushed to `main` (`69a1f76..d0e39e2`, the pre-push gate green). **AY-S2 starts**: the containment wake (AY-R2) |
 | **Does not settle** | AY-Q9, put in the same report and not answered, so the seven cells stay out; any stage past S2 |
 | **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |
+
+## 17. AY-S2 landed, AY-Q9 as proposed, and AY-S3 started
+
+Recorded on `worktree-ay-s3-b6-and-q9-cells` from `e187b2b`
+(`v2.7.0-494-ge187b2b`), after a session report on `ay-s2-containment-wake`
+at `e187b2b` put the push, AY-Q9 and AY-S3 to the operator.
+
+| | |
+|---|---|
+| **Word** | *"push"*; then, while it ran, *"follow CLA proposal for AY-Q9, AY-S3"* |
+| **Mark** | **AY-S2 lands**: `e187b2b` pushed to `main` (`1bf7c30..e187b2b`, the pre-push gate green). **AY-Q9 as proposed**: only the premises of the seven no-lock-table cells that still hold are ported, onto AY-S1's table fixture. **AY-S3 starts**: B6 (AY-R3) |
+| **Reading** | "AY-S3" read beside "follow CLA proposal" as the word to start the stage, whose ruling AY-R3 is CLA's proposal; both are built on one branch, the port as its own commit |
+| **Does not settle** | Any stage past S3, or any other §4 item |
+| **Recorded at** | `workorder-ay-following-letter.md` §4 (AY-Q9) and §6, `index.md`, `known-gaps.md` (Testing) |

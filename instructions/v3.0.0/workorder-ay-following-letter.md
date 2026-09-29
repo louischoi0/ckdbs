@@ -227,7 +227,7 @@ Each stage waits for the operator's word, as AT's did.
 | AY-Q6 | **A pre-AY snapshot** has no count | `[quiet-wrong]` either way it is read wrong | `reserved == 0` is pre-AY, read by today's rule - which keeps today's two under-counts for the first mount of an old binary's log; the alternative, not a base, fails closed and leaves every such assertion unenforcing until its next checkpoint |
 | AY-Q7 | **A snapshot run torn at scan end** is a base today | `[quiet-wrong]` today | not a base: the assertion comes up unenforcing - fails closed, a behaviour change |
 | AY-Q8 | **A parent `DELETE` meeting a child row whose writer holds no `S(P)`** - a child `DELETE`, or an `UPDATE` moving the fk column - is refused, not waited | user-visible | carry the child's transaction id out of the check and park mid-walk, inside AY-S5, its cell in AY-S4 |
-| AY-Q9 | **The seven uninventoried cells** ran with no lock table, an arm no production assembly builds | scope | port only the premises that still hold onto AY-S1's table fixture; two have table-backed successors already |
+| AY-Q9 | **The seven uninventoried cells** ran with no lock table, an arm no production assembly builds | scope | port only the premises that still hold onto AY-S1's table fixture; two have table-backed successors already. **Marked as proposed 2026-09-29** (`raft-marks-2026-09-29.md` §17); built with AY-S3, §6 |
 | AY-Q10 | **E10** - put back by the 2026-09-29 marks (§11) | spec | retire it: nothing splits since AT-S9 and a pre-AT split relation's schema cannot change |
 | AY-Q11 | **AR1's AQ/AR** - AT-0 item 6 lists them; AR1 §14 names them letters behind AP | scope | their own letters, after AP's order is settled |
 | AY-Q12 | **A zero-row `UPDATE`** takes the `S` at the hoist | cost | accept |
@@ -373,3 +373,81 @@ test turned a crash into the pre-AY-S2 refusal, and its comment now says so.
 `Start()`. That path is untouched here; the cell did not reproduce alone or
 in 40 parallel runs, and it is recorded in `known-gaps.md` (Testing). The
 next full run was 3080/3080. Overhead not measured.
+
+### AY-Q9 and AY-S3 — built 2026-09-29
+
+On `worktree-ay-s3-b6-and-q9-cells` from `e187b2b`, on the operator's
+*"follow CLA proposal for AY-Q9, AY-S3"* (`raft-marks-2026-09-29.md` §17).
+
+**AY-Q9, as proposed** (`0fdb0e5`). Four of the seven cells from the old base
+fixture have premises that still hold with a lock table, and are ported onto
+`LockDeadlockTest`:
+
+- `ARepeatableReadWriterIsRefusedRatherThanOfferedANarrowerWait`
+- `ARepeatableReadChildWaitsOutItsParentBecauseTheCheckViewIsFresh`
+- `AnAutocommitWriterWaitsOutALocalHolderAndThenSeesItsValue`
+- `AWriterWaitingOutAHolderThatRollsBackWritesOverThePriorVersion`
+
+The other three are not ported:
+
+- `ATransactionThatAlreadyWroteIsRefusedRatherThanWaited` has the same shape
+  as `WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe`.
+- The FK child's commit and rollback cells are covered by the two-core rig's
+  first two cells.
+
+One of AY-S1's six uncounted cells, `ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid`,
+had no surviving cell and is ported too.
+
+Mutants, each killed by its cell:
+
+- `NoteBlockingWriter`'s repeatable-read guard removed;
+- a level test added to `WaitForParentRowWriter`'s table path, which does not
+  pass through that guard (the old cell's `kFutile` mutant named the no-table
+  arm);
+- `NoteBlockingWriter` recording without `may_park_`.
+
+**AY-S3, B6** (AY-R3). Red first at `27ee3e3` against `0fdb0e5`, with the
+`LateRelease` cell reordered: the holder commits with its `X` still held
+before core 1's UPDATE first meets the row, and the UPDATE was answered
+`TXN_CONFLICT … held by transaction 4`. At `b201ed3`, `NoteBlockingWriter`'s
+`!IsInFlight` return is bypassed when `blocking_wake_` names the holder, and
+nothing else moves. The mutant "early return restored" is the code at
+`0fdb0e5`, where the cell was red.
+
+**The review** (`critics-developer`, one pass) found B6 correct:
+
+- a leftover wake is impossible, since `blocking_wake_` lives one statement;
+- a holder released before the ask means the ask was granted, with nothing
+  registered;
+- an edge to a decided holder closes no cycle;
+- the repeatable-read guard is unchanged beneath the bypass.
+
+It also found the Q9 decisions sound. **One real finding**: B6 made AX-S2b's
+mutant (a), a slot wait that polls `IsInFlight`, survive. That mutant's re-run
+inside the window used to be refused; it now waits again on a predicate already
+true, spins through the window, and still ends `UPDATED 1`. The sibling cell
+now asserts that core 1 sleeps inside the window, and the mutant is killed 3/3
+by both late-release cells.
+
+Also taken:
+
+- stale comments in the dispatcher, its header, the RR comment and
+  `txn.md` §5's new sentence, which now excepts the repeatable-read refusal;
+- the B6 cell's early `ASSERT` made an `EXPECT`;
+- the late-release setup folded into `HoldRowLate`;
+- the Testing entry in `known-gaps.md` deleted, since it held only closed
+  work.
+
+Rejected:
+
+- merging the commit and rollback cells: they keep their original names, one
+  per decide;
+- a fixture helper for the five-line row setup: the file's cells read
+  standalone.
+
+The sibling rig cells' early-`ASSERT` teardown hazard, which predates this
+stage, is left as it is.
+
+**Suite**: 3092/3092 in Debug at `b201ed3`, and again after the review, below.
+The rig file passed 20 repeats alone and 8 × 5 in parallel. Overhead not
+measured.

@@ -53,44 +53,6 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
-- **The lock family's lost cells are restored or accounted for; the
-  entry stays for its record of what was not ported and why.** On `ay-s1-lock-family-cells` from `69a1f76` (AY-S1),
-  the five fixtures AT-S6 (`ac4bd64`) deleted with
-  `tests/txn_2pc_protocol_test.cpp` - `LockDeadlockTest`, `MidWalkWaitTest`,
-  `LockCapTest`, `LockCapOfOneTest`, `FailedCommitTest`, 53 cells - are back
-  in `tests/lock_family_test.cpp` on a one-core base with the 2PC
-  participant's machinery left out, with a DELETE bind cell beside them and
-  a direct `NoteWaitFor` cell in `lock_table_test.cpp`. The compiler's bind
-  declaring nothing is killed by the join and subquery cells, and
-  `NoteWaitFor` never finding a cycle by six.
-
-  **The seven non-2PC cells of the base fixture itself** (old
-  `:3833-4156`, in no inventory before AY-S0) ran with **no lock table**, an
-  arm no production assembly builds. AY-Q9, marked as proposed, ported the
-  four whose premise holds with one onto `LockDeadlockTest` (on
-  `ay-s3-b6-and-q9-cells` from `e187b2b`): the repeatable-read refusal of a
-  row's own writer, the repeatable-read FK child that waits, and an
-  autocommit writer waiting out a holder's commit and rollback. Of the other
-  three, the no-detector guard is `WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe`'s
-  shape, and the FK child's two decides are pinned on the two-core rig
-  (`fk_cross_core_rig_test.cpp`'s first two cells). Two of the 53 still run
-  the no-table arm by `set_locks(nullptr)`, which is the arm they pin.
-
-  **Six more went uncounted**, the base fixture's cells that shipped or
-  prepared (old `:1596-1779` and `:4158`), named neither in AT-S6's twelve
-  nor in AY-S0's seven. Their holder was a 2PC participant; what they
-  pinned of the lock family outlives it. The fault net's refusal - retryable
-  `TxnConflict`, "fault net" on the line and on the carried status - was
-  pinned by no cell, and `LockDeadlockTest.ARowWaitAtTheFaultNetIsRefusedRetryablyAndNamesTheNet`
-  restores it (AY-S1's review). An undecided holder waited on, and a
-  waiting statement not poisoned, have the restored cells. The in-doubt
-  ceiling key's inertness went with the key.
-  `ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid`'s premise - the
-  synchronous path poisons an explicit transaction on a row conflict - had
-  no surviving cell (the only poison cells were a generic failed statement's
-  and the deadlock victim's), and it is ported with AY-Q9's four, killed by
-  `NoteBlockingWriter` recording without `may_park_`.
-
 - **An expeditor's `Start()` failed once under `-j8` and did not
   reproduce.** On `ay-s2-containment-wake` at `33b9433`, one full Debug
   suite failed `ExpeditorTest.AtOneCoreTheDispatcherHoldsTheInstancesLockTable`
