@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <optional>
 #include <string>
@@ -329,6 +330,11 @@ private:
     void DeliverTextLines(std::string_view reply, std::vector<std::byte>& out);
 
     Portal* FindPortal(const std::string& name);
+    // The refusal for a frame naming a portal this session does not hold:
+    // `kPortalIdleTimeout` for one the sweep released, `kUnknownPortal`
+    // otherwise. `frame` names the frame in the message.
+    FrameAction RefuseMissingPortal(std::string_view frame, const std::string& name,
+                                    std::vector<std::byte>& out);
     Statement* FindStatement(const std::string& name);
 
     sched::MonoTimeNs Now() const noexcept;
@@ -352,6 +358,19 @@ private:
     // stable order; the counts are small and bounded by the caps above.
     std::map<std::string, Statement> statements_;
     std::map<std::string, Portal> portals_;
+
+    // Portals the idle sweep released, oldest first, so a frame naming one
+    // is answered `kPortalIdleTimeout` (§7, §11) rather than
+    // `kUnknownPortal`: the client did hold it. An entry leaves when its
+    // name is bound again, when it is closed, or when its statement is
+    // closed - after which "bind it again" is advice the client cannot
+    // follow - and past `kMaxSessionPortals` the oldest is forgotten, so a
+    // client that never touches its expired names cannot grow this.
+    struct ExpiredPortal {
+        std::string name;
+        std::string statement;
+    };
+    std::deque<ExpiredPortal> expired_portals_;
 
     // The portal a `FrameAction{dispatch}` is running for. Empty when the
     // dispatch is transaction control, which has no portal and answers

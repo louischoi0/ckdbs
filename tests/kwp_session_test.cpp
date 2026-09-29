@@ -646,6 +646,58 @@ TEST_F(KwpSessionTest, APortalIdleBeyondTheTimeoutIsReleased) {
               static_cast<std::uint16_t>(wire::ResourceDetail::kPortalIdleTimeout));
 }
 
+TEST_F(KwpSessionTest, APortalWhoseStatementIsRunningIsNotIdle) {
+    // A statement parked on a wait (group commit, a lock) holds its
+    // portal's sink and needs the portal to answer at completion. The sweep
+    // must not release it however long the statement takes: that freed the
+    // sink under the parked statement and dropped a committed write's reply.
+    Handshake();
+    Feed(ClientFrameType::kParse, Parse("s", "SELECT id FROM t"));
+    Feed(ClientFrameType::kBind, Bind("p", "s"));
+
+    std::vector<std::byte> out;
+    FrameAction action = session_->OnFrame(
+        wire::DecodedFrame{static_cast<std::uint8_t>(ClientFrameType::kExecute), 0,
+                           Execute("p", 0)},
+        out);
+    ASSERT_TRUE(action.dispatch);
+    clock_.Advance(kPortalIdleTimeoutNs);
+    session_->ExpireIdlePortals();
+    EXPECT_EQ(session_->portal_count(), 1u) << "a running statement's portal is not idle";
+
+    session_->session().set_result_sink(action.sink);
+    DispatchOutcome outcome = dispatcher_->Dispatch(action.sql, &session_->session());
+    session_->session().set_result_sink(nullptr);
+    session_->OnStatementComplete(outcome, out);
+    auto frames = Decode(out);
+    ASSERT_FALSE(frames.empty());
+    EXPECT_EQ(frames.back().type, static_cast<std::uint8_t>(ServerFrameType::kComplete))
+        << "the statement's reply reaches the client";
+
+    // Its idleness counts from the completion, not from the C_EXECUTE.
+    session_->ExpireIdlePortals();
+    EXPECT_EQ(session_->portal_count(), 1u);
+}
+
+TEST_F(KwpSessionTest, ClosingItsStatementForgetsAnExpiredPortal) {
+    // "Bind it again" is advice a client cannot follow once the statement is
+    // gone, so the name answers as unknown, as it would had it not expired.
+    Handshake();
+    Feed(ClientFrameType::kParse, Parse("s", "SELECT id FROM t"));
+    Feed(ClientFrameType::kBind, Bind("p", "s"));
+    clock_.Advance(kPortalIdleTimeoutNs);
+    session_->ExpireIdlePortals();
+    Feed(ClientFrameType::kClose, Handle(1, "s"));
+
+    auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_EQ(frames.size(), 1u);
+    auto err = wire::DecodeError(frames[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kProtocol);
+    EXPECT_EQ(err.value().detail_code(),
+              static_cast<std::uint16_t>(wire::ProtocolDetail::kUnknownPortal));
+}
+
 TEST_F(KwpSessionTest, AnExpiredPortalNameIsForgottenOnceItIsBoundOrClosedAgain) {
     // The timeout answer is about a portal the client held; a name bound
     // afresh is a new portal, and a closed one is one the client let go.

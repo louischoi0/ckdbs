@@ -305,7 +305,9 @@ void TcpServer::AdoptConnection(int client_fd) {
         config.server_info = server_info_;
         config.tls_active = conn.channel != nullptr;
         config.capabilities = wire::kServerCapabilities;
-        conn.kwp.emplace(conn.session, config, durability_);
+        // The reactor's clock, which is what the idle sweep above runs on:
+        // a session built without one stamps no portal and expires none.
+        conn.kwp.emplace(conn.session, config, durability_, &scheduler_->clock());
         conn.kwp->set_identity(NextIdentity(), NextIdentity());
         // The gate moves into the protocol session: a KWP connection's
         // exchange runs in `C_AUTH` frames, not in lines, and `auth.hpp`'s

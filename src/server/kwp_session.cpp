@@ -560,6 +560,7 @@ FrameAction KwpSession::OnBind(std::span<const std::byte> payload, std::vector<s
     portal.sql = std::move(bound.value());
     portal.idle_since = Now();
     portals_[*portal_name] = std::move(portal);
+    std::erase_if(expired_portals_, [&](const ExpiredPortal& e) { return e.name == *portal_name; });
 
     Send(out, ServerFrameType::kBindOk, 0, {});
     return FrameAction{};
@@ -593,9 +594,7 @@ FrameAction KwpSession::OnDescribe(std::span<const std::byte> payload,
     }
     Portal* portal = FindPortal(*name);
     if (portal == nullptr) {
-        return Refuse(out, Protocol(ProtocolDetail::kUnknownPortal,
-                                    "C_DESCRIBE names portal '" + *name +
-                                        "', which this session does not hold"));
+        return RefuseMissingPortal("C_DESCRIBE", *name, out);
     }
     if (!portal->executed || !portal->sink.described()) {
         return Refuse(out, wire::ErrorFromStatus(Status::Unsupported(
@@ -620,9 +619,7 @@ FrameAction KwpSession::OnExecute(std::span<const std::byte> payload,
     }
     Portal* portal = FindPortal(*name);
     if (portal == nullptr) {
-        return Refuse(out, Protocol(ProtocolDetail::kUnknownPortal,
-                                    "C_EXECUTE names portal '" + *name +
-                                        "', which this session does not hold"));
+        return RefuseMissingPortal("C_EXECUTE", *name, out);
     }
     if (portal->executed) {
         // Re-executing a portal would re-run its statement, which for a
@@ -775,9 +772,7 @@ FrameAction KwpSession::OnContinue(std::span<const std::byte> payload,
     }
     Portal* portal = FindPortal(*name);
     if (portal == nullptr) {
-        return Refuse(out, Protocol(ProtocolDetail::kUnknownPortal,
-                                    "C_CONTINUE names portal '" + *name +
-                                        "', which this session does not hold"));
+        return RefuseMissingPortal("C_CONTINUE", *name, out);
     }
     if (!portal->executed) {
         return Refuse(out, Protocol(ProtocolDetail::kUnexpectedFrame,
@@ -920,6 +915,7 @@ FrameAction KwpSession::OnClose(std::span<const std::byte> payload, std::vector<
     }
     if (*kind == kKindPortal) {
         portals_.erase(*name);
+        std::erase_if(expired_portals_, [&](const ExpiredPortal& e) { return e.name == *name; });
     } else if (*kind == kKindStatement) {
         statements_.erase(*name);
         // Its portals go with it: a portal is a binding *of* a statement,
@@ -927,6 +923,8 @@ FrameAction KwpSession::OnClose(std::span<const std::byte> payload, std::vector<
         for (auto it = portals_.begin(); it != portals_.end();) {
             it = it->second.statement == *name ? portals_.erase(it) : std::next(it);
         }
+        std::erase_if(expired_portals_,
+                      [&](const ExpiredPortal& e) { return e.statement == *name; });
     } else {
         return Refuse(out, Protocol(ProtocolDetail::kMalformedPayload,
                                     "C_CLOSE: kind must be 1 (statement) or 2 (portal)"));
@@ -994,10 +992,37 @@ void KwpSession::ExpireIdlePortals() {
     if (clock_ == nullptr) return;
     const sched::MonoTimeNs now = clock_->Now();
     for (auto it = portals_.begin(); it != portals_.end();) {
-        const bool stale = now - it->second.idle_since >= kPortalIdleTimeoutNs;
-        it = stale ? portals_.erase(it) : std::next(it);
+        // A portal whose statement is in flight is not idle: the running
+        // statement holds `&sink` (the session's result sink), and its
+        // completion needs the portal to answer. Erasing it here freed the
+        // sink under a statement parked on a wait and dropped its reply.
+        if (now - it->second.idle_since < kPortalIdleTimeoutNs || it->first == running_portal_) {
+            ++it;
+            continue;
+        }
+        if (expired_portals_.size() >= kMaxSessionPortals) expired_portals_.pop_front();
+        expired_portals_.push_back({it->first, it->second.statement});
+        it = portals_.erase(it);
     }
 }
+
+FrameAction KwpSession::RefuseMissingPortal(std::string_view frame, const std::string& name,
+                                            std::vector<std::byte>& out) {
+    if (std::any_of(expired_portals_.begin(), expired_portals_.end(),
+                    [&](const ExpiredPortal& e) { return e.name == name; })) {
+        return Refuse(out, wire::ErrorFromStatus(
+                               Status::ResourceExhausted(
+                                   std::string(frame) + " names portal '" + name +
+                                   "', released after " +
+                                   std::to_string(kPortalIdleTimeoutNs / 1'000'000'000) +
+                                   " s idle; bind it again"),
+                               static_cast<std::uint16_t>(ResourceDetail::kPortalIdleTimeout)));
+    }
+    return Refuse(out, Protocol(ProtocolDetail::kUnknownPortal,
+                                std::string(frame) + " names portal '" + name +
+                                    "', which this session does not hold"));
+}
+
 
 KwpSession::Portal* KwpSession::FindPortal(const std::string& name) {
     auto it = portals_.find(name);

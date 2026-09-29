@@ -20,7 +20,8 @@ built that bound the target. One is a defect against `protocol.md` §10 - a
 served session never expires an idle portal - and is recorded as
 `docs/inflight/bugs/a-served-kwp-session-never-expires-an-idle-portal.md`;
 the rest are the tree as built, stated in its source, and none is recorded
-there.
+there. *Marked 2026-09-29: that defect is fixed on `fix-portal-idle-clock`
+and its bug file removed; §2's portal-sweep bullet describes `b54a769`.*
 
 ---
 
