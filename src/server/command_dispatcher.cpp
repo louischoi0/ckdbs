@@ -8096,7 +8096,18 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     // slot (`BorrowChain`); a second wait on the same statement would be
     // one the outcome cannot carry.
     if (lock_wait_.has_value()) return;
-    if (!txn_->IsInFlight(trx)) return;
+    // **A holder the refusing unit's wake names is waited for even when it
+    // is no longer in flight** (B6, AY-S3; `raft-marks-2026-09-29.md` §13).
+    // A decide retires the transaction before it releases its borrows, so a
+    // first encounter inside that window meets a unit still held by a
+    // transaction `IsInFlight` calls decided. The refused ask has registered
+    // its wake on that unit (`BorrowChain`), and the release flips it -
+    // already, or imminently - so the park ends at the release rather than
+    // the statement being refused for a wait that was about to end. A holder
+    // with no wake behind it keeps the poll's test: nothing would flip a
+    // slot for it, and a decided one has nothing left to wait for.
+    const bool woken_at_release = blocking_wake_.has_value() && blocking_wake_->holder == trx;
+    if (!woken_at_release && !txn_->IsInFlight(trx)) return;
     // The two guards the declaration argues for. A null `waiter` is
     // autocommit before its transaction is opened: it holds nothing and
     // will mint a fresh view, so both tests pass vacuously.

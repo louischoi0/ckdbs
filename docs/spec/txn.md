@@ -621,7 +621,10 @@ is on that slot, flipped at the holder's release and kicked across
 (AX-S2b). A refusal on the ask's own key is registered there, and one the
 lock table's verify finds in another unit - a declared range met by a
 row's `X`, a row under a range fence - is registered on the unit that
-refused it (AY-S2). Where no slot comes back - a dispatcher with no lock
+refused it (AY-S2). A holder that slot names is waited for **even once it
+has decided and not yet released** (AY-S3, B6): a decide retires before it
+releases, and a first encounter inside that window parks until the release
+rather than being refused. Where no slot comes back - a dispatcher with no lock
 table, a holder only the header names, an assertion's group - it is woken
 by a poll rather than a kick (`docs/inflight/known-gaps.md`, Locks). A
 transaction holding rows may wait because a wait-for graph in

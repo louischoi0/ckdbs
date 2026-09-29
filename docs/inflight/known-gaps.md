@@ -579,9 +579,12 @@ there is no second core's registration to be answered by.
 
 ## Locks
 
-- **A write refused on its own tuple waits on that unit's slot since
-  AX-S2b; a write refused any other way still waits on a poll, and one that
-  first meets a holder between its decide and its release is refused.**
+- **A write refused by a lock unit waits on that unit's slot, and a wake
+  is not a grant.** A refusal on the ask's own unit has waited on its slot
+  since AX-S2b, one found in another unit since AY-S2, and a first encounter
+  with a holder between its decide and its release since AY-S3. What still
+  polls is a refusal with no slot behind it - no lock table, a holder only
+  the header names, an assertion's group.
   Found by AT-S13's review, measured on `at-s13-prices` at `896af54`
   (2026-09-26) as a *refusal*: `CommandDispatcher::NoteBlockingWriter` parks
   only when `txn_->IsInFlight(trx)`, and until AX-S1 that walked **this
@@ -595,18 +598,14 @@ there is no second core's registration to be answered by.
   a wake, so that wait is on the unit's slot - flipped at the holder's
   release, after its retire, with a kick to the waiter's core - and its
   re-run comes after the release (`row_wait_wake_rig_test.cpp`). Verified by
-  reading on `ax-s2b-row-wait-wake` at `043aee7`, the stage's review. What
-  stays open, all retryable, never a wrong answer:
+  reading on `ax-s2b-row-wait-wake` at `043aee7`, the stage's review.
+  **B6 is closed at AY-S3** (on `ay-s3-b6-and-q9-cells` from `e187b2b`,
+  `raft-marks-2026-09-29.md` §13): `NoteBlockingWriter` records the block
+  whenever the refusing unit's wake names the holder, in flight or not, with
+  the repeatable-read guard unchanged beneath it
+  (`row_wait_wake_rig_test.cpp`'s first-encounter cell). What stays open,
+  retryable, never a wrong answer:
 
-  - **The first encounter inside the retire-to-release window is
-    refused.** A holder that has left the in-flight table and not yet
-    released - or released just after the refusal - is "not in flight" to
-    `NoteBlockingWriter`, which declines, so the statement is refused where
-    a wait on the slot it registered would end at once. Closing it is a
-    behaviour change - record the block whenever the refusing unit's wake
-    names the holder, the repeatable-read guard ahead of it - taken on the
-    operator's word of 2026-09-29
-    (`instructions/v3.0.0/raft-marks-2026-09-29.md` §13).
   - **A wake is not a grant.** `TryAcquire` does not queue, so a third
     writer can take the unit between the flip and the re-run; the re-run
     parks again under the same deadline, and under sustained contention
@@ -617,9 +616,8 @@ there is no second core's registration to be answered by.
   three (`instructions/v3.0.0/workorder-ax-inflight-publication.md` §7
   items 1-3): the cross-unit refusal (item 2), which handed back no slot,
   **is closed by AY-S2** (on `ay-s2-containment-wake` at `7d90ca7`, the
-  containment wake; `txn.md` §5) - the first
-  encounter (item 1) is **taken as a wait** (§13), placed in AY by CLA
-  rather than by the mark, and a wake not being a grant (item 3) proposes
+  containment wake; `txn.md` §5), the first encounter (item 1) **by
+  AY-S3** as a wait (§13), and a wake not being a grant (item 3) proposes
   no action. Spec: `docs/spec/txn.md` §5.
 
 - **The relation `IS` covers a statement's outermost walk and nothing else,
