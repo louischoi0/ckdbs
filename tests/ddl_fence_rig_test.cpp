@@ -4,14 +4,14 @@
 // AT-S5e; `workorder-av-two-core-rig.md`).
 //
 // **Why these cells have to be on the rig.** A writer that meets another
-// transaction's relation `X` would, by the row-level wait, poll
-// `TransactionManager::IsInFlight` - one core's live set - and read a DDL
-// running on the other core as "not in flight": the write would be refused
-// rather than held, and before AT-S5e it was worse, admitted into an index
-// being built (D6) or past a cabin being built (the unfenced-build bug).
-// What a writer waits on is the table's own slot, flipped by the release
-// from whichever core releases, and only two reactors on two threads
-// exercise that.
+// transaction's relation `X` would, by the row-level wait, have polled
+// `TransactionManager::IsInFlight` - one core's live set until AX-S1 - and
+// read a DDL running on the other core as "not in flight": the write would
+// be refused rather than held, and before AT-S5e it was worse, admitted into
+// an index being built (D6) or past a cabin being built (the unfenced-build
+// bug). What a writer waits on is the table's own slot, flipped by the
+// release from whichever core releases and kicked across, and only two
+// reactors on two threads exercise that.
 //
 // The three cells:
 //
@@ -275,20 +275,19 @@ std::string RunOn(TwoCoreRig& rig, std::uint32_t core, Session* session, const s
 TEST(DdlFenceRigTest, ADropIndexRolledBackOnCoreZeroKeepsTheRowAPeerWroteWhileItWasOpen) {
     // **The AT-S5e review's C1.** A `DROP INDEX` inside a transaction on
     // core 0 delete-marks the index; an `INSERT` on core 1 resolves the
-    // relation while the drop is open, and core 1 cannot see core 0's
-    // deleter in flight (DT9's predicate is one core's), so its memo leaves
-    // the index out. The insert parks on the relation `X`. `ROLLBACK`
-    // restores the index - and the insert, woken, must re-resolve before it
-    // writes, or its row is missing from the index the rollback kept. What
-    // makes it re-resolve is the decide moving the schema word **before**
-    // it releases the borrows (`Transaction::NoteWroteCatalog`); the DDL
-    // path's own bump comes after the release, in a race with the woken
-    // insert's re-run - so the cell runs the sequence for several rounds,
-    // and every round's row must be in the index.
+    // relation while the drop is open and parks on the relation `X`.
+    // `ROLLBACK` restores the index, and every round's row must be in it.
     //
-    // **Mutation**, measured: the pre-release word move removed from
-    // `TransactionManager::Abort` - killed 5 runs in 5 at this round count,
-    // where one round killed it once in three.
+    // **Written for a core-local DT9, and weaker since AX-S2.** Core 1
+    // could not see core 0's deleter in flight, so its memo left the index
+    // out and only the rollback moving the schema word **before** it
+    // released the borrows (`Transaction::NoteWroteCatalog`) made the woken
+    // insert re-resolve; the rounds were for the race with the DDL path's
+    // own bump after the release. That mutation - the pre-release move
+    // removed from `TransactionManager::Abort` - was killed 5 in 5. Since
+    // AX-S2 core 1 resolves the index while the drop is open, and the same
+    // mutation survives 5 in 5 (AX-S3; `known-gaps.md`, Testing): the cell
+    // now pins the outcome, not the move.
     constexpr int kRounds = 8;
     auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
     ASSERT_TRUE(opened.ok()) << opened.status().message();

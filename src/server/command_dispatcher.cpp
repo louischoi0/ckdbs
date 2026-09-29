@@ -558,12 +558,13 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // holds everything that transaction has written, and `EndWrite`
     // deliberately withheld the poison so this wait could happen at all.
     //
-    // **What is waited on is the slot, not the holder's decide.** Every
-    // other wait in this file polls `IsInFlight`, which is this core's live
-    // set; the holder here is a read borrow that may be running on any
-    // core, and on a peer that predicate is false from the first poll - a
-    // re-run per reactor iteration for the length of the reader's
-    // statement. The slot is flipped by the release itself, from whichever
+    // **What is waited on is the slot, not the holder's decide.** The
+    // holder here may be a read borrow, which is no transaction: no
+    // in-flight table holds its id, so `IsInFlight` is false from the
+    // first poll - a re-run per reactor iteration for the length of the
+    // reader's statement. Where it is a transaction the slot is still the
+    // better wait: it flips at the release, where a poll would re-run in
+    // the gap between the holder's retire and its release. The slot is flipped by the release itself, from whichever
     // core releases, and the kick that follows it is AU-S2's.
     // `locks_` and the slot are non-null by construction: this field is
     // set only where a `TryAcquire` asked for a wake and got one, which
@@ -2243,17 +2244,16 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // for an index whose drop had not committed - and DT9 closed it
             // at the read: an unfiltered catalog read counts a delete-mark
             // only once its deleter is no longer in flight (`catalog.cpp`'s
-            // `ScanAll`). That predicate is one core's (`IsInFlight`), so the
+            // `ScanAll`). That predicate was one core's until AX-S1, so the
             // claim was core-0-scoped and a drop on a peer-owned relation was
-            // refused inside a transaction (PW1c-6b-4). A writer on another
-            // core still asks it at its resolution and may leave the index
-            // out; what makes that harmless is the relation `X` above - the
-            // writer writes nothing until the drop decides - and the decide
-            // moving the schema word before it releases
-            // (`Transaction::NoteWroteCatalog`), so the writer re-resolves.
-            // Without the second a rollback's woken writer kept its memo and
-            // wrote no entry into the index it restored (the AT-S5e review's
-            // C1).
+            // refused inside a transaction (PW1c-6b-4). A writer on any core
+            // resolves the index while the drop is open since AX-S2; the
+            // relation `X` above keeps it from writing until the drop
+            // decides, and the decide moving the schema word before it
+            // releases (`Transaction::NoteWroteCatalog`) makes it re-resolve
+            // against whichever way the drop went. While the predicate was
+            // core-local a rollback's woken writer without that move kept a
+            // memo that had left the index out (the AT-S5e review's C1).
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
             auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -3409,14 +3409,15 @@ void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
                                                catalog::Oid parent_rel, std::uint64_t pk,
                                                std::uint64_t holder) {
     // **The wait is on the table's slot, because the holder may be on any
-    // core** (AO-S6e-b's finding, reached here by AT-S5f). Every other
-    // row-level wait in this file is recorded through `NoteBlockingWriter`,
-    // whose predicate is `TransactionManager::IsInFlight` - *this core's*
-    // live set, which answers "not in flight" for a transaction very much
-    // in flight on a peer. While a foreign parent was deferred to its
-    // owner, that was sound: the park happened on the owner's core, where
-    // the holder was local (AO-S5(b)). With the descent run here it is not,
-    // and a wait built on it would be a spin that ends at the fault net.
+    // core** (AO-S6e-b's finding, reached here by AT-S5f). Until AX-S1
+    // `NoteBlockingWriter`'s predicate, `TransactionManager::IsInFlight`,
+    // was *this core's* live set and answered "not in flight" for a
+    // transaction very much in flight on a peer - sound while a foreign
+    // parent was deferred to its owner, whose core held it (AO-S5(b)), and
+    // a spin to the fault net once the descent ran here. It is the
+    // instance's since, and the slot is still the better wait: the release
+    // flips it and kicks this core, which nothing does for a poll (AX-S2b
+    // gave the row wait the same shape).
     //
     // So the parent row's own borrow is asked for instead. Its writer holds
     // the tuple `X` (AO-S6a), the table is the instance's (AO-S5(a)), and
@@ -3442,10 +3443,9 @@ void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
     if (locks_ == nullptr || waiter == nullptr) {
         // No table to ask - a dispatcher built without one, which is the
         // configuration `CheckWriteConflictBlocking` keeps its own union
-        // for - or no transaction to ask under. A peer's holder needs the
-        // table to be reached at all, so where there is none the holder is
-        // this core's and the per-core predicate is the right one: AO-S3's
-        // wait, unchanged.
+        // for - or no transaction to ask under. `NoteBlockingWriter`'s
+        // `IsInFlight` poll reaches a holder on any core since AX-S1, woken
+        // by a poll rather than a kick: AO-S3's wait, unchanged.
         NoteBlockingWriter(waiter, holder, pk, RepeatableReadWait::kCapable);
         return;
     }
@@ -8216,12 +8216,12 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     //
     // **And the one ask here a DDL refuses** (AT-S5e). A relation `X` -
     // `DROP TABLE`, `CREATE`/`DROP INDEX`, a `CREATE ASSERTION`'s build -
-    // refuses this `IX`, and that holder may be on any core: the row-level
-    // wait (`NoteBlockingWriter`) polls `IsInFlight`, which is this core's
-    // live set, so it would answer "not in flight" for a DDL on a peer and
-    // the write would be refused rather than held. A refusal here parks on
-    // the table's own slot instead, flipped by the release from whichever
-    // core releases - `BorrowRelationForDdl`'s wait, from the other side.
+    // refuses this `IX`, and that holder may be on any core. A refusal
+    // here parks on the table's own slot, flipped by the release from
+    // whichever core releases and followed by a kick -
+    // `BorrowRelationForDdl`'s wait, from the other side. (The row-level
+    // wait's `IsInFlight` read a DDL on a peer as decided until AX-S1, so
+    // that wait would have refused the write rather than held it.)
     const txn::LockKey relation = txn::LockKey::Relation(unit.rel_oid);
     const bool first_intention = !holdings.Holds(relation);
     std::shared_ptr<txn::LockWaitSlot> wake;

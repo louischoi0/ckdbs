@@ -210,9 +210,10 @@ runs again whole.
   the ask; the borrow is released at once and the statement takes the busy
   verdict's retryable refusal, which is what a decided holder has always
   produced.
-- **Without a lock table** — a dispatcher built without one — the holder
-  can only be this core's, and `NoteBlockingWriter`'s per-core predicate
-  is the honest wait (AO-S3's, unchanged).
+- **Without a lock table** — a dispatcher built without one — there is no
+  slot to park on, and `NoteBlockingWriter`'s `IsInFlight` poll (the
+  instance's since AX-S1) is the honest wait, woken by a poll rather than a
+  kick (AO-S3's, unchanged).
 - **At every isolation level**, because the check view is minted at the
   check and not at `BEGIN` (`txn.md` §5): a commit makes the parent
   visible to the re-run and an abort makes the violation terminal, so

@@ -1168,9 +1168,10 @@ TEST(LockTableTest, AnIntentionModeOnAnIntervalUnitNeitherFencesNorIsFenced) {
 
 TEST(LockTableTest, AWakeRegistrationIsFlippedByTheReleaseAndTakesNoQueuePosition) {
     // AO-S6e-b's `TryAcquire(..., wake)`. What a **statement** needs when
-    // the holder is on another core: `IsInFlight` is per-core and would
-    // answer "not in flight" for a live reader on a peer, so the wait has
-    // to be on the unit's own slot. What it must *not* take is a queue
+    // the holder is on another core: the release flips the slot and kicks
+    // the asker's core, and a live reader is no transaction `IsInFlight`
+    // could answer for, so the wait has to be on the unit's own slot. What
+    // it must *not* take is a queue
     // position - the asker's transaction is unwound between the ask and the
     // park, and `Release` withdraws exactly what `waiting_` names.
     auto table = MakeTable();

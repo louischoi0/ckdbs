@@ -2155,9 +2155,10 @@ TEST_F(CoreRuntimeTest, APeerMaintainsInsertsIntoAnIndexCore0BuiltAndReadsAnswer
 
 TEST_F(CoreRuntimeTest, ADropIndexOnAPeerRelationIsAdmittedInsideATransactionAndRollsBackWhole) {
     // **AT-S5e.** This was refused inside a transaction (PW1c-6b-4): DT9's
-    // "is the deleter in flight" predicate is core-local, so the owner would
-    // have stopped maintaining the index before `COMMIT` and a `ROLLBACK`
-    // would have restored it missing the owner's meanwhile-writes. The drop
+    // "is the deleter in flight" predicate was core-local (until AX-S2), so
+    // the owner would have stopped maintaining the index before `COMMIT` and
+    // a `ROLLBACK` would have restored it missing the owner's
+    // meanwhile-writes. The drop
     // takes the relation `X` now, so no writer of the relation runs on any
     // core while it is undecided and the predicate is never asked about
     // one: admitted, and a `ROLLBACK` restores the index whole.

@@ -53,8 +53,9 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
-- **The lock family's statement-level cells went with the 2PC suite, and
-  nothing pins the bind's `IS` or the deadlock detector.** Verified at
+- **The lock family's statement-level cells went with the 2PC suite;
+  nothing pins the bind's `IS`, and one cross-core cell pins the deadlock
+  detector (since AX-S3; below).** Verified at
   `3de6d62` on `at-s19-ar0-5-revised` (2026-09-28), by AT-S19's survey
   (`ar0-5-amendment-uniformity.md` AR0-5-R, R8.3). AT-S6 (`ac4bd64`)
   deleted `tests/txn_2pc_protocol_test.cpp` whole with the 2PC service; the
@@ -83,6 +84,34 @@ statement about an engine that no longer exists; re-verify or strike it.
   base a restoration has to rebuild. Owner: the
   operator's decision whether a stage restores them before AT's close
   (`workorder-at-close-ar0-5-left-open.md` AT-S20's carry list otherwise).
+
+  **The detector is pinned again, by one cell, since AX-S3.** On
+  `ax-s3-inflight-prose` from `b54a769`, `NoteWaitFor` never finding a
+  cycle survived AX-S2b's cross-core cycle cell
+  (`row_wait_wake_rig_test.cpp`), because it asserted the word "deadlock"
+  and the fault net's refusal names it too; asserting the victim's own
+  message kills it 3/3. The bind's declarations and the rest of the list
+  above are still pinned by nothing.
+
+- **A rollback's schema-word move has no cell that kills its removal since
+  AX-S2.** Verified on `ax-s3-inflight-prose` from `b54a769` (AX-S3):
+  `MoveSchemaWordIfCatalogWriter` removed from `TransactionManager::Abort`
+  survives `DdlFenceRigTest.ADropIndexRolledBackOnCoreZeroKeepsTheRowAPeerWroteWhileItWasOpen`
+  5/5 and the full Debug suite, 3015/3015 (one pre-existing disabled cell). The cell
+  was written for a peer whose memo left out an index an open `DROP INDEX`
+  had marked - DT9's predicate was core-local - so after the rollback only
+  a re-resolution put the index back into its writes. Since AX-S2 the peer
+  resolves the index while the drop is open, and the cell passes without
+  the move. **The move was nearly inert already**: the rolling-back core
+  moves the word again at `EndDdlScope` (`InvalidateAfterCompensation`),
+  synchronously after `Abort`, so this move only orders the bump before the
+  release - the window the cell's rounds raced. By reading, not by a cell:
+  the one shape it still orders is a rolled-back `CREATE INDEX` whose
+  index a peer's memo holds (§5b's asymmetry), where a re-run inside that
+  window maintains the orphaned tree once; a rolled-back `DROP TABLE`
+  bumps the word at its own write. No shape found loses an entry, so the
+  move stays. Owner: none named; `txn.md` §4.1 and `ddl-transactional.md`
+  §5e.
 
 - **The assertion scan's floor is a fixed defect with no regression test
   under it.** Verified at AM-S0(a) by reverting the fix: every cell in

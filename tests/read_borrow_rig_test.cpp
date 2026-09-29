@@ -2,13 +2,15 @@
 // the two-core rig (`instructions/v3.0.0/workorder-ao-m2-lock-family.md`
 // AO-S6, the row's fourth cell; `workorder-av-two-core-rig.md`).
 //
-// **Why this cell has to be on the rig and not beside the others.** Every
-// other wait in the dispatcher polls `TransactionManager::IsInFlight`,
-// which walks *this core's* live set (`manager.hpp`) - so a holder running
-// on another core reads as "not in flight" from the first poll, and a wait
-// built on that predicate is a re-run per reactor iteration rather than a
-// wait. The read borrow is exactly such a holder: a read and a DDL each run
-// where their session is (AT-S6, AT-S5), so they are on different cores
+// **Why this cell has to be on the rig and not beside the others.** When
+// it was written every other wait in the dispatcher polled
+// `TransactionManager::IsInFlight`, which walked *this core's* live set
+// until AX-S1 - so a holder running on another core read as "not in
+// flight" from the first poll, and a wait built on that predicate was a
+// re-run per reactor iteration rather than a wait. A read borrow still is
+// such a holder, on any core - its id is no transaction's, and no
+// in-flight table holds it: a read and a DDL each run where their session
+// is (AT-S6, AT-S5), so they are on different cores
 // whenever their sessions are - when this cell was written, reads ran on
 // the relation's owner and DDL on core 0 (CC13). What the DDL waits on
 // instead is the table's own slot, flipped by the release from whichever

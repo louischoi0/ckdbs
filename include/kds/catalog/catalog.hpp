@@ -19,8 +19,9 @@
 #include "kds/txn/read_view.hpp"
 
 namespace kds::txn {
-// Forward-declared rather than included: the catalog asks it one question
-// (`IsInFlight`), and `txn/manager.hpp` drags the WAL manager and the
+// Forward-declared rather than included: the catalog asks it two questions
+// (`IsInFlight`, `NoneInFlightBelow`), and `txn/manager.hpp` drags the WAL
+// manager and the
 // checkpointer in behind it, into every translation unit that names a
 // relation.
 class TransactionManager;

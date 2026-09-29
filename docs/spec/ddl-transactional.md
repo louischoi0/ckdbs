@@ -236,9 +236,9 @@ AX-S1) — one bit, where a minted `ReadView` would be a view.
 **"No longer in flight" is safe to read as "committed"** for exactly one
 reason, and it is an ordering fact rather than a definition:
 `TransactionManager::Abort` compensates the entire trail *before* it
-clears `active_`. A mark whose deleter has gone inactive is a mark no
-rollback is coming for. If that order is ever inverted, this rule breaks
-silently.
+retires the id from its core's in-flight table (`txn.md` §4.1). A mark
+whose deleter no table holds is a mark no rollback is coming for. If that
+order is ever inverted, this rule breaks silently.
 
 **The catalog asks only when it has a manager to ask.** `Catalog`
 carries a `SetTransactionManager` handle, armed by the
@@ -393,15 +393,18 @@ while the DDL is undecided parks on the slot and re-runs after the decide.
 **Two things make the re-run see what the decide did.** The decide moves
 the schema word before its borrows are released
 (`Transaction::NoteWroteCatalog`), so the re-run's task boundary drops the
-memo it resolved while the DDL was open - which matters for a rolled-back
-`DROP INDEX`, whose index another core's memo had left out while DT9's
-predicate was core-local (§5b, until AX-S2). And a writer's *first* intention checks that the
+memo it resolved while the DDL was open. That mattered most for a
+rolled-back `DROP INDEX`, whose index another core's memo had left out
+while DT9's predicate was core-local (§5b, until AX-S2); since then that
+memo keeps the index, and no cell now shows the rollback's move to be
+load-bearing (`known-gaps.md`, Testing). And a writer's *first* intention checks that the
 word has not moved since its own boundary (`Catalog::MemoIsCurrent`): the
 intention comes after the resolution, and a DDL could have taken the
 relation, published and released in between; moved, the statement runs
 again before it writes anything. A writer on another core waits the same way: the slot is flipped by
-the release from whichever core releases, where the row-level wait polls
-one core's `IsInFlight` and would read a DDL on another core as finished.
+the release from whichever core releases, and the kick that follows wakes
+the waiter's core, which a poll of `IsInFlight` - the instance's since
+AX-S1 - would not.
 
 **Atomic and isolated, on every core.** A `CREATE INDEX` backfills with no
 concurrent writer, so the finished index holds every row, and nothing names
