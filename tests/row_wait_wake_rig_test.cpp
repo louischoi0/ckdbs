@@ -276,9 +276,12 @@ TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOth
     // flips A's slot and kicks core 0, and A's re-run takes the row.
     //
     // **Mutation**: the drop in `RefuseParkedWrite` removed - B's
-    // registration on row 1 outlives it and the entry with it. Also the
-    // statement-level cross-core cycle the lost `LockDeadlockTest` cells
-    // (`known-gaps.md`, Testing: R8.3) no longer pin.
+    // registration on row 1 outlives it and the entry with it; and
+    // `NoteWaitFor` never finding a cycle - B parks, and both waits end at
+    // the fault net (killed 3/3 at AX-S3, once the victim's message rather
+    // than the word "deadlock" was asserted). The statement-level cross-core
+    // cycle the lost `LockDeadlockTest` cells (`known-gaps.md`, Testing:
+    // R8.3) no longer pin.
     auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
@@ -318,7 +321,12 @@ TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOth
     b_closes.go.store(true, std::memory_order_release);
     ASSERT_TRUE(KickUntil(*rig, 1, [&] { return b_closes.done.load(std::memory_order_acquire); }));
     EXPECT_TRUE(StartsWith(b_closes.out.response, "ERR")) << b_closes.out.response;
-    EXPECT_NE(b_closes.out.response.find("deadlock"), std::string::npos) << b_closes.out.response;
+    // The victim's own refusal: the fault net's names deadlock too ("a
+    // deadlock went undetected"), so a bare "deadlock" passed with the
+    // detector removed.
+    EXPECT_NE(b_closes.out.response.find("deadlock: this transaction waited for"),
+              std::string::npos)
+        << b_closes.out.response;
     EXPECT_FALSE(a_waits.done.load(std::memory_order_acquire)) << "the survivor was refused too";
 
     b_rollback.go.store(true, std::memory_order_release);

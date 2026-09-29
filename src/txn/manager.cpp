@@ -592,9 +592,11 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     PublishCoreBounds();
     // The schema word before the borrows, as at commit: the compensations
     // above put a rolled-back DDL's catalog rows back, and a writer this
-    // release wakes must re-run through a boundary that sees them - a
-    // `DROP INDEX` undone here restores an index a peer's cache had left
-    // out while the drop was open (the AT-S5e review's C1).
+    // release wakes must re-run through a boundary that sees them. The shape
+    // that made it load-bearing - a `DROP INDEX` undone here restoring an
+    // index a peer's memo had left out while the drop was open (the AT-S5e
+    // review's C1) - is gone since AX-S2 made that memo keep the index, and
+    // no cell now kills this line's removal (`known-gaps.md`, Testing).
     MoveSchemaWordIfCatalogWriter(txn);
     // And the borrows, last and for the same reason as at commit: the
     // compensations above have already put every page back, so a waiter

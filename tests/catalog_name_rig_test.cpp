@@ -242,9 +242,9 @@ TEST(CatalogNameRigTest, ANamespaceDropOnOneCoreIsRefusedWhileAnotherCoresDropOf
     // AT-S17b's other flavour. Core 0 drops `ledger.t` inside a transaction
     // and leaves it open; core 1 drops `ledger`. The RESTRICT check read
     // `sys.tables` unfiltered, where core 0's delete-mark was settled by
-    // *core 1's* in-flight test (DT9) - so it saw core 0's open drop as
-    // done, dropped the namespace, and core 0's rollback put `t` back into
-    // it. It reads `sys.objects` since, through the instance check view:
+    // *core 1's* in-flight test (DT9, core-local until AX-S2) - so it saw
+    // core 0's open drop as done, dropped the namespace, and core 0's
+    // rollback put `t` back into it. It reads `sys.objects` since, through the instance check view:
     // the undecided retype counts, and the drop is refused retryable.
     //
     // **Mutation**: `CheckNamespaceEmpty` ignoring an undecided relation

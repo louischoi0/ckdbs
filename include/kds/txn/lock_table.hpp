@@ -584,11 +584,11 @@ public:
     // `holdings.waiting_`, and the grant this waiter eventually gets is one
     // it asks for again - but a registration is left on the entry so the
     // holder's release flips the slot and kicks the core that asked. It is
-    // what a **statement** waits on when the holder is on another core:
-    // `TransactionManager::IsInFlight` is per-core (`manager.hpp`), so the
-    // predicate every other wait in the dispatcher uses answers "not in
-    // flight" for a holder that is very much in flight on a peer, and a
-    // wait built on it is a spin. Untouched on a grant and by the cap.
+    // what a **statement** waits on: the release wakes it from whichever
+    // core releases, where a poll of `TransactionManager::IsInFlight` - the
+    // instance's since AX-S1 - is re-read only when the waiter's reactor
+    // next runs, and a read borrow's holder is no transaction it knows.
+    // Untouched on a grant and by the cap.
     //
     // The registration is the caller's to remove - `DropWake` - because the
     // statement that took it is torn down and re-run between the ask and

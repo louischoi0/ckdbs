@@ -256,8 +256,9 @@ struct DispatchOutcome {
     // `CREATE`/`DROP INDEX`, a `CREATE ASSERTION`'s build) against a
     // writer's `IX` or a reader's `IS`, and since AT-S5e by a writer's first
     // `IX` against a DDL's `X`. The wait is on the table's own slot and not
-    // on the holder's decide, because the holder may be on another core and
-    // `TransactionManager::IsInFlight` is per-core.
+    // on the holder's decide, because the release flips it and kicks this
+    // core wherever the holder runs, and a read borrow's holder is no
+    // transaction `TransactionManager::IsInFlight` knows.
     //
     // The slot is what a release flips (`lock_table.hpp`, AU-S2's
     // write-then-kick). `holder` names the refusal and draws the wait-for
@@ -726,8 +727,9 @@ private:
     // First-updater-wins, plus the one thing R6-5 adds to it: **who** the
     // conflicting writer is. `TransactionManager::CheckWriteConflict` is
     // unchanged and still decides the verdict; this notes, when the verdict
-    // is a conflict against a transaction on this core that has not decided,
-    // that the refusal is one a bounded wait could get past (AO-S3 widened
+    // is a conflict against a transaction that has not decided - on any
+    // core since AX-S1 made `IsInFlight` the instance's - that the refusal
+    // is one a bounded wait could get past (AO-S3 widened
     // R6-5's prepared holder to any undecided one). One function for the
     // two call sites, so the two write paths cannot come to disagree about
     // which conflicts are waitable.
@@ -1339,8 +1341,8 @@ private:
     // Two shapes for one wait, and which one is used is a property of the
     // dispatcher rather than of the parent: with a lock table the parent
     // row's own borrow is asked for, so a holder on any core is waited
-    // for; without one there is no peer to reach and `NoteBlockingWriter`'s
-    // per-core predicate is the honest wait. The body states both.
+    // for; without one there is no slot to park on and `NoteBlockingWriter`'s
+    // `IsInFlight` poll is the honest wait. The body states both.
     void WaitForParentRowWriter(txn::Transaction* waiter, catalog::Oid parent_rel,
                                 std::uint64_t pk, std::uint64_t holder);
 

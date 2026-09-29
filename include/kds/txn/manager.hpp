@@ -591,9 +591,8 @@ public:
     // coming for, on whichever core it ran.
     //
     // **Per-core until AX-S1**, when a transaction on another core answered
-    // false. Its callers were written against that and AX-S2 is the stage
-    // that re-reads them; what changes for each at S1 is that a peer's
-    // running transaction now answers true.
+    // false; AX-S2 re-read its callers (`ScanAll`'s DT9 gate) and AX-S2b the
+    // row wait.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
 
     // **`IsInFlight`'s partner** (AX-S2): no id below this is running on

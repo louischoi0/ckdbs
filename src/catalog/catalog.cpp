@@ -3886,9 +3886,9 @@ Status Catalog::CheckIndexNameFree(std::string_view name, std::uint64_t own_trx_
     // Its own walk, for `CheckNameFree`'s reason one relation over: the
     // answer is in the tuple header. An index's drop **delete-marks** its
     // row rather than retyping it, and `ListIndexes`' unfiltered read
-    // settles a mark by *this core's* in-flight test (`ScanAll`, DT9) - so
-    // another core's open `DROP INDEX` read as done here, and its rollback
-    // restored the name beside the one this create took. The check view is
+    // settled a mark by *this core's* in-flight test until AX-S2 (`ScanAll`,
+    // DT9) - so another core's open `DROP INDEX` read as done here, and its
+    // rollback restored the name beside the one this create took. The check view is
     // the instance's, minted with no own id: the asker's own drop is
     // classified by its stamp.
     const txn::ReadView view =

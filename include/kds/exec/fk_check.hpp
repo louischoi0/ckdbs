@@ -91,9 +91,9 @@ enum class FkVerdict : std::uint8_t {
 // `busy_trx`, when given, is set to the transaction holding the parent row
 // on a `kBusy` verdict and to 0 otherwise. **AO-S3 needs it because a busy
 // answer becomes a wait**, and a wait has to name what it is waiting for:
-// the dispatcher parks on `IsInFlight(busy_trx)` exactly as a write
-// conflict does, and since AO-S5(b) so does the probe server, on the
-// parent's core and on the child's behalf. Optional so the paths that
+// the dispatcher waits for it - on the parent row's slot where there is a
+// lock table, on `IsInFlight(busy_trx)` where there is none
+// (`WaitForParentRowWriter`). Optional so the paths that
 // cannot wait - `Dispatch()`, with no reactor to park on - are unchanged
 // and keep F3's retryable refusal.
 StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,

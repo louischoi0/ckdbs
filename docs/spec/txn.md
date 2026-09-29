@@ -418,6 +418,29 @@ slot, so reclamation can move its answer for a committed writer to
 it moves. An unlogged instance has no LSN and the window assigns the next
 position in commit order.
 
+**Who is in flight is the instance's answer** (AX-S1,
+`instructions/v3.0.0/workorder-ax-inflight-publication.md`). The window
+tells a committed writer apart and nothing more: a loser is invisible by
+absence, so "no entry" is both "aborted" and "still running".
+`TransactionManager::IsInFlight` therefore reads a second structure beside
+it - one in-flight table per core in `InstanceVisibility`,
+`kInFlightSlotsPerCore` (1,024) ids, written only by the issuing core (its
+protocol is `rules.md` §3's row; a stale answer errs only toward "in
+flight"). An id is in its core's table from before `Begin` returns until its
+decide retires it, and nothing else is published. Past the cap `Begin` is
+refused `ResourceExhausted` naming the cap before it issues an id or
+appends: a transaction running unpublished would read as decided on every
+other core. `Commit` retires after its window entry is in, so no instant
+finds it in neither record, and after its pending-commit marker is cleared,
+so a peer that finds it gone mints a view that sees the commit; and before
+the schema word moves and its borrows are released, so a waiter woken by
+either finds it decided. `Abort` retires after its compensations, before the
+same two. A caller that meets ids over
+time - a catalog scan meeting delete-marks - takes `FloorCandidate()` once
+as its short-circuit, the minimum of every attached core's oldest running id
+and issue cursor (`ddl-transactional.md` §5b); a core's own oldest running
+id is its floor term and is not that bound.
+
 **Readers are registered.** Two records together name every reader on a
 core: live transactions in the manager's `live_`, and every other snapshot
 that can read a superseded version across a park — an autocommit
@@ -693,8 +716,9 @@ level: **can the re-run answer differently once this holder decides?**
   parent visible to the re-run, and its abort makes the answer a terminal
   `FkViolation` instead of a retryable conflict. **One wait, whichever
   core the holder is on** since AT-S5f: the check asks the instance's
-  table for the parent row and parks on the slot, because `IsInFlight` is
-  one core's live set and the check descends every parent here.
+  lock table for the parent row and parks on the slot, which the holder's
+  release flips and kicks across - a wake the `IsInFlight` poll does not
+  have (AX-S2b's row wait is the same shape).
 - **No, where the site cannot tell.** A statement that declared a coarse
   unit and had it refused knows *who* refused it and not *what* they hold,
   so a holder that already wrote a row the walk will reach is
@@ -739,8 +763,9 @@ runs under the session's borrow now.)
   DT7) in M2, and since AT-S5e `CREATE INDEX`, `DROP INDEX` and a `CREATE
   ASSERTION`'s build (`ddl-transactional.md` §5e, §5f). A writer's relation
   `IX` refused by one of them parks on the table's own slot rather than on
-  the holder's decide (`BorrowChain`), because the holder may be on another
-  core and `IsInFlight` is one core's; an `INSERT` asks for that `IX` ahead
+  the holder's decide (`BorrowChain`), because the release flips it and
+  kicks the waiter's core wherever the holder runs, and nothing kicks a
+  poll of `IsInFlight`; an `INSERT` asks for that `IX` ahead
   of its assertion admission (`InsertParsed`, AT-0 item 13), so a build
   cannot slip between a writer's check and its row. AO-R12 puts the read borrow there for a *mover*,
   and no mover exists (`physical-optimizer.md` is shadow-only), so what a
@@ -754,9 +779,10 @@ runs under the session's borrow now.)
   autocommit drop registers none - its transaction is unwound before the
   park, so it holds nothing - and a reader never waits, so a chain that
   reaches one ends there. The wait itself is on the table's **slot** rather
-  than on the holder's decide, because `IsInFlight` is one core's live set
-  and a read borrow may be held on another; the slot is flipped by whichever
-  core releases and carried across by AU-S2's kick.
+  than on the holder's decide, because a read borrow's holder is no
+  transaction - its id is a read holder's (`read_borrow.hpp`), which no
+  in-flight table publishes - and the slot is flipped by whichever core
+  releases and carried across by AU-S2's kick.
 - **A bulk write's declared unit is not a consumer**, and that is a rule
   rather than an omission: an intention mode on an interval unit neither
   fences nor is fenced. A `DELETE FROM t WHERE id < 50` changes no key's

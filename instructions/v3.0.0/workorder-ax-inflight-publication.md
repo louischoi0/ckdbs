@@ -374,3 +374,68 @@ against the final window and killed again (3/3). A second
 seven doc inaccuracies, all fixed; not taken: a stop guard for the cells'
 early-`ASSERT` teardown, the sibling cells' existing shape and only reached
 by a cell already failing. Overhead not measured.
+
+### AX-S3 — built 2026-09-29, the prose
+
+On `ax-s3-inflight-prose` from `b54a769` (`v2.7.0-470-gb54a769`), on the
+operator's *"merge and push, then start AX-S3"* (`raft-marks-2026-09-29.md`
+§1).
+
+**What landed.** `txn.md` §4.1 states the in-flight tables - what is
+published, when `Begin`, `Commit` and `Abort` move it and why each
+neighbour is load-bearing, the cap, and `FloorCandidate()` as the
+short-circuit - and §5's three sentences that gave "`IsInFlight` is one
+core's" as the reason a wait is on a slot now give the reason that holds:
+the release flips the slot and kicks, and a read borrow's holder is no
+transaction. `rules.md` §3 gains the declared row: the in-flight tables, a
+single writer per table and no latch, read under a catalog page latch by
+`ScanAll` and entering no latch order. `crosscore.md` CC11 says which
+transactions are running is every core's to read, and §5 that a writer's
+conflict check and an unfiltered catalog read ask the instance.
+`ddl-transactional.md` §5b's ordering fact is the retire, not `active_`;
+§5e's rollback clause and the "writer on another core" sentence are
+corrected; `foreign-keys.md`'s no-lock-table wait is no longer "per-core".
+**§5a needed nothing**: its caveat went at AX-S2. The comments: the
+dispatcher's DT9 claim (the order's "core-0-scoped" comment),
+`WaitForParentRowWriter` in both files, `AwaitRelationLock`, `BorrowChain`'s
+relation ask, `NoteBlockingWriter`'s declaration, `lock_table.hpp`'s
+`TryAcquire` note, `manager.hpp`'s `IsInFlight`, `catalog.hpp`/`.cpp`,
+`fk_check.hpp` (whose probe server went at AT-S5f), and five test headers.
+The exit is checked as a grep: no present-tense "per-core predicate",
+"this core's live set" or "is per-core" about the in-flight answer is left
+under `docs/spec`, `docs/rules`, `CLAUDE.md`, `manual/`, `include/`, `src/`
+or `tests/`.
+
+**Two findings the sweep made, both about cells.**
+
+1. **AX-S2 left `DdlFenceRigTest`'s C1 cell killing nothing.** Its mutant -
+   the schema-word move removed from `TransactionManager::Abort` - survives
+   the cell 5/5 and the full suite 3015/3015: the cell was written for a
+   peer whose memo left out an index an open drop had marked, and since
+   AX-S2 that memo keeps it. The move was nearly inert already -
+   `EndDdlScope` moves the word again synchronously after `Abort` - so it
+   orders only the bump before the release. The cell's comment says so, and
+   `known-gaps.md` (Testing) records it; the move stays.
+2. **AX-S2b's cycle cell did not pin the detector.** It asserted the word
+   "deadlock", which the fault net's refusal also contains, so
+   `NoteWaitFor` never finding a cycle passed. It asserts the victim's own
+   message now and kills that mutant 3/3; `known-gaps.md`'s Testing entry
+   is amended.
+
+**The review** (`critics-developer`, one pass) found the exit not met -
+`foreign-keys.md` and `WaitForParentRowWriter`'s no-table branch still said
+"per-core", and `manager.hpp`, §5b's `active_` and `fk_check.hpp` were stale
+beside them - the `rules.md` row's "taken under nothing" false (`ScanAll`
+reads under a page latch), §4.1's `Commit` sentence attributing the
+marker's purpose to the wrong record, the known-gaps entry missing
+`EndDdlScope`'s second bump, and the protocol stated three times. All
+taken. **Rejected**: that §5b's *"and never tell a peer to re-read"* is
+false - it is the counterfactual of not invalidating, not a claim about
+`EndDdlScope`.
+
+**Found, not fixed** (not this order's): `ddl-transactional.md` §3 still
+says *"A peer may not write the catalog ... DDL runs on core 0"* and §5c
+*"a peer may not write a catalog page (P6)"*, both false since AT-S5.
+
+**Suite**: 3015/3015 in Debug before the review's changes; after them,
+3015/3015, the one disabled cell pre-existing. Overhead not measured.
