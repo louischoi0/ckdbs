@@ -4,9 +4,11 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -14,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -536,6 +539,101 @@ TEST_F(TcpServerTest, ADisconnectMidBatchDoesNotTakeTheServerDown) {
     EXPECT_EQ(SendAndReceiveLine(next, "PING"), "PONG");
     EXPECT_EQ(SendAndReceiveLine(next, "STOP"), "OK bye");
     ::close(next);
+    server_thread.join();
+}
+
+// The server-side socket of the connection `client` made to `port`: the
+// server runs in this process, so its accepted fd is one of ours. Found by
+// matching the address pair, which is what makes the socket options an
+// accepted connection was given observable at all.
+int ServerSideOf(int client, std::uint16_t port) {
+    sockaddr_in mine{};
+    socklen_t len = sizeof(mine);
+    if (::getsockname(client, reinterpret_cast<sockaddr*>(&mine), &len) != 0) return -1;
+    for (int fd = 3; fd < 4096; ++fd) {
+        if (fd == client) continue;
+        sockaddr_in local{};
+        sockaddr_in peer{};
+        socklen_t l1 = sizeof(local);
+        socklen_t l2 = sizeof(peer);
+        if (::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &l1) != 0) continue;
+        if (::getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &l2) != 0) continue;
+        if (local.sin_family == AF_INET && ntohs(local.sin_port) == port &&
+            peer.sin_port == mine.sin_port) {
+            return fd;
+        }
+    }
+    return -1;
+}
+
+int IntOption(int fd, int level, int name) {
+    int value = -1;
+    socklen_t len = sizeof(value);
+    if (::getsockopt(fd, level, name, &value, &len) != 0) return -1;
+    return value;
+}
+
+TEST(TcpServerListenTest, ABurstOfConnectsCompletesBeforeAnyIsAccepted) {
+    // A pool opens its connections at once. The kernel completes a
+    // handshake into the accept queue whether or not the server has called
+    // accept yet; past the queue's depth it drops the SYN and the client
+    // retransmits after a second. So the queue's depth is the burst a
+    // listener absorbs without a stall - measured here with nothing
+    // accepting, which is the worst moment for a burst to land.
+    constexpr std::uint16_t kPort = 25421;
+    constexpr int kBurst = 64;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+
+    std::vector<int> clients;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(kPort);
+    for (int i = 0; i < kBurst; ++i) {
+        int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+        ASSERT_GE(fd, 0);
+        const int rc = ::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        ASSERT_TRUE(rc == 0 || errno == EINPROGRESS) << std::strerror(errno);
+        clients.push_back(fd);
+    }
+
+    // Well inside the first SYN retransmit (1 s): a dropped SYN cannot
+    // have completed by then, and a queued one completed at once.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    int completed = 0;
+    for (int fd : clients) {
+        sockaddr_in peer{};
+        socklen_t len = sizeof(peer);
+        if (::getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &len) == 0) ++completed;
+        ::close(fd);
+    }
+    EXPECT_EQ(completed, kBurst) << "the accept queue dropped part of a " << kBurst
+                                 << "-connection burst";
+}
+
+TEST_F(TcpServerTest, AnAcceptedConnectionCarriesTcpKeepalive) {
+    // A client that vanished without a FIN - a host that lost power, a
+    // cable pulled - leaves a connection nothing else would ever end: there
+    // is no idle-session timeout (protocol.md §10). Keepalive is what finds
+    // it, so every accepted socket carries it, on by default.
+    constexpr std::uint16_t kPort = 25422;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int client = ConnectToLoopback(kPort);
+    ASSERT_GE(client, 0);
+    ASSERT_EQ(SendAndReceiveLine(client, "PING"), "PONG");  // accepted and adopted
+
+    const int server_side = ServerSideOf(client, kPort);
+    ASSERT_GE(server_side, 0);
+    EXPECT_EQ(IntOption(server_side, SOL_SOCKET, SO_KEEPALIVE), 1);
+    EXPECT_EQ(IntOption(server_side, IPPROTO_TCP, TCP_KEEPIDLE),
+              static_cast<int>(kDefaultTcpKeepaliveS));
+
+    EXPECT_EQ(SendAndReceiveLine(client, "STOP"), "OK bye");
+    ::close(client);
     server_thread.join();
 }
 

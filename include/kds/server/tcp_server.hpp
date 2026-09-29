@@ -59,6 +59,13 @@ enum class Protocol : std::uint8_t {
     kText,
 };
 
+// **TCP keepalive's idle time, the default of `tcp_keepalive_s`** (CN-10
+// U7, the operator's answer of 2026-09-29: on by default, one setting).
+// A connection silent this long is probed; `ConfigureKeepalive` derives the
+// probe interval and count from it, so a vanished peer is reaped in about
+// twice this. 0 turns keepalive off.
+inline constexpr std::uint32_t kDefaultTcpKeepaliveS = 60;
+
 class TcpServer {
 public:
     // Binds and listens on 127.0.0.1:port. Fails with IoError if the
