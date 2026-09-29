@@ -8,6 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/tcp_server.hpp"
 #include "kds/wire/error_registry.hpp"
 #include "kds/wire/kwp.hpp"
 #include "kds/wire/kwp_types.hpp"
@@ -37,7 +38,11 @@ inline constexpr std::uint32_t kKwpMaxChunkBytes = 256u * 1024u;
 
 class KwpLoadServer {
 public:
-    static StatusOr<KwpLoadServer> Listen(std::uint16_t port);
+    // `keepalive_s` is `tcp_keepalive_s` (`ConfigureAcceptedSocket`): a
+    // vanished loader holds its load's open transaction, which is the
+    // connection keepalive exists to end.
+    static StatusOr<KwpLoadServer> Listen(std::uint16_t port,
+                                          std::uint32_t keepalive_s = kDefaultTcpKeepaliveS);
 
     KwpLoadServer(KwpLoadServer&& other) noexcept;
     KwpLoadServer& operator=(KwpLoadServer&& other) noexcept;
@@ -81,7 +86,8 @@ private:
         Session session{};
     };
 
-    explicit KwpLoadServer(int fd) noexcept : listen_fd_(fd) {}
+    KwpLoadServer(int fd, std::uint32_t keepalive_s) noexcept
+        : listen_fd_(fd), keepalive_s_(keepalive_s) {}
     void CloseIfOpen() noexcept;
 
     void OnListenerReadable();
@@ -115,6 +121,7 @@ private:
     }
 
     int listen_fd_;
+    std::uint32_t keepalive_s_ = kDefaultTcpKeepaliveS;
     sched::Scheduler* scheduler_ = nullptr;
     CommandDispatcher* dispatcher_ = nullptr;
     Logger* log_ = nullptr;

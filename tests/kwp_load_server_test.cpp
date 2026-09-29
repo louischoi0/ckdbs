@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -344,6 +345,60 @@ TEST_F(KwpLoadServerTest, AFrameBeforeHelloIsRefusedAndClosed) {
         // The server closes after the refusal: the next read is EOF.
         std::byte buf[16];
         EXPECT_LE(::read(fd, buf, sizeof(buf)), 0);
+        ::close(fd);
+
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
+TEST_F(KwpLoadServerTest, ALoadConnectionCarriesTheConfiguredKeepalive) {
+    // A vanished loader holds its load's open transaction, which is the
+    // connection keepalive exists to end - so `kwp_port` takes
+    // `tcp_keepalive_s` like every listener (`ConfigureAcceptedSocket`).
+    // The server runs in this process, so its accepted socket is one of our
+    // fds: found by the address pair, then asked for its options.
+    constexpr std::uint16_t kTextPort = 25717;
+    constexpr std::uint16_t kKwpPort = 25718;
+    constexpr std::uint32_t kIdle = 45;
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort, kIdle);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        sockaddr_in mine{};
+        socklen_t len = sizeof(mine);
+        ASSERT_EQ(::getsockname(fd, reinterpret_cast<sockaddr*>(&mine), &len), 0);
+
+        int idle = -1;
+        for (int attempt = 0; attempt < 200 && idle < 0; ++attempt) {
+            for (int other = 3; other < 4096; ++other) {
+                sockaddr_in local{};
+                sockaddr_in peer{};
+                socklen_t l1 = sizeof(local);
+                socklen_t l2 = sizeof(peer);
+                if (other == fd ||
+                    ::getsockname(other, reinterpret_cast<sockaddr*>(&local), &l1) != 0 ||
+                    ::getpeername(other, reinterpret_cast<sockaddr*>(&peer), &l2) != 0 ||
+                    ntohs(local.sin_port) != kKwpPort || peer.sin_port != mine.sin_port) {
+                    continue;
+                }
+                socklen_t vlen = sizeof(idle);
+                ::getsockopt(other, IPPROTO_TCP, TCP_KEEPIDLE, &idle, &vlen);
+                break;
+            }
+            if (idle < 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        EXPECT_EQ(idle, static_cast<int>(kIdle)) << "the load endpoint's accepted socket";
         ::close(fd);
 
         int text_fd = ConnectToLoopback(kTextPort);

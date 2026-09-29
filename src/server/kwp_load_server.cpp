@@ -44,7 +44,7 @@ bool LoadableColumn(std::uint32_t type_val) {
 
 }  // namespace
 
-StatusOr<KwpLoadServer> KwpLoadServer::Listen(std::uint16_t port) {
+StatusOr<KwpLoadServer> KwpLoadServer::Listen(std::uint16_t port, std::uint32_t keepalive_s) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         return Status::IoError(std::string("socket() failed: ") + std::strerror(errno));
@@ -63,16 +63,17 @@ StatusOr<KwpLoadServer> KwpLoadServer::Listen(std::uint16_t port) {
         ::close(fd);
         return s;
     }
-    if (::listen(fd, 16) < 0) {
+    if (::listen(fd, kListenBacklog) < 0) {
         Status s = Status::IoError(std::string("listen() failed: ") + std::strerror(errno));
         ::close(fd);
         return s;
     }
-    return KwpLoadServer(fd);
+    return KwpLoadServer(fd, keepalive_s);
 }
 
 KwpLoadServer::KwpLoadServer(KwpLoadServer&& other) noexcept
     : listen_fd_(other.listen_fd_),
+      keepalive_s_(other.keepalive_s_),
       scheduler_(other.scheduler_),
       dispatcher_(other.dispatcher_),
       log_(other.log_),
@@ -87,6 +88,7 @@ KwpLoadServer& KwpLoadServer::operator=(KwpLoadServer&& other) noexcept {
         Detach();
         CloseIfOpen();
         listen_fd_ = other.listen_fd_;
+        keepalive_s_ = other.keepalive_s_;
         scheduler_ = other.scheduler_;
         dispatcher_ = other.dispatcher_;
         log_ = other.log_;
@@ -142,14 +144,12 @@ void KwpLoadServer::OnListenerReadable() {
             ::close(client_fd);
             continue;
         }
-        // TCP_NODELAY, unconditionally - tcp_server.cpp's lesson, relearned
-        // by measurement (bench/results-bulk-insert.md Part IV): a small
-        // ACK frame held by Nagle against the peer's delayed-ACK timer
-        // cost a pipelined load 33% of its throughput, ~40 ms per stall.
-        // There is nothing for Nagle to coalesce that the outbox does not
-        // already coalesce better.
-        int nodelay = 1;
-        ::setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        // Fail closed, as the default port does.
+        if (Status s = ConfigureAcceptedSocket(client_fd, keepalive_s_); !s.ok()) {
+            if (logging(LogLevel::kWarn)) log_->Warn("kwp", s.message());
+            ::close(client_fd);
+            continue;
+        }
         clients_.emplace(client_fd, Connection{});
         Status s = scheduler_->RegisterIoHandler(
             client_fd, sched::IoInterest::kReadable,

@@ -124,6 +124,17 @@ cores = 1
 # TCP port, loopback only. 1..65535.
 port = 15432
 
+# TCP keepalive on every accepted client connection - the default port,
+# `debug_text_port` and `kwp_port` - in seconds of silence before the first
+# probe (CN-10 U7). There is no idle-session timeout, so this is what ends a
+# connection whose client vanished without closing it - a host that lost
+# power, a cable pulled. Six probes follow a sixth of this apart, and
+# TCP_USER_TIMEOUT is set to the same total, so a dead peer is reaped after
+# about twice this value. A live idle client is never ended; a live client
+# that leaves a reply unread (a zero receive window) for that long is.
+# 0 turns keepalive off; above 32767 (Linux's MAX_TCP_KEEPIDLE) is refused.
+tcp_keepalive_s = 60
+
 # Direct TLS on the port above (docs/spec/protocol.md §1, decided 2026-08-13).
 # With `tls = on` every connection must open with a TLS 1.3 handshake -
 # there is no plaintext fallback on the same port and no STARTTLS-style
