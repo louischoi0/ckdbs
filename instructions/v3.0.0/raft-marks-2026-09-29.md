@@ -156,3 +156,16 @@ push"*, corrected at `14cfdfa` on this branch.
 | **Mark** | **AY-S0 starts**: the work order (`workorder-ay-following-letter.md`) |
 | **Does not settle** | Any AY stage past S0, or any of the order's §4 items |
 | **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |
+
+## 15. AY-S1 started
+
+Recorded on `worktree-ay-s1-lock-family-cells` from `69a1f76`
+(`v2.7.0-483-g69a1f76`), after AY-S0 landed on `main` at `69a1f76`.
+
+| | |
+|---|---|
+| **Word** | *"start AY milestone"* |
+| **Reading** | The order has each stage wait for the operator's word (§3 there), so CLA reads this as the word for the first stage past S0, **AY-S1**, and not as one word for every stage |
+| **Mark** | **AY-S1 starts**: R8.3's cells restored (AY-R1) |
+| **Does not settle** | Any AY stage past S1, or any of the order's §4 items - AY-Q9 among them, so the seven cells it names stay out of S1 |
+| **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |

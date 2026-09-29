@@ -269,3 +269,53 @@ cell); a first run failed
 with its message not captured, and the cell then passed 20/20 alone, 40/40
 across eight parallel copies and 40/40 under a concurrent full suite
 (`known-gaps.md`, Testing). Overhead not measured.
+
+### AY-S1 — built 2026-09-29
+
+On `worktree-ay-s1-lock-family-cells` from `69a1f76`, on the operator's
+*"start AY milestone"*, read as AY-S1's word (`raft-marks-2026-09-29.md`
+§15). Tests only; no source file changes.
+
+**The 53 cells** are back in `tests/lock_family_test.cpp` on
+`LockFamilyTest`, the old participant base without the shipped-statement
+executor and the in-doubt ceiling: one core, a WAL on core 0, a scheduler,
+and one lock table wired into both the manager and the dispatcher. All 53
+passed unchanged; the ports are comment-only, and each comment naming the
+11 s net, a ship or a remote step is rewritten. Beside them are three new cells:
+`ADeleteDeclaresItsRelationAtResolveToo`, because `DeleteInner`'s resolve
+borrow had no cell; `ARowWaitAtTheFaultNetIsRefusedRetryablyAndNamesTheNet`,
+the premise of an uncounted 2PC-shaped cell that no cell pinned (the review's
+find); and `LockTableTest.AnEdgeThatClosesACycleIsRefusedAndRecordsNothing`,
+the direct `NoteWaitFor` cell. The citations in `fk_cross_core_rig_test.cpp`,
+`read_borrow_rig_test.cpp` and `row_wait_wake_rig_test.cpp` are corrected.
+AY-Q9's seven are not ported.
+
+**Mutants**, each run against the file's cells:
+
+- **M1** (the bind's `declare->Position` skipped) is killed by the join and
+  subquery cells. The single-relation read cell does not kill it, because
+  the walk reports its own first position, and its comment now says so.
+- **`NoteWaitFor` never finding a cycle** is killed by six cells.
+- **Each write verb's resolve `ReadBorrow` given no table** is killed by that
+  verb's own cell: INSERT, UPDATE, and DELETE.
+- **The net's wording changed** is killed by the fault-net cell.
+
+**The review** (`critics-developer`, one pass) found no defect in the port.
+Taken:
+
+- a false comment in the new unit cell, which claimed a victim's stray edge
+  is never cleared;
+- the M1 comment, which still left the DELETE cell out;
+- the read cell's comment, which overclaimed what it pins;
+- three wording fixes and an indentation fix;
+- `RunAsync` and `Start`/`Pump`, which were duplicated, merged into the base;
+- the lost-cell range, now `:3833-4156`;
+- six uncounted 2PC-shaped cells, now named in `known-gaps.md` with the
+  fault-net cell above.
+
+Rejected, as outside the stage: `ParentWriter`'s stale doc in
+`fk_cross_core_rig_test.cpp`, which describes a child-relation fence that no
+remaining cell uses. It belongs to AY-S4, the stage that writes the FK cells.
+
+**Suite**: results are recorded at the commit that lands this row.
+Overhead not measured.

@@ -1251,8 +1251,9 @@ TEST(LockTableTest, AnEdgeThatClosesACycleIsRefusedAndRecordsNothing) {
     EXPECT_EQ(table->WaitEdgeCount(), 2u);
 
     // 3 -> 1 closes the three-cycle two edges deep, which a check one edge
-    // deep would miss. Refused, and nothing recorded: the victim must not
-    // park, so an edge left behind would be one no decide ever clears.
+    // deep would miss. Refused, and nothing recorded: the victim does not
+    // park, so an edge left behind would stand until its decide and make a
+    // later waiter's walk find a cycle through a transaction not waiting.
     EXPECT_TRUE(table->NoteWaitFor(3, 1)) << "the three-cycle was not found";
     EXPECT_EQ(table->WaitEdgeCount(), 2u) << "the victim's edge was recorded";
 

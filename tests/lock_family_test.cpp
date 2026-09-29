@@ -38,7 +38,8 @@
 // `LockFamilyTest` is that base with the participant's machinery - its
 // shipped-statement executor and its in-doubt ceiling - left out, because
 // neither exists any more. Everything here runs on one reactor, so a wait
-// ends by the slot flip its holder's decide makes, never by a kick; the
+// ends by the slot flip its holder's decide makes, or at the fault net,
+// never by a kick; the
 // cross-core half is `row_wait_wake_rig_test.cpp`'s.
 
 namespace kds::server {
@@ -115,29 +116,55 @@ protected:
     std::string Local(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
     std::string Rows() { return Local("SELECT * FROM t"); }
 
-    // A statement on the served path - the only entry point that may park -
-    // run to its end.
+    // Starts a statement on the served path and returns its handles; the
+    // caller decides what it is waiting to observe, which is the only way
+    // to tell a park from a slow grant.
     //
-    // **It fails rather than returning a half-outcome.** A caller asserting
-    // on `response` of a statement that parked would read the pre-wait
-    // reply `DispatchAndStage` left there and pass whether or not the
-    // statement ever completed. Every cell that means to observe a *wait*
-    // uses `LockDeadlockTest::Start` and asserts on its own `done` flag.
-    DispatchOutcome RunAsync(const std::string& sql, Session& session, int turns = 64) {
-        auto out = std::make_shared<DispatchOutcome>();
-        auto done = std::make_shared<bool>(false);
-        auto text = std::make_shared<std::string>(sql);
+    // **It owns the statement text, and that is not tidiness.**
+    // `DispatchAsync` takes a `std::string_view` and is a coroutine, so the
+    // view is copied into the frame while the characters are not: the
+    // caller must keep them alive until the statement finishes. Every cell
+    // that calls `DispatchAsync` directly passes a string *literal*, which
+    // has static storage and hides the requirement; a helper taking
+    // `const std::string&` binds a temporary that dies at the end of the
+    // caller's statement, long before the first `Pump`, and the parked
+    // coroutine then parses freed memory. That reads as `ERR unknown
+    // command` from a statement that is plainly a valid `UPDATE`.
+    struct Started {
+        std::shared_ptr<std::string> sql = std::make_shared<std::string>();
+        std::shared_ptr<DispatchOutcome> out = std::make_shared<DispatchOutcome>();
+        std::shared_ptr<bool> done = std::make_shared<bool>(false);
+    };
+
+    Started Start(std::string sql, Session& session) {
+        Started s;
+        *s.sql = std::move(sql);
         scheduler_->Submit(sched::MakeCoroTask(
             sched::SchedulingGroup::kForeground,
-            dispatcher_->DispatchAsync(*text, &session, out.get()),
-            [done, text](const Status&) { *done = true; }));
-        for (int i = 0; i < turns && !*done; ++i) {
+            dispatcher_->DispatchAsync(*s.sql, &session, s.out.get()),
+            [d = s.done](const Status&) { *d = true; }));
+        return s;
+    }
+
+    void Pump(int turns = 64) {
+        for (int i = 0; i < turns; ++i) {
             (void)wal_->DrainOnce();
             scheduler_->RunOnce();
         }
-        EXPECT_TRUE(*done) << "the statement was still parked after " << turns
-                           << " turns, so what follows would read a stale reply: " << sql;
-        return *out;
+    }
+
+    // A statement run to its end on the served path, for a cell that
+    // observes an outcome rather than a wait. **It fails rather than
+    // returning a half-outcome**: a caller asserting on `response` of a
+    // statement still parked would read the pre-wait reply
+    // `DispatchAndStage` left there. A cell that means to observe a wait
+    // uses `Start` and asserts on its own `done` flag.
+    DispatchOutcome RunAsync(std::string sql, Session& session, int turns = 64) {
+        Started s = Start(std::move(sql), session);
+        for (int i = 0; i < turns && !*s.done; ++i) Pump(1);
+        EXPECT_TRUE(*s.done) << "the statement was still parked after " << turns
+                             << " turns, so what follows would read a stale reply: " << *s.sql;
+        return *s.out;
     }
 
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -348,46 +375,9 @@ TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) 
            "the cap";
 }
 
-class LockDeadlockTest : public LockFamilyTest {
-protected:
-
-    // Starts a statement on the served path and returns its handles; the
-    // caller decides what it is waiting to observe, which is the only way
-    // to tell a park from a slow grant.
-    //
-    // **It owns the statement text, and that is not tidiness.**
-    // `DispatchAsync` takes a `std::string_view` and is a coroutine, so the
-    // view is copied into the frame while the characters are not: the
-    // caller must keep them alive until the statement finishes. Every cell
-    // that calls `DispatchAsync` directly passes a string *literal*, which
-    // has static storage and hides the requirement; a helper taking
-    // `const std::string&` binds a temporary that dies at the end of the
-    // caller's statement, long before the first `Pump`, and the parked
-    // coroutine then parses freed memory. That reads as `ERR unknown
-    // command` from a statement that is plainly a valid `UPDATE`.
-    struct Started {
-        std::shared_ptr<std::string> sql = std::make_shared<std::string>();
-        std::shared_ptr<DispatchOutcome> out = std::make_shared<DispatchOutcome>();
-        std::shared_ptr<bool> done = std::make_shared<bool>(false);
-    };
-
-    Started Start(std::string sql, Session& session) {
-        Started s;
-        *s.sql = std::move(sql);
-        scheduler_->Submit(sched::MakeCoroTask(
-            sched::SchedulingGroup::kForeground,
-            dispatcher_->DispatchAsync(*s.sql, &session, s.out.get()),
-            [d = s.done](const Status&) { *d = true; }));
-        return s;
-    }
-
-    void Pump(int turns = 64) {
-        for (int i = 0; i < turns; ++i) {
-            (void)wal_->DrainOnce();
-            scheduler_->RunOnce();
-        }
-    }
-};
+// The default cap; the name is the cells', kept from the file they came
+// from.
+class LockDeadlockTest : public LockFamilyTest {};
 
 // ---- AO-S6e-b: the read borrow, and the DDL that waits for one ---------
 
@@ -405,7 +395,10 @@ TEST_F(LockDeadlockTest, AReadDeclaresItsPositionAndGivesItBack) {
     // by the walk, and released when the statement ends,
     // which is what `EntryCount` reads here - a read that kept its position
     // would leave the relation entry standing and a later `DROP TABLE`
-    // would wait for a reader that finished long ago.
+    // would wait for a reader that finished long ago. **The count does not
+    // pin the bind**: one relation's walk reports its own first position
+    // (`step_vm.cpp`'s `index == 0` guard), so this reads `+1` with the
+    // bind's declaration removed; the join and subquery cells below pin it.
     ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO rb VALUES (1, 1)").rfind("INSERTED", 0), 0u);
 
@@ -606,6 +599,46 @@ TEST_F(LockDeadlockTest, ADropWhoseWaitReachesTheFaultNetPoisonsItsTransaction) 
     locks_->Release(reader_id, reader);
 }
 
+TEST_F(LockDeadlockTest, ARowWaitAtTheFaultNetIsRefusedRetryablyAndNamesTheNet) {
+    // The premise of `Txn2pcBlockedWriterTest.AtTheFaultNetTheWriterIsAbortedAndTheRefusalNamesTheNet`,
+    // which AT-S6 deleted because its holder was a prepared 2PC participant.
+    // The net outlived the holder: restored at AY-S1 over an ordinary open
+    // transaction.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+
+    Session w;
+    Started wait = Start("UPDATE t SET v = 3 WHERE id = 7", w);
+    Pump();
+    ASSERT_FALSE(*wait.done) << "the writer answered instead of waiting: " << wait.out->response;
+
+    // The holder never decides; the net (AO-R8) is the only thing that ends
+    // this, and a hang is not the alternative (HP3).
+    clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+    Pump();
+    ASSERT_TRUE(*wait.done) << "the wait has no bound at all, which is the hang HP3 forbids";
+
+    // Retryable, so a client's loop reads the bit the engine means; *not*
+    // `UnknownOutcome`, which would send a client to read back data its
+    // statement never touched; and named as the **net**, on the rendered
+    // line and on the carried status a KWP client reads, so an operator
+    // meeting it looks for the fault rather than concluding the row was
+    // busy.
+    const Status refused = StatusFromErrorReply(wait.out->response);
+    EXPECT_EQ(refused.code(), StatusCode::kTxnConflict) << wait.out->response;
+    EXPECT_TRUE(refused.retryable()) << wait.out->response;
+    EXPECT_NE(wait.out->response.find("fault net"), std::string::npos) << wait.out->response;
+    EXPECT_NE(wait.out->status.message().find("fault net"), std::string::npos)
+        << wait.out->status.message();
+
+    // The net refuses the waiter and never the holder.
+    EXPECT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    EXPECT_NE(Rows().find(",2"), std::string::npos) << Rows();
+}
+
 // ---- AT-S3: the sys.tables row has no contender the page latch does not serialise --
 //
 // E13 asked whether the relation's `sys.tables` row becomes borrowable at
@@ -673,8 +706,8 @@ TEST_F(LockDeadlockTest, TwoTransactionsNamedKeysIntoOneRelationDoNotWaitOnItsCa
 //
 // **R8.3's mutant M1** - the compiler's bind declaring nothing
 // (`step_compiler.cpp`, AT-R1's `declare->Position`) - is killed by the
-// join and subquery cells, each counting one borrow short. The INSERT and
-// UPDATE cells do not see it: a write declares at resolve through its own
+// join and subquery cells, each counting one borrow short. The three write
+// cells do not see it: a write declares at resolve through its own
 // `ReadBorrow`, and the three write cells pin `InsertParsed`'s,
 // `UpdateInner`'s and `DeleteInner`'s (measured, AY-S1; the DELETE cell is
 // AY-S1's, the site having had none).
@@ -716,7 +749,7 @@ TEST_F(LockDeadlockTest, ASubqueryRelationIsDeclaredAtItsOwnBind) {
 }
 
 TEST_F(LockDeadlockTest, AnInsertDeclaresItsRelationAtResolveToo) {
-    // The third write verb, which the first draft of this stage missed: an
+    // The write verb the first draft of AT-S1 missed: an
     // INSERT resolves its relation's layout exactly as the others do, and
     // its own borrows are taken rows later.
     ASSERT_EQ(Local("CREATE TABLE ins (id int64, v int64)").rfind("CREATED", 0), 0u);
@@ -745,7 +778,7 @@ TEST_F(LockDeadlockTest, AWriteDeclaresItsRelationAtResolveToo) {
 }
 
 TEST_F(LockDeadlockTest, ADeleteDeclaresItsRelationAtResolveToo) {
-    // The third write verb's own site, which none of R8.3's cells reached.
+    // DELETE's own resolve site, which none of R8.3's cells pinned.
     ASSERT_EQ(Local("CREATE TABLE de (id int64, v int64)").rfind("CREATED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO de VALUES (1, 1)").rfind("INSERTED", 0), 0u);
 
@@ -1177,9 +1210,8 @@ TEST_F(LockDeadlockTest, WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe) {
 // A repeatable-read writer whose blocker is the row's own writer is still
 // refused rather than offered a wait (`NoteBlockingWriter`'s guard; its
 // cell, `ARepeatableReadWriterIsRefusedRatherThanOfferedANarrowerWait`,
-// went with AT-S6 and is one of the seven AY-Q9 holds): the blocker is the
-// row's own writer, and a
-// commit makes the row invisible to the waiter's view for the rest of its
+// went with AT-S6 and is one of the seven AY-Q9 holds), because a commit
+// makes the row invisible to the waiter's view for the rest of its
 // transaction, so the wait could only ever pay off on the abort arm. These
 // two are the case that does not - a holder of a *unit* over the key that
 // has written no version of it. Its commit changes what this view admits
@@ -1730,7 +1762,7 @@ TEST_F(MidWalkWaitTest, ATenRowUpdateMeetingAHeldRowKeepsWhatItWroteAndWaits) {
               0u);
 
     Session w;
-        // `v >= 0` for the fixture's reason: the per-row path.
+    // `v >= 0` for the fixture's reason: the per-row path.
     Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
 
@@ -1811,7 +1843,7 @@ TEST_F(MidWalkWaitTest, TheCommitArmRefusesAndUnwindsWhatTheStatementHadWritten)
               0u);
 
     Session w;
-        // `v >= 0` for the fixture's reason: the per-row path.
+    // `v >= 0` for the fixture's reason: the per-row path.
     Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << walk.out->response;
@@ -1841,7 +1873,7 @@ TEST_F(MidWalkWaitTest, InsideAnExplicitTransactionTheRowsAreWrittenOnceNotTwice
 
     Session w;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
-        // `v >= 0` for the fixture's reason: the per-row path.
+    // `v >= 0` for the fixture's reason: the per-row path.
     Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << walk.out->response;
@@ -1871,7 +1903,7 @@ TEST_F(MidWalkWaitTest, ADeleteParksInTheMiddleOfItsWalkToo) {
               0u);
 
     Session w;
-        // `v >= 0` for the fixture's reason: the per-row path.
+    // `v >= 0` for the fixture's reason: the per-row path.
     Started walk = Start("DELETE FROM t WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << "the DELETE did not park: " << walk.out->response;
@@ -1897,7 +1929,7 @@ TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
 
     Session w;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
-        // `v >= 0` for the fixture's reason: the per-row path.
+    // `v >= 0` for the fixture's reason: the per-row path.
     Started walk = Start("UPDATE tb SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << "the btree walk did not park: " << walk.out->response;
@@ -2203,7 +2235,7 @@ TEST_F(MidWalkWaitTest, WithoutADetectorTheMidWalkParkIsNotOffered) {
               0u);
 
     Session w;
-        // `v >= 0` for the fixture's reason: the per-row path.
+    // `v >= 0` for the fixture's reason: the per-row path.
     Started walk = Start("UPDATE t SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_TRUE(*walk.done) << "it parked with no detector to end a cycle it could join";

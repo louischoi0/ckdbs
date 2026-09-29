@@ -65,7 +65,7 @@ statement about an engine that no longer exists; re-verify or strike it.
   `NoteWaitFor` never finding a cycle by six.
 
   **What is not restored**: the seven non-2PC cells of the base fixture
-  itself (old `:3833-4122`), in no inventory before AY-S0 - the in-flight
+  itself (old `:3833-4156`), in no inventory before AY-S0 - the in-flight
   writer waits, the repeatable-read refusal of a row's own writer, and the
   FK child waiting out a parent's writer. They ran with **no lock table**
   (`LockCap()` was `nullopt`), an arm no production assembly builds; two
@@ -74,6 +74,19 @@ statement about an engine that no longer exists; re-verify or strike it.
   `LockDeadlockTest.WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe` and
   `MidWalkWaitTest.WithoutADetectorTheMidWalkParkIsNotOffered`. **Owner:
   AY-Q9** (`instructions/v3.0.0/workorder-ay-following-letter.md` §4).
+
+  **Six more went uncounted**, the base fixture's cells that shipped or
+  prepared (old `:1596-1779` and `:4158`), named neither in AT-S6's twelve
+  nor in AY-S0's seven. Their holder was a 2PC participant; what they
+  pinned of the lock family outlives it. The fault net's refusal - retryable
+  `TxnConflict`, "fault net" on the line and on the carried status - was
+  pinned by no cell, and `LockDeadlockTest.ARowWaitAtTheFaultNetIsRefusedRetryablyAndNamesTheNet`
+  restores it (AY-S1's review). An undecided holder waited on, and a
+  waiting statement not poisoned, have the restored cells. The in-doubt
+  ceiling key's inertness went with the key. Whether
+  `ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid`'s premise - the
+  synchronous path poisons an explicit transaction on a row conflict - has
+  a surviving cell was not checked.
 
 - **AX-S2b's release-kick cell failed once under `-j8` and did not
   reproduce.** On `worktree-ay-s0-order` at `14cfdfa` (sources as
