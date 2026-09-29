@@ -448,6 +448,7 @@ Rejected:
 The sibling rig cells' early-`ASSERT` teardown hazard, which predates this
 stage, is left as it is.
 
-**Suite**: 3092/3092 in Debug at `b201ed3`, and again after the review, below.
-The rig file passed 20 repeats alone and 8 × 5 in parallel. Overhead not
-measured.
+**Suite**: 3092/3092 in Debug (`ctest -LE heap-suspended -j8`) at `b201ed3`
+and at `58e78c7` after the review. `origin/main` had not moved, so there was
+nothing to merge. The rig file passed 20 repeats alone and 8 × 5 in parallel.
+Overhead not measured.
