@@ -639,6 +639,172 @@ TEST_F(LockDeadlockTest, ARowWaitAtTheFaultNetIsRefusedRetryablyAndNamesTheNet) 
     EXPECT_NE(Rows().find(",2"), std::string::npos) << Rows();
 }
 
+// ---- AY-Q9: what the base fixture's own cells pinned ----------------------
+//
+// `Txn2pcBlockedWriterTest` held seven cells of its own that test no 2PC
+// (old `:3833-4156`), run with **no lock table** - an arm no production
+// assembly builds. AY-Q9, marked as proposed on 2026-09-29, ports the
+// premises that still hold onto this table-backed base. Four do and are
+// below. Three are not ported: `ATransactionThatAlreadyWroteIsRefusedRatherThanWaited`
+// is the no-table guard, which `WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe`
+// pins in the same shape and which a table inverts
+// (`ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds`); the child
+// that waits out a parent's commit, and the one whose parent rolls back,
+// are pinned table-backed on the two-core rig (`fk_cross_core_rig_test.cpp`).
+
+TEST_F(LockDeadlockTest, ARepeatableReadWriterIsRefusedRatherThanOfferedANarrowerWait) {
+    // The repeatable-read guard in `NoteBlockingWriter`. The view is minted
+    // at `BEGIN` and never re-minted, so a holder that **commits** after it
+    // stays invisible and the re-run refuses on the ground it refused on the
+    // first time - a stall ending in the refusal already owed. Where the
+    // blocker is the row's own writer - the header names it - the wait is
+    // futile and the level keeps the refusal. The fence-holder cells below
+    // are the case that waits.
+    //
+    // **The exclusion is conservative rather than exact**: a holder that
+    // *aborts* restores the row's prior writer id, and the same view would
+    // then admit the write. A wait that pays off only on a rollback is a
+    // narrower promise than the family makes elsewhere.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+
+    Session rr;
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &rr)
+                  .response.rfind("ERR", 0),
+              std::string::npos)
+        << "the level must be settable for this cell to mean anything";
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &rr).response.rfind("BEGIN", 0), 0u);
+
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", rr);
+    Pump();
+    ASSERT_TRUE(*w.done) << "a repeatable-read writer waited for a decision its own view will "
+                            "never see: " << w.out->response;
+    EXPECT_EQ(StatusFromErrorReply(w.out->response).code(), StatusCode::kTxnConflict)
+        << w.out->response;
+    EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "a refused wait left its edge";
+}
+
+TEST_F(LockDeadlockTest, ARepeatableReadChildWaitsOutItsParentBecauseTheCheckViewIsFresh) {
+    // AO-S6d's item 17, on the forward check. A constraint check reads
+    // latest state - `CheckView` mints a view of *now* whatever the level -
+    // so the wait pays off in both arms: the parent's commit makes it
+    // visible to the re-run, its abort makes the answer a terminal
+    // `FkViolation`. A level test here would answer the same `INSERT`
+    // differently depending on nothing the client can see.
+    //
+    // **The mutation** (measured, AY-Q9): a repeatable-read test in
+    // `WaitForParentRowWriter`'s table path - which asks the parent row's
+    // `S` and does not go through `NoteBlockingWriter`'s level guard - and
+    // the child is refused `TxnConflict` here, where the same statement at
+    // READ COMMITTED waits.
+    ASSERT_EQ(Local("CREATE TABLE accounts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+
+    Session parent;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &parent).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO accounts VALUES (5, 1)", &parent)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Session child;
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &child)
+                  .response.rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &child).response.rfind("BEGIN", 0), 0u);
+
+    Started insert = Start("INSERT INTO orders VALUES (1, 5)", child);
+    Pump();
+    ASSERT_FALSE(*insert.done) << "the repeatable-read child was refused instead of waiting for "
+                                  "its parent: " << insert.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &parent).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*insert.done) << "the wait never ended";
+    EXPECT_EQ(insert.out->response.rfind("INSERTED", 0), 0u)
+        << "the parent committed before the check view was minted, so the child is legal: "
+        << insert.out->response;
+}
+
+TEST_F(LockDeadlockTest, AnAutocommitWriterWaitsOutALocalHolderAndThenSeesItsValue) {
+    // AO-5's S3 row: an autocommit `UPDATE` against a row an open
+    // transaction holds returns after its `COMMIT`, and writes over the
+    // value the commit left - the re-check is mandatory, so it does not
+    // resume with the answer it had when it parked.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*w.done) << "the writer was refused instead of waiting: " << w.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done) << "the wait never ended";
+    EXPECT_EQ(w.out->response, "UPDATED 1") << w.out->response;
+    EXPECT_NE(Rows().find(",3"), std::string::npos) << Rows();
+}
+
+TEST_F(LockDeadlockTest, AWriterWaitingOutAHolderThatRollsBackWritesOverThePriorVersion) {
+    // The other decide. The holder's compensations put the old value back
+    // before its borrows go (AO-R6's ordering), so the waiter re-runs
+    // against the version that was there all along rather than a
+    // half-undone one.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done) << "an abort must end the wait exactly as a commit does";
+    EXPECT_EQ(w.out->response, "UPDATED 1") << w.out->response;
+    EXPECT_NE(Rows().find(",3"), std::string::npos) << Rows();
+}
+
+TEST_F(LockDeadlockTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid) {
+    // One of the six uncounted cells (`known-gaps.md`, Testing), whose
+    // holder was a prepared participant; ported here over an ordinary one.
+    // **The poison is withheld for the wait, so where there is no wait it
+    // must stand.** `Dispatch()` has no reactor to park on and answers the
+    // conflict itself; a failed statement inside an explicit transaction
+    // poisons the session whatever refused it (txn.md §6 - failure atomicity
+    // is per transaction), and a session left unpoisoned here would tell the
+    // client `ERR` and then let its COMMIT succeed without the statement.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+
+    Session local;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &local).response.rfind("BEGIN", 0), 0u);
+    const DispatchOutcome out = dispatcher_->Dispatch("UPDATE t SET v = 3 WHERE id = 7", &local);
+    EXPECT_EQ(StatusFromErrorReply(out.response).code(), StatusCode::kTxnConflict)
+        << out.response;
+    EXPECT_TRUE(local.failed()) << "the failed statement left the transaction committable";
+    EXPECT_NE(dispatcher_->Dispatch("COMMIT", &local).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &local).response.rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(locks_->EntryCount(), 2u) << "only the holder's relation IX and row X remain";
+}
+
 // ---- AY-S2: the containment wake ------------------------------------------
 
 TEST_F(LockDeadlockTest, AChildWhoseParentIsUnderARangeFenceWaitsForTheFence) {
