@@ -1,0 +1,48 @@
+
+postgresql benchmark - 34 columns, 200 rows resident, 1 connection
+server 127.0.0.1:15700  table users_082826, books_082826, reservations_082826, loans_082826
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0    2753.9   2073.7   2073.7   2265.1   4204.0   4204.0    4204.0     0
+load                       380         0    1803.0   1135.2   1290.1   1333.6   1951.0   6770.8   77552.7     0
+create-index                12         0    1675.2   1424.9   1560.3   1574.2   1998.3   1998.3    1998.3     0
+pk-user                    200         0      61.6     57.2     58.3     58.8     74.1     81.6     234.7     0
+loans-by-user              200         0      81.8     68.5     75.3     78.7     94.9    129.2     323.0     0
+loans-by-book              200         0      78.3     69.0     74.2     77.1     89.2     95.6     137.4     0
+resv-by-user               200         0      67.0     59.5     63.4     65.1     81.6     88.5     155.0     0
+books-by-author            200         0      69.8     61.7     64.2     68.5     84.7     91.1     162.1     0
+books-by-genre             200         0      68.1     62.7     64.9     66.5     82.1     87.0     115.2     0
+loans-by-daterange         200         0      85.6     73.5     79.8     83.2    100.2    113.9     155.1     0
+overdue                    200         0      90.4     78.4     86.2     88.7    106.0    117.3     128.7     0
+join-loan-user             200         0     106.3     91.3    100.7    104.2    120.5    129.7     234.2     0
+join-no-literal            200         0     232.6    222.7    226.1    228.8    245.4    263.9     404.0     0
+exists-correlated          200         0     184.6    176.3    179.1    180.4    202.2    209.8     239.0     0
+count-by-user              200         0      80.4     76.1     77.0     77.7     94.6    107.7     178.0     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - index scan on the pk, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON l.user_id = u.id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans WHERE user_id = users.id), 20 outer rows
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), analyze on
+  sizes: users=40, books=40, reservations=100, loans=200
+  no Cabin equivalent exists here - a --cabin ckdbs run has no twin column in the comparison
+  EXPLAIN:
+      loans-by-user: Seq Scan on loans_082826  (cost=0.00..4.50 rows=6 width=8) /   Filter: (user_id = 1)
+      books-by-genre: Seq Scan on books_082826  (cost=0.00..1.50 rows=3 width=13) /   Filter: (genre = 3)
+      overdue: Seq Scan on loans_082826  (cost=0.00..5.50 rows=25 width=8) /   Filter: ((due_day >= 19700) AND (due_day <= 20000) AND (status = 2))
+      join-no-literal: Hash Join  (cost=1.79..6.37 rows=75 width=17) /   Hash Cond: (l.user_id = u.id) /   ->  Seq Scan on loans_082826 l  (cost=0.00..4.00 rows=200 width=16) /   ->  
+      exists-correlated: Hash Join  (cost=5.38..7.24 rows=19 width=8) /   Hash Cond: (users_082826.id = l.user_id) /   ->  Seq Scan on users_082826  (cost=0.00..1.60 rows=19 width=8) / 
+  wrote /home/cdkbs/bench-runs/pg18-f2f1ee7/json/s3-pg-n200-all-r2.json

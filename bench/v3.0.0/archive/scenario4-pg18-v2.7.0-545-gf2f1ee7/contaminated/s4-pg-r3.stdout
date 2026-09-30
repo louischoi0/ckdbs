@@ -1,0 +1,28 @@
+/home/cdkbs/ckdbs/.claude/worktrees/bench-pg-floor/tools/pg_scenario4_cabinopt_days.py:215: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  "started_utc": datetime.datetime.utcfromtimestamp(t0)
+
+postgresql benchmark - id bigserial pk, symbol text, qty bigint, price bigint columns, boards 2x10000, tapes 200/1000/10000 rows resident, 1 connection
+server 127.0.0.1:15700  table board_*/tape_*_a
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load[pg]                 31200    19,092      52.4     46.1     47.9     48.5     70.4     87.2     450.0     0
+d1-open[pg]                240       722    1385.5    904.1   1041.6   1104.7   3575.8   6239.2    8378.3     0
+d1-board[pg]              2400     2,010     497.6    465.3    488.6    495.7    520.1    546.7     933.3     0
+d1-tape200[pg]             396    12,996      76.9     71.6     72.9     73.8     92.0    123.3     131.8     0
+d1-tape1k[pg]              396     9,189     108.8    103.6    105.2    106.1    122.0    131.8     136.0     0
+d1-tape10k[pg]             396     2,123     471.0    455.7    461.4    468.7    490.5    551.9     710.6     0
+d1-pk[pg]                  240    15,686      63.8     58.0     59.6     60.5     81.9     95.0     174.2     0
+d1-close[pg]                12     1,191     839.9    348.1    359.5    474.6   2270.7   2270.7    2270.7     0
+
+  load[pg]: setup, txn batches of 500
+  d1-open[pg]: 240 inserts
+  d1-board[pg]: hot equality on board_a_a
+  d1-tape200[pg]: 200 rows
+  d1-tape1k[pg]: 1000 rows
+  d1-tape10k[pg]: 10000 rows
+  d1-pk[pg]: control
+  d1-close[pg]: COUNT/SUM/GROUP BY full scans
+
+  PostgreSQL at defaults: no structure is ever created for the hot predicate, so one day stands for every day.
+json -> /home/cdkbs/bench-runs/pg18-f2f1ee7/json/s4-pg-r3.json

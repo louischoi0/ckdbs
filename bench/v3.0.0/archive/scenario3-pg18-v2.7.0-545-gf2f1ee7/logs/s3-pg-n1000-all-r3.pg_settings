@@ -1,0 +1,28 @@
+DateStyle|ISO, MDY|configuration file
+TimeZone|Etc/UTC|configuration file
+application_name|psql|client
+autovacuum_worker_slots|16|configuration file
+config_file|/home/cdkbs/pg-bench-18/data/postgresql.conf|override
+data_directory|/home/cdkbs/pg-bench-18/data|override
+default_text_search_config|pg_catalog.english|configuration file
+dynamic_shared_memory_type|posix|configuration file
+hba_file|/home/cdkbs/pg-bench-18/data/pg_hba.conf|override
+ident_file|/home/cdkbs/pg-bench-18/data/pg_ident.conf|override
+lc_messages|C|configuration file
+lc_monetary|C|configuration file
+lc_numeric|C|configuration file
+lc_time|C|configuration file
+listen_addresses|127.0.0.1|configuration file
+log_line_prefix|%m [%p] |configuration file
+log_min_duration_statement|-1|configuration file
+log_timezone|Etc/UTC|configuration file
+logging_collector|off|configuration file
+max_connections|100|configuration file
+max_wal_size|1024|configuration file
+min_wal_size|80|configuration file
+port|15700|configuration file
+shared_buffers|16384|configuration file
+transaction_deferrable|off|override
+transaction_isolation|read committed|override
+transaction_read_only|off|override
+unix_socket_directories|/home/cdkbs/pg-bench-18/data|configuration file

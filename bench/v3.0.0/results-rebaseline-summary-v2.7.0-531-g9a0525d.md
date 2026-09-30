@@ -20,7 +20,7 @@ drivers ran. Scenario 1 is refused by the engine and produced no number.**
 | Host | 8 logical CPUs, AMD EPYC 9V74 (4 cores x 2 threads), Linux 7.0.0-1014-azure; **no `cc1plus`, `cmake --build` or `ctest` process at any cell**, per-cell loadavg in each file |
 | Ports | 15600 to 15653, never 15432 |
 | Config | `log_level = warn`; `cores` and `durability` per cell; scenario4 also `decay_half_life = 5`, `cabin_optimizer_snapshot_interval_ms = 500` (and `cabin_optimizer_cooldown_half_lives = 2` in its second run) |
-| PostgreSQL | not installed on this host; **no PostgreSQL floor was measured for any scenario** |
+| PostgreSQL | not installed on this host when this file was written; **no PostgreSQL floor was measured here**. PostgreSQL 18.6 was built afterwards and the floor measured at `v2.7.0-545-gf2f1ee7`: `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` |
 | Drivers | unmodified `tools/` scripts; every relation BTREE |
 
 ## What ran and what did not
@@ -186,7 +186,7 @@ against 3,283 qps, single draws).
 
 ## Not done
 
-- No PostgreSQL floor, for any scenario (not installed).
+- No PostgreSQL floor in this file (not installed then); it was measured afterwards and is in `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` and the five `results-scenario<N>-*-pg18-v2.7.0-545-gf2f1ee7.md` files.
 - Scenario1: no number.
 - Scenario3: `--cabin` and the `single`, `composite`, `covering` index modes.
 - `recovery_checkpoint_us` was not sampled in any cell; the load phases'

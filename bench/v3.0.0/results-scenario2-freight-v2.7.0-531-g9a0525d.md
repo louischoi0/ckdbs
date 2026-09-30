@@ -30,7 +30,7 @@ run. Arguments and cell order are that run's
 | Host | 8 logical CPUs, AMD EPYC 9V74, 1 socket x 4 cores x 2 threads, Linux 7.0.0-1014-azure. **The `cores = 8` cells put eight reactors, eight booker processes and a reporter on those eight CPUs** |
 | Server config | `log_level = warn`, `cores` and `durability` per cell, all else default; `placement` and `peer_listeners` are retired and not set. Default `isolation` (read-committed; the driver reports it as `server default`) except the probe in section 6 |
 | Ports | 15604 to 15607 (probe: 15604, 15605); never 15432 |
-| PostgreSQL | not installed on this host; the floor was not measured for this shape |
+| PostgreSQL | not installed on this host when this file was written and **not measured here**; the PostgreSQL 18.6 floor for this shape was measured afterwards, at `v2.7.0-545-gf2f1ee7`, and is in `results-scenario2-freight-pg18-v2.7.0-545-gf2f1ee7.md` (summary: `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`) |
 
 ## 2. What was run
 

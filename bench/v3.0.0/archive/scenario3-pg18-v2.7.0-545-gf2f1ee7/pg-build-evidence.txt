@@ -1,0 +1,58 @@
+## pg_config --configure
+ '--prefix=/home/cdkbs/.local/pgsql-18.6' '--without-icu' '--without-readline' '--without-zlib' '--with-openssl'
+## postgres --version
+postgres (PostgreSQL) 18.6
+## ldd postgres | grep -i -E 'libz|icu|readline|ssl|crypto'
+	libssl.so.3 => /lib/x86_64-linux-gnu/libssl.so.3 (0x00007ba03f561000)
+	libcrypto.so.3 => /lib/x86_64-linux-gnu/libcrypto.so.3 (0x00007ba03e400000)
+## ldd psql | grep -i -E 'libz|icu|readline' (empty = none linked)
+## df -T of the data directory's filesystem
+Filesystem     Type 1K-blocks      Used Available Use% Mounted on
+/dev/root      ext4 258932720 115433992 143482344  45% /
+## pg_database provider/collation (libc/C: ICU is not in play)
+bench|c|C|C|UTF8
+postgres|c|C|C|UTF8
+template0|c|C|C|UTF8
+template1|c|C|C|UTF8
+## compression settings on the hot paths
+pglz
+off
+worker
+fdatasync
+on
+on
+on
+on
+1GB
+128MB
+## SELECT version()
+PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+## pg_settings non-default, verbatim (the same dump is in each cell's logs/<cell>.pg_settings)
+DateStyle|ISO, MDY|configuration file
+TimeZone|Etc/UTC|configuration file
+application_name|psql|client
+autovacuum_worker_slots|16|configuration file
+config_file|/home/cdkbs/pg-bench-18/data/postgresql.conf|override
+data_directory|/home/cdkbs/pg-bench-18/data|override
+default_text_search_config|pg_catalog.english|configuration file
+dynamic_shared_memory_type|posix|configuration file
+hba_file|/home/cdkbs/pg-bench-18/data/pg_hba.conf|override
+ident_file|/home/cdkbs/pg-bench-18/data/pg_ident.conf|override
+lc_messages|C|configuration file
+lc_monetary|C|configuration file
+lc_numeric|C|configuration file
+lc_time|C|configuration file
+listen_addresses|127.0.0.1|configuration file
+log_line_prefix|%m [%p] |configuration file
+log_min_duration_statement|-1|configuration file
+log_timezone|Etc/UTC|configuration file
+logging_collector|off|configuration file
+max_connections|100|configuration file
+max_wal_size|1024|configuration file
+min_wal_size|80|configuration file
+port|15700|configuration file
+shared_buffers|16384|configuration file
+transaction_deferrable|off|override
+transaction_isolation|read committed|override
+transaction_read_only|off|override
+unix_socket_directories|/home/cdkbs/pg-bench-18/data|configuration file

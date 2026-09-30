@@ -69,7 +69,7 @@ changes it.
   verify verdict: nothing past the fifth `CREATE TABLE` ran.
 - The row-set sweep of rule 9, the wait decomposition and the percentile
   tables do not apply: there is no measured unit.
-- PostgreSQL is not installed on this host and no floor exists.
+- PostgreSQL was not installed on this host when this file was written and no floor exists here; a standalone PostgreSQL 18.6 run of the driver's defaults was made afterwards, at `v2.7.0-545-gf2f1ee7`, in `results-scenario1-backtest-pg18-v2.7.0-545-gf2f1ee7.md` (KDS still has no counterpart).
 - The one thing this run establishes is that the driver, unmodified, is
   unrunnable at `9a0525d`, in one second and with a clear message; the
   scenario has no number to defend until its schema is BTREE-only.

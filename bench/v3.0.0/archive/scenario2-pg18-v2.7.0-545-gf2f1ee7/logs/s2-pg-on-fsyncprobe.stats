@@ -1,0 +1,4 @@
+wal io: 7753 writes, 7748 fsyncs
+wal io all backends: 8515 writes, 7751 fsyncs
+pg_stat_wal: records=95353 fpi=1730 bytes=16976517
+xact_commit=9592 xact_rollback=340

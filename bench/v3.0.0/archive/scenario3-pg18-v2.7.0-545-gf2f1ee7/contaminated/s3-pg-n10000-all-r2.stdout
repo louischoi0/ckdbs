@@ -1,0 +1,48 @@
+
+postgresql benchmark - 34 columns, 10000 rows resident, 1 connection
+server 127.0.0.1:15700  table users_083110, books_083110, reservations_083110, loans_083110
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0   90841.7   2962.7   2962.7   3957.2 349994.3 349994.3  349994.3     0
+load                     19000         0    1708.1   1036.7   1195.5   1260.3   2200.9   6017.6  395510.3     0
+create-index                12         0    5279.3   2460.1   2575.6   4097.6  12677.8  12677.8   12677.8     0
+pk-user                    200         0      71.8     64.6     66.1     67.9     94.0     99.2     339.0     0
+loans-by-user              200         0     104.9     78.7     92.0    100.1    128.0    146.7     530.0     0
+loans-by-book              200         0      94.5     74.9     87.0     92.6    115.9    124.5     131.8     0
+resv-by-user               200         0      84.0     66.8     76.6     81.3    102.6    126.6     198.7     0
+books-by-author            200         0     107.4     73.4     99.4    104.6    137.9    152.5     261.8     0
+books-by-genre             200         0     307.4    232.8    258.2    271.0    407.5    429.0     506.8     0
+loans-by-daterange         200         0    1011.4    511.1    935.7    963.5   1143.6   1218.6    2690.0     0
+overdue                    200         0     551.3    115.5    544.2    568.8    633.6    658.4     672.9     0
+join-loan-user             200         0     140.9    125.9    133.5    137.9    161.3    176.2     260.2     0
+join-no-literal            200         0     714.7    691.2    704.8    716.2    725.7    733.8     904.6     0
+exists-correlated          200         0     223.2    213.7    216.4    218.3    240.5    248.9     326.7     0
+count-by-user              200         0     111.3    103.8    106.7    108.1    128.8    133.6     233.8     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - index scan on the pk, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON l.user_id = u.id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans WHERE user_id = users.id), 20 outer rows
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), analyze on
+  sizes: users=2000, books=2000, reservations=5000, loans=10000
+  no Cabin equivalent exists here - a --cabin ckdbs run has no twin column in the comparison
+  EXPLAIN:
+      loans-by-user: Bitmap Heap Scan on loans_083110  (cost=4.32..20.93 rows=5 width=8) /   Recheck Cond: (user_id = 1) /   ->  Bitmap Index Scan on loans_user_cov_083110  (cost=0.
+      books-by-genre: Bitmap Heap Scan on books_083110  (cost=5.29..31.93 rows=131 width=13) /   Recheck Cond: (genre = 3) /   ->  Bitmap Index Scan on books_genre_083110  (cost=0.00
+      overdue: Bitmap Heap Scan on loans_083110  (cost=29.51..147.15 rows=1351 width=8) /   Recheck Cond: ((status = 2) AND (due_day >= 19700) AND (due_day <= 20000)) /   ->  
+      join-no-literal: Hash Join  (cost=8.80..229.10 rows=80 width=17) /   Hash Cond: (l.user_id = u.id) /   ->  Seq Scan on loans_083110 l  (cost=0.00..194.00 rows=10000 width=16) / 
+      exists-correlated: Nested Loop Semi Join  (cost=0.56..120.09 rows=20 width=8) /   ->  Index Only Scan using users_083110_pkey on users_083110  (cost=0.28..8.68 rows=20 width=8) / 
+  wrote /home/cdkbs/bench-runs/pg18-f2f1ee7/json/s3-pg-n10000-all-r2.json

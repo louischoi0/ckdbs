@@ -1,0 +1,8 @@
+initialized /home/cdkbs/pg-bench-18/data on port 15700
+waiting for server to start.... done
+server started
+created database bench
+ready: python3 tools/pg_benchmark.py --port 15700 --database bench
+waiting for server to shut down.... done
+server stopped
+removed /home/cdkbs/pg-bench-18/data

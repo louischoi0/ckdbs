@@ -33,7 +33,7 @@ the baseline the next scenario4 run is read against.
 | Server config (all three servers) | `cores = 1`, `durability = group`, `log_level = warn`, `decay_half_life = 5` (seconds; the driver docstring's 120x compression of the 600 s default), `cabin_optimizer_snapshot_interval_ms = 500`; **run B only** `cabin_optimizer_cooldown_half_lives = 2`. Ports 15651 to 15653, never 15432. The `on` arm runs `SET CABIN_OPTIMIZER ON` at day 1 open; the `declared` arm declares `CREATE CABIN` on every board and tape symbol column up front |
 | Driver arguments | defaults: `--days 3 --blocks 12 --session-seconds 45 --overnight-seconds 45 --open-inserts 240 --board-probes 2400 --tape-probes 396 --pk-ops 240 --close-rounds 3 --seed 20260810 --suffix a`, plus `--port-off/-on/-declared` and the three server pids |
 | Host stamp | precheck loadavg 1.69 / 1.65 / 1.54 (run A, the tail of the scenario1 attempt and the preceding passes) and 0.15 / 0.76 / 1.18 (run B); no `cc1plus`, `cmake --build` or `ctest` process at either |
-| PostgreSQL | not installed on this host; the floor was not measured for this shape |
+| PostgreSQL | not installed on this host when this file was written and **not measured here**; the PostgreSQL 18.6 floor for this shape was measured afterwards, at `v2.7.0-545-gf2f1ee7`, and is in `results-scenario4-cabinopt-days-pg18-v2.7.0-545-gf2f1ee7.md` (summary: `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`) |
 
 ## 2. What was run
 
