@@ -627,11 +627,13 @@ public:
     // it, and drops its ledger record so the cap and `Release` see it as
     // never taken.
     //
-    // Two callers, and they are the same operation seen from two sides: the
-    // verify below unwinds a grant it just published, and a positioned
-    // reader's borrow **moves** (AO-S6e-b) - it takes the slice it is
-    // entering before letting go of the one it is leaving, so the position
-    // is never unheld between two pages.
+    // Its callers give back one borrow before the decide: the verify below
+    // unwinds a grant it just published; a positioned reader's borrow
+    // **moves** (AO-S6e-b) - it takes the slice it is entering before letting
+    // go of the one it is leaving, so the position is never unheld between
+    // two pages; a child-row wait gives back a grant it did not need; and a
+    // foreign-key check that failed gives back the parent `S` its own ask
+    // took (AZ-S5).
     void ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
                     LockHoldings& holdings);
 

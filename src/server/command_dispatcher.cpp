@@ -3338,11 +3338,13 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // refused `S` is the wait - the statement has written nothing and
         // runs again at the release - and the cap refuses it past
         // `max_locks_per_txn` (AO-R10).
+        const bool held_before = HoldsRow(scope, fk.rel_oid, pk);
         if (std::optional<Status> held =
                 BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, pk),
                              RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
             return ParentRowHeld(child, fk.rel_oid, pk, *held);
         }
+        if (!held_before) into.NoteAsked(fk.rel_oid, pk);
 
         // The view is minted **after** the grant, so a writer that decided
         // between the statement's start and the grant is visible to it
@@ -3372,6 +3374,11 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         into.Put(fk.rel_oid, pk, verdict.value());
     }
     return Status::OK();
+}
+
+bool CommandDispatcher::HoldsRow(const WriteScope& scope, catalog::Oid rel,
+                                 std::uint64_t pk) const {
+    return scope.txn != nullptr && scope.txn->borrows().Holds(txn::LockKey::Tuple(rel, pk));
 }
 
 Status CommandDispatcher::ParentRowHeld(const catalog::TableAccess& child,
@@ -3409,8 +3416,10 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     // call site is inside an open `WriteScope`, which is the place AH-R1
     // exists to keep free of anything that could need to wait.
     exec::FkVerdict resolved{};
+    bool asked_here = false;  // whether this statement's ask took the parent's `S`
     if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk); found != nullptr) {
         resolved = *found;
+        asked_here = held.Asked(fk.rel_oid, parent_pk);
     } else if (fk.rel_oid == child.oid) {
         // The self-referencing arm, the one case the extraction pass
         // deliberately skips (see there).
@@ -3423,6 +3432,7 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         // the insert's own tuple borrow records its (`BorrowOrWait`), and
         // the statement ends there to park. A parent this statement wrote
         // itself is its own `X`, which never conflicts with its own `S`.
+        asked_here = !HoldsRow(scope, fk.rel_oid, parent_pk);
         if (std::optional<Status> row_held =
                 BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, parent_pk),
                              RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
@@ -3479,6 +3489,18 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
                                        column + "' cannot be checked yet");
         case exec::FkVerdict::kViolation:
             break;
+    }
+    // **The absent parent's `S` goes with the violation, if this statement
+    // took it** (AZ-S5, AZ-R5): the statement fails and poisons the
+    // transaction, which can write nothing that `S` protects, and kept it
+    // refused every insert of that parent until the client's `ROLLBACK`.
+    // One held before the statement stays - another statement stands on it.
+    // **The relation's `IS` stays too**: every other parent row of this
+    // statement stands under it, and without it a relation `X` - `DROP
+    // TABLE`, `CREATE INDEX` - could be granted over their `S`.
+    if (asked_here && locks_ != nullptr && scope.txn != nullptr) {
+        locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(fk.rel_oid, parent_pk),
+                           txn::LockMode::kShared, scope.txn->borrows());
     }
     return Status::FkViolation("'" + column + "' references row id=" +
                                std::to_string(value.int_val) + " of '" +

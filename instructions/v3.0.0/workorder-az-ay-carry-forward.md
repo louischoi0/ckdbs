@@ -639,3 +639,80 @@ the port probe unchanged.
   destroys the cell's statements while the reactors may still touch them
   until the rig joins. The file had that shape before AZ-S4; the message is
   printed before it can matter.
+### AZ-S5 — built 2026-09-30
+
+On `worktree-az-s5-failed-check-share` from `cd433ea`, on *"start
+AZ-S*"*. The reproduction (`f882e75`) was red at `cd433ea`: a failed child
+`INSERT` inside `BEGIN`, then another session's `INSERT` of that parent,
+refused `TXN_CONFLICT` "row id=99 is held by transaction 4".
+
+**The fix is AZ-R5 as written** (`92e14c7`).
+
+- On `FK_VIOLATION`, the parent row's `S` is given back with
+  `LockTable::ReleaseOne`, which wakes the key's waiters.
+- It is given back only when this statement's ask took it:
+  - the hoist tests `HoldsRow` before `BorrowOrWait` and records its own
+    asks (`FkParentVerdicts::NoteAsked`/`Asked`);
+  - the self-referencing arm tests the same.
+- The relation's `IS` is never given back.
+
+**The cells** (`fk_parent_hold_test.cpp`: one core, the lock table, two
+sessions, synchronous dispatch).
+
+- **The release**: red, then green.
+- **An `S` held from an earlier statement survives.** The earlier statement
+  is a zero-row `UPDATE` that named the absent key.
+- **The `IS` survives.** One statement names an absent and a present parent.
+  After the violation, a `CREATE INDEX` on the parent is still refused, and
+  the absent key's parent `INSERT` goes through.
+- **Mutants: three, all killed.**
+  - the held-before answer ignored: the held-before cell;
+  - the `IS` given back with the `S`: the intention cell;
+  - no release: the release and intention cells.
+
+**Not as the exit wrote it.**
+
+- **No self-referencing cell.** A self-referencing key cannot be declared
+  (`ForeignKeyCheckTest.ASelfReferencingForeignKeyCannotBeDeclared`), so the
+  arm's release is written and nothing reaches it. The reproduction's
+  message called that pair red; it was red only because its `CREATE TABLE`
+  was refused (corrected in `92e14c7`).
+- **One core, synchronously.** The cells do not run "on the other core ...
+  at the 1 s net": a refused hold is the refusal there, and the release's
+  wake is `ReleaseHeld`'s.
+- **`CREATE INDEX` stands in for `DROP TABLE`.** The parent of a declared
+  foreign key cannot be dropped (RESTRICT).
+
+**Also**: `foreign-keys.md` §2c, §2a and §5, the `known-gaps.md` entry and
+the CLAUDE.md Foreign keys row restated. The suite at `92e14c7`: 3062/3062
+under `-j8`. Overhead not measured; it is measured at AZ's close.
+
+**The review** (`critics-developer`, on `92e14c7`) found the change safe:
+it never gives back an `S` anything relies on. It also found a gap, and it
+is recorded here, not closed.
+
+- **A statement that parked after its hoist keeps the `S`.** It runs again
+  whole, and its first run's `S` is still in the ledger, so the re-run reads
+  it as held before. An example: a violation after a wait on a child row
+  another open transaction holds. Inside `BEGIN` the `S` then stays to the
+  rollback, as before AZ-S5. That is a refusal, not a wrong answer, and the
+  synchronous fixture cannot reach it.
+- **The review's proposal is the operator's**, because it changes AZ-R5:
+  give back the `S` on any failed check, whoever held it. An `S` on a key
+  the check reads as absent protects no row - while any `S` is held no
+  other transaction can take the key's `X`, so absent means absent at every
+  grant, or deleted by this transaction under its own `X`. That closes the
+  gap, deletes `HoldsRow` and the asked set, and flips the held-before cell.
+  It is recorded in §2c and `known-gaps.md`, and not assumed.
+- **Taken:**
+  - §5's "an absent parent is held by the same `S`";
+  - §2a now says the self-referencing arm is unreachable;
+  - `ReleaseOne`'s "two callers";
+  - the dispatcher header's comments sat above the wrong declarations;
+  - the test helper is a fixture method.
+- **Rejected:**
+  - folding the asked bit into the verdict map - `Find`'s callers would all
+    change for one flag;
+  - leaving the self-referencing arm unchanged - AZ-R5 names both arms, and
+    the arm should not diverge silently if a self-referencing key ever
+    becomes declarable.

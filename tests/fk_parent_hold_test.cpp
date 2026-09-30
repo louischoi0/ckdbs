@@ -81,6 +81,8 @@ protected:
     std::string Run(Session& s, const std::string& sql) {
         return dispatcher_->Dispatch(sql, &s).response;
     }
+    // Another session's statement, on the second dispatcher.
+    std::string Other(const std::string& sql) { return other_->Dispatch(sql).response; }
 
     storage::InMemoryPageStore backing_{kFirstUserPageId};
     testing_race::ActOnFetchStore store_{backing_};
@@ -219,5 +221,70 @@ TEST_F(FkParentHoldTest, AChildMovedOffTheParentInABankedSetIsNotAClear) {
         << "the DELETE answered '" << deleted << "' and left c(1, pid = 7) without its parent";
 }
 
+
+// ---- A failed check gives back the `S` its own ask took (AZ-S5, AZ-R5) ----
+//
+// D9(a) holds the parent row's `S` from before the descent to the decide. A
+// check that finds no parent fails the statement `FK_VIOLATION` and poisons
+// the transaction, which then writes nothing that `S` protects; kept, it
+// refused every insert of that parent key until the client's `ROLLBACK`
+// (`TXN_CONFLICT` here, where a refused hold is the refusal; the 1 s fault
+// net on a served session). Only the ask's own `S` goes: one the transaction
+// held before the statement is left, and so is the relation's `IS`, which the
+// statement's other parent keys still stand under.
+//
+// **The self-referencing arm gives back its own `S` the same way, and no
+// cell reaches it**: a self-referencing foreign key cannot be declared
+// (`ForeignKeyCheckTest.ASelfReferencingForeignKeyCannotBeDeclared` pins
+// that, and fails if it changes).
+//
+// **Mutations**: the held-before answer removed (release whatever the
+// violation names), killed by the held-before cell; the `IS` released with
+// the `S`, killed by the intention cell.
+
+TEST_F(FkParentHoldTest, AFailedCheckGivesBackTheAbsentParentsHold) {
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    const std::string failed = Run(child, "INSERT INTO c VALUES (99)");
+    ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
+
+    const std::string parent = Other("INSERT INTO p VALUES (99, 0)");
+    EXPECT_EQ(parent.rfind("INSERTED", 0), 0u)
+        << "the failed check still holds the absent parent: " << parent;
+    ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(FkParentHoldTest, AHoldTakenByAnEarlierStatementSurvivesTheViolation) {
+    // A zero-row `UPDATE` resolves its SET's parent and holds its `S`
+    // (`UPDATED 0`, byte-identical by design) - an `S` on an absent key the
+    // transaction had before the failing statement asked.
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(Run(child, "UPDATE c SET pid = 99 WHERE id = 12345").rfind("UPDATED 0", 0), 0u);
+    const std::string failed = Run(child, "INSERT INTO c VALUES (99)");
+    ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
+
+    const std::string parent = Other("INSERT INTO p VALUES (99, 0)");
+    EXPECT_EQ(parent.rfind("ERR TXN_CONFLICT", 0), 0u)
+        << "the violation gave back a hold an earlier statement took: " << parent;
+    ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(FkParentHoldTest, TheRelationsIntentionOutlivesAFailedChecksHold) {
+    // One statement, an absent parent and a present one: the violation gives
+    // back S(99) and keeps S(10) - and the `IS` on `p` both stood under. A
+    // relation `X` on `p` must still be refused while S(10) is held.
+    ASSERT_EQ(Run("INSERT INTO p VALUES (10, 0)").rfind("INSERTED", 0), 0u);
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    const std::string failed = Run(child, "INSERT INTO c VALUES (99), (10)");
+    ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
+
+    const std::string index = Other("CREATE INDEX pv ON p (v)");
+    EXPECT_EQ(index.rfind("ERR TXN_CONFLICT", 0), 0u)
+        << "a relation X was granted over a held parent row: " << index;
+    EXPECT_EQ(Other("INSERT INTO p VALUES (99, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
 }  // namespace
 }  // namespace kds::server
