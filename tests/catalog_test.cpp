@@ -19,7 +19,11 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/sched/clock.hpp"
 #include "kds/txn/manager.hpp"
+#include "kds/wal/manager.hpp"
+#include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/record.hpp"
 
 namespace kds::catalog {
 namespace {
@@ -1875,6 +1879,174 @@ TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
     // merely filtered.
     EXPECT_EQ(catalog_.FindTableOidByName("doomed").status().code(), StatusCode::kNotFound)
         << "the rows are still on the page; the rollback only hid them";
+}
+
+// ---- AZ-S1: a row placed and then not reported ----------------------------
+//
+// `InsertRow` places a row, fires the DDL undo hook, then logs the row's
+// `HEAP_INSERT`. A failure between placement and the record left the row on
+// the page with `where` unset, so the caller had nothing to register and the
+// rollback nothing to retire: a live catalog row for a DDL that failed
+// (`workorder-az-ay-carry-forward.md` item 2).
+
+// One page of a catalog chain as the slot directory records it.
+struct PageShape {
+    PageId page_id = kInvalidPageId;
+    std::uint16_t slots = 0;
+    std::uint16_t live = 0;
+    std::uint16_t lower = 0;
+    std::uint16_t upper = 0;
+    bool operator==(const PageShape&) const = default;
+};
+
+std::vector<PageShape> ChainShape(storage::PageStore& store, PageId root) {
+    std::vector<PageShape> out;
+    for (PageId at = root; at != kInvalidPageId;) {
+        auto bytes = store.Get(at);
+        EXPECT_TRUE(bytes.ok()) << bytes.status().message();
+        if (!bytes.ok()) break;
+        heap::PageView page(bytes.value().bytes());
+        PageShape shape{at, page.slot_count(), 0, page.lower(), page.upper()};
+        for (std::uint16_t i = 0; i < shape.slots; ++i) {
+            auto info = page.DebugSlotInfo(i);
+            if (info.ok() && !info.value().dead) ++shape.live;
+        }
+        out.push_back(shape);
+        at = page.next_page_id();
+    }
+    return out;
+}
+
+TEST_F(CatalogTest, AnUndoHookThatFailsOnTheTailLeavesTheChainAsItWas) {
+    // The first catalog write a create makes is its `sys.objects` row, and
+    // after bootstrap that chain's tail has room: the tail arm.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    const std::vector<PageShape> before = ChainShape(store_, kCatalogPageObjects);
+    ASSERT_FALSE(before.empty());
+
+    PageId hooked = kInvalidPageId;
+    catalog_.SetDdlUndoHook([&](const Catalog::DdlUndoEvent& event) {
+        hooked = event.page_id;
+        return Status::IoError("injected: the undo record could not be appended");
+    });
+    std::vector<CatalogRowRef> written;
+    auto created = catalog_.CreateTable(kNamespacePublic, "unhooked", MinimalPkSchema(),
+                                        ClusteredType::kBtree, /*trx_id=*/7, &written);
+    catalog_.SetDdlUndoHook(nullptr);
+
+    ASSERT_EQ(created.status().code(), StatusCode::kIoError) << created.status().message();
+    ASSERT_EQ(hooked, before.back().page_id) << "the cell meant the tail arm";
+    EXPECT_TRUE(written.empty());
+    // Nothing was logged and nothing is reported, so the page is as it was:
+    // not a dead slot, which a later logged insert on this page would sit
+    // past - a record redo cannot apply to an image the dead slot never
+    // reached (`heap_page.cpp`'s dense-slot refusal).
+    EXPECT_EQ(ChainShape(store_, kCatalogPageObjects), before)
+        << "the row the failed create placed is still on the page";
+    EXPECT_EQ(catalog_.FindTableOidByName("unhooked").status().code(), StatusCode::kNotFound);
+}
+
+TEST_F(CatalogTest, AnUndoHookThatFailsOnANewPageLeavesItEmptyAndUnlinked) {
+    // The new-page arm: creates run until one of them grows a chain, and
+    // the hook refuses the first event on a page no chain had.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    const PageId roots[] = {kCatalogPageObjects, kCatalogPageTables, kCatalogPageColumns};
+    auto known_pages = [&] {
+        std::set<PageId> known;
+        for (const PageId root : roots) {
+            for (const PageShape& page : ChainShape(store_, root)) known.insert(page.page_id);
+        }
+        return known;
+    };
+
+    std::set<PageId> known = known_pages();
+    PageId fresh = kInvalidPageId;
+    catalog_.SetDdlUndoHook([&](const Catalog::DdlUndoEvent& event) {
+        if (known.count(event.page_id) != 0) return Status::OK();
+        fresh = event.page_id;
+        return Status::IoError("injected: the undo record could not be appended");
+    });
+    std::vector<CatalogRowRef> written;
+    Status last = Status::OK();
+    for (int i = 0; i < 256 && fresh == kInvalidPageId; ++i) {
+        known = known_pages();
+        written.clear();
+        auto created = catalog_.CreateTable(kNamespacePublic, "grow" + std::to_string(i),
+                                            MinimalPkSchema(), ClusteredType::kBtree,
+                                            /*trx_id=*/7, &written);
+        last = created.status();
+    }
+    catalog_.SetDdlUndoHook(nullptr);
+
+    ASSERT_NE(fresh, kInvalidPageId) << "no catalog chain grew; the cell tested nothing";
+    EXPECT_EQ(last.code(), StatusCode::kIoError) << last.message();
+    for (const CatalogRowRef& row : written) {
+        EXPECT_NE(row.page_id, fresh) << "a row the failed create took back is still reported";
+    }
+    EXPECT_EQ(known_pages(), known) << "the new page was linked into a chain";
+    auto bytes = store_.Get(fresh);
+    ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+    EXPECT_EQ(heap::PageView(bytes.value().bytes()).slot_count(), 0)
+        << "the row the failed create placed is still on the new page";
+}
+
+TEST_F(CatalogTest, ARowWhoseRecordCannotBeAppendedIsRetiredWhereItLies) {
+    // The log refuses after the undo hook has succeeded: the transaction's
+    // undo holds an insert naming the slot, so the slot is retired rather
+    // than taken back - a retired slot is never handed out again, so
+    // recovery's undo meets it dead ("nothing to retire", recovery_undo.cpp)
+    // and never another row.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto device = wal::MemoryLogDevice::Create(/*segment_size=*/1u << 20);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    sched::ManualClock clock;
+    wal::WalManagerConfig config;
+    config.ring_capacity = wal::kMinRingCapacity;
+    auto opened = wal::WalManager::Open(device.value().get(), clock, /*core_id=*/0, config);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    wal::WalManager& log = *opened.value();
+    catalog_.SetWal(&log);
+
+    const std::vector<PageShape> before = ChainShape(store_, kCatalogPageObjects);
+    ASSERT_FALSE(before.empty());
+
+    // At the hook, the ring is filled to less than one smallest record and
+    // the device made to refuse: the row's append then finds no room, and
+    // the drain it forces fails. Each fill ends at a refused drain, which
+    // spends that injection - hence one per fill and one for the row.
+    bool armed = false;
+    catalog_.SetDdlUndoHook([&](const Catalog::DdlUndoEvent&) {
+        if (armed) return Status::OK();
+        armed = true;
+        for (const std::size_t size : {std::size_t{1024}, std::size_t{1}}) {
+            device.value()->FailNextWrite(Status::IoError("injected: the drain failed"));
+            const std::vector<std::byte> filler(size, std::byte{0x5a});
+            Status fill = Status::OK();
+            for (int i = 0; i < 1 << 16 && fill.ok(); ++i) {
+                fill = log.Append({wal::RecordType::kHeapInsert, wal::kNoTxnId, kInvalidPageId, 0},
+                                  filler)
+                           .status();
+            }
+            EXPECT_EQ(fill.code(), StatusCode::kIoError) << "the ring never filled";
+        }
+        device.value()->FailNextWrite(Status::IoError("injected: the row's drain failed"));
+        return Status::OK();
+    });
+    std::vector<CatalogRowRef> written;
+    auto created = catalog_.CreateTable(kNamespacePublic, "unlogged", MinimalPkSchema(),
+                                        ClusteredType::kBtree, /*trx_id=*/7, &written);
+    catalog_.SetDdlUndoHook(nullptr);
+    catalog_.SetWal(nullptr);
+
+    ASSERT_TRUE(armed);
+    ASSERT_EQ(created.status().code(), StatusCode::kIoError) << created.status().message();
+    EXPECT_TRUE(written.empty());
+    const std::vector<PageShape> after = ChainShape(store_, kCatalogPageObjects);
+    ASSERT_EQ(after.size(), before.size());
+    EXPECT_EQ(after.back().slots, before.back().slots + 1) << "the slot was taken back";
+    EXPECT_EQ(after.back().live, before.back().live)
+        << "the row the failed create placed is still live on the page";
+    EXPECT_EQ(catalog_.FindTableOidByName("unlogged").status().code(), StatusCode::kNotFound);
 }
 
 }  // namespace
