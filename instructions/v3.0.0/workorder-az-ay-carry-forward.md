@@ -12,8 +12,9 @@ waits on AR0 §8's chain through M4 (`raft-marks-2026-09-26.md` §4).
 ## 0. The items this order serves
 
 Numbered as AY §7 numbers them. "Covered" means differently per item, and
-the column says how: three are built by a stage whatever is marked, three
-need a mark before a stage exists, and one cannot be built here at all.
+the column says how: two are built on the word alone, two by a stage whose
+shape a mark picks, two need a mark before a stage exists, and one cannot
+be built here at all.
 
 | AY §7 | item | owner at AY's close | covered here by |
 |---|---|---|---|
@@ -39,9 +40,9 @@ Read, not run. Every citation is to `a59da9c`.
 ### 1.1 Item 1 - the peer's `CREATE ASSERTION`
 
 The bug entry (verified at `5574a7e`) still describes the tree. The publish
-run is logged inside `CreateAssertion` (`src/exec/assertion_catalog.cpp:576`),
-ahead of the catalog row (`:609`); the assertion enters the registry's
-`live_` only at `enforcer_->Adopt` (`src/server/command_dispatcher.cpp:2834`,
+run is logged inside `BuildAssertionCabin`, which `CreateAssertion` calls
+(`src/exec/assertion_catalog.cpp:576`), ahead of the catalog row (`:609`);
+the assertion enters the registry's `live_` only at `enforcer_->Adopt` (`src/server/command_dispatcher.cpp:2834`,
 `src/exec/assertion_check.cpp:160`), after `CreateAssertion` returns; core
 0's checkpoint snapshots only `live_` (`VisitSnapshots`,
 `assertion_check.cpp:153`, called from `Checkpointer::Start` at
@@ -56,15 +57,18 @@ that choice; it does not introduce one. A base for an assertion whose
 publish then fails is already possible and harmless: a mount folds only
 what `ListAssertions` returns (`assertion_catalog.cpp:560-564`).
 
-Not established: whether the adoption can move inside the build's
-relation `X` (AT-S5e) without a writer on another core meeting an assertion
-whose row is not yet committed. AZ-S2's first cell answers it.
+The adoption already runs under the build's relation `X` (AT-S5e): the
+`BuildLock` that holds it (`command_dispatcher.cpp:2782-2812`) is released
+only when the handler returns, after `:2834`. Moving the adoption earlier
+keeps it under the same `X`, so no writer of the relation, on any core,
+can meet the assertion before its row is written. A dispatcher with no
+lock table (`locks_ == nullptr`, `:2791`) takes no `X` today either.
 
 ### 1.2 Item 2 - the catalog row on a chain's tail
 
 The bug entry (verified at `68d8b18`) still describes the tree.
 `InsertRow` (`src/catalog/catalog.cpp:384`) sets `*where` in the tail arm
-only after `LogCatInsert` succeeds (`:411`, after the hook at `:399-405`
+only after `LogCatInsert` succeeds (`:411`, after the hook at `:400-406`
 and the append at `:407-410`), and in the new-page arm right after
 placement (`:440-442`), before its hook. A failed hook or append in the
 tail arm leaves the row on the page and `*where` unset, so the DDL's
@@ -106,7 +110,8 @@ AR1-V's corrections and left AP's order unsettled (status line, `:3`).
 
 - `ExpeditorTest.AtOneCoreTheDispatcherHoldsTheInstancesLockTable` failed at
   `ASSERT_TRUE(db.Start().ok())` (`tests/expeditor_test.cpp:377`) with no
-  status printed. The file carries **ten** such bare `Start()` assertions.
+  status printed. The file carries **ten** such bare `db.Start()`
+  assertions, and four more on `opened.value()->Start()`.
   The fixture's ports come from `TwoFreeLoopbackPorts()` (`:75-95`), which
   closes its probe sockets before returning, so another process can bind a
   port before the instance does; that reading is still unconfirmed.
@@ -122,21 +127,24 @@ Neither can be attributed from what was recorded.
 refuses a run of more than `kMaxAssertSnapshotChunks` (0xFFFF,
 `include/kds/wal/payload.hpp:833`) chunks at `checkpointer.cpp:71-77`, and a
 group no record can carry at `:55-64`. Either refusal returns out of
-`Checkpointer::Start` after `CHECKPOINT_BEGIN` is logged (`:135`, `:143`).
-By source read, what then happens:
+`Checkpointer::Start` after `CHECKPOINT_BEGIN` is logged (`:136`, `:143`).
+Only core 0's checkpoints reach it: a peer sharing the instance's registry
+gets no snapshot source (`src/server/core_runtime.cpp:438-440`). By source
+read, what then happens:
 
-- the periodic checkpoint's status is discarded - `(void)Checkpoint()` at
-  `src/server/core_runtime.cpp:529` and `src/server/expeditor.cpp:1878` -
-  so **no checkpoint completes again** on that volume while the assertion
-  lives, and the anchor stops moving;
-- the shutdown checkpoint logs an error and continues
-  (`expeditor.cpp:2050`, `:2116`);
+- core 0's periodic checkpoint fails every tick: `RunGated` logs the error
+  (`checkpointer.cpp:314-318`) and the cadence discards the status -
+  `(void)Checkpoint()` at `src/server/expeditor.cpp:1878` - so **no core-0
+  checkpoint completes again** while the assertion lives, and the fold's
+  redo start, bounded by core 0's last completion, stops moving;
+- core 0's shutdown checkpoint logs an error and continues
+  (`expeditor.cpp:2116`);
 - the mount's completion checkpoint returns the refusal
   (`src/server/mount_recovery.cpp:368`), so **the next mount fails**.
 
 AY §7 recorded this as "a refusal there is the rule". Read this way it
-stops checkpoints for good and then leaves the volume unmountable. That is
-not a wrong answer, but it is not the bounded refusal the close described.
+stops core 0's checkpoints for good and then leaves the volume unmountable.
+That is not a wrong answer, but it is not the bounded refusal the close described.
 Not run: no cell reaches 65,535 chunks (about 4 GB of group headers).
 **Not established**: whether any SQL path yields one group key larger than a
 record's usable payload (`WalManager::usable_payload_bytes`,
@@ -218,7 +226,7 @@ Each stage waits for the operator's word.
 |---|---|---|---|
 | AZ-S0 | This order; the index row | the files at the commit | S |
 | AZ-S1 | **The catalog tail arm** (item 2, AZ-R1) | red first: a DDL undo hook failing on its first event with the target's tail holding room leaves `written` (and `CREATE INDEX`'s `created_row`) empty and the row live after the rollback; green with the helper; mutation: `*where` set after the log again, killed by the cell; the bug entry deleted | S |
-| AZ-S2 | **The peer's `CREATE ASSERTION`** (item 1, AZ-R2) | red first on the two-core rig: a peer's create paused between its publish run and its adoption, a core-0 checkpoint completing past the publish run, a crash, a mount - the assertion comes up unenforcing today; green with adoption first; cells for a create that fails after adoption (evicted, no enforcement left) and for a writer on another core during the window (the question §1.1 leaves open); mutation: adoption moved back after the publish, killed; the bug entry deleted | M |
+| AZ-S2 | **The peer's `CREATE ASSERTION`** (item 1, AZ-R2) | red first on the two-core rig: a peer's create paused between its publish run and its adoption, a core-0 checkpoint completing past the publish run, a crash, a mount - the assertion comes up unenforcing today; green with adoption first; cells for a create that fails after adoption (evicted, no enforcement left) and for a writer on another core during the window (waits on the relation `X`, §1.1); mutation: adoption moved back after the publish, killed; the bug entry deleted | M |
 | AZ-S3 | **The unsnapshottable cabin** (item 7, AZ-R3) | first the survey question: whether SQL reaches a group key past one record; a cell per door reached - an admission refused with its position, a checkpoint that meets such a cabin completing and the assertion unenforcing at the next mount, the mount succeeding; the chunk-count door at its threshold through a test seam, not 4 GB; `266db2e`'s writer cell ported; the two "version 17" comments corrected; mutation: the checkpoint's fail-closed arm returning the refusal again, killed | M |
 | AZ-S4 | **The unreproduced failures instrumented** (item 6, AZ-R4) | every `Start()` assertion and every rig `Within` carries its cause; the suite green; `known-gaps.md`'s two Testing entries restated | S |
 | AZ-S5 | **The failed check's `S`** (item 3, AZ-R5) - only if AZ-Q3 marks a release | red first: a failed child `INSERT` inside `BEGIN`, then a parent `INSERT` of that key on the other core, which waits and is refused `TxnConflict` at the 1 s net today, proceeds; a cell where the `S` was held from an earlier statement and survives the violation; the self-referencing arm's pair; mutation: the `Holds` guard removed, killed; `foreign-keys.md` §2c and the `known-gaps.md` entry | S |
@@ -229,9 +237,9 @@ Each stage waits for the operator's word.
 
 | # | item | class | CLA proposal |
 |---|---|---|---|
-| AZ-Q0 | **The letter** - whether AY §7's seven items open as one letter, and as AZ | scope | yes: every item is small, none depends on another, and three need nothing but the word |
+| AZ-Q0 | **The letter** - whether AY §7's seven items open as one letter, and as AZ | scope | yes: every item is small, none depends on another, and two need nothing but the word |
 | AZ-Q1 | **Item 1's shape**: adopt before the publish run, or hold the checkpoint gate from the publish to the adoption | user-visible | adopt first (AZ-R2). It extends the over-enforcing choice `command_dispatcher.cpp:2836-2840` already made, and keeps `CheckpointGate` - which orders checkpoints against each other, not against DDL - out of a DDL's path |
-| AZ-Q2 | **Item 7's door**: today a checkpoint that meets the cabin fails, and by §1.7's read no checkpoint completes after it and the next mount fails | user-visible | refuse at admission, and let the checkpoint complete with the assertion unenforcing (AZ-R3): fail closed, keep the volume mountable |
+| AZ-Q2 | **Item 7's door**: today a checkpoint that meets the cabin fails, and by §1.7's read no core-0 checkpoint completes after it and the next mount fails | user-visible | refuse at admission, and let the checkpoint complete with the assertion unenforcing (AZ-R3): fail closed, keep the volume mountable |
 | AZ-Q3 | **Item 3**: release a failed check's `S` at the violation, or keep it to the rollback | user-visible | release the ask's own `S` only (AZ-R5): PostgreSQL's `FOR KEY SHARE` locks nothing for a missing row, and the poisoned transaction can write nothing that `S` protects. Keeping it is also sound; its cost is a refusal bounded by the client's rollback |
 | AZ-Q4 | **Item 4**: build the keyed partition, or accept the priced cost | cost | accept, no stage (AZ-R6): ~6 % at 16,384 parents in one transaction, unresolved at 1,024. Revisit when a workload holds thousands |
 | AZ-Q5 | **Item 5**: AP's order, which blocks AQ and AR opening as their own letters (AY-Q11) | scope | AP first, argued on AR1-V2's remaining ground: it is the only one of the three with no dependency. Settling it opens nothing here |
