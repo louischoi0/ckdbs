@@ -110,17 +110,17 @@ struct CatalogRowRef {
 // refused. Nothing opens a range since AT-S9, so only a relation split
 // before then meets this door. **Its callers are the index and the foreign
 // key since AY-S9**, which lifted the assertion's arm (its build walks every
-// chain, `assertion.md` §8.1) under AR0 D7; the Cabin's went at SB3. The
-// two left are AY-S10's.
+// chain, `assertion.md` §8.1) under AR0 D7; the Cabin's went at SB3.
 //
 // **More than one range**, not "has a directory": a one-row directory is
 // one range, and `range_directory.hpp` branches the other way because it
 // asks a different question - whether routing must be *resolved*, which a
 // migration's single row also requires.
 //
-// `Unsupported`, not retryable and carrying no byte position: the
-// statement is well formed and what it asks for is understood and
-// declined, and there is no offending token — ranges are an engine
+// `NotImplemented`, not retryable and carrying no byte position: the
+// statement is well formed and what it asks for is unbuilt rather than
+// inadmissible - D7 admits each auxiliary once a cell shows its build and
+// maintenance cover every chain - and there is no offending token — ranges are an engine
 // decision no statement asked for (§0's direction), so nothing in the text
 // the user wrote is at fault.
 Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary);

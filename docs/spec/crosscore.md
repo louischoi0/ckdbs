@@ -237,8 +237,7 @@ spec names (`index.md`, `cabin.md`, `assertion.md` §6.1,
 walked whole. **Creating one on a split relation** is AR0 D7's lift, per
 auxiliary: a Cabin has been admitted since SB3, an assertion since AY-S9
 (its build walks every chain, `assertion.md` §8.1); an index and a foreign
-key are still refused `NotImplemented` by `RefuseAuxiliaryOnSplitRelation`
-until AY-S10. The gates' text is `git show 2b20369:docs/spec/crosscore.md`
+key are refused `NotImplemented` by `RefuseAuxiliaryOnSplitRelation`. The gates' text is `git show 2b20369:docs/spec/crosscore.md`
 §6a.
 
 ### 6b. Inserts and the Tail

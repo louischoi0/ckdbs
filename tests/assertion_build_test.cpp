@@ -14,6 +14,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -228,6 +229,19 @@ void SplitRelation(catalog::Catalog& catalog, const char* name, std::uint64_t lo
     ASSERT_EQ(access.value()->ranges.size(), 2u);
 }
 
+// The slots on the second chain's entry page: the cells' premise, that the
+// deciding row is in the chain `desc_page_id` does not reach.
+std::uint16_t SecondChainSlots(catalog::Catalog& catalog, storage::PageStore& store,
+                               const char* name) {
+    auto oid = catalog.FindTableOidByName(name, nullptr);
+    EXPECT_TRUE(oid.ok()) << oid.status().message();
+    auto access = catalog.InitTableAccess(oid.value());
+    EXPECT_TRUE(access.ok()) << access.status().message();
+    auto page = store.GetForRead(access.value()->ranges.at(1).entry_page);
+    EXPECT_TRUE(page.ok()) << page.status().message();
+    return heap::PageView(page.value().bytes()).slot_count();
+}
+
 TEST_F(AssertionBuildTest, ABuildOverASplitRelationCountsEveryChain) {
     ASSERT_EQ(Run("CREATE TABLE ledger_h (id int64, book int64) HEAP").substr(0, 7), "CREATED");
     // Ids 1 and 2, in the first chain.
@@ -236,6 +250,7 @@ TEST_F(AssertionBuildTest, ABuildOverASplitRelationCountsEveryChain) {
     SplitRelation(boot_->catalog, "ledger_h", /*lo=*/3);
     // Id 3, the first row of the second chain: the group's third row.
     ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(SecondChainSlots(boot_->catalog, store_, "ledger_h"), 1u);
 
     const std::string refused =
         Run("CREATE ASSERTION book_cap ON ledger_h GROUP BY (book) CHECK COUNT(*) <= 2");
@@ -256,6 +271,7 @@ TEST_F(AssertionBuildTest, AnUpperRangeWritePastTheBoundOfASplitRelationIsRefuse
     ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");  // id 1
     SplitRelation(boot_->catalog, "ledger_h", /*lo=*/2);
     ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");  // id 2
+    ASSERT_EQ(SecondChainSlots(boot_->catalog, store_, "ledger_h"), 1u);
 
     const std::string out =
         Run("CREATE ASSERTION book_cap ON ledger_h GROUP BY (book) CHECK COUNT(*) <= 2");
@@ -267,8 +283,8 @@ TEST_F(AssertionBuildTest, AnUpperRangeWritePastTheBoundOfASplitRelationIsRefuse
     const std::string refused = Run("INSERT INTO ledger_h VALUES (7)");
     EXPECT_EQ(refused.substr(0, 23), "ERR ASSERTION_VIOLATION") << refused;
 
-    // The upper row's delete frees its ground, so maintenance reaches the
-    // second chain in both directions.
+    // The delete locates the upper row, and its departure frees the
+    // group's ground.
     ASSERT_EQ(Run("DELETE FROM ledger_h WHERE id = 2"), "DELETED 1");
     EXPECT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");
     EXPECT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 23), "ERR ASSERTION_VIOLATION");

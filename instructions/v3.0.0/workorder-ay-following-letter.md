@@ -517,3 +517,53 @@ Rejected:
 pre-existing disabled cell) at `68d8b18`, and again with the review's changes
 applied. The rig file passed 5 repeats after the review. Overhead not
 measured.
+
+### AY-S9 — built 2026-09-30
+
+On `worktree-ay-s9-assertion-every-chain` from `b5465a9`, on the operator's
+*"/inv-where-to-start-and-go-ahead"* (`raft-marks-2026-09-30.md` §1). S9 is
+independent of everything but S0 (§5); S4 and S8 were not startable, their
+cells encoding unmarked `[quiet-wrong]` items.
+
+**Red first**, at `c4d8e55` against `b5465a9`, two `HEAP` cells in
+`tests/assertion_build_test.cpp`, the deciding row in the second chain:
+`ABuildOverASplitRelationCountsEveryChain` (three rows of one group across
+two chains, `COUNT(*) <= 2` refused and `<= 3` built `rows=3`) and
+`AnUpperRangeWritePastTheBoundOfASplitRelationIsRefused`. Both failed on the
+gate's `NotImplemented`. **With the gates removed and the walk unfixed they
+failed by the survey's under-count**: the build reported `rows=2` over
+three rows and admitted, and the upper-range insert past the bound was
+admitted - the quiet wrong answer the gate stood in front of.
+
+**Built** at `557f1d1`: `BuildBoundCabin` walks `WalkHeads()` for a heap
+relation (the leftmost leaf for a btree, which never splits), the walk
+budget counted per chain; both `RefuseAuxiliaryOnSplitRelation` calls on
+the assertion path - `PrepareAssertionDef` and the `InsertAssertion` door -
+are deleted. The function keeps the index and FK callers. `assertion.md`
+§8.1 step 2 and `crosscore.md` §6a state it.
+
+**The review** (`critics-developer`, one pass) found no correctness defect:
+maintenance is keyed by group with the row's page from `HeapChainFor`,
+recovery and replay read the Bound Cabin's own pages, and the door's race
+had a range opening as its other side, which nothing in `src/` or `sim/`
+does since AT-S9. Taken:
+
+- the cells' premise pinned inside them - the second chain's entry page
+  holds the upper row (`SecondChainSlots`);
+- the delete tail's comment, which claimed maintenance "reaches the second
+  chain" where maintenance has no chain dimension;
+- `catalog.hpp`'s claim that the refusal is `Unsupported` - the code returns
+  `NotImplemented`, and D7's lift per auxiliary is why;
+- two plan clauses ("AY-S10's", "until AY-S10") out of contract text.
+
+Rejected:
+
+- **One shared split-relation test helper** across the six files carrying
+  the recipe. AY-S10 adds the FK child's cell and touches SB3's; the cut
+  belongs where the next copies land.
+- **Flattening the re-indented build loop.** The nested loop is the shape
+  of "every chain, then every leaf"; the review recommended no cut either.
+
+**Suite**: 3095/3095 in Debug (`ctest -LE heap-suspended -j8`, one
+pre-existing disabled cell) at `557f1d1`, and 3095/3095 again with the
+review's changes applied. Overhead not measured.
