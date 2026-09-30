@@ -271,6 +271,14 @@ public:
     StatusOr<std::uint16_t> InsertTuple(std::span<const std::byte> payload, std::uint64_t trx_id,
                                          std::uint64_t undo_ptr = 0);
 
+    // Takes back the tuple InsertTuple() just placed at `slot`, leaving the
+    // slot directory and free space as they were before it: for a writer
+    // that placed a row, has logged nothing of it, and must not leave it
+    // behind. Only the last slot, and only while nothing was placed after
+    // it - the caller's exclusive hold on the page is what makes that true.
+    // Fails with InvalidArgument otherwise, and changes nothing.
+    Status UnInsertTuple(std::uint16_t slot);
+
     // Reads the tuple at `slot`. A delete-marked tuple is returned, with
     // `deleted` set - whether the reader may see it depends on its snapshot
     // versus `trx_id`, which is not this layer's decision. Fails with

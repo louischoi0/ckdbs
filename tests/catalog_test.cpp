@@ -1946,44 +1946,46 @@ TEST_F(CatalogTest, AnUndoHookThatFailsOnTheTailLeavesTheChainAsItWas) {
     EXPECT_EQ(catalog_.FindTableOidByName("unhooked").status().code(), StatusCode::kNotFound);
 }
 
-TEST_F(CatalogTest, AnUndoHookThatFailsOnANewPageLeavesItEmptyAndUnlinked) {
-    // The new-page arm: creates run until one of them grows a chain, and
-    // the hook refuses the first event on a page no chain had.
+TEST_F(CatalogTest, AnUndoHookThatFailsOnANewPageLeavesItEmptyUnlinkedAndUnreported) {
+    // The new-page arm, through `CreateIndex`: the caller whose `where` is
+    // read even when the create fails (`CREATE INDEX`'s `created_row`,
+    // command_dispatcher.cpp), where `CreateTable` reports only the rows
+    // that succeeded. Indexes are created until `sys.indexes` grows, and
+    // the hook refuses the first event on a page its chain did not have.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    const PageId roots[] = {kCatalogPageObjects, kCatalogPageTables, kCatalogPageColumns};
-    auto known_pages = [&] {
-        std::set<PageId> known;
-        for (const PageId root : roots) {
-            for (const PageShape& page : ChainShape(store_, root)) known.insert(page.page_id);
+    auto chain_pages = [&] {
+        std::set<PageId> pages;
+        for (const PageShape& page : ChainShape(store_, kCatalogPageIndexes)) {
+            pages.insert(page.page_id);
         }
-        return known;
+        return pages;
     };
 
-    std::set<PageId> known = known_pages();
+    std::set<PageId> known;
     PageId fresh = kInvalidPageId;
-    catalog_.SetDdlUndoHook([&](const Catalog::DdlUndoEvent& event) {
-        if (known.count(event.page_id) != 0) return Status::OK();
-        fresh = event.page_id;
-        return Status::IoError("injected: the undo record could not be appended");
-    });
-    std::vector<CatalogRowRef> written;
+    CatalogRowRef where;
     Status last = Status::OK();
-    for (int i = 0; i < 256 && fresh == kInvalidPageId; ++i) {
-        known = known_pages();
-        written.clear();
-        auto created = catalog_.CreateTable(kNamespacePublic, "grow" + std::to_string(i),
-                                            MinimalPkSchema(), ClusteredType::kBtree,
-                                            /*trx_id=*/7, &written);
-        last = created.status();
+    for (int i = 0; i < 1024 && fresh == kInvalidPageId; ++i) {
+        auto table = catalog_.CreateTable(kNamespacePublic, "t" + std::to_string(i),
+                                          IndexableSchema(), ClusteredType::kBtree);
+        ASSERT_TRUE(table.ok()) << table.status().message();
+        known = chain_pages();
+        catalog_.SetDdlUndoHook([&](const Catalog::DdlUndoEvent& event) {
+            if (known.count(event.page_id) != 0) return Status::OK();
+            fresh = event.page_id;
+            return Status::IoError("injected: the undo record could not be appended");
+        });
+        where = CatalogRowRef{};
+        last = catalog_.CreateIndex(SimpleIndex(table.value(), "i" + std::to_string(i), 1),
+                                    /*trx_id=*/7, &where)
+                   .status();
+        catalog_.SetDdlUndoHook(nullptr);
     }
-    catalog_.SetDdlUndoHook(nullptr);
 
-    ASSERT_NE(fresh, kInvalidPageId) << "no catalog chain grew; the cell tested nothing";
+    ASSERT_NE(fresh, kInvalidPageId) << "sys.indexes never grew; the cell tested nothing";
     EXPECT_EQ(last.code(), StatusCode::kIoError) << last.message();
-    for (const CatalogRowRef& row : written) {
-        EXPECT_NE(row.page_id, fresh) << "a row the failed create took back is still reported";
-    }
-    EXPECT_EQ(known_pages(), known) << "the new page was linked into a chain";
+    EXPECT_EQ(where.page_id, kInvalidPageId) << "a row the failed create took back is reported";
+    EXPECT_EQ(chain_pages(), known) << "the new page was linked into the chain";
     auto bytes = store_.Get(fresh);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
     EXPECT_EQ(heap::PageView(bytes.value().bytes()).slot_count(), 0)

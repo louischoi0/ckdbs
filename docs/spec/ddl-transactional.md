@@ -55,8 +55,14 @@ trail in reverse and physically undoes each mutation, and for an insert
 that is `PageView::RetireSlot`. So DDL does what every other write does —
 **registers its catalog row writes on the transaction's trail**
 (`NoteDdlRows`, `NoteCatalogRowChanges`), even when the DDL statement
-failed, so `Abort` compensates them. Isolation and atomicity are separate
-phases, and only the first is delivered by the read filter.
+failed, so `Abort` compensates them. **The row whose own write failed is
+not registered, because that write removes it** (AZ-S1). If the undo hook
+refused, nothing names the row, so it is taken back whole
+(`PageView::UnInsertTuple`) and the page is as it was. If the hook
+succeeded and the row's record was refused, the undo record names the
+slot, so the slot is retired in place and is never reused. Isolation and
+atomicity are separate phases, and only the first is delivered by the read
+filter.
 
 ## 3. Invariants this must not break
 

@@ -188,6 +188,26 @@ StatusOr<std::uint16_t> PageView::InsertTuple(std::span<const std::byte> payload
     return new_slot_idx;
 }
 
+Status PageView::UnInsertTuple(std::uint16_t slot_idx) {
+    HeapPageHeaderFields h = ReadHeader();
+    if (h.nr_slots == 0 || slot_idx != h.nr_slots - 1) {
+        return Status::InvalidArgument("UnInsertTuple: slot " + std::to_string(slot_idx) +
+                                       " is not the page's last");
+    }
+    const HeapSlotFields slot = ReadSlot(slot_idx);
+    // InsertTuple's arithmetic in reverse: its tuple is the lowest on the
+    // page, at `upper`, and nothing dead or retired sits there.
+    if (slot.offset != h.upper || slot.flags != 0 || slot.length == 0) {
+        return Status::InvalidArgument("UnInsertTuple: slot " + std::to_string(slot_idx) +
+                                       " is not a tuple InsertTuple just placed");
+    }
+    h.nr_slots = static_cast<std::uint16_t>(h.nr_slots - 1);
+    h.lower = static_cast<std::uint16_t>(h.lower - kSlotOnDiskSize);
+    h.upper = static_cast<std::uint16_t>(h.upper + slot.length);
+    WriteHeader(h);
+    return Status::OK();
+}
+
 StatusOr<PageView::Tuple> PageView::ReadTuple(std::uint16_t slot_idx) const {
     HeapPageHeaderFields h = ReadHeader();
     if (slot_idx >= h.nr_slots) {
