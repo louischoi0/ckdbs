@@ -8,10 +8,9 @@ build*/
 # segment directory (kds.db.wal/), and the log. kds.conf.sample is
 # committed; a real kds.conf is not.
 *.log
-# bench/ was emptied 2026-09-02 ahead of the big-bang change (see
-# bench/README.md), so the exception that kept a benchmark run's archived
-# driver logs (`!bench/*/archive/**/*.log`) went with it. When measurement
-# returns, its archive rule returns here with it.
+# A benchmark run's archived driver and server logs are evidence its
+# results file cites (bench/README.md), so they are kept.
+!bench/*/archive/**/*.log
 kds.db
 kds.db.*
 kds.conf
