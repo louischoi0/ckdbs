@@ -197,3 +197,16 @@ Recorded on `worktree-ay-s8-snapshot-chunk-count` from `6e84c23`
 | **Reading** | "Until closing" read as the Session Workflow's chain through AY-S11 - each stage reviewed, the suite run, and landed - with the milestone's overhead measurement (§8) at AY-S11. Anything the close finds that the order does not already decide is carried, not built |
 | **Does not settle** | The peer `CREATE ASSERTION` no-base path (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`) - no letter carries it; the next letter; the v3.0.0 tag, which waits on M4 |
 | **Recorded at** | `workorder-ay-following-letter.md` §4 (AY-Q11) and §6, `index.md` |
+
+## 16. AZ opened, and its six items marked as proposed
+
+Recorded on `worktree-az-ay-carry-forward-order` at `e8bacf7`
+(`v2.7.0-543-ge8bacf7`), after AZ-S0's order and its review were reported.
+
+| | |
+|---|---|
+| **Word** | *"CLA 제안대로 진행하고 main에 push해줘"* |
+| **Mark** | **AZ-Q0 as proposed**: AY §7's seven items open as one letter, **AZ**. **AZ-Q1 as proposed**: adopt the assertion and log its publish run under one hold of the registry latch (AZ-R2). **AZ-Q2 as proposed**: an assertion write the snapshot cannot carry is refused at admission, `NotImplemented`, and a checkpoint that meets such a cabin anyway completes with the assertion evicted and unenforceable (AZ-R3). **AZ-Q3 as proposed**: a failed check releases its own tuple `S`, never the `IS` and never an `S` held before the ask (AZ-R5), so AZ-S5 exists. **AZ-Q4 as proposed**: the decide's cost is accepted as priced, so AZ-S6 is struck. **AZ-Q5 as proposed**: AR1's order is AP first, on AR1-V2's remaining ground |
+| **Reading** | "진행" read as the marks: every item takes CLA's proposal, and the order is landed on `main`. It is not read as a word to start AZ-S1..S7. Each stage waits for its own word, as §3 of the order says; AY's close (§15) was started by a word that named the close |
+| **Does not settle** | Any AZ stage's start; AQ's and AR's letters, which AP's order unblocks but does not open; the v3.0.0 tag, which waits on M4 |
+| **Recorded at** | `workorder-az-ay-carry-forward.md` §0, §3, §4 and §6, `ar1-architecture-revision-cabin-function.md` (status line), `index.md` |

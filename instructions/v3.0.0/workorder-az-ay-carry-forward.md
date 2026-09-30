@@ -4,25 +4,25 @@ Written 2026-09-30 on `worktree-az-ay-carry-forward-order` from `a59da9c`
 (`v2.7.0-533-ga59da9c`), on the operator's *"미해결 항목 7건을 모두
 커버하는 새로운 작업 지시서를 작성해줘"*: a work order covering every item
 AY's close carried forward (`workorder-ay-following-letter.md` §7, *What AY
-carries forward*). **The letter is CLA's proposal** (AZ-Q0): a letter is
-opened on the operator's word, as AY was (`raft-marks-2026-09-29.md` §7),
-and until then this order licenses no stage. It cuts no tag; the v3.0.0 tag
-waits on AR0 §8's chain through M4 (`raft-marks-2026-09-26.md` §4).
+carries forward*). **Opened as AZ on 2026-09-30, with every §4 item marked
+as proposed** (`raft-marks-2026-09-30.md` §16). Each stage still waits for
+its own word. It cuts no tag; the v3.0.0 tag waits on AR0 §8's chain
+through M4 (`raft-marks-2026-09-26.md` §4).
 
 ## 0. The items this order serves
 
 Numbered as AY §7 numbers them. "Covered" means differently per item, and
-the column says how: two are built on the word alone, two by a stage whose
-shape a mark picks, two need a mark before a stage exists, and one cannot
-be built here at all.
+the column says how, as §16 of the 2026-09-30 marks left it: five have a
+stage, each waiting for its own word; one is accepted as priced; and one
+cannot be built here at all.
 
 | AY §7 | item | owner at AY's close | covered here by |
 |---|---|---|---|
 | 1 | A peer's `CREATE ASSERTION` can miss every snapshot in the mount's scan (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`) | none | AZ-S2, on AZ-Q1 |
 | 2 | A catalog row placed on a chain's tail is not reported when its logging fails (`docs/inflight/bugs/a-catalog-row-placed-on-a-chains-tail-is-not-reported-when-its-logging-fails.md`) | none | AZ-S1 |
-| 3 | A failed child check inside an explicit transaction keeps its `S` on the absent parent key until the rollback (`known-gaps.md`, Foreign keys) | the operator | AZ-Q3; AZ-S5 only if it marks a release |
-| 4 | A large transaction's decide is quadratic in its borrows, and D9(a) doubles them (`known-gaps.md`, Foreign keys) | none | AZ-Q4; AZ-S6 only if it marks a build |
-| 5 | AR1's AQ and AR | their own letters, after AP's order is settled (AY-Q11) | AZ-Q5 - **no stage**, see below |
+| 3 | A failed child check inside an explicit transaction keeps its `S` on the absent parent key until the rollback (`known-gaps.md`, Foreign keys) | the operator | AZ-S5 (AZ-Q3 marked a release) |
+| 4 | A large transaction's decide is quadratic in its borrows, and D9(a) doubles them (`known-gaps.md`, Foreign keys) | none | AZ-Q4, accepted as priced; AZ-S6 struck |
+| 5 | AR1's AQ and AR | their own letters, after AP's order is settled (AY-Q11) | AZ-Q5 (AP first) - **no stage**, see below |
 | 6 | Two one-off cell failures under `-j8` that did not reproduce (`known-gaps.md`, Testing) | none | AZ-S4 |
 | 7 | A cabin needing more than 65,535 snapshot chunks is refused at every checkpoint | none | AZ-S3, on AZ-Q2 |
 
@@ -272,20 +272,20 @@ Each stage waits for the operator's word.
 | AZ-S2 | **The peer's `CREATE ASSERTION`** (item 1, AZ-R2) | red first on the two-core rig: a peer's create paused between its publish run and its adoption, a core-0 checkpoint completing past the publish run, a crash, a mount - the assertion comes up unenforcing today; green with adoption first; cells for a create that fails after adoption (evicted, no enforcement left) and for a writer on another core during the window (waits on the relation `X`, §1.1); a cell interleaving a core-0 checkpoint run with a three-chunk publish run of the same id, which recovers only if both are under one hold; mutation: adoption moved back after the publish, killed, and the latch dropped between adopt and log, killed by the interleaving cell; the bug entry deleted | M |
 | AZ-S3 | **The unsnapshottable cabin** (item 7, AZ-R3) | first the survey question: whether SQL reaches a group key past one record; a cell per door reached - an admission refused with its position, a checkpoint that meets such a cabin completing and the assertion unenforcing at the next mount, the mount succeeding; the chunk-count door at its threshold through a test seam, not 4 GB; `266db2e`'s writer cell ported; the two "version 17" comments corrected; mutation: the checkpoint's fail-closed arm returning the refusal again, killed | M |
 | AZ-S4 | **The unreproduced failures instrumented** (item 6, AZ-R4) | all fourteen `Start()` assertions in `tests/expeditor_test.cpp` (ten on `db`, four on `opened.value()`) carry their status, and every rig `Within` what it saw; the suite green; `known-gaps.md`'s two Testing entries restated | S |
-| AZ-S5 | **The failed check's `S`** (item 3, AZ-R5) - only if AZ-Q3 marks a release | red first: a failed child `INSERT` inside `BEGIN`, then a parent `INSERT` of that key on the other core, which waits and is refused `TxnConflict` at the 1 s net today, proceeds; a cell where the `S` was held from an earlier statement and survives the violation; the self-referencing arm's pair; a statement with an absent and a present parent key, whose `IS` survives the violation and holds off a parent `DROP TABLE`; mutation: the `Holds` answer removed, killed, and the `IS` released too, killed; `foreign-keys.md` §2c and the `known-gaps.md` entry | S |
-| AZ-S6 | **The keyed lock partition** (item 4, AZ-R6) - only if AZ-Q4 marks a build | `lock_table_test.cpp` and `lock_family_test.cpp` green unchanged; AY-S11 cell 3's shape re-run at the close, K up to 16,384, `58198cb`'s and `0552d55`'s numbers as the controls | M |
+| AZ-S5 | **The failed check's `S`** (item 3, AZ-R5) - AZ-Q3 marked the release | red first: a failed child `INSERT` inside `BEGIN`, then a parent `INSERT` of that key on the other core, which waits and is refused `TxnConflict` at the 1 s net today, proceeds; a cell where the `S` was held from an earlier statement and survives the violation; the self-referencing arm's pair; a statement with an absent and a present parent key, whose `IS` survives the violation and holds off a parent `DROP TABLE`; mutation: the `Holds` answer removed, killed, and the `IS` released too, killed; `foreign-keys.md` §2c and the `known-gaps.md` entry | S |
+| AZ-S6 | ~~**The keyed lock partition**~~ (item 4, AZ-R6) - **struck 2026-09-30**: AZ-Q4 accepted the cost as priced (`raft-marks-2026-09-30.md` §16); what follows is the stage a later build would run | `lock_table_test.cpp` and `lock_family_test.cpp` green unchanged; AY-S11 cell 3's shape re-run at the close, K up to 16,384, `58198cb`'s and `0552d55`'s numbers as the controls | M |
 | AZ-S7 | **AZ's close** | a row per stage; what AZ carries; the overhead measured over the whole change | S |
 
 ## 4. Items for the operator
 
 | # | item | class | CLA proposal |
 |---|---|---|---|
-| AZ-Q0 | **The letter** - whether AY §7's seven items open as one letter, and as AZ | scope | yes: every item is small, none depends on another, and two need nothing but the word |
-| AZ-Q1 | **Item 1's shape**: adopt before the publish run, or hold the checkpoint gate from the publish to the adoption | user-visible | adopt first, and log the publish run under the same hold (AZ-R2). §1.1 gives the reason; it also keeps `CheckpointGate` - which orders checkpoints against each other, not against DDL - out of a DDL's path |
-| AZ-Q2 | **Item 7's door**: today a checkpoint that meets the cabin fails, and by §1.7's read no core-0 checkpoint completes after it and the next mount fails | user-visible | refuse at admission, and let the checkpoint complete with the assertion unenforcing (AZ-R3): fail closed, keep the volume mountable. **The admission refusal's code** is also the operator's, since it is a wire surface (`protocol.md` §11). CLA proposes `NotImplemented`: the bound is the snapshot format's (a `u16` count, one record per group), and a later release can widen it, so *this release* is what is true (`status.hpp`). `ResourceExhausted` would need a third wire detail, and `OutOfSpace` says storage is full, which it is not |
-| AZ-Q3 | **Item 3**: release a failed check's `S` at the violation, or keep it to the rollback | user-visible | release the ask's own `S` only (AZ-R5): PostgreSQL's `FOR KEY SHARE` locks nothing for a missing row, and the poisoned transaction can write nothing that `S` protects. Keeping it is also sound; its cost is a refusal bounded by the client's rollback |
-| AZ-Q4 | **Item 4**: build the keyed partition, or accept the priced cost | cost | accept, no stage (AZ-R6): ~6 % at 16,384 parents in one transaction, unresolved at 1,024. Revisit when a workload holds thousands |
-| AZ-Q5 | **Item 5**: AP's order, which blocks AQ and AR opening as their own letters (AY-Q11) | scope | AP first, argued on AR1-V2's remaining ground: it is the only one of the three with no dependency. Settling it opens nothing here |
+| AZ-Q0 | **The letter** - whether AY §7's seven items open as one letter, and as AZ | scope | yes: every item is small, none depends on another, and two need nothing but the word. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §16) |
+| AZ-Q1 | **Item 1's shape**: adopt before the publish run, or hold the checkpoint gate from the publish to the adoption | user-visible | adopt first, and log the publish run under the same hold (AZ-R2). §1.1 gives the reason; it also keeps `CheckpointGate` - which orders checkpoints against each other, not against DDL - out of a DDL's path. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §16) |
+| AZ-Q2 | **Item 7's door**: today a checkpoint that meets the cabin fails, and by §1.7's read no core-0 checkpoint completes after it and the next mount fails | user-visible | refuse at admission, and let the checkpoint complete with the assertion unenforcing (AZ-R3): fail closed, keep the volume mountable. **The admission refusal's code** is also the operator's, since it is a wire surface (`protocol.md` §11). CLA proposes `NotImplemented`: the bound is the snapshot format's (a `u16` count, one record per group), and a later release can widen it, so *this release* is what is true (`status.hpp`). `ResourceExhausted` would need a third wire detail, and `OutOfSpace` says storage is full, which it is not. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §16) |
+| AZ-Q3 | **Item 3**: release a failed check's `S` at the violation, or keep it to the rollback | user-visible | release the ask's own `S` only (AZ-R5): PostgreSQL's `FOR KEY SHARE` locks nothing for a missing row, and the poisoned transaction can write nothing that `S` protects. Keeping it is also sound; its cost is a refusal bounded by the client's rollback. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §16) |
+| AZ-Q4 | **Item 4**: build the keyed partition, or accept the priced cost | cost | accept, no stage (AZ-R6): ~6 % at 16,384 parents in one transaction, unresolved at 1,024. Revisit when a workload holds thousands. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §16) |
+| AZ-Q5 | **Item 5**: AP's order, which blocks AQ and AR opening as their own letters (AY-Q11) | scope | AP first, argued on AR1-V2's remaining ground: it is the only one of the three with no dependency. Settling it opens nothing here. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §16) |
 
 ## 5. Sequencing
 
@@ -326,3 +326,14 @@ spec or test is changed. The letter itself is AZ-Q0's.
 
 **Rejected: none.** The review's trims were taken: the over-enforcing
 argument now lives in §1.1 only, and §5 keeps only the S2 → S3 order.
+
+### AZ opened, and §4 marked - 2026-09-30
+
+On *"CLA 제안대로 진행하고 main에 push해줘"*, every §4 item was marked as
+proposed and the order landed (`raft-marks-2026-09-30.md` §16).
+
+- **Open**: AZ-S1, S2, S3, S4, S5 and S7, each on its own word.
+- **Struck**: AZ-S6, since AZ-Q4 accepted the cost as priced.
+- **Settled**: AR1's AP order, AP first, recorded in AR1's status line.
+
+No stage has started.
