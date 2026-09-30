@@ -565,19 +565,11 @@ StatusOr<AssertionDdlResult> CreateAssertion(
                                      check_view, wal);
     if (!build.ok()) return build.status();
 
-    // ---- The new cabin's base, adopted with it (AS6a, RC07; AZ-S2) --------
+    // ---- The new cabin's base, adopted with it (AS6a; AZ-S2) --------------
     //
     // Without a base of its own, an assertion created after the last
-    // checkpoint has none in any range: the mount cannot recover it, and
-    // `enforcing=0` is permanent until DROP + CREATE. The run is logged and
-    // the directory adopted under one hold of the registry's latch
-    // (`AdoptLogged`), because a core-0 checkpoint snapshots exactly the
-    // registry: one landing between the two would write a run without this
-    // assertion, and once the redo start passed this run the mount found no
-    // base at all. Adopting here, before the row, is safe for the relation:
-    // its writers wait on the build's relation `X` until the statement ends.
-    // A base for an assertion whose publish then fails is harmless - a
-    // mount folds only what `ListAssertions` returns.
+    // checkpoint has none in any range. Logged and adopted under one hold
+    // (`AdoptLogged`; `assertion.md` §8.1 says why, and why before the row).
     const std::uint64_t assertion_id = prepared.value().assertion_id;
     const PageId cabin_root = build.value().cabin_root;
     if (Status s = enforcer.AdoptLogged(
@@ -587,6 +579,9 @@ StatusOr<AssertionDdlResult> CreateAssertion(
                 return wal::LogAssertionSnapshot(*wal, run.front());
             });
         !s.ok()) {
+        if (Status drop = EmitAssertDrop(wal, assertion_id, cabin_root); !drop.ok()) {
+            return drop;
+        }
         return s.WithContext("publishing assertion \"" + stmt.name + "\"'s group snapshot");
     }
     if (after_publish_run_for_test) after_publish_run_for_test();

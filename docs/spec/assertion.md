@@ -645,10 +645,15 @@ which a checkpoint wrote a run without it; once the redo start passed the
 create's own run, a mount found no base and the assertion came up
 unenforcing. Adopted first but logged outside the hold, a checkpoint's run
 of the same id could cross the create's chunk by chunk, and recovery
-discards both (§7, AS6a). The adoption is safe before the row because the
-relation `X` is held across all of it: no writer meets the assertion before
-it is published. **A publish that is then refused evicts the directory**
-before its `ASSERT_DROP`; a refused base adopts nothing. What remains is an
+discards both (§7, AS6a). The adoption is safe before the row wherever the
+dispatcher takes the relation `X`, which is held across all of it: no writer
+meets the assertion before it is published. The dispatcher takes none with
+no lock table, and none for a name its session's view does not resolve
+(`docs/inflight/bugs/a-create-assertion-on-a-relation-its-view-cannot-see-builds-unfenced.md`).
+**A publish that is then refused evicts the directory** before its
+`ASSERT_DROP` (a row whose own log fails stays on its page:
+`docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`); a refused base adopts nothing and logs the `ASSERT_DROP`
+too. What remains is an
 `ASSERT_SNAPSHOT` for an assertion whose publish failed — a base for a
 cabin no catalog row names, which no mount folds, since a mount folds only
 what `ListAssertions` returns.

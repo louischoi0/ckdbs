@@ -679,8 +679,13 @@ TEST_F(AssertionRecoverTest, ACreatesPublishRunAndACheckpointsRunOfItNeverInterl
         EXPECT_TRUE(s.ok()) << s.message();
     });
 
-    // Core 0's checkpoint, once the create has begun.
-    ASSERT_TRUE(await(announced)) << "the create never reached its log";
+    // Core 0's checkpoint, once the create has begun. Unbounded, and no
+    // `ASSERT` before the join: the create thread holds references to this
+    // frame.
+    {
+        std::unique_lock<std::mutex> lock(m);
+        cv.wait(lock, [&] { return announced; });
+    }
     const Status snapshot = registry.VisitSnapshots(
         [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
             EXPECT_EQ(cabins.size(), 1u) << "the checkpoint ran without the created assertion";

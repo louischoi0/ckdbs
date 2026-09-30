@@ -427,3 +427,75 @@ it is not fixed here.
     original error;
   - removing `UnInsertTuple`'s redundant `length == 0` check - kept, for
     symmetry with the page's other slot tests.
+
+### AZ-S2 — built 2026-09-30
+
+On `worktree-az-s2-peer-create-assertion` from `2bb1f9d`, on *"start
+AZ-S*"*. The reproduction (`647eec7`) was red at `2bb1f9d`: core 1's create,
+paused at a new dispatcher seam (`SetAfterAssertionPublishRunForTest`, after
+the publish run and before the row) while a core-0 checkpoint ran over the
+instance's registry. Read back from that checkpoint's `BEGIN`, the assertion
+came up unrecovered (`unrecovered=1`, `enforcing=0`) - the bug entry's
+sequence.
+
+**The fix is AZ-R2 as written** (`38bb8a8`).
+
+- `AssertionEnforcer::AdoptLogged` logs the new cabin's run and adopts it
+  under one hold of the directory latch. It logs first, so a refused run
+  adopts nothing.
+- `CreateAssertion` calls it between the build and the row, evicts on a
+  refused row, and logs `ASSERT_DROP` on either failure. The dispatcher no
+  longer adopts.
+- `SnapshotOf` is the one header-to-snapshot copy, shared by the checkpoint
+  and the create.
+
+**The cells.**
+
+- **On the rig** (`assertion_publish_rig_test.cpp`):
+  - the checkpoint in the window, red then green;
+  - a writer on core 0 in the window parks on the relation `X` and is then
+    refused by the assertion;
+  - a create refused at its row by a same-name create on core 0 in the
+    window leaves nothing enforcing.
+- **The interleave** (`assertion_recover_test.cpp`): the create's run and a
+  checkpoint's run of one id, each writer stopped between chunks. With the
+  one hold, the log reads P0 P1 P2 C0 C1 C2.
+- **Mutants: three, all killed.**
+  - the adoption moved back after the row: the checkpoint cell (at `38bb8a8`);
+  - the latch dropped between adoption and log: the interleave cell, whose
+    log then reads C0 C1 P0 C2 P1 P2;
+  - the eviction removed: the same-name cell.
+
+**Also**: `assertion.md` §6.1, §7 (AS6a) and §8.1 restated; the bug entry
+deleted; the CLAUDE.md Assertions row flipped. The suite at `38bb8a8`:
+3063/3063 under `-j8`. Overhead not measured; it is measured at AZ's close.
+
+**The review** (`critics-developer`, on `38bb8a8`) found no production
+defect in the change.
+
+- **Taken:**
+  - the interleave cell's `ASSERT` on a 200 ms wait before the create
+    thread was joined would terminate the process under load; the wait is
+    unbounded now;
+  - a refused base logs `ASSERT_DROP`, as the other two failure arms do;
+  - the rationale repeated in the source trimmed to a pointer at §8.1, and
+    a stray blank line.
+- **Taken as docs**: §8.1 said the relation `X` is held across the
+  adoption. It is where the dispatcher takes one. Two leads by reading,
+  both predating the stage, filed as bug entries rather than fixed here:
+  - `a-create-assertion-on-a-relation-its-view-cannot-see-builds-unfenced.md` -
+    the dispatcher resolves under the session's view and takes no `X` when
+    that fails, while the build resolves unfiltered;
+  - `an-assertion-row-whose-log-fails-stays-on-its-page.md` - AZ-S1's
+    shape on `InsertAssertion`'s own `ChainInsert`.
+- **Rejected:**
+  - hoisting the rig's `Statement`/`Submit` helpers into `two_core_rig.hpp` -
+    it rewrites two unrelated test files, one of which AZ-S4 edits;
+  - `AdoptLogged` taking a one-cabin callback instead of `SnapshotVisitor` -
+    kept, so the create's run and the checkpoint's go through one seam type.
+
+**Found for AZ-S3, by reading**: a record is bounded by the WAL ring
+(`kDefaultRingCapacity`, 1 MiB), not only by the segment (64 MiB), and
+`LogAssertionSnapshot` cuts its chunks against the segment
+(`usable_payload_bytes`). A cabin with more than about 1 MiB of group
+headers would then have its first chunk refused by `Append`. AZ-S3 takes it.

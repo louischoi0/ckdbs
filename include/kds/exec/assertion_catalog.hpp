@@ -192,7 +192,6 @@ struct AssertionDdlResult {
     PageId cabin_root = kInvalidPageId;
     std::size_t rows_incorporated = 0;
     std::size_t group_count = 0;
-
 };
 
 // The live half of a **surviving** assertion, rebuilt from its stored
@@ -244,11 +243,8 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 // manager, which is the pre-MVCC engine exactly). `wal` may be null: the
 // build is then unlogged, like every other DDL today.
 //
-// **The build is adopted into `enforcer` before the row is written**
-// (AZ-S2), with its publish run logged under the same hold of the
-// registry's latch, and evicted again if the row is refused. The caller
-// holds the relation `X` across the call, so no writer meets the
-// assertion before it is published.
+// **The build is adopted into `enforcer` before the row is written**, with
+// its publish run (`AdoptLogged`, AZ-S2), and evicted if the row is refused.
 //
 // `after_publish_run_for_test`, when set, runs once, after the adoption and
 // immediately before the `sys.assertions` row - the window a checkpoint on
