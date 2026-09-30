@@ -1311,10 +1311,13 @@ private:
     // statement's snapshot, because a check reads latest state.
     txn::ReadView CheckView(const WriteScope& scope);
 
-    // Whether the statement's transaction already holds the row in some
-    // mode, asked before a parent check's `S` so a failed check gives back
-    // only what its own ask took (AZ-S5).
-    bool HoldsRow(const WriteScope& scope, catalog::Oid rel, std::uint64_t pk) const;
+    // Whether a parent check's ask took the row's `S` itself - a new record,
+    // not a grant of one the transaction already held - so a failed check
+    // gives back only that (AZ-S5). `borrows_before` is `BorrowCount` taken
+    // before the ask.
+    std::size_t BorrowCount(const WriteScope& scope) const;
+    bool TookShare(const WriteScope& scope, std::size_t borrows_before, catalog::Oid rel,
+                   std::uint64_t pk) const;
 
     // A refused parent-row hold's status, restated as the foreign key's
     // (a conflict names the child and parent relations; any other code
