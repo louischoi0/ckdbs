@@ -365,6 +365,51 @@ StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
         ") is full; every catalog relation's chain together has outgrown it");
 }
 
+// Reports a row `InsertRow` just placed at (`page_id`, `slot`) - the undo
+// record first, then the row record: the hook's whole contract
+// (catalog.hpp), since redo alone must never be able to resurrect a loser's
+// row that undo has no record for. **A failure of either leaves nothing
+// behind to retire** (AZ-S1): the caller reports no `where` for this row, so
+// a rollback could not find one.
+//
+// - The hook refused: nothing names the row, so it is taken back whole and
+//   the page is as it was. A dead slot would do for the rollback, but not
+//   for redo: a later logged insert on this page would sit past a slot no
+//   record describes, which a replay onto an older image refuses (the
+//   dense-slot rule, `heap_page.cpp`).
+// - The log refused: the undo record the hook appended names the slot, so
+//   it is retired rather than taken back - a retired slot is never handed
+//   out again, so recovery's undo meets it dead and never another row
+//   (`recovery_undo.cpp`, "nothing to retire"). `LogCatInsert` fails before
+//   its append or not at all: the stamp after it is on a page this holds
+//   pinned and exclusive, which is always resident. **This arm leaves the
+//   dead slot no record describes** that the first arm avoids. On a tail
+//   page, a later logged insert followed by a crash before writeback refuses
+//   the mount; taking the row back instead would let another row reach a
+//   slot the undo record names. It is open, in `known-gaps.md` (WAL).
+Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
+                       storage::PageStore& store, PageId page_id, heap::PageView& page,
+                       std::uint16_t slot, std::span<const std::byte> encoded,
+                       std::uint64_t trx_id) {
+    if (hook) {
+        if (Status s = hook({Catalog::DdlUndoEvent::Kind::kInsert, page_id, slot, encoded, 0, 0,
+                             UndoPkOf(encoded)});
+            !s.ok()) {
+            if (Status back = page.UnInsertTuple(slot); !back.ok()) {
+                return back.WithContext("taking back a catalog row after: " + s.message());
+            }
+            return s;
+        }
+    }
+    if (Status s = LogCatInsert(wal, store, trx_id, page_id, slot, encoded); !s.ok()) {
+        if (Status retired = page.RetireSlot(slot); !retired.ok()) {
+            return retired.WithContext("retiring a catalog row after: " + s.message());
+        }
+        return s;
+    }
+    return Status::OK();
+}
+
 // Appends one row to the chain rooted at `root`, growing it by a page when
 // the tail is full.
 //
@@ -375,9 +420,10 @@ StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
 // so there is no key to order by and every page carries `min_key = 0` - the
 // chain here is an append list, not a semi-sorted heap. Sharing the heap's
 // insert would mean inventing an id for a row nothing looks up by id.
-// `where`, when given, receives the (page, slot) the row landed at
-// (workplan-ddl-transactional.md DT3a). A transactional DDL registers
-// that address on its transaction's trail so `Abort` can retire the slot -
+// `where`, when given, receives the (page, slot) the row landed at, once
+// the row's record is logged (workplan-ddl-transactional.md DT3a; AZ-S1).
+// A transactional DDL registers that address on its transaction's trail so
+// `Abort` can retire the slot -
 // the engine hides aborted work by compensation, not by visibility (spec
 // §2's correction), so without this a rolled-back CREATE TABLE stays.
 template <typename RowT>
@@ -394,17 +440,8 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
         heap::PageView page(bytes.value().bytes());
         auto slot = page.InsertTuple(encoded, trx_id);
         if (slot.ok()) {
-            // The undo record first, then the row record - the hook's
-            // whole contract (catalog.hpp): redo alone must never be able
-            // to resurrect a loser's row that undo has no record for.
-            if (hook) {
-                if (Status s = hook({Catalog::DdlUndoEvent::Kind::kInsert, current,
-                                     slot.value(), encoded, 0, 0, UndoPkOf(encoded)});
-                    !s.ok()) {
-                    return s;
-                }
-            }
-            if (Status s = LogCatInsert(wal, store, trx_id, current, slot.value(), encoded);
+            if (Status s = ReportPlacedRow(wal, hook, store, current, page, slot.value(), encoded,
+                                           trx_id);
                 !s.ok()) {
                 return s;
             }
@@ -438,26 +475,21 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
         if (Status s = LogCatPageInit(wal, trx_id, new_id); !s.ok()) return s;
 
         auto placed = fresh.value().InsertTuple(encoded, trx_id);
-        if (placed.ok() && where != nullptr) {
-            *where = CatalogRowRef{new_id, placed.value()};
-        }
         if (!placed.ok()) {
             // A row no empty page can hold. The page stays allocated and
             // unlinked rather than freed - there is no free-page path - and
             // nothing reaches it, which is the same trade heap_chain makes.
+            // A report refused below leaves the page the same way.
             return placed.status();
         }
-        if (hook) {
-            if (Status s = hook({Catalog::DdlUndoEvent::Kind::kInsert, new_id, placed.value(),
-                                 encoded, 0, 0, UndoPkOf(encoded)});
-                !s.ok()) {
-                return s;
-            }
-        }
-        if (Status s = LogCatInsert(wal, store, trx_id, new_id, placed.value(), encoded);
+        if (Status s = ReportPlacedRow(wal, hook, store, new_id, fresh.value(), placed.value(),
+                                       encoded, trx_id);
             !s.ok()) {
             return s;
         }
+        // Reported from here: the row is logged, so a failure of the link
+        // below leaves it for the rollback to retire.
+        if (where != nullptr) *where = CatalogRowRef{new_id, placed.value()};
         new_page.Release();
 
         // Linked **after** the row is in it, and through a re-fetch:

@@ -198,6 +198,37 @@ TEST(HeapPageTest, RetireSlotHidesTupleFromRead) {
     EXPECT_FALSE(retire_again.ok());
 }
 
+TEST(HeapPageTest, UnInsertTupleTakesBackOnlyTheLastInsertWhole) {
+    PageBuf buf{};
+    auto created = PageView::CreateEmpty(AsSpan(buf), 0);
+    ASSERT_TRUE(created.ok());
+    PageView page = created.value();
+    ASSERT_TRUE(page.InsertTuple(BytesOf("kept"), 1).ok());
+    const std::uint16_t slots = page.slot_count();
+    const std::uint16_t lower = page.lower();
+    const std::uint16_t upper = page.upper();
+
+    auto last = page.InsertTuple(BytesOf("taken back"), 2);
+    ASSERT_TRUE(last.ok());
+    // Not the last slot: refused, and nothing moves.
+    EXPECT_EQ(page.UnInsertTuple(0).code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(page.slot_count(), slots + 1);
+
+    ASSERT_TRUE(page.UnInsertTuple(last.value()).ok());
+    EXPECT_EQ(page.slot_count(), slots);
+    EXPECT_EQ(page.lower(), lower);
+    EXPECT_EQ(page.upper(), upper);
+    EXPECT_EQ(StringOf(page.ReadTuple(0).value().payload), "kept");
+    // The next insert takes the same slot and the same space.
+    auto again = page.InsertTuple(BytesOf("taken back"), 3);
+    ASSERT_TRUE(again.ok());
+    EXPECT_EQ(again.value(), last.value());
+
+    // A retired last slot is not an insert to take back.
+    ASSERT_TRUE(page.RetireSlot(again.value()).ok());
+    EXPECT_EQ(page.UnInsertTuple(again.value()).code(), StatusCode::kInvalidArgument);
+}
+
 TEST(HeapPageTest, RetireSlotOutOfRangeIsNotFound) {
     PageBuf buf{};
     auto created = PageView::CreateEmpty(AsSpan(buf), 0);

@@ -188,6 +188,33 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## WAL
 
+- **A catalog row whose `HEAP_INSERT` is refused leaves a dead slot that no
+  record describes.** Found by AZ-S1's review on
+  `worktree-az-s1-catalog-tail-arm` at `55a5aab`; read, not run.
+  `ReportPlacedRow` (`src/catalog/catalog.cpp`) retires the slot when the
+  row's append fails after the undo hook succeeded.
+  - **The failing case:** a later DDL logs an insert at the next slot of the
+    same tail page, and the process crashes before that page is written
+    back. Redo then meets that record on an image with one slot fewer, and
+    `RedoWriteTuple` refuses it `Corruption` (heap slots are dense), so the
+    **mount is refused**. It is a refusal, never a wrong answer.
+  - **It needs** an append refused and then accepted again, such as a ring
+    drain that fails once, and a crash before writeback.
+  - **Not new with AZ-S1:** before it, the same arm left a live row in that
+    slot, unlogged, which has the same redo shape.
+  - **Why the other arm's cure does not apply:** taking the row back, as
+    the hook-refused arm does, would let another row take a slot the undo
+    record names. Recovery's identity check then refuses the mount
+    instead.
+  - **Three cures, none chosen:** stop the instance on an append failure
+    that follows a page mutation; hold the page from further inserts until
+    a `SLOT_RETIRE` (or a full image) for the slot is logged; or accept it.
+  - **No owner.**
+- **A refused catalog report on a new page spends one reserved page.** The
+  page is left allocated, empty and unlinked. The catalog range is pages
+  16..127, and nothing frees a page (`page.md` §5). This predates AZ-S1:
+  the page used to hold the row. **No owner.**
+
 - **`PAGE_HANDOFF` is neither written nor read, and its record type
   stays.** Verified at AT-S9, 2026-09-24. Its reader was the receiving
   core's write grant, struck at AW-S1b, and since AM-S4(d) analysis neither

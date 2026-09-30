@@ -337,3 +337,93 @@ proposed and the order landed (`raft-marks-2026-09-30.md` §16).
 - **Settled**: AR1's AP order, AP first, recorded in AR1's status line.
 
 No stage has started.
+
+### AZ-S1 — built 2026-09-30
+
+On `worktree-az-s1-catalog-tail-arm` from `f2f1ee7`, on *"AZ-S1 진행해줘"*.
+The reproduction (`aa9c3ef`) was red at `f2f1ee7` in all three cells:
+
+- **the hook refused on the `sys.objects` tail**: the failed create's row
+  stayed live, and `FindTableOidByName` found the relation - the quiet
+  wrong answer item 2 named;
+- **the hook refused on a new page**: the row stayed on it;
+- **the row's `HEAP_INSERT` refused after the hook succeeded**: the row
+  stayed live and was found. The cell fills the ring and makes its drain
+  fail, so the refusal is the one a real append gives.
+
+**The fix is one helper, `ReportPlacedRow`**, which both arms of `InsertRow`
+call. It fires the hook, then logs, and on a failure removes the row it
+placed. The arms set `where` only once the row is logged.
+
+**What changed from AZ-R1 as written, and why**:
+
+- **The hook's failure takes the row back whole** (`PageView::UnInsertTuple`,
+  new); it does not retire it in place. A dead slot no record describes
+  would sit before any later logged insert on the page, and redo onto an
+  image older than that slot refuses the later record (the dense-slot rule,
+  `heap_page.cpp`). Taking the row back is exact because the page is held
+  exclusive across the insert and slots are only ever appended.
+- **The log's failure retires the slot, as AZ-R1 said.** The undo record
+  the hook appended names the slot, and a retired slot is never handed out
+  again. A taken-back slot could be reused, and recovery's undo would then
+  meet another row there.
+- **AZ-R1's premise was wrong for catalog rows.** No catalog page is at or
+  above `kCatalogOverflowLimit`: `AllocateCatalogPage` allocates below it.
+  So `Compensate` never logs a `SLOT_RETIRE` for a catalog row, and the
+  mount failure the review predicted cannot arise here. The live defect
+  in that area is the reverse one,
+  `docs/inflight/bugs/a-ddl-rollback-compensates-logged-catalog-pages-unlogged.md`,
+  which this stage does not take up. The crash-and-mount cells the exit
+  named were not written. For the arm that takes the row back, a mount has
+  nothing of it to replay. For the retire arm, recovery's undo answers a
+  dead or missing slot as "nothing to retire" (`recovery_undo.cpp`), but
+  redo does not - see the review below.
+
+**The cells.**
+
+- **The new-page cell runs through `CreateIndex`.** `CreateTable` records
+  a row only after that row's insert succeeds, so a `where` set too early
+  does not show through it. `CREATE INDEX`'s `created_row` is read even
+  when the create fails.
+- **Mutants: four, all killed.**
+  - the take-back removed: two cells;
+  - the take-back replaced by a retire: two cells;
+  - the retire on a log failure removed: one cell;
+  - `where` set before the report again: the new-page cell.
+- **`heap_page_test.cpp` pins `UnInsertTuple`**: only the last insert, the
+  directory and free space restored, and a retired slot refused.
+
+**Also**:
+
+- `ddl-transactional.md` §2 states the rule.
+- The bug entry is deleted.
+- Overhead not measured; it is measured at AZ's close.
+
+**The review** (`critics-developer`, on `55a5aab`) found one defect, and
+it is not fixed here.
+
+- **The retire arm leaves the dead slot no record describes, which this
+  row had rejected for the hook arm.** A later DDL's logged insert on the
+  same tail page, then a crash before writeback, makes redo refuse the
+  mount (the dense-slot rule).
+  - It predates the stage: the same arm left a live, unlogged row with the
+    same redo shape.
+  - Taking the row back instead fails another way: recovery's identity
+    check meets a reused slot.
+  - The cure is a design call - stop on the append failure, hold the page
+    until a record describes the slot, or accept it. It is recorded in
+    `known-gaps.md` (WAL), and is **the operator's**, not assumed.
+- **The docs claimed it closed.** Corrected: `ddl-transactional.md` §2,
+  `ReportPlacedRow`'s comment, and this row.
+- **Also taken:**
+  - `InsertRow`'s comment says `where` is set once the row is logged;
+  - `ReportPlacedRow` takes the page by reference, as its sibling helpers
+    do;
+  - a refused report on a new page spending one reserved catalog page is
+    recorded in `known-gaps.md`.
+- **Rejected:**
+  - dropping the unreachable take-back and retire failure contexts - kept,
+    since they cost nothing and a failure there would otherwise hide the
+    original error;
+  - removing `UnInsertTuple`'s redundant `length == 0` check - kept, for
+    symmetry with the page's other slot tests.
