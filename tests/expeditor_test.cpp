@@ -73,8 +73,11 @@ namespace {
 // about the engine.
 //
 // The window between closing these and `Start()` binding them stays open and
-// is not worth closing: nothing here passes `SO_REUSEPORT`, so losing that
-// race is a clean `EADDRINUSE` out of `Start()` rather than a wrong answer.
+// is not worth closing: at one core nothing passes `SO_REUSEPORT`, so losing
+// that race is a clean `EADDRINUSE` out of `Start()` rather than a wrong
+// answer. Above one core the default port is bound with it (AT-S8), and a
+// clash with another such listener of the same user binds rather than
+// failing.
 struct FreePorts {
     std::uint16_t first = 0;
     std::uint16_t second = 0;

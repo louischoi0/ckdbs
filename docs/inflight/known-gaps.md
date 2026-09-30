@@ -65,8 +65,11 @@ statement about an engine that no longer exists; re-verify or strike it.
   confirmed. **Owner: none.** Since AZ-S4 (`worktree-az-s4-instrument-failures`
   from `cd433ea`) every one of the file's fourteen `Start()` assertions - ten
   on `db`, four on `opened.value()` - prints the status through `Started`,
-  so the next failure names its cause; neither the port probe nor any bound
-  was changed, since no cause has been observed.
+  so the next failure names its cause - for a port clash, `bind() failed`
+  with the errno, though not which of the two ports. The failed cell runs
+  one core, where no listener uses `SO_REUSEPORT`, so a clash there fails
+  `Start()`; above one core it would bind. Neither the port probe nor any
+  bound was changed, since no cause has been observed.
 
 - **AX-S2b's release-kick cell failed once under `-j8` and did not
   reproduce.** On `worktree-ay-s0-order` at `14cfdfa` (sources as
@@ -77,13 +80,20 @@ statement about an engine that no longer exists; re-verify or strike it.
   suite, and two more full suites were green. Its bounds are wall-clock
   (`Within(2000ms)` for core 1's first idle block, `Within(1000ms)` after
   the kick), which a loaded host can exceed. **Owner: none.** Since AZ-S4
-  (`worktree-az-s4-instrument-failures` from `cd433ea`) every `Within` in
-  `row_wait_wake_rig_test.cpp` prints what it saw - the reactor's idle
-  blocks, the statement's `done` and response, and after the kick the kicks
-  logged to core 1 - so the next failure says whether the reactor never
-  slept, the kick never landed, or the statement was merely slow. The
-  bounds were not widened. Keep the next failure with `--output-on-failure`
-  before it is attributed.
+  (`worktree-az-s4-instrument-failures` from `cd433ea`) the file's timed
+  waits print what they saw, read only through what is safe from the test
+  thread:
+  - every first idle-block wait, and the holder's `COMMIT`, print whether
+    the statement finished and, only if it did, its response;
+  - the wait after the kick prints, from a baseline taken before the sim
+    releases it, the kicks still held in the sim, the kicks the real table
+    skipped on a clear sleep flag, the wakes core 1 received and its idle
+    blocks - which tells a kick that never reached core 1 from a reactor
+    that woke and a statement that was slow.
+  What a first idle-block timeout cannot say is whether the reactor was busy
+  or the statement never parked; no counter safe to read across threads
+  separates the two. The bounds were not widened. Keep the next failure with
+  `--output-on-failure` before it is attributed.
 
 - **A rollback's schema-word move has no cell that kills its removal since
   AX-S2.** Verified on `ax-s3-inflight-prose` from `b54a769` (AX-S3):

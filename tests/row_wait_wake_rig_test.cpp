@@ -52,6 +52,42 @@ struct Statement {
     std::atomic<bool> done{false};
 };
 
+// **What a timed-out wait saw** (AZ-S4), for the one-off failures
+// `known-gaps.md` (Testing) records. Read on the test thread while both
+// reactors run, so only what is safe to read there: the statement's response
+// once its `done` is seen - the release store follows the reactor's last
+// write to it - and the scheduler's and tables' atomic counters.
+std::string Seen(const Statement& s) {
+    if (!s.done.load(std::memory_order_acquire)) return "the statement not done";
+    return "the statement done, response '" + s.out.response + "'";
+}
+
+// The wake path to one core, from a baseline: a kick still held in the sim,
+// one the real table skipped on a clear sleep flag (best-effort, costing one
+// idle block), one written to the core's eventfd, and the blocks the core
+// took. Tells "the kick never landed" from "it landed and the statement was
+// slow".
+struct WakePath {
+    std::uint64_t idle_blocks = 0;
+    std::uint64_t wakes_received = 0;
+    std::uint64_t kicks_skipped = 0;
+};
+
+WakePath WakesTo(TwoCoreRig& rig, std::uint32_t core) {
+    const sched::Scheduler& s = rig.core(core).scheduler();
+    return {s.idle_blocks(), s.wakes_received(), rig.wakers().kicks_skipped()};
+}
+
+std::string Since(const WakePath& before, TwoCoreRig& rig, std::uint32_t core) {
+    const WakePath now = WakesTo(rig, core);
+    return "since the kick: " + std::to_string(rig.wake().in_flight()) +
+           " kick(s) held in the sim, " +
+           std::to_string(now.kicks_skipped - before.kicks_skipped) + " skipped, " +
+           std::to_string(now.wakes_received - before.wakes_received) +
+           " wake(s) received and " + std::to_string(now.idle_blocks - before.idle_blocks) +
+           " idle block(s) on core " + std::to_string(core);
+}
+
 sched::Coro RunStatement(CommandDispatcher& d, Statement& s) {
     s.go_pred = [&s] { return s.go.load(std::memory_order_acquire); };
     co_await sched::WaitUntil{&s.go_pred};
@@ -97,9 +133,7 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     // has gone to sleep over it.
     sched::Scheduler& peer = rig->core(1).scheduler();
     ASSERT_TRUE(Within(2000ms, [&] { return peer.idle_blocks() >= 1; }))
-        << "core 1 never blocked with its UPDATE parked; saw idle_blocks="
-        << peer.idle_blocks() << ", done=" << update.done.load(std::memory_order_acquire)
-        << ", response '" << update.out.response << "'";
+        << "core 1 never blocked with its UPDATE parked; saw " << Seen(update);
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
     const std::size_t kicks_to_peer_before = KicksTo(*rig, 1).size();
@@ -107,7 +141,8 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     // The holder decides, on its own reactor; the cell's kick to core 0 is
     // the barrier, through the real table.
     commit.go.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }))
+        << "core 0's COMMIT never finished; saw " << Seen(commit);
     ASSERT_TRUE(StartsWith(commit.out.response, "COMMIT")) << commit.out.response;
 
     // The release flipped the waiter's slot and kicked core 1 - through the
@@ -117,11 +152,10 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     EXPECT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE ran before any kick reached its reactor";
 
+    const WakePath before_kick = WakesTo(*rig, 1);
     rig->wake().Advance(2);
     ASSERT_TRUE(Within(1000ms, [&] { return update.done.load(std::memory_order_acquire); }))
-        << "core 1's UPDATE did not proceed at the kick; saw idle_blocks="
-        << peer.idle_blocks() << ", kicks to core 1 " << KicksTo(*rig, 1).size()
-        << ", response '" << update.out.response << "'";
+        << "core 1's UPDATE did not proceed at the kick; " << Since(before_kick, *rig, 1);
     // The re-run found the row released, not merely decided.
     EXPECT_TRUE(StartsWith(update.out.response, "UPDATED 1")) << update.out.response;
     rig->Stop();
@@ -167,9 +201,7 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
 
     sched::Scheduler& peer = rig->core(1).scheduler();
     ASSERT_TRUE(Within(2000ms, [&] { return peer.idle_blocks() >= 1; }))
-        << "core 1 never blocked with its UPDATE parked; saw idle_blocks="
-        << peer.idle_blocks() << ", done=" << update.done.load(std::memory_order_acquire)
-        << ", response '" << update.out.response << "'";
+        << "core 1 never blocked with its UPDATE parked; saw " << Seen(update);
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
     // Registered on the row's own entry, the unit that refused the range.
@@ -180,7 +212,8 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
     const std::size_t kicks_to_peer_before = KicksTo(*rig, 1).size();
 
     commit.go.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }))
+        << "core 0's COMMIT never finished; saw " << Seen(commit);
     ASSERT_TRUE(StartsWith(commit.out.response, "COMMIT")) << commit.out.response;
 
     const std::vector<sched::SimWakerTable::Record> to_peer = KicksTo(*rig, 1);
@@ -188,11 +221,10 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
     EXPECT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE ran before any kick reached its reactor";
 
+    const WakePath before_kick = WakesTo(*rig, 1);
     rig->wake().Advance(2);
     ASSERT_TRUE(Within(1000ms, [&] { return update.done.load(std::memory_order_acquire); }))
-        << "core 1's UPDATE did not proceed at the kick; saw idle_blocks="
-        << peer.idle_blocks() << ", kicks to core 1 " << KicksTo(*rig, 1).size()
-        << ", response '" << update.out.response << "'";
+        << "core 1's UPDATE did not proceed at the kick; " << Since(before_kick, *rig, 1);
     EXPECT_TRUE(StartsWith(update.out.response, "UPDATED 2")) << update.out.response;
     rig->Stop();
     EXPECT_EQ(rig->locks().EntryCount(), 0u);
@@ -278,16 +310,14 @@ TEST(RowWaitWakeRigTest, AWaiterOnTheSlotSleepsThroughTheHoldersDecideUntilItsRe
     rig->Start();
 
     ASSERT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
-        << "core 1 never blocked with its UPDATE parked; saw idle_blocks="
-        << rig->core(1).scheduler().idle_blocks()
-        << ", done=" << update.done.load(std::memory_order_acquire) << ", response '"
-        << update.out.response << "'";
+        << "core 1 never blocked with its UPDATE parked; saw " << Seen(update);
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
 
     // The holder decides and is out of the in-flight table; its `X` stays.
     commit.go.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }))
+        << "core 0's COMMIT never finished; saw " << Seen(commit);
     ASSERT_TRUE(StartsWith(commit.out.response, "COMMIT")) << commit.out.response;
     ASSERT_FALSE(rig->core(1).transactions().IsInFlight(late.txn));
     // Core 1 is run for 50 ms inside the window, well inside the 1 s net
@@ -347,9 +377,7 @@ TEST(RowWaitWakeRigTest, AFirstEncounterInsideTheRetireToReleaseWindowWaitsForTh
     // Checked without an early return: on a failure the rig must still stop
     // before the statements on this frame go.
     EXPECT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
-        << "core 1 never blocked; saw idle_blocks=" << rig->core(1).scheduler().idle_blocks()
-        << ", done=" << update.done.load(std::memory_order_acquire) << ", response '"
-        << update.out.response << "'";
+        << "core 1 never blocked; saw " << Seen(update);
     const bool answered_early = update.done.load(std::memory_order_acquire);
     EXPECT_FALSE(answered_early)
         << "the first encounter inside the window was answered rather than waited: "
@@ -464,10 +492,7 @@ TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOth
 
     // A has met row 2 and parked, and core 0 has gone to sleep over it.
     ASSERT_TRUE(Within(2000ms, [&] { return rig->core(0).scheduler().idle_blocks() >= 1; }))
-        << "core 0 never blocked with A parked; saw idle_blocks="
-        << rig->core(0).scheduler().idle_blocks()
-        << ", done=" << a_waits.done.load(std::memory_order_acquire) << ", response '"
-        << a_waits.out.response << "'";
+        << "core 0 never blocked with A parked; saw " << Seen(a_waits);
     ASSERT_FALSE(a_waits.done.load(std::memory_order_acquire)) << a_waits.out.response;
 
     b_closes.go.store(true, std::memory_order_release);
