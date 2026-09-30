@@ -170,3 +170,17 @@ with AY-S6 on `main` at `24cf703`.
 | **Reading** | The cost is every v18 volume - development volumes, made since `62a6cb3` - which must be recreated. The survey's "room for the count with no format bump" (§1.3 of the order) is given up: the word still carries the count, and the version is what keeps an old log from being read. |
 | **Does not settle** | AY-Q7 (a run torn at scan end), and so AY-S8's start; AY-Q11; AY-S11 |
 | **Recorded at** | `workorder-ay-following-letter.md` §2 (AY-R7), §3 (AY-S8), §4 (AY-Q6), `index.md` |
+
+## 14. AY-Q7 marked (B): a run torn at scan end is not a base
+
+Recorded on `worktree-ay-q7-mark` from `e7eba85` (`v2.7.0-525-ge7eba85`),
+with AY-Q6's mark on `main` at `e7eba85`.
+
+| | |
+|---|---|
+| **Question** | AY-Q7: after the scan, `close_bases` (`assertion_recover.cpp:292-296`) adopts every base still open, so a run a crash cut after `k` of its `n` chunks is taken as whole and its missing groups under-count. With AY-R7's count the cut is visible. (A) keep adopting it; (B) the order's proposal, not a base: the assertion is unrecovered, `NoteUnenforceable` refuses its relation's writes on every core. CLA's reading, not run: a torn run is adopted only when it is the assertion's first run in range - a completed checkpoint's run is always in range (the scan starts at `redo_start_lsn`, at or below core 0's `CHECKPOINT_BEGIN`, and the anchor moves only at `Complete()`), and `CREATE ASSERTION`'s snapshot precedes its publish in the one stream - so (B) fires only where one of those has already failed |
+| **Word** | *"AY-Q7 (B)로 마킹해줘"* |
+| **Mark** | **AY-Q7 (B)**: a run with fewer chunks than its `chunk_count` when the scan ends is not a base. The assertion is not recovered, its relation's writes are refused `CannotEnforce` on every core, and the mount reports it (`assertions_unrecovered`, the recovery log's error). A torn run after a whole base of the same assertion is still skipped as a later checkpoint's |
+| **Reading** | The refusal lasts until `DROP ASSERTION` and `CREATE ASSERTION`: no checkpoint snapshots an unenforceable assertion (`SnapshotLocked` walks `live_` only, `assertion_check.cpp:118-128`), so no later mount finds a base, and `Evict` clears the record. The order's AY-Q6 row said "until its next checkpoint" of the same state; that was wrong, and is corrected there |
+| **Does not settle** | AY-Q11; AY-S8's other cells; AY-S11 |
+| **Recorded at** | `workorder-ay-following-letter.md` §2 (AY-R7), §3 (AY-S8), §4 (AY-Q6, AY-Q7), `index.md` |
