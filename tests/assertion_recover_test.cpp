@@ -226,6 +226,62 @@ protected:
         return RecoverAssertions(*device_, /*core_id=*/0, from_lsn, store_, list, /*log=*/nullptr);
     }
 
+    // `live`'s snapshot run as the writer emits it, one payload per chunk -
+    // logged into a scratch stream of its own and read back, so a cell can
+    // replay the run into `wal_` with something between its chunks, or with
+    // chunks missing. The chunks are the real writer's bytes, never
+    // hand-encoded ones: what is under test is how recovery reads what
+    // `LogAssertionSnapshot` writes.
+    std::vector<std::vector<std::byte>> SnapshotChunks(const BoundCabin& live) {
+        std::vector<std::vector<std::byte>> out;
+        auto device = wal::MemoryLogDevice::Create(kSegmentSize);
+        EXPECT_TRUE(device.ok());
+        if (!device.ok()) return out;
+        auto manager = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0);
+        EXPECT_TRUE(manager.ok());
+        if (!manager.ok()) return out;
+
+        wal::AssertionCabinSnapshot cabin;
+        cabin.assertion_id = kAssertionId;
+        for (const BoundCabin::GroupSnapshot& g : live.SnapshotGroups()) {
+            cabin.groups.push_back(wal::AssertionSnapshotGroup{g.group_id, g.count, g.sum, g.key});
+        }
+        EXPECT_TRUE(wal::LogAssertionSnapshot(*manager.value(), cabin).ok());
+        EXPECT_TRUE(manager.value()->Flush().ok());
+        auto scanned = wal::ScanLog(*device.value(), /*core_id=*/0, /*from_lsn=*/0,
+                                    [&out](const wal::DecodedRecord& record) {
+                                        if (record.type() == wal::RecordType::kAssertSnapshot) {
+                                            out.emplace_back(record.payload.begin(),
+                                                             record.payload.end());
+                                        }
+                                        return Status::OK();
+                                    });
+        EXPECT_TRUE(scanned.ok()) << scanned.status().message();
+        return out;
+    }
+
+    wal::Lsn AppendChunk(const std::vector<std::byte>& payload) {
+        auto lsn = wal_->Append({wal::RecordType::kAssertSnapshot, wal::kNoTxnId, kInvalidPageId},
+                                payload);
+        EXPECT_TRUE(lsn.ok()) << lsn.status().message();
+        return lsn.ok() ? lsn.value() : 0;
+    }
+
+    // Another core's record: under one stream nothing keeps it out of the gap
+    // between two chunks (the directory latch keeps out only ASSERT_*).
+    void AppendForeignRecord() {
+        ASSERT_TRUE(
+            wal_->Append({wal::RecordType::kTxnCommit, /*txn_id=*/41, kInvalidPageId}).ok());
+    }
+
+    // A cabin whose snapshot takes several records (the 700 of the chunking
+    // cell below).
+    static void FillToChunk(BoundCabin& live) {
+        for (int i = 0; i < 700; ++i) {
+            live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
+        }
+    }
+
     sched::ManualClock clock_;
     std::unique_ptr<wal::MemoryLogDevice> device_;
     std::unique_ptr<wal::WalManager> wal_;
@@ -417,6 +473,72 @@ TEST_F(AssertionRecoverTest, AChunkedSnapshotRelinksEachEntryExactlyOnce) {
     const GroupHeader* x = rebuilt.Find(Key("x"));
     ASSERT_NE(x, nullptr);
     EXPECT_EQ(x->entries.size(), 1u);
+}
+
+// AY-S8 (AY-R7): a run is whole when it has as many chunks as it says, not
+// when the first record that is not a snapshot arrives. Under one stream the
+// second rule is false - another core's record lands between two chunks - and
+// the chunks after it were skipped as "a later checkpoint's", so the base
+// under-counted: a quiet wrong answer.
+TEST_F(AssertionRecoverTest, AForeignRecordBetweenChunksLeavesTheBaseWhole) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(live);
+    const auto chunks = SnapshotChunks(live);
+    ASSERT_GT(chunks.size(), 1u) << "one chunk has no gap to put a record in";
+
+    const wal::Lsn from = AppendChunk(chunks[0]);
+    AppendForeignRecord();
+    for (std::size_t i = 1; i < chunks.size(); ++i) AppendChunk(chunks[i]);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(from, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+    EXPECT_EQ(report.value().assertions[0].groups_restored, live.group_count())
+        << "the chunks after the foreign record were dropped, so the base under-counts";
+    EXPECT_EQ(rebuilt.group_count(), live.group_count());
+}
+
+// AY-Q7 (B): a run the scan ends inside - a crash after some of its chunks - is
+// not a base. Adopting it restores only the groups its chunks carried, and an
+// admission check on that directory admits what the assertion forbids.
+TEST_F(AssertionRecoverTest, ARunTornAtScanEndIsNotABase) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(live);
+    const auto chunks = SnapshotChunks(live);
+    ASSERT_GT(chunks.size(), 1u) << "one chunk cannot be torn";
+
+    const wal::Lsn from = AppendChunk(chunks[0]);
+    for (std::size_t i = 1; i + 1 < chunks.size(); ++i) AppendChunk(chunks[i]);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(from, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_FALSE(report.value().assertions[0].recovered)
+        << "a run missing its last chunk was adopted as a base";
+    EXPECT_EQ(rebuilt.group_count(), 0u) << "a discarded run leaves nothing restored";
+}
+
+// A run cut short in a live log - `LogAssertionSnapshot` refusing mid-run, or a
+// publish run a crash cut ahead of a later checkpoint's - is not a base, and
+// the whole run after it is. Closing the partial one at the next foreign record
+// made it the base and skipped the whole one.
+TEST_F(AssertionRecoverTest, APartialRunIsDiscardedAndTheWholeRunAfterItIsTheBase) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(live);
+    const auto chunks = SnapshotChunks(live);
+    ASSERT_GT(chunks.size(), 1u) << "one chunk cannot be cut short";
+
+    const wal::Lsn from = AppendChunk(chunks[0]);
+    AppendForeignRecord();
+    for (const auto& chunk : chunks) AppendChunk(chunk);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(from, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+    EXPECT_EQ(rebuilt.group_count(), live.group_count())
+        << "the partial run was taken as the base and the whole one skipped";
 }
 
 TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {

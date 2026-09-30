@@ -705,5 +705,21 @@ TEST(WalPayloadTest, VarHeapAppendLengthPastThePayloadIsCorruption) {
     EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
+// AY-Q6 (C): every snapshot this build writes says how many chunks its run
+// has, at least one, so a count of zero is the word a pre-AY writer left - on
+// a volume the superblock version already refuses - or bytes that are wrong.
+// Neither is read as a snapshot. Built by hand so the cell does not depend on
+// what the encoder writes into the word.
+TEST(WalPayloadTest, AssertSnapshotWithAZeroChunkCountIsCorruption) {
+    std::array<std::byte, kAssertSnapshotFixedSize> buf{};
+    const std::uint64_t assertion_id = 77;
+    std::memcpy(buf.data() + kAssertSnapshotAssertionIdOffset, &assertion_id,
+                sizeof(assertion_id));  // group count 0, the last word 0
+
+    auto decoded = DecodeAssertSnapshot(buf);
+    ASSERT_FALSE(decoded.ok()) << "a snapshot with no chunk count decoded";
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+}
+
 }  // namespace
 }  // namespace kds::wal

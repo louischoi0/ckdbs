@@ -267,6 +267,23 @@ TEST(SuperBlockTest, DecodeRefusesAnyVersionButThisBuilds) {
     }
 }
 
+// AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no
+// chunk count, which this build does not read (`raft-marks-2026-09-30.md`
+// §13). Named rather than left to the loop above, whose `- 1` would stop
+// meaning 18 at the next bump.
+TEST(SuperBlockTest, AVersion18VolumeDoesNotMount) {
+    constexpr std::uint32_t kBeforeTheChunkCount = 18;
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheChunkCount,
+                sizeof(kBeforeTheChunkCount));
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    EXPECT_FALSE(decoded.ok()) << "a volume whose snapshots carry no chunk count mounted";
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+}
+
 // ---- The recorded core count (pinned until AT-S9) ---------------------
 
 TEST(SuperBlockTest, TheCoreCountIsRecordedAndRoundTrips) {
