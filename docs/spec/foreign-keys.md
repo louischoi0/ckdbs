@@ -373,23 +373,28 @@ through the undo log, answering busy if that version references the
 parent. Until AY-S5 the walk skipped it, and the writer's rollback left a
 child of a deleted parent with nothing refused.
 
-**The Cabin may find a child and may not clear one** (AT-R15, D4). The
-rule was made while `stats::CabinStore` was a dispatcher's own: a write
-filed its entry into the *writing* core's store, which since AT-S5 is
-where the session is, so a set observed on one core could be blind to what
-another core wrote. A hit is authoritative and returns without walking;
-an exhausted, all-non-matching set is **not** an authoritative "no
-children" and falls through to the walk. **The store has been the
-instance's since AT-S7** (`cabin.md`), which removes the reason, and the
-clearing return AT-R15 took away **has not been restored**: the reverse
-check still walks after an exhausted set (`fk_check.cpp`). Restoring it is
-a change to what may answer "no children" - the one forbidden wrong answer
-of §1 - and **the operator decided on 2026-09-29 to restore it in the
-following letter (AT-0 item 6), as its own stage beside D9(a), behind
-two-core cells**
-(`instructions/v3.0.0/raft-marks-2026-09-29.md` §6). Until it lands the
-walk costs a relation scan the fast path would have saved, and nothing is
-wrong.
+**The Cabin finds a child and clears a parent** (F6; restored at AY-S6).
+A hit is authoritative and returns without walking, and so is an
+**exhausted** set - every entry checked, none a live or undecided child -
+which answers "no children" and records a `CabinProbe`, no walk. It rests
+on three things, each of which once failed:
+
+- **One store for the instance** (AT-S7). While the store was a
+  dispatcher's own (until then; AT-R15 took the return away for it) a
+  child written on another core never reached this core's set.
+- **D9(a)'s `S`** (§2a). A set's count is fixed when the check reads it,
+  and a child is placed before its hook appends it; a writer that sets the
+  fk to the parent holds the parent row's `S` from before its descent to
+  its decide, and the check runs under that row's `X`, so no such writer is
+  mid-write while the set is read.
+- **The banking gate** (`cabin.md` §6a). A set banked while a child insert
+  was open would lack it, the insert's hook having found the value
+  unobserved; the gate declines such a bank and the walk answers.
+
+**A loop that gives the set up is not exhausted**, and the walk answers:
+a heap child whose hint fails (no descent heals it, and the value is
+un-observed), and a row an undecided writer moved off the parent, whose pk
+stays in the set while its page holds the new value (AY-Q8).
 
 ## 3. Reverse check — parent DELETE
 
@@ -417,10 +422,9 @@ walk child_rel
   check consults an active Cabin on the child's fk column **read-only**,
   an observed value's entry set is resolved and key-re-checked, and a live
   match there answers `kFkViolation` or busy without walking. A set that
-  drains does **not** answer "no children" — §3a says why — so the pass
-  case still costs the relation until AT-S7 makes the store the
-  instance's. A heap child with a failed hint abandons the Cabin and
-  walks, exactly as `ServeFromCabin` does.
+  drains answers "no children" without walking too (§3a), so a Cabin pays
+  for the pass as well. A heap child with a failed hint, or a row an
+  undecided writer moved off the parent, gives the set up and walks.
 
 There is no reverse check for parent UPDATE: K2 makes pk update
 Unsupported, so the case is closed by contract, not by code.

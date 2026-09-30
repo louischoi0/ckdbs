@@ -185,12 +185,13 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
 
             // An observed value's set is a **superset** of the pks that
             // carry it, so every entry has to be checked and none may be
-            // trusted on sight. A live match found here is therefore
-            // authoritative and returns without walking; an exhausted scan
-            // is not, and the loop's exit says why.
+            // trusted on sight. A live match found here is authoritative and
+            // returns without walking; so is an exhausted loop that checked
+            // every entry (below). `usable` is whether it did.
             const bool is_btree = child.clustered_type == catalog::ClusteredType::kBtree;
             std::unordered_set<std::uint64_t> seen;
             std::vector<parser::AstValue> scratch;
+            bool usable = true;
 
             for (std::size_t i = 0; i < set.size(); ++i) {
                 // By value, under the partition's latch (AT-S7): the set is
@@ -222,6 +223,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                         // for the same reason - and take the walk, which
                         // is where every exit from this loop goes now.
                         options.cabins->Unobserve(*key);
+                        usable = false;
                         break;
                     }
                     auto found = btree::BtreeLookup(store, child.desc_page_id, entry.pk);
@@ -261,7 +263,21 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 auto value =
                     ForeignKeyValue(child, child_column_no, tuple.value().payload, scratch);
                 if (!value.ok()) return value.status();
-                if (!value.value().has_value() || *value.value() != parent_pk) continue;
+                if (!value.value().has_value() || *value.value() != parent_pk) {
+                    // **A row an undecided writer moved off the parent**
+                    // keeps its pk in this set and holds the writer's value
+                    // in its page (AY-Q8): skipping it would clear a parent
+                    // the writer's rollback references again. The set is
+                    // given up for this check and the walk, which reads such
+                    // a row's earlier version, answers.
+                    if (tuple.value().undo_ptr != txn::kNoUndoPtr &&
+                        txn::CheckVisibility(check_view, tuple.value()) ==
+                            txn::CheckVerdict::kBusy) {
+                        usable = false;
+                        break;
+                    }
+                    continue;
+                }
 
                 const txn::CheckVerdict seen_as = txn::CheckVisibility(check_view, tuple.value());
                 if (seen_as == txn::CheckVerdict::kLive) {
@@ -278,21 +294,31 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 }
             }
 
-            // **An exhausted set does not clear the parent** (AT-R15, D4's
-            // first half). The rule was made while `stats::CabinStore` was
-            // a dispatcher's own: a child row inserted on another core never
-            // reached this set, and a drained loop here would have cleared a
-            // parent that has a child - `foreign-keys.md` §1's one forbidden
-            // answer. So a set may **find** a child, which is what the two
-            // returns above do, and may not clear one: the walk below
-            // answers "no children". **The store is the instance's since
-            // AT-S7**, which removes the reason; the clearing return has
-            // **not been restored**, and restoring it is a change to what
-            // may answer "no children" that is not decided here
-            // (`foreign-keys.md` §2).
+            // **An exhausted set clears the parent** (AY-S6, restoring the
+            // return AT-S5f took away). Every entry was checked and none is a
+            // live or undecided child, and the set holds every pk that
+            // carries this value (`cabin.md` §1). Two things made that
+            // untrue and neither stands:
             //
-            // `served_from_cabin` therefore stays true only on a hit, which
-            // is what `SHOW ACCESS` has always meant by it.
+            // - **The store was a dispatcher's own** until AT-S7, so a child
+            //   written on another core never reached this set. It is the
+            //   instance's.
+            // - **A child could be written past the set's count** - fixed at
+            //   `Find` - or between its placement and its hook. D9(a) closes
+            //   both: every writer that sets the fk to this parent holds the
+            //   parent row's `S` from before its descent, and the caller
+            //   holds that row's `X`, so no such writer is between its check
+            //   and its decide while this runs. A writer that holds no `S` -
+            //   a child `DELETE`, or an `UPDATE` moving the column off - is
+            //   met above, as a match or as a moved row that gives the set up.
+            //
+            // A loop that gave the set up - a heap child's failed hint, a
+            // moved row - is not exhausted, and the walk answers.
+            if (usable) {
+                outcome.verdict = FkVerdict::kPass;
+                outcome.served_from_cabin = true;
+                return outcome;
+            }
         } else {
             options.cabins->NoteMiss(options.cabin_id);
         }

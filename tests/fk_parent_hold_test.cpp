@@ -169,9 +169,10 @@ TEST_F(FkParentHoldTest, AChildCommittedAfterTheDeleteBeganIsSeenUnderItsMove) {
 //
 // **Mutation**: the forward check's `S` not asked. The insert passes on the
 // parent's committed header, commits, and appends past the loop's count; the
-// set clears 7, and the child is left referencing nothing. With the walk kept
-// instead of the clearing return the same mutation is caught: the walk reads
-// the committed child.
+// set clears 7, and the child is left referencing nothing. With the walk in
+// place of the clearing return the same mutation leaves no orphan - the walk
+// reads the committed child and refuses the `DELETE` - which is why the
+// return, and not the walk, is what rests on the `S`.
 TEST_F(FkParentHoldTest, AChildWrittenWhileTheSetIsReadCannotBeMadeToReferenceTheParent) {
     ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Run("CREATE CABIN ON c(pid)").rfind("CRE", 0), 0u);
