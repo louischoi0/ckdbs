@@ -681,6 +681,45 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
     EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1"), "DELETED 1");
 }
 
+// **A set the loop gives up on does not clear the parent** (AY-S6). A heap
+// child has no descent to heal a failed hint with, so the reverse check
+// un-observes the value and walks; the entries it did not reach are the
+// ones a "no children" would have skipped. The hint is written wrong
+// through the store's own heal, the way a split's directory rows are written
+// directly - no SQL moves a heap row.
+//
+// **Mutation**: the set cleared whenever its loop ends, a broken-off loop
+// included - `DELETED 1` for a parent whose one child is the entry skipped.
+TEST_F(ForeignKeyCheckTest, AHeapChildWhoseHintFailsIsWalkedNotCleared) {
+    ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
+                  "qty int64) HEAP")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("CREATE CABIN ON trades_h(account_id)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (1, 100)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(RowCount("SELECT * FROM trades_h WHERE account_id = 1"), 1u);  // banks 1's set
+
+    auto oid = boot_->catalog.FindTableOidByName("trades_h", nullptr);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    parser::AstValue one;
+    one.type = parser::ValueType::kInt;
+    one.int_val = 1;
+    auto key = stats::MakeCabinKey(access.value()->CabinOn(1).id, one);
+    ASSERT_TRUE(key.has_value());
+    {
+        const stats::CabinSet set = cabins_->Find(*key);
+        ASSERT_TRUE(set.valid()) << "the read did not bank the value";
+        ASSERT_EQ(set.size(), 1u);
+        const stats::CabinEntry entry = set.At(0);
+        set.Heal(0, entry.page_id, static_cast<std::uint16_t>(entry.slot + 7), entry.page_epoch);
+    }
+
+    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1").substr(0, 16), "ERR FK_VIOLATION");
+    EXPECT_FALSE(cabins_->Find(*key).valid()) << "the abandoned set is still served";
+}
+
 // ---- The reverse check under a split child (SA-T6's prerequisite) ----
 //
 // Nothing opens a range since AT-S9 (and `RangeEligible`'s `kForeignKey`

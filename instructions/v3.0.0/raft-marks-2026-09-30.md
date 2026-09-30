@@ -106,3 +106,26 @@ review.
 | **Answers** | For AY: its measurement is AY-S11's, over `58198cb` (AY-S0's base) against AY's closing commit |
 | **Does not settle** | Which benchmarks a milestone's measurement runs, beyond `bench/README.md`'s rules; whether stages already landed under the suspension are re-measured individually (read as no: the milestone measurement covers them) |
 | **Recorded at** | `CLAUDE.md` Session Workflow step 3 |
+
+## 9. AY-S6 started
+
+Recorded on `worktree-ay-s6-fk-cabin-clearing-return` from `2d2d96b`
+(`v2.7.0-512-g2d2d96b`), with AY-S5 on `main` at `2d2d96b`.
+
+| | |
+|---|---|
+| **Word** | *"push"* (`7c51f82..2d2d96b`, the pre-push gate green, 3107/3107); then *"start AY-S6"* |
+| **Mark** | **AY-S6 starts**: the Cabin's clearing return (AY-R5) |
+| **Does not settle** | Any §4 item; AY-S7-S11 |
+| **Recorded at** | `workorder-ay-following-letter.md` §6, `index.md` |
+
+## 10. AY-S6's cells, re-read under D9(a)
+
+Recorded on `worktree-ay-s6-fk-cabin-clearing-return` at `2d2d96b`.
+
+| | |
+|---|---|
+| **Question** | With D9(a) built, every cell the order's S6 row lists parks on the child's `S(P)` before the Cabin is read, so the order's mutant ("clears unconditionally") differs from the restored return only where the loop abandons the set - a heap child whose hint failed. What should the cells and the mutant pin? |
+| **Word** | **"Serve-proof + hint cell (Recommended)"**: *"Restore f247c52's return. Cells, red first on today's walk: (1) a drained set clears from the Cabin with a Cabin probe in SHOW ACCESS and no walk, and a child committed on the other core is found in the set; (2) a set banked while a child insert is open is declined by the gate and the walk answers; (3) a heap child with a failed hint abandons the set and walks. Mutants: 'clears unconditionally', killed by (3); 'the walk kept', killed by (1)'s probe; D9(a)'s S removed, to show the return depends on it."* |
+| **Mark** | AY-S6's exit as that option states it. The order's "a skipped hook" is read as the placement-to-hook gap, the cell D9(a)'s mutant needs |
+| **Recorded at** | `workorder-ay-following-letter.md` §6 |

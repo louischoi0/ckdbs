@@ -7,6 +7,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
@@ -57,7 +58,7 @@ protected:
             d->emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
                        /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
                        exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
-                       /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
+                       /*access_statistics=*/false, &cabins_, &*txns_);
             (*d)->set_locks(locks_.get());
         }
 
@@ -87,6 +88,7 @@ protected:
     std::optional<txn::TrxIdSequence> ids_;
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> txns_;
+    stats::CabinStore cabins_;  // the instance's one store, as since AT-S7
     std::optional<CommandDispatcher> dispatcher_;
     std::optional<CommandDispatcher> other_;
     PageId parent_leaf_ = kInvalidPageId;
@@ -150,6 +152,68 @@ TEST_F(FkParentHoldTest, AChildCommittedAfterTheDeleteBeganIsSeenUnderItsMove) {
 
     // Whatever the DELETE answered, the child's rollback references 7 again.
     ASSERT_EQ(other_->Dispatch("ROLLBACK", &mover).response.rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(Run("SELECT id FROM p WHERE id = 7"), "id\\n7")
+        << "the DELETE answered '" << deleted << "' and left c(1, pid = 7) without its parent";
+}
+
+// ---- The Cabin's "no children" answer rests on D9(a) (AY-S6) --------------
+//
+// A set's count is fixed at `Find`, so an entry appended while the reverse
+// check's loop runs is not in it, and a loop that exhausts clears the
+// parent. That is sound only because no child can be *made* to reference a
+// parent whose `DELETE` holds its row: the child's check asks `S` on that
+// row, which the `DELETE`'s `X` refuses.
+//
+// Driven on one thread: inside the loop's verify of the one dead entry -
+// the first fetch of the child's leaf - another session inserts a child of 7.
+//
+// **Mutation**: the forward check's `S` not asked. The insert passes on the
+// parent's committed header, commits, and appends past the loop's count; the
+// set clears 7, and the child is left referencing nothing. With the walk kept
+// instead of the clearing return the same mutation is caught: the walk reads
+// the committed child.
+TEST_F(FkParentHoldTest, AChildWrittenWhileTheSetIsReadCannotBeMadeToReferenceTheParent) {
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("CREATE CABIN ON c(pid)").rfind("CRE", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO c VALUES (1, 7)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("SELECT id FROM c WHERE pid = 7"), "id\\n1");  // banks 7's set
+    ASSERT_EQ(Run("DELETE FROM c WHERE id = 1"), "DELETED 1");   // a dead entry
+
+    std::string inserted;
+    store_.OnFetch(child_leaf_, 1,
+                   [&] { inserted = other_->Dispatch("INSERT INTO c VALUES (2, 7)").response; });
+    const std::string deleted = Run("DELETE FROM p WHERE id = 7");
+    ASSERT_TRUE(store_.fired()) << "the seam never ran; the cell tested nothing";
+
+    const bool child_written = inserted.rfind("INSERTED", 0) == 0;
+    const bool parent_gone = deleted.rfind("DELETED 1", 0) == 0;
+    EXPECT_FALSE(child_written && parent_gone) << "insert: " << inserted << "; delete: " << deleted;
+    EXPECT_TRUE(parent_gone) << deleted;  // the set, drained, cleared it
+}
+
+// AY-Q8 through the Cabin: an `UPDATE` moving a child off 7 leaves its pk in
+// 7's set (maintenance is append-only), and its page holds the new value, so
+// the loop skips it as not a child of 7. A set the loop exhausts that way is
+// not a "no children": the writer is undecided and its rollback puts the
+// reference back. The loop gives the set up and the walk answers, waiting on
+// that writer - here, on the synchronous path, refusing retryably.
+//
+// **Mutation**: a non-matching entry skipped whatever its writer's state -
+// `DELETED 1`, and the rollback leaves a child of a deleted 7.
+TEST_F(FkParentHoldTest, AChildMovedOffTheParentInABankedSetIsNotAClear) {
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO p VALUES (8, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("CREATE CABIN ON c(pid)").rfind("CRE", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO c VALUES (1, 7)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("SELECT id FROM c WHERE pid = 7"), "id\\n1");  // banks 7's set
+
+    Session mover;
+    ASSERT_EQ(Run(mover, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(Run(mover, "UPDATE c SET pid = 8 WHERE id = 1"), "UPDATED 1");
+    const std::string deleted = Run("DELETE FROM p WHERE id = 7");
+    EXPECT_EQ(deleted.rfind("ERR TXN_CONFLICT", 0), 0u) << deleted;
+
+    ASSERT_EQ(Run(mover, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
     EXPECT_EQ(Run("SELECT id FROM p WHERE id = 7"), "id\\n7")
         << "the DELETE answered '" << deleted << "' and left c(1, pid = 7) without its parent";
 }

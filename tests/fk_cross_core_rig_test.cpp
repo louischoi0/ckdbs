@@ -285,57 +285,6 @@ TEST(FkCrossCoreRigTest, AChildWaitingOnAParentThatRollsBackAcrossCoresIsAViolat
 }
 
 
-// ---- D4's Cabin half: a per-core set may find a child and may not clear one
-//
-// `stats::CabinStore` is a dispatcher's own, and since AT-S5 a write runs
-// where the **session** is rather than where the relation's owner is - so a
-// child row written on core 1 files its Cabin entry into core 1's store and
-// core 0's set never hears of it. The reverse check reads the deleting
-// core's store, so a set observed on core 0 that has since drained used to
-// answer an authoritative *"no children"* for a parent that has one:
-// `foreign-keys.md` §1's one forbidden answer, from the structure that
-// exists to give the opposite.
-//
-// AT-S5f makes a drained set fall through to the walk. The set may still
-// **find** a child, which is the fast path F6 is for; it may not clear one
-// until the store becomes the instance's at AT-S7 (AT-0 item 9).
-//
-// **The mutation**: restore the `kPass` return after the loop and this cell
-// reads `DELETED 1` for a parent whose child is on the other core.
-TEST(FkCrossCoreRigTest, ADrainedCabinSetDoesNotClearAParentAChildOnAnotherCoreReferences) {
-    FkRig r({});
-    ASSERT_NE(r.rig, nullptr);
-    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
-    CommandDispatcher& d0 = r.rig->core(0).dispatcher();
-
-    ASSERT_EQ(d0.Dispatch("INSERT INTO p VALUES (7, 0)").response.rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(d0.Dispatch("CREATE CABIN ON c(pid)").response.rfind("CRE", 0), 0u);
-    // A child of 7 on core 0, and the read that banks core 0's set for the
-    // value 7: a probe that finds nothing banks nothing, so the set has to
-    // be made to drain rather than started empty.
-    ASSERT_EQ(d0.Dispatch("INSERT INTO c VALUES (7)").response.rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response, "id\\n1");
-    // The row goes; the set keeps its pk, because maintenance is
-    // append-only and the re-check is what subtracts it.
-    ASSERT_EQ(d0.Dispatch("DELETE FROM c WHERE pid = 7").response, "DELETED 1");
-
-    // **And a new child of 7, written on core 1.** Its entry is filed into
-    // core 1's store - the one core 0's check does not read.
-    r.one.statement = "INSERT INTO c VALUES (7)";
-    r.rig->core(1).scheduler().Submit(sched::MakeCoroTask(
-        sched::SchedulingGroup::kForeground, RunOne(r.rig->core(1).dispatcher(), r.one)));
-    r.rig->Start();
-    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.one.done.load(std::memory_order_acquire); },
-                          4000ms))
-        << r.one.out.response;
-    ASSERT_EQ(r.one.out.response.rfind("INSERTED", 0), 0u) << r.one.out.response;
-
-    // Core 0's set for 7 now drains - its one entry is the deleted row -
-    // and the walk is what answers.
-    const std::string del = d0.Dispatch("DELETE FROM p WHERE id = 7").response;
-    EXPECT_NE(del.find("FK_VIOLATION"), std::string::npos) << del;
-}
-
 // ---- D9(a)'s cells, red first (AY-S4) --------------------------------------
 //
 // **Written red at AY-S4 and disabled until AY-S5 built D9(a)**; each
@@ -685,6 +634,97 @@ TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRol
     // Whatever the answer, the child row references 7 again, so 7 is there.
     EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p WHERE id = 7").response,
               "id\\n7");
+}
+
+// ---- The Cabin's "no children" answer (AY-S6) ----------------------------
+//
+// An observed value's set is a superset of the pks that carry it (`cabin.md`
+// §1), so a set whose every entry fails to be a live child of 7 is an
+// authoritative "no children" - F6's whole reason. AT-S5f took that answer
+// away while the store was a dispatcher's own, a child written on another
+// core never reaching this core's set; the store is the instance's since
+// AT-S7, and **since AY-S6 the answer is back**, sound because D9(a) keeps
+// every child writer that sets the fk to 7 on `S(7)`, which the `DELETE`'s
+// `X(7)` refuses (`foreign-keys.md` §3a).
+
+// `uses=` of the `SHOW ACCESS` line for `kind` on `rel`, or 0 without one.
+std::uint64_t AccessUses(CommandDispatcher& d, const std::string& kind, const std::string& rel) {
+    const std::string shown = d.Dispatch("SHOW ACCESS").response;
+    const std::string anchor = "kind=" + kind + " rel=" + rel + " ";
+    const std::size_t at = shown.find(anchor);
+    if (at == std::string::npos) return 0;
+    const std::size_t uses = shown.find("uses=", at);
+    return uses == std::string::npos ? 0 : std::stoull(shown.substr(uses + 5));
+}
+
+// A child committed on core 1 is found in core 0's banked set, and once the
+// set holds no live child the parent's `DELETE` is cleared from it - a
+// `CabinProbe` of `c`, and no `FilterScan` walk. **Red at `2d2d96b`**: the
+// clearing return was absent and the pass walked `c`.
+//
+// **Mutation**: the walk kept after an exhausted set - the code this stage
+// replaced - and the pass records a `FilterScan`.
+TEST(FkCrossCoreRigTest, ADrainedCabinSetClearsTheParentAndAChildOnAnotherCoreIsFoundInIt) {
+    FkRig r({});
+    ASSERT_NE(r.rig, nullptr);
+    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
+    CommandDispatcher& d0 = r.rig->core(0).dispatcher();
+
+    ASSERT_EQ(d0.Dispatch("INSERT INTO p VALUES (7, 0)").response.rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(d0.Dispatch("CREATE CABIN ON c(pid)").response.rfind("CRE", 0), 0u);
+    // A child of 7 and the read that banks the set for 7; the child then
+    // goes, leaving its pk in the set as a surplus entry.
+    ASSERT_EQ(d0.Dispatch("INSERT INTO c VALUES (7)").response.rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response, "id\\n1");
+    ASSERT_EQ(d0.Dispatch("DELETE FROM c WHERE pid = 7").response, "DELETED 1");
+
+    // A new child of 7, written on core 1 into the instance's one store.
+    r.one.statement = "INSERT INTO c VALUES (7)";
+    r.rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground, RunOne(r.rig->core(1).dispatcher(), r.one)));
+    r.rig->Start();
+    ASSERT_TRUE(KickUntil(*r.rig, 1, [&] { return r.one.done.load(std::memory_order_acquire); },
+                          4000ms))
+        << r.one.out.response;
+    ASSERT_EQ(r.one.out.response.rfind("INSERTED", 0), 0u) << r.one.out.response;
+
+    // Found in the set: refused, and from the Cabin.
+    const std::uint64_t probes_before = AccessUses(d0, "CabinProbe", "c");
+    EXPECT_NE(d0.Dispatch("DELETE FROM p WHERE id = 7").response.find("FK_VIOLATION"),
+              std::string::npos);
+    EXPECT_EQ(AccessUses(d0, "CabinProbe", "c"), probes_before + 1);
+
+    // The child goes too; the set now holds two dead entries and is drained.
+    ASSERT_EQ(d0.Dispatch("DELETE FROM c WHERE pid = 7").response, "DELETED 1");
+    const std::uint64_t walks_before = AccessUses(d0, "FilterScan", "c");
+    EXPECT_EQ(d0.Dispatch("DELETE FROM p WHERE id = 7").response, "DELETED 1");
+    EXPECT_EQ(AccessUses(d0, "CabinProbe", "c"), probes_before + 2)
+        << "the pass was not answered from the set";
+    EXPECT_EQ(AccessUses(d0, "FilterScan", "c"), walks_before)
+        << "the pass walked the child relation although the set cleared it";
+}
+
+// A read that would bank 7's set while a child insert of 7 is open on core 1
+// is declined by the banking gate (`cabin.md` §6a): the insert's hook found
+// 7 unobserved and appended nothing, so a set banked then would miss it and
+// clear its parent once it commits. The walk answers instead.
+TEST(FkCrossCoreRigTest, ASetBankedWhileAChildInsertIsOpenIsDeclinedAndTheWalkAnswers) {
+    ScriptRig f({"SELECT id FROM c WHERE pid = 7", "DELETE FROM p WHERE id = 7"},
+                {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"}, {"CREATE CABIN ON c(pid)"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
+
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1)) << f.core0.Reply(0);
+    EXPECT_EQ(f.core0.Reply(0), "id");  // the open child is not this view's
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    CommandDispatcher& d0 = f.r.rig->core(0).dispatcher();
+    const std::uint64_t walks_before = AccessUses(d0, "FilterScan", "c");
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    EXPECT_NE(f.core0.Reply(1).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(1);
+    EXPECT_EQ(AccessUses(d0, "FilterScan", "c"), walks_before + 1)
+        << "the parent's DELETE was answered from a set banked while its child was open";
 }
 
 }  // namespace
