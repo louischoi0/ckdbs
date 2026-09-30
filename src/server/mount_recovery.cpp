@@ -349,7 +349,7 @@ Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
                                wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
                                Logger* log, const sched::Clock* clock,
                                sched::MonoTimeNs* elapsed_ns,
-                               const wal::AssertionSnapshotSource* assertions) {
+                               wal::AssertionSnapshotSource* assertions) {
     const sched::MonoTimeNs started = clock != nullptr ? clock->Now() : 0;
     // Empty by fact, not by omission - see the header. A checkpoint written
     // here with a *stale* active list would be worse than none: recovery would

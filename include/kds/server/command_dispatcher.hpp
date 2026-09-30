@@ -457,6 +457,7 @@ public:
         // leave the later manager installed, the same relation the single
         // `catalog_` reference already has.
         if (txn != nullptr) catalog.SetTransactionManager(txn);
+        ArmAssertionRecordBudget();
     }
 
     // Parses and executes one line. Never fails outward: a malformed or
@@ -656,6 +657,13 @@ public:
     }
 
 private:
+    // AZ-S3: the registry refuses at admission a group no log record of this
+    // dispatcher's stream can carry. Every core's stream is the instance's
+    // one, so the value is the same from every dispatcher.
+    void ArmAssertionRecordBudget() noexcept {
+        if (wal_ != nullptr) enforcer_->SetRecordBudget(wal_->usable_payload_bytes());
+    }
+
     std::function<void()> before_insert_log_for_test_;
     std::function<void()> after_assertion_publish_run_for_test_;
 
@@ -1695,6 +1703,7 @@ public:
             owned_enforcer_ = std::make_unique<exec::AssertionEnforcer>();
             enforcer_ = owned_enforcer_.get();
         }
+        ArmAssertionRecordBudget();
     }
 
 

@@ -76,7 +76,7 @@ struct BootstrapResult {
 // could: a genuine pre-M0 volume, since `wal.md` §3 kept per-core streams
 // as a live branch that still mounted. D14 ends that - a v3 build mounts
 // only volumes it created - and `superblock.cpp`'s `Decode` refuses any
-// image that is not version 17. Keeping a way to *create* a per-core-stream
+// image that is not `kSuperBlockVersion`. Keeping a way to *create* a per-core-stream
 // volume would have left the branch reachable from tests alone, which is
 // the state AM-R4a calls "refusing the volume without deleting the
 // machinery": the refusal is what made the lease, the CC7 fault grants and

@@ -829,7 +829,7 @@ inline constexpr std::size_t kAssertSnapshotChunkCountOffset = 14;
 // 8+4+2+2 = 16; the groups follow, each one a header block then its key bytes.
 inline constexpr std::size_t kAssertSnapshotFixedSize = 16;
 // The most chunks one run can say it has. A cabin needing more is refused
-// `OutOfSpace` at the writer, as a group too large for any record is.
+// `NotImplemented` at the writer, as a group too large for any record is (AZ-Q2).
 inline constexpr std::size_t kMaxAssertSnapshotChunks = 0xFFFF;
 
 static_assert(offsetof(AssertSnapshotPayload, assertion_id) ==

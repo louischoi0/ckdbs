@@ -163,7 +163,7 @@ protected:
         class Source final : public wal::AssertionSnapshotSource {
         public:
             explicit Source(const BoundCabin& cabin) : cabin_(cabin) {}
-            Status VisitSnapshots(const wal::SnapshotVisitor& visit) const override {
+            Status VisitSnapshots(std::size_t, const wal::SnapshotVisitor& visit) override {
                 // The seam owns its keys, so this is a straight copy - the
                 // first version of this fixture had to keep a `mutable` vector
                 // of strings alive across the call, which is the trap that
@@ -429,19 +429,21 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
 // ring's worth of headers had every run refused at its first chunk: every
 // core-0 checkpoint after it failed, and so did the next mount's completion
 // checkpoint. The fixture's 64 KiB segment is smaller than any ring, which
-// is why no other cell here reached it.
+// is why no other cell here reached it. A 4 MiB segment has the production
+// shape - larger than the default ring - at a sixteenth of the scan.
 TEST_F(AssertionRecoverTest, ACabinPastOneRingOfHeadersIsCutToChunksTheRingCanStage) {
-    auto device = wal::MemoryLogDevice::Create(wal::kDefaultSegmentSize);
+    constexpr std::uint64_t kSegmentPastTheRing = 4 * 1024 * 1024;
+    auto device = wal::MemoryLogDevice::Create(kSegmentPastTheRing);
     ASSERT_TRUE(device.ok()) << device.status().message();
     auto manager = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0);
     ASSERT_TRUE(manager.ok()) << manager.status().message();
     wal::WalManager& wal = *manager.value();
-    ASSERT_LT(wal.stream()->ring_capacity(), wal::kDefaultSegmentSize)
-        << "the defaults no longer put the ring below the segment";
+    ASSERT_LT(wal.stream()->ring_capacity(), kSegmentPastTheRing)
+        << "the default ring is no longer below the segment";
 
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
-    for (int i = 0; i < 20000; ++i) {
-        live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
+    for (int i = 0; i < 5000; ++i) {
+        live.EnsureGroupId(Key("group-" + std::string(300, 'k') + std::to_string(i)));
     }
     wal::AssertionCabinSnapshot cabin;
     cabin.assertion_id = kAssertionId;
@@ -517,6 +519,116 @@ TEST_F(AssertionRecoverTest, ACheckpointMeetingACabinNoRunCanCarryCompletesAndFa
     EXPECT_TRUE(registry.Holds(kAssertionId + 1));
     EXPECT_EQ(SnapshotRecords(anchor.anchor().checkpoint_lsn), 1u)
         << "the other assertion's run is missing";
+
+    // The next mount, from this checkpoint: no base, so the assertion comes
+    // up unrecovered - unenforceable, as it went down - and the mount's own
+    // completion checkpoint has nothing of it to meet.
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(anchor.anchor().checkpoint_lsn, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_FALSE(report.value().assertions[0].recovered);
+}
+
+// Ported from AY-S8's superseded attempt (`266db2e`), with AZ-Q2's code.
+TEST_F(AssertionRecoverTest, AGroupNoRecordCanCarryIsRefusedBeforeAnyChunkIsWritten) {
+    // The writer cuts the run before it writes, so a too-large group anywhere
+    // in the cabin - here the last - leaves no partial run in the log.
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(live);
+    live.EnsureGroupId(Key(std::string(wal_->usable_payload_bytes(), 'z')));
+    wal::AssertionCabinSnapshot cabin;
+    cabin.assertion_id = kAssertionId;
+    for (const BoundCabin::GroupSnapshot& g : live.SnapshotGroups()) {
+        cabin.groups.push_back(wal::AssertionSnapshotGroup{g.group_id, g.count, g.sum, g.key});
+    }
+    const wal::Lsn before = wal_->appended_lsn();
+    EXPECT_EQ(wal::LogAssertionSnapshot(*wal_, cabin).code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(wal_->appended_lsn(), before) << "a chunk was written ahead of the refusal";
+}
+
+// `GROUP BY (v)` on `(id, v int64)`: one group per value.
+std::vector<parser::AstValue> IntRow(std::int64_t v) {
+    std::vector<parser::AstValue> row(1);
+    row[0].type = parser::ValueType::kInt;
+    row[0].int_val = v;
+    return row;
+}
+
+wal::AssertionCabinSnapshot SnapshotOfGroups(std::int64_t groups) {
+    BoundCabin cabin(BoundAggregate::kCount, /*bound=*/1'000'000);
+    for (std::int64_t v = 0; v < groups; ++v) cabin.EnsureGroupId(EncodeGroupKey(IntRow(v)));
+    wal::AssertionCabinSnapshot out;
+    for (const BoundCabin::GroupSnapshot& g : cabin.SnapshotGroups()) {
+        out.groups.push_back(wal::AssertionSnapshotGroup{g.group_id, g.count, g.sum, g.key});
+    }
+    return out;
+}
+
+// **The writer's chunk-count door at its threshold** (AZ-S3), through the
+// budget rather than 4 GB of headers: a budget of one group per chunk makes
+// the run's chunk count its group count. No cell reached this refusal before.
+TEST(AssertionSnapshotDoorTest, TheWritersChunkCountIsRefusedOnePastWhatARunCanCount) {
+    const std::size_t cost = wal::AssertSnapshotGroupBytes(EncodeGroupKey(IntRow(0)).size());
+    const std::size_t one_per_chunk = wal::kAssertSnapshotFixedSize + cost;
+    const auto most = static_cast<std::int64_t>(wal::kMaxAssertSnapshotChunks);
+    EXPECT_TRUE(wal::AssertionSnapshotFits(SnapshotOfGroups(most), one_per_chunk).ok());
+    EXPECT_EQ(wal::AssertionSnapshotFits(SnapshotOfGroups(most + 1), one_per_chunk).code(),
+              StatusCode::kNotImplemented);
+}
+
+// **The admission's chunk-count door at its threshold** (AZ-S3). A budget of
+// the chunk's fixed part and two groups makes admission's floor exactly one
+// group, so its bound is `kMaxAssertSnapshotChunks - 1` groups: the group
+// that reaches it is admitted, the one past it is refused `NotImplemented`,
+// and a row into a group that exists is admitted either way. Conservative by
+// design - the writer's cut at that budget is two groups a chunk - and never
+// the other way: every cabin admission lets form, the writer can carry.
+TEST(AssertionSnapshotDoorTest, AGroupPastWhatARunCanCountIsRefusedAtAdmission) {
+    const std::size_t cost = wal::AssertSnapshotGroupBytes(EncodeGroupKey(IntRow(0)).size());
+    const std::size_t budget = wal::kAssertSnapshotFixedSize + 2 * cost;
+    const auto bound = static_cast<std::int64_t>(wal::kMaxAssertSnapshotChunks - 1);
+    EXPECT_TRUE(wal::AssertionSnapshotFits(SnapshotOfGroups(bound), budget).ok())
+        << "admission's bound admits a cabin the writer refuses";
+
+    const auto registry_of = [&](std::int64_t groups) {
+        auto registry = std::make_unique<AssertionEnforcer>();
+        LiveAssertion a;
+        a.assertion_id = 5;
+        a.target_oid = 4000;
+        a.name = "cap";
+        a.aggregate = BoundAggregate::kCount;
+        a.group_cols = {1};
+        a.group_col_names = {"v"};
+        a.group_type_vals = {catalog::kTypeValInt64};
+        a.cabin = BoundCabin(BoundAggregate::kCount, /*bound=*/1'000'000);
+        for (std::int64_t v = 0; v < groups; ++v) a.cabin.EnsureGroupId(EncodeGroupKey(IntRow(v)));
+        registry->Adopt(std::move(a));
+        registry->SetRecordBudget(budget);
+        return registry;
+    };
+    const auto admit = [](AssertionEnforcer& registry, std::int64_t v) {
+        AssertionEnforcer::Hold hold;
+        return registry.AdmitInsert(4000, IntRow(v), /*writer_txn=*/0, hold);
+    };
+
+    auto below = registry_of(bound - 1);
+    EXPECT_TRUE(admit(*below, bound).ok()) << "the group that reaches the bound was refused";
+
+    auto at = registry_of(bound);
+    const Status refused = admit(*at, bound + 1);
+    EXPECT_EQ(refused.code(), StatusCode::kNotImplemented) << refused.message();
+    EXPECT_NE(refused.message().find("cap"), std::string::npos) << refused.message();
+    EXPECT_TRUE(admit(*at, 7).ok()) << "a row into an existing group was refused";
+
+    // A group another admission is about to open counts: with it held, the
+    // last room is gone for a second new group.
+    AssertionEnforcer::Hold opening;
+    ASSERT_TRUE(below->AdmitInsert(4000, IntRow(bound), /*writer_txn=*/1, opening).ok());
+    EXPECT_EQ(admit(*below, bound + 1).code(), StatusCode::kNotImplemented)
+        << "two admissions each took the last room";
+
+    at->SetRecordBudget(0);
+    EXPECT_TRUE(admit(*at, bound + 1).ok()) << "a registry with no log refused a group";
 }
 
 TEST_F(AssertionRecoverTest, ASecondCheckpointsSnapshotInRangeDoesNotFailThePass) {
@@ -783,7 +895,7 @@ TEST_F(AssertionRecoverTest, ACreatesPublishRunAndACheckpointsRunOfItNeverInterl
         cv.wait(lock, [&] { return announced; });
     }
     const Status snapshot = registry.VisitSnapshots(
-        [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
+        wal_->usable_payload_bytes(), [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
             EXPECT_EQ(cabins.size(), 1u) << "the checkpoint ran without the created assertion";
             AppendChunk(chunks[0]);
             AppendChunk(chunks[1]);

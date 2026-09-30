@@ -107,7 +107,7 @@ protected:
         // opening its own `wal-<core>-*`, running its own recovery,
         // publishing its own anchor — stood below this fixture until
         // AW-S1b, and the branch they covered was reachable then. It is not
-        // now: D14 refuses any image that is not version 17 and nothing can
+        // now: D14 refuses any image that is not `kSuperBlockVersion` and nothing can
         // write a per-core-stream one, so the skip that guarded this
         // attachment has no arm to guard against.
         auto log_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);

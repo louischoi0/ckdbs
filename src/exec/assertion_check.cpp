@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 
 #include "kds/exec/assertion_violation.hpp"
@@ -155,11 +157,26 @@ std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotAssertions()
     return SnapshotLocked();
 }
 
-Status AssertionEnforcer::VisitSnapshots(const wal::SnapshotVisitor& visit) const {
+Status AssertionEnforcer::VisitSnapshots(std::size_t record_budget,
+                                         const wal::SnapshotVisitor& visit) {
     // Held across `visit`, which appends the records: directory latch then
     // WAL stream latch, the order every reservation takes them in too.
     const LatchGuard guard(latch_.get());
-    return visit(SnapshotLocked());
+    std::vector<wal::AssertionCabinSnapshot> cabins = SnapshotLocked();
+    std::vector<wal::AssertionCabinSnapshot> carried;
+    carried.reserve(cabins.size());
+    for (wal::AssertionCabinSnapshot& cabin : cabins) {
+        if (wal::AssertionSnapshotFits(cabin, record_budget).ok()) {
+            carried.push_back(std::move(cabin));
+            continue;
+        }
+        // Failed closed, in this hold (AZ-R3): no write is admitted against
+        // a directory the next mount could not recover.
+        const catalog::Oid oid = live_.at(cabin.assertion_id)->a.target_oid;
+        EvictLocked(cabin.assertion_id);
+        NoteUnenforceableLocked(oid, cabin.assertion_id);
+    }
+    return visit(carried);
 }
 
 void AssertionEnforcer::Adopt(LiveAssertion assertion) {
@@ -207,6 +224,10 @@ void AssertionEnforcer::AdoptLocked(std::shared_ptr<Live> live) {
 
 void AssertionEnforcer::NoteUnenforceable(catalog::Oid oid, std::uint64_t assertion_id) {
     const LatchGuard guard(latch_.get());
+    NoteUnenforceableLocked(oid, assertion_id);
+}
+
+void AssertionEnforcer::NoteUnenforceableLocked(catalog::Oid oid, std::uint64_t assertion_id) {
     // Never for something the registry is already enforcing: the two states
     // are exclusive, and the enforced one is the truthful answer.
     if (live_.count(assertion_id) != 0) return;
@@ -219,6 +240,10 @@ void AssertionEnforcer::NoteUnenforceable(catalog::Oid oid, std::uint64_t assert
 
 void AssertionEnforcer::Evict(std::uint64_t assertion_id) {
     const LatchGuard guard(latch_.get());
+    EvictLocked(assertion_id);
+}
+
+void AssertionEnforcer::EvictLocked(std::uint64_t assertion_id) {
     // The unenforceable record first, and **before the early return**: an
     // assertion that could not be enforced is exactly the one an operator
     // drops in order to re-create it, and leaving the record behind would
@@ -254,6 +279,7 @@ StatusOr<std::uint64_t> AssertionEnforcer::AdmitLocked(
     LiveAssertion& a, const std::string& key, std::optional<std::int64_t> check,
     std::int64_t hold, std::uint64_t txn_id, std::span<const parser::AstValue> row,
     std::size_t first_col_pos, std::uint64_t* reserver) {
+    if (Status s = AdmitGroupLocked(a, key); !s.ok()) return s;
     if (check.has_value()) {
         // Every held contribution to the group counts, **positive ones
         // only**: a negative one held would read as room to another core's
@@ -284,6 +310,56 @@ StatusOr<std::uint64_t> AssertionEnforcer::AdmitLocked(
     const std::uint64_t serial = ++next_hold_serial_;
     holds_.emplace(serial, HeldContribution{txn_id, a.assertion_id, key, hold});
     return serial;
+}
+
+Status AssertionEnforcer::AdmitGroupLocked(const LiveAssertion& a, const std::string& key) const {
+    const std::size_t budget = record_budget_.load(std::memory_order_relaxed);
+    if (budget == 0 || a.cabin.Find(key) != nullptr) return Status::OK();
+
+    // **The key's own records**: its snapshot group, and the largest record
+    // naming one key - `ASSERT_RESERVE`, an entry with the key after it. A key
+    // past either would be refused by the log after the row is placed.
+    const std::size_t cost = wal::AssertSnapshotGroupBytes(key.size());
+    const std::size_t largest_record =
+        std::max({wal::kAssertSnapshotFixedSize + cost,
+                  wal::kAssertEntryFixedSize + storage::cabin::kEntryBytes + key.size(),
+                  wal::kAssertRollbackFixedSize + key.size()});
+    if (largest_record > budget) {
+        return Status::NotImplemented(
+            "assertion \"" + a.name + "\": a group key of " + std::to_string(key.size()) +
+            " bytes is longer than one log record can carry (" + std::to_string(budget) +
+            " bytes of payload)");
+    }
+
+    // **The run**, conservatively: the writer cuts chunks greedily, so every
+    // chunk but the last closes holding more than `floor` - the budget less
+    // the chunk's fixed part and the largest group. Headers within
+    // `(kMaxAssertSnapshotChunks - 1) * floor` cannot need more chunks than
+    // one run counts. Groups another statement is about to open count too:
+    // a hold is a group-to-be, and two admissions must not each take the
+    // last room.
+    std::size_t headers = a.cabin.group_count() * wal::kAssertSnapshotGroupFixedSize +
+                          a.cabin.key_bytes() + cost;
+    std::size_t largest = std::max(wal::AssertSnapshotGroupBytes(a.cabin.largest_key()), cost);
+    std::unordered_set<std::string_view> opening;
+    for (const auto& [serial, held] : holds_) {
+        if (held.assertion_id != a.assertion_id || held.key == key ||
+            a.cabin.Find(held.key) != nullptr || !opening.insert(held.key).second) {
+            continue;
+        }
+        const std::size_t held_cost = wal::AssertSnapshotGroupBytes(held.key.size());
+        headers += held_cost;
+        largest = std::max(largest, held_cost);
+    }
+    if (budget <= wal::kAssertSnapshotFixedSize + largest ||
+        headers > (wal::kMaxAssertSnapshotChunks - 1) *
+                      (budget - wal::kAssertSnapshotFixedSize - largest)) {
+        return Status::NotImplemented(
+            "assertion \"" + a.name + "\": a new group would take its snapshot past " +
+            std::to_string(wal::kMaxAssertSnapshotChunks) +
+            " log records, more than one snapshot run can count");
+    }
+    return Status::OK();
 }
 
 void AssertionEnforcer::ReleaseHoldLocked(std::uint64_t serial) {

@@ -335,6 +335,6 @@ Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
                                wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
                                Logger* log, const sched::Clock* clock = nullptr,
                                sched::MonoTimeNs* elapsed_ns = nullptr,
-                               const wal::AssertionSnapshotSource* assertions = nullptr);
+                               wal::AssertionSnapshotSource* assertions = nullptr);
 
 }  // namespace kds::server

@@ -150,7 +150,11 @@ public:
     // versus `<=`, which is the point of reducing it once.
     std::int64_t bound() const noexcept { return bound_; }
 
-    std::size_t group_count() const noexcept;
+    std::size_t group_count() const noexcept { return group_count_; }
+    // Every group's key bytes, and the longest key: what a snapshot run of
+    // this cabin costs, for admission to bound (AZ-S3).
+    std::size_t key_bytes() const noexcept { return key_bytes_; }
+    std::size_t largest_key() const noexcept { return largest_key_; }
 
     // The header for `key`, or nullptr. Confirms the stored key, so a
     // colliding hash answers nullptr rather than someone else's group.
@@ -334,6 +338,13 @@ private:
     // would be a second container to keep true (the note above on why there is
     // only one).
     GroupHeader* FindById(std::uint32_t group_id);
+
+    // Kept by the two places a group is born, `EnsureGroup` and
+    // `RestoreGroup`; nothing removes a group.
+    void CountGroup(const std::string& key) noexcept;
+    std::size_t group_count_ = 0;
+    std::size_t key_bytes_ = 0;
+    std::size_t largest_key_ = 0;
 
     BoundAggregate aggregate_;
     std::int64_t bound_;

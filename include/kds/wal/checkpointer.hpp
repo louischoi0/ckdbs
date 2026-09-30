@@ -109,7 +109,10 @@ struct AssertionCabinSnapshot {
 };
 
 // Writes one cabin's group headers as `ASSERT_SNAPSHOT` records, chunked so no
-// record outgrows a segment (`payload.hpp`).
+// record outgrows `wal.usable_payload_bytes()` (`payload.hpp`). A cabin no run
+// can carry - a group larger than a record, or more than
+// `kMaxAssertSnapshotChunks` chunks - is refused `NotImplemented` before any
+// chunk is written (`AssertionSnapshotFits`).
 //
 // **Two callers, and the second is why this is not private to the
 // checkpointer.** A checkpoint writes every live cabin's base; `CREATE
@@ -125,6 +128,11 @@ struct AssertionCabinSnapshot {
 // absent base - and those must not read alike, because the second means the
 // fold has nothing to fold onto.
 Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin);
+
+// Whether one run of records of `record_budget` payload bytes can carry
+// `cabin`: `LogAssertionSnapshot`'s refusals, without writing anything
+// (AZ-S3). The registry asks it inside a checkpoint's hold.
+Status AssertionSnapshotFits(const AssertionCabinSnapshot& cabin, std::size_t record_budget);
 
 using SnapshotVisitor = std::function<Status(const std::vector<AssertionCabinSnapshot>&)>;
 
@@ -147,7 +155,12 @@ public:
     // between the headers it carries and its own LSN - so the instance's
     // registry, which every core reserves into, holds its latch across the
     // call (AT-S5d, `exec/assertion_check.hpp`).
-    virtual Status VisitSnapshots(const SnapshotVisitor& visit) const = 0;
+    //
+    // `record_budget` is the checkpoint's `usable_payload_bytes()`. A cabin
+    // no run of that budget can carry is the source's to deal with before
+    // `visit` (AZ-S3): the registry fails it closed rather than failing the
+    // checkpoint.
+    virtual Status VisitSnapshots(std::size_t record_budget, const SnapshotVisitor& visit) = 0;
 };
 
 // The pages a checkpoint has to get on disk, and the way to do it. The
@@ -286,7 +299,7 @@ public:
 
     // AS6a's snapshot source (RC07), null by default: a core with no assertions
     // writes no ASSERT_SNAPSHOT records. `source` must outlive this.
-    void SetAssertionSource(const AssertionSnapshotSource* source) noexcept {
+    void SetAssertionSource(AssertionSnapshotSource* source) noexcept {
         assertions_ = source;
     }
 
@@ -345,7 +358,7 @@ private:
     CheckpointAnchor& anchor_;
     CheckpointerConfig config_;
     Logger* log_ = nullptr;
-    const AssertionSnapshotSource* assertions_ = nullptr;  // AS6a, may be null
+    AssertionSnapshotSource* assertions_ = nullptr;  // AS6a, may be null
     CheckpointStats stats_;
 
     bool in_progress_ = false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -225,8 +226,17 @@ public:
     // header is subtracted here rather than by every such caller, since a caller
     // that forgot would produce a record the append path refuses at the worst
     // possible moment - mid-checkpoint.
+    //
+    // **The smaller of the segment and the ring** (AZ-S3): `WalStream::Append`
+    // refuses a record either cannot hold whole, and at the defaults the ring
+    // (1 MiB) is the smaller by 64x. Rounded down to the record alignment, so a
+    // payload of exactly this size still encodes within both.
     std::size_t usable_payload_bytes() const noexcept {
-        return static_cast<std::size_t>(stream_->usable_segment_bytes()) - kRecordHeaderSize;
+        const std::size_t whole =
+            std::min(static_cast<std::size_t>(stream_->usable_segment_bytes()),
+                     stream_->ring_capacity()) &
+            ~(kRecordAlignment - 1);
+        return whole - kRecordHeaderSize;
     }
     const WalStats& stats() const noexcept { return stats_; }
 

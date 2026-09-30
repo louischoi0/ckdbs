@@ -343,8 +343,9 @@ On a multi-core instance:
   failed, a mount whose scan holds no whole snapshot run for the
   assertion - none at all, or only runs cut short (§7, AY-S8) - and a
   recovery pass that fails outright (a Corruption, such as a snapshot with
-  no chunk count), which reaches it for every assertion. It lasts until
-  `DROP` and `CREATE ASSERTION`.
+  no chunk count), which reaches it for every assertion, and a core-0
+  checkpoint that meets a cabin no snapshot run can carry (§7, AZ-S3). It
+  lasts until `DROP` and `CREATE ASSERTION`.
 - **The file that made a cabin unenforceable is not one any more** (AW-S1b):
   a cabin page is a *user* page and every core writes those, so a chain
   core 0 built for a relation another core owned is appended to like any
@@ -519,9 +520,42 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > unrecovered (below). A chunk whose run
   > began before the scan's start is skipped. `chunk_count` is at least 1;
   > a record with 0 is Corruption - the word a pre-AY-S8 writer left, on a
-  > version-18 volume the superblock no longer mounts (AY-Q6). A cabin
-  > needing more than 65,535 chunks is refused `OutOfSpace` at the writer,
-  > before any chunk is appended, as a group too large for any record is.
+  > version-18 volume the superblock no longer mounts (AY-Q6).
+  >
+  > **A run's record is the smaller of a segment and the ring** (AZ-S3):
+  > `WalManager::usable_payload_bytes()`, 1 MiB less the record header at
+  > the defaults. Cut against the segment alone, a cabin past one ring of
+  > headers had its first chunk refused by the append.
+  >
+  > **A cabin no run can carry is refused at admission, and failed closed
+  > at a checkpoint** (AZ-S3, AZ-R3). A run cannot carry a group larger
+  > than one record, or more than 65,535 chunks. The writer refuses both
+  > `NotImplemented` before any chunk is appended (AZ-Q2: the bound is the
+  > format's, and a later release can widen it). Two doors keep that
+  > refusal from being where it is met:
+  >
+  > - **Admission** refuses the write that would open such a group, with
+  >   `NOT_IMPLEMENTED` naming the assertion, before anything is placed.
+  >   The key's limit is its largest record's - `ASSERT_RESERVE`, an entry
+  >   and the key. The run's limit is conservative: the writer cuts greedily,
+  >   so every chunk but the last closes holding more than the budget less
+  >   the chunk's fixed part and the cabin's largest group, and headers
+  >   within 65,534 of those cannot need 65,536 chunks. A group another
+  >   statement is about to open counts, so two admissions cannot each take
+  >   the last room. The registry learns the budget from every dispatcher
+  >   with a log; one with none admits every group.
+  > - **A checkpoint** that meets such a cabin anyway - one a volume built
+  >   before AZ-S3 holds - evicts the assertion and marks it unenforceable
+  >   inside its snapshot hold, then carries the rest and completes. The
+  >   relation's writes are refused `CannotEnforce` until `DROP` and
+  >   `CREATE` (§6.1), and the next mount finds no base for it, so it comes
+  >   up unrecovered and the mount completes. Before AZ-S3 the refusal
+  >   failed the checkpoint: no core-0 checkpoint completed while the
+  >   assertion lived, and the next mount's completion checkpoint failed the
+  >   mount.
+  >
+  > A `CREATE ASSERTION` over rows that already hold such a group is refused
+  > by the log where its build or its base is logged, not at admission.
   >
   > **Two writers make a base, and their runs never cross.** Core 0's
   > checkpoints write a run for every assertion the registry enforces, and

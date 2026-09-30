@@ -230,7 +230,24 @@ public:
     // checkpointer's entry point, so its `ASSERT_SNAPSHOT` records are
     // appended with no `ASSERT_*` record able to land between the headers
     // they carry and their own LSN (the header's snapshot paragraph).
-    Status VisitSnapshots(const wal::SnapshotVisitor& visit) const override;
+    //
+    // **A cabin no run of `record_budget` can carry is failed closed first**
+    // (AZ-S3, AZ-R3): evicted and marked unenforceable in the same hold, so
+    // its relation's writes are refused `CannotEnforce` until DROP and
+    // CREATE, and the checkpoint carries the rest and completes. Admission
+    // keeps such a cabin from forming (`SetRecordBudget`); a volume written
+    // before it did not.
+    Status VisitSnapshots(std::size_t record_budget, const wal::SnapshotVisitor& visit) override;
+
+    // **The payload one log record may hold**, for admission (AZ-S3): a write
+    // that would add a group whose key no record can carry, or take its
+    // cabin's snapshot run past `kMaxAssertSnapshotChunks`, is refused
+    // `NotImplemented` before anything is placed. Set by every dispatcher with
+    // a log, from its `usable_payload_bytes()`; 0, a registry with no log,
+    // admits every group, and the writer's refusal is the last line.
+    void SetRecordBudget(std::size_t bytes) noexcept {
+        record_budget_.store(bytes, std::memory_order_relaxed);
+    }
 
     // ---- An admission's held contribution (AT-S5d) ------------------------
     //
@@ -362,6 +379,10 @@ private:
     void ReleaseHoldLocked(std::uint64_t serial);
     std::vector<wal::AssertionCabinSnapshot> SnapshotLocked() const;
     void PublishDeclaredLocked() noexcept;
+    // AZ-S3's admission door, for a key that would open a group.
+    Status AdmitGroupLocked(const LiveAssertion& a, const std::string& key) const;
+    void EvictLocked(std::uint64_t assertion_id);
+    void NoteUnenforceableLocked(catalog::Oid oid, std::uint64_t assertion_id);
     // `Adopt`'s two halves: the directory built outside the latch, entered
     // under it.
     std::shared_ptr<Live> MakeLive(LiveAssertion assertion) const;
@@ -402,6 +423,7 @@ private:
     std::unordered_map<std::uint64_t, HeldContribution> holds_;
     std::uint64_t next_hold_serial_ = 0;
     std::atomic<std::size_t> declared_{0};
+    std::atomic<std::size_t> record_budget_{0};  // 0: no log, no door
 };
 
 }  // namespace kds::exec

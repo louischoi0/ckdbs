@@ -435,7 +435,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // duplicate group id, a failed pass, and every asserted relation
         // refusing writes for the mount, `assertion_recover.cpp`). A
         // runtime with its own registry - a fixture - snapshots it.
-        const wal::AssertionSnapshotSource* snapshot_source =
+        wal::AssertionSnapshotSource* snapshot_source =
             config.assertions == nullptr ? &runtime->dispatcher_->assertions() : nullptr;
         runtime->checkpointer_->SetAssertionSource(snapshot_source);
 

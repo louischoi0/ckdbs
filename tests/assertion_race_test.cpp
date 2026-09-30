@@ -63,6 +63,8 @@ using testing_race::Rendezvous;
 
 inline constexpr catalog::Oid kOid = 4000;
 inline constexpr int kThreads = 2;
+// A record budget no cabin here comes near, for a visit that logs nothing.
+inline constexpr std::size_t kUnboundedRecord = std::size_t{1} << 30;
 
 // `GROUP BY (v) CHECK COUNT(*) <= bound` on `(id, v)`, built by hand with a
 // chain rooted in `store` - what `CreateAssertion`'s build hands `Adopt`,
@@ -281,7 +283,7 @@ TEST(AssertionRaceTest, ASnapshotHoldsTheDirectoryAgainstAReservationOnAnotherCo
     bool landed_inside = false;
     std::int64_t seen = -1;
     const Status visited = enforcer.VisitSnapshots(
-        [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
+        kUnboundedRecord, [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
             seen = cabins.empty() || cabins.front().groups.empty() ? 0
                                                                    : cabins.front().groups[0].count;
             visiting.store(true, std::memory_order_release);
@@ -502,7 +504,8 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
     int snapshots = 0;
     while (writing.load(std::memory_order_acquire) > 0) {
         ASSERT_TRUE(enforcer
-                        .VisitSnapshots([&](const std::vector<wal::AssertionCabinSnapshot>& cabins)
+                        .VisitSnapshots(owner.value()->usable_payload_bytes(),
+                                        [&](const std::vector<wal::AssertionCabinSnapshot>& cabins)
                                             -> Status {
                             for (const wal::AssertionCabinSnapshot& cabin : cabins) {
                                 if (Status s = wal::LogAssertionSnapshot(*owner.value(), cabin);

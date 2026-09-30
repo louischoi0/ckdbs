@@ -34,22 +34,26 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
     return Status::OK();
 }
 
-Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin) {
-    // The chunk bound: what one record's payload may hold. A cabin's group count
-    // is bounded by the data, so a cabin can need several records - a run, each
-    // chunk naming its place in it (payload.hpp, AY-R7).
-    const std::size_t budget = wal.usable_payload_bytes();
+namespace {
 
-    // **The run is cut before anything is written**, because every chunk
-    // carries the count. That also puts both refusals ahead of the first
-    // record, so neither leaves a partial run in the log; an append that fails
-    // mid-run still can, and the reader discards it.
-    struct Chunk {
-        std::size_t first = 0;  // into `cabin.groups`
-        std::size_t end = 0;
-        std::size_t bytes = kAssertSnapshotFixedSize;
-    };
-    std::vector<Chunk> chunks(1);  // a cabin with no groups still gets one - see the header
+// One chunk of a run: a range of `cabin.groups` and its payload bytes.
+struct SnapshotChunk {
+    std::size_t first = 0;  // into `cabin.groups`
+    std::size_t end = 0;
+    std::size_t bytes = kAssertSnapshotFixedSize;
+};
+
+// **The run is cut before anything is written**, because every chunk carries
+// the count. That also puts both refusals ahead of the first record, so
+// neither leaves a partial run in the log; an append that fails mid-run still
+// can, and the reader discards it.
+//
+// Both refusals are `NotImplemented` (AZ-Q2): the bound is the snapshot
+// format's - one record per group, a `u16` count - and a later release can
+// widen it. `OutOfSpace` would say storage is full, which it is not.
+StatusOr<std::vector<SnapshotChunk>> CutRun(const AssertionCabinSnapshot& cabin,
+                                            std::size_t budget) {
+    std::vector<SnapshotChunk> chunks(1);  // a cabin with no groups still gets one - see the header
     for (std::size_t at = 0; at < cabin.groups.size(); ++at) {
         const std::size_t cost = AssertSnapshotGroupBytes(cabin.groups[at].key.size());
         if (kAssertSnapshotFixedSize + cost > budget) {
@@ -57,24 +61,40 @@ Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin
             // dropped: a base missing a group under-counts, and an admission
             // check built on it would admit a write that violates the
             // assertion.
-            return Status::OutOfSpace(
+            return Status::NotImplemented(
                 "assertion snapshot: assertion " + std::to_string(cabin.assertion_id) +
                 " has a group key of " + std::to_string(cabin.groups[at].key.size()) +
                 " bytes, which no ASSERT_SNAPSHOT record can carry");
         }
         if (chunks.back().end > chunks.back().first && chunks.back().bytes + cost > budget) {
-            chunks.push_back(Chunk{at, at, kAssertSnapshotFixedSize});
+            chunks.push_back(SnapshotChunk{at, at, kAssertSnapshotFixedSize});
         }
         chunks.back().end = at + 1;
         chunks.back().bytes += cost;
     }
     if (chunks.size() > kMaxAssertSnapshotChunks) {
         // Refused for the same reason: the count could not say the run.
-        return Status::OutOfSpace("assertion snapshot: assertion " +
-                                  std::to_string(cabin.assertion_id) + " needs " +
-                                  std::to_string(chunks.size()) + " ASSERT_SNAPSHOT records, " +
-                                  "more than one run can count");
+        return Status::NotImplemented("assertion snapshot: assertion " +
+                                      std::to_string(cabin.assertion_id) + " needs " +
+                                      std::to_string(chunks.size()) +
+                                      " ASSERT_SNAPSHOT records, more than one run can count");
     }
+    return chunks;
+}
+
+}  // namespace
+
+Status AssertionSnapshotFits(const AssertionCabinSnapshot& cabin, std::size_t record_budget) {
+    return CutRun(cabin, record_budget).status();
+}
+
+Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin) {
+    // The chunk bound: what one record's payload may hold. A cabin's group count
+    // is bounded by the data, so a cabin can need several records - a run, each
+    // chunk naming its place in it (payload.hpp, AY-R7).
+    auto cut = CutRun(cabin, wal.usable_payload_bytes());
+    if (!cut.ok()) return cut.status();
+    const std::vector<SnapshotChunk>& chunks = cut.value();
 
     std::vector<std::byte> scratch;
     for (std::size_t i = 0; i < chunks.size(); ++i) {
@@ -113,6 +133,7 @@ Status Checkpointer::LogAssertionSnapshots() {
         return Status::OK();  // no assertions on this core: no records, no cost
     }
     return assertions_->VisitSnapshots(
+        wal_.usable_payload_bytes(),
         [this](const std::vector<AssertionCabinSnapshot>& cabins) -> Status {
             for (const AssertionCabinSnapshot& cabin : cabins) {
                 if (Status s = LogAssertionSnapshot(wal_, cabin); !s.ok()) {

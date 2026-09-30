@@ -75,10 +75,10 @@ std::uint64_t HashGroupKey(const std::string& encoded) noexcept {
     return h;
 }
 
-std::size_t BoundCabin::group_count() const noexcept {
-    std::size_t n = 0;
-    for (const auto& [hash, headers] : groups_by_hash_) n += headers.size();
-    return n;
+void BoundCabin::CountGroup(const std::string& key) noexcept {
+    ++group_count_;
+    key_bytes_ += key.size();
+    largest_key_ = std::max(largest_key_, key.size());
 }
 
 const GroupHeader* BoundCabin::Find(const std::string& key) const {
@@ -105,6 +105,7 @@ GroupHeader& BoundCabin::EnsureGroup(const std::string& key) {
     GroupHeader fresh;
     fresh.key = key;
     fresh.group_id = next_group_id_++;  // AS6a: dense, from 1, never reused
+    CountGroup(key);
     bucket.push_back(std::move(fresh));
     return bucket.back();
 }
@@ -176,6 +177,7 @@ Status BoundCabin::RestoreGroup(std::uint32_t group_id, const std::string& key,
     restored.group_id = group_id;
     restored.count = count;
     restored.sum = sum;
+    CountGroup(key);
     bucket.push_back(std::move(restored));
 
     // Past every id the snapshot carried, so a group the fold creates after it
