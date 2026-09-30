@@ -926,10 +926,10 @@ Overhead not measured; measured at the milestone's close.
 
 ## 7. AY closed, 2026-09-30
 
-**The following letter is complete.** Every stage of §3 has landed on
-`main` or been struck: AY-S0 `69a1f76`, AY-S1 `ffdcfb1` (review `ac6baae`),
+**The following letter is complete.** Every stage of §3 before this close
+has landed on `main` or been struck: AY-S0 `69a1f76`, AY-S1 `ffdcfb1` (review `ac6baae`),
 AY-S2 `7d90ca7` (reproduction `a3db595`, review `33b9433`), AY-S3 `b201ed3`
-(reproduction `27ee3e3`, review `58e78c7`), AY-S7 `68d8b18` (reproduction
+(AY-Q9's ports `0fdb0e5`, reproduction `27ee3e3`, review `58e78c7`), AY-S7 `68d8b18` (reproduction
 `09b2924`, review `b5465a9`), AY-S9 `557f1d1` (reproduction `c4d8e55`,
 review `64b97e7`; its multi-chain build reverted with the split relation),
 AY-S4 `86b61b3` (review `5aac081`), AY-S5 `826d15b` (reviews `a72b070`,
@@ -962,16 +962,25 @@ interleaved - in `bench/v3.0.0/results-ay-s11-overhead-v2.7.0-530-g0552d55.md`:
 - **The general statement mix** (AT-S13 cell 2's shape): not resolvable -
   every write arm within -2.4 to +3.0 µs of ~340 µs end to end with the
   controls moving as much, and +0.41, +0.03, -0.44 µs of ~16 µs of the
-  engine's own time per statement.
+  engine's own time per statement - three runs bound it only to about
+  ±1 µs (~6 %). `SHOW META`, a sixth of that mix, is 3.7 µs cheaper on
+  `0552d55`; without it the other arms read ~+0.7 µs, estimated from cell 2
+  and not measured per arm.
 - **D9(a)'s price on a child `INSERT`**: +0.40 µs p50 of ~51 µs end to end
   (IQR +0.26 to +0.62), +0.24 µs of ~14 µs in the engine - resolved and
-  small, about 1.5x the floor; inside `BEGIN`/`COMMIT` not resolvable. The
-  controls sit inside the floor. The fence it prices is live: on `0552d55`
-  a parent `DELETE` against an open child waits and is refused at the 1 s
-  net, on `58198cb` the reverse check refuses it at once.
-- **The linear `Holds` scan**: a per-row cost growing about 0.2 ns x K with
-  the transaction's distinct parents - not resolved at K <= 1,024, marginal
-  at 4,096, +3.43 µs a row at 16,384 (+56 ms, ~6 %, on that transaction).
+  small, about 1.5x the floor and ~0.1 µs above the largest control
+  (`child-update`, +0.30 µs); inside `BEGIN`/`COMMIT` not resolvable.
+  `SHOW META` is 8 µs faster on `0552d55`, which `62a6cb3` explains (its
+  per-relation `split_relations` walk deleted). The fence it prices is
+  live: on `0552d55` a parent `DELETE` against an open child waits and is
+  refused at the 1 s net, on `58198cb` the reverse check refuses it at once.
+- **A transaction of K distinct parents**: a per-row cost growing about
+  0.2 ns x K - not resolved at K <= 1,024, marginal at 4,096, +3.43 µs a
+  row at 16,384 (+56 ms, ~6 %, on that transaction). **~2.1 µs of it is at
+  the decide** (B's `COMMIT` side 49 ms against A's 14, in every run), and
+  the inserts' own excess is not resolvable - so not the ledger's `Holds`
+  scan `known-gaps.md` predicted; by source read, the lock table's
+  per-partition release.
 
 Qualified: cells 2 and 3 run on a new driver (`tools/fk_overhead_benchmark.py`,
 in neither binary); the host showed a slow mode on either engine and cell 2
@@ -996,18 +1005,22 @@ Each once, with its owner or the statement that it has none.
    on the absent parent key until the rollback** (`known-gaps.md`, Foreign
    keys) - a bounded refusal. Releasing it changes what D9(a) holds.
    **The operator's**, if it is to change.
-4. **The borrow ledger's `Holds` is a linear scan that D9(a) asks more**
-   (`known-gaps.md`, Foreign keys). **Priced by this close**: about
-   0.2 ns x K a row, unresolved up to K = 1,024 distinct parents and ~6 %
-   at 16,384. **No owner.** CLA's proposal: no change until a workload holds
-   thousands of parents in one transaction; a hashed holdings set is the
-   cut then.
+4. **A large transaction's decide is quadratic in its borrows, and D9(a)
+   doubles them** (`known-gaps.md`, Foreign keys, the `Holds` entry).
+   **Priced by this close**: about 0.2 ns x K a row, unresolved up to
+   K = 1,024 distinct parents and ~6 % at 16,384, most of it at the decide
+   rather than in the ledger's `Holds` scan the entry named. **No owner.**
+   CLA's proposal: no change until a workload holds thousands of parents in
+   one transaction; a keyed lock-table partition is the cut then, not a
+   hashed holdings set.
 5. **AR1's AQ and AR** (AY-Q11, as proposed): their own letters, after AP's
    order is settled.
-6. **Six uncounted 2PC-shaped cells and the one-off `Start()` failure**
-   (`known-gaps.md`, Testing), recorded at AY-S1 and AY-S2. **No owner.**
+6. **Two one-off cell failures under `-j8` that did not reproduce** - AX-S2b's
+   release-kick cell (recorded at AY-S0) and an expeditor's `Start()` (at
+   AY-S2) (`known-gaps.md`, Testing). **No owner.**
 7. **A cabin needing more than 65,535 snapshot chunks is refused** at every
-   checkpoint - no cell reaches it, 65,535 chunks of a ~61 KB payload being
+   checkpoint, and the checkpoint with it (`Checkpointer::Start` returns the
+   refusal) - no cell reaches it, 65,535 chunks of a ~61 KB payload being
    about 4 GB of group headers. **No owner**; recorded so a refusal there
    is read as the rule and not a fault.
 
@@ -1015,5 +1028,18 @@ Each once, with its owner or the statement that it has none.
 
 It opens nothing, decides none of the items above, and cuts no tag (the
 v3.0.0 tag waits on AR0 §8's chain through M4, `raft-marks-2026-09-26.md`
-§4). `CLAUDE.md`'s Assertions and Ranges rows carry AY-S8; its Foreign keys
-row already carried AY-S5 and AY-S6. SUITE-PENDING
+§4). `CLAUDE.md`'s Assertions and Ranges rows carry AY-S8, and its
+Transactions row AY-S2 and AY-S3, where it still said a cross-unit refusal
+polls; its Foreign keys row already carried AY-S5 and AY-S6. **The suite
+was not executed on the close**, which touches no source: the last run is
+3055/3055 at `0552d55` (Debug, one pre-existing disabled cell), and the
+close was pushed with the pre-push hook skipped on the operator's word.
+
+**The close's review** (`critics-developer`, on `9a0525d`, applied after it
+was pushed) found the close's own commit wrong in one claim: cell 3's cost
+is mostly at the decide - `LockTable::ReleaseHeld` finds each borrow by a
+linear walk of its partition and erases it, and `WakeWaiters` walks it
+again, so a decide is O(n²/64) in the transaction's borrows - and not in
+the ledger's `Holds` scan, whose relation intention sits near the front of
+`held_`. Item 4, the measurement bullet, `known-gaps.md` and the results
+file say so now; the commit message of `9a0525d` does not.

@@ -436,10 +436,20 @@ statement about an engine that no longer exists; re-verify or strike it.
   intention test scans the transaction's holdings, beside the row `X`s the
   writes already took - so a transaction's asks are quadratic in its
   borrows. Found by the same review. **Measured at AY's close** at
-  `v2.7.0-530-g0552d55` (`bench/v3.0.0/results-ay-s11-overhead-v2.7.0-530-g0552d55.md`,
-  cell 3): about 0.2 ns x K a row for K distinct parents in one
-  transaction - unresolved up to K = 1,024, marginal at 4,096, +3.43 µs a
-  row (~6 %) at 16,384. A hashed holdings set would remove it; not built.
+  `v2.7.0-530-g0552d55`, one core only
+  (`bench/v3.0.0/results-ay-s11-overhead-v2.7.0-530-g0552d55.md`, cell 3):
+  about 0.2 ns x K a row for K distinct parents in one transaction -
+  unresolved up to K = 1,024, marginal at 4,096, +3.43 µs a row (~6 %) at
+  16,384 - **and ~2.1 µs of that 3.43 is paid at the decide, not by the
+  inserts**, whose own excess is not resolvable. So what was measured is
+  not this scan: its hit here, the relation intention, sits among
+  `held_`'s first entries. By source read, not profiled, it is
+  `LockTable::Release`: per borrow, `ReleaseHeld` erases from the front of
+  its partition's vector and `WakeWaiters` then scans that partition for
+  the key just erased - O(n²/64) a decide, which predates AY and which
+  D9(a)'s doubled borrows took from 14 ms to 49 ms at K = 16,384. A hashed
+  holdings set would not remove
+  it; a keyed partition would. Neither is built.
 
 **The check-to-write window closed at AY-S5** (on
 `ay-s5-d9a-parent-fence`): a child's forward check holds the parent row's

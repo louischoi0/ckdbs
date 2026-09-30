@@ -10,21 +10,26 @@ measurement over a milestone's whole code change, at its close. Run 2026-09-30
 | cell | what | B − A | noise floor | reading |
 |---|---|---|---|---|
 | 1 | AT-S13's statement mix, 8 sessions, p50 end to end | **−2.4 to +3.0 µs** of ~340 µs on the write arms (`update-hot` +2.3, −0.5, +3.0 µs) | 0.9 / 1.4 / 3.3 µs (B), 0.3 / 0.3 / 0.4 µs (A); the controls moved −4.8 to +0.0 µs | **not resolvable** end to end |
-| 1 | the same, the engine's own time per statement (`SHOW META`) | **+0.41, +0.03, −0.44 µs** of ~16 µs | each engine moves 15.6–17.1 µs between its own runs | **not resolvable**; at most ~3 % of the engine |
-| 2 | D9(a): child `INSERT` referencing an existing parent row, one row per transaction (autocommit) | **+0.40 µs** p50 (IQR +0.26 to +0.62 µs) of ~51 µs; engine +0.24 µs of ~14 µs | 0.26 µs (B), 0.12 µs (A) (one statement repeated) | **resolved, small**: ~0.8 % at the client, ~2 % of the engine, ~1.5× the floor |
+| 1 | the same, the engine's own time per statement (`SHOW META`) | **+0.41, +0.03, −0.44 µs** of ~16 µs | each engine moves 15.6–17.1 µs between its own runs | **not resolvable**; three runs bound it only to about ±1 µs (~6 %) of the engine. Without `SHOW META` (a sixth of the mix, 3.7 µs cheaper on B) the rest reads ~+0.7 µs, estimated |
+| 2 | D9(a): child `INSERT` referencing an existing parent row, one row per transaction (autocommit) | **+0.40 µs** p50 (IQR +0.26 to +0.62 µs) of ~51 µs; engine +0.24 µs of ~14 µs | 0.26 µs (B), 0.12 µs (A) (one statement repeated) | **resolved, small**: ~0.8 % at the client, ~2 % of the engine, ~1.5× the floor and ~0.1 µs above the largest control |
 | 2 | the same in `BEGIN` / `INSERT` / `COMMIT` | +0.35 µs (IQR −0.33 to +1.12 µs) | | **not resolvable** |
-| 2 | controls: parent-row `UPDATE`, child `UPDATE` (fk column untouched), fk-less insert, point read | −0.08, +0.30, −0.13, +0.08 µs | as above | inside the floor |
-| 3 | borrow ledger: K child rows in one transaction, per row, fk | K = 64: −0.12 µs; 1,024: −0.46 µs; 4,096: **+0.76 µs**; 16,384: **+3.43 µs** (IQR +1.1 to +3.9 µs) | fk-less control: −0.37 / −0.08 / −0.35 / −1.47 µs | **a per-row cost that grows with K is there**: not resolved at K ≤ 1,024, marginal at 4,096, clear at 16,384 (+56 ms on a 16,384-row transaction, ~6 %) |
+| 2 | controls: parent-row `UPDATE`, child `UPDATE` (fk column untouched), fk-less insert, point read | −0.08, +0.30, −0.13, +0.08 µs | as above | within 0.30 µs; `child-update` just above the same-server floor. `SHOW META` −8.17 µs, changed by AY (`62a6cb3`) |
+| 3 | K child rows in one transaction, each a distinct parent, per row, fk | K = 64: −0.12 µs; 1,024: −0.46 µs; 4,096: **+0.76 µs**; 16,384: **+3.43 µs** (IQR +1.1 to +3.9 µs) | fk-less control: −0.37 / −0.08 / −0.35 / −1.47 µs | **a per-row cost that grows with K is there**: not resolved at K ≤ 1,024, marginal at 4,096, clear at 16,384 (+56 ms on a 16,384-row transaction, ~6 %). **The resolvable part is at the decide** (+35 ms of B's `COMMIT` side at 16,384), not in the inserts |
 
 **What AY costs, in one paragraph.** On the statements AY did not touch, at
 one core, nothing resolvable: cell 1's mix moves by less than its controls
-do, and cell 2's controls sit inside a ~0.3 µs floor. D9(a)'s fence on a
+do, and cell 2's controls sit within ~0.3 µs (`SHOW META`, which AY did
+touch, is 8 µs faster). D9(a)'s fence on a
 one-row child insert costs about **0.4 µs** (of ~51 µs at the client, ~14 µs
-in the engine). What the fence adds to one transaction's ledger grows with
-that transaction's borrows: about **0.2 ns × K a row** (+0.8 µs a row at
-K = 4,096, +3.4 µs at 16,384) - the linear `Holds` scan
-`docs/inflight/known-gaps.md` (Foreign keys) predicted, now with a
-coefficient. A transaction of 1,024 rows or fewer cannot tell it from noise.
+in the engine). What the fence adds to a transaction of K distinct parents
+grows with K: about **0.2 ns × K a row** on average (+0.8 µs a row at
+K = 4,096, +3.4 µs at 16,384). **Most of it is paid at the decide, not by
+the inserts**: B's `COMMIT` side at K = 16,384 is 49 ms against A's 14 ms
+in every run, ~2.1 µs of the 3.4 a row, and the inserts' own excess is not
+resolvable. What the data resolves is therefore not the per-insert `Holds`
+scan `docs/inflight/known-gaps.md` (Foreign keys) predicted; cell 3 says
+where it is.
+A transaction of 1,024 rows or fewer cannot tell it from noise.
 
 ---
 
@@ -47,8 +52,8 @@ coefficient. A transaction of 1,024 rows or fewer cannot tell it from noise.
    Both binaries were built after both commits, from exact `git archive`
    trees, so neither is older than the commit it names. The worktree was
    clean at `0552d55` when the run started; the one file added since,
-   `tools/fk_overhead_benchmark.py` (below), enters neither binary. A
-   mounts superblock v17, B v18 -> v19 era; each arm ran on its own fresh
+   `tools/fk_overhead_benchmark.py` (below), enters neither binary. A's
+   superblock is version 17 and B's 19; each arm ran on its own fresh
    volume in every run.
 4. **Host load, per cell.** `/proc/loadavg` and the
    `pgrep -a -f "cc1plus|cmake --build|ctest"` result are in every
@@ -102,7 +107,8 @@ server per run):
 
 **Not resolvable.** The write arms move −2.4 to +3.0 µs of ~340 µs with no
 consistent sign, and the two controls (a read, `SHOW META`), which take no
-borrow and reach nothing AY changed, move as much (−4.8 to +0.0 µs).
+borrow, move as much (−4.8 to +0.0 µs). `SHOW META` is not a clean control:
+AY made it cheaper (cell 2, `ping`).
 `update-hot` is +2.3 / −0.5 / +3.0 µs against a B floor of up to 3.3 µs.
 Absolute p50s are 337–344 µs for every write arm on both engines, throughput
 18.4–20.5 k qps (raw tables below). This driver saturates at its Python
@@ -122,11 +128,17 @@ run:
 **Not resolvable, and small.** The sign changes across runs and each engine
 moves 15.6–17.1 µs between its own runs, more than the delta. Run 1's +0.41
 µs is the one number a reader could seize on: it is the run in which both
-engines read highest and it is not repeated. **Bound: AY adds under ~0.5 µs
-of ~16 µs (~3 %) per statement on this mix at one core; this host cannot see
-anything smaller.** The mix takes no foreign key, so it prices what AY did to
+engines read highest and it is not repeated. **Bound: the three paired
+differences average 0.0 µs, and three runs bound AY's addition only to about
+±1 µs of ~16 µs (~6 %) per statement on this mix at one core** (a t-interval
+on three pairs: 4.3 × 0.43 µs / √3). **One arm biases it towards B**:
+`ping` is `SHOW META`, a sixth of the 96,001 statements, and cell 2 finds
+B's engine 3.7 µs cheaper on it (the deleted `split_relations` walk). If that
+holds here - estimated, not measured per arm - the other five arms read
+about +1.2, +0.8 and +0.2 µs, all three runs positive, mean +0.7 µs (~4 %),
+still inside the ±1 µs a three-run interval allows. The mix takes no foreign key, so it prices what AY did to
 every statement, not the fence. No stall of the ~0.4 s kind AT-S13 recorded
-appears: the largest latency of any arm in cell 1 is 87 ms (B, run 1) and the
+appears in cell 1 (cell 3 has one, on both engines): the largest latency of any arm in cell 1 is 87 ms (B, run 1) and the
 p99s are ~1.0 ms on both engines.
 
 ## Cell 2 — D9(a)'s price: a child insert's parent `IS` and `S`
@@ -152,14 +164,14 @@ per-pair B − A differences. Nothing is dropped from the raw tables.
 
 | arm | clean pairs of 40 | B p50 | A p50 | derived qps B / A (1e6 / p50) | **B − A p50** (IQR) | B − A engine per op |
 |---|---|---|---|---|---|---|
-| `child-insert-fk` (autocommit, one txn) | 34 | 51.5 µs | 51.1 µs | 19,417 / 19,569 qps | **+0.40 µs** (+0.26 to +0.62 µs) | +0.24 µs |
-| `child-insert-fk-txn` (BEGIN, INSERT, COMMIT; the unit) | 23 | 111.5 µs | 111.1 µs | 8,969 / 9,001 txn/s | +0.35 µs (−0.33 to +1.12 µs) | +0.35 µs |
-| control `child-insert-plain` (no fk declared) | 23 | 49.6 µs | 49.8 µs | 20,161 / 20,080 qps | −0.13 µs (−0.48 to +0.13 µs) | −0.04 µs |
-| control `parent-update` (no child writer open) | 28 | 50.9 µs | 50.7 µs | 19,646 / 19,724 qps | −0.08 µs (−0.60 to +0.42 µs) | −0.38 µs |
-| control `child-update` (fk column untouched) | 16 | 51.4 µs | 50.9 µs | 19,455 / 19,646 qps | +0.30 µs (−0.19 to +0.68 µs) | −0.26 µs |
-| noise floor `child-update-again` | 33 | 51.1 µs | 51.1 µs | 19,569 / 19,569 qps | −0.09 µs (−0.66 to +0.29 µs) | −0.20 µs |
-| control `select` (pk read) | 34 | 64.8 µs | 64.8 µs | 15,432 / 15,432 qps | +0.08 µs (−0.41 to +0.52 µs) | −0.06 µs |
-| control `ping` (`SHOW META`) | 33 | 38.0 µs | 46.3 µs | 26,316 / 21,598 qps | **−8.17 µs** (−8.39 to −7.09 µs) | −3.69 µs |
+| `child-insert-fk` (autocommit, one txn) | 34 pairs | 51.5 µs | 51.1 µs | 19,417 / 19,569 qps | **+0.40 µs** (+0.26 to +0.62 µs) | +0.24 µs |
+| `child-insert-fk-txn` (BEGIN, INSERT, COMMIT; the unit) | 23 pairs | 111.5 µs | 111.1 µs | 8,969 / 9,001 txn/s | +0.35 µs (−0.33 to +1.12 µs) | +0.35 µs |
+| control `child-insert-plain` (no fk declared) | 23 pairs | 49.6 µs | 49.8 µs | 20,161 / 20,080 qps | −0.13 µs (−0.48 to +0.13 µs) | −0.04 µs |
+| control `parent-update` (no child writer open) | 28 pairs | 50.9 µs | 50.7 µs | 19,646 / 19,724 qps | −0.08 µs (−0.60 to +0.42 µs) | −0.38 µs |
+| control `child-update` (fk column untouched) | 16 pairs | 51.4 µs | 50.9 µs | 19,455 / 19,646 qps | +0.30 µs (−0.19 to +0.68 µs) | −0.26 µs |
+| noise floor `child-update-again` | 33 pairs | 51.1 µs | 51.1 µs | 19,569 / 19,569 qps | −0.09 µs (−0.66 to +0.29 µs) | −0.20 µs |
+| control `select` (pk read) | 34 pairs | 64.8 µs | 64.8 µs | 15,432 / 15,432 qps | +0.08 µs (−0.41 to +0.52 µs) | −0.06 µs |
+| control `ping` (`SHOW META`) | 33 pairs | 38.0 µs | 46.3 µs | 26,316 / 21,598 qps | **−8.17 µs** (−8.39 to −7.09 µs) | −3.69 µs |
 
 Noise floor from inside the run: the same statement repeated on one server
 (`child-update` against `child-update-again`, same block position, both
@@ -169,24 +181,27 @@ fast) differs by a median **0.26 µs (B) and 0.12 µs (A)** in absolute value
 - **`child-insert-fk` +0.40 µs is resolved, and small**: its IQR excludes
   zero (34 pairs), the engine's per-op difference agrees in sign (+0.24 µs),
   and the fk-less insert, the same shape with no fence, reads −0.13 µs. It is
-  ~1.5× the floor and not an order above it: read it as "about 0.4 µs,
+  ~1.5× the floor and not an order above it, and only ~0.1 µs above the
+  largest control (`child-update`, +0.30 µs; the engine-time sign is what
+  separates them: +0.24 µs against −0.26): read it as "about 0.4 µs,
   between 0.2 and 0.6".
 - The **explicit-transaction unit** (`BEGIN`, `INSERT`, `COMMIT`: three round
   trips) has +0.35 µs with an IQR spanning zero: **not resolvable** there.
   The fence is one part of one of three statements.
-- **Every control is inside the floor** (|delta| ≤ 0.30 µs). **`ping` is the
-  exception and is not AY's fence**: `SHOW META` resolves no relation and
-  takes no borrow, and B answers it 8.2 µs faster than A (38 against 46 µs)
-  with 3.7 µs less engine time, in every one of the five runs (per-run
-  medians −8.5, −20.6, −8.3, −7.1, −7.6 µs). Something in `SHOW META`'s
-  path is cheaper in B; it is outside this measurement's question and was not
-  chased.
+- **Every control but `ping` is within 0.30 µs**; `child-update`'s +0.30 µs
+  sits just above the same-server floor. **`ping` is the exception and is
+  not AY's fence**: B answers `SHOW META` 8.2 µs faster than A (38 against
+  46 µs) with 3.7 µs less engine time, in every one of the five runs
+  (per-run medians −8.5, −20.6, −8.3, −7.1, −7.6 µs). AY changed that path:
+  at `58198cb`, `SHOW META`'s `split_relations` block ran `ListTables()`
+  and `RangesOf()` for every relation, and `62a6cb3` (the split relation's
+  retirement) deleted it. Read from the source, not profiled.
 - The engine's own time for the fk insert is ~14 µs a statement (block
   median 14.1 µs on both B and A) of the ~51 µs the client sees; the rest is
-  the client's round trip and the reactor's wake. A 0.4 µs fence is ~2 % of
-  the engine's statement and ~0.8 % of what a client sees.
+  the client's round trip and the reactor's wake. The engine's +0.24 µs is
+  ~2 % of its statement; the client's +0.40 µs is ~0.8 % of what it sees.
 
-**Latency decomposition (rule 3).** The unit is one serial statement on one
+**Latency decomposition (ck-tester's documentation rule 3).** The unit is one serial statement on one
 session: ~51 µs = ~14 µs engine (`SHOW META`) + ~37 µs client, socket and
 reactor wake (not separable here). No fsync wait (`relaxed`: the commit
 returns without one), no lock or conflict wait (one session, nothing
@@ -194,16 +209,16 @@ contends: the fence is *taken* and never *waited on* in this cell), no read
 wait of note. What cell 2 prices is the acquisition and release of two lock
 entries, and the answer is ~0.4 µs.
 
-**Row-count sweep (rule 9).** A pk point statement does not scale with rows,
+**Row-count sweep (ck-tester's documentation rule 9).** A pk point statement does not scale with rows,
 and this cell did **not** show it: the parent has 256 rows and the child 256
 named rows at the start, one cardinality. Cell 3 is the row-count axis, at
 the transaction level.
 
-## Cell 3 — the borrow ledger's `Holds` scan
+## Cell 3 — a transaction of K distinct parents (the ledger question)
 
-**A per-row cost that grows with the transaction's size is there, and it is
-the size the known gap said, but small: +0.76 µs a row at K = 4,096, +3.4 µs
-at 16,384, nothing resolvable at K ≤ 1,024.** One explicit transaction
+**A per-row cost that grows with the transaction's size is there, small, and
+mostly at the decide: +0.76 µs a row at K = 4,096, +3.4 µs at 16,384,
+nothing resolvable at K ≤ 1,024.** One explicit transaction
 inserts K child rows, each referencing a distinct parent (parents 1..K of
 16,384; child pk named, every insert the same shape), `BEGIN` to `COMMIT`
 timed whole and divided by K. `plain` is the same K inserts into a child with
@@ -211,7 +226,7 @@ no fk declared. K = 1 is one transaction of three round trips and is per
 transaction, not per row. Three runs, reps pooled: K = 1: 98,304
 transactions; 64: 1,536; 1,024: 96; 4,096: 24; 16,384: 15. No errors at any K
 (`max_locks_per_txn` is 65,536 and was not reached). Row-count mapping: K is
-the rows in one transaction; 1,024 / 4,096 / 16,384 bracket the rule-9 1K /
+the rows in one transaction; 1,024 / 4,096 / 16,384 bracket ck-tester's rule-9 1K /
 10K axis and K = 64 stands for the small end (a 200-row transaction was not
 run).
 
@@ -235,42 +250,73 @@ control's excursion and in the other direction. `fk` − `plain` on B alone
 
 **Reading.** The paired `fk` B − A is −0.46 µs at 1,024, +0.76 at 4,096 and
 +3.43 at 16,384: about ×4.5 for ×4 in K, which a per-row cost linear in K (a
-quadratic transaction) predicts, at roughly **0.2 ns of per-row cost per row
-already held: 0.2 ns × K a row, +3 ms on a 4,096-row transaction, +56 ms on a
-16,384-row one**. That is a two-point fit with a ~1.5 µs floor beside it: it
-is consistent with the linear `Holds` scan the gap names and does not prove
-the shape, and nothing was measured above K = 16,384. It says the cost is
-unimportant below ~4,000 borrows in a transaction and a few percent above
-~16,000. **A K-dependent term exists in A too** (its `fk` row cost grows
-1.8 µs a row from K = 4,096 to 16,384 and its engine time per row reads
-14.3 -> 19.7 µs); that is not D9(a), and B's growth is A's plus ~2 µs. The
-`plain` control grows on neither engine.
+quadratic transaction) predicts, at roughly **0.2 ns × K a row on average,
++3 ms on a 4,096-row transaction, +56 ms on a 16,384-row one**. That is a
+two-point fit with a ~1.5 µs floor beside it: it does not prove the shape,
+and nothing was measured above K = 16,384.
 
-Two features of the per-statement profile are the same in both arms and so
-not AY's. At K = 1,024 an fk transaction has a stretch of ~150 µs statements
-about two thirds of the way through it (octile means 55 54 58 54 54 **153**
-54 54 µs on B, **152** µs in that octile on A: a ~12 ms event per
-transaction, engine time 27 µs a row against 14 in both), and at K = 16,384 a
-similar one near the same position (**96** / **90** µs octile means). Neither
-appears in `plain`. Its cause is not identified here; it is an fk-insert-path
-event of ~10 ms once per large transaction on both engines.
+**Where the excess is.** The driver records each statement's latency
+(`stmt_us_by_pos`) apart from the transaction's wall time, so the
+transaction splits into its inserts and the rest - `BEGIN`, `COMMIT` and
+the driver's own loop, which is the same code on both arms. The rest, per
+transaction, pooled per run (`t3b.py`):
 
-**Latency decomposition (rule 3).** `relaxed`: no fsync wait inside the
-transaction (the decide's log write is one per transaction), no lock wait
-(one session). At K ≥ 64 the unit is ~52–57 µs a row, of which the engine is
-~13–15 µs (`plain`); the fence's ledger term is the excess above the A arm.
+| K | `fk` B | `fk` A | `plain` B | `plain` A | `fk` B − A |
+|---|---|---|---|---|---|
+| 1,024 | 0.70 / 0.69 / 0.73 ms | 0.50 / 0.49 / 0.44 ms | 0.50 / 0.44 / 0.47 ms | 0.46 / 0.49 / 0.44 ms | +0.23 ms (+0.23 µs a row) |
+| 4,096 | 4.56 / 4.39 / 4.49 ms | 2.12 / 1.95 / 1.92 ms | 2.27 / 1.95 / 2.08 ms | 2.06 / 1.96 / 2.18 ms | +2.5 ms (+0.61 µs a row) |
+| 16,384 | 49.12 / 49.04 / 49.13 ms | 14.62 / 13.84 / 14.20 ms | 13.85 / 13.77 / 13.88 ms | 14.05 / 14.79 / 14.24 ms | +34.9 ms (+2.13 µs a row) |
+
+The rest is the steadiest number in the cell - three runs agree to 0.1 ms on
+B's `fk` arm - and B's excess over A grows ~×14 for ×4 in K: **of the +3.43 µs a
+row at K = 16,384, ~2.1 µs is paid after the last insert**. The inserts'
+own B − A (the per-rep total less that run's rest, median) is −0.77,
++0.32 and +0.81 µs a row at 1,024, 4,096 and 16,384, against the `plain`
+control's −1.47 µs at 16,384: not resolvable. So the resolved cost is
+not the per-insert `Holds` scan the gap names. By source read at `0552d55`,
+not profiled: `Holds` is asked of a relation intention, which a
+transaction takes on its first insert and which sits among the first
+entries of `held_`, so the scan returns at once here; and the decide's
+`LockTable::Release` (`manager.cpp`) runs
+`ReleaseHeld` per borrow, which finds the entry in its partition's vector,
+erases it from the front, and then `WakeWaiters` scans the same partition
+for the key it just erased - O(n / 64) a borrow, O(n² / 64) a decide, with
+D9(a) doubling n. That fits A's rest growing too (0.49 -> 0.87 µs a row
+from 4,096 to 16,384 on both of A's arms and on B's `plain`).
+
+The per-row medians (B / A 57.2 / 54.3 µs at 16,384) carry the host's slow
+mode on A's side (A's `fk` p75 is 73.0 µs); the paired medians and the rest
+above do not depend on it.
+
+**A ~0.4 s stall, on both engines, not AY's.** In every run the first
+K = 1,024 `fk` transaction (~440 µs a row against ~53) and the second
+K = 16,384 `fk` transaction (~81 µs a row against ~57) each carry ~0.4 s
+more, inside their seventh octile of statements (octile means 153 µs on B,
+152 on A at 1,024; 96 / 90 µs at 16,384). It never falls in `plain`, which
+runs after `fk` at each K. It is what lifts A's engine time per row at
+16,384 to 19.7 µs, and B's to 22.4; it is not a K-dependent term. Its cause
+is not identified here.
+
+**Latency decomposition (ck-tester's documentation rule 3).** `relaxed`: no
+fsync wait inside the transaction (the decide's log write is one per
+transaction), no lock wait (one session). At K ≥ 64 the unit is ~52–57 µs a
+row, of which the engine is ~13–15 µs (`plain`); the fence's term is the
+excess above the A arm, most of it at the decide.
 
 ## What this decides, and what it does not
 
 - **AY's overhead on the general path at one core is not resolvable**
   (cell 1), and on the statement D9(a) added a lock to it is ~0.4 µs (cell
   2). Nothing here is a regression for a one-row write. The overhead
-  measurement `CLAUDE.md`'s step 3 suspends is, for AY, **measured**.
-- **D9(a)'s open cost, the ledger's scan (`known-gaps.md`, Foreign keys),
-  has its first data point**: ~0.2 ns × K a row - not visible to a
-  transaction of 1,000 borrows, ~6 % at 16,000. Whether that stands as the
-  price or wants `Holds` indexed is the operator's to decide; measured at one
-  core only.
+  measurement `CLAUDE.md`'s step 3 asks at a milestone's close is, for AY,
+  **measured**.
+- **D9(a)'s open cost on a large transaction (`known-gaps.md`, Foreign
+  keys) has its first data point**: ~0.2 ns × K a row - not visible to a
+  transaction of 1,000 distinct parents, ~6 % at 16,000 - **and it is at the
+  decide, not in the ledger's `Holds` scan** the entry predicted. Indexing
+  `Holds` would not remove what was measured; by source read, the lock
+  table's per-partition release would. Whether it stands as the price is the
+  operator's to decide; measured at one core only.
 - **Not measured, and not implied**: `cores > 1` (the fence is *waited on*
   across cores, and a single session cannot exercise the wait D9(a) exists to
   impose on a parent `DELETE`), `group` or `strict` durability, a child
@@ -280,13 +326,21 @@ transaction (the decide's log write is one per transaction), no lock wait
   faster client would see a 0.4 µs fence as a larger share).
 - **Qualifications.** (1) Cell 2's slow mode is a host state present on both
   engines; the clean-pair filter and its 1.12× threshold are this file's
-  choice, so the unfiltered rows are in the raw tables. (2) A first pass of
+  choice, so the unfiltered rows are in the raw tables. The choice does not
+  make the number: any threshold from 1.05× to 1.3× keeps the same pairs
+  (the two modes are ~24 µs apart), and with no filter the `child-insert-fk`
+  median is +0.31 µs over all 40 pairs. (2) A first pass of
   cells 2 and 3 was made with the driver before it recorded per-block p50s,
   showed the same bimodality, and was redone with the block records; it is
   not reported. (3) Cell 3's K = 4,096 and 16,384 rest on 24 and 15 paired
   repetitions. (4) No `SHOW META` control runs inside cell 3's transactions;
   its control is the fk-less `plain` insert. (5) B's `SHOW META` is 8 µs
-  faster than A's for a reason not looked into.
+  faster than A's; `62a6cb3` deleted a per-relation catalog walk from it
+  (source read, not profiled), so it is AY's and not a control. (6) Cells 2
+  and 3 run on a driver written in this stage; `bench/README.md` asks for
+  unmodified `tools/` drivers so that a driver change is not measured as an
+  engine change, which holds here only because both arms ran the same
+  driver.
 
 ---
 
@@ -295,11 +349,17 @@ transaction (the decide's log write is one per transaction), no lock wait
 Every arm, both engines, p0 / p25 / p50 / p95 / p99 with throughput. The JSON
 under `archive/ay-s11-overhead-v2.7.0-530-g0552d55/` (`c1-run*`, `c2-run*`,
 `c3-run*`, each with `result.json` - gzipped in `c3-run*` (`result.json.gz`,
-~4 MB each raw; `gunzip -k` before `t3.py`) - `driver.txt`, `host.txt`, both servers'
-configs and warn logs) carries the per-block records and the per-core
-`SHOW META` before and after; `t2b.py`, `t3.py`, `breakdown.py` and `gen.py`
-in that directory reproduce every derived number here from them. `pair.sh`,
-`all.sh` and `all2.sh` are the orchestration.
+~4 MB each raw; `gunzip -k` before `t3.py`) - `driver.txt`, `host.txt` and
+both servers' configs; the servers' warn logs are `*.log`, which
+`.gitignore` keeps out of the commit) carries the per-block records (cells
+2 and 3) and the per-core `SHOW META` before and after (cell 1);
+`t2b.py`, `t3.py`, `t3b.py` (cell 3's decide split), `breakdown.py` and
+`gen.py` in that directory reproduce every derived number here from them,
+each reading `R` - the run directory, `/home/cdkbs/bench-runs/ay-s11` -
+which a reader points at this one. `pair.sh`, `all.sh` and `all2.sh` are
+the orchestration: cell 1's three runs are `all.sh`'s, and its cell 2 and 3
+runs are the unreported first pass (qualification 2), overwritten by
+`all2.sh`'s.
 
 `child-insert-fk-txn:stmt` is the `INSERT` alone inside the explicit
 transaction and has no throughput of its own (shown as 0 qps).
@@ -310,34 +370,34 @@ transaction and has no throughput of its own (shown as 0 qps).
 
 | arm | B (`0552d55`): p0 / p25 / p50 / p95 / p99, throughput | A (`58198cb`): p0 / p25 / p50 / p95 / p99, throughput | errors B / A |
 |---|---|---|---|
-| `update-hot` | 45.2 / 239.5 / 343.5 / 755.4 / 1050.6 µs, 20035 qps | 43.9 / 239.7 / 341.2 / 749.7 / 1008.9 µs, 19683 qps | 0 / 0 |
-| `update-disjoint` | 45.0 / 238.7 / 341.0 / 757.5 / 1022.5 µs, 20347 qps | 42.6 / 239.1 / 341.2 / 759.5 / 1016.7 µs, 19869 qps | 0 / 0 |
-| `update-disjoint-again` | 48.5 / 241.1 / 340.1 / 752.8 / 1022.0 µs, 18354 qps | 40.2 / 238.3 / 340.9 / 756.7 / 1055.8 µs, 19913 qps | 0 / 0 |
-| `insert-omitted` | 37.1 / 236.2 / 337.7 / 749.6 / 1011.9 µs, 19226 qps | 35.6 / 237.2 / 340.1 / 742.2 / 1004.1 µs, 19611 qps | 0 / 0 |
-| `select-hot` | 51.8 / 306.2 / 429.2 / 914.7 / 1219.6 µs, 16638 qps | 57.2 / 310.5 / 430.8 / 925.6 / 1228.5 µs, 16518 qps | 0 / 0 |
-| `ping` | 36.0 / 222.6 / 329.4 / 766.2 / 1017.3 µs, 20826 qps | 37.9 / 214.0 / 329.7 / 778.4 / 1044.7 µs, 20718 qps | 0 / 0 |
+| `update-hot` | 45.2 / 239.5 / 343.5 / 755.4 / 1050.6 µs, 20035 qps | 43.9 / 239.7 / 341.2 / 749.7 / 1008.9 µs, 19683 qps | 0 / 0 errors |
+| `update-disjoint` | 45.0 / 238.7 / 341.0 / 757.5 / 1022.5 µs, 20347 qps | 42.6 / 239.1 / 341.2 / 759.5 / 1016.7 µs, 19869 qps | 0 / 0 errors |
+| `update-disjoint-again` | 48.5 / 241.1 / 340.1 / 752.8 / 1022.0 µs, 18354 qps | 40.2 / 238.3 / 340.9 / 756.7 / 1055.8 µs, 19913 qps | 0 / 0 errors |
+| `insert-omitted` | 37.1 / 236.2 / 337.7 / 749.6 / 1011.9 µs, 19226 qps | 35.6 / 237.2 / 340.1 / 742.2 / 1004.1 µs, 19611 qps | 0 / 0 errors |
+| `select-hot` | 51.8 / 306.2 / 429.2 / 914.7 / 1219.6 µs, 16638 qps | 57.2 / 310.5 / 430.8 / 925.6 / 1228.5 µs, 16518 qps | 0 / 0 errors |
+| `ping` | 36.0 / 222.6 / 329.4 / 766.2 / 1017.3 µs, 20826 qps | 37.9 / 214.0 / 329.7 / 778.4 / 1044.7 µs, 20718 qps | 0 / 0 errors |
 
 **`c1-run2/result.json`** - load before `0.96 1.83 2.42 1/247 150293`, after `1.12 1.84 2.41 1/237 150686`; competing builds: none
 
 | arm | B (`0552d55`): p0 / p25 / p50 / p95 / p99, throughput | A (`58198cb`): p0 / p25 / p50 / p95 / p99, throughput | errors B / A |
 |---|---|---|---|
-| `update-hot` | 37.8 / 240.1 / 340.3 / 760.9 / 1019.3 µs, 20267 qps | 44.4 / 240.7 / 340.8 / 761.1 / 1016.8 µs, 20328 qps | 0 / 0 |
-| `update-disjoint` | 50.9 / 238.2 / 340.8 / 754.6 / 1003.9 µs, 19712 qps | 46.5 / 240.6 / 342.7 / 752.6 / 1020.0 µs, 20218 qps | 0 / 0 |
-| `update-disjoint-again` | 35.5 / 240.7 / 342.2 / 760.4 / 1038.7 µs, 19698 qps | 37.7 / 237.7 / 342.4 / 752.8 / 1031.8 µs, 20263 qps | 0 / 0 |
-| `insert-omitted` | 45.7 / 237.2 / 339.7 / 759.2 / 1019.1 µs, 20214 qps | 38.6 / 237.8 / 338.7 / 750.6 / 1033.6 µs, 20381 qps | 0 / 0 |
-| `select-hot` | 58.0 / 307.8 / 429.3 / 933.2 / 1232.8 µs, 16551 qps | 61.8 / 310.4 / 434.1 / 909.6 / 1222.5 µs, 16492 qps | 0 / 0 |
-| `ping` | 36.7 / 215.7 / 325.8 / 764.3 / 1012.5 µs, 20958 qps | 40.8 / 221.4 / 328.2 / 770.0 / 1025.4 µs, 20580 qps | 0 / 0 |
+| `update-hot` | 37.8 / 240.1 / 340.3 / 760.9 / 1019.3 µs, 20267 qps | 44.4 / 240.7 / 340.8 / 761.1 / 1016.8 µs, 20328 qps | 0 / 0 errors |
+| `update-disjoint` | 50.9 / 238.2 / 340.8 / 754.6 / 1003.9 µs, 19712 qps | 46.5 / 240.6 / 342.7 / 752.6 / 1020.0 µs, 20218 qps | 0 / 0 errors |
+| `update-disjoint-again` | 35.5 / 240.7 / 342.2 / 760.4 / 1038.7 µs, 19698 qps | 37.7 / 237.7 / 342.4 / 752.8 / 1031.8 µs, 20263 qps | 0 / 0 errors |
+| `insert-omitted` | 45.7 / 237.2 / 339.7 / 759.2 / 1019.1 µs, 20214 qps | 38.6 / 237.8 / 338.7 / 750.6 / 1033.6 µs, 20381 qps | 0 / 0 errors |
+| `select-hot` | 58.0 / 307.8 / 429.3 / 933.2 / 1232.8 µs, 16551 qps | 61.8 / 310.4 / 434.1 / 909.6 / 1222.5 µs, 16492 qps | 0 / 0 errors |
+| `ping` | 36.7 / 215.7 / 325.8 / 764.3 / 1012.5 µs, 20958 qps | 40.8 / 221.4 / 328.2 / 770.0 / 1025.4 µs, 20580 qps | 0 / 0 errors |
 
 **`c1-run3/result.json`** - load before `0.97 1.62 2.28 1/250 151094`, after `1.20 1.65 2.28 1/250 151493`; competing builds: none
 
 | arm | B (`0552d55`): p0 / p25 / p50 / p95 / p99, throughput | A (`58198cb`): p0 / p25 / p50 / p95 / p99, throughput | errors B / A |
 |---|---|---|---|
-| `update-hot` | 34.9 / 238.1 / 340.3 / 755.4 / 1014.3 µs, 20535 qps | 49.3 / 239.1 / 337.3 / 747.6 / 1013.5 µs, 20414 qps | 0 / 0 |
-| `update-disjoint` | 42.1 / 240.8 / 344.1 / 748.5 / 1012.7 µs, 20040 qps | 45.5 / 239.1 / 341.9 / 760.4 / 1010.5 µs, 20315 qps | 0 / 0 |
-| `update-disjoint-again` | 46.3 / 240.6 / 340.8 / 763.5 / 1024.9 µs, 20067 qps | 42.2 / 240.7 / 342.3 / 750.8 / 1027.8 µs, 20144 qps | 0 / 0 |
-| `insert-omitted` | 36.4 / 238.6 / 338.7 / 733.2 / 983.4 µs, 20530 qps | 43.8 / 235.8 / 338.9 / 750.4 / 1028.7 µs, 20246 qps | 0 / 0 |
-| `select-hot` | 56.3 / 310.0 / 434.7 / 913.2 / 1196.1 µs, 16520 qps | 59.3 / 310.7 / 434.7 / 908.3 / 1222.0 µs, 16572 qps | 0 / 0 |
-| `ping` | 32.1 / 213.1 / 323.3 / 771.9 / 1040.1 µs, 20986 qps | 32.1 / 212.6 / 326.5 / 773.3 / 1063.6 µs, 20850 qps | 0 / 0 |
+| `update-hot` | 34.9 / 238.1 / 340.3 / 755.4 / 1014.3 µs, 20535 qps | 49.3 / 239.1 / 337.3 / 747.6 / 1013.5 µs, 20414 qps | 0 / 0 errors |
+| `update-disjoint` | 42.1 / 240.8 / 344.1 / 748.5 / 1012.7 µs, 20040 qps | 45.5 / 239.1 / 341.9 / 760.4 / 1010.5 µs, 20315 qps | 0 / 0 errors |
+| `update-disjoint-again` | 46.3 / 240.6 / 340.8 / 763.5 / 1024.9 µs, 20067 qps | 42.2 / 240.7 / 342.3 / 750.8 / 1027.8 µs, 20144 qps | 0 / 0 errors |
+| `insert-omitted` | 36.4 / 238.6 / 338.7 / 733.2 / 983.4 µs, 20530 qps | 43.8 / 235.8 / 338.9 / 750.4 / 1028.7 µs, 20246 qps | 0 / 0 errors |
+| `select-hot` | 56.3 / 310.0 / 434.7 / 913.2 / 1196.1 µs, 16520 qps | 59.3 / 310.7 / 434.7 / 908.3 / 1222.0 µs, 16572 qps | 0 / 0 errors |
+| `ping` | 32.1 / 213.1 / 323.3 / 771.9 / 1040.1 µs, 20986 qps | 32.1 / 212.6 / 326.5 / 773.3 / 1063.6 µs, 20850 qps | 0 / 0 errors |
 
 ### Cell 2 raw (median across the five runs of each run's whole-arm summary, slow-mode blocks included)
 
@@ -384,13 +444,13 @@ Per K and kind, per row = transaction wall time / K; min, p25, median, p75 over 
 
 | K | kind | reps | B: min / p25 / median / p75 | A: min / p25 / median / p75 |
 |---|---|---|---|---|
-| 1 | `fk` | 98304 | 105.0 / 115.9 / 120.1 / 127.0 µs | 103.9 / 116.9 / 121.1 / 127.9 µs |
-| 1 | `plain` | 98304 | 102.2 / 113.4 / 116.9 / 121.8 µs | 104.8 / 115.0 / 118.7 / 124.1 µs |
-| 64 | `fk` | 1536 | 51.3 / 53.3 / 53.8 / 54.5 µs | 51.3 / 53.2 / 53.9 / 54.8 µs |
-| 64 | `plain` | 1536 | 50.0 / 52.4 / 52.8 / 53.3 µs | 51.2 / 52.7 / 53.2 / 53.8 µs |
-| 1024 | `fk` | 96 | 51.4 / 52.1 / 52.5 / 53.4 µs | 51.2 / 52.6 / 53.1 / 53.7 µs |
-| 1024 | `plain` | 96 | 50.1 / 51.4 / 51.8 / 52.2 µs | 50.2 / 51.5 / 51.8 / 52.3 µs |
-| 4096 | `fk` | 24 | 52.2 / 52.9 / 53.4 / 54.0 µs | 51.8 / 52.1 / 52.5 / 54.0 µs |
-| 4096 | `plain` | 24 | 50.3 / 51.1 / 51.3 / 52.5 µs | 50.8 / 51.2 / 51.5 / 54.9 µs |
-| 16384 | `fk` | 15 | 56.2 / 56.7 / 57.2 / 59.8 µs | 52.1 / 52.8 / 54.3 / 73.0 µs |
-| 16384 | `plain` | 15 | 50.4 / 50.9 / 51.7 / 54.2 µs | 52.0 / 52.3 / 53.3 / 56.9 µs |
+| 1 | `fk` | 98,304 reps | 105.0 / 115.9 / 120.1 / 127.0 µs | 103.9 / 116.9 / 121.1 / 127.9 µs |
+| 1 | `plain` | 98,304 reps | 102.2 / 113.4 / 116.9 / 121.8 µs | 104.8 / 115.0 / 118.7 / 124.1 µs |
+| 64 | `fk` | 1,536 reps | 51.3 / 53.3 / 53.8 / 54.5 µs | 51.3 / 53.2 / 53.9 / 54.8 µs |
+| 64 | `plain` | 1,536 reps | 50.0 / 52.4 / 52.8 / 53.3 µs | 51.2 / 52.7 / 53.2 / 53.8 µs |
+| 1024 | `fk` | 96 reps | 51.4 / 52.1 / 52.5 / 53.4 µs | 51.2 / 52.6 / 53.1 / 53.7 µs |
+| 1024 | `plain` | 96 reps | 50.1 / 51.4 / 51.8 / 52.2 µs | 50.2 / 51.5 / 51.8 / 52.3 µs |
+| 4096 | `fk` | 24 reps | 52.2 / 52.9 / 53.4 / 54.0 µs | 51.8 / 52.1 / 52.5 / 54.0 µs |
+| 4096 | `plain` | 24 reps | 50.3 / 51.1 / 51.3 / 52.5 µs | 50.8 / 51.2 / 51.5 / 54.9 µs |
+| 16384 | `fk` | 15 reps | 56.2 / 56.7 / 57.2 / 59.8 µs | 52.1 / 52.8 / 54.3 / 73.0 µs |
+| 16384 | `plain` | 15 reps | 50.4 / 50.9 / 51.7 / 54.2 µs | 52.0 / 52.3 / 53.3 / 56.9 µs |
