@@ -400,21 +400,6 @@ statement about an engine that no longer exists; re-verify or strike it.
   the claim does not have. `waystone_dir.hpp`'s header carries the trap;
   owner: `include/kds/catalog/catalog.hpp`.
 
-- **The cabin optimizer's build does not announce, so a write during its
-  walk is lost.** Verified at AT-S7 (2026-09-23) on
-  `at-s7-one-cabin-store`. The serve path's build announces its set before
-  it walks (`cabin.md` §6), so the write hook appends into it from any
-  core and the commit merges; `CabinOptimizerExecutor::BuildSeededSets`
-  walks and then `Commit`s, which with one store for the instance is the
-  hazard §6 used to delete structurally — a write on another core between
-  its walk and its commit is in neither, and the set is banked short.
-
-  Not reachable today for two reasons that are both configuration rather
-  than construction: the controller is **off by default**
-  (`cabin_optimizer`), and its walks run on core 0's tick. Closing it is
-  the same two calls the serve path makes. Owner:
-  `src/exec/cabin_optimizer_exec.cpp`.
-
 - **A Cabin builds rarely on a busy instance, and that is the price of
   one store.** Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`.
   §6a's banking gate refuses while **anything** is unresolved anywhere —

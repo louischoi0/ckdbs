@@ -342,7 +342,8 @@ set, and the atomicity that argument rested on is gone. This section said
 *"if either changes, §4–§5 must be redesigned, not relaxed"*, and §6a is
 that redesign.
 
-**The announce is what replaces it.** A walk that intends to bank does
+**The announce is what replaces it**, for both builds - the serve path's
+and the controller's (`BuildSeededSets`, since AY-S6). A walk that intends to bank does
 not walk and then mark; it marks first, with an **empty set `Find`
 refuses to serve**, and merges its matches into that set at the end. The
 write hook appends into an announced set exactly as into an observed one,

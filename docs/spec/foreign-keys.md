@@ -387,9 +387,14 @@ on three things, each of which once failed:
   fk to the parent holds the parent row's `S` from before its descent to
   its decide, and the check runs under that row's `X`, so no such writer is
   mid-write while the set is read.
-- **The banking gate** (`cabin.md` §6a). A set banked while a child insert
-  was open would lack it, the insert's hook having found the value
-  unobserved; the gate declines such a bank and the walk answers.
+- **The banking gate and the announce** (`cabin.md` §6, §6a), on both
+  builds - the serve path's and, since AY-S6, the controller's. A set
+  banked while a child insert was open would lack it, the insert's hook
+  having found the value unobserved; the gate declines such a bank. A
+  child written behind a build's walk is appended into the announced set.
+  A writer whose table access predates a `CREATE CABIN` writes without the
+  hook, but it is open while it does, which the gate declines, and its
+  rows are committed and visible to any later bank.
 
 **A loop that gives the set up is not exhausted**, and the walk answers:
 a heap child whose hint fails (no descent heals it, and the value is

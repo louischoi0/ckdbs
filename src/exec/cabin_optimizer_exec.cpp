@@ -77,20 +77,55 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     const std::function<bool()>& enabled, bool* aborted) {
     *aborted = false;
     // The walk below covers the whole relation, so the set this banks
-    // speaks for exactly what it read.
+    // speaks for exactly what it read - and, since AY-S6, for every write
+    // made while it read.
     //
-    // **This path does not announce** (AT-S7), so a write landing during
-    // its walk is lost where the serve site's build would have kept it.
-    // Sound only because the controller is off by default and its walks
-    // run on core 0's tick; `known-gaps.md` carries it.
-    const std::vector<stats::CabinKey> seeds = cabins_.SightedUnobservedOf(cabin_id);
+    // **Each seed is announced before the walk** (`cabin.md` §6, the serve
+    // path's order; `raft-marks-2026-09-30.md` §12). The announce installs
+    // an unservable empty set the write hook appends to, from any core, so
+    // a write behind the walk - on a page it has already read - is in the
+    // set when the walk's matches merge into it. Until AY-S6 this path
+    // walked and then committed, and such a write found the value
+    // unobserved and was in neither; with the reverse check's clearing
+    // return that was an orphaned child.
+    std::vector<stats::CabinKey> seeds;
+    for (const stats::CabinKey& seed : cabins_.SightedUnobservedOf(cabin_id)) {
+        // Refused: already observed, another build's, or the value cap -
+        // none of them this build's to commit.
+        if (cabins_.BeginRecording(seed)) seeds.push_back(seed);
+    }
     if (seeds.empty()) return std::size_t{0};
+    // **Every exit before the commit ends the announce**, or the value
+    // stays unservable for the life of the store.
+    struct EndAnnounce {
+        stats::CabinStore& cabins;
+        const std::vector<stats::CabinKey>& seeds;
+        bool committed = false;
+        ~EndAnnounce() {
+            if (committed) return;
+            for (const stats::CabinKey& seed : seeds) cabins.CancelRecording(seed);
+        }
+    } announce{cabins_, seeds};
 
     std::unordered_map<stats::CabinKey, std::vector<stats::CabinEntry>, stats::CabinKeyHash>
         collected;
     for (const stats::CabinKey& seed : seeds) collected.emplace(seed, std::vector<stats::CabinEntry>{});
 
+    // Minted after the announce, and gated as the serve path's view is
+    // (§6a): a transaction unresolved anywhere, or a commit published
+    // above this view's snapshot, may hold rows of a seeded value this walk
+    // cannot see and that no hook appended before the announce. The walk's
+    // own busy test below catches a row it meets; the gate is what covers
+    // the window between a commit and the announce.
     const txn::ReadView check_view = MintCheckView();
+    if (check_view.in_flight_at_mint ||
+        (check_view.visibility != nullptr &&
+         (check_view.visibility->AnyUnresolved() ||
+          check_view.visibility->CommitCeiling() != check_view.snapshot_lsn))) {
+        cabins_.NoteUnbankableView();
+        *aborted = true;  // demand re-nominates, as for a busy row
+        return std::size_t{0};
+    }
 
     // PO4's mandate, structural: the walk's pages come from the scan ring,
     // so the build cannot displace the foreground working set.
@@ -217,6 +252,7 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     // every seed commits, **empty sets included**: an observed value with
     // no rows is the authoritative zero-rows answer.
     std::size_t committed = 0;
+    announce.committed = true;  // `Commit` ends each announce, banked or not
     for (const stats::CabinKey& seed : seeds) {
         auto bucket = collected.find(seed);
         const std::size_t entries = bucket->second.size();
