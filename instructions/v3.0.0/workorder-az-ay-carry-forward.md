@@ -18,13 +18,13 @@ cannot be built here at all.
 
 | AY §7 | item | owner at AY's close | covered here by |
 |---|---|---|---|
-| 1 | A peer's `CREATE ASSERTION` can miss every snapshot in the mount's scan (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`) | none | AZ-S2, on AZ-Q1 |
+| 1 | A peer's `CREATE ASSERTION` can miss every snapshot in the mount's scan (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`) | none | AZ-S2 (AZ-Q1 marked adopt first) |
 | 2 | A catalog row placed on a chain's tail is not reported when its logging fails (`docs/inflight/bugs/a-catalog-row-placed-on-a-chains-tail-is-not-reported-when-its-logging-fails.md`) | none | AZ-S1 |
 | 3 | A failed child check inside an explicit transaction keeps its `S` on the absent parent key until the rollback (`known-gaps.md`, Foreign keys) | the operator | AZ-S5 (AZ-Q3 marked a release) |
 | 4 | A large transaction's decide is quadratic in its borrows, and D9(a) doubles them (`known-gaps.md`, Foreign keys) | none | AZ-Q4, accepted as priced; AZ-S6 struck |
 | 5 | AR1's AQ and AR | their own letters, after AP's order is settled (AY-Q11) | AZ-Q5 (AP first) - **no stage**, see below |
 | 6 | Two one-off cell failures under `-j8` that did not reproduce (`known-gaps.md`, Testing) | none | AZ-S4 |
-| 7 | A cabin needing more than 65,535 snapshot chunks is refused at every checkpoint | none | AZ-S3, on AZ-Q2 |
+| 7 | A cabin needing more than 65,535 snapshot chunks is refused at every checkpoint | none | AZ-S3 (AZ-Q2 marked refusal at admission) |
 
 **Item 5 is not built by this order.** AY-Q11 is marked (`raft-marks-2026-09-30.md`
 §15): AQ and AR are their own letters, after AP's order is settled.
@@ -160,7 +160,7 @@ cell reaches `checkpointer.cpp:55-64`. And two comments still say the
 superblock is refused unless it is version 17, where it is 19:
 `include/kds/bootstrap/bootstrap.hpp:79`, `tests/core_runtime_test.cpp:110`.
 
-## 2. Rulings - CLA's proposals
+## 2. Rulings - CLA's proposals, marked as proposed 2026-09-30
 
 **AZ-R1 - one placement helper in `InsertRow`, and a failure retires
 what nothing logged.** Both arms place, set `*where`, fire the hook and log
@@ -240,7 +240,7 @@ from `266db2e` and corrects the two "version 17" comments.
 `known-gaps.md` keeps both entries, each saying the next failure will now
 print its cause.
 
-**AZ-R5 - release only the ask's own `S`** (AZ-Q3, if marked to release).
+**AZ-R5 - release only the ask's own `S`** (AZ-Q3, marked to release).
 On `FK_VIOLATION`, the hoisted arm and the self-referencing arm release the
 tuple `S` only when the transaction did not hold it before the ask. The
 answer is taken before `BorrowOrWait` (`command_dispatcher.cpp:3344`) and
@@ -254,8 +254,8 @@ relation in the statement (`BorrowChain`). With rows `(p = 99, absent)` and
 under no intention, and a relation `X` on the parent - `DROP TABLE`,
 `CREATE INDEX` - could be granted over it.
 
-**AZ-R6 - no build** (AZ-Q4), as AY's close proposed. If the operator marks
-a build, the cut is a keyed partition: each partition's entries indexed by
+**AZ-R6 - no build** (AZ-Q4, marked), as AY's close proposed. If a later
+word marks a build, the cut is a keyed partition: each partition's entries indexed by
 `LockKey`, so `ReleaseHeld` and `WakeWaiters` find their entry without a
 walk. The all-partition verify scan still iterates. A hashed holdings set in
 the ledger does not touch the measured cost (`known-gaps.md`, the `Holds`
