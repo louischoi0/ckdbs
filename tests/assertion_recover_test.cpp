@@ -423,6 +423,102 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
     EXPECT_EQ(rebuilt.group_count(), groups);
 }
 
+// **A record is bounded by the ring as well as the segment** (AZ-S3). At the
+// production defaults - a 64 MiB segment and a 1 MiB ring - a chunk cut to
+// the segment is one the ring refuses whole, so a cabin with more than a
+// ring's worth of headers had every run refused at its first chunk: every
+// core-0 checkpoint after it failed, and so did the next mount's completion
+// checkpoint. The fixture's 64 KiB segment is smaller than any ring, which
+// is why no other cell here reached it.
+TEST_F(AssertionRecoverTest, ACabinPastOneRingOfHeadersIsCutToChunksTheRingCanStage) {
+    auto device = wal::MemoryLogDevice::Create(wal::kDefaultSegmentSize);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto manager = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0);
+    ASSERT_TRUE(manager.ok()) << manager.status().message();
+    wal::WalManager& wal = *manager.value();
+    ASSERT_LT(wal.stream()->ring_capacity(), wal::kDefaultSegmentSize)
+        << "the defaults no longer put the ring below the segment";
+
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    for (int i = 0; i < 20000; ++i) {
+        live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
+    }
+    wal::AssertionCabinSnapshot cabin;
+    cabin.assertion_id = kAssertionId;
+    std::size_t bytes = 0;
+    for (const BoundCabin::GroupSnapshot& g : live.SnapshotGroups()) {
+        bytes += wal::AssertSnapshotGroupBytes(g.key.size());
+        cabin.groups.push_back(wal::AssertionSnapshotGroup{g.group_id, g.count, g.sum, g.key});
+    }
+    ASSERT_GT(bytes, wal.stream()->ring_capacity()) << "the cabin fits one ring";
+
+    const Status logged = wal::LogAssertionSnapshot(wal, cabin);
+    ASSERT_TRUE(logged.ok()) << logged.message();
+    ASSERT_TRUE(wal.Flush().ok());
+
+    RecoverableAssertion a;
+    a.assertion_id = kAssertionId;
+    a.root_page_id = kCabinPage;
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    a.cabin = &rebuilt;
+    const std::array<RecoverableAssertion, 1> list = {a};
+    auto report = RecoverAssertions(*device.value(), /*core_id=*/0, /*from_lsn=*/0, store_, list,
+                                    /*log=*/nullptr);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+    EXPECT_EQ(rebuilt.group_count(), live.group_count());
+}
+
+// **A checkpoint that meets a cabin no run can carry completes** (AZ-S3,
+// AZ-R3). The writer refuses such a cabin before its first chunk; until
+// AZ-S3 that refusal failed the whole checkpoint, so core 0 never completed
+// another one while the assertion lived and the next mount's completion
+// checkpoint failed the mount. Now the registry evicts the assertion and
+// marks it unenforceable inside the snapshot's hold - its relation's writes
+// are refused `CannotEnforce` until DROP and CREATE - and the checkpoint
+// carries every other assertion's run and publishes.
+//
+// Reached here by a group key longer than a record: admission refuses one
+// on a registry that knows its budget, so a volume written before AZ-S3 is
+// where a checkpoint meets it.
+TEST_F(AssertionRecoverTest, ACheckpointMeetingACabinNoRunCanCarryCompletesAndFailsItClosed) {
+    AssertionEnforcer registry(/*shared=*/true);
+    LiveAssertion unsnapshottable;
+    unsnapshottable.assertion_id = kAssertionId;
+    unsnapshottable.target_oid = 4000;
+    unsnapshottable.aggregate = BoundAggregate::kSum;
+    unsnapshottable.cabin = BoundCabin(BoundAggregate::kSum, /*bound=*/1'000'000);
+    unsnapshottable.cabin.EnsureGroupId(Key(std::string(wal_->usable_payload_bytes(), 'z')));
+    registry.Adopt(std::move(unsnapshottable));
+    LiveAssertion other;
+    other.assertion_id = kAssertionId + 1;
+    other.target_oid = 4001;
+    other.aggregate = BoundAggregate::kSum;
+    other.cabin = BoundCabin(BoundAggregate::kSum, /*bound=*/1'000'000);
+    other.cabin.EnsureGroupId(Key("small"));
+    registry.Adopt(std::move(other));
+
+    class NoPages final : public wal::CheckpointTarget {
+    public:
+        std::vector<wal::CheckpointDirtyPage> DirtyTable() const override { return {}; }
+        Status FlushPages(std::span<const PageId>) override { return Status::OK(); }
+    };
+    NoPages target;
+    wal::NoActiveTransactions none;
+    wal::InMemoryCheckpointAnchor anchor;
+    wal::Checkpointer checkpointer(*wal_, target, none, anchor);
+    checkpointer.SetAssertionSource(&registry);
+    const Status completed = checkpointer.RunToCompletion();
+    ASSERT_TRUE(completed.ok()) << completed.message();
+    EXPECT_EQ(anchor.publishes(), 1u);
+
+    EXPECT_FALSE(registry.Holds(kAssertionId)) << "an unsnapshottable cabin is still enforcing";
+    EXPECT_TRUE(registry.CannotEnforce(4000)) << "its relation's writes are admitted unchecked";
+    EXPECT_TRUE(registry.Holds(kAssertionId + 1));
+    EXPECT_EQ(SnapshotRecords(anchor.anchor().checkpoint_lsn), 1u)
+        << "the other assertion's run is missing";
+}
+
 TEST_F(AssertionRecoverTest, ASecondCheckpointsSnapshotInRangeDoesNotFailThePass) {
     // The anchor is published at Complete(), so a crash *during* a later
     // checkpoint leaves that checkpoint's snapshot records inside the range the
@@ -987,6 +1083,36 @@ TEST_F(AssertionResumeTest, AnAssertionCreatedAfterTheLastCheckpointStillRecover
     };
     EXPECT_EQ(admit(50).code(), StatusCode::kAssertionViolation) << "70 + 50 > 100";
     EXPECT_TRUE(admit(30).ok()) << "70 + 30 == 100";
+}
+
+TEST_F(AssertionResumeTest, AGroupKeyNoRecordCanCarryIsRefusedAtAdmission) {
+    // **The survey's question, answered by SQL** (AZ-S3): a `GROUP BY` over
+    // spilled `varchar`s reaches a key past one record - eight values of
+    // 8,000 bytes against this fixture's 61 KiB record. The row is refused at
+    // admission, before anything is placed, and `NOT_IMPLEMENTED` says
+    // why: the bound is the log format's, not the data's fault.
+    std::string columns;
+    std::string group;
+    for (char c = 'a'; c <= 'h'; ++c) {
+        columns += std::string(", ") + c + " varchar";
+        group += std::string(group.empty() ? "" : ", ") + c;
+    }
+    ASSERT_EQ(Run("CREATE TABLE wide (id int64" + columns + ")").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON wide GROUP BY (" + group + ") CHECK COUNT(*) <= 5")
+                  .substr(0, 7),
+              "CREATED");
+
+    const std::string huge = "'" + std::string(8000, 'v') + "'";
+    std::string values;
+    for (int i = 0; i < 8; ++i) values += std::string(i == 0 ? "" : ", ") + huge;
+    const std::string refused = Run("INSERT INTO wide VALUES (" + values + ")");
+    EXPECT_NE(refused.find("NOT_IMPLEMENTED"), std::string::npos) << refused.substr(0, 300);
+    EXPECT_NE(refused.find("cap"), std::string::npos) << refused.substr(0, 300);
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM wide"), "count(*)\\n0") << "the refused row was placed";
+
+    // A key that fits is admitted as before.
+    EXPECT_EQ(Run("INSERT INTO wide VALUES ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h')").substr(0, 8),
+              "INSERTED");
 }
 
 TEST_F(AssertionResumeTest, WithNoBaseInRangeTheAssertionIsNotAdoptedAtAll) {
