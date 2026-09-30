@@ -1,0 +1,30 @@
+arm | clean pairs/40 | B-A p50 median (IQR) | B-A engine/op median | B abs p50 | A abs p50 | slow blocks B/A
+child-insert-fk           | 25 | -0.31 (-0.66..+0.22) | -0.26 | 51.0 | 51.3 | 1/14 | meandiff -0.47
+child-insert-fk-txn       | 21 | -0.21 (-1.60..+0.42) | -0.81 | 110.8 | 110.8 | 9/11 | meandiff -0.81
+child-insert-plain        | 31 | -0.04 (-0.31..+0.17) | -0.17 | 49.7 | 49.7 | 5/6 | meandiff -0.34
+parent-update             | 19 | +0.02 (-0.39..+0.26) | -0.15 | 50.7 | 50.4 | 11/10 | meandiff +0.04
+child-update              | 21 | -0.10 (-0.45..+0.51) | -0.17 | 51.0 | 50.6 | 11/9 | meandiff -0.10
+child-update-again        | 32 | -0.44 (-0.77..+0.39) | -0.44 | 50.6 | 50.9 | 1/7 | meandiff -0.45
+select                    | 27 | -0.32 (-0.60..+0.08) | -0.28 | 64.2 | 64.4 | 5/8 | meandiff -0.08
+ping                      | 33 | +0.08 (-0.16..+0.36) | +0.03 | 38.3 | 38.2 | 4/3 | meandiff +0.22
+floor: child-update vs child-update-again, same server, clean blocks
+B 29 median +0.15 IQR -0.01..+0.34 abs-median 0.18
+A 27 median +0.02 IQR -0.21..+0.30 abs-median 0.22
+whole-arm qps (5-run median) B vs A
+child-insert-fk            B 18256 A 16078
+child-insert-fk-txn        B 8284 A 7938
+child-insert-plain         B 17696 A 18116
+parent-update              B 17545 A 17465
+child-update               B 18216 A 17462
+child-update-again         B 18782 A 18570
+select                     B 14557 A 14737
+ping                       B 24145 A 24206
+max latency per arm per run (ms) - stall check
+child-insert-fk [(5.2, 5.4), (5.5, 6.5), (6.2, 5.9), (8.8, 7.4), (6.0, 6.4)]
+child-insert-fk-txn [(6.6, 5.5), (9.8, 5.8), (5.4, 9.6), (5.7, 5.6), (6.5, 13.1)]
+child-insert-plain [(7.7, 7.8), (5.3, 6.2), (5.7, 8.7), (5.6, 6.3), (5.1, 16.6)]
+parent-update [(5.7, 5.6), (5.3, 8.5), (7.7, 5.2), (5.6, 12.5), (5.6, 5.1)]
+child-update [(5.3, 11.1), (7.4, 8.1), (8.2, 7.8), (36.6, 5.0), (6.5, 7.2)]
+child-update-again [(0.1, 0.3), (0.1, 0.1), (0.1, 0.1), (0.1, 0.1), (0.1, 0.1)]
+select [(0.2, 0.1), (28.7, 0.2), (0.2, 33.6), (28.1, 0.2), (0.1, 0.2)]
+ping [(0.1, 25.8), (0.1, 0.1), (0.1, 0.1), (0.1, 0.1), (32.8, 0.3)]

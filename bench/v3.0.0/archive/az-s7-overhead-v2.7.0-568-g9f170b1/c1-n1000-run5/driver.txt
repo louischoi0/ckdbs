@@ -1,0 +1,20 @@
+host before: 0.95 1.33 1.95 1/313 308760  competing: none
+host after : 1.03 1.34 1.95 1/313 308768  competing: none
+== B  create_assertion_ms=0.8
+  insert-assert-existing     p50=    53.8 p99=    97.1 qps=   15095 err=0
+  insert-assert-newgroup     p50=    52.4 p99=    75.8 qps=   17598 err=0
+  insert-none-existing       p50=    50.2 p99=    72.6 qps=   18447 err=0
+  insert-none-newgroup       p50=    49.7 p99=    70.4 qps=   18756 err=0
+  insert-none-again          p50=    49.9 p99=    71.5 qps=   18164 err=0
+  select                     p50=    64.9 p99=    94.3 qps=   14612 err=0
+  ping                       p50=    38.0 p99=    77.2 qps=   21470 err=0
+== A  create_assertion_ms=0.8
+  insert-assert-existing     p50=    53.1 p99=    78.3 qps=   17333 err=0
+  insert-assert-newgroup     p50=    53.2 p99=    84.5 qps=   16978 err=0
+  insert-none-existing       p50=    50.2 p99=    73.4 qps=   18409 err=0
+  insert-none-newgroup       p50=    49.9 p99=    72.7 qps=   18419 err=0
+  insert-none-again          p50=    50.1 p99=    79.4 qps=   18119 err=0
+  select                     p50=    66.2 p99=   120.4 qps=   13116 err=0
+  ping                       p50=    38.0 p99=    61.1 qps=   24773 err=0
+raw: /home/cdkbs/bench-runs/az-s7b/c1-n1000-run5/result.json
+driver exit 0

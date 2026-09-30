@@ -1,0 +1,15 @@
+K=1024 fk B rest ms/txn per run: [0.72, 0.76, 0.73, 0.72, 0.69]
+K=1024 fk A rest ms/txn per run: [0.71, 0.72, 0.77, 0.68, 0.7]
+K=1024 plain B rest ms/txn per run: [0.47, 0.5, 0.45, 0.44, 0.44]
+K=1024 plain A rest ms/txn per run: [0.49, 0.51, 0.48, 0.53, 0.47]
+K=1024 fk B-A rest +0.01 ms/txn = +0.01 us/row; inserts B-A (median) -0.17 us/row
+K=4096 fk B rest ms/txn per run: [4.69, 4.54, 4.59, 4.63, 4.6]
+K=4096 fk A rest ms/txn per run: [4.38, 4.87, 4.69, 4.69, 4.49]
+K=4096 plain B rest ms/txn per run: [1.95, 2.09, 1.95, 2.08, 2.0]
+K=4096 plain A rest ms/txn per run: [2.16, 1.98, 1.97, 2.03, 2.1]
+K=4096 fk B-A rest -0.02 ms/txn = -0.00 us/row; inserts B-A (median) -0.02 us/row
+K=16384 fk B rest ms/txn per run: [51.53, 52.0, 51.71, 51.05, 51.83]
+K=16384 fk A rest ms/txn per run: [49.47, 49.66, 50.42, 49.12, 49.37]
+K=16384 plain B rest ms/txn per run: [13.76, 13.83, 13.73, 13.58, 14.26]
+K=16384 plain A rest ms/txn per run: [13.87, 14.34, 13.95, 14.32, 13.59]
+K=16384 fk B-A rest +2.01 ms/txn = +0.12 us/row; inserts B-A (median) -0.84 us/row

@@ -716,3 +716,75 @@ is recorded here, not closed.
   - leaving the self-referencing arm unchanged - AZ-R5 names both arms, and
     the arm should not diverge silently if a self-referencing key ever
     becomes declarable.
+
+### AZ-S7 — the close, 2026-09-30
+
+On `worktree-az-s7-close`, on *"start AZ-S*"*. The branch merges AZ-S3's
+branch, which carries AZ-S2, then AZ-S4's and AZ-S5's, over
+`origin/main` at `cd433ea`. The row conflicts were two appended rows and
+the CLAUDE.md Foreign keys / Assertions pair, one row from each side. AZ-S1
+landed on `main` before this session.
+
+| stage | what landed | its code commits | suite |
+|---|---|---|---|
+| AZ-S1 | the catalog tail arm (item 2) | `aa9c3ef`, `55a5aab`, `2bb1f9d` | on `main` |
+| AZ-S2 | a create adopted with its publish run under one hold (item 1) | `647eec7`, `38bb8a8`, `47c9f6b` | 3063/3063 at `38bb8a8` |
+| AZ-S3 | the run cut to the ring, refused at admission, failed closed at a checkpoint (item 7) | `197eb2e`, `a7d4030`, `9af46f2` | 3071/3071 at `9af46f2` |
+| AZ-S4 | the two unreproduced failures instrumented (item 6) | `6ebe6e1`, `67aa3e9` | 3059/3059 at `67aa3e9` |
+| AZ-S5 | a failed check gives back its own `S` (item 3) | `f882e75`, `92e14c7`, `d5b0165`, `198181e` | 3062/3062 at `d5b0165` |
+| AZ-S6 | struck (item 4, accepted as priced) | - | - |
+
+The merged tree ran 3074/3074 under `-j8` at `273416c` and again at
+`9f170b1`, after the fix below.
+
+**The overhead, measured once over the whole change** (`ck-tester`,
+`build-release` from `git archive`, interleaved A/B, `cores = 1`,
+`relaxed`, BTREE; A `a59da9c`, the order's base).
+
+- **First run: B `273416c`**
+  (`bench/v3.0.0/results-az-s7-overhead-v2.7.0-566-g273416c.md`).
+  - Assertion admission, both an existing group and a new one: no
+    resolvable cost.
+  - The one-row FK check: no resolvable cost.
+  - **K child rows of distinct parents in one transaction: a regression.**
+    - Size: +2.8 µs a row at K = 4,096 and +11.3 µs (+19 %) at 16,384.
+    - Where: in the inserts, growing with the row's position in the
+      transaction.
+    - Cause: AZ-S5's `HoldsRow`, which walked the whole borrow ledger
+      before every parent `S` ask.
+  - The chain stopped there.
+- **The fix, `198181e`.** `TookShare` reads whether the ask appended the
+  ledger's newest record (`LockHoldings::LastIs`), which is O(1). Its two
+  mutants were killed.
+- **Second run: B `9f170b1`**
+  (`bench/v3.0.0/results-az-s7-overhead-v2.7.0-568-g9f170b1.md`).
+  - **Cell 3's K-dependent excess is gone**: −0.09 µs a row at K = 4,096 and
+    −0.19 µs at 16,384, with no climb by position.
+  - Cells 1 and 2 are not resolvable.
+  - The resolution limits are the file's: about 0.4 µs a statement in cells
+    1 and 2, and 1–3 µs a row at K = 16,384. A size-dependent term of up to
+    about 1 µs on the existing-group admission cannot be excluded.
+  - Not measured: `cores > 1`, `group` and `strict` durability, a
+    checkpoint's cost, `CREATE ASSERTION`.
+
+**What AZ carries forward.**
+
+- **AZ-S5's review proposal, the operator's.** Give back the `S` on any
+  failed check, whoever held it. It closes the parked-statement gap
+  (`known-gaps.md`, Foreign keys), and AZ-R5 as ruled keeps that gap.
+- **AZ-S1's retire arm**, whose cure the operator has not chosen
+  (`known-gaps.md`, WAL).
+- **Two bug entries from AZ-S2's review**, both predating AZ:
+  - `a-create-assertion-on-a-relation-its-view-cannot-see-builds-unfenced.md`;
+  - `an-assertion-row-whose-log-fails-stays-on-its-page.md`.
+- **Unmeasured, from AZ-S3:**
+  - recovery's `RestoreGroup` walks every bucket per group, quadratic in a
+    cabin's groups at mount;
+  - a checkpoint cuts each cabin twice;
+  - a `CREATE ASSERTION` over rows that already hold an oversized key is
+    refused by the log rather than at admission.
+- **Item 5**, AQ and AR: their own letters, with AP first (AZ-Q5).
+- **The two `-j8` flakes (item 6)**: instrumented, not explained. The next
+  failure prints its cause.
+
+It cuts no tag. Nothing is pushed until the operator's word.
