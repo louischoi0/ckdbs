@@ -5,7 +5,6 @@
 
 #include <gtest/gtest.h>
 
-#include "kds/storage/keystone.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/sched/clock.hpp"
@@ -14,6 +13,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"

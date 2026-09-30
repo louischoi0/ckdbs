@@ -32,8 +32,8 @@ memory-resident and never persisted — every cache is empty at mount, so no
 value survives one. Every core's `Catalog` holds a pointer to it
 (`Catalog::SetSchemaWord`). **It is not `Catalog::catalog_version()`**,
 which is one core's counter (`catalog.hpp`) that a peer's drop never
-advanced — the reason `range_directory.hpp` forbids validating a range set
-against it, and the one home of that rule — and the two are not merged:
+advanced — so nothing shared may be validated against it — and the two
+are not merged:
 the word is bumped by every invalidation that can stale another core's
 memo. (Two that cannot do not bump it: the mount's post-redo `DropCache()`
 and its delete-mark purge.)

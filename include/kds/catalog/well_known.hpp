@@ -442,7 +442,7 @@ inline constexpr PageId kCatalogOverflowLimit = 128;
 
 // Distinctness and the overflow bound in one pass over the list that
 // already exists, for `WellKnownOidsAreDistinct()`'s reason: nothing else
-// puts the twelve root ids side by side, and the old form of this assert
+// puts the root ids side by side, and the old form of this assert
 // named the single highest root by hand - a second hand-edited list that
 // every new bootstrap relation had to remember to update (and page 15 was
 // checked against eleven constants by eye when sys.ranges claimed it).

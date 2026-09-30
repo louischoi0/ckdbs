@@ -1993,8 +1993,9 @@ private:
             // is about to visit.
             //
             // Btree only. A heap chain is not key-ordered - invariant 4
-            // leaves a page's tuples unordered - so `min_key` of the page a heap walk is on is not
-            // a bound on what it has yet to read; there the relation
+            // leaves a page's tuples unordered - so `min_key` of the page a
+            // heap walk is on is not a bound on what it has yet to read;
+            // there the relation
             // reported above is the whole declaration. Since SUS-1 every
             // relation created is a btree.
             // `parent_ == nullptr`: a sub-chain's walk is `index == 0` in

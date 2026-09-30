@@ -632,3 +632,57 @@ Rejected:
 **Suite**: 3097/3097 in Debug at `86b61b3` (`ctest -LE heap-suspended -j8`;
 seven D9(a) cells and one pre-existing cell disabled), and 3097/3097
 again with the review's changes and the eighth cell. Overhead not measured.
+
+### AY-S10 — struck 2026-09-30: the split relation retired
+
+On `worktree-retire-split-relations` from `7c51f82`, on the operator's
+*"split relation 이라는 개념을 아예 폐기 해야해"* and *"하위 호환성은 고려하지
+않아도 돼. 나는 해당 테이블을 제거했으면 좋겠어"* (`raft-marks-2026-09-30.md`
+§9). It replaces AY-S10 and answers AY-Q5 and AY-Q10: with no split relation
+there is no gate to lift and no E10 subject.
+
+**Built** at `62a6cb3`. A relation is one structure headed by
+`desc_page_id`. Deleted: `range_directory.{hpp,cpp}`, `SysRangeRow` and its
+codec, the catalog's range door (`RangesOf`, `InsertRangeRow`,
+`WriteRangeRow`, `CreateRangeEntryPage`, `OpenRangeRows`),
+`RefuseAuxiliaryOnSplitRelation` (D7's last gate), `TableAccess::ranges`,
+`WalkHeads`, `HeapChainFor` and `RangeFor`, `PkSpan`, the cursor's and the
+walk mark's range index, `SHOW META`'s `split_relations`, and the relayout
+survey's range counts. Every walk takes the one head. `sys.ranges` leaves
+bootstrap; page 15 and oid 133 stay unused. The superblock moves 17 -> 18,
+so an older volume is refused rather than read from its first chain.
+AY-S9's multi-chain assertion build and its two cells are reverted to
+`c4d8e55^`. The WAL golden log is re-pinned: bootstrap's two `sys.ranges`
+catalog rows no longer enter the stream.
+
+**Not red first.** Nothing the removal fixes fails today: a split relation
+can no longer be built, so what could be pinned is the removal itself -
+`BootstrapCreatesNoRangeDirectory` - and the version refusal
+`superblock_test.cpp` already covers for any version but the current.
+
+**The review** (`critics-developer`, one pass) found no correctness defect:
+every walk reduces to the old unsplit path, `WalkHeapChain` matches the old
+`WalkHeapChains` for one head including the cursor, and the old
+`HeapChainFor` answered `{desc_page_id, &heap_tail_hint}` for every unsplit
+id. The reviewer fixed, in place: `range_size_ids`' refusal text, which
+still promised that a split relation is read whole; two comments left above
+`&walk_cursor` after the span argument went; a "walks every range";
+`catalog.md`'s citation of the deleted header; "the twelve root ids".
+Taken: `kSysTables` sized by the compiler - the one defect this change made
+on the way, a 10-entry array left with a zero entry that failed every
+bootstrap, cannot recur; the includes' order; a double blank line; a long
+comment line.
+
+Rejected:
+
+- **Trimming the history in `fk_check.cpp`, `CheckWriteAdmission`,
+  `HandleSelect` and `CreateCabin`'s comments.** Each already says the split
+  relation went; the history beside it is the file's idiom, and a comment-only
+  rewrite of four files is not this stage's.
+- **Deleting `BootstrapCreatesNoRangeDirectory`.** It is the one cell that
+  names the removal; cheap to keep.
+
+**Suite**: 3040/3040 in Debug (`ctest -LE heap-suspended -j8`, one
+pre-existing disabled cell) at `62a6cb3`, and 3040/3040 again with the
+review's changes. Overhead not measured; measured at AY's close
+(`raft-marks-2026-09-30.md` §8).

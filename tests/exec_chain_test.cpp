@@ -1,4 +1,3 @@
-#include "kds/storage/keystone.hpp"
 #include "kds/exec/step_vm.hpp"
 
 #include <optional>
@@ -19,6 +18,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
 // V17 - the step VM, linear chains (docs/inflight/in-progress/parser-v2-workplan.md).

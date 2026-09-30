@@ -537,7 +537,7 @@ Status Catalog::Bootstrap() {
         std::string_view name;
         PageId page_id;
     };
-    static constexpr std::array<SysTableBootstrap, 9> kSysTables{{
+    static constexpr SysTableBootstrap kSysTables[] = {
         {kSysTypesTable, "types", kCatalogPageTypes},
         {kSysObjectsTable, "objects", kCatalogPageObjects},
         {kSysColumnsTable, "columns", kCatalogPageColumns},
@@ -562,7 +562,7 @@ Status Catalog::Bootstrap() {
         // reason sys.cabins does - an `fk_id` comes from this relation's own
         // `next_id`, not from GenerateUserOid(), which numbers objects.
         {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
-    }};
+    };
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
     // tables are always scanned in full by oid/name (ScanAll above), never
@@ -669,7 +669,7 @@ Status Catalog::Bootstrap() {
         // The line said "+ 2" while sys.pattern_defs was bootstrapped
         // beside it, and "+ 1" from AST03 to 2026-08-27, when it
         // under-counted by one.
-        log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size() + 1) +
+        log_->Info("catalog", "bootstrapped " + std::to_string(std::size(kSysTables) + 1) +
                                   " system tables and " + std::to_string(kTypes.size()) +
                                   " types on the fixed catalog pages");
     }

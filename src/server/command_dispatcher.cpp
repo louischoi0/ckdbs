@@ -1408,7 +1408,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // fell through only for a walk narrower than its relation, which was a
     // remote stage's slice, and nothing opens a stage.
 
-
     // **CR7's block went with the batch** (AT-S7): `access_batches_sent`,
     // `access_entries_sent`, `access_batches_dropped`, the two applied
     // counts and `access_shape_overflows` each measured one end of a wire
@@ -6954,8 +6953,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // resolved the range owner a predicate-shaped write belonged on, and
     // refused one that would span several owners rather than half-apply it
     // - the refusal went stale when `VisitRelation` began walking every
-    // range, and both went with ownership. This write walks every range
-    // here, on the core its session is on.
+    // range, and both went with ownership. This write walks the whole
+    // relation here, on the core its session is on.
     if (Status admitted = CheckWriteAdmission(ta); !admitted.ok()) {
         return {ErrorReply(admitted), false, 0, admitted};
     }
@@ -7527,7 +7526,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             if (parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
-        // R4/IS4: the pk window this statement can touch.
         &walk_cursor);
     if (!scan.ok()) {
         // Partial **within the statement**, which is section 6's stated
@@ -8919,7 +8917,6 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             if (parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
-        // R4/IS4: the pk window this statement can touch.
         &walk_cursor);
     if (!scan.ok()) return {ErrorReply(scan), false, 0, scan};
 
