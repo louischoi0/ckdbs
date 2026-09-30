@@ -93,11 +93,13 @@ The same at `cores = 8` (derived, median of three):
 | exists-correlated | 7,220 qps | 6,583 qps | 5,118 qps | 6,588 qps | 1,499 qps | 6,653 qps |
 | count-by-user | 12,077 qps | 14,006 qps | 6,623 qps | 14,144 qps | 1,238 qps | 13,532 qps |
 
-`cores = 8` is within a few percent of `cores = 1` in every cell, which is
-what a single serial connection should give: it lands on one core and the
-other seven have nothing to do. The cell differences (9,560 against 10,173
-qps for `loans-by-user` at 200 rows, 1,206 against 1,277 at 10,000) are
-inside the noise below.
+`cores = 8` reads 0.86x to 1.18x of `cores = 1` (median 0.95x over the 72
+cells) and is the slower of the two in 65 of them; a single serial
+connection lands on one core and the other seven have nothing to do, so no
+gain is expected. Each cell's difference (9,560 against 10,173 qps for
+`loans-by-user` at 200 rows, 1,206 against 1,277 at 10,000) is inside the
+noise below, but the sign is consistent: about 5 % is lost at eight
+cores, and this run does not say where.
 
 **The index's effect** (none over all, ratio of mean latency, `cores = 1`;
 above 1 means the index is faster):
@@ -125,7 +127,10 @@ of this table: **a ratio inside about 1.00 +/- 0.05 is not a finding**, so
 ## 4. Percentiles
 
 Run 1 of the `cores = 1` cells, in full: 200 operations per shape.
-Microseconds; `plan` is what ANALYZE reported the shape compiled to.
+Microseconds; `plan` is what ANALYZE reported the shape compiled to. Run 1
+of `n=1,000 all` met the host's slow mode (section 7): its `pk-user` p50 is
+102.3 us against about 70 us elsewhere, and runs 2 and 3 of that cell read
+72.3 us mean; section 3's medians vote it out, this table does not.
 
 | n | mode | shape | p0 | p25 | p50 | p95 | p99 | plan |
 |---|---|---|---|---|---|---|---|---|
@@ -209,7 +214,7 @@ round trip plus engine work that scales with the rows walked.
 
 | Component | Estimate | How derived |
 |---|---|---|
-| Fixed cost: client, socket, parse, one pk descent | about 84 us for a scan's intercept, 64 us at p0 for a pk lookup, 90 to 100 us for an indexed shape | `pk-user` p0 (64.6 us at `n=200 none`); the two-point fit below; indexed `loans-by-user` p50 (88.1 us at `n=200 all`) |
+| Fixed cost: client, socket, parse, one pk descent | about 84 us for a scan's intercept, 64 us at p0 for a pk lookup, 76 to 92 us (mean, median of three) for an indexed equality shape | `pk-user` p0 (64.6 us at `n=200 none`); the two-point fit below; indexed `loans-by-user` p50 (88.1 us at `n=200 all`) |
 | Rows walked | about **70 ns per row** of the relation for an unindexed equality | `loans-by-user none` mean 98.3 us at 200 loans (10,173 qps) and 783 us at 10,000 (1,277 qps): (783 - 98) / 9,800 = 70 ns per row, intercept 84 us; the 1,000-loan cell then predicts 154 us and measures 155 us (6,443 qps) |
 | Index probe | about 20 us over a pk lookup, flat in n | indexed `loans-by-user` at 10,881 qps (92 us) against `pk-user` at 14,388 qps (70 us) |
 | Lock / commit / durability | not applicable: read-only statements on one connection | |
@@ -217,12 +222,12 @@ round trip plus engine work that scales with the rows walked.
 
 | n | mode | load ops | load p50 | load mean | create-index ops | create-index p50 | create-index mean |
 |---|---|---|---|---|---|---|---|
-| 200 | none | 380 | 1,415 µs | 2,415 µs | not run | - | - |
-| 200 | all | 380 | 1,388 µs | 1,782 µs | 8 | 1,397 µs | 1,537 µs |
-| 1,000 | none | 1,900 | 1,334 µs | 1,535 µs | not run | - | - |
-| 1,000 | all | 1,900 | 1,352 µs | 1,520 µs | 8 | 2,344 µs | 2,566 µs |
-| 10,000 | none | 19,000 | 1,347 µs | 1,517 µs | not run | - | - |
-| 10,000 | all | 19,000 | 1,364 µs | 1,569 µs | 8 | 10,431 µs | 8,573 µs |
+| 200 | none | 380 ops | 1,415 µs | 2,415 µs | not run | - | - |
+| 200 | all | 380 ops | 1,388 µs | 1,782 µs | 8 ops | 1,397 µs | 1,537 µs |
+| 1,000 | none | 1,900 ops | 1,334 µs | 1,535 µs | not run | - | - |
+| 1,000 | all | 1,900 ops | 1,352 µs | 1,520 µs | 8 ops | 2,344 µs | 2,566 µs |
+| 10,000 | none | 19,000 ops | 1,347 µs | 1,517 µs | not run | - | - |
+| 10,000 | all | 19,000 ops | 1,364 µs | 1,569 µs | 8 ops | 10,431 µs | 8,573 µs |
 
 The load is 380 / 1,900 / 19,000 individual inserts at a p50 of about 1.4
 ms each: one durability point per statement under `group`, the same
@@ -234,7 +239,8 @@ autocommit wait that scenario0 measures.
 problem in any of the 36 cells. `--assert-index-reads` passed in the 18
 indexed cells: `loans-by-user`, `loans-by-book`, `resv-by-user`,
 `books-by-author` and `books-by-genre` compile to `IndexProbe`, `overdue` to
-`IndexRange`, and the two join shapes to `Range, IndexProbe`.
+`IndexRange`, and `join-no-literal` and `exists-correlated` to
+`Range, IndexProbe` (ANALYZE reports no plan for `join-loan-user`).
 
 Three shapes the indexes do not fix, and why:
 
@@ -282,42 +288,42 @@ Every cell's precheck, driver exit and verify count:
 
 | cell | precheck UTC | loadavg | build procs | driver exit | verify problems |
 |---|---|---|---|---|---|
-| `s3-c1-n200-none` | 2026-09-30T06:49:36Z | 1.90 / 1.70 / 1.54 | none | 0 | 0 |
-| `s3-c1-n200-all` | 2026-09-30T06:49:38Z | 1.90 / 1.70 / 1.54 | none | 0 | 0 |
-| `s3-c1-n1000-none` | 2026-09-30T06:49:40Z | 1.90 / 1.70 / 1.54 | none | 0 | 0 |
-| `s3-c1-n1000-all` | 2026-09-30T06:49:44Z | 1.90 / 1.70 / 1.54 | none | 0 | 0 |
-| `s3-c1-n10000-none` | 2026-09-30T06:49:48Z | 1.83 / 1.69 / 1.54 | none | 0 | 0 |
-| `s3-c1-n10000-all` | 2026-09-30T06:50:20Z | 1.56 / 1.64 / 1.52 | none | 0 | 0 |
-| `s3-c8-n200-none` | 2026-09-30T06:50:52Z | 1.47 / 1.62 / 1.52 | none | 0 | 0 |
-| `s3-c8-n200-all` | 2026-09-30T06:50:54Z | 1.47 / 1.62 / 1.52 | none | 0 | 0 |
-| `s3-c8-n1000-none` | 2026-09-30T06:50:55Z | 1.43 / 1.60 / 1.52 | none | 0 | 0 |
-| `s3-c8-n1000-all` | 2026-09-30T06:50:59Z | 1.43 / 1.60 / 1.52 | none | 0 | 0 |
-| `s3-c8-n10000-none` | 2026-09-30T06:51:04Z | 1.32 / 1.58 / 1.51 | none | 0 | 0 |
-| `s3-c8-n10000-all` | 2026-09-30T06:51:37Z | 1.54 / 1.61 / 1.52 | none | 0 | 0 |
-| `r2-s3-c1-n200-none` | 2026-09-30T07:02:15Z | 0.22 / 0.42 / 0.92 | none | 0 | 0 |
-| `r2-s3-c1-n200-all` | 2026-09-30T07:02:17Z | 0.36 / 0.45 / 0.93 | none | 0 | 0 |
-| `r2-s3-c1-n1000-none` | 2026-09-30T07:02:18Z | 0.36 / 0.45 / 0.93 | none | 0 | 0 |
-| `r2-s3-c1-n1000-all` | 2026-09-30T07:02:22Z | 0.41 / 0.46 / 0.93 | none | 0 | 0 |
-| `r2-s3-c1-n10000-none` | 2026-09-30T07:02:26Z | 0.46 / 0.47 / 0.93 | none | 0 | 0 |
-| `r2-s3-c1-n10000-all` | 2026-09-30T07:02:59Z | 0.75 / 0.54 / 0.94 | none | 0 | 0 |
-| `r2-s3-c8-n200-none` | 2026-09-30T07:03:29Z | 0.92 / 0.60 / 0.95 | none | 0 | 0 |
-| `r2-s3-c8-n200-all` | 2026-09-30T07:03:31Z | 1.01 / 0.62 / 0.95 | none | 0 | 0 |
-| `r2-s3-c8-n1000-none` | 2026-09-30T07:03:33Z | 1.01 / 0.62 / 0.95 | none | 0 | 0 |
-| `r2-s3-c8-n1000-all` | 2026-09-30T07:03:37Z | 1.17 / 0.66 / 0.96 | none | 0 | 0 |
-| `r2-s3-c8-n10000-none` | 2026-09-30T07:03:41Z | 1.23 / 0.68 / 0.97 | none | 0 | 0 |
-| `r2-s3-c8-n10000-all` | 2026-09-30T07:04:14Z | 1.68 / 0.84 / 1.02 | none | 0 | 0 |
-| `r3-s3-c1-n200-none` | 2026-09-30T07:04:45Z | 1.64 / 0.94 / 1.04 | none | 0 | 0 |
-| `r3-s3-c1-n200-all` | 2026-09-30T07:04:47Z | 1.64 / 0.94 / 1.04 | none | 0 | 0 |
-| `r3-s3-c1-n1000-none` | 2026-09-30T07:04:49Z | 1.64 / 0.94 / 1.04 | none | 0 | 0 |
-| `r3-s3-c1-n1000-all` | 2026-09-30T07:04:53Z | 1.83 / 0.99 / 1.06 | none | 0 | 0 |
-| `r3-s3-c1-n10000-none` | 2026-09-30T07:04:57Z | 1.77 / 0.99 / 1.06 | none | 0 | 0 |
-| `r3-s3-c1-n10000-all` | 2026-09-30T07:05:29Z | 1.46 / 0.99 / 1.05 | none | 0 | 0 |
-| `r3-s3-c8-n200-none` | 2026-09-30T07:06:01Z | 1.39 / 1.03 / 1.06 | none | 0 | 0 |
-| `r3-s3-c8-n200-all` | 2026-09-30T07:06:03Z | 1.39 / 1.03 / 1.06 | none | 0 | 0 |
-| `r3-s3-c8-n1000-none` | 2026-09-30T07:06:05Z | 1.39 / 1.03 / 1.06 | none | 0 | 0 |
-| `r3-s3-c8-n1000-all` | 2026-09-30T07:06:10Z | 1.44 / 1.04 / 1.07 | none | 0 | 0 |
-| `r3-s3-c8-n10000-none` | 2026-09-30T07:06:15Z | 1.48 / 1.06 / 1.07 | none | 0 | 0 |
-| `r3-s3-c8-n10000-all` | 2026-09-30T07:06:48Z | 1.66 / 1.15 / 1.10 | none | 0 | 0 |
+| `s3-c1-n200-none` | 2026-09-30T06:49:36Z | 1.90 / 1.70 / 1.54 | none | exit 0 | 0 problems |
+| `s3-c1-n200-all` | 2026-09-30T06:49:38Z | 1.90 / 1.70 / 1.54 | none | exit 0 | 0 problems |
+| `s3-c1-n1000-none` | 2026-09-30T06:49:40Z | 1.90 / 1.70 / 1.54 | none | exit 0 | 0 problems |
+| `s3-c1-n1000-all` | 2026-09-30T06:49:44Z | 1.90 / 1.70 / 1.54 | none | exit 0 | 0 problems |
+| `s3-c1-n10000-none` | 2026-09-30T06:49:48Z | 1.83 / 1.69 / 1.54 | none | exit 0 | 0 problems |
+| `s3-c1-n10000-all` | 2026-09-30T06:50:20Z | 1.56 / 1.64 / 1.52 | none | exit 0 | 0 problems |
+| `s3-c8-n200-none` | 2026-09-30T06:50:52Z | 1.47 / 1.62 / 1.52 | none | exit 0 | 0 problems |
+| `s3-c8-n200-all` | 2026-09-30T06:50:54Z | 1.47 / 1.62 / 1.52 | none | exit 0 | 0 problems |
+| `s3-c8-n1000-none` | 2026-09-30T06:50:55Z | 1.43 / 1.60 / 1.52 | none | exit 0 | 0 problems |
+| `s3-c8-n1000-all` | 2026-09-30T06:50:59Z | 1.43 / 1.60 / 1.52 | none | exit 0 | 0 problems |
+| `s3-c8-n10000-none` | 2026-09-30T06:51:04Z | 1.32 / 1.58 / 1.51 | none | exit 0 | 0 problems |
+| `s3-c8-n10000-all` | 2026-09-30T06:51:37Z | 1.54 / 1.61 / 1.52 | none | exit 0 | 0 problems |
+| `r2-s3-c1-n200-none` | 2026-09-30T07:02:15Z | 0.22 / 0.42 / 0.92 | none | exit 0 | 0 problems |
+| `r2-s3-c1-n200-all` | 2026-09-30T07:02:17Z | 0.36 / 0.45 / 0.93 | none | exit 0 | 0 problems |
+| `r2-s3-c1-n1000-none` | 2026-09-30T07:02:18Z | 0.36 / 0.45 / 0.93 | none | exit 0 | 0 problems |
+| `r2-s3-c1-n1000-all` | 2026-09-30T07:02:22Z | 0.41 / 0.46 / 0.93 | none | exit 0 | 0 problems |
+| `r2-s3-c1-n10000-none` | 2026-09-30T07:02:26Z | 0.46 / 0.47 / 0.93 | none | exit 0 | 0 problems |
+| `r2-s3-c1-n10000-all` | 2026-09-30T07:02:59Z | 0.75 / 0.54 / 0.94 | none | exit 0 | 0 problems |
+| `r2-s3-c8-n200-none` | 2026-09-30T07:03:29Z | 0.92 / 0.60 / 0.95 | none | exit 0 | 0 problems |
+| `r2-s3-c8-n200-all` | 2026-09-30T07:03:31Z | 1.01 / 0.62 / 0.95 | none | exit 0 | 0 problems |
+| `r2-s3-c8-n1000-none` | 2026-09-30T07:03:33Z | 1.01 / 0.62 / 0.95 | none | exit 0 | 0 problems |
+| `r2-s3-c8-n1000-all` | 2026-09-30T07:03:37Z | 1.17 / 0.66 / 0.96 | none | exit 0 | 0 problems |
+| `r2-s3-c8-n10000-none` | 2026-09-30T07:03:41Z | 1.23 / 0.68 / 0.97 | none | exit 0 | 0 problems |
+| `r2-s3-c8-n10000-all` | 2026-09-30T07:04:14Z | 1.68 / 0.84 / 1.02 | none | exit 0 | 0 problems |
+| `r3-s3-c1-n200-none` | 2026-09-30T07:04:45Z | 1.64 / 0.94 / 1.04 | none | exit 0 | 0 problems |
+| `r3-s3-c1-n200-all` | 2026-09-30T07:04:47Z | 1.64 / 0.94 / 1.04 | none | exit 0 | 0 problems |
+| `r3-s3-c1-n1000-none` | 2026-09-30T07:04:49Z | 1.64 / 0.94 / 1.04 | none | exit 0 | 0 problems |
+| `r3-s3-c1-n1000-all` | 2026-09-30T07:04:53Z | 1.83 / 0.99 / 1.06 | none | exit 0 | 0 problems |
+| `r3-s3-c1-n10000-none` | 2026-09-30T07:04:57Z | 1.77 / 0.99 / 1.06 | none | exit 0 | 0 problems |
+| `r3-s3-c1-n10000-all` | 2026-09-30T07:05:29Z | 1.46 / 0.99 / 1.05 | none | exit 0 | 0 problems |
+| `r3-s3-c8-n200-none` | 2026-09-30T07:06:01Z | 1.39 / 1.03 / 1.06 | none | exit 0 | 0 problems |
+| `r3-s3-c8-n200-all` | 2026-09-30T07:06:03Z | 1.39 / 1.03 / 1.06 | none | exit 0 | 0 problems |
+| `r3-s3-c8-n1000-none` | 2026-09-30T07:06:05Z | 1.39 / 1.03 / 1.06 | none | exit 0 | 0 problems |
+| `r3-s3-c8-n1000-all` | 2026-09-30T07:06:10Z | 1.44 / 1.04 / 1.07 | none | exit 0 | 0 problems |
+| `r3-s3-c8-n10000-none` | 2026-09-30T07:06:15Z | 1.48 / 1.06 / 1.07 | none | exit 0 | 0 problems |
+| `r3-s3-c8-n10000-all` | 2026-09-30T07:06:48Z | 1.66 / 1.15 / 1.10 | none | exit 0 | 0 problems |
 
 Loadavg (one-minute) at the precheck reads 0.22 to 1.90, the tail of the previous cell's
 own client and server; no `cc1plus`, `cmake --build` or `ctest` process was
@@ -332,18 +338,22 @@ scenario2 passes with no idle gap.
    rows the ratio is 1.2x to 2.0x on the indexed equality shapes; at 10,000
    it is 5.5x to 10.8x for `loans-by-user`, `loans-by-book`, `resv-by-user`
    and `count-by-user`, 2.8x for `books-by-author` and 1.3x for
-   `books-by-genre`, in order of how many rows each returns; `join-loan-user`
-   is 8.1x and the two literal-free joins 4.6x.
+   `books-by-genre`. The two `books` shapes gain less because the walk they
+   replace is shorter (`books` holds 2,000 rows against `loans`' 10,000 and
+   `reservations`' 5,000), and `books-by-genre` also returns 125 of those
+   rows; `books-by-author` returns about four, fewer than `loans-by-user`'s
+   five. `join-loan-user` is 8.1x and the two literal-free joins 4.6x.
 2. **The index makes a non-pk equality independent of the relation's size.**
    Indexed `loans-by-user` is 11,186 / 11,074 / 10,881 qps at 200 / 1,000 /
    10,000 rows, a 2.8 % spread across a 50x change in size, inside the
    noise; unindexed it is 10,173 / 6,443 / 1,277 qps.
 3. **The residual cost of an indexed read is the round trip.** 90 us
-   against 70 us for a pk `Lookup`; the extra 20 us is the index descent and
-   the main-tree fetch. Below that there is nothing left for an index to
+   against 70 us for a pk `Lookup`; the extra 20 us is presumably the index
+   descent and the main-tree fetch (not separated here). Below that there is nothing left for an index to
    remove; the next gain is not in the index.
-4. **Reads do not scale with `cores` from one connection**, as expected
-   (section 3). This scenario does not exercise the multi-core read path.
+4. **Reads do not scale with `cores` from one connection**, as expected,
+   and run about 5 % slower at eight (section 3). This scenario does not
+   exercise the multi-core read path.
 5. **Backfill is cheap and grows with the row count**: the eight
    `create-index` statements take 1.4 ms / 2.3 ms / 10.4 ms at p50 at 200 /
    1,000 / 10,000 loans.

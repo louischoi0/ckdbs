@@ -87,51 +87,53 @@ is the phase's count in that cell. Run 1 in full:
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | max | errors |
 |---|---|---|---|---|---|---|---|---|---|
-| `s0-c1-g` | txn | 5,000 | 9,791.1 µs | 11,243.1 µs | 11,769.4 µs | 20,667.2 µs | 28,226.6 µs | 36,900.0 µs | 0 |
-| `s0-c1-g` | trade-insert | 10,000 | 1,742.2 µs | 2,746.9 µs | 2,884.6 µs | 5,400.6 µs | 11,321.2 µs | 21,429.4 µs | 0 |
-| `s0-c1-g` | account-update | 10,000 | 1,461.5 µs | 2,752.2 µs | 2,890.6 µs | 5,471.3 µs | 10,456.2 µs | 21,426.5 µs | 0 |
-| `s0-c1-g` | profit-scan | 300 | 387.3 µs | 1,488.2 µs | 1,573.2 µs | 2,538.6 µs | 5,310.1 µs | 11,603.1 µs | 0 |
-| `s0-c1-g` | profit-insert | 300 | 2,441.7 µs | 2,689.2 µs | 2,837.2 µs | 4,567.1 µs | 5,998.8 µs | 16,263.4 µs | 0 |
-| `s0-c8-g` | txn | 5,000 | 5,005.7 µs | 9,732.7 µs | 10,338.3 µs | 18,829.3 µs | 27,599.2 µs | 49,323.8 µs | 0 |
-| `s0-c8-g` | trade-insert | 10,000 | 1,186.6 µs | 2,351.5 µs | 2,505.8 µs | 5,114.6 µs | 9,242.7 µs | 41,696.1 µs | 0 |
-| `s0-c8-g` | account-update | 10,000 | 1,245.9 µs | 2,355.0 µs | 2,511.2 µs | 5,448.2 µs | 10,246.0 µs | 25,453.6 µs | 0 |
-| `s0-c8-g` | profit-scan | 300 | 153.5 µs | 197.8 µs | 219.4 µs | 362.7 µs | 512.2 µs | 730.3 µs | 0 |
-| `s0-c8-g` | profit-insert | 300 | 1,782.0 µs | 2,125.2 µs | 2,255.8 µs | 3,826.9 µs | 7,063.6 µs | 9,731.8 µs | 0 |
-| `s0-c1-s` | txn | 5,000 | 4,604.6 µs | 37,576.2 µs | 41,228.3 µs | 80,927.9 µs | 95,307.9 µs | 134,410.8 µs | 0 |
-| `s0-c1-s` | trade-insert | 10,000 | 1,125.1 µs | 8,918.1 µs | 9,907.6 µs | 20,795.0 µs | 28,946.0 µs | 56,294.2 µs | 0 |
-| `s0-c1-s` | account-update | 10,000 | 1,156.3 µs | 8,946.8 µs | 9,945.6 µs | 20,682.3 µs | 28,915.2 µs | 49,347.9 µs | 0 |
-| `s0-c1-s` | profit-scan | 400 | 10,294.0 µs | 18,889.9 µs | 19,918.7 µs | 31,519.6 µs | 39,063.2 µs | 40,380.8 µs | 0 |
-| `s0-c1-s` | profit-insert | 400 | 17,655.5 µs | 19,993.4 µs | 21,199.8 µs | 33,642.1 µs | 46,982.8 µs | 54,559.5 µs | 0 |
-| `s0-c8-s` | txn | 5,001 | 8,425.2 µs | 16,952.5 µs | 20,250.3 µs | 45,447.2 µs | 56,883.8 µs | 81,571.0 µs | 1 |
-| `s0-c8-s` | trade-insert | 10,002 | 1,831.4 µs | 3,869.4 µs | 4,938.5 µs | 11,600.2 µs | 18,126.6 µs | 42,392.6 µs | 1 |
-| `s0-c8-s` | account-update | 10,002 | 1,343.3 µs | 3,849.9 µs | 4,937.0 µs | 11,538.1 µs | 18,294.3 µs | 41,832.5 µs | 0 |
-| `s0-c8-s` | profit-scan | 100 | 134.2 µs | 147.9 µs | 158.5 µs | 190.9 µs | 237.7 µs | 387.1 µs | 0 |
-| `s0-c8-s` | profit-insert | 100 | 1,850.5 µs | 2,211.0 µs | 2,323.4 µs | 4,409.0 µs | 6,079.8 µs | 25,000.1 µs | 0 |
+| `s0-c1-g` | txn | 5,000 ops | 9,791.1 µs | 11,243.1 µs | 11,769.4 µs | 20,667.2 µs | 28,226.6 µs | 36,900.0 µs | 0 errors |
+| `s0-c1-g` | trade-insert | 10,000 ops | 1,742.2 µs | 2,746.9 µs | 2,884.6 µs | 5,400.6 µs | 11,321.2 µs | 21,429.4 µs | 0 errors |
+| `s0-c1-g` | account-update | 10,000 ops | 1,461.5 µs | 2,752.2 µs | 2,890.6 µs | 5,471.3 µs | 10,456.2 µs | 21,426.5 µs | 0 errors |
+| `s0-c1-g` | profit-scan | 300 ops | 387.3 µs | 1,488.2 µs | 1,573.2 µs | 2,538.6 µs | 5,310.1 µs | 11,603.1 µs | 0 errors |
+| `s0-c1-g` | profit-insert | 300 ops | 2,441.7 µs | 2,689.2 µs | 2,837.2 µs | 4,567.1 µs | 5,998.8 µs | 16,263.4 µs | 0 errors |
+| `s0-c8-g` | txn | 5,000 ops | 5,005.7 µs | 9,732.7 µs | 10,338.3 µs | 18,829.3 µs | 27,599.2 µs | 49,323.8 µs | 0 errors |
+| `s0-c8-g` | trade-insert | 10,000 ops | 1,186.6 µs | 2,351.5 µs | 2,505.8 µs | 5,114.6 µs | 9,242.7 µs | 41,696.1 µs | 0 errors |
+| `s0-c8-g` | account-update | 10,000 ops | 1,245.9 µs | 2,355.0 µs | 2,511.2 µs | 5,448.2 µs | 10,246.0 µs | 25,453.6 µs | 0 errors |
+| `s0-c8-g` | profit-scan | 300 ops | 153.5 µs | 197.8 µs | 219.4 µs | 362.7 µs | 512.2 µs | 730.3 µs | 0 errors |
+| `s0-c8-g` | profit-insert | 300 ops | 1,782.0 µs | 2,125.2 µs | 2,255.8 µs | 3,826.9 µs | 7,063.6 µs | 9,731.8 µs | 0 errors |
+| `s0-c1-s` | txn | 5,000 ops | 4,604.6 µs | 37,576.2 µs | 41,228.3 µs | 80,927.9 µs | 95,307.9 µs | 134,410.8 µs | 0 errors |
+| `s0-c1-s` | trade-insert | 10,000 ops | 1,125.1 µs | 8,918.1 µs | 9,907.6 µs | 20,795.0 µs | 28,946.0 µs | 56,294.2 µs | 0 errors |
+| `s0-c1-s` | account-update | 10,000 ops | 1,156.3 µs | 8,946.8 µs | 9,945.6 µs | 20,682.3 µs | 28,915.2 µs | 49,347.9 µs | 0 errors |
+| `s0-c1-s` | profit-scan | 400 ops | 10,294.0 µs | 18,889.9 µs | 19,918.7 µs | 31,519.6 µs | 39,063.2 µs | 40,380.8 µs | 0 errors |
+| `s0-c1-s` | profit-insert | 400 ops | 17,655.5 µs | 19,993.4 µs | 21,199.8 µs | 33,642.1 µs | 46,982.8 µs | 54,559.5 µs | 0 errors |
+| `s0-c8-s` | txn | 5,001 ops | 8,425.2 µs | 16,952.5 µs | 20,250.3 µs | 45,447.2 µs | 56,883.8 µs | 81,571.0 µs | 1 error |
+| `s0-c8-s` | trade-insert | 10,002 ops | 1,831.4 µs | 3,869.4 µs | 4,938.5 µs | 11,600.2 µs | 18,126.6 µs | 42,392.6 µs | 1 error |
+| `s0-c8-s` | account-update | 10,002 ops | 1,343.3 µs | 3,849.9 µs | 4,937.0 µs | 11,538.1 µs | 18,294.3 µs | 41,832.5 µs | 0 errors |
+| `s0-c8-s` | profit-scan | 100 ops | 134.2 µs | 147.9 µs | 158.5 µs | 190.9 µs | 237.7 µs | 387.1 µs | 0 errors |
+| `s0-c8-s` | profit-insert | 100 ops | 1,850.5 µs | 2,211.0 µs | 2,323.4 µs | 4,409.0 µs | 6,079.8 µs | 25,000.1 µs | 0 errors |
 
 Runs 2 and 3, the measured unit and the trade insert only (everything is
-in the archive):
+in the archive). Run 2:
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | max | errors |
 |---|---|---|---|---|---|---|---|---|---|
-| `s0-c1-g` | txn | 5,000 | 9,428.1 µs | 10,950.5 µs | 11,584.3 µs | 19,921.0 µs | 26,740.1 µs | 33,351.4 µs | 0 |
-| `s0-c1-g` | trade-insert | 10,000 | 1,605.7 µs | 2,674.9 µs | 2,833.2 µs | 5,388.4 µs | 10,135.9 µs | 23,081.4 µs | 0 |
-| `s0-c8-g` | txn | 5,000 | 5,716.1 µs | 9,779.0 µs | 10,706.8 µs | 19,599.4 µs | 26,259.4 µs | 58,317.1 µs | 0 |
-| `s0-c8-g` | trade-insert | 10,000 | 1,186.7 µs | 2,319.8 µs | 2,506.4 µs | 5,504.8 µs | 9,568.8 µs | 48,541.2 µs | 0 |
-| `s0-c1-s` | txn | 5,000 | 5,106.0 µs | 37,026.9 µs | 40,595.4 µs | 80,020.6 µs | 95,088.1 µs | 116,505.9 µs | 0 |
-| `s0-c1-s` | trade-insert | 10,000 | 1,235.8 µs | 8,786.5 µs | 9,704.3 µs | 20,580.3 µs | 28,330.7 µs | 50,627.6 µs | 0 |
-| `s0-c8-s` | txn | 5,001 | 5,730.9 µs | 10,254.1 µs | 11,701.7 µs | 41,219.0 µs | 52,858.8 µs | 90,694.5 µs | 1 |
-| `s0-c8-s` | trade-insert | 10,002 | 282.7 µs | 2,469.6 µs | 2,711.3 µs | 10,332.4 µs | 15,251.3 µs | 56,169.6 µs | 1 |
+| `s0-c1-g` | txn | 5,000 ops | 9,428.1 µs | 10,950.5 µs | 11,584.3 µs | 19,921.0 µs | 26,740.1 µs | 33,351.4 µs | 0 errors |
+| `s0-c1-g` | trade-insert | 10,000 ops | 1,605.7 µs | 2,674.9 µs | 2,833.2 µs | 5,388.4 µs | 10,135.9 µs | 23,081.4 µs | 0 errors |
+| `s0-c8-g` | txn | 5,000 ops | 5,716.1 µs | 9,779.0 µs | 10,706.8 µs | 19,599.4 µs | 26,259.4 µs | 58,317.1 µs | 0 errors |
+| `s0-c8-g` | trade-insert | 10,000 ops | 1,186.7 µs | 2,319.8 µs | 2,506.4 µs | 5,504.8 µs | 9,568.8 µs | 48,541.2 µs | 0 errors |
+| `s0-c1-s` | txn | 5,000 ops | 5,106.0 µs | 37,026.9 µs | 40,595.4 µs | 80,020.6 µs | 95,088.1 µs | 116,505.9 µs | 0 errors |
+| `s0-c1-s` | trade-insert | 10,000 ops | 1,235.8 µs | 8,786.5 µs | 9,704.3 µs | 20,580.3 µs | 28,330.7 µs | 50,627.6 µs | 0 errors |
+| `s0-c8-s` | txn | 5,001 ops | 5,730.9 µs | 10,254.1 µs | 11,701.7 µs | 41,219.0 µs | 52,858.8 µs | 90,694.5 µs | 1 error |
+| `s0-c8-s` | trade-insert | 10,002 ops | 282.7 µs | 2,469.6 µs | 2,711.3 µs | 10,332.4 µs | 15,251.3 µs | 56,169.6 µs | 1 error |
+
+Run 3:
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | max | errors |
 |---|---|---|---|---|---|---|---|---|---|
-| `s0-c1-g` | txn | 5,000 | 9,925.1 µs | 10,861.1 µs | 11,502.9 µs | 19,479.3 µs | 24,106.9 µs | 29,576.4 µs | 0 |
-| `s0-c1-g` | trade-insert | 10,000 | 1,637.7 µs | 2,655.0 µs | 2,803.2 µs | 5,202.6 µs | 9,750.0 µs | 16,552.6 µs | 0 |
-| `s0-c8-g` | txn | 5,000 | 6,648.5 µs | 10,155.7 µs | 11,081.2 µs | 19,997.6 µs | 26,517.8 µs | 65,809.0 µs | 0 |
-| `s0-c8-g` | trade-insert | 10,000 | 1,199.8 µs | 2,417.0 µs | 2,604.9 µs | 5,421.9 µs | 10,461.1 µs | 25,451.3 µs | 0 |
-| `s0-c1-s` | txn | 5,000 | 4,740.9 µs | 38,519.5 µs | 42,845.6 µs | 85,545.3 µs | 103,398.7 µs | 159,419.3 µs | 0 |
-| `s0-c1-s` | trade-insert | 10,000 | 1,167.9 µs | 9,111.8 µs | 10,196.9 µs | 21,974.0 µs | 30,047.0 µs | 73,381.0 µs | 0 |
-| `s0-c8-s` | txn | 5,001 | 5,464.6 µs | 11,244.1 µs | 17,997.4 µs | 31,052.2 µs | 39,089.7 µs | 58,584.7 µs | 1 |
-| `s0-c8-s` | trade-insert | 10,002 | 345.3 µs | 2,672.4 µs | 4,139.3 µs | 8,530.5 µs | 14,272.1 µs | 50,027.7 µs | 1 |
+| `s0-c1-g` | txn | 5,000 ops | 9,925.1 µs | 10,861.1 µs | 11,502.9 µs | 19,479.3 µs | 24,106.9 µs | 29,576.4 µs | 0 errors |
+| `s0-c1-g` | trade-insert | 10,000 ops | 1,637.7 µs | 2,655.0 µs | 2,803.2 µs | 5,202.6 µs | 9,750.0 µs | 16,552.6 µs | 0 errors |
+| `s0-c8-g` | txn | 5,000 ops | 6,648.5 µs | 10,155.7 µs | 11,081.2 µs | 19,997.6 µs | 26,517.8 µs | 65,809.0 µs | 0 errors |
+| `s0-c8-g` | trade-insert | 10,000 ops | 1,199.8 µs | 2,417.0 µs | 2,604.9 µs | 5,421.9 µs | 10,461.1 µs | 25,451.3 µs | 0 errors |
+| `s0-c1-s` | txn | 5,000 ops | 4,740.9 µs | 38,519.5 µs | 42,845.6 µs | 85,545.3 µs | 103,398.7 µs | 159,419.3 µs | 0 errors |
+| `s0-c1-s` | trade-insert | 10,000 ops | 1,167.9 µs | 9,111.8 µs | 10,196.9 µs | 21,974.0 µs | 30,047.0 µs | 73,381.0 µs | 0 errors |
+| `s0-c8-s` | txn | 5,001 ops | 5,464.6 µs | 11,244.1 µs | 17,997.4 µs | 31,052.2 µs | 39,089.7 µs | 58,584.7 µs | 1 error |
+| `s0-c8-s` | trade-insert | 10,002 ops | 345.3 µs | 2,672.4 µs | 4,139.3 µs | 8,530.5 µs | 14,272.1 µs | 50,027.7 µs | 1 error |
 
 `trade-insert` (a clustered-btree append) and `account-update` (a btree
 overwrite by pk) are the same statement to within 0.4 % at p50 in every
@@ -159,10 +161,10 @@ group-versus-strict pair exposes:
 | Wait | Estimate | How derived |
 |---|---|---|
 | Durability (fsync / group flush) | dominant. `trade-insert` p50 is 2,884.6 us under `group` and 9,907.6 us under `strict` at one core, so about 7,000 us (71 %) of a strict statement is the durability wait; at eight cores 2,505.8 vs 4,938.5 us, about 2,430 us (49 %) | group-vs-strict delta at fixed cores, run 1 |
-| Queueing behind other clients on the same reactor | large at `cores = 1`. Eight traders share one reactor and one commit path: `s0-c1-s` runs 169.4 tps x 4 statements = 678 durable statements per second, one every 1.5 ms, and the per-statement p50 of 9.9 ms is about eight of them in line | tps arithmetic and the p50, one core |
+| Queueing behind other clients on the same reactor | large at `cores = 1`. Eight traders share one reactor and one commit path: `s0-c1-s` runs 169.4 tps x 4 statements = 678 durable statements per second, one every 1.5 ms, and the per-statement p50 of 9.9 ms is about seven of them in line | tps arithmetic and the p50, one core |
 | Page work (descent, leaf write, splits) | not separable: inside the 0.4 % by which insert and update agree | the two phases' p50s |
-| Lock or conflict wait | absent in the timed statements except the one refused insert per `c8-s` run (section 6) | error columns |
-| Client and socket round trip | present in every number and not isolated (no `--server-log` was used); the `p0` of `trade-insert`, 1,125 to 1,831 us across the four cells of run 1, is the cheapest statement any cell reached, an upper bound on the fixed part | phase p0 |
+| Lock or conflict wait | no client-visible refusal except the one refused insert per `c8-s` run (section 6); the server logs of `r3-s0-c8-g` and `r3-s0-c8-s` each also carry one `catalog changed ... runs again` re-run of an `UPDATE accounts`, absorbed by the server | error columns, server logs |
+| Client and socket round trip | present in every number and not isolated (no `--server-log` was used); the `p0` of `trade-insert`, 1,125 to 1,831 us across the four cells of run 1, is the cheapest trade insert each cell reached, an upper bound on the fixed part | phase p0 |
 
 ## 6. Correctness, refusals and the one anomaly
 
@@ -170,39 +172,52 @@ group-versus-strict pair exposes:
 **all matched**. Every phase of every `c1-*` cell and every `c8-g` cell
 replied with zero errors.
 
-| cell | run | committed | torn | error replies (all phases) | driver exit |
+| cell | run | committed | torn | engine error replies (all phases) | driver exit |
 |---|---|---|---|---|---|
-| `s0-c1-g` | 1 | 5,000 | 0 | 0 | 0 |
-| `s0-c8-g` | 1 | 5,000 | 0 | 0 | 0 |
-| `s0-c1-s` | 1 | 5,000 | 0 | 0 | 0 |
-| `s0-c8-s` | 1 | 5,000 | 1 | 2 | 1 |
-| `r2-s0-c1-g` | 2 | 5,000 | 0 | 0 | 0 |
-| `r2-s0-c8-g` | 2 | 5,000 | 0 | 0 | 0 |
-| `r2-s0-c1-s` | 2 | 5,000 | 0 | 0 | 0 |
-| `r2-s0-c8-s` | 2 | 5,000 | 1 | 2 | 1 |
-| `r3-s0-c1-g` | 3 | 5,000 | 0 | 0 | 0 |
-| `r3-s0-c8-g` | 3 | 5,000 | 0 | 0 | 0 |
-| `r3-s0-c1-s` | 3 | 5,000 | 0 | 0 | 0 |
-| `r3-s0-c8-s` | 3 | 5,000 | 1 | 2 | 1 |
+| `s0-c1-g` | 1 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `s0-c8-g` | 1 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `s0-c1-s` | 1 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `s0-c8-s` | 1 | 5,000 txns | 1 txn | 1 reply | exit 1 |
+| `r2-s0-c1-g` | 2 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `r2-s0-c8-g` | 2 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `r2-s0-c1-s` | 2 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `r2-s0-c8-s` | 2 | 5,000 txns | 1 txn | 1 reply | exit 1 |
+| `r3-s0-c1-g` | 3 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `r3-s0-c8-g` | 3 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `r3-s0-c1-s` | 3 | 5,000 txns | 0 txns | 0 replies | exit 0 |
+| `r3-s0-c8-s` | 3 | 5,000 txns | 1 txn | 1 reply | exit 1 |
 
-**`s0-c8-s` refused one trade insert in every run (3 of 3), and never
-anywhere else (0 of 9).** The reply, identical in the three runs but for the
-key the statement wrote:
+The JSON's per-phase `errors` sum to 2 in each `c8-s` cell because the
+`txn` phase counts the same refusal again as the driver's own `ERR partial`;
+the engine refused one statement.
+
+**`s0-c8-s` refused one trade insert in every run (3 of 3), and never in
+this scenario's other cells (0 of 9).** The reply, identical in the three
+runs, key 113 and page 138 included (only the statement's values differed):
 
     ERR TXN_CONFLICT retryable=1 btree descent for key 113 from page 138 gave up after 5 attempts:
     each leaf it reached had already given the key away. Either the chain is being split faster than
     a descent can cross it, or this core is descending from a root that has since grown a level
 
 with the server logging it at `WARN [btree]` and `WARN [query]`. It is the
-bounded re-descent that AT-S15 gives an insert (a stale descent restarts,
-bounded, then `TxnConflict`) reached under real load: eight traders across
-eight cores appending to a fresh `trades` relation while its first leaf
-splits, under `strict`, where each statement holds its page for a whole
-fsync. The refusal is a documented one and it is `retryable=1`; **this driver
-does not retry**, so that leg is lost, the transaction is counted `torn` (1)
-and the driver exits 1. Its `--txn` mode would unwind it instead. A search of
-`docs/` at `9a0525d` for the refusal's text finds no entry for this shape. The
-measured TPS in that cell is over the 5,000 transactions that did commit.
+clustered tree's bounded re-descent (`docs/spec/heap-and-tuple.md` §5,
+AT-S5c: a write descent whose leaf no longer covers the key restarts from
+the root, `kMaxDescentRestarts` times, then refuses `TxnConflict`) reached
+under eight traders on eight cores appending to a fresh `trades` relation.
+The message names two causes and does not choose; `src/storage/btree/btree.cpp`
+(the comment above the refusal) calls a **stale root** the everyday one - a
+descent from a pre-growth root misses the key "every time, ... without
+anything racing at all". The same key and page in 3 of 3 runs, and in run 3
+a `catalog changed between this statement's resolution and its first write`
+re-run logged in the same second (absorbed by the server, never a client
+error), fit that reading; this run does not prove it. The same refusal
+reached scenario2's `s2-c8-g` under `group` (keys 107 and 135, pages 145 and
+147), so "only under `strict`" holds for this scenario alone. The refusal is
+documented and `retryable=1`; **this driver does not retry**, so that leg is
+lost, the transaction is counted `torn` (1) and the driver exits 1.
+`docs/inflight/known-gaps.md` at `9a0525d` has no entry recording that this
+workload reaches it. The measured TPS in that cell is over the 5,000
+transactions that did commit.
 
 ## 7. Delta against the previous run of this shape
 
@@ -223,16 +238,23 @@ attributable to one change.** The f6ed10c run is one draw per cell.
 Reading it:
 
 - **`cores = 1`: -16.6 % (group) and -20.1 % (strict), outside the noise
-  floor** of this run (3.8 % and 6.1 % spread over three runs) and outside
-  the 2 to 7 % that AM-S6 recorded for these cells at f6ed10c. The one-core
-  path is slower than it was: every statement now takes more of the reactor
-  (locks, the instance read view, the single WAL stream). The number says
-  the sign and the size; it does not say which milestone.
+  floor** of this run (3.8 % and 6.1 % spread over three runs). AM-S6
+  (`results-am-s6-m1-baseline-v2.7.0-286-g1e7148f.md` at `9a0525d`) ran
+  these two cells four times at f6ed10c: 658.4 to 773.9 tps (median 743.8,
+  spread 17.5 %) and 202.1 to 209.9 tps (median 205.6, spread 3.9 %);
+  against those medians the deltas are -15.8 % and -17.6 %, still outside
+  both floors. The one-core path is slower than it was. Which of the
+  intervening changes (locks, the instance read view, the single WAL
+  stream among them) costs it is not measured here; the number says the
+  sign and the size, not which milestone.
 - **`c8-g` -16.8 %** is the same sign but the previous cell was one draw
   from a distribution that AM-S6 measured as bimodal (469 to 781 tps across
   four runs at f6ed10c), so it is **not a finding**.
 - **`c8-s` +55.7 %** and the change of shape described in section 3 are
-  large; the f6ed10c `c8-s` (213.0 tps) was likewise a single draw.
+  large. The f6ed10c `c8-s` (213.0 tps) is a single draw, but AM-S6's four
+  f6ed10c runs of it read 207.7 to 216.3 tps (spread 4.1 %), so the
+  comparator is not an outlier; +55.7 % is also above the ~50 % that AM-S6
+  set as the eight-core noise floor on this host.
 - **The `cores = 8` cells are not the same configuration.** f6ed10c ran
   `peer_listeners = on` and `placement = namespace`, so every relation
   belonged to core 0 and the other seven reactors owned nothing. Both keys
@@ -269,24 +291,28 @@ twelve cells, so no device stall is indicated.
 
 1. **The durability wait is the workload at one core, and one reactor
    serialises it.** 169.4 tps under `strict` is one durable statement per
-   1.5 ms regardless of how many traders wait. Eight cores let the waits
+   1.5 ms with eight traders waiting (no other trader count was run). Eight cores let the waits
    overlap (331.7 tps, statement p50 halved to 4.9 ms). That is the first
    data point in this series where `strict` scales with `cores`; it is
    consistent with the single WAL stream (AR0 M0) letting every core append
    under core 0's latch while each core waits for its own flush, and it is
    not proven by this run, which has no server-side breakdown.
 2. **`group` hides the core count, `strict` exposes it.** 626 to 661 tps for
-   `group` against 169 to 332 tps for `strict`: the group flush interval,
-   not the reactor, bounds `group`, so 8x the cores buy 5.6 %.
+   `group` against 169 to 332 tps for `strict`: 8x the cores buy `group`
+   5.6 %, inside that cell's 6.8 % spread. What bounds `group` (the flush
+   interval is one candidate) is not isolated by this run.
 3. **Insert and update are one cost.** A btree append and a btree overwrite
-   agree to 0.4 % at p50 in every cell. Whatever the leaf split costs, it is
+   agree to within 0.9 % at p50 in every cell of the three runs (0.4 % in
+   run 1). Whatever the leaf split costs, it is
    below the resolution of a workload whose statements each wait for
    durability.
 4. **A newly created relation under eight concurrent appenders can refuse an
    insert** (section 6). The design accepts this (bounded restart, then a
    retryable refusal); this run gives the first rate for it: 1 refusal in
-   10,000 trade inserts, only under `strict` at eight cores, in 3 of 3 runs,
-   and never at one core or under `group`.
+   10,000 trade inserts, in this scenario only under `strict` at eight
+   cores, in 3 of 3 runs, and never at one core or under `group`. Scenario2
+   met it under `group` at eight cores (3 refusals in 2 of 3 runs), so
+   `strict` is not a condition of it.
 5. **`c8-s`'s 20 % spread is the widest in the matrix**, so any later
    eight-core `strict` delta needs its own repeat before it is believed.
 6. **The floor is host CPU at eight cores.** The `cores = 8` cells put eight

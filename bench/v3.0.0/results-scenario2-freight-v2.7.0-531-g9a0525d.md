@@ -41,9 +41,10 @@ repeatable-read`, one run each). Arguments: `--organizations 300 --ships
 --seed 1 --sync`, with `--txn`, `--contend` and `--manifest` at their
 defaults (on) and `--capacity-mode cached`. A run is 3,000 committed
 bookings, 375 per booker, contended on 6 hot routes; the eight relations
-hold 24,653 rows after the load (300 organizations, 30 ships, 300
-operations, 12 fees, 93 recipes, 4,000 cargos, 3,000 freights, about 16,900
-charges).
+hold 24,644 to 24,664 rows at the end of a run (24,653 in run 1 of
+`s2-c1-g`: 300 organizations, 30 ships, 300 operations, 12 fees, 93
+recipes and 4,000 cargos loaded, then 3,000 freights and about 16,900
+charges written by the bookings).
 
 Rule 9's 200 / 1K / 10K sweep is **not executed** for this driver: the
 sizes above mirror the predecessor and the measured unit (an eight-statement
@@ -83,91 +84,95 @@ span. Values in microseconds.
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | max | errors |
 |---|---|---|---|---|---|---|---|---|---|
-| `s2-c1-g` | booking | 3,349 | 718.3 µs | 11,041.9 µs | 12,869.2 µs | 20,845.8 µs | 31,102.2 µs | 66,453.2 µs | 0 |
-| `s2-c1-g` | commit | 3,000 | 1,326.9 µs | 1,616.5 µs | 1,762.6 µs | 4,103.2 µs | 7,977.5 µs | 33,632.8 µs | 0 |
-| `s2-c1-g` | freight-insert | 3,000 | 64.3 µs | 272.0 µs | 1,321.9 µs | 2,047.0 µs | 4,903.2 µs | 33,119.0 µs | 0 |
-| `s2-c1-g` | charge-insert | 16,918 | 44.5 µs | 176.3 µs | 261.1 µs | 1,854.4 µs | 3,572.7 µs | 22,943.5 µs | 0 |
-| `s2-c1-g` | operation-update | 3,000 | 50.3 µs | 170.7 µs | 210.3 µs | 1,794.8 µs | 3,535.5 µs | 33,350.3 µs | 0 |
-| `s2-c1-g` | org-update | 3,000 | 53.4 µs | 169.6 µs | 206.3 µs | 1,782.8 µs | 3,003.3 µs | 33,366.5 µs | 0 |
-| `s2-c1-g` | cargo-lookup | 3,349 | 99.8 µs | 313.3 µs | 419.0 µs | 1,917.7 µs | 4,436.1 µs | 23,157.4 µs | 0 |
-| `s2-c1-g` | credit-lookup | 3,349 | 81.1 µs | 278.3 µs | 372.8 µs | 1,951.3 µs | 3,782.3 µs | 33,594.8 µs | 0 |
-| `s2-c1-g` | capacity-read | 3,349 | 69.0 µs | 256.5 µs | 379.5 µs | 1,971.9 µs | 4,370.1 µs | 33,359.3 µs | 0 |
-| `s2-c1-g` | recipe-read | 3,349 | 189.7 µs | 372.9 µs | 525.4 µs | 2,172.1 µs | 4,276.9 µs | 20,415.9 µs | 0 |
-| `s2-c1-g` | manifest-scan | 120 | 81.9 µs | 409.0 µs | 688.6 µs | 2,173.1 µs | 2,438.0 µs | 3,730.5 µs | 0 |
-| `s2-c8-g` | booking | 3,360 | 571.9 µs | 3,808.9 µs | 4,234.6 µs | 7,996.1 µs | 15,314.4 µs | 119,362.5 µs | 0 |
-| `s2-c8-g` | commit | 3,000 | 1,149.1 µs | 1,913.6 µs | 2,312.3 µs | 5,760.4 µs | 13,375.0 µs | 61,345.4 µs | 0 |
-| `s2-c8-g` | freight-insert | 3,000 | 60.0 µs | 104.8 µs | 132.1 µs | 315.8 µs | 485.1 µs | 6,112.9 µs | 0 |
-| `s2-c8-g` | charge-insert | 16,926 | 39.0 µs | 96.5 µs | 123.2 µs | 244.1 µs | 389.8 µs | 115,683.2 µs | 0 |
-| `s2-c8-g` | operation-update | 3,000 | 60.8 µs | 103.8 µs | 122.2 µs | 237.1 µs | 364.0 µs | 707.2 µs | 0 |
-| `s2-c8-g` | org-update | 3,000 | 55.7 µs | 102.5 µs | 122.3 µs | 241.6 µs | 392.6 µs | 17,880.8 µs | 0 |
-| `s2-c8-g` | cargo-lookup | 3,360 | 80.2 µs | 126.7 µs | 140.4 µs | 238.7 µs | 346.6 µs | 1,633.8 µs | 0 |
-| `s2-c8-g` | credit-lookup | 3,360 | 67.6 µs | 109.3 µs | 125.2 µs | 229.8 µs | 368.6 µs | 3,212.6 µs | 0 |
-| `s2-c8-g` | capacity-read | 3,360 | 60.0 µs | 104.8 µs | 121.0 µs | 240.6 µs | 426.6 µs | 1,704.4 µs | 0 |
-| `s2-c8-g` | recipe-read | 3,360 | 177.2 µs | 271.3 µs | 298.8 µs | 476.1 µs | 593.8 µs | 6,461.1 µs | 0 |
-| `s2-c8-g` | manifest-scan | 60 | 85.3 µs | 135.8 µs | 398.2 µs | 669.3 µs | 710.9 µs | 710.9 µs | 0 |
-| `s2-c1-s` | booking | 3,339 | 509.7 µs | 11,631.0 µs | 14,325.9 µs | 24,570.0 µs | 32,571.8 µs | 89,082.5 µs | 0 |
-| `s2-c1-s` | commit | 3,000 | 1,163.8 µs | 1,470.9 µs | 1,634.7 µs | 4,597.8 µs | 8,906.4 µs | 21,151.5 µs | 0 |
-| `s2-c1-s` | freight-insert | 3,000 | 62.3 µs | 265.9 µs | 1,443.9 µs | 3,648.3 µs | 6,981.3 µs | 21,296.5 µs | 0 |
-| `s2-c1-s` | charge-insert | 16,919 | 43.1 µs | 201.4 µs | 318.1 µs | 3,061.1 µs | 5,525.1 µs | 69,612.2 µs | 0 |
-| `s2-c1-s` | operation-update | 3,000 | 58.3 µs | 174.5 µs | 276.4 µs | 2,992.0 µs | 5,244.5 µs | 69,611.1 µs | 0 |
-| `s2-c1-s` | org-update | 3,000 | 55.1 µs | 168.1 µs | 255.6 µs | 2,843.4 µs | 5,889.7 µs | 21,315.6 µs | 0 |
-| `s2-c1-s` | cargo-lookup | 3,339 | 79.2 µs | 197.0 µs | 252.8 µs | 2,685.0 µs | 5,229.4 µs | 68,467.1 µs | 0 |
-| `s2-c1-s` | credit-lookup | 3,339 | 64.2 µs | 195.3 µs | 308.8 µs | 2,907.1 µs | 5,540.3 µs | 11,768.9 µs | 0 |
-| `s2-c1-s` | capacity-read | 3,339 | 65.4 µs | 184.1 µs | 310.9 µs | 2,931.8 µs | 5,037.1 µs | 69,797.7 µs | 0 |
-| `s2-c1-s` | recipe-read | 3,339 | 171.9 µs | 333.5 µs | 466.7 µs | 3,189.9 µs | 5,909.5 µs | 21,520.9 µs | 0 |
-| `s2-c1-s` | manifest-scan | 140 | 67.5 µs | 591.1 µs | 1,739.1 µs | 3,741.7 µs | 6,764.8 µs | 11,336.3 µs | 0 |
-| `s2-c8-s` | booking | 3,321 | 498.7 µs | 4,124.2 µs | 5,864.2 µs | 14,072.5 µs | 19,624.9 µs | 94,914.9 µs | 0 |
-| `s2-c8-s` | commit | 3,000 | 1,149.3 µs | 2,145.5 µs | 2,994.1 µs | 8,141.6 µs | 13,750.6 µs | 20,424.2 µs | 0 |
-| `s2-c8-s` | freight-insert | 3,125 | 41.2 µs | 79.9 µs | 94.4 µs | 2,262.2 µs | 6,003.5 µs | 11,630.3 µs | 0 |
-| `s2-c8-s` | charge-insert | 17,597 | 34.2 µs | 63.4 µs | 78.5 µs | 193.6 µs | 2,782.4 µs | 18,061.6 µs | 0 |
-| `s2-c8-s` | operation-update | 3,125 | 44.2 µs | 72.8 µs | 86.3 µs | 233.2 µs | 3,183.2 µs | 14,018.1 µs | 41 |
-| `s2-c8-s` | org-update | 3,084 | 41.9 µs | 70.4 µs | 85.6 µs | 304.6 µs | 4,309.0 µs | 15,262.4 µs | 84 |
-| `s2-c8-s` | cargo-lookup | 3,446 | 72.4 µs | 119.1 µs | 134.0 µs | 264.1 µs | 3,972.8 µs | 10,128.4 µs | 0 |
-| `s2-c8-s` | credit-lookup | 3,446 | 62.7 µs | 99.8 µs | 116.4 µs | 273.8 µs | 3,415.8 µs | 13,828.0 µs | 0 |
-| `s2-c8-s` | capacity-read | 3,446 | 57.6 µs | 93.7 µs | 111.0 µs | 251.3 µs | 3,601.9 µs | 75,849.6 µs | 0 |
-| `s2-c8-s` | recipe-read | 3,446 | 169.2 µs | 224.1 µs | 268.1 µs | 424.1 µs | 3,458.8 µs | 9,272.6 µs | 0 |
-| `s2-c8-s` | manifest-scan | 80 | 87.9 µs | 257.9 µs | 428.9 µs | 2,045.1 µs | 8,744.2 µs | 8,744.2 µs | 0 |
+| `s2-c1-g` | booking | 3,349 ops | 718.3 µs | 11,041.9 µs | 12,869.2 µs | 20,845.8 µs | 31,102.2 µs | 66,453.2 µs | 0 errors |
+| `s2-c1-g` | commit | 3,000 ops | 1,326.9 µs | 1,616.5 µs | 1,762.6 µs | 4,103.2 µs | 7,977.5 µs | 33,632.8 µs | 0 errors |
+| `s2-c1-g` | freight-insert | 3,000 ops | 64.3 µs | 272.0 µs | 1,321.9 µs | 2,047.0 µs | 4,903.2 µs | 33,119.0 µs | 0 errors |
+| `s2-c1-g` | charge-insert | 16,918 ops | 44.5 µs | 176.3 µs | 261.1 µs | 1,854.4 µs | 3,572.7 µs | 22,943.5 µs | 0 errors |
+| `s2-c1-g` | operation-update | 3,000 ops | 50.3 µs | 170.7 µs | 210.3 µs | 1,794.8 µs | 3,535.5 µs | 33,350.3 µs | 0 errors |
+| `s2-c1-g` | org-update | 3,000 ops | 53.4 µs | 169.6 µs | 206.3 µs | 1,782.8 µs | 3,003.3 µs | 33,366.5 µs | 0 errors |
+| `s2-c1-g` | cargo-lookup | 3,349 ops | 99.8 µs | 313.3 µs | 419.0 µs | 1,917.7 µs | 4,436.1 µs | 23,157.4 µs | 0 errors |
+| `s2-c1-g` | credit-lookup | 3,349 ops | 81.1 µs | 278.3 µs | 372.8 µs | 1,951.3 µs | 3,782.3 µs | 33,594.8 µs | 0 errors |
+| `s2-c1-g` | capacity-read | 3,349 ops | 69.0 µs | 256.5 µs | 379.5 µs | 1,971.9 µs | 4,370.1 µs | 33,359.3 µs | 0 errors |
+| `s2-c1-g` | recipe-read | 3,349 ops | 189.7 µs | 372.9 µs | 525.4 µs | 2,172.1 µs | 4,276.9 µs | 20,415.9 µs | 0 errors |
+| `s2-c1-g` | manifest-scan | 120 ops | 81.9 µs | 409.0 µs | 688.6 µs | 2,173.1 µs | 2,438.0 µs | 3,730.5 µs | 0 errors |
+| `s2-c8-g` | booking | 3,360 ops | 571.9 µs | 3,808.9 µs | 4,234.6 µs | 7,996.1 µs | 15,314.4 µs | 119,362.5 µs | 0 errors |
+| `s2-c8-g` | commit | 3,000 ops | 1,149.1 µs | 1,913.6 µs | 2,312.3 µs | 5,760.4 µs | 13,375.0 µs | 61,345.4 µs | 0 errors |
+| `s2-c8-g` | freight-insert | 3,000 ops | 60.0 µs | 104.8 µs | 132.1 µs | 315.8 µs | 485.1 µs | 6,112.9 µs | 0 errors |
+| `s2-c8-g` | charge-insert | 16,926 ops | 39.0 µs | 96.5 µs | 123.2 µs | 244.1 µs | 389.8 µs | 115,683.2 µs | 0 errors |
+| `s2-c8-g` | operation-update | 3,000 ops | 60.8 µs | 103.8 µs | 122.2 µs | 237.1 µs | 364.0 µs | 707.2 µs | 0 errors |
+| `s2-c8-g` | org-update | 3,000 ops | 55.7 µs | 102.5 µs | 122.3 µs | 241.6 µs | 392.6 µs | 17,880.8 µs | 0 errors |
+| `s2-c8-g` | cargo-lookup | 3,360 ops | 80.2 µs | 126.7 µs | 140.4 µs | 238.7 µs | 346.6 µs | 1,633.8 µs | 0 errors |
+| `s2-c8-g` | credit-lookup | 3,360 ops | 67.6 µs | 109.3 µs | 125.2 µs | 229.8 µs | 368.6 µs | 3,212.6 µs | 0 errors |
+| `s2-c8-g` | capacity-read | 3,360 ops | 60.0 µs | 104.8 µs | 121.0 µs | 240.6 µs | 426.6 µs | 1,704.4 µs | 0 errors |
+| `s2-c8-g` | recipe-read | 3,360 ops | 177.2 µs | 271.3 µs | 298.8 µs | 476.1 µs | 593.8 µs | 6,461.1 µs | 0 errors |
+| `s2-c8-g` | manifest-scan | 60 ops | 85.3 µs | 135.8 µs | 398.2 µs | 669.3 µs | 710.9 µs | 710.9 µs | 0 errors |
+| `s2-c1-s` | booking | 3,339 ops | 509.7 µs | 11,631.0 µs | 14,325.9 µs | 24,570.0 µs | 32,571.8 µs | 89,082.5 µs | 0 errors |
+| `s2-c1-s` | commit | 3,000 ops | 1,163.8 µs | 1,470.9 µs | 1,634.7 µs | 4,597.8 µs | 8,906.4 µs | 21,151.5 µs | 0 errors |
+| `s2-c1-s` | freight-insert | 3,000 ops | 62.3 µs | 265.9 µs | 1,443.9 µs | 3,648.3 µs | 6,981.3 µs | 21,296.5 µs | 0 errors |
+| `s2-c1-s` | charge-insert | 16,919 ops | 43.1 µs | 201.4 µs | 318.1 µs | 3,061.1 µs | 5,525.1 µs | 69,612.2 µs | 0 errors |
+| `s2-c1-s` | operation-update | 3,000 ops | 58.3 µs | 174.5 µs | 276.4 µs | 2,992.0 µs | 5,244.5 µs | 69,611.1 µs | 0 errors |
+| `s2-c1-s` | org-update | 3,000 ops | 55.1 µs | 168.1 µs | 255.6 µs | 2,843.4 µs | 5,889.7 µs | 21,315.6 µs | 0 errors |
+| `s2-c1-s` | cargo-lookup | 3,339 ops | 79.2 µs | 197.0 µs | 252.8 µs | 2,685.0 µs | 5,229.4 µs | 68,467.1 µs | 0 errors |
+| `s2-c1-s` | credit-lookup | 3,339 ops | 64.2 µs | 195.3 µs | 308.8 µs | 2,907.1 µs | 5,540.3 µs | 11,768.9 µs | 0 errors |
+| `s2-c1-s` | capacity-read | 3,339 ops | 65.4 µs | 184.1 µs | 310.9 µs | 2,931.8 µs | 5,037.1 µs | 69,797.7 µs | 0 errors |
+| `s2-c1-s` | recipe-read | 3,339 ops | 171.9 µs | 333.5 µs | 466.7 µs | 3,189.9 µs | 5,909.5 µs | 21,520.9 µs | 0 errors |
+| `s2-c1-s` | manifest-scan | 140 ops | 67.5 µs | 591.1 µs | 1,739.1 µs | 3,741.7 µs | 6,764.8 µs | 11,336.3 µs | 0 errors |
+| `s2-c8-s` | booking | 3,321 ops | 498.7 µs | 4,124.2 µs | 5,864.2 µs | 14,072.5 µs | 19,624.9 µs | 94,914.9 µs | 0 errors |
+| `s2-c8-s` | commit | 3,000 ops | 1,149.3 µs | 2,145.5 µs | 2,994.1 µs | 8,141.6 µs | 13,750.6 µs | 20,424.2 µs | 0 errors |
+| `s2-c8-s` | freight-insert | 3,125 ops | 41.2 µs | 79.9 µs | 94.4 µs | 2,262.2 µs | 6,003.5 µs | 11,630.3 µs | 0 errors |
+| `s2-c8-s` | charge-insert | 17,597 ops | 34.2 µs | 63.4 µs | 78.5 µs | 193.6 µs | 2,782.4 µs | 18,061.6 µs | 0 errors |
+| `s2-c8-s` | operation-update | 3,125 ops | 44.2 µs | 72.8 µs | 86.3 µs | 233.2 µs | 3,183.2 µs | 14,018.1 µs | 41 errors |
+| `s2-c8-s` | org-update | 3,084 ops | 41.9 µs | 70.4 µs | 85.6 µs | 304.6 µs | 4,309.0 µs | 15,262.4 µs | 84 errors |
+| `s2-c8-s` | cargo-lookup | 3,446 ops | 72.4 µs | 119.1 µs | 134.0 µs | 264.1 µs | 3,972.8 µs | 10,128.4 µs | 0 errors |
+| `s2-c8-s` | credit-lookup | 3,446 ops | 62.7 µs | 99.8 µs | 116.4 µs | 273.8 µs | 3,415.8 µs | 13,828.0 µs | 0 errors |
+| `s2-c8-s` | capacity-read | 3,446 ops | 57.6 µs | 93.7 µs | 111.0 µs | 251.3 µs | 3,601.9 µs | 75,849.6 µs | 0 errors |
+| `s2-c8-s` | recipe-read | 3,446 ops | 169.2 µs | 224.1 µs | 268.1 µs | 424.1 µs | 3,458.8 µs | 9,272.6 µs | 0 errors |
+| `s2-c8-s` | manifest-scan | 80 ops | 87.9 µs | 257.9 µs | 428.9 µs | 2,045.1 µs | 8,744.2 µs | 8,744.2 µs | 0 errors |
 
 Runs 2 and 3, booking, commit and the two appends only (the rest is in the
-archive):
+archive). The `errors` of `s2-c8-g`'s appends in runs 2 and 3 are the btree
+re-descent refusal of scenario0's section 6 (`freights` key 107 page 145,
+`charges` key 135 page 147), retried by the driver. Run 2:
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | max | errors |
 |---|---|---|---|---|---|---|---|---|---|
-| `s2-c1-g` | booking | 3,353 | 497.2 µs | 11,072.3 µs | 13,013.2 µs | 21,726.2 µs | 26,907.5 µs | 37,890.7 µs | 0 |
-| `s2-c1-g` | commit | 3,000 | 1,233.1 µs | 1,613.2 µs | 1,770.5 µs | 3,999.8 µs | 7,686.6 µs | 22,033.4 µs | 0 |
-| `s2-c1-g` | freight-insert | 3,000 | 61.8 µs | 269.8 µs | 1,337.0 µs | 2,024.5 µs | 5,078.7 µs | 20,557.8 µs | 0 |
-| `s2-c1-g` | charge-insert | 16,920 | 49.6 µs | 178.3 µs | 264.3 µs | 1,868.5 µs | 3,919.2 µs | 20,555.2 µs | 0 |
-| `s2-c8-g` | booking | 3,342 | 508.8 µs | 3,961.8 µs | 4,301.5 µs | 7,983.9 µs | 13,958.6 µs | 84,574.7 µs | 0 |
-| `s2-c8-g` | commit | 3,000 | 1,281.0 µs | 1,924.0 µs | 2,289.1 µs | 5,815.8 µs | 11,754.7 µs | 64,443.1 µs | 0 |
-| `s2-c8-g` | freight-insert | 3,003 | 48.7 µs | 108.2 µs | 137.7 µs | 342.7 µs | 492.7 µs | 80,848.5 µs | 1 |
-| `s2-c8-g` | charge-insert | 16,936 | 38.3 µs | 98.4 µs | 127.9 µs | 256.3 µs | 390.0 µs | 4,359.7 µs | 1 |
-| `s2-c1-s` | booking | 3,315 | 541.4 µs | 11,793.5 µs | 14,535.2 µs | 25,217.9 µs | 34,369.5 µs | 52,501.9 µs | 0 |
-| `s2-c1-s` | commit | 3,000 | 1,214.4 µs | 1,483.6 µs | 1,669.0 µs | 4,554.6 µs | 7,898.1 µs | 29,140.4 µs | 0 |
-| `s2-c1-s` | freight-insert | 3,000 | 40.1 µs | 275.1 µs | 1,449.0 µs | 3,836.9 µs | 5,979.1 µs | 29,005.4 µs | 0 |
-| `s2-c1-s` | charge-insert | 16,925 | 33.9 µs | 212.4 µs | 342.3 µs | 3,160.3 µs | 5,635.8 µs | 29,414.0 µs | 0 |
-| `s2-c8-s` | booking | 3,347 | 519.0 µs | 3,988.2 µs | 6,085.5 µs | 14,718.8 µs | 21,744.7 µs | 62,573.8 µs | 0 |
-| `s2-c8-s` | commit | 3,000 | 1,121.7 µs | 1,612.6 µs | 2,193.1 µs | 5,525.6 µs | 10,148.9 µs | 21,003.9 µs | 0 |
-| `s2-c8-s` | freight-insert | 3,050 | 40.7 µs | 77.4 µs | 101.2 µs | 2,566.7 µs | 5,248.4 µs | 13,088.4 µs | 0 |
-| `s2-c8-s` | charge-insert | 17,203 | 34.7 µs | 64.0 µs | 84.4 µs | 1,777.9 µs | 3,499.9 µs | 16,130.0 µs | 0 |
+| `s2-c1-g` | booking | 3,353 ops | 497.2 µs | 11,072.3 µs | 13,013.2 µs | 21,726.2 µs | 26,907.5 µs | 37,890.7 µs | 0 errors |
+| `s2-c1-g` | commit | 3,000 ops | 1,233.1 µs | 1,613.2 µs | 1,770.5 µs | 3,999.8 µs | 7,686.6 µs | 22,033.4 µs | 0 errors |
+| `s2-c1-g` | freight-insert | 3,000 ops | 61.8 µs | 269.8 µs | 1,337.0 µs | 2,024.5 µs | 5,078.7 µs | 20,557.8 µs | 0 errors |
+| `s2-c1-g` | charge-insert | 16,920 ops | 49.6 µs | 178.3 µs | 264.3 µs | 1,868.5 µs | 3,919.2 µs | 20,555.2 µs | 0 errors |
+| `s2-c8-g` | booking | 3,342 ops | 508.8 µs | 3,961.8 µs | 4,301.5 µs | 7,983.9 µs | 13,958.6 µs | 84,574.7 µs | 0 errors |
+| `s2-c8-g` | commit | 3,000 ops | 1,281.0 µs | 1,924.0 µs | 2,289.1 µs | 5,815.8 µs | 11,754.7 µs | 64,443.1 µs | 0 errors |
+| `s2-c8-g` | freight-insert | 3,003 ops | 48.7 µs | 108.2 µs | 137.7 µs | 342.7 µs | 492.7 µs | 80,848.5 µs | 1 error |
+| `s2-c8-g` | charge-insert | 16,936 ops | 38.3 µs | 98.4 µs | 127.9 µs | 256.3 µs | 390.0 µs | 4,359.7 µs | 1 error |
+| `s2-c1-s` | booking | 3,315 ops | 541.4 µs | 11,793.5 µs | 14,535.2 µs | 25,217.9 µs | 34,369.5 µs | 52,501.9 µs | 0 errors |
+| `s2-c1-s` | commit | 3,000 ops | 1,214.4 µs | 1,483.6 µs | 1,669.0 µs | 4,554.6 µs | 7,898.1 µs | 29,140.4 µs | 0 errors |
+| `s2-c1-s` | freight-insert | 3,000 ops | 40.1 µs | 275.1 µs | 1,449.0 µs | 3,836.9 µs | 5,979.1 µs | 29,005.4 µs | 0 errors |
+| `s2-c1-s` | charge-insert | 16,925 ops | 33.9 µs | 212.4 µs | 342.3 µs | 3,160.3 µs | 5,635.8 µs | 29,414.0 µs | 0 errors |
+| `s2-c8-s` | booking | 3,347 ops | 519.0 µs | 3,988.2 µs | 6,085.5 µs | 14,718.8 µs | 21,744.7 µs | 62,573.8 µs | 0 errors |
+| `s2-c8-s` | commit | 3,000 ops | 1,121.7 µs | 1,612.6 µs | 2,193.1 µs | 5,525.6 µs | 10,148.9 µs | 21,003.9 µs | 0 errors |
+| `s2-c8-s` | freight-insert | 3,050 ops | 40.7 µs | 77.4 µs | 101.2 µs | 2,566.7 µs | 5,248.4 µs | 13,088.4 µs | 0 errors |
+| `s2-c8-s` | charge-insert | 17,203 ops | 34.7 µs | 64.0 µs | 84.4 µs | 1,777.9 µs | 3,499.9 µs | 16,130.0 µs | 0 errors |
+
+Run 3:
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | max | errors |
 |---|---|---|---|---|---|---|---|---|---|
-| `s2-c1-g` | booking | 3,343 | 1,086.9 µs | 11,052.4 µs | 12,892.6 µs | 21,677.0 µs | 29,235.4 µs | 49,255.0 µs | 0 |
-| `s2-c1-g` | commit | 3,000 | 1,217.6 µs | 1,614.8 µs | 1,794.3 µs | 4,165.3 µs | 8,535.3 µs | 17,026.5 µs | 0 |
-| `s2-c1-g` | freight-insert | 3,000 | 56.7 µs | 270.1 µs | 1,326.5 µs | 2,134.4 µs | 5,303.5 µs | 15,394.6 µs | 0 |
-| `s2-c1-g` | charge-insert | 16,917 | 35.5 µs | 172.1 µs | 258.2 µs | 1,915.6 µs | 4,717.0 µs | 19,903.3 µs | 0 |
-| `s2-c8-g` | booking | 3,338 | 505.2 µs | 3,984.7 µs | 4,409.7 µs | 7,628.9 µs | 12,643.8 µs | 69,476.7 µs | 0 |
-| `s2-c8-g` | commit | 3,000 | 1,250.6 µs | 2,119.9 µs | 2,499.3 µs | 5,705.6 µs | 10,653.9 µs | 67,941.1 µs | 0 |
-| `s2-c8-g` | freight-insert | 3,002 | 52.6 µs | 99.9 µs | 123.5 µs | 290.1 µs | 390.1 µs | 2,068.3 µs | 0 |
-| `s2-c8-g` | charge-insert | 16,929 | 34.4 µs | 91.4 µs | 116.2 µs | 220.6 µs | 329.3 µs | 2,416.8 µs | 1 |
-| `s2-c1-s` | booking | 3,335 | 553.1 µs | 11,224.1 µs | 14,040.5 µs | 23,872.7 µs | 31,832.4 µs | 44,165.0 µs | 0 |
-| `s2-c1-s` | commit | 3,000 | 1,180.4 µs | 1,425.8 µs | 1,585.4 µs | 4,324.4 µs | 8,934.6 µs | 21,915.0 µs | 0 |
-| `s2-c1-s` | freight-insert | 3,000 | 63.5 µs | 271.1 µs | 1,394.3 µs | 3,682.1 µs | 5,842.4 µs | 21,976.7 µs | 0 |
-| `s2-c1-s` | charge-insert | 16,915 | 49.9 µs | 200.4 µs | 317.9 µs | 2,982.7 µs | 5,187.9 µs | 26,969.5 µs | 0 |
-| `s2-c8-s` | booking | 3,280 | 507.2 µs | 4,123.4 µs | 5,515.2 µs | 11,862.9 µs | 17,400.6 µs | 119,515.0 µs | 0 |
-| `s2-c8-s` | commit | 3,000 | 1,200.3 µs | 1,899.3 µs | 2,415.5 µs | 6,659.7 µs | 11,278.3 µs | 36,141.7 µs | 0 |
-| `s2-c8-s` | freight-insert | 3,077 | 43.4 µs | 75.3 µs | 92.3 µs | 2,879.1 µs | 6,481.1 µs | 114,154.0 µs | 0 |
-| `s2-c8-s` | charge-insert | 17,369 | 33.9 µs | 61.8 µs | 77.2 µs | 196.4 µs | 3,004.8 µs | 36,172.3 µs | 0 |
+| `s2-c1-g` | booking | 3,343 ops | 1,086.9 µs | 11,052.4 µs | 12,892.6 µs | 21,677.0 µs | 29,235.4 µs | 49,255.0 µs | 0 errors |
+| `s2-c1-g` | commit | 3,000 ops | 1,217.6 µs | 1,614.8 µs | 1,794.3 µs | 4,165.3 µs | 8,535.3 µs | 17,026.5 µs | 0 errors |
+| `s2-c1-g` | freight-insert | 3,000 ops | 56.7 µs | 270.1 µs | 1,326.5 µs | 2,134.4 µs | 5,303.5 µs | 15,394.6 µs | 0 errors |
+| `s2-c1-g` | charge-insert | 16,917 ops | 35.5 µs | 172.1 µs | 258.2 µs | 1,915.6 µs | 4,717.0 µs | 19,903.3 µs | 0 errors |
+| `s2-c8-g` | booking | 3,338 ops | 505.2 µs | 3,984.7 µs | 4,409.7 µs | 7,628.9 µs | 12,643.8 µs | 69,476.7 µs | 0 errors |
+| `s2-c8-g` | commit | 3,000 ops | 1,250.6 µs | 2,119.9 µs | 2,499.3 µs | 5,705.6 µs | 10,653.9 µs | 67,941.1 µs | 0 errors |
+| `s2-c8-g` | freight-insert | 3,002 ops | 52.6 µs | 99.9 µs | 123.5 µs | 290.1 µs | 390.1 µs | 2,068.3 µs | 0 errors |
+| `s2-c8-g` | charge-insert | 16,929 ops | 34.4 µs | 91.4 µs | 116.2 µs | 220.6 µs | 329.3 µs | 2,416.8 µs | 1 error |
+| `s2-c1-s` | booking | 3,335 ops | 553.1 µs | 11,224.1 µs | 14,040.5 µs | 23,872.7 µs | 31,832.4 µs | 44,165.0 µs | 0 errors |
+| `s2-c1-s` | commit | 3,000 ops | 1,180.4 µs | 1,425.8 µs | 1,585.4 µs | 4,324.4 µs | 8,934.6 µs | 21,915.0 µs | 0 errors |
+| `s2-c1-s` | freight-insert | 3,000 ops | 63.5 µs | 271.1 µs | 1,394.3 µs | 3,682.1 µs | 5,842.4 µs | 21,976.7 µs | 0 errors |
+| `s2-c1-s` | charge-insert | 16,915 ops | 49.9 µs | 200.4 µs | 317.9 µs | 2,982.7 µs | 5,187.9 µs | 26,969.5 µs | 0 errors |
+| `s2-c8-s` | booking | 3,280 ops | 507.2 µs | 4,123.4 µs | 5,515.2 µs | 11,862.9 µs | 17,400.6 µs | 119,515.0 µs | 0 errors |
+| `s2-c8-s` | commit | 3,000 ops | 1,200.3 µs | 1,899.3 µs | 2,415.5 µs | 6,659.7 µs | 11,278.3 µs | 36,141.7 µs | 0 errors |
+| `s2-c8-s` | freight-insert | 3,077 ops | 43.4 µs | 75.3 µs | 92.3 µs | 2,879.1 µs | 6,481.1 µs | 114,154.0 µs | 0 errors |
+| `s2-c8-s` | charge-insert | 17,369 ops | 33.9 µs | 61.8 µs | 77.2 µs | 196.4 µs | 3,004.8 µs | 36,172.3 µs | 0 errors |
 
 **One core queues; eight cores mostly do not.** The statements do the same
 work at both core counts (p0 of `cargo-lookup` 99.8 us at `s2-c1-g`, 80.2
@@ -195,26 +200,26 @@ Each phase's mean times its ops over the booking's mean times its ops, run
 
 | Wait | Reading |
 |---|---|
-| Durability / commit | `commit` is 16.0 % of a booking at `s2-c1-g` and **55.4 %** at `s2-c8-g` (52.3 % at `s2-c8-s`). Its p50 rises from 1,762.6 to 2,312.3 us going from one core to eight under `group` while every other phase's p50 falls by 1.7x to 10x, so at eight cores the commit path, not the statements, bounds the booking. The name of the bound: the instance's single WAL stream and its commit path (AR0 M0), shared by eight cores |
+| Durability / commit | `commit` is 16.0 % of a booking at `s2-c1-g` and **55.4 %** at `s2-c8-g` (52.3 % at `s2-c8-s`). Its p50 rises from 1,762.6 to 2,312.3 us going from one core to eight under `group` while every other phase's p50 falls by 1.7x to 10x, so at eight cores the commit path, not the statements, bounds the booking. That this is the instance's single WAL stream (AR0 M0) shared by eight cores is the likely reading, not isolated by this run (no server-side breakdown) |
 | Write statements (`freight-insert`, `charge-insert`, `operation-update`, `org-update`) | at one core 29.6 % for `charge-insert` alone (about 5.6 charges per booking) and 7.9 / 4.6 / 4.4 % for the three others; at eight cores 15.9 / 3.2 / 2.6 / 2.9 % |
 | Reads (`cargo-lookup`, `credit-lookup`, `capacity-read`, `recipe-read`) | 7.3 to 8.4 % each at one core, 3.0 to 6.8 % at eight; `recipe-read` is the FilterScan and the largest |
-| Lock or conflict wait | 0 conflicts at any `cores = 1` cell and 0 / 3 / 2 at `c8-g`; **125 / 50 / 77 at `c8-s`** (`TXN_CONFLICT retryable=1 row id=... was written by transaction ...`, all on `operations` and `organizations` rows), 0.02 to 0.04 retries per booking, all retried by the driver. Their time is inside the phase that met them and is not separable |
+| Lock or conflict wait | 0 client-visible conflicts at any `cores = 1` cell and 0 / 3 / 2 at `c8-g`, of which 3 (two in run 2, one in run 3) are the btree re-descent refusal on a `freights` or `charges` insert (scenario0 section 6), which the driver files under its `read` axis, and 2 are held rows; **125 / 50 / 77 at `c8-s`** (`TXN_CONFLICT retryable=1 row id=... was written by transaction ...`, all on `operations` and `organizations` rows), 0.02 to 0.04 retries per booking, all retried by the driver. The server logs also record 5 to 15 `row id=...` refusals per one-core cell that never reached the driver (a statement that parks is re-run after the holder decides), so rows are waited for at one core too. Their time is inside the phase that met them and is not separable |
 | Client and socket round trip | the unattributed column, 3.8 to 7.1 % |
 
 | cell | run | committed | rejected-capacity | rejected-credit | conflicted | axes (op / org / read / commit) | verify failures / checks | error replies (all phases) | exit |
 |---|---|---|---|---|---|---|---|---|---|
-| `s2-c1-g` | 1 | 3,000 | 294 | 55 | 0 | 0 / 0 / 0 / 0 | 22 / 400 | 0 | 0 |
-| `s2-c8-g` | 1 | 3,000 | 300 | 60 | 0 | 0 / 0 / 0 / 0 | 19 / 400 | 0 | 0 |
-| `s2-c1-s` | 1 | 3,000 | 289 | 50 | 0 | 0 / 0 / 0 / 0 | 30 / 400 | 0 | 0 |
-| `s2-c8-s` | 1 | 3,000 | 280 | 41 | 125 | 41 / 84 / 0 / 0 | 27 / 400 | 125 | 0 |
-| `r2-s2-c1-g` | 2 | 3,000 | 297 | 56 | 0 | 0 / 0 / 0 / 0 | 27 / 400 | 0 | 0 |
-| `r2-s2-c8-g` | 2 | 3,000 | 285 | 57 | 3 | 1 / 0 / 2 / 0 | 27 / 400 | 3 | 0 |
-| `r2-s2-c1-s` | 2 | 3,000 | 262 | 53 | 0 | 0 / 0 / 0 / 0 | 30 / 400 | 0 | 0 |
-| `r2-s2-c8-s` | 2 | 3,000 | 298 | 49 | 50 | 22 / 28 / 0 / 0 | 23 / 400 | 50 | 0 |
-| `r3-s2-c1-g` | 3 | 3,000 | 291 | 52 | 0 | 0 / 0 / 0 / 0 | 31 / 400 | 0 | 0 |
-| `r3-s2-c8-g` | 3 | 3,000 | 281 | 57 | 2 | 0 / 1 / 1 / 0 | 13 / 400 | 2 | 0 |
-| `r3-s2-c1-s` | 3 | 3,000 | 282 | 53 | 0 | 0 / 0 / 0 / 0 | 27 / 400 | 0 | 0 |
-| `r3-s2-c8-s` | 3 | 3,000 | 239 | 41 | 77 | 29 / 48 / 0 / 0 | 25 / 400 | 77 | 0 |
+| `s2-c1-g` | 1 | 3,000 bookings | 294 bookings | 55 bookings | 0 conflicts | 0 / 0 / 0 / 0 conflicts | 22 / 400 checks | 0 replies | exit 0 |
+| `s2-c8-g` | 1 | 3,000 bookings | 300 bookings | 60 bookings | 0 conflicts | 0 / 0 / 0 / 0 conflicts | 19 / 400 checks | 0 replies | exit 0 |
+| `s2-c1-s` | 1 | 3,000 bookings | 289 bookings | 50 bookings | 0 conflicts | 0 / 0 / 0 / 0 conflicts | 30 / 400 checks | 0 replies | exit 0 |
+| `s2-c8-s` | 1 | 3,000 bookings | 280 bookings | 41 bookings | 125 conflicts | 41 / 84 / 0 / 0 conflicts | 27 / 400 checks | 125 replies | exit 0 |
+| `r2-s2-c1-g` | 2 | 3,000 bookings | 297 bookings | 56 bookings | 0 conflicts | 0 / 0 / 0 / 0 conflicts | 27 / 400 checks | 0 replies | exit 0 |
+| `r2-s2-c8-g` | 2 | 3,000 bookings | 285 bookings | 57 bookings | 3 conflicts | 1 / 0 / 2 / 0 conflicts | 27 / 400 checks | 3 replies | exit 0 |
+| `r2-s2-c1-s` | 2 | 3,000 bookings | 262 bookings | 53 bookings | 0 conflicts | 0 / 0 / 0 / 0 conflicts | 30 / 400 checks | 0 replies | exit 0 |
+| `r2-s2-c8-s` | 2 | 3,000 bookings | 298 bookings | 49 bookings | 50 conflicts | 22 / 28 / 0 / 0 conflicts | 23 / 400 checks | 50 replies | exit 0 |
+| `r3-s2-c1-g` | 3 | 3,000 bookings | 291 bookings | 52 bookings | 0 conflicts | 0 / 0 / 0 / 0 conflicts | 31 / 400 checks | 0 replies | exit 0 |
+| `r3-s2-c8-g` | 3 | 3,000 bookings | 281 bookings | 57 bookings | 2 conflicts | 0 / 1 / 1 / 0 conflicts | 13 / 400 checks | 2 replies | exit 0 |
+| `r3-s2-c1-s` | 3 | 3,000 bookings | 282 bookings | 53 bookings | 0 conflicts | 0 / 0 / 0 / 0 conflicts | 27 / 400 checks | 0 replies | exit 0 |
+| `r3-s2-c8-s` | 3 | 3,000 bookings | 239 bookings | 41 bookings | 77 conflicts | 29 / 48 / 0 / 0 conflicts | 25 / 400 checks | 77 replies | exit 0 |
 
 ## 6. Correctness: what the invariant failures are
 
@@ -234,23 +239,23 @@ probe cells run the same workload under `--isolation repeatable-read`:
 
 | Cell | isolation | tps | committed | conflicted (retried) | axes (op / org) | verify failures / checks |
 |---|---|---|---|---|---|---|
-| `rr-s2-c1-g` | repeatable-read | 541.8 tps | 3,000 | 101 | 51 / 50 | **0 / 400** |
-| `rr-s2-c8-g` | repeatable-read | 1,579.5 tps | 3,000 | 58 | 35 / 23 | **0 / 400** |
-| `s2-c1-g` (median of 3) | server default | 537.6 tps | 3,000 | 0 | 0 / 0 | 22, 27, 31 / 400 |
-| `s2-c8-g` (median of 3) | server default | 1,519.0 tps | 3,000 | 0, 3, 2 | 0 / 0 | 19, 27, 13 / 400 |
+| `rr-s2-c1-g` | repeatable-read | 541.8 tps | 3,000 bookings | 101 conflicts | 51 / 50 conflicts | **0 / 400 checks** |
+| `rr-s2-c8-g` | repeatable-read | 1,579.5 tps | 3,000 bookings | 58 conflicts | 35 / 23 conflicts | **0 / 400 checks** |
+| `s2-c1-g` (median of 3) | server default | 537.6 tps | 3,000 bookings | 0 conflicts | 0 / 0 conflicts | 22, 27, 31 / 400 checks |
+| `s2-c8-g` (median of 3) | server default | 1,519.0 tps | 3,000 bookings | 0, 3, 2 conflicts | 0 / 0 conflicts | 19, 27, 13 / 400 checks |
 
 Percentiles of the probe cells, microseconds:
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | errors |
 |---|---|---|---|---|---|---|---|---|
-| `rr-s2-c1-g` | booking | 3,354 | 625.3 µs | 10,566.4 µs | 12,599.6 µs | 22,138.2 µs | 29,724.5 µs | 0 |
-| `rr-s2-c1-g` | commit | 3,000 | 1,251.3 µs | 1,564.5 µs | 1,727.1 µs | 4,250.8 µs | 7,449.3 µs | 0 |
-| `rr-s2-c1-g` | operation-update | 3,101 | 68.1 µs | 168.7 µs | 206.5 µs | 1,749.0 µs | 4,003.1 µs | 51 |
-| `rr-s2-c1-g` | org-update | 3,050 | 65.3 µs | 169.6 µs | 208.8 µs | 1,773.2 µs | 3,640.0 µs | 50 |
-| `rr-s2-c8-g` | booking | 3,355 | 472.0 µs | 3,873.9 µs | 4,179.2 µs | 7,337.8 µs | 12,492.2 µs | 0 |
-| `rr-s2-c8-g` | commit | 3,000 | 1,313.3 µs | 1,990.1 µs | 2,329.6 µs | 5,486.8 µs | 10,377.1 µs | 0 |
-| `rr-s2-c8-g` | operation-update | 3,058 | 50.1 µs | 96.1 µs | 114.4 µs | 206.6 µs | 337.4 µs | 35 |
-| `rr-s2-c8-g` | org-update | 3,023 | 46.8 µs | 95.0 µs | 112.5 µs | 198.2 µs | 312.6 µs | 23 |
+| `rr-s2-c1-g` | booking | 3,354 ops | 625.3 µs | 10,566.4 µs | 12,599.6 µs | 22,138.2 µs | 29,724.5 µs | 0 errors |
+| `rr-s2-c1-g` | commit | 3,000 ops | 1,251.3 µs | 1,564.5 µs | 1,727.1 µs | 4,250.8 µs | 7,449.3 µs | 0 errors |
+| `rr-s2-c1-g` | operation-update | 3,101 ops | 68.1 µs | 168.7 µs | 206.5 µs | 1,749.0 µs | 4,003.1 µs | 51 errors |
+| `rr-s2-c1-g` | org-update | 3,050 ops | 65.3 µs | 169.6 µs | 208.8 µs | 1,773.2 µs | 3,640.0 µs | 50 errors |
+| `rr-s2-c8-g` | booking | 3,355 ops | 472.0 µs | 3,873.9 µs | 4,179.2 µs | 7,337.8 µs | 12,492.2 µs | 0 errors |
+| `rr-s2-c8-g` | commit | 3,000 ops | 1,313.3 µs | 1,990.1 µs | 2,329.6 µs | 5,486.8 µs | 10,377.1 µs | 0 errors |
+| `rr-s2-c8-g` | operation-update | 3,058 ops | 50.1 µs | 96.1 µs | 114.4 µs | 206.6 µs | 337.4 µs | 35 errors |
+| `rr-s2-c8-g` | org-update | 3,023 ops | 46.8 µs | 95.0 µs | 112.5 µs | 198.2 µs | 312.6 µs | 23 errors |
 
 **Finding.** The invariant failures are the read-committed lost update of a
 client-side read-modify-write, not corruption of the engine: under
@@ -302,7 +307,7 @@ difference below those in the matching cell is not a result. The spread
 of `c8-s` is 741.1 (run 2, 50 conflicts), 864.2 (run 1, 125) and 1,052.6 tps
 (run 3, 77): throughput does not follow the conflict count, and the spread
 is not explained here. The device thermometer,
-`load-cargos` p50, is 1.30 to 1.45 ms across all fourteen cells, so no
+`load-cargos` p50, is 1.30 to 1.38 ms across all fourteen cells, so no
 device stall is indicated (`recovery_checkpoint_us` was not sampled).
 
 | cell | run | precheck UTC | loadavg 1/5/15 | build/ctest processes |
@@ -336,7 +341,8 @@ build or test process.
    reactor, not the statement.
 3. **`strict` conflicts.** At eight cores under `strict` 50 to 125 bookings
    in 3,000 meet a row held by an undecided writer and are refused
-   `TXN_CONFLICT`, against 0 to 3 under `group`. Row locks held across the
+   `TXN_CONFLICT`, against 0 to 1 held-row refusals per run under `group`
+   (whose other 3 refusals are the btree re-descent, section 5). Row locks held across the
    longer commit wait are the likely mechanism; this run does not show it.
 4. **The invariant failures are a property of the read-modify-write under
    the default isolation, and repeatable-read removes them at no visible

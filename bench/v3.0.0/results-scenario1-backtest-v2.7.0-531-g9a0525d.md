@@ -40,9 +40,9 @@ engine admits. Cells: `s1-c1-g` (`cores = 1`, `group`), `s1-c8-g`
 
 | Cell | Result | Exit | Elapsed |
 |---|---|---|---|
-| `s1-c1-g` | refused at the fifth `CREATE TABLE` | 1 | 1 s |
-| `s1-c8-g` | refused at the fifth `CREATE TABLE` | 1 | 1 s |
-| `s1-c1-s` | refused at the fifth `CREATE TABLE` | 1 | 1 s |
+| `s1-c1-g` | refused at the fifth `CREATE TABLE` | exit 1 | 1 s |
+| `s1-c8-g` | refused at the fifth `CREATE TABLE` | exit 1 | 1 s |
+| `s1-c1-s` | refused at the fifth `CREATE TABLE` | exit 1 | 1 s |
 
 The driver's output, identical in all three but for the suffix:
 
@@ -50,8 +50,11 @@ The driver's output, identical in all three but for the suffix:
     scenario1 aborted: could not create daily_stats_s1_c1_g
       server said: ERR HEAP storage is suspended (SUS-1) and no new heap relation is created (byte 219); BTREE is the default and every existing heap relation still mounts and serves. The suspension, its rulings and the condition that lifts it are instructions/v3.0.0/workorder-as-sus1-heap-suspended.md
 
-The refusal is the engine's documented one (`CLAUDE.md`: "`CREATE TABLE ...
-HEAP` is refused `Unsupported`"). In the driver's `SCHEMA` table
+The refusal is the engine's documented one (`docs/spec/heap-and-tuple.md`,
+the SUS-1 note under §3.1b: "`CREATE TABLE … HEAP` is refused `Unsupported`
+naming SUS-1"). The driver prints the reply without its code; the server
+log carries it whole, `ERR UNSUPPORTED retryable=0 HEAP storage is
+suspended (SUS-1) ...`. In the driver's `SCHEMA` table
 (`tools/scenario1_backtest.py` lines 219 to 265 at `9a0525d`) `daily_stats`
 and `model_results` are `HEAP`, and the write sweep's `write_probe`
 relation is created `... HEAP` at line 1663; `--bars-clustered` moves only

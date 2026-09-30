@@ -58,13 +58,18 @@ run 1.
 
 **Insights.** Durability is still the axis at one core (group is 3.70x
 strict). At eight cores `strict` now doubles (169.4 to 331.7 tps) where
-f6ed10c had it flat: the first place in this series where the durability
-wait overlaps across cores. The one-core path is 17 to 20 % slower than at
-f6ed10c, outside this run's floor. **Anomaly**: `s0-c8-s` refuses one trade
-insert in each of its three runs (`ERR TXN_CONFLICT retryable=1 btree
-descent for key 113 from page 138 gave up after 5 attempts`), never
-elsewhere in nine other runs; the driver does not retry, so the cell has one
-torn trade and exits 1. No entry for it was found in `docs/`.
+f6ed10c had it flat, consistent with the durability wait overlapping
+across cores (this run has no server-side breakdown to show it). The
+one-core path is 17 to 20 % slower than at f6ed10c, outside this run's
+floor. **Anomaly**: `s0-c8-s` refuses one trade insert in each of its three
+runs (`ERR TXN_CONFLICT retryable=1 btree descent for key 113 from page 138
+gave up after 5 attempts`, the same key and page every time), never in
+scenario0's nine other runs; the driver does not retry, so the cell has one
+torn trade and exits 1. The same refusal also reached scenario2's `s2-c8-g`
+three times in two of its three runs, under `group`, where that driver
+retried it. The bounded re-descent and its retryable refusal are documented
+(`docs/spec/heap-and-tuple.md` §5, AT-S5c); `docs/inflight/known-gaps.md`
+has no entry recording that this workload reaches it.
 
 ## Scenario 1: backtest ([file](results-scenario1-backtest-v2.7.0-531-g9a0525d.md))
 
@@ -116,9 +121,10 @@ of three runs; no v3 predecessor, no delta.
 (10,881 qps at 10,000 rows against 11,186 at 200) where unindexed it falls
 with the rows: about 84 us fixed plus 70 ns per row walked. The gain is
 1.1x at 200 rows (inside the floor), 1.4x to 2.0x at 1,000 and 5.5x to 10.8x
-at 10,000 on the lookups, and the residual cost of an indexed read is the
-round trip (about 90 us against 70 us for a pk lookup). `cores = 8` gives
-the same numbers within noise from one connection. Noise floor is large
+at 10,000 on the `loans` and `reservations` equalities, and the residual cost
+of an indexed read is the round trip (about 90 us against 70 us for a pk
+lookup). `cores = 8` from one connection reads 0.86x to 1.18x of `cores = 1`
+(median 0.95x) and is the slower of the two in 65 of 72 cells. Noise floor is large
 and heavy-tailed (median shape 1.6 to 8.2 % between runs, four groups at 21
 to 33 %, worst shapes to 89 %), so only differences over about 10 % are
 read.
@@ -140,8 +146,10 @@ day 1: 1.11x (at the floor), 1.44x, 2.67x. The pk control reads 0.97x to
 1.15x and is the floor.
 
 **Insights.** The controller gets most of the hand-declared ceiling without
-being told, and gives up the difference in the first observation of each
-value (p95 1,130 us, p50 187 us against 183 us declared). Answers were
+being told; the difference is in the mean (416 us against 329 us declared,
+day 1), not at p50 (187 against 183 us) or p95 (1,130 against 1,061 us),
+so the controller walks a larger share of probes than the declared arm,
+not slower ones. Answers were
 byte-identical across arms on all three days in both runs. **At the
 default `cabin_optimizer_cooldown_half_lives = 128` and `decay_half_life =
 5` the run never DROPs a Cabin (`drops=0`)**: the controller creates
@@ -155,9 +163,9 @@ against 3,283 qps, single draws).
 
 1. **Cross-core execution now pays where it is measured**: scenario2 at eight
    cores under `group` is 2.83x one core, and scenario0's `strict` doubles;
-   both were flat or negative at f6ed10c. What bounds them now is the
-   commit path (55 % of a booking) and the host's eight CPUs shared with the
-   client processes, which this box cannot separate.
+   both were flat or negative at f6ed10c. In scenario2 the commit path is
+   55 % of a booking at eight cores; the host's eight CPUs are shared with
+   the client processes, and this box cannot separate the two.
 2. **The one-core path is slower than at f6ed10c**: 8.7 to 20.1 % on
    scenario0 and scenario2, outside their floors and not attributable to
    any single milestone. This is the number a per-milestone overhead
@@ -167,12 +175,14 @@ against 3,283 qps, single draws).
 4. **A Cabin, declared or automatic, and a secondary index both deliver the
    same thing, a read that costs one round trip instead of the relation**;
    their value scales with the row count (nothing to gain at 200 rows).
-5. **Two defects surfaced**: a retryable `TXN_CONFLICT` from the btree's
-   bounded re-descent that a driver without retry turns into a torn trade
-   (scenario0, `strict`, eight cores, 3 of 3 runs), and scenario1's
-   inability to run at all under SUS-1. The scenario2 invariant failures
-   are diagnosed as the driver's read-committed lost update, not an
-   engine defect.
+5. **Two driver gaps surfaced; no engine defect is established**: the btree's documented
+   bounded re-descent refusal (retryable `TXN_CONFLICT`) is reached under
+   eight concurrent appenders (scenario0 `strict`, 3 of 3 runs; scenario2
+   `group`, 3 refusals in 2 of 3 runs), and scenario0's driver, which does
+   not retry, turns it into a torn trade; and scenario1's driver still
+   creates `HEAP` relations, which SUS-1 refuses by design. The scenario2
+   invariant failures are diagnosed as the driver's read-committed lost
+   update, not an engine defect.
 
 ## Not done
 
@@ -180,6 +190,7 @@ against 3,283 qps, single draws).
 - Scenario1: no number.
 - Scenario3: `--cabin` and the `single`, `composite`, `covering` index modes.
 - `recovery_checkpoint_us` was not sampled in any cell; the load phases'
-  p50s (scenario0 1.24 to 1.42 ms, scenario2 1.30 to 1.45 ms) stood in as the
+  p50s (scenario0 `load-users` 1.24 to 1.42 ms, scenario2 `load-cargos` 1.30
+  to 1.38 ms) stood in as the
   device thermometer and show no stall.
 - `cores` above the CPU count was not tried.

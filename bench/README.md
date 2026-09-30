@@ -41,8 +41,9 @@ tree resolves against `9a0525d`** (the AY-S11 overhead file against
 `a59da9c`) — `known-gaps.md`, the concept notes and
 `instructions/v3.0.0/` cite several. The rebaseline's files are the
 comparator for every later delta of the same driver and shape; a delta
-against a deleted file names `9a0525d` and says the two runs are ten days
-and five milestones apart.
+against a deleted file names `9a0525d` and states how far apart the two
+runs are, in commits and milestones (the rebaseline's own deltas against
+the `f6ed10c` BTREE pair say 374 commits).
 
 ## Where a result goes
 
@@ -116,13 +117,14 @@ against a BTREE baseline of the same driver** — a driver still emitting
 changes it. Heap relations are suspended
 (SUS-1), so a post-2026-09-05 engine refuses the shape the AL-S8 files at
 `f6ed10c` measured — `trades`/`user_periodic_profit` and
-`freights`/`charges` were `HEAP` there. Those files stay as history and are
-compared against nothing: a heap number beside a btree number is two
-workloads. The comparator for every later delta is `f6ed10c` re-measured
+`freights`/`charges` were `HEAP` there. Those files stay as history (at
+`9a0525d` since 2026-09-30) and are compared against nothing: a heap number
+beside a btree number is two workloads. Until the 2026-09-30 rebaseline
+replaced it, the comparator for every later delta was `f6ed10c` re-measured
 with the changed drivers, on the same host and from the archived binary
 AL-S8's stamp names — **measured 2026-09-08**, eight cells, all of
-AL-S8's own arguments and its cell order (both deleted on 2026-09-30 and
-held at `9a0525d`; the rebaseline above replaced them as the comparator):
+AL-S8's own arguments and its cell order (both files deleted on 2026-09-30
+and held at `9a0525d`):
 
 - `results-scenario0-stockmarket-btree-v2.7.0-157-gf6ed10c.md`
 - `results-scenario2-freight-btree-v2.7.0-157-gf6ed10c.md`
