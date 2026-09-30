@@ -855,3 +855,71 @@ serve a violation from the set.
 **Suite**: 3045/3045 in Debug at `6097a92`, and 3046/3046 with the review's
 changes (`ctest -LE heap-suspended -j8`, one pre-existing disabled cell).
 Overhead not measured; measured at the milestone's close.
+
+### AY-S8 — built 2026-09-30
+
+On `worktree-ay-s8-snapshot-chunk-count` from `6e84c23`, on the operator's
+*"go ahead for AY-S8"* with AY-Q6 marked (C) and AY-Q7 marked (B)
+(`raft-marks-2026-09-30.md` §13-§15).
+
+**Red first**, at `4eab535` against `6e84c23`, five cells:
+`AssertionRecoverTest.AForeignRecordBetweenChunksLeavesTheBaseWhole` (a
+commit between two chunks, and the chunks after it dropped - 700 groups
+under-counted), `ARunTornAtScanEndIsNotABase` (adopted),
+`APartialRunIsDiscardedAndTheWholeRunAfterItIsTheBase` (the partial run
+closed at the next record shadowed the whole one),
+`WalPayloadTest.AssertSnapshotWithAZeroChunkCountIsCorruption` (decoded) and
+`SuperBlockTest.AVersion18VolumeDoesNotMount` (mounted). The chunks are the
+real writer's bytes, replayed from a scratch stream.
+
+**Built** at `39b65a0`. `AssertSnapshotPayload`'s reserved word is
+`chunk_index:u16 | chunk_count:u16`; a count of 0 or an index past it is
+`InvalidArgument` on encode and `Corruption` on decode. `LogAssertionSnapshot`
+cuts the run before its first append, so a group too large for a record and
+a run of more than 65,535 chunks are both refused `OutOfSpace` with nothing
+written - the survey's third defect, a partial run left by a mid-run
+`OutOfSpace`, goes with it; a failed append mid-run can still leave one.
+Recovery holds a run's groups (keys copied) until its count is met in order,
+then restores them, walks the pages once and marks the base; nothing but the
+count closes a run. A chunk 0 discards an open run of the same assertion; a
+chunk out of sequence discards its run and is skipped; a run open at scan
+end is discarded (AY-Q7 (B)), counted in the new
+`AssertionRecoveryResult::partial_runs_discarded`, and the recovery log's
+error says the snapshots were cut short. `kSuperBlockVersion` 18 -> 19
+(AY-Q6 (C)); the WAL segment's format version does not move, and the
+superblock's comment says why. `assertion.md` §6.1 and §7 restated; the bug
+entry this fixes is deleted.
+
+**The review** (`critics-developer`, one pass) found no correctness defect:
+every whole run the old rule took is still taken - a checkpoint's run is
+written under the directory latch every `ASSERT_*` append takes, and a
+publish run's assertion is in no checkpoint yet - and the writer's chunk cut
+is the old one. Six mutants: closing at any foreign record, adopting at scan
+end and dropping the chunk-0 discard were killed by the stage's cells;
+**adopting a chunk whose run began before the scan survived**, and
+`ARunWhoseStartPrecedesTheScanIsSkippedAndTheNextWholeRunIsTheBase` kills it;
+**the discard counter never moving survived**, and the torn and partial
+cells now read it; **dropping the sequence check survived**, and
+`AChunkOutOfSequenceDiscardsItsRun` (chunk 1 twice, over three chunks) kills
+it - measured, the mutant restored from a copy. Also taken: three stale
+comments (`record.hpp`, the recovery pass's "scan starts at
+`checkpoint_lsn`", a test's "no continuation flag"), the 700-group fill
+written once, an unused include, `extract` for the move-then-erase, and
+§6.1's list of what reaches "cannot enforce" gaining a pass that fails
+outright.
+
+Rejected:
+
+- **A mount-level cell for "writes refused `CannotEnforce`" after a torn
+  run.** The mount treats every result with `recovered == false` alike
+  (`mount_recovery.cpp`, `NoteUnenforceable`), and
+  `AssertionResumeTest.WithNoBaseInRangeTheAssertionIsNotAdoptedAtAll` pins
+  that path; the torn run reaches it through `recovered == false`, which
+  `ARunTornAtScanEndIsNotABase` pins.
+- **One helper for the `BoundCabin` -> `AssertionCabinSnapshot` conversion**,
+  written four times (two production, two test). Pre-existing, and not this
+  stage's.
+
+**Suite**: 3053/3053 in Debug at `39b65a0` (`ctest -LE heap-suspended -j8`,
+one pre-existing disabled cell), and 3055/3055 with the review's changes.
+Overhead not measured; measured at the milestone's close.

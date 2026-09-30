@@ -150,7 +150,7 @@ enum class RecordType : std::uint8_t {
     // assertion replay folds onto, so the fold starts at the last checkpoint
     // rather than at the cabin's birth. Chunked, because a cabin's group count is
     // bounded by the data and a record must fit a segment; `payload.hpp` carries
-    // the format and the reason no continuation flag is needed.
+    // the format and each chunk's place in its run (AY-S8).
     kAssertSnapshot = 24,
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
     // there is no B+ tree page format to describe, and a number reserved

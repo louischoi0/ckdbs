@@ -1,6 +1,5 @@
 #include "kds/exec/assertion_recover.hpp"
 
-#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
@@ -220,10 +219,11 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
             }
             if (context.based(id)) {
                 // **A later checkpoint's snapshot, and it is skipped.** The scan
-                // starts at the anchor's `checkpoint_lsn`, and a crash during a
-                // *subsequent* checkpoint - the ordinary case, since the anchor
-                // is only published at Complete() - leaves that checkpoint's
-                // snapshot records inside this range. Restoring them would hit
+                // starts at the anchor's `redo_start_lsn`, at or below the
+                // `CHECKPOINT_BEGIN` whose run gave the base, so every later
+                // run in range - a later completed checkpoint's, or one a crash
+                // cut, the anchor being published only at Complete() - is one
+                // this skip meets. Restoring them would hit
                 // `RestoreGroup`'s duplicate-id refusal and fail the whole pass,
                 // leaving every assertion unenforcing after a routine crash.
                 //
@@ -262,9 +262,8 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
             if (++run.next_index < run.chunk_count) {
                 return Status::OK();  // AS6a's step 3 waits for the rest of the run
             }
-            const PendingRun whole = std::move(run);
-            pending.erase(id);
-            return close_base(id, whole);
+            auto whole = pending.extract(id);
+            return close_base(id, whole.mapped());
         }
 
         if (!IsAssertionRecord(record.type())) {

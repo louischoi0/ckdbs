@@ -339,9 +339,11 @@ On a multi-core instance:
 - **An assertion the registry knows of and cannot enforce refuses the
   relation's writes, on every core.** Refusing is recoverable; admitting an
   unchecked write is not. What reaches "cannot enforce" is a revive that
-  failed and a mount whose scan holds no whole snapshot run for the
-  assertion - none at all, or only runs cut short (§7, AY-S8) - and it
-  lasts until `DROP` and `CREATE ASSERTION`.
+  failed, a mount whose scan holds no whole snapshot run for the
+  assertion - none at all, or only runs cut short (§7, AY-S8) - and a
+  recovery pass that fails outright (a Corruption, such as a snapshot with
+  no chunk count), which reaches it for every assertion. It lasts until
+  `DROP` and `CREATE ASSERTION`.
 - **The file that made a cabin unenforceable is not one any more** (AW-S1b):
   a cabin page is a *user* page and every core writes those, so a chain
   core 0 built for a relation another core owned is appended to like any

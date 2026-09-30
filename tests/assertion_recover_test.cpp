@@ -274,8 +274,8 @@ protected:
             wal_->Append({wal::RecordType::kTxnCommit, /*txn_id=*/41, kInvalidPageId}).ok());
     }
 
-    // A cabin whose snapshot takes several records (the 700 of the chunking
-    // cell below).
+    // A cabin whose snapshot takes several records - 700 and not 600, which
+    // fell 302 bytes short of chunking (`ManyGroupsChunkAcrossRecords...`).
     static void FillToChunk(BoundCabin& live) {
         for (int i = 0; i < 700; ++i) {
             live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
@@ -390,9 +390,8 @@ TEST_F(AssertionRecoverTest, AnEmptyCabinStillGetsASnapshotSoItsAbsenceMeansSome
 }
 
 TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
-    // A cabin's group count is bounded by the data, so the snapshot chunks - and
-    // the loader is additive over the chunks, which is the property that makes a
-    // continuation flag unnecessary.
+    // A cabin's group count is bounded by the data, so the snapshot chunks, and
+    // the loader takes the run as a base once every chunk it counts has arrived.
     //
     // Groups only, no entries: these headers exceed what one record's payload can
     // hold, which is the boundary under test. Entries would add nothing to it and
@@ -404,9 +403,7 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
     // boundary without reaching it. The record count below is what keeps that
     // from happening silently again.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
-    for (int i = 0; i < 700; ++i) {
-        live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
-    }
+    FillToChunk(live);
     const std::size_t groups = live.group_count();
     ASSERT_EQ(groups, 700u);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
@@ -457,9 +454,7 @@ TEST_F(AssertionRecoverTest, AChunkedSnapshotRelinksEachEntryExactlyOnce) {
     // and a duplicated pair is exactly what §7's VerifyAgainstEntries catches.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
     Write(live, Key("x"), 5, /*pk=*/1);  // group id 1, so it lands in chunk one
-    for (int i = 0; i < 700; ++i) {
-        live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
-    }
+    FillToChunk(live);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
     ASSERT_GT(SnapshotRecords(checkpoint_lsn), 1u) << "one chunk cannot double-attach anything";
 
@@ -537,6 +532,7 @@ TEST_F(AssertionRecoverTest, ARunTornAtScanEndIsNotABase) {
     EXPECT_FALSE(report.value().assertions[0].recovered)
         << "a run missing its last chunk was adopted as a base";
     EXPECT_EQ(rebuilt.group_count(), 0u) << "a discarded run leaves nothing restored";
+    EXPECT_EQ(report.value().assertions[0].partial_runs_discarded, 1u);
 }
 
 // A run cut short in a live log - `LogAssertionSnapshot` refusing mid-run, or a
@@ -559,6 +555,59 @@ TEST_F(AssertionRecoverTest, APartialRunIsDiscardedAndTheWholeRunAfterItIsTheBas
     EXPECT_TRUE(report.value().assertions[0].recovered);
     EXPECT_EQ(rebuilt.group_count(), live.group_count())
         << "the partial run was taken as the base and the whole one skipped";
+    EXPECT_EQ(report.value().assertions[0].partial_runs_discarded, 1u);
+}
+
+// The scan starts at `redo_start_lsn`, which can fall between two chunks of an
+// earlier checkpoint's run. The chunks it meets are that run's tail, not a
+// run, and the whole run after them is the base. Taking the tail finished the
+// run by its count and skipped the whole one as "a later checkpoint's".
+TEST_F(AssertionRecoverTest, ARunWhoseStartPrecedesTheScanIsSkippedAndTheNextWholeRunIsTheBase) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(live);
+    const auto chunks = SnapshotChunks(live);
+    ASSERT_GT(chunks.size(), 1u) << "one chunk has no tail";
+
+    AppendChunk(chunks[0]);
+    const wal::Lsn from = AppendChunk(chunks[1]);
+    for (std::size_t i = 2; i < chunks.size(); ++i) AppendChunk(chunks[i]);
+    AppendForeignRecord();
+    for (const auto& chunk : chunks) AppendChunk(chunk);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(from, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+    EXPECT_EQ(rebuilt.group_count(), live.group_count())
+        << "the tail of a run begun before the scan was taken as the base";
+    EXPECT_EQ(report.value().assertions[0].partial_runs_discarded, 0u)
+        << "a tail is skipped, not counted as a run cut short";
+}
+
+// A chunk out of its run's order - here chunk 1 twice - is bytes no writer
+// produces (one latch writes a run whole). The run is discarded rather than
+// restored twice, which would fail the whole pass on a duplicate group id and
+// leave every assertion unenforcing; the whole run after it is the base.
+TEST_F(AssertionRecoverTest, AChunkOutOfSequenceDiscardsItsRun) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(live);
+    for (int i = 0; i < 700; ++i) {  // a third chunk, so chunk 1 is not the last
+        live.EnsureGroupId(Key("more-" + std::string(60, 'k') + std::to_string(i)));
+    }
+    const auto chunks = SnapshotChunks(live);
+    ASSERT_GT(chunks.size(), 2u) << "needs a chunk 1 that is not the last";
+
+    const wal::Lsn from = AppendChunk(chunks[0]);
+    AppendChunk(chunks[1]);
+    AppendChunk(chunks[1]);
+    for (const auto& chunk : chunks) AppendChunk(chunk);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(from, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+    EXPECT_EQ(report.value().assertions[0].partial_runs_discarded, 1u);
+    EXPECT_EQ(rebuilt.group_count(), live.group_count());
 }
 
 TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
