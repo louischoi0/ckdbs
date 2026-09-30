@@ -96,7 +96,7 @@ erases it; `WakeWaiters` (`:434`) walks the same partition again. With
 decide is O(n²/64) in the transaction's borrows. AY's close measured it at
 ~2.1 µs of a +3.43 µs row cost at K = 16,384 distinct parents, unresolved
 at K ≤ 1,024 (`bench/v3.0.0/results-ay-s11-overhead-v2.7.0-530-g0552d55.md`,
-cell 3).
+cell 3; the file left the tree with the bench rebaseline `fc2d343` and is read with `git show a59da9c:<path>`).
 
 ### 1.5 Item 5 - AQ and AR
 
