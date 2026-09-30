@@ -1,0 +1,12 @@
+created 8 relations with suffix _s2rrc1g:
+  organizations_s2rrc1g
+  ships_s2rrc1g
+  operations_s2rrc1g
+  cargos_s2rrc1g
+  fees_s2rrc1g
+  recipes_s2rrc1g
+  freights_s2rrc1g
+  charges_s2rrc1g
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/bench-rerun-scenarios/tools/scenario2_freight.py --suffix s2rrc1g [--load-only]

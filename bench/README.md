@@ -21,6 +21,30 @@ file from `v2.2.0` through `v2.8.0`. The last commit holding them is
 A citation to `bench/...` in a spec, the manual, a test or a source comment
 points at that commit unless it names a `v3.` path.
 
+## Emptied again on 2026-09-30 — the scenario rebaseline
+
+On the operator's word, every results file and archive directory under
+`bench/v3.0.0/` written from AL-S8 (`f6ed10c`) through AY-S11's overhead
+run (`0552d55`) was deleted, and each scenario driver was re-run at
+`9a0525d` (`v2.7.0-531-g9a0525d`, AY closed). The last commit holding the
+deleted files is `9a0525d`:
+
+    git ls-tree -r --name-only 9a0525d bench/v3.0.0   # what was here
+    git show 9a0525d:bench/v3.0.0/<path>              # any one file
+
+One exception: AY-S11's overhead file
+(`results-ay-s11-overhead-v2.7.0-530-g0552d55.md` and its archive) was
+corrected on `main` after `9a0525d`, and its last version is at `a59da9c`.
+
+**A citation to a `bench/v3.0.0/` path that does not exist in the working
+tree resolves against `9a0525d`** (the AY-S11 overhead file against
+`a59da9c`) — `known-gaps.md`, the concept notes and
+`instructions/v3.0.0/` cite several. The rebaseline's files are the
+comparator for every later delta of the same driver and shape; a delta
+against a deleted file names `9a0525d` and states how far apart the two
+runs are, in commits and milestones (the rebaseline's own deltas against
+the `f6ed10c` BTREE pair say 374 commits).
+
 ## Where a result goes
 
 `bench/<version>/<benchmark>-<git describe --tags>.md` under the version of
@@ -77,7 +101,7 @@ the cell says so the same way: `0 errors`, `1.3 %`, `4 cells`.
 
 **It applies to every results file written after this rule was recorded,
 and earlier files stay as they are** — the last one before it is
-`results-ao-s7-c3-v2.7.0-304-g5e94dc8.md`, whose run matrix carries its
+`results-ao-s7-c3-v2.7.0-304-g5e94dc8.md` (at `9a0525d`), whose run matrix carries its
 units in the headings. The boundary is this rule's own commit and not a
 date, because a date is ambiguous on the day it is written and this rule
 was written on a day that already had a results file in it. Rewriting them would restate numbers nobody re-measured,
@@ -93,12 +117,14 @@ against a BTREE baseline of the same driver** — a driver still emitting
 changes it. Heap relations are suspended
 (SUS-1), so a post-2026-09-05 engine refuses the shape the AL-S8 files at
 `f6ed10c` measured — `trades`/`user_periodic_profit` and
-`freights`/`charges` were `HEAP` there. Those files stay as history and are
-compared against nothing: a heap number beside a btree number is two
-workloads. The comparator for every later delta is `f6ed10c` re-measured
+`freights`/`charges` were `HEAP` there. Those files stay as history (at
+`9a0525d` since 2026-09-30) and are compared against nothing: a heap number
+beside a btree number is two workloads. Until the 2026-09-30 rebaseline
+replaced it, the comparator for every later delta was `f6ed10c` re-measured
 with the changed drivers, on the same host and from the archived binary
 AL-S8's stamp names — **measured 2026-09-08**, eight cells, all of
-AL-S8's own arguments and its cell order:
+AL-S8's own arguments and its cell order (both files deleted on 2026-09-30
+and held at `9a0525d`):
 
 - `results-scenario0-stockmarket-btree-v2.7.0-157-gf6ed10c.md`
 - `results-scenario2-freight-btree-v2.7.0-157-gf6ed10c.md`

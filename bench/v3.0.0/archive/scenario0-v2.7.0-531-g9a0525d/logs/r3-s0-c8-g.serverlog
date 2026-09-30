@@ -1,0 +1,1 @@
+1790750887 WARN [query] "UPDATE accounts_s0c8g SET balance = 105682960, asset_qty = -48, trade_count = 1 WHERE id = 80" -> ERR TXN_CONFLICT retryable=1 relation oid 4011: the catalog changed between this statement's resolution and its first write to the relation; it runs again against the current schema in 27us

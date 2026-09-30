@@ -1,0 +1,67 @@
+loading: users=100 assets=30 accounts~300  (tables suffixed _s0c8s)
+  users         100 rows
+  assets         30 rows
+  accounts      287 rows   (load took 0.7s)
+running until 5,000 transactions commit (50 per user, ceiling 60s): 8 trader process(es) + 1 reporting process, 180 simulated days
+  1 statements replied ERR; first: INSERT INTO trades_s0c8s VALUES (127, 1, 1, 76, 26762, 2)  ->  ERR TXN_CONFLICT retryable=1 btree descent for key 113 from page 138 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level
+
+ckdbs benchmark - 27 columns, 287 rows resident, 9 connections
+server 127.0.0.1:15603  table *_s0c8s
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load-users                 100       594    1684.9   1141.6   1282.6   1346.2   2780.9   5664.0   18655.6     0
+load-assets                 30       728    1373.6   1148.0   1247.6   1303.0   1634.7   2009.6    2009.6     0
+load-accounts              287       653    1531.2   1133.0   1307.9   1386.9   2313.0   5334.9    6681.2     0
+txn                       5001       332   15943.9   5730.9  10254.1  11701.7  41219.0  52858.8   90694.5     1
+trade-insert             10002       664    3985.4    282.7   2469.6   2711.3  10332.4  15251.3   56169.6     1
+account-update           10002       664    3982.9   1131.3   2474.1   2707.1  10433.7  15022.2   33225.1     0
+profit-scan                150        10    3057.1    215.4   2583.1   2803.8   4928.2   8563.9    9691.6     0
+profit-insert              150        10    5999.6   3405.3   4871.7   5370.2  10606.7  16626.9   16778.8     0
+sync                         1       196    5097.3   5097.3   5097.3   5097.3   5097.3   5097.3    5097.3     0
+
+  load-users: one row per customer
+  load-assets: instruments
+  load-accounts: 3+-1 per user
+  txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+  txn: 1 error replies, first: ERR partial
+  trade-insert: clustered-btree append (BTREE since AS-Q6), WAL-logged
+  trade-insert: 1 error replies, first: ERR TXN_CONFLICT retryable=1 btree descent for key 113 from page 138 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level
+  account-update: in-place overwrite after a clustered-btree descent, WAL-logged as HEAP_OVERWRITE
+  profit-scan: FilterScan: WHERE user_id = <n>, a non-pk equality, so the whole accounts relation is walked per user
+  profit-insert: one user_periodic_profit row per user per period
+  sync: page store flushed to the data file
+
+  the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+  balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+  money is int64 minor units - float/decimal columns are refused at CREATE TABLE under the fixed-length rule.
+  every statement is WAL-logged - INSERT as HEAP_INSERT, UPDATE as HEAP_OVERWRITE, CREATE TABLE as catalog records (docs/spec/wal.md). Do not measure this on tmpfs, where fsync is free and every durability class looks identical.
+  no Cabin (--cabin declares one on accounts.user_id): the reporter's `WHERE user_id = <n>` walks the whole accounts relation per user, per period, which is what a reporting job on an unindexed foreign key costs.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now). trades/user_periodic_profit were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver; a heap accounts relation would in any case make every UPDATE a full chain scan, and the update number a function of --users rather than of the engine.
+
+business scenario
+------------------------------------------------------------------------
+  users 100   accounts 287   assets 30   simulated span 180 days in 15.1s wall
+  transaction = 2 INSERT trades + 2 UPDATE accounts, 8 trader process(es)
+  statement grouping  four autocommit statements: four transactions, four durability points (--txn groups them)
+  ran to a work target of 5,000 transactions (ceiling was 60s); TPS below is over the 15.1s the work took
+
+  TPS                        331.7   committed transactions/sec
+  statements/sec           1,326.7   4 statements per transaction
+  committed                  5,000
+  torn                           1   partially applied; no transaction was open to roll back (--txn opens one)
+  underfunded                  179   skipped before any statement was sent
+  per trader          #0:625  #1:625  #2:625  #3:625  #4:625  #5:625  #6:625  #7:625
+
+  cabin               disabled (--cabin declares one on accounts.user_id); the reporting scan above is a FilterScan
+
+  foreign key         none (--fk declares trades.account_id -> accounts)
+
+  reporting process              4 periods, 150 user_periodic_profit rows written
+                      one FilterScan of accounts per user per period
+
+  balance verify               200 accounts read back - all match
+
+  trades relation holds 10,001 rows (2 per committed transaction)
+
+  wrote /home/cdkbs/bench-runs/rebaseline-9a0525d/json/r2-s0-c8-s.json
