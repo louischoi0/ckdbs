@@ -56,6 +56,14 @@
 namespace kds::server {
 namespace {
 
+// `Start()`'s status, printed when it fails (AZ-S4): a bare `.ok()` lost the
+// cause of a one-off failure under `-j8` (`known-gaps.md`, Testing).
+::testing::AssertionResult Started(const Status& s) {
+    if (s.ok()) return ::testing::AssertionSuccess();
+    return ::testing::AssertionFailure() << "Start() failed: code " << static_cast<int>(s.code())
+                                         << ": " << s.message();
+}
+
 // **Two free ports, held open together.** Hard-coding them races every other
 // cell in a `ctest -j8` run and every other instance on the box (`kds_server`
 // has been seen holding 15432 for hours). Taken as a pair rather than one at
@@ -230,7 +238,7 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     Expeditor& db = *opened.value();
 
     ASSERT_TRUE(db.cores().empty()) << "no core is built until Start()";
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
 
     // **One peer, and core 0 is not in the list**: core 0's runtime is the
     // `Expeditor` itself, which is why `cores()` is one short of `cores`.
@@ -374,7 +382,7 @@ TEST_F(ExpeditorTest, AtOneCoreTheDispatcherHoldsTheInstancesLockTable) {
     auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     Expeditor& db = *opened.value();
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
 
     ASSERT_NE(db.locks(), nullptr) << "a single-core server built no lock table";
     EXPECT_FALSE(db.locks()->latched()) << "a single-core table constructed latches";
@@ -402,7 +410,7 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
     auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     Expeditor& db = *opened.value();
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
     ASSERT_EQ(db.cores().size(), 1u);
     const CoreRuntime& peer = *db.cores().front();
 
@@ -462,7 +470,7 @@ TEST_F(ExpeditorTest, UnderTheHandoffFallbackAConnectionCoreZeroAcceptedIsServed
     auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     Expeditor& db = *opened.value();
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
     ASSERT_NE(db.connection_handoff(), nullptr) << "the fallback was forced and not taken";
     ASSERT_EQ(db.cores().size(), 1u);
     EXPECT_TRUE(db.cores().front()->listening()) << "the peer hosts nothing";
@@ -491,7 +499,7 @@ TEST_F(ExpeditorTest, UnderTheHandoffFallbackAConnectionCoreZeroAcceptedIsServed
 TEST_F(ExpeditorTest, WhereThePortIsSharedThereIsNoHandoff) {
     auto opened = Expeditor::Open(ConfigAt(/*cores=*/2), /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
-    ASSERT_TRUE(opened.value()->Start().ok());
+    ASSERT_TRUE(Started(opened.value()->Start()));
     EXPECT_EQ(opened.value()->connection_handoff(), nullptr);
 }
 
@@ -514,7 +522,7 @@ TEST_F(ExpeditorTest, TheFaultNetsKeyReachesTheDispatcherThatWaits) {
     {
         auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
         ASSERT_TRUE(opened.ok()) << opened.status().message();
-        ASSERT_TRUE(opened.value()->Start().ok());
+        ASSERT_TRUE(Started(opened.value()->Start()));
         EXPECT_EQ(opened.value()->dispatcher().LockWaitFaultNetNs(), txn::kLockWaitFaultNetNs);
     }
     // Set, the dispatcher waits by it. Milliseconds in, nanoseconds held.
@@ -522,7 +530,7 @@ TEST_F(ExpeditorTest, TheFaultNetsKeyReachesTheDispatcherThatWaits) {
     {
         auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
         ASSERT_TRUE(opened.ok()) << opened.status().message();
-        ASSERT_TRUE(opened.value()->Start().ok());
+        ASSERT_TRUE(Started(opened.value()->Start()));
         EXPECT_EQ(opened.value()->dispatcher().LockWaitFaultNetNs(), 250ULL * 1'000'000ULL)
             << "the key was threaded to the dispatcher and not read by the wait";
     }
@@ -532,7 +540,7 @@ TEST_F(ExpeditorTest, TheFaultNetsKeyReachesTheDispatcherThatWaits) {
     {
         auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
         ASSERT_TRUE(opened.ok()) << opened.status().message();
-        ASSERT_TRUE(opened.value()->Start().ok());
+        ASSERT_TRUE(Started(opened.value()->Start()));
         EXPECT_EQ(opened.value()->dispatcher().LockWaitFaultNetNs(), 0u)
             << "0 was read as 'nobody configured one' and replaced by the default";
     }
@@ -548,7 +556,7 @@ TEST_F(ExpeditorTest, AtOneCoreThereIsNoWakeRegistry) {
     auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     Expeditor& db = *opened.value();
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
 
     EXPECT_EQ(db.wakers(), nullptr);
     // And core 0's own reactor reports the counter honestly rather than
@@ -571,7 +579,7 @@ TEST_F(ExpeditorTest, AtOneCoreTheStreamsLatchIsNeverArmed) {
     auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     Expeditor& db = *opened.value();
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
 
     EXPECT_FALSE(db.wal().stream()->shared())
         << "a one-core instance armed the stream latch, which is G2's overhead on every append";
@@ -593,7 +601,7 @@ TEST_F(ExpeditorTest, AtOneCoreThePageLatchIsNeverArmed) {
     auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     Expeditor& db = *opened.value();
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
 
     if (std::getenv("KDS_TEST_PAGE_LATCH") != nullptr) {
         GTEST_SKIP() << "the census override arms every store and wins over the assembly's "
@@ -617,7 +625,7 @@ TEST_F(ExpeditorTest, StartIsRefusedTwiceAndTheRunHalfIsRefusedWithoutIt) {
     EXPECT_NE(without_start.message().find("Start() has not run"), std::string::npos)
         << without_start.message();
 
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
     const Status again = db.Start();
     EXPECT_EQ(again.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(again.message().find("already started"), std::string::npos) << again.message();
@@ -643,7 +651,7 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
         auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
         ASSERT_TRUE(opened.ok()) << opened.status().message();
         Expeditor& db = *opened.value();
-        ASSERT_TRUE(db.Start().ok());
+        ASSERT_TRUE(Started(db.Start()));
         ASSERT_EQ(db.cores().size(), 1u);
 
         RunningInstance running(db, config.debug_text_port);
@@ -670,7 +678,7 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
     auto reopened = Expeditor::Open(config, /*now_unix_seconds=*/2000);
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
     Expeditor& db = *reopened.value();
-    ASSERT_TRUE(db.Start().ok());
+    ASSERT_TRUE(Started(db.Start()));
     ASSERT_EQ(db.cores().size(), 1u);
     CoreRuntime& peer = *db.cores().front();
 

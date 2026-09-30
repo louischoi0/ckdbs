@@ -97,7 +97,9 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     // has gone to sleep over it.
     sched::Scheduler& peer = rig->core(1).scheduler();
     ASSERT_TRUE(Within(2000ms, [&] { return peer.idle_blocks() >= 1; }))
-        << "core 1 never blocked with its UPDATE parked";
+        << "core 1 never blocked with its UPDATE parked; saw idle_blocks="
+        << peer.idle_blocks() << ", done=" << update.done.load(std::memory_order_acquire)
+        << ", response '" << update.out.response << "'";
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
     const std::size_t kicks_to_peer_before = KicksTo(*rig, 1).size();
@@ -117,7 +119,9 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
 
     rig->wake().Advance(2);
     ASSERT_TRUE(Within(1000ms, [&] { return update.done.load(std::memory_order_acquire); }))
-        << "core 1's UPDATE did not proceed at the kick";
+        << "core 1's UPDATE did not proceed at the kick; saw idle_blocks="
+        << peer.idle_blocks() << ", kicks to core 1 " << KicksTo(*rig, 1).size()
+        << ", response '" << update.out.response << "'";
     // The re-run found the row released, not merely decided.
     EXPECT_TRUE(StartsWith(update.out.response, "UPDATED 1")) << update.out.response;
     rig->Stop();
@@ -163,7 +167,9 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
 
     sched::Scheduler& peer = rig->core(1).scheduler();
     ASSERT_TRUE(Within(2000ms, [&] { return peer.idle_blocks() >= 1; }))
-        << "core 1 never blocked with its UPDATE parked";
+        << "core 1 never blocked with its UPDATE parked; saw idle_blocks="
+        << peer.idle_blocks() << ", done=" << update.done.load(std::memory_order_acquire)
+        << ", response '" << update.out.response << "'";
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
     // Registered on the row's own entry, the unit that refused the range.
@@ -184,7 +190,9 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
 
     rig->wake().Advance(2);
     ASSERT_TRUE(Within(1000ms, [&] { return update.done.load(std::memory_order_acquire); }))
-        << "core 1's UPDATE did not proceed at the kick";
+        << "core 1's UPDATE did not proceed at the kick; saw idle_blocks="
+        << peer.idle_blocks() << ", kicks to core 1 " << KicksTo(*rig, 1).size()
+        << ", response '" << update.out.response << "'";
     EXPECT_TRUE(StartsWith(update.out.response, "UPDATED 2")) << update.out.response;
     rig->Stop();
     EXPECT_EQ(rig->locks().EntryCount(), 0u);
@@ -270,7 +278,10 @@ TEST(RowWaitWakeRigTest, AWaiterOnTheSlotSleepsThroughTheHoldersDecideUntilItsRe
     rig->Start();
 
     ASSERT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
-        << "core 1 never blocked with its UPDATE parked";
+        << "core 1 never blocked with its UPDATE parked; saw idle_blocks="
+        << rig->core(1).scheduler().idle_blocks()
+        << ", done=" << update.done.load(std::memory_order_acquire) << ", response '"
+        << update.out.response << "'";
     ASSERT_FALSE(update.done.load(std::memory_order_acquire))
         << "core 1's UPDATE did not wait: " << update.out.response;
 
@@ -336,7 +347,9 @@ TEST(RowWaitWakeRigTest, AFirstEncounterInsideTheRetireToReleaseWindowWaitsForTh
     // Checked without an early return: on a failure the rig must still stop
     // before the statements on this frame go.
     EXPECT_TRUE(Within(2000ms, [&] { return rig->core(1).scheduler().idle_blocks() >= 1; }))
-        << "core 1 never blocked";
+        << "core 1 never blocked; saw idle_blocks=" << rig->core(1).scheduler().idle_blocks()
+        << ", done=" << update.done.load(std::memory_order_acquire) << ", response '"
+        << update.out.response << "'";
     const bool answered_early = update.done.load(std::memory_order_acquire);
     EXPECT_FALSE(answered_early)
         << "the first encounter inside the window was answered rather than waited: "
@@ -450,7 +463,11 @@ TEST(RowWaitWakeRigTest, ACrossCoreRowCycleRefusesTheWaiterThatClosesItAndTheOth
     rig->Start();
 
     // A has met row 2 and parked, and core 0 has gone to sleep over it.
-    ASSERT_TRUE(Within(2000ms, [&] { return rig->core(0).scheduler().idle_blocks() >= 1; }));
+    ASSERT_TRUE(Within(2000ms, [&] { return rig->core(0).scheduler().idle_blocks() >= 1; }))
+        << "core 0 never blocked with A parked; saw idle_blocks="
+        << rig->core(0).scheduler().idle_blocks()
+        << ", done=" << a_waits.done.load(std::memory_order_acquire) << ", response '"
+        << a_waits.out.response << "'";
     ASSERT_FALSE(a_waits.done.load(std::memory_order_acquire)) << a_waits.out.response;
 
     b_closes.go.store(true, std::memory_order_release);
