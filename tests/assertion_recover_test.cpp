@@ -631,6 +631,76 @@ TEST(AssertionSnapshotDoorTest, AGroupPastWhatARunCanCountIsRefusedAtAdmission) 
     EXPECT_TRUE(admit(*at, bound + 1).ok()) << "a registry with no log refused a group";
 }
 
+// **A checkpoint's eviction refuses the rest of the statement it lands in**
+// (AZ-S3's review). The dispatcher asks `CannotEnforce` once per statement;
+// a checkpoint can now mark the relation between two of its rows, and the
+// per-row admission answered "no live assertion" and admitted the rest
+// unchecked. It asks again per row now, and refuses.
+TEST(AssertionSnapshotDoorTest, AnEvictionMidStatementRefusesTheRowsAfterIt) {
+    AssertionEnforcer registry(/*shared=*/true);
+    LiveAssertion a;
+    a.assertion_id = 5;
+    a.target_oid = 4000;
+    a.name = "cap";
+    a.aggregate = BoundAggregate::kCount;
+    a.group_cols = {1};
+    a.group_col_names = {"v"};
+    a.group_type_vals = {catalog::kTypeValInt64};
+    a.cabin = BoundCabin(BoundAggregate::kCount, /*bound=*/1'000'000);
+    a.cabin.EnsureGroupId(EncodeGroupKey(IntRow(1)));
+    registry.Adopt(std::move(a));
+
+    const auto admit = [&](std::int64_t v) {
+        AssertionEnforcer::Hold hold;
+        return registry.AdmitInsert(4000, IntRow(v), /*writer_txn=*/0, hold);
+    };
+    ASSERT_TRUE(admit(1).ok()) << "row 1, before the checkpoint";
+
+    // A checkpoint whose record cannot carry even the one group.
+    ASSERT_TRUE(registry
+                    .VisitSnapshots(/*record_budget=*/wal::kAssertSnapshotFixedSize,
+                                    [](const std::vector<wal::AssertionCabinSnapshot>& cabins) {
+                                        EXPECT_TRUE(cabins.empty());
+                                        return Status::OK();
+                                    })
+                    .ok());
+    ASSERT_TRUE(registry.CannotEnforce(4000));
+
+    const Status row2 = admit(1);
+    EXPECT_EQ(row2.code(), StatusCode::kNotImplemented)
+        << "the row after the eviction was admitted unchecked: " << row2.message();
+}
+
+// **A key past its records' `u16` length is refused at admission** (AZ-S3's
+// review): at the production budget - about 1 MiB - the record would carry it,
+// but `ASSERT_RESERVE`'s key length is a `u16`, so the reservation would fail
+// after the row is placed.
+TEST(AssertionSnapshotDoorTest, AKeyPastItsRecordsLengthFieldIsRefusedAtAdmission) {
+    AssertionEnforcer registry;
+    LiveAssertion a;
+    a.assertion_id = 5;
+    a.target_oid = 4000;
+    a.name = "cap";
+    a.aggregate = BoundAggregate::kCount;
+    a.group_cols = {1};
+    a.group_col_names = {"v"};
+    a.group_type_vals = {catalog::kTypeValVarchar};
+    a.cabin = BoundCabin(BoundAggregate::kCount, /*bound=*/1'000'000);
+    registry.Adopt(std::move(a));
+    registry.SetRecordBudget(std::size_t{1} << 20);
+
+    const auto admit = [&](std::size_t length) {
+        std::vector<parser::AstValue> row(1);
+        row[0].type = parser::ValueType::kStr;
+        row[0].str_val = std::string(length, 'k');
+        AssertionEnforcer::Hold hold;
+        return registry.AdmitInsert(4000, row, /*writer_txn=*/0, hold);
+    };
+    const Status refused = admit(wal::kMaxAssertKeyBytes + 1);
+    EXPECT_EQ(refused.code(), StatusCode::kNotImplemented) << refused.message();
+    EXPECT_TRUE(admit(1000).ok());
+}
+
 TEST_F(AssertionRecoverTest, ASecondCheckpointsSnapshotInRangeDoesNotFailThePass) {
     // The anchor is published at Complete(), so a crash *during* a later
     // checkpoint leaves that checkpoint's snapshot records inside the range the

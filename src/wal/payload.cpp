@@ -655,7 +655,7 @@ StatusOr<std::size_t> EncodeAssertEntry(std::span<std::byte> out,
     if (entry.size() > 0xFFFF) {
         return Status::InvalidArgument("wal payload: assert entry longer than a uint16 length");
     }
-    if (key.size() > 0xFFFF) {
+    if (key.size() > kMaxAssertKeyBytes) {
         return Status::InvalidArgument("wal payload: assert group key longer than a uint16 length");
     }
     const std::size_t total = kAssertEntryFixedSize + entry.size() + key.size();
@@ -757,7 +757,7 @@ StatusOr<DecodedAssertCommit> DecodeAssertCommit(std::span<const std::byte> in) 
 StatusOr<std::size_t> EncodeAssertRollback(std::span<std::byte> out,
                                            const AssertRollbackPayload& fields,
                                            std::span<const std::byte> key) {
-    if (key.size() > 0xFFFF) {
+    if (key.size() > kMaxAssertKeyBytes) {
         return Status::InvalidArgument("wal payload: assert group key longer than a uint16 length");
     }
     const std::size_t total = kAssertRollbackFixedSize + key.size();

@@ -640,6 +640,10 @@ inline constexpr std::size_t kAssertEntryReservedOffset = 14;
 inline constexpr std::size_t kAssertEntryGroupIdOffset = 16;
 // 8+2+2+2+2+4 = 20; entry bytes begin here, key bytes after them.
 inline constexpr std::size_t kAssertEntryFixedSize = 20;
+// The longest group key an `ASSERT_RESERVE`/`ASSERT_BUILD` or `ASSERT_ROLLBACK`
+// can carry: its length is a `u16` (`key_len`). Admission refuses a key past
+// it (AZ-S3), and the encoders refuse one that reaches them anyway.
+inline constexpr std::size_t kMaxAssertKeyBytes = 0xFFFF;
 
 static_assert(offsetof(AssertEntryPayload, assertion_id) == kAssertEntryAssertionIdOffset);
 static_assert(offsetof(AssertEntryPayload, index) == kAssertEntryIndexOffset);

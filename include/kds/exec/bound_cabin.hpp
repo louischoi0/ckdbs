@@ -326,10 +326,10 @@ private:
 
     GroupHeader* FindMutable(const std::string& key);
 
-    // The one place a group is born, so the one place an id is assigned. Two
-    // creation sites would be two chances to leave `group_id` at 0, which reads
-    // as "no group" and would silently unlink every entry of that group at the
-    // next recovery.
+    // The one place a group is born with a fresh id - `RestoreGroup` is the
+    // other birth, with the id a snapshot names. Two id-assigning sites would
+    // be two chances to leave `group_id` at 0, which reads as "no group" and
+    // would silently unlink every entry of that group at the next recovery.
     GroupHeader& EnsureGroup(const std::string& key);
 
     // The group a `group_id` names, for the linkage rebuild. A linear walk of

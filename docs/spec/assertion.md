@@ -537,7 +537,8 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > - **Admission** refuses the write that would open such a group, with
   >   `NOT_IMPLEMENTED` naming the assertion, before anything is placed.
   >   The key's limit is its largest record's - `ASSERT_RESERVE`, an entry
-  >   and the key. The run's limit is conservative: the writer cuts greedily,
+  >   and the key - and that record's `u16` key length, 65,535 bytes, which
+  >   is the smaller at the defaults. The run's limit is conservative: the writer cuts greedily,
   >   so every chunk but the last closes holding more than the budget less
   >   the chunk's fixed part and the cabin's largest group, and headers
   >   within 65,534 of those cannot need 65,536 chunks. A group another
@@ -548,8 +549,11 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   >   before AZ-S3 holds - evicts the assertion and marks it unenforceable
   >   inside its snapshot hold, then carries the rest and completes. The
   >   relation's writes are refused `CannotEnforce` until `DROP` and
-  >   `CREATE` (§6.1), and the next mount finds no base for it, so it comes
-  >   up unrecovered and the mount completes. Before AZ-S3 the refusal
+  >   `CREATE` (§6.1) - **per row, not only per statement**, so a statement
+  >   the eviction lands in writes nothing more past it. A mount whose scan
+  >   starts at or after that checkpoint finds no base for it, so it comes up
+  >   unrecovered; one that starts earlier revives it, and its own completion
+  >   checkpoint fails it closed again. Either way the mount completes. Before AZ-S3 the refusal
   >   failed the checkpoint: no core-0 checkpoint completed while the
   >   assertion lived, and the next mount's completion checkpoint failed the
   >   mount.

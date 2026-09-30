@@ -4313,17 +4313,11 @@ Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access
     // putting a second row in a group under `CHECK COUNT(*) <= 1`): an
     // assertion the instance knows of and could not revive at this mount
     // refuses the relation's writes on every core, there being one registry
-    // since AT-S5d. What reaches it is a revive that failed or a checkpoint
-    // whose snapshots do not cover the base (`server/mount_recovery.cpp`).
-    if (enforcer_->CannotEnforce(access.oid)) {
-        return Status::NotImplemented(
-            "a relation under an assertion this core cannot enforce cannot take "
-            "writes on core " +
-            std::to_string(core_id_) +
-            ": the assertion's Bound Cabin could not be revived at this mount, so "
-            "admitting the write would leave the constraint unchecked; the mount log "
-            "names why (docs/spec/assertion.md 6.1)");
-    }
+    // since AT-S5d. What reaches it is a revive that failed, a mount whose
+    // snapshots do not cover the base (`server/mount_recovery.cpp`), or a
+    // checkpoint no snapshot run could carry the cabin for (AZ-S3), which
+    // can land mid-statement - so the admissions ask again per row.
+    if (enforcer_->CannotEnforce(access.oid)) return exec::AssertionEnforcer::CannotEnforceRefusal();
     return Status::OK();
 }
 

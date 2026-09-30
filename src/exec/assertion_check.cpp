@@ -105,6 +105,14 @@ bool AssertionEnforcer::CannotEnforce(catalog::Oid oid) const {
     return unenforceable_.count(oid) != 0;
 }
 
+Status AssertionEnforcer::CannotEnforceRefusal() {
+    return Status::NotImplemented(
+        "a relation under an assertion the instance cannot enforce takes no writes: its Bound "
+        "Cabin could not be revived at a mount, or no snapshot run could carry it at a "
+        "checkpoint, so admitting the write would leave the constraint unchecked; DROP and "
+        "CREATE the assertion (docs/spec/assertion.md 6.1)");
+}
+
 void AssertionEnforcer::PublishDeclaredLocked() noexcept {
     declared_.store(by_oid_.size() + unenforceable_.size(), std::memory_order_release);
 }
@@ -317,18 +325,21 @@ Status AssertionEnforcer::AdmitGroupLocked(const LiveAssertion& a, const std::st
     if (budget == 0 || a.cabin.Find(key) != nullptr) return Status::OK();
 
     // **The key's own records**: its snapshot group, and the largest record
-    // naming one key - `ASSERT_RESERVE`, an entry with the key after it. A key
-    // past either would be refused by the log after the row is placed.
+    // naming one key - `ASSERT_RESERVE`, an entry with the key after it - whose
+    // key length is a `u16`. A key past any of them would be refused by the
+    // log after the row is placed.
     const std::size_t cost = wal::AssertSnapshotGroupBytes(key.size());
     const std::size_t largest_record =
         std::max({wal::kAssertSnapshotFixedSize + cost,
                   wal::kAssertEntryFixedSize + storage::cabin::kEntryBytes + key.size(),
                   wal::kAssertRollbackFixedSize + key.size()});
-    if (largest_record > budget) {
+    if (largest_record > budget || key.size() > wal::kMaxAssertKeyBytes) {
         return Status::NotImplemented(
             "assertion \"" + a.name + "\": a group key of " + std::to_string(key.size()) +
-            " bytes is longer than one log record can carry (" + std::to_string(budget) +
-            " bytes of payload)");
+            " bytes is longer than its log records can carry (at most " +
+            std::to_string(std::min(budget - (largest_record - key.size()),
+                                    wal::kMaxAssertKeyBytes)) +
+            ")");
     }
 
     // **The run**, conservatively: the writer cuts chunks greedily, so every
@@ -418,6 +429,7 @@ Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
                                       std::uint64_t* reserver) {
     if (NothingDeclared()) return Status::OK();
     const LatchGuard guard(latch_.get());
+    if (unenforceable_.count(oid) != 0) return CannotEnforceRefusal();
     auto on = by_oid_.find(oid);
     if (on == by_oid_.end()) return Status::OK();
     hold.owner_ = this;
@@ -524,6 +536,7 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
     std::vector<Work> work;
     {
         const LatchGuard guard(latch_.get());
+        if (unenforceable_.count(oid) != 0) return CannotEnforceRefusal();
         for (std::shared_ptr<Live>& live : OnLocked(oid)) {
             LiveAssertion& a = live->a;
             Work w{live, KeyFor(a, values, 1), ContributionOf(a, values, 1), 0};
@@ -553,7 +566,13 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
             return s;  // `hold` gives back what was not converted
         }
     }
-    hold.items_.clear();  // every one converted
+    // Every one converted - unless an assertion was evicted between the two
+    // calls, whose hold nothing converted and which is given back here.
+    if (hold.items_.size() == work.size()) {
+        hold.items_.clear();
+    } else {
+        hold.Release();
+    }
     return Status::OK();
 }
 
@@ -564,10 +583,13 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
                                                 std::uint64_t pk, PageId row_page,
                                                 std::uint16_t row_slot,
                                                 std::uint64_t* reserver) {
+    std::optional<Status> unenforceable;
     const std::vector<std::shared_ptr<Live>> lives = [&] {
         const LatchGuard guard(latch_.get());
+        if (unenforceable_.count(oid) != 0) unenforceable = CannotEnforceRefusal();
         return OnLocked(oid);
     }();
+    if (unenforceable.has_value()) return *unenforceable;
     // **Once this call has reserved, its refusal is not waitable** (the
     // AO-S6e-c review's B1). This loop is per *assertion* and is not atomic
     // across them: assertion #1's departure and arrival are applied to its

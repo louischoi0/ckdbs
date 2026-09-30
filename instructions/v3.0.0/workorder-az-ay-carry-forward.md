@@ -499,3 +499,100 @@ defect in the change.
 `LogAssertionSnapshot` cuts its chunks against the segment
 (`usable_payload_bytes`). A cabin with more than about 1 MiB of group
 headers would then have its first chunk refused by `Append`. AZ-S3 takes it.
+
+### AZ-S3 — built 2026-09-30
+
+On `worktree-az-s3-unsnapshottable-cabin` from `47c9f6b` (AZ-S2's close,
+per §5's S2 → S3 order), on *"start AZ-S*"*.
+
+**The survey question, answered.** SQL reaches a group key past one record:
+a `GROUP BY` over spilled `varchar`s, eight values of 8,000 bytes against a
+61 KiB record. **And the record is smaller than §1.7 assumed.**
+`WalStream::Append` refuses a record the ring cannot hold whole, and at the
+defaults the ring (1 MiB) is 64x smaller than the segment. `LogAssertionSnapshot`
+cut its chunks against the segment. So any cabin with more than about 1 MiB
+of group headers had its first chunk refused, which failed every core-0
+checkpoint after it and the next mount. Roughly 24,000 groups with short
+keys is enough. That is far nearer than the 65,535-chunk door §1.7 priced.
+
+The reproduction (`197eb2e`) was red at `47c9f6b` in three cells:
+
+- the ring: "record of 2068944 bytes is larger than the ring";
+- a checkpoint over a cabin with a key no record carries: the checkpoint
+  failed;
+- the SQL key: refused by the log after placement, with
+  `ERR WalStream: record of 64160 bytes cannot fit a segment`.
+
+**The fix** (`a7d4030`), AZ-R3 plus the ring:
+
+- **The budget.** `usable_payload_bytes()` is the smaller of the segment
+  and the ring, less the header.
+- **One cut.** `CutRun` is shared by `LogAssertionSnapshot` and
+  `AssertionSnapshotFits`. Both refusals are `NotImplemented` (AZ-Q2).
+- **The checkpoint fails closed.** The snapshot seam carries the
+  checkpoint's budget. The registry evicts, and marks unenforceable, any
+  cabin no run can carry, inside the snapshot hold. The checkpoint then
+  completes.
+- **Admission refuses.** A new group whose key its records cannot carry,
+  or which could take the run past 65,535 chunks, is refused
+  `NotImplemented`. The bound is AZ-R3's:
+  `headers ≤ 65,534 × (budget − 16 − largest group)`, and groups other
+  holds are opening count too. Every dispatcher with a log arms the budget.
+- **`BoundCabin` counts** its groups, key bytes and longest key where a
+  group is born.
+- **Leftovers**: AY-S8's writer cell ported from `266db2e`; the two
+  "version 17" comments corrected; `assertion.md` §6.1 and §7 and `wal.md`
+  §4 restated.
+
+**Not as the exit wrote it**: the admission refusal carries no byte
+position. It refuses a row's values, not a token, as the
+`ASSERTION_VIOLATION` at the same door does not. A `CREATE ASSERTION` over
+rows that already hold such a key is refused by the log at its build or its
+base, not at admission (§7 says so).
+
+**Mutants: seven, all killed.**
+
+| mutant | killed by |
+|---|---|
+| the checkpoint's fail-closed arm returning the refusal again | the checkpoint cell |
+| the budget back to the segment | the ring cell |
+| the admission door removed | the SQL cell and the chunk-count cell |
+| held groups not counted | the chunk-count cell |
+| the budget never armed | the SQL cell |
+| the per-row refusal removed (the review's finding below) | the mid-statement cell |
+| the `u16` door removed (the review's finding below) | the key-length cell |
+
+The suite at `a7d4030` ran 3069/3069 under `-j8`. Overhead not measured;
+it is measured at AZ's close.
+
+**The review** (`critics-developer`, on `a7d4030`) proved the chunk bound
+sound: every chunk but the last holds more than the floor. It found three
+defects, all fixed here.
+
+- **A checkpoint's eviction let the rest of a running statement through
+  unchecked.**
+  - The dispatcher asks `CannotEnforce` once per statement. The per-row
+    admission answered "no live assertion".
+  - Before this stage nothing marked a relation mid-statement.
+  - `AdmitInsert`, `ReserveInsert` and `AdmitAndReserveUpdate` now refuse
+    per row, with the dispatcher's own refusal (`CannotEnforceRefusal`).
+    Its wording no longer says "at this mount" only.
+- **The key door missed the records' `u16` key length.** At 65,535 bytes
+  that length binds before a 1 MiB record does. `kMaxAssertKeyBytes` names
+  it for the door and the two encoders.
+- **A hold leaked** when its assertion was evicted between admission and
+  reservation. It is given back now. The leak was memory only, since no
+  admission of another id counts it, so no cell pins it.
+- **Also taken**:
+  - §7 overstated "the next mount finds no base". A mount whose scan starts
+    before the evicting checkpoint revives the assertion and fails it closed
+    again at its own completion checkpoint;
+  - `EnsureGroup`'s "the one place a group is born" comment.
+- **Left for the close's measurement**: every admission of a new key hashes
+  it once more, and every checkpoint cuts each cabin twice (fits, then
+  logs).
+
+**Found, not taken up**: the ring cell spent 15 s in Debug at 20,000 groups.
+Most of it was the 64 MiB segment's scan, and at 4 MiB the cell takes 1.3 s.
+Recovery's `RestoreGroup` walks every bucket per group (`FindById`), which
+is quadratic in a cabin's groups at mount. That is not measured here.

@@ -200,6 +200,10 @@ public:
     // writer's shape on a chain that already has one.
     void NoteUnenforceable(catalog::Oid oid, std::uint64_t assertion_id);
     bool CannotEnforce(catalog::Oid oid) const;
+    // The refusal a write meets there, asked once per statement by the
+    // dispatcher and again per row by the admissions below: since AZ-S3 a
+    // checkpoint can mark a relation between two rows of one statement.
+    static Status CannotEnforceRefusal();
     std::size_t unenforceable() const;
 
     // The counters, copied under the latch, or nothing while the registry
