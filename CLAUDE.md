@@ -225,11 +225,15 @@ over-engineering, bloat. Apply what it finds; say plainly which findings
 were rejected and why — a review whose findings are all silently accepted
 was not read.
 
-**3. Every feature runs the full test suite; the overhead measurement is
-suspended.** The suite gates every step. The interleaved A/B overhead
-measurement (`ck-tester`, `build-release`) is suspended by operator
-decision, so a landed change carries "overhead not measured" as a stated
-fact, never an implied pass. **If the environment cannot build or run,
+**3. Every feature runs the full test suite; the overhead is measured once
+per milestone.** The suite gates every step. The interleaved A/B overhead
+measurement (`ck-tester`, `build-release`) runs **per milestone, not per
+stage** (operator decision, 2026-09-30; `instructions/v3.0.0/raft-marks-2026-09-30.md`
+§8): at the milestone's close, over its whole code change - the commit it
+opened from against the commit that closes it. A stage lands carrying
+"overhead not measured; measured at the milestone's close" as a stated
+fact, never an implied pass, and a milestone does not close with it
+unmeasured unless the report says so. **If the environment cannot build or run,
 say so in the report** — an unrun measurement is never reported as a
 pass, and a suite that was not executed is stated as "not executed".
 

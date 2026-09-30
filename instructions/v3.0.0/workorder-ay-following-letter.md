@@ -230,7 +230,7 @@ Each stage waits for the operator's word, as AT's did.
 | AY-Q9 | **The seven uninventoried cells** ran with no lock table, an arm no production assembly builds | scope | port only the premises that still hold onto AY-S1's table fixture; two have table-backed successors already. **Marked as proposed 2026-09-29** (`raft-marks-2026-09-29.md` §17); built with AY-S3, §6 |
 | AY-Q10 | **E10** - put back by the 2026-09-29 marks (§11) | spec | retire it: nothing splits since AT-S9 and a pre-AT split relation's schema cannot change |
 | AY-Q11 | **AR1's AQ/AR** - AT-0 item 6 lists them; AR1 §14 names them letters behind AP | scope | their own letters, after AP's order is settled |
-| AY-Q12 | **A zero-row `UPDATE`** takes the `S` at the hoist | cost | accept |
+| AY-Q12 | **A zero-row `UPDATE`** takes the `S` at the hoist | cost | accept. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §7) |
 
 ## 5. Sequencing
 

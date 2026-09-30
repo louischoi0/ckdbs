@@ -80,3 +80,29 @@ Recorded on `worktree-ay-s5-d9a-parent-fence` from `5aac081`, during AY-S5.
 | **Mark** | §2's AY-Q8, made exact: the reverse check carries the undecided child writer's id out, the parent `DELETE` parks mid-walk on it, and the check runs again at that writer's decide |
 | **Does not settle** | Any other stage or item |
 | **Recorded at** | `workorder-ay-following-letter.md` §4 and §6 |
+
+## 7. AY-Q12 as proposed
+
+Recorded on `worktree-ay-s5-d9a-parent-fence` at `826d15b`, during AY-S5's
+review.
+
+| | |
+|---|---|
+| **Word** | *"follow CLA proposal for AY-Q12"* |
+| **Mark** | **AY-Q12 as proposed**: an `UPDATE` that sets an fk column takes the parent row's `S` at the hoist, before its walk, so one that matches no row still holds the parent it names until its transaction decides - the cost accepted. As built at `826d15b` and stated in `foreign-keys.md` §2c |
+| **Does not settle** | AY-S6 or any later stage; AY-Q5-Q7, Q10, Q11 |
+| **Recorded at** | `workorder-ay-following-letter.md` §4 and §6 |
+
+## 8. The overhead measurement resumes, per milestone
+
+Recorded on `worktree-ay-s5-d9a-parent-fence` at `826d15b`, during AY-S5's
+review.
+
+| | |
+|---|---|
+| **Word** | *"[decision] resume to measure overhead by code-conversion for a milestone (not stage)"* |
+| **Mark** | **The interleaved A/B overhead measurement resumes, once per milestone and not per stage.** Read as: at a milestone's close, `ck-tester` measures in `build-release` the milestone's whole code change - the commit it opened from against the commit that closes it. A stage lands with "overhead not measured; measured at the milestone's close". Ends the suspension `CLAUDE.md`'s Session Workflow step 3 stated |
+| **Reading** | "code-conversion" read as the milestone's code change, measured base against tip; if another sense was meant, the step-3 text is the one place to correct |
+| **Answers** | For AY: its measurement is AY-S11's, over `58198cb` (AY-S0's base) against AY's closing commit |
+| **Does not settle** | Which benchmarks a milestone's measurement runs, beyond `bench/README.md`'s rules; whether stages already landed under the suspension are re-measured individually (read as no: the milestone measurement covers them) |
+| **Recorded at** | `CLAUDE.md` Session Workflow step 3 |
