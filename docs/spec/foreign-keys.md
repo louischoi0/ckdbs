@@ -297,8 +297,10 @@ D9(a) is built as ratified, and its costs are the engine's:
   `S` the transaction held before the statement - a zero-row `UPDATE`'s,
   say - stays, since another statement stands on it; so does the
   relation's `IS`, which the statement's other parent rows stand under.
-  The hoist records which rows its asks took (`FkParentVerdicts::Asked`);
-  the self-referencing arm tests the same before its ask, and is
+  The hoist records which rows its asks took (`FkParentVerdicts::Asked`) -
+  an ask took the row when it appended the ledger's newest record, an O(1)
+  test (AZ-S7 measured a ledger walk before each ask at +11 µs a row with
+  16,384 distinct parents); the self-referencing arm tests the same, and is
   unreachable while no self-referencing key can be declared.
   **A statement that parked after its hoist keeps the `S`**: it runs again
   whole, and its first run's `S` is still in the transaction's ledger, so
