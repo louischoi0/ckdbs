@@ -1,0 +1,26 @@
+host before: 0.83 3.41 4.57 1/329 295469  competing: none
+host after : 1.87 3.18 4.40 1/318 295584  competing: none
+== B
+  fk-K1        reps=32768 txn median=117us per-row=117.3us errors=0
+  plain-K1     reps=32768 txn median=115us per-row=115.2us errors=0
+  fk-K64       reps=512 txn median=3445us per-row=53.8us errors=0
+  plain-K64    reps=512 txn median=3381us per-row=52.8us errors=0
+  fk-K1024     reps=32 txn median=55977us per-row=54.7us errors=0
+  plain-K1024  reps=32 txn median=52205us per-row=51.0us errors=0
+  fk-K4096     reps=8 txn median=233758us per-row=57.1us errors=0
+  plain-K4096  reps=8 txn median=208023us per-row=50.8us errors=0
+  fk-K16384    reps=5 txn median=1154810us per-row=70.5us errors=0
+  plain-K16384 reps=5 txn median=839725us per-row=51.3us errors=0
+== A
+  fk-K1        reps=32768 txn median=119us per-row=118.8us errors=0
+  plain-K1     reps=32768 txn median=116us per-row=115.8us errors=0
+  fk-K64       reps=512 txn median=3503us per-row=54.7us errors=0
+  plain-K64    reps=512 txn median=3434us per-row=53.7us errors=0
+  fk-K1024     reps=32 txn median=55345us per-row=54.0us errors=0
+  plain-K1024  reps=32 txn median=53325us per-row=52.1us errors=0
+  fk-K4096     reps=8 txn median=226703us per-row=55.3us errors=0
+  plain-K4096  reps=8 txn median=212025us per-row=51.8us errors=0
+  fk-K16384    reps=5 txn median=968937us per-row=59.1us errors=0
+  plain-K16384 reps=5 txn median=850576us per-row=51.9us errors=0
+raw: /home/cdkbs/bench-runs/az-s7/c3-run1/result.json
+driver exit 0

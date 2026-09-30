@@ -1,0 +1,54 @@
+== preload 200: create_assertion_ms B/A per run: [(0.2, 0.2), (0.3, 0.3), (0.2, 0.2), (0.3, 0.2), (0.3, 0.2)]
+arm | clean pairs | B-A p50 median (IQR) | B-A engine/op | B p50 | A p50 | slow B/A | qps B/A (median of runs)
+insert-assert-existing  | 49/80 | -0.83 (-1.28..-0.50) | -0.33 | 52.4 | 53.3 | 22/10 | 15708/16676
+insert-assert-newgroup  | 76/80 | -0.65 (-1.04..-0.32) | -0.36 | 52.9 | 53.5 | 4/0 | 16776/17264
+insert-none-existing    | 68/80 | -0.51 (-0.72..-0.25) | -0.25 | 49.7 | 50.1 | 3/11 | 19082/18652
+insert-none-newgroup    | 66/80 | -0.63 (-0.89..-0.35) | -0.44 | 49.5 | 50.2 | 4/11 | 18747/18150
+insert-none-again       | 70/80 | -0.38 (-0.69..-0.16) | -0.25 | 49.7 | 50.2 | 6/4 | 18668/17776
+select                  | 63/80 | -0.71 (-1.17..-0.21) | -0.33 | 64.3 | 65.0 | 11/6 | 13845/14663
+ping                    | 66/80 | -0.31 (-0.57..-0.05) | -0.17 | 37.8 | 38.1 | 6/8 | 24552/23716
+floor (same server, same block, none-existing vs none-again, all blocks):
+B 80 median -0.02 IQR -0.20..+0.24 abs-median 0.20
+A 80 median +0.00 IQR -0.17..+0.32 abs-median 0.26
+assertion premium (assert - none) p50 per server, paired same block:
+  B existing: +3.20 us (IQR +2.22..+24.98) engine +2.29 us, n=80
+  B newgroup: +3.26 us (IQR +2.90..+3.70) engine +2.54 us, n=80
+  A existing: +3.22 us (IQR +2.67..+3.63) engine +2.12 us, n=80
+  A newgroup: +3.33 us (IQR +2.97..+3.60) engine +2.50 us, n=80
+errors: []
+== preload 1000: create_assertion_ms B/A per run: [(0.8, 0.8), (0.8, 0.8), (0.8, 1.0), (0.8, 0.8), (0.8, 0.8)]
+arm | clean pairs | B-A p50 median (IQR) | B-A engine/op | B p50 | A p50 | slow B/A | qps B/A (median of runs)
+insert-assert-existing  | 62/80 | -0.88 (-1.14..-0.51) | -0.38 | 52.5 | 53.3 | 7/11 | 17474/16174
+insert-assert-newgroup  | 57/80 | -0.75 (-1.23..-0.54) | -0.40 | 52.9 | 53.7 | 11/12 | 17272/17038
+insert-none-existing    | 55/80 | -0.21 (-0.67..+0.11) | +0.05 | 49.6 | 50.0 | 17/9 | 17860/18337
+insert-none-newgroup    | 64/80 | -0.43 (-0.72..-0.03) | -0.13 | 49.6 | 49.9 | 13/4 | 16590/18144
+insert-none-again       | 58/80 | -0.37 (-0.62..-0.07) | -0.13 | 49.7 | 50.2 | 11/12 | 18513/18154
+select                  | 54/80 | -0.53 (-1.06..-0.17) | -0.13 | 64.8 | 65.3 | 20/16 | 14003/14449
+ping                    | 75/80 | -0.42 (-0.96..-0.03) | -0.24 | 38.0 | 38.4 | 4/1 | 24523/24208
+floor (same server, same block, none-existing vs none-again, all blocks):
+B 80 median +0.13 IQR -0.47..+0.86 abs-median 0.66
+A 80 median -0.21 IQR -0.58..+0.32 abs-median 0.51
+assertion premium (assert - none) p50 per server, paired same block:
+  B existing: +2.74 us (IQR +1.95..+3.53) engine +1.78 us, n=80
+  B newgroup: +3.26 us (IQR +2.76..+4.11) engine +2.58 us, n=80
+  A existing: +3.32 us (IQR +2.75..+4.13) engine +2.33 us, n=80
+  A newgroup: +3.95 us (IQR +3.32..+4.75) engine +2.97 us, n=80
+errors: []
+== preload 10000: create_assertion_ms B/A per run: [(7.8, 7.8), (8.5, 8.1), (8.1, 8.2), (8.1, 7.9), (7.7, 9.5)]
+arm | clean pairs | B-A p50 median (IQR) | B-A engine/op | B p50 | A p50 | slow B/A | qps B/A (median of runs)
+insert-assert-existing  | 56/80 | -0.52 (-0.84..-0.16) | -0.50 | 53.2 | 53.6 | 2/23 | 17383/15402
+insert-assert-newgroup  | 30/80 | -0.67 (-1.35..-0.19) | -0.33 | 52.7 | 53.4 | 20/30 | 16530/14434
+insert-none-existing    | 48/80 | -0.20 (-0.44..+0.14) | -0.12 | 49.7 | 49.7 | 18/14 | 17904/18541
+insert-none-newgroup    | 69/80 | -0.24 (-0.62..+0.05) | -0.23 | 49.6 | 49.9 | 7/4 | 18523/17962
+insert-none-again       | 63/80 | -0.26 (-0.45..+0.11) | -0.16 | 49.5 | 49.8 | 12/5 | 18758/18020
+select                  | 76/80 | -0.63 (-1.08..-0.09) | -0.30 | 63.4 | 64.0 | 0/4 | 15221/14992
+ping                    | 71/80 | -0.33 (-0.57..-0.05) | -0.09 | 38.1 | 38.4 | 3/6 | 24687/23403
+floor (same server, same block, none-existing vs none-again, all blocks):
+B 80 median +0.16 IQR -0.22..+0.59 abs-median 0.42
+A 80 median +0.04 IQR -0.26..+0.56 abs-median 0.31
+assertion premium (assert - none) p50 per server, paired same block:
+  B existing: +3.23 us (IQR +2.31..+3.73) engine +2.35 us, n=80
+  B newgroup: +3.48 us (IQR +3.05..+4.78) engine +2.77 us, n=80
+  A existing: +3.97 us (IQR +3.49..+4.87) engine +2.99 us, n=80
+  A newgroup: +4.24 us (IQR +3.69..+26.93) engine +3.19 us, n=80
+errors: []

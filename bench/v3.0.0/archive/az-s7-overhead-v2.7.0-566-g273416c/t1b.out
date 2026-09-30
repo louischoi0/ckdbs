@@ -1,0 +1,9 @@
+== preload 200
+  existing: premium B +3.20 A +3.22; B-A of premium +0.24 us (IQR -0.85..+22.28) engine +0.59 (IQR -0.42..+10.97) n=80
+  newgroup: premium B +3.26 A +3.33; B-A of premium -0.04 us (IQR -0.51..+0.71) engine +0.18 (IQR -0.35..+5.85) n=80
+== preload 1000
+  existing: premium B +2.74 A +3.32; B-A of premium -0.50 us (IQR -22.81..+0.32) engine -0.53 (IQR -10.02..+0.46) n=80
+  newgroup: premium B +3.26 A +3.95; B-A of premium -0.62 us (IQR -1.28..+0.19) engine -0.37 (IQR -6.39..+0.13) n=80
+== preload 10000
+  existing: premium B +3.23 A +3.97; B-A of premium -0.70 us (IQR -22.90..+0.15) engine -0.76 (IQR -11.63..+0.09) n=80
+  newgroup: premium B +3.48 A +4.24; B-A of premium -1.00 us (IQR -23.53..+0.46) engine -0.43 (IQR -10.05..+3.27) n=80
