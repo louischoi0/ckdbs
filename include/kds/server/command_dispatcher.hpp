@@ -1323,6 +1323,10 @@ private:
     // A refused parent-row hold's status, restated as the foreign key's
     // (a conflict names the child and parent relations; any other code
     // stands).
+    // Whether the statement's transaction already holds the row in some
+    // mode, asked before a parent check's `S` so a failed check gives back
+    // only what its own ask took (AZ-S5).
+    bool HoldsRow(const WriteScope& scope, catalog::Oid rel, std::uint64_t pk) const;
     Status ParentRowHeld(const catalog::TableAccess& child, catalog::Oid parent_rel,
                          std::uint64_t pk, const Status& held);
 

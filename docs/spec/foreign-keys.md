@@ -287,6 +287,17 @@ D9(a) is built as ratified, and its costs are the engine's:
 - **An `UPDATE` that sets an fk column takes the `S` at the hoist**, before
   its walk, so one that matches no row still holds the parent it names
   until its transaction decides.
+- **A check that fails gives back the `S` its own ask took** (AZ-S5,
+  AZ-Q3). An absent parent answers `FK_VIOLATION`, which poisons the
+  transaction: it can write nothing that `S` protects, and holding it would
+  refuse every insert of that parent key until the client's `ROLLBACK`.
+  PostgreSQL's `FOR KEY SHARE` locks nothing for a missing row either. An
+  `S` the transaction held before the statement - a zero-row `UPDATE`'s,
+  say - stays, since another statement stands on it; so does the
+  relation's `IS`, which the statement's other parent rows stand under.
+  The hoist records which rows its asks took (`FkParentVerdicts::Asked`);
+  the self-referencing arm tests the same before its ask, and is
+  unreachable while no self-referencing key can be declared.
 
 An existence-only unit that only a `DELETE` would take is not built; it is
 a change to AR2's units, and would be put forward as its own item if these

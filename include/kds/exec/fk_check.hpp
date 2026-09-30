@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <vector>
 #include <utility>
 
@@ -150,6 +151,16 @@ public:
     std::size_t size() const noexcept { return entries_.size(); }
     bool empty() const noexcept { return entries_.empty(); }
 
+    // AZ-S5: the parent rows whose `S` this statement's own ask took - not
+    // one the transaction held before it. Only those are given back when
+    // their check fails (`foreign-keys.md` §2c).
+    void NoteAsked(catalog::Oid parent_rel, std::uint64_t parent_pk) {
+        asked_.insert(Key{parent_rel, parent_pk});
+    }
+    bool Asked(catalog::Oid parent_rel, std::uint64_t parent_pk) const noexcept {
+        return asked_.count(Key{parent_rel, parent_pk}) != 0;
+    }
+
     // AK-S3: whether the pks this holds were **collected** by a read-only
     // pass over the relation rather than named by the statement. It changes
     // what a miss in the per-row check means: for a named pk a miss is the
@@ -167,6 +178,7 @@ private:
     // synchronous span (AK-S3's review, C4).
     using Key = std::pair<catalog::Oid, std::uint64_t>;
     std::map<Key, FkVerdict> entries_;
+    std::set<Key> asked_;
     bool collected_ = false;
 };
 
