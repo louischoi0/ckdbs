@@ -514,7 +514,8 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > assertion opens another run first (a failed append) - is **discarded,
   > never a base**: its missing groups would restore as absent, and an
   > admission check on that directory admits what the assertion forbids
-  > (AY-Q7). The assertion is then unrecovered (below). A chunk whose run
+  > (AY-Q7). A whole run after it is the base; with none, the assertion is
+  > unrecovered (below). A chunk whose run
   > began before the scan's start is skipped. `chunk_count` is at least 1;
   > a record with 0 is Corruption - the word a pre-AY-S8 writer left, on a
   > version-18 volume the superblock no longer mounts (AY-Q6). A cabin

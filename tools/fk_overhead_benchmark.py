@@ -28,9 +28,10 @@ Cell 2 (`--cell price`), per-statement, one session per server:
 
 Cell 3 (`--cell ledger`): one explicit transaction inserting K child rows,
 each referencing a distinct parent (and the same K rows into the fk-less
-child as control), K from `--ks`. Reports per-row cost against K, and for the
-largest K the per-statement mean by position in the transaction (a quadratic
-term shows as a slope inside one transaction).
+child as control), K from `--ks`. Reports per-row cost against K, and for
+every K >= 64 the per-statement latency summed by octile of the transaction
+(`stmt_us_by_pos`: a per-insert term that grows with K shows as a slope, and
+the transaction's wall time less its inserts is what BEGIN and COMMIT cost).
 
 Arms alternate which server goes first per block/rep, so a drifting host does
 not favour one side. Each server's `SHOW META` is read before and after every
@@ -125,8 +126,9 @@ def cell_price(args, servers):
     for s in servers:
         setup(s.conn, parents, children)
     per_block = max(1, args.ops // args.blocks)
-    # Named pks for inserts start above the setup rows so they cannot collide
-    # and are identical across servers.
+    # Named pks for inserts start above the setup rows so they cannot collide.
+    # One counter for both servers, so each gets its own ascending ids - the
+    # same append-at-the-right-edge shape, not the same keys.
     counter = {"n": 10_000_000}
 
     def next_id():

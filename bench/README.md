@@ -32,8 +32,13 @@ deleted files is `9a0525d`:
     git ls-tree -r --name-only 9a0525d bench/v3.0.0   # what was here
     git show 9a0525d:bench/v3.0.0/<path>              # any one file
 
+One exception: AY-S11's overhead file
+(`results-ay-s11-overhead-v2.7.0-530-g0552d55.md` and its archive) was
+corrected on `main` after `9a0525d`, and its last version is at `a59da9c`.
+
 **A citation to a `bench/v3.0.0/` path that does not exist in the working
-tree resolves against `9a0525d`** — `known-gaps.md`, the concept notes and
+tree resolves against `9a0525d`** (the AY-S11 overhead file against
+`a59da9c`) — `known-gaps.md`, the concept notes and
 `instructions/v3.0.0/` cite several. The rebaseline's files are the
 comparator for every later delta of the same driver and shape; a delta
 against a deleted file names `9a0525d` and says the two runs are ten days
