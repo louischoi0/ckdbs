@@ -1,0 +1,8 @@
+# 7 flagged cells of 40
+s0-pg-on-r1	55 samples	49 flagged	max load1 1.98	 205403  1.8     167 ctest           ctest --test-dir /home/cdkbs/ckdbs/.claude/worktrees/az-s1-catalog-tail-a
+s3-pg-n10000-none-r2	17 samples	6 flagged	max load1 3.16	 214485  0.0       0 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumenta
+s3-pg-n10000-all-r2	76 samples	63 flagged	max load1 7.45	 214485  0.0      10 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumenta
+s4-pg-r2	6 samples	4 flagged	max load1 4.28	 217579 16.0       5 kds_tests       ./build/tests/kds_tests --gtest_filter=RowWaitWakeRigTest.AWriterParkedOn
+s3-pg-n200-none-r3	6 samples	2 flagged	max load1 3.78	 217702  0.0       5 cmake           cmake --build build -j8 --target kds_tests
+s3-pg-n1000-none-r3	16 samples	15 flagged	max load1 6.32	 218136  7.4       1 ctest           ctest --test-dir build -j8 -LE heap-suspended
+s3-pg-n1000-all-r3	45 samples	41 flagged	max load1 7.66	 218136  3.4      29 ctest           ctest --test-dir build -j8 -LE heap-suspended

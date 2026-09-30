@@ -1,0 +1,12 @@
+created 8 relations with suffix _s2_kds_b1_c1_g_r2:
+  organizations_s2_kds_b1_c1_g_r2
+  ships_s2_kds_b1_c1_g_r2
+  operations_s2_kds_b1_c1_g_r2
+  cargos_s2_kds_b1_c1_g_r2
+  fees_s2_kds_b1_c1_g_r2
+  recipes_s2_kds_b1_c1_g_r2
+  freights_s2_kds_b1_c1_g_r2
+  charges_s2_kds_b1_c1_g_r2
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/bench-pg-floor/tools/scenario2_freight.py --suffix s2_kds_b1_c1_g_r2 [--load-only]

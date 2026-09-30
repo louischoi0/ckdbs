@@ -1,0 +1,126 @@
+S0 START 2026-09-30T08:21:16Z
+== s0-pg-on-r1 start 2026-09-30T08:21:16Z ==
+== s0-pg-on-r1 end 2026-09-30T08:23:06Z rc=0 ==
+== s0-pg-off-r1 start 2026-09-30T08:23:06Z ==
+== s0-pg-off-r1 end 2026-09-30T08:23:08Z rc=0 ==
+== s0-pg-on-r2 start 2026-09-30T08:23:08Z ==
+== s0-pg-on-r2 end 2026-09-30T08:23:18Z rc=0 ==
+== s0-pg-off-r2 start 2026-09-30T08:23:18Z ==
+== s0-pg-off-r2 end 2026-09-30T08:23:21Z rc=0 ==
+== s0-pg-on-r3 start 2026-09-30T08:23:21Z ==
+== s0-pg-on-r3 end 2026-09-30T08:23:31Z rc=0 ==
+== s0-pg-off-r3 start 2026-09-30T08:23:31Z ==
+== s0-pg-off-r3 end 2026-09-30T08:23:33Z rc=0 ==
+S0 END 2026-09-30T08:23:33Z
+S2 START 2026-09-30T08:23:33Z
+== s2-pg-on-r1 start 2026-09-30T08:23:33Z ==
+== s2-pg-on-r1 end 2026-09-30T08:23:49Z rc=0 ==
+== s2-kds-b1-c1-g-r1 start 2026-09-30T08:23:49Z ==
+== s2-kds-b1-c1-g-r1 end 2026-09-30T08:24:14Z rc=0 ==
+== s2-pg-off-r1 start 2026-09-30T08:24:14Z ==
+== s2-pg-off-r1 end 2026-09-30T08:24:19Z rc=0 ==
+== s2-kds-b1-c1-s-r1 start 2026-09-30T08:24:19Z ==
+== s2-kds-b1-c1-s-r1 end 2026-09-30T08:24:43Z rc=0 ==
+== s2-pg-on-r2 start 2026-09-30T08:24:43Z ==
+== s2-pg-on-r2 end 2026-09-30T08:25:00Z rc=0 ==
+== s2-kds-b1-c1-g-r2 start 2026-09-30T08:25:00Z ==
+== s2-kds-b1-c1-g-r2 end 2026-09-30T08:25:25Z rc=0 ==
+== s2-pg-off-r2 start 2026-09-30T08:25:25Z ==
+== s2-pg-off-r2 end 2026-09-30T08:25:30Z rc=0 ==
+== s2-kds-b1-c1-s-r2 start 2026-09-30T08:25:30Z ==
+== s2-kds-b1-c1-s-r2 end 2026-09-30T08:25:54Z rc=0 ==
+== s2-pg-on-r3 start 2026-09-30T08:25:54Z ==
+== s2-pg-on-r3 end 2026-09-30T08:26:10Z rc=0 ==
+== s2-kds-b1-c1-g-r3 start 2026-09-30T08:26:10Z ==
+== s2-kds-b1-c1-g-r3 end 2026-09-30T08:26:35Z rc=0 ==
+== s2-pg-off-r3 start 2026-09-30T08:26:35Z ==
+== s2-pg-off-r3 end 2026-09-30T08:26:41Z rc=0 ==
+== s2-kds-b1-c1-s-r3 start 2026-09-30T08:26:41Z ==
+== s2-kds-b1-c1-s-r3 end 2026-09-30T08:27:05Z rc=0 ==
+S2 END 2026-09-30T08:27:05Z
+S34 START 2026-09-30T08:27:05Z
+== s3-pg-n200-none-r1 start 2026-09-30T08:27:05Z ==
+== s3-pg-n200-none-r1 end 2026-09-30T08:27:06Z rc=0 ==
+== s3-pg-n200-all-r1 start 2026-09-30T08:27:06Z ==
+== s3-pg-n200-all-r1 end 2026-09-30T08:27:09Z rc=0 ==
+== s3-pg-n1000-none-r1 start 2026-09-30T08:27:09Z ==
+== s3-pg-n1000-none-r1 end 2026-09-30T08:27:13Z rc=0 ==
+== s3-pg-n1000-all-r1 start 2026-09-30T08:27:13Z ==
+== s3-pg-n1000-all-r1 end 2026-09-30T08:27:17Z rc=0 ==
+== s3-pg-n10000-none-r1 start 2026-09-30T08:27:17Z ==
+== s3-pg-n10000-none-r1 end 2026-09-30T08:27:47Z rc=0 ==
+== s3-pg-n10000-all-r1 start 2026-09-30T08:27:47Z ==
+== s3-pg-n10000-all-r1 end 2026-09-30T08:28:18Z rc=0 ==
+== s4-pg-r1 start 2026-09-30T08:28:18Z ==
+== s4-pg-r1 end 2026-09-30T08:28:23Z rc=0 ==
+== s3-pg-n200-none-r2 start 2026-09-30T08:28:23Z ==
+== s3-pg-n200-none-r2 end 2026-09-30T08:28:25Z rc=0 ==
+== s3-pg-n200-all-r2 start 2026-09-30T08:28:25Z ==
+== s3-pg-n200-all-r2 end 2026-09-30T08:28:28Z rc=0 ==
+== s3-pg-n1000-none-r2 start 2026-09-30T08:28:28Z ==
+== s3-pg-n1000-none-r2 end 2026-09-30T08:28:32Z rc=0 ==
+== s3-pg-n1000-all-r2 start 2026-09-30T08:28:32Z ==
+== s3-pg-n1000-all-r2 end 2026-09-30T08:28:38Z rc=0 ==
+== s3-pg-n10000-none-r2 start 2026-09-30T08:28:38Z ==
+== s3-pg-n10000-none-r2 end 2026-09-30T08:29:11Z rc=0 ==
+== s3-pg-n10000-all-r2 start 2026-09-30T08:29:11Z ==
+== s3-pg-n10000-all-r2 end 2026-09-30T08:31:44Z rc=0 ==
+== s4-pg-r2 start 2026-09-30T08:31:44Z ==
+== s4-pg-r2 end 2026-09-30T08:31:56Z rc=0 ==
+== s3-pg-n200-none-r3 start 2026-09-30T08:31:56Z ==
+== s3-pg-n200-none-r3 end 2026-09-30T08:32:07Z rc=0 ==
+== s3-pg-n200-all-r3 start 2026-09-30T08:32:07Z ==
+== s3-pg-n200-all-r3 end 2026-09-30T08:32:10Z rc=0 ==
+== s3-pg-n1000-none-r3 start 2026-09-30T08:32:10Z ==
+== s3-pg-n1000-none-r3 end 2026-09-30T08:32:42Z rc=0 ==
+== s3-pg-n1000-all-r3 start 2026-09-30T08:32:42Z ==
+== s3-pg-n1000-all-r3 end 2026-09-30T08:34:11Z rc=0 ==
+== s3-pg-n10000-none-r3 start 2026-09-30T08:34:11Z ==
+== s3-pg-n10000-none-r3 end 2026-09-30T08:34:37Z rc=0 ==
+== s3-pg-n10000-all-r3 start 2026-09-30T08:34:37Z ==
+== s3-pg-n10000-all-r3 end 2026-09-30T08:35:03Z rc=0 ==
+== s4-pg-r3 start 2026-09-30T08:35:03Z ==
+== s4-pg-r3 end 2026-09-30T08:35:08Z rc=0 ==
+S34 END 2026-09-30T08:35:08Z
+== s1-pg-r1 start 2026-09-30T08:35:08Z ==
+== s1-pg-r1 end 2026-09-30T08:35:48Z rc=0 ==
+S0 START 2026-09-30T08:36:17Z
+== s0-pg-on-r1 start 2026-09-30T08:36:17Z ==
+== s0-pg-on-r1 end 2026-09-30T08:36:26Z rc=0 ==
+S0 END 2026-09-30T08:36:26Z
+S2 START 2026-09-30T08:36:26Z
+S2 END 2026-09-30T08:36:26Z
+S34 START 2026-09-30T08:36:26Z
+== s3-pg-n10000-none-r2 start 2026-09-30T08:36:26Z ==
+== s3-pg-n10000-none-r2 end 2026-09-30T08:36:52Z rc=0 ==
+== s3-pg-n10000-all-r2 start 2026-09-30T08:36:52Z ==
+== s3-pg-n10000-all-r2 end 2026-09-30T08:37:17Z rc=0 ==
+== s4-pg-r2 start 2026-09-30T08:37:17Z ==
+== s4-pg-r2 end 2026-09-30T08:37:22Z rc=0 ==
+== s3-pg-n200-none-r3 start 2026-09-30T08:37:22Z ==
+== s3-pg-n200-none-r3 end 2026-09-30T08:37:24Z rc=0 ==
+== s3-pg-n1000-none-r3 start 2026-09-30T08:37:24Z ==
+== s3-pg-n1000-none-r3 end 2026-09-30T08:37:28Z rc=0 ==
+== s3-pg-n1000-all-r3 start 2026-09-30T08:37:28Z ==
+== s3-pg-n1000-all-r3 end 2026-09-30T08:37:32Z rc=0 ==
+S34 END 2026-09-30T08:37:32Z
+S0 START 2026-09-30T08:37:57Z
+S0 END 2026-09-30T08:37:57Z
+S2 START 2026-09-30T08:37:57Z
+S2 END 2026-09-30T08:37:57Z
+S34 START 2026-09-30T08:37:57Z
+== s3-pg-n200-all-r3 start 2026-09-30T08:37:57Z ==
+== s3-pg-n200-all-r3 end 2026-09-30T08:37:59Z rc=0 ==
+== s3-pg-n10000-none-r3 start 2026-09-30T08:37:59Z ==
+== s3-pg-n10000-none-r3 end 2026-09-30T08:38:24Z rc=0 ==
+== s3-pg-n10000-all-r3 start 2026-09-30T08:38:24Z ==
+== s3-pg-n10000-all-r3 end 2026-09-30T08:39:16Z rc=0 ==
+== s4-pg-r3 start 2026-09-30T08:39:16Z ==
+== s4-pg-r3 end 2026-09-30T08:39:21Z rc=0 ==
+S34 END 2026-09-30T08:39:21Z
+== s1-pg-r1 start 2026-09-30T08:40:39Z ==
+== s1-pg-r1 end 2026-09-30T08:41:20Z rc=0 ==
+== s0-pg-on-fsyncprobe start 2026-09-30T08:42:24Z ==
+== s0-pg-on-fsyncprobe end 2026-09-30T08:42:34Z rc=0 ==
+== s2-pg-on-fsyncprobe start 2026-09-30T08:42:34Z ==
+== s2-pg-on-fsyncprobe end 2026-09-30T08:42:51Z rc=0 ==

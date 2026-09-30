@@ -1,0 +1,1069 @@
+T 1790756897 1.07 1.28 1.63
+T 1790756899 1.07 1.28 1.63
+T 1790756901 1.07 1.28 1.63
+  X  213798 58.3       1 postgres        postgres: cdkbs bench 127.0.0.1(33390) idle in transaction
+T 1790756903 1.14 1.29 1.63
+  X  213798 66.6       3 postgres        postgres: cdkbs bench 127.0.0.1(33390) SELECT
+T 1790756905 1.14 1.29 1.63
+T 1790756907 1.13 1.29 1.62
+T 1790756909 1.13 1.29 1.62
+T 1790756911 1.13 1.29 1.62
+T 1790756913 1.12 1.28 1.62
+T 1790756915 1.12 1.28 1.62
+T 1790756917 1.19 1.29 1.62
+T 1790756919 1.19 1.29 1.62
+T 1790756921 1.19 1.29 1.62
+T 1790756923 1.34 1.32 1.63
+T 1790756925 1.34 1.32 1.63
+T 1790756927 1.39 1.33 1.63
+T 1790756929 1.39 1.33 1.63
+T 1790756931 1.36 1.33 1.63
+T 1790756933 1.36 1.33 1.63
+T 1790756935 1.36 1.33 1.63
+T 1790756937 1.33 1.32 1.63
+T 1790756939 1.33 1.32 1.63
+T 1790756941 2.02 1.47 1.67
+  X  214485  0.0       0 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214518 94.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214525 94.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214526  101       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214540  111       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214542  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214547  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214551  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756943 2.02 1.47 1.67
+  X  214485  0.0       2 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214571 91.6       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214605 97.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214607 98.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214612  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214617 93.4       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214622 97.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214627  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214628 33.3       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include --gdwarf-5 --64 -o CMakeF
+T 1790756945 2.02 1.47 1.67
+  X  214485  0.0       4 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214679 95.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214706 92.7       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214711 87.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214724 94.4       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214726 94.4       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214732  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214735 66.6       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include --gdwarf-5 --64 -o CMakeF
+  X  214737 66.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756947 2.74 1.63 1.72
+  X  214485  0.0       6 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214706 96.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214799  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214800 97.8       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214805 95.4       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214812  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214820  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214823 93.3       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214826 92.8       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756949 2.74 1.63 1.72
+  X  214485  0.0       8 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214844 99.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214853 84.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214858 90.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214862 96.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214867 91.3       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214873  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214876  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include --gdwarf-5 --64 -o CMakeF
+T 1790756951 3.16 1.73 1.76
+  X  214485  0.0      10 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214844 95.9       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214858 94.9       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214862 76.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214873 89.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214893 89.7       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214897 95.6       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214927 97.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214951  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756953 3.16 1.73 1.76
+  X  214485  0.0      12 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214858 96.7       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214862 84.3       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214893 93.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214897 96.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214927 99.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214974  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214975 83.3       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include --gdwarf-5 --64 -o CMakeF
+  X  214980 66.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756955 3.16 1.73 1.76
+  X  214485  0.0      14 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  214858 96.8       7 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  214862 88.5       7 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215028 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215031 95.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215034 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215040 95.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215052  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215057 50.0       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756957 3.55 1.84 1.79
+  X  214485  0.0      16 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215075 98.7       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215092 99.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215102 98.8       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215106  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215112 96.4       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215114 97.2       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include --gdwarf-5 --64 -o CMakeF
+  X  215118 97.1       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215123  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756959 3.55 1.84 1.79
+  X  214485  0.0      18 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215118 97.4       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215150  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215162 98.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215167 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215172  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215179  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215183  103       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215187  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756962 3.91 1.94 1.82
+  X  214485  0.0      20 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215150 99.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215200 98.7       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215205 93.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215212 97.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215217 96.8       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215224 95.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215228 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215235 85.7       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include --gdwarf-5 --64 -o CMakeF
+T 1790756964 3.91 1.94 1.82
+  X  214485  0.0      22 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215212 99.0       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215247 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215277 97.2       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215287  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215298  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215300  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756966 3.91 1.94 1.82
+  X  214485  0.0      24 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215322  0.0       1 cmake           /usr/bin/cmake -E cmake_link_script CMakeFiles/kds.dir/link.txt --verbose=
+  X  215324 65.2       0 ranlib          /usr/bin/ranlib libkds.a
+T 1790756968 4.32 2.06 1.86
+  X  214485  0.0      26 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215374 99.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215375 99.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215376 98.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215379 98.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215382 97.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756970 4.32 2.06 1.86
+  X  214485  0.0      28 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215375 99.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215382 98.5       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215408 85.7       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include --gdwarf-5 --64 -o CMakeF
+T 1790756972 4.61 2.16 1.90
+  X  214485  0.0      30 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215457 98.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215468 98.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215471 99.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215472 98.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215475 97.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215481 98.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215488  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215494  101       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756974 4.61 2.16 1.90
+  X  214485  0.0      33 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215457 98.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215468 99.0       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215481 98.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215488 99.3       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215494 98.4       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215526 98.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215532 95.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215537 98.3       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756976 4.61 2.16 1.90
+  X  214485  0.0      35 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215468 98.8       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215481 98.4       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215488 98.5       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215494 98.7       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215526 98.9       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215537 98.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215558 94.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215565 96.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756978 4.88 2.25 1.93
+  X  214485  0.0      37 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215488 98.4       6 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215494 97.7       6 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215526 99.3       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215537 98.9       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215558 97.2       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215565 96.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215591  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215596  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756980 4.88 2.25 1.93
+  X  214485  0.0      39 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215558 97.1       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215565 95.9       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215591 99.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215612 89.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215617 91.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215632 90.2       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215633 97.3       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+  X  215634  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790756982 5.13 2.35 1.96
+  X  214485  0.0      41 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215565 97.0       6 cc1plus         [cc1plus]
+  X  215591 98.8       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215662  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215669  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215670  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+  X  215675  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215683  112       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+  X  215688 85.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756984 5.13 2.35 1.96
+  X  214485  0.0      43 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215591 99.2       6 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215706 97.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215712  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215718 96.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215724  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215730  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215737 85.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215742 66.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756986 5.13 2.35 1.96
+  X  214485  0.0      45 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215706 96.2       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215712 95.9       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215737 95.2       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215742 90.2       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215767 96.9       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215775 91.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215781 84.8       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215787 93.3       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215795 89.2       0 2.1.285         ugrep -G --ignore-files --hidden -I --exclude-dir=.git --exclude-dir=.svn --exclude-dir=.hg --exclude-d
+T 1790756988 5.44 2.46 2.00
+  X  214485  0.0      47 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215775 95.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215781 86.8       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215787 93.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215817 95.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215822 90.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215831 97.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215837  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215842 96.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756990 5.44 2.46 2.00
+  X  214485  0.0      49 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215781 91.4       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215787 95.9       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215817 97.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215822 96.3       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215837 99.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215842 99.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215856 98.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215859  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790756992 5.65 2.55 2.03
+  X  214485  0.0      51 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215822 96.4       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215856 97.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215874 96.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215880 97.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215885 92.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215890 97.9       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215900 96.9       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+  X  215902 94.7       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790756994 5.65 2.55 2.03
+  X  214485  0.0      53 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215915 97.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215920 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215927 97.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215932 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215941 96.8       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215948  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215949  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+  X  215950  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790756996 5.65 2.55 2.03
+  X  214485  0.0      55 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215915 98.0       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215927 97.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215932 98.9       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215941 97.0       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215948 98.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215964 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215969 98.8       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215974 98.8       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790756998 5.84 2.64 2.06
+  X  214485  0.0      57 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215948 98.3       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215964 98.2       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215969 94.5       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  215989 97.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216001 96.8       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216006 99.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216019 95.0       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757000 5.84 2.64 2.06
+  X  214485  0.0      59 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215989 97.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216001 97.2       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216006 98.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216019 97.7       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216035 98.8       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216045 96.7       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216052 88.6       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216055 97.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757002 6.01 2.73 2.10
+  X  214485  0.0      61 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  215989 98.0       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216001 96.7       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216006 99.2       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216019 97.2       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216035 98.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216045 97.5       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216052 96.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216055 93.5       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757004 6.01 2.73 2.10
+  X  214485  0.0      63 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216019 97.9       6 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216035 98.7       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216045 97.9       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216052 97.2       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216108  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216113 97.1       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216122  104       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216123  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757006 6.01 2.73 2.10
+  X  214485  0.0      65 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216045 97.8       7 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216108 99.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216113 98.3       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216137  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216144 97.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216150  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216151  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+  X  216156  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757008 6.17 2.82 2.13
+  X  214485  0.0      67 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216113 99.0       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216137 99.3       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216144 98.3       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216150  100       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216156 98.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216169  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216182 98.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216185  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790757010 6.17 2.82 2.13
+  X  214485  0.0      69 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216137 98.2       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216144 98.6       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216169 99.2       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216182 96.8       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216200 98.9       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216205 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216210 98.7       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216216 98.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757012 6.32 2.91 2.16
+  X  214485  0.0      71 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216137 98.0       7 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216200 99.2       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216216 97.6       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216231 98.8       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216236 97.7       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216243  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216251 96.9       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+  X  216257  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757014 6.32 2.91 2.16
+  X  214485  0.0      73 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216236 98.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216243 98.2       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216279 98.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216284 99.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216292  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216298 90.0       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216304 90.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757016 6.45 2.99 2.19
+  X  214485  0.0      75 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216243 98.3       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216292 99.2       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216298 98.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216316 97.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216324 99.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216329  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216335 98.8       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216341  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757018 6.45 2.99 2.19
+  X  214485  0.0      77 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216298 99.0       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216316 97.2       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216324 99.1       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216329 99.3       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216361  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216370  101       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216376  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216377  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790757020 6.45 2.99 2.19
+  X  214485  0.0      79 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216361 99.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216376 99.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216391 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216396  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216403 98.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216408  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216414  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216420  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757022 6.58 3.07 2.22
+  X  214485  0.0      81 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216391 98.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216396 98.9       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216403 97.5       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216408 99.6       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216420 97.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216442  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216448 95.2       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216449 94.1       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790757024 6.58 3.07 2.22
+  X  214485  0.0      83 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216408 99.4       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216462 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216469 99.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216474 98.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216480 98.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216486  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216493  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216498 87.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757026 6.69 3.16 2.25
+  X  214485  0.0      85 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216462 99.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216469 98.6       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216486 99.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216493  100       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216498 96.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216512  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216518  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216524 99.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757028 6.69 3.16 2.25
+  X  214485  0.0      87 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216518 98.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216524 94.5       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216549 97.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216555 97.6       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216561 89.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216567 97.0       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216574  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216579 87.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757030 6.69 3.16 2.25
+  X  214485  0.0      89 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216518 99.0       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216524 96.4       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216567 98.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216574 99.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216579 98.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216596 96.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216601 99.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216607  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757032 6.88 3.25 2.29
+  X  214485  0.0      91 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216567 98.5       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216574 99.7       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216579 99.0       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216622  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216628  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216633 97.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216645  102       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216646  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790757034 6.88 3.25 2.29
+  X  214485  0.0      93 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216579 98.7       6 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216645 99.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216659 98.9       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216667  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216672 99.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216678 98.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216684 97.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216687  100       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790757036 7.21 3.38 2.34
+  X  214485  0.0      95 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216667 98.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216672 99.3       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216684 98.2       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216702 96.1       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216708 99.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216732  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216737 97.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216743  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757039 7.21 3.38 2.34
+  X  214485  0.0      97 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216702 97.9       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216708 97.7       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216732 99.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216737 98.4       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216743 98.6       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216764  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216770  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757041 7.21 3.38 2.34
+  X  214485  0.0      99 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216732 99.0       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216737 98.8       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216784  100       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216796 97.4       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216801 98.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216806 98.4       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216812 96.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216818 66.6       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757043 7.35 3.48 2.37
+  X  214485  0.0     101 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216796 97.8       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216806 97.7       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216812 98.2       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216818 98.0       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216834 98.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216839  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216844 98.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216850 98.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757045 7.35 3.48 2.37
+  X  214485  0.0     103 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216812 98.6       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216834 99.0       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216839 99.3       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216844 98.6       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216850 97.8       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216873  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216878 97.0       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216879  109       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790757047 7.40 3.55 2.40
+  X  214485  0.0     106 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216893 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216900 98.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216905 98.5       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216910  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216916 96.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216923 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216929 97.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216934  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757049 7.40 3.55 2.40
+  X  214485  0.0     108 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216900 98.8       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216905 98.5       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216910 99.6       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216929 99.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216934 99.1       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216948 97.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216962 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216968  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757051 7.40 3.55 2.40
+  X  214485  0.0     110 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216900 98.5       5 cc1plus         [cc1plus]
+  X  216910 99.2       5 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216968  100       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216982 99.4       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216988 99.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  216994 97.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217001  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217008  107       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757053 7.45 3.63 2.43
+  X  214485  0.0     112 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  216994 97.9       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217008 99.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217023 98.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217028 99.3       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217038 99.0       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217041 96.2       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217047 98.9       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217052 97.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757055 7.45 3.63 2.43
+  X  214485  0.0     114 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  217008 99.5       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217041 98.0       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217074  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217081 97.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217086  100       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217093 98.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217099  101       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217104 97.5       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757057 7.25 3.65 2.45
+  X  214485  0.0     116 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  217081 98.6       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217086  100       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757059 7.25 3.65 2.45
+  X  214485  0.0     118 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  217081 99.3       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757061 7.25 3.65 2.45
+  X  214485  0.0     120 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  217149  0.0       1 cmake           /usr/bin/cmake -E cmake_link_script CMakeFiles/kds_tests.dir/link.txt --verbose=
+  X  217152  100       1 ld              /usr/bin/ld -plugin /usr/libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so -plugin-opt=/usr/libexec/gcc/
+T 1790757063 6.75 3.60 2.44
+  X  214485  0.0     122 cmake           cmake --build /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build -j8
+  X  217180 50.0       0 cmake           /usr/bin/cmake -D TEST_TARGET=kds_tests -D TEST_EXECUTABLE=/home/cdkbs/ckdbs/.claude/worktrees/az-s4-fl
+T 1790757065 6.75 3.60 2.44
+T 1790757067 6.21 3.54 2.43
+T 1790757069 6.21 3.54 2.43
+T 1790757071 6.21 3.54 2.43
+T 1790757073 6.04 3.55 2.44
+  X  217251 10.6       5 kds_tests       ./build/tests/kds_tests --gtest_filter=ExpeditorTest.*:RowWaitWakeRigTest.*
+T 1790757075 6.04 3.55 2.44
+  X  217251 15.0       7 kds_tests       ./build/tests/kds_tests --gtest_filter=ExpeditorTest.*:RowWaitWakeRigTest.*
+T 1790757077 5.63 3.51 2.43
+T 1790757079 5.63 3.51 2.43
+T 1790757081 5.63 3.51 2.43
+T 1790757083 5.26 3.47 2.42
+T 1790757085 5.26 3.47 2.42
+T 1790757087 4.92 3.43 2.41
+T 1790757089 4.92 3.43 2.41
+T 1790757091 4.92 3.43 2.41
+T 1790757093 4.61 3.39 2.41
+T 1790757095 4.61 3.39 2.41
+  X  217448  0.0       0 cmake           cmake --build build -j8 --target kds_tests
+  X  217475 14.2       0 gmake           /usr/bin/gmake -s -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/build
+  X  217485 93.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217486 93.7       0 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757097 4.48 3.38 2.41
+  X  217448  0.0       2 cmake           cmake --build build -j8 --target kds_tests
+  X  217485 99.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217486 99.5       2 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757099 4.48 3.38 2.41
+  X  217448  0.0       4 cmake           cmake --build build -j8 --target kds_tests
+  X  217485 99.7       4 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217505 92.8       0 as              as -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/include -I /home/cdkbs/ckdbs/.cla
+T 1790757101 4.48 3.38 2.41
+  X  217448  0.0       6 cmake           cmake --build build -j8 --target kds_tests
+  X  217519  0.0       1 cmake           /usr/bin/cmake -E cmake_link_script CMakeFiles/kds_tests.dir/link.txt --verbose=
+  X  217522  100       1 ld              /usr/bin/ld -plugin /usr/libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so -plugin-opt=/usr/libexec/gcc/
+T 1790757103 4.28 3.36 2.41
+  X  217448  0.0       8 cmake           cmake --build build -j8 --target kds_tests
+  X  217519  0.0       3 cmake           /usr/bin/cmake -E cmake_link_script CMakeFiles/kds_tests.dir/link.txt --verbose=
+  X  217522  100       3 ld              /usr/bin/ld -plugin /usr/libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so -plugin-opt=/usr/libexec/gcc/
+T 1790757105 4.28 3.36 2.41
+T 1790757107 4.02 3.32 2.40
+T 1790757109 4.02 3.32 2.40
+  X  217579 16.0       5 kds_tests       ./build/tests/kds_tests --gtest_filter=RowWaitWakeRigTest.AWriterParkedOnAnotherCoresRowProceedsAtTheRe
+  X  217643  100       0 postgres        /home/cdkbs/.local/pgsql-18.6/bin/postgres --boot -F -c log_checkpoints=false -X 16777216 -k
+T 1790757111 4.02 3.32 2.40
+  X  217579 15.2       7 kds_tests       ./build/tests/kds_tests --gtest_filter=RowWaitWakeRigTest.AWriterParkedOnAnotherCoresRowProceedsAtTheRe
+T 1790757113 3.93 3.31 2.40
+  X  217685 48.6       2 postgres        postgres: cdkbs bench 127.0.0.1(48646) INSERT
+  X  217702  0.0       1 cmake           cmake --build build -j8 --target kds_tests
+  X  217736  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217737  100       1 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757115 3.93 3.31 2.40
+  X  217685 58.0       4 postgres        postgres: cdkbs bench 127.0.0.1(48646) SELECT
+  X  217702  0.0       3 cmake           cmake --build build -j8 --target kds_tests
+  X  217736  100       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+  X  217737 99.6       3 cc1plus         /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-
+T 1790757117 3.78 3.29 2.40
+  X  217702  0.0       5 cmake           cmake --build build -j8 --target kds_tests
+  X  217782  0.0       0 cmake           /usr/bin/cmake -E cmake_link_script CMakeFiles/kds_tests.dir/link.txt --verbose=
+  X  217785  100       0 ld              /usr/bin/ld -plugin /usr/libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so -plugin-opt=/usr/libexec/gcc/
+T 1790757119 3.78 3.29 2.40
+  X  217702  0.0       7 cmake           cmake --build build -j8 --target kds_tests
+  X  217782  0.0       2 cmake           /usr/bin/cmake -E cmake_link_script CMakeFiles/kds_tests.dir/link.txt --verbose=
+  X  217785 99.5       2 ld              /usr/bin/ld -plugin /usr/libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so -plugin-opt=/usr/libexec/gcc/
+T 1790757121 3.48 3.23 2.39
+T 1790757123 3.48 3.23 2.39
+T 1790757125 3.48 3.23 2.39
+T 1790757127 3.28 3.20 2.38
+  X  217916 21.2       0 postgres        postgres: cdkbs bench 127.0.0.1(57838) idle
+T 1790757129 3.28 3.20 2.38
+  X  218000 22.3       0 postgres        postgres: cdkbs bench 127.0.0.1(57864) SELECT
+T 1790757131 3.25 3.19 2.38
+T 1790757133 3.25 3.19 2.38
+  X  218136  7.4       1 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757135 3.25 3.19 2.38
+  X  218136  2.9       3 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757137 3.88 3.32 2.43
+  X  218136  1.7       5 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757139 3.88 3.32 2.43
+  X  218136  1.4       7 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757141 4.29 3.42 2.46
+  X  218136  1.2       9 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757143 4.29 3.42 2.46
+  X  218136  1.0      11 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  218290  123       2 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Id
+T 1790757145 4.29 3.42 2.46
+  X  218136  2.4      13 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  218290  156       4 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Id
+T 1790757147 4.90 3.56 2.52
+  X  218136  5.3      15 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219073  160       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Bt
+  X  219077  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Bt
+  X  219151  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  219205  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757149 4.90 3.56 2.52
+  X  218136  5.2      17 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757151 5.47 3.70 2.57
+  X  218136  4.6      19 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757153 5.47 3.70 2.57
+  X  218136  4.2      21 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757155 5.47 3.70 2.57
+  X  218136  3.9      23 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757158 5.92 3.82 2.61
+  X  218136  3.9      25 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757160 5.92 3.82 2.61
+  X  218136  3.6      27 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 20.2       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757162 6.32 3.94 2.66
+  X  218136  3.4      29 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 48.2       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757164 6.32 3.94 2.66
+  X  218136  3.5      31 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 62.5       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757166 6.32 3.94 2.66
+  X  218136  3.3      33 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 70.3       9 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757168 6.62 4.04 2.70
+  X  218136  3.1      35 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 75.4      11 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757170 6.62 4.04 2.70
+  X  218136  3.0      37 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 79.1      13 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757172 6.89 4.14 2.74
+  X  218136  2.8      39 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 81.8      15 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757174 6.89 4.14 2.74
+  X  218136  2.7      41 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 83.9      17 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  219923 33.3       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Co
+T 1790757176 6.89 4.14 2.74
+  X  218136  2.6      43 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 85.7      19 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  219944 11.1       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Co
+  X  219945 12.5       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Co
+  X  219946 12.5       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Co
+T 1790757178 7.14 4.24 2.78
+  X  218136  2.5      45 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 87.1      21 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757180 7.14 4.24 2.78
+  X  218136  2.4      47 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 88.3      23 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757182 7.29 4.32 2.81
+  X  218136  2.3      49 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 89.2      25 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757184 7.29 4.32 2.81
+  X  218136  2.2      51 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 90.1      27 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757186 7.29 4.32 2.81
+  X  218136  2.2      53 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 90.8      29 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757188 7.42 4.40 2.84
+  X  218136  2.5      55 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 91.7      32 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757190 7.42 4.40 2.84
+  X  218136  3.7      57 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  219625 92.8      34 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  220845  190       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Ev
+  X  220967 42.8       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  220968 50.0       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  220969 83.3       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  220970  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  220971 60.0       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+  X  220972 80.0       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=In
+T 1790757192 7.47 4.46 2.87
+  X  218136  4.4      59 ctest           ctest --test-dir build -j8 -LE heap-suspended
+T 1790757194 7.47 4.46 2.87
+  X  218136  5.6      61 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222179  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Re
+  X  222213  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Ch
+  X  222215 91.6       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Ch
+  X  222218  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Ch
+  X  222219  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Ch
+  X  222227 75.0       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Ch
+  X  222229  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Ch
+T 1790757196 7.47 4.46 2.87
+  X  218136  5.5      63 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222179 99.5       2 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Re
+  X  222283 99.4       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222284 98.3       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222285 98.8       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.4       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222287 99.4       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222288 97.1       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222289 98.3       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757198 7.51 4.52 2.90
+  X  218136  5.4      65 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222283 99.2       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222284 97.9       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222285 99.2       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.7       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222289 98.4       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222298 99.3       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222306  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222310 50.0       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757200 7.51 4.52 2.90
+  X  218136  5.2      67 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222283 98.8       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222284 97.4       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222285 99.3       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 98.9       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222289 98.2       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222298 98.9       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222325  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222326 96.1       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Rv
+T 1790757202 7.63 4.59 2.93
+  X  218136  5.1      69 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222283 98.7       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222284 97.9       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222285 99.3       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.1       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222289 98.2       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222298 99.1       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222339 97.5       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Rv
+  X  222340 83.3       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Rv
+T 1790757204 7.63 4.59 2.93
+  X  218136  5.0      71 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222285 99.3       9 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.1       9 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222298 99.2       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 98.4       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222360 96.5       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222361 96.4       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222362  100       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757206 7.63 4.59 2.93
+  X  218136  4.8      73 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222285 99.4      11 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.3      11 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222298 99.1       9 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 98.7       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222360 98.4       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222361 96.1       2 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222377 99.4       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222381 93.7       0 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757208 7.66 4.65 2.96
+  X  218136  4.8      75 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222285 99.3      13 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.3      13 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.0       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222361 96.7       4 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222377 99.4       3 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222395 98.2       1 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Sh
+T 1790757210 7.66 4.65 2.96
+  X  218136  4.7      77 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222285 99.4      15 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.3      15 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.3       7 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222377 99.6       5 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757212 7.37 4.64 2.96
+  X  218136  4.5      79 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222285 99.6      17 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222286 99.4      17 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.5       9 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222377 99.8       8 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757214 7.37 4.64 2.96
+  X  218136  4.4      81 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.5      20 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.5      11 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222377 99.7      10 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757216 7.37 4.64 2.96
+  X  218136  4.3      83 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.5      22 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.5      13 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757218 6.94 4.59 2.96
+  X  218136  4.2      85 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.5      24 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.6      15 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757220 6.94 4.59 2.96
+  X  218136  4.1      87 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.6      26 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.7      17 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757222 6.62 4.57 2.96
+  X  218136  4.0      89 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.6      28 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.7      19 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757224 6.62 4.57 2.96
+  X  218136  3.9      91 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.6      30 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.7      21 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757226 6.62 4.57 2.96
+  X  218136  3.9      93 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.6      32 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.8      23 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757228 6.25 4.52 2.95
+  X  218136  3.8      95 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.6      34 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+  X  222359 99.8      25 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757230 6.25 4.52 2.95
+  X  218136  3.7      97 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.7      36 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757232 5.83 4.46 2.94
+  X  218136  3.6      99 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.7      38 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757234 5.83 4.46 2.94
+  X  218136  3.5     102 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.7      40 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757236 5.44 4.41 2.93
+  X  218136  3.5     104 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.7      42 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757238 5.44 4.41 2.93
+  X  218136  3.4     106 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.7      44 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757240 5.44 4.41 2.93
+  X  218136  3.3     108 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.7      46 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757242 5.09 4.35 2.92
+  X  218136  3.3     110 ctest           ctest --test-dir build -j8 -LE heap-suspended
+  X  222286 99.7      48 kds_tests       /home/cdkbs/ckdbs/.claude/worktrees/az-s4-flake-instrumentation/build/tests/kds_tests --gtest_filter=Si
+T 1790757244 5.09 4.35 2.92
+T 1790757246 4.76 4.29 2.91
+T 1790757248 4.76 4.29 2.91
+T 1790757250 4.76 4.29 2.91
+T 1790757252 4.46 4.24 2.90
+T 1790757254 4.46 4.24 2.90
+T 1790757256 4.18 4.18 2.89
+T 1790757258 4.18 4.18 2.89
+T 1790757260 4.18 4.18 2.89
+T 1790757262 4.01 4.15 2.89
+T 1790757264 4.01 4.15 2.89
+T 1790757266 3.85 4.11 2.88
+T 1790757268 3.85 4.11 2.88
+T 1790757270 3.85 4.11 2.88
+T 1790757272 3.70 4.08 2.88
+T 1790757275 3.70 4.08 2.88
+T 1790757277 3.48 4.03 2.87
+T 1790757279 3.48 4.03 2.87
+T 1790757281 3.48 4.03 2.87
+T 1790757283 3.28 3.98 2.86
+T 1790757285 3.28 3.98 2.86
+T 1790757287 3.10 3.93 2.85
+T 1790757289 3.10 3.93 2.85
+T 1790757291 3.10 3.93 2.85
+T 1790757293 2.93 3.88 2.83
+T 1790757295 2.93 3.88 2.83
+T 1790757297 2.78 3.83 2.82
+T 1790757299 2.78 3.83 2.82
+T 1790757301 2.78 3.83 2.82
+T 1790757303 2.63 3.78 2.81
+T 1790757305 2.63 3.78 2.81
+  X  223422 58.9       0 postgres        postgres: cdkbs bench 127.0.0.1(45022) idle in transaction
+T 1790757307 2.50 3.74 2.80
+  X  223422 60.9       2 postgres        postgres: cdkbs bench 127.0.0.1(45022) SELECT
+T 1790757309 2.50 3.74 2.80
+  X  223519 40.0       0 postgres        postgres: cdkbs bench 127.0.0.1(45048) INSERT
+T 1790757311 2.50 3.74 2.80
+  X  223519 43.6       2 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle in transaction
+T 1790757313 2.38 3.69 2.79
+  X  223519 45.8       4 postgres        postgres: cdkbs bench 127.0.0.1(45048) INSERT
+T 1790757315 2.38 3.69 2.79
+  X  223519 44.2       6 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle in transaction
+T 1790757317 2.27 3.64 2.79
+  X  223519 44.5       8 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle in transaction
+T 1790757319 2.27 3.64 2.79
+  X  223519 45.2      10 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle in transaction
+T 1790757321 2.27 3.64 2.79
+  X  223519 45.7      12 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle in transaction
+T 1790757323 2.17 3.60 2.78
+  X  223519 46.1      14 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle in transaction
+T 1790757325 2.17 3.60 2.78
+  X  223519 44.4      16 postgres        postgres: cdkbs bench 127.0.0.1(45048) SELECT
+T 1790757327 2.08 3.56 2.77
+  X  223519 42.6      18 postgres        postgres: cdkbs bench 127.0.0.1(45048) INSERT
+T 1790757329 2.08 3.56 2.77
+  X  223519 44.1      20 postgres        postgres: cdkbs bench 127.0.0.1(45048) SELECT
+T 1790757331 2.08 3.56 2.77
+  X  223519 46.6      22 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle
+T 1790757333 1.99 3.51 2.76
+  X  223519 47.1      24 postgres        postgres: cdkbs bench 127.0.0.1(45048) SELECT
+T 1790757335 1.99 3.51 2.76
+  X  223519 45.1      26 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle
+T 1790757337 1.91 3.47 2.75
+  X  223519 43.1      28 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle
+T 1790757339 1.91 3.47 2.75
+  X  223519 41.5      30 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle
+T 1790757341 1.91 3.47 2.75
+  X  223519 40.1      32 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle
+T 1790757343 1.84 3.43 2.74
+  X  223519 41.0      34 postgres        postgres: cdkbs bench 127.0.0.1(45048) COMMIT
+T 1790757345 1.84 3.43 2.74
+  X  223519 39.3      36 postgres        postgres: cdkbs bench 127.0.0.1(45048) COMMIT
+T 1790757347 1.77 3.39 2.73
+  X  223519 38.0      38 postgres        postgres: cdkbs bench 127.0.0.1(45048) idle
+  X  223741 86.6       0 postgres        postgres: cdkbs bench 127.0.0.1(37226) idle
+  X  223742 80.0       0 postgres        postgres: cdkbs bench 127.0.0.1(37228) idle
+  X  223743 93.3       0 postgres        postgres: cdkbs bench 127.0.0.1(37234) SELECT
+  X  223744 93.3       0 postgres        postgres: cdkbs bench 127.0.0.1(37242) SELECT
+T 1790757377 1.15 3.08 2.64
+T 1790757379 1.15 3.08 2.64
+T 1790757381 1.22 3.06 2.64
+T 1790757383 1.22 3.06 2.64
+T 1790757385 1.22 3.06 2.64
+T 1790757387 1.20 3.03 2.63
+T 1790757389 1.20 3.03 2.63
+T 1790757391 1.18 3.00 2.62
+T 1790757393 1.18 3.00 2.62
+T 1790757396 1.18 3.00 2.62
+T 1790757398 1.17 2.96 2.61
+T 1790757400 1.17 2.96 2.61
+T 1790757402 1.16 2.93 2.60
+T 1790757404 1.16 2.93 2.60
+T 1790757406 1.16 2.93 2.60
+T 1790757408 1.14 2.90 2.60
+T 1790757410 1.14 2.90 2.60
+T 1790757412 1.13 2.87 2.59
+T 1790757414 1.13 2.87 2.59
+T 1790757416 1.13 2.87 2.59
+T 1790757418 1.12 2.83 2.58
+T 1790757420 1.12 2.83 2.58
+T 1790757422 1.27 2.84 2.58
+T 1790757424 1.27 2.84 2.58
+T 1790757426 1.27 2.84 2.58
+T 1790757428 1.33 2.82 2.58
+T 1790757430 1.33 2.82 2.58
+T 1790757432 1.30 2.79 2.57
+T 1790757434 1.30 2.79 2.57
+T 1790757436 1.30 2.79 2.57
+T 1790757438 1.28 2.76 2.56
+T 1790757440 1.28 2.76 2.56
+  X  224703 55.5       1 postgres        postgres: cdkbs bench 127.0.0.1(58794) INSERT
+T 1790757442 1.26 2.73 2.55
+  X  224752  100       0 postgres        /home/cdkbs/.local/pgsql-18.6/bin/postgres --boot -F -c log_checkpoints=false -X 16777216 -k
+T 1790757444 1.26 2.73 2.55
+T 1790757446 1.26 2.73 2.55
+T 1790757448 1.32 2.72 2.55
+T 1790757450 1.32 2.72 2.55
+T 1790757477 0.85 2.47 2.47
+T 1790757479 0.85 2.47 2.47
+  X  225233  100       0 postgres        /home/cdkbs/.local/pgsql-18.6/bin/postgres --boot -F -c log_checkpoints=false -X 16777216 -k
+T 1790757481 0.85 2.47 2.47
+T 1790757483 0.86 2.45 2.46
+T 1790757485 0.86 2.45 2.46
+T 1790757487 0.87 2.43 2.45
+T 1790757489 0.87 2.43 2.45
+T 1790757491 0.87 2.43 2.45
+T 1790757493 0.96 2.42 2.45
+T 1790757495 0.96 2.42 2.45
+T 1790757497 1.05 2.41 2.45
+T 1790757499 1.05 2.41 2.45
+T 1790757501 1.05 2.41 2.45
+T 1790757503 1.12 2.40 2.45
+T 1790757505 1.12 2.40 2.45
+T 1790757507 1.27 2.41 2.45
+T 1790757509 1.27 2.41 2.45
+T 1790757511 1.27 2.41 2.45
+  X  225568 14.6       4 kds_tests       ./build/tests/kds_tests --gtest_filter=ExpeditorTest.*:RowWaitWakeRigTest.*
+T 1790757513 1.33 2.41 2.45
+  X  225568 16.9       6 kds_tests       ./build/tests/kds_tests --gtest_filter=ExpeditorTest.*:RowWaitWakeRigTest.*
+T 1790757515 1.33 2.41 2.45
+T 1790757517 1.31 2.38 2.44
+T 1790757519 1.31 2.38 2.44
+T 1790757521 1.31 2.38 2.44
+T 1790757523 1.36 2.38 2.44
+T 1790757525 1.36 2.38 2.44
+T 1790757527 1.41 2.37 2.43
+T 1790757529 1.41 2.37 2.43
+  X  225805 59.3       1 claude          claude
+  X  225865  126       0 node            /home/cdkbs/.local/node-v22/bin/node --liftoff-only /usr/local/lib/node_modules/@zvec/zvec-grep/dist/cl
+T 1790757531 1.41 2.37 2.43
+  X  225805 31.2       3 claude          claude
+  X  225865 21.6       2 node            /home/cdkbs/.local/node-v22/bin/node --liftoff-only /usr/local/lib/node_modules/@zvec/zvec-grep/dist/cl
+T 1790757533 1.62 2.40 2.44
+  X  225805 21.8       5 claude          claude
+  X  225865 11.2       4 node            /home/cdkbs/.local/node-v22/bin/node --liftoff-only /usr/local/lib/node_modules/@zvec/zvec-grep/dist/cl
+T 1790757535 1.62 2.40 2.44
+  X  225805 17.1       7 claude          claude
+T 1790757537 1.65 2.39 2.44
+  X  225805 14.0       9 claude          claude
+T 1790757539 1.65 2.39 2.44
+  X  225805 12.3      11 claude          claude
+T 1790757541 1.60 2.37 2.43
+  X  225805 11.5      13 claude          claude
+T 1790757543 1.60 2.37 2.43
+  X  225805 10.3      15 claude          claude
+T 1790757545 1.60 2.37 2.43
+T 1790757547 1.55 2.34 2.43
+T 1790757549 1.55 2.34 2.43
+T 1790757551 1.51 2.32 2.42
+T 1790757553 1.51 2.32 2.42
+T 1790757555 1.51 2.32 2.42
+T 1790757557 1.55 2.32 2.41
+  X  226218 57.1       0 postgres        postgres: cdkbs bench 127.0.0.1(60050) idle in transaction
+T 1790757559 1.55 2.32 2.41
+  X  226218 58.8       2 postgres        postgres: cdkbs bench 127.0.0.1(60050) SELECT

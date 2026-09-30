@@ -31,7 +31,7 @@ server configuration (section 7 says where they differ).
 | Host | 8 logical CPUs, AMD EPYC 9V74, 1 socket x 4 cores x 2 threads, Linux 7.0.0-1014-azure |
 | Server config | `log_level = warn`, `cores` and `durability` per cell, everything else default (no `placement` and no `peer_listeners`: both are retired and refused by name). Auth and TLS off |
 | Ports | 15600 to 15603; never 15432 |
-| PostgreSQL | not installed on this host; the floor was not measured for this shape |
+| PostgreSQL | not installed on this host when this file was written and **not measured here**; the PostgreSQL 18.6 floor for this shape was measured afterwards, at `v2.7.0-545-gf2f1ee7`, and is in `results-scenario0-stockmarket-pg18-v2.7.0-545-gf2f1ee7.md` (summary: `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`) |
 
 ## 2. What was run
 

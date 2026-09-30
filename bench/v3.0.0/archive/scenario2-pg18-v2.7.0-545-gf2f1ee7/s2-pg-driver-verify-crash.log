@@ -1,0 +1,57 @@
+created 8 relations with suffix _080536
+
+postgresql benchmark - 68 columns, 24624 rows resident, 1 connection
+server 127.0.0.1:15700  table scenario2_080536
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                         10         0    3405.8   2023.4   2330.2   2620.5   5928.8   5928.8    5928.8     0
+load-organizations         300         0    1592.4   1106.1   1301.3   1352.8   2896.3   6087.1   11686.2     0
+load-ships                  30         0    1356.2   1256.4   1307.8   1332.0   1566.1   1647.2    1647.2     0
+load-operations            300         0    1509.2   1091.2   1276.1   1327.3   2254.3   5666.6    6859.4     0
+load-fees                   12         0    1440.9   1334.9   1383.7   1400.6   1630.3   1630.3    1630.3     0
+load-recipes                93         0    1410.7   1200.5   1304.4   1358.6   1814.0   2711.6    2711.6     0
+load-cargos               4000         0    1514.6   1078.8   1233.5   1306.7   2670.6   6227.9   24565.3     0
+booking                   3340         0    2564.1    336.6   2194.6   2331.4   4334.6   9719.9   94036.3     0
+cargo-lookup              3340         0      81.7     60.2     76.5     78.2     99.9    116.0     287.9     0
+credit-lookup             3340         0      70.0     56.6     64.9     66.1     91.1    106.8     131.1     0
+capacity-read             3340         0      68.0     54.7     62.7     63.7     88.3    101.6     123.6     0
+recipe-read               3340         0      94.4     80.5     87.4     89.5    116.8    132.0     171.7     0
+freight-insert            3000         0      85.0     74.3     77.5     79.1    106.6    125.3     349.6     0
+charge-insert            16889         0      56.8     47.4     49.8     51.8     77.5     94.5     233.8     0
+operation-update          3000         0      75.6     67.7     69.8     70.8     95.7    109.3     158.9     0
+org-update                3000         0      73.3     65.6     67.4     68.3     92.6    107.5     225.4     0
+commit                    3000         0    1867.7   1102.9   1338.3   1421.4   3591.9   8980.5   93150.9     0
+manifest-scan              160        18      98.9     69.0     84.0     94.8    131.1    151.4     153.5     0
+voyage-rollup              160        18     104.4     81.4     92.2     96.7    131.0    179.9     396.0     0
+customer-statement          80         9     339.0    261.6    295.6    326.3    415.7    542.9     542.9     0
+
+  ddl: 8 relations + 2 indexes
+  booking: BEGIN/COMMIT, capacity=cached
+
+  PostgreSQL twin of tools/scenario2_freight.py: same booking, same
+  work target, same seed. freights and charges carry a pk index they
+  do not want and the two non-pk reads carry one they do.
+bookings
+  committed                 3000       347.5 TPS
+  rejected-capacity          289        8.7% of attempts
+  rejected-credit             51        1.5% of attempts
+  conflicted                   0          0 retries
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              1, partitioned (disjoint slices, no conflict possible)
+  cargo pool left      949
+
+  manifest reporter    8 passes, 400 reads, 859 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/bench-pg-floor/tools/pg_scenario2_freight.py", line 731, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/bench-pg-floor/tools/pg_scenario2_freight.py", line 720, in main
+    print_bookings(result, args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/bench-pg-floor/tools/scenario2_freight.py", line 1477, in print_bookings
+    line = f"verify (§4)          {v.checks} checks, {v.failures} failure(s)"
+                                   ^^^^^^^^
+AttributeError: 'tuple' object has no attribute 'checks'

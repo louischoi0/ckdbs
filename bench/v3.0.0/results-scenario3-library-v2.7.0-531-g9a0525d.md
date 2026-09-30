@@ -26,7 +26,7 @@ so this file is the baseline the next scenario3 run is read against.
 | Build type | Release (`CMakeCache.txt`), built to completion before the first cell |
 | Host | 8 logical CPUs, AMD EPYC 9V74, 1 socket x 4 cores x 2 threads, Linux 7.0.0-1014-azure |
 | Server config | `log_level = warn`, `durability = group`, `cores` 1 or 8 per cell, `indexes` at its default (on; recorded as `--server-indexes on`), all else default; port 15620, never 15432 |
-| PostgreSQL | not installed on this host; the floor was not measured for this shape |
+| PostgreSQL | not installed on this host when this file was written and **not measured here**; the PostgreSQL 18.6 floor for this shape was measured afterwards, at `v2.7.0-545-gf2f1ee7`, and is in `results-scenario3-library-pg18-v2.7.0-545-gf2f1ee7.md` (summary: `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`) |
 
 ## 2. What was run
 
