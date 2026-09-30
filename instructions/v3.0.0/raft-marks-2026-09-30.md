@@ -106,3 +106,18 @@ review.
 | **Answers** | For AY: its measurement is AY-S11's, over `58198cb` (AY-S0's base) against AY's closing commit |
 | **Does not settle** | Which benchmarks a milestone's measurement runs, beyond `bench/README.md`'s rules; whether stages already landed under the suspension are re-measured individually (read as no: the milestone measurement covers them) |
 | **Recorded at** | `CLAUDE.md` Session Workflow step 3 |
+
+## 9. Split relations retired, `sys.ranges` removed
+
+Recorded on `worktree-retire-split-relations` from `7c51f82`
+(`v2.7.0-509-g7c51f82`), after CLA explained AY-Q5 and why a split relation
+is always heap.
+
+| | |
+|---|---|
+| **Word** | *"split relation 이라는 개념을 아예 폐기 해야해"*; and, to the question CLA put on what becomes of a volume that already carries ranges - *"하위 호환성은 고려하지 않아도 돼. 나는 해당 테이블을 제거했으면 좋겠어"* |
+| **Mark** | **The split relation is retired as a concept, and `sys.ranges` is removed.** A relation is one structure headed by `sys.tables.desc_page_id`, always: the range directory, its row and codec, the resolver, the per-range chain routing and `RefuseAuxiliaryOnSplitRelation` are deleted. No compatibility is kept |
+| **Reading** | *"해당 테이블"* read as `sys.ranges`, the table the question named. *No compatibility* read as D14's rule rather than as silence: the superblock version moves 17 -> 18, so a volume from before is refused at mount instead of being read with every chain but its first missing. Page 15 and oid 133 are left unused, not reissued - moving `kCatalogOverflowFirst` back to 15 buys one page |
+| **Answers** | AY-S10 (struck: no gate is left to lift), AY-Q5 and AY-Q10 (no subject); D7's last gate, which goes with the function |
+| **Does not settle** | Heap relations themselves - SUS-1 stands, and an existing heap relation still mounts and serves; any other stage of AY |
+| **Recorded at** | `workorder-ay-following-letter.md` §4 and §6, `crosscore.md`, `CLAUDE.md` |

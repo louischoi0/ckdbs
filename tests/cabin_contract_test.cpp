@@ -1032,57 +1032,6 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
         << "the declared literal probe records first-touch";
 }
 
-// ---- SB4: the Cabin under a split, and what it may still speak for ----
-//
-// Two cells for `docs/spec/cabin.md` §4b's rule 3, ratified as SB-R1.
-// Since AT-S9 no core owns a range, so what the serve site asks is whether
-// the step's own span is the whole relation - a set covering every range
-// would hand a step assigned a slice rows outside it.
-//
-// The fixture splits a relation by writing the directory rows directly,
-// as a pre-AT volume carries them: nothing opens a range since AT-S9, and
-// what is under test here is what a *reader* does with the directory once
-// it exists.
-
-// Splits `name` at `lo`. Returns the relation's oid.
-catalog::Oid SplitRelation(Instance& db, const char* name, std::uint64_t lo) {
-    auto oid = db.catalog().FindTableOidByName(name, nullptr);
-    EXPECT_TRUE(oid.ok()) << oid.status().message();
-    auto head = db.catalog().CreateRangeEntryPage(oid.value(), lo);
-    EXPECT_TRUE(head.ok()) << head.status().message();
-    EXPECT_TRUE(db.catalog().OpenRangeRows(oid.value(), lo, head.value()).ok());
-    return oid.value();
-}
-
-std::uint64_t CabinIdOn(Instance& db, catalog::Oid oid, std::uint16_t col_pos) {
-    auto access = db.catalog().InitTableAccess(oid);
-    EXPECT_TRUE(access.ok()) << access.status().message();
-    return access.value()->CabinOn(col_pos).id;
-}
-
-TEST(CabinSplitScopeTest, ASplitRelationWalkedWholeStillServes) {
-    // The split arm's **positive** half, and the one that proves the
-    // predicate is about the step's span rather than about the word
-    // "split": a walk over every range leaves the set covering exactly the
-    // walk, so serving is correct and the reply is byte-identical to an
-    // instance with no Cabin at all.
-    Instance db(/*cabins=*/true);
-    Instance ref(/*cabins=*/false);
-    Load(db);
-    Load(ref);
-    DeclareCabins(db);
-
-    const std::string q = "SELECT * FROM h WHERE sym = 'aaa'";
-    ASSERT_EQ(db.Run(q), ref.Run(q));  // records: a declaration observes first-touch
-    const catalog::Oid oid = SplitRelation(db, "h", /*lo=*/4096);
-    const std::uint64_t cabin_id = CabinIdOn(db, oid, /*col_pos=*/1);
-    ASSERT_GT(db.cabins().InfoFor(cabin_id).values, 0u) << "nothing was observed to serve from";
-
-    const std::uint64_t hits_before = db.cabins().InfoFor(cabin_id).hits;
-    EXPECT_EQ(db.Run(q), ref.Run(q));
-    EXPECT_GT(db.cabins().InfoFor(cabin_id).hits, hits_before) << "the split declined a serve";
-}
-
 }  // namespace
 }  // namespace kds::server
 

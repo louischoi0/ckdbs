@@ -65,23 +65,13 @@ namespace kds::server {
 // order, so the slot is the position.
 //
 // **Why skipping is sound across a park.** Resuming at
-// `(range, page, slot)` skips every earlier range, every earlier page of
-// this chain, and every lower slot of this page. A row can appear in one
+// `(page, slot)` skips every earlier page of the chain and every lower
+// slot of this page. A row can appear in one
 // of those places while this statement is parked - another session on this
 // core may insert - but such a row is invisible to this statement's
 // snapshot, which was minted before the park, so skipping it changes no
 // answer. Heap pages append slots and a heap chain never loses a page, so
 // nothing this walk already passed moves to a position it has yet to reach.
-//
-// **`range` is a positional index, and that is an assumption, not a fact.**
-// It indexes `ResolveRanges(access.ranges, span)`'s output, and the resume
-// re-resolves that list against a freshly re-read catalog - so it names the
-// same chain only while no range with a lower `lo` can appear during the
-// park. Nothing splits or merges a range (spreading retired at AT-S9 and
-// nothing opens one), so the index is stable and this is unreachable. It is written down
-// rather than relied on silently: the day a range can open under a parked
-// statement, the cursor must carry the range's `lo` and look it up on
-// resume, or the walk resumes into a different chain.
 //
 // **A btree resumes by key instead, and `pk` is that key.** A clustered
 // btree leaf splits by moving its upper half to a new right sibling, so a
@@ -99,7 +89,6 @@ namespace kds::server {
 // at once (that is what a deadlock cell needs), so a dispatcher member
 // would be one cursor shared by both.
 struct WalkCursor {
-    std::size_t range = 0;
     PageId page = kInvalidPageId;
     std::uint16_t slot = 0;
     // The key the walk stopped **at** - the row it is waiting for, which it

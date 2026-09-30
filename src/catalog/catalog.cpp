@@ -537,7 +537,7 @@ Status Catalog::Bootstrap() {
         std::string_view name;
         PageId page_id;
     };
-    static constexpr std::array<SysTableBootstrap, 10> kSysTables{{
+    static constexpr std::array<SysTableBootstrap, 9> kSysTables{{
         {kSysTypesTable, "types", kCatalogPageTypes},
         {kSysObjectsTable, "objects", kCatalogPageObjects},
         {kSysColumnsTable, "columns", kCatalogPageColumns},
@@ -562,13 +562,6 @@ Status Catalog::Bootstrap() {
         // reason sys.cabins does - an `fk_id` comes from this relation's own
         // `next_id`, not from GenerateUserOid(), which numbers objects.
         {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
-        // sys.ranges (RD1): a page and its two catalog rows, and at this
-        // version nothing more - the relation is empty and its row format
-        // is RD2's (well_known.hpp's note at kSysRangesTable). It sits in
-        // this array so it exists from the first mount on a fixed low page
-        // every routing core can fault, which is the whole reason it
-        // bootstraps rather than waiting for a first split.
-        {kSysRangesTable, "ranges", kCatalogPageRanges},
     }};
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -1035,222 +1028,6 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     // would answer, so it stales cached name lookups.
     if (s.ok()) BumpVersion("sys.objects insert");
     return s;
-}
-
-StatusOr<std::vector<SysRangeRow>> Catalog::RangesOf(Oid rel_oid) {
-    auto all = ScanAll<SysRangeRow>(store_, kCatalogPageRanges, nullptr, txn_);
-    if (!all.ok()) return all.status();
-
-    std::vector<SysRangeRow> mine;
-    for (const SysRangeRow& row : all.value()) {
-        if (row.rel_oid == rel_oid) mine.push_back(row);
-    }
-    // The ordinary answer, and not an error: every relation is one range
-    // headed by `sys.tables.desc_page_id` unless a pre-AT split gave it more.
-    if (mine.empty()) return mine;
-
-    // Page order is insertion order, and neither is `lo` order.
-    std::sort(mine.begin(), mine.end(),
-              [](const SysRangeRow& a, const SysRangeRow& b) { return a.lo < b.lo; });
-
-    // CC9's rule 1 (stated at `SysRangeRow`).
-    if (mine.front().lo != 0) {
-        return Status::Corruption(
-            "sys.ranges: relation " + std::to_string(rel_oid) + " has " +
-            std::to_string(mine.size()) + " range row(s) but none at lo = 0, so the rows do "
-            "not partition the id space and the ids below " +
-            std::to_string(mine.front().lo) + " are owned by nothing");
-    }
-    // Rule 2. Two rows at one `lo` are two ranges claiming one boundary,
-    // and nothing anywhere says which of them owns it.
-    for (std::size_t i = 1; i < mine.size(); ++i) {
-        if (mine[i].lo == mine[i - 1].lo) {
-            return Status::Corruption(
-                "sys.ranges: relation " + std::to_string(rel_oid) +
-                " has two range rows at lo = " + std::to_string(mine[i].lo) +
-                "; a boundary belongs to one range");
-        }
-    }
-    // The row's own ceiling (`SysRangeRow::lo`), read here and not only
-    // written at `InsertRangeRow`. RD3 derives `hi` from the *next* row's
-    // `lo` and gives the last row `kIdSpaceEnd`, so a boundary above the
-    // 40-bit space produces a `RangeTarget` with `lo > hi` - a value that
-    // struct's own comment says cannot exist. Checking the last row is
-    // checking all of them: they are sorted ascending by here.
-    if (mine.back().lo > kMaxKeystoneId) {
-        return Status::Corruption(
-            "sys.ranges: relation " + std::to_string(rel_oid) +
-            " has a range row at lo = " + std::to_string(mine.back().lo) +
-            ", above the 40-bit Keystone id ceiling (" + std::to_string(kMaxKeystoneId) +
-            "), so no id could ever fall in it and the range it derives is inverted");
-    }
-    return mine;
-}
-
-Status Catalog::InsertRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where) {
-    Status s = WriteRangeRow(std::move(row), trx_id, where);
-    // A new range row changes which core a resolver would name for part of
-    // this relation's id space, so every cached routing answer is stale.
-    //
-    // **This is CC10's cache half, and it is not all of CC10.** The bump
-    // reaches every core through the schema word (AT-S2), from whichever
-    // catalog writes - and it fires before the transaction commits, so a
-    // peer can re-read a split that later rolls back; DT3 and catalog MVCC
-    // are what keep that a re-read and not a wrong answer.
-    //
-    // **`OpenRangeRows` does not come through here**, and that is CC10's
-    // ordering rather than tidiness: a range's head page must be flushed,
-    // handed off and durable *before* its boundary is announced, and a
-    // publication welded to the row write announces it first. That call
-    // writes through `WriteRangeRow` and publishes once, last.
-    if (s.ok()) BumpVersion("sys.ranges insert");
-    return s;
-}
-
-Status Catalog::WriteRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where) {
-    // A boundary no id could ever fall in is not a boundary. `lo` is a
-    // Keystone id (invariant 7) and the ceiling is the type's.
-    if (row.lo > kMaxKeystoneId) {
-        return Status::InvalidArgument(
-            "sys.ranges: range boundary " + std::to_string(row.lo) + " for relation " +
-            std::to_string(row.rel_oid) + " is above the 40-bit Keystone id ceiling (" +
-            std::to_string(kMaxKeystoneId) + "), so no id could ever fall in it");
-    }
-
-    // Read through the same door the reader uses, so the directory this row
-    // is validated against is one that already validates. A Corruption here
-    // is the existing rows' and crosses unchanged rather than being
-    // reported as a bad argument.
-    auto existing = RangesOf(row.rel_oid);
-    if (!existing.ok()) return existing.status();
-
-    if (existing.value().empty()) {
-        if (row.lo != 0) {
-            return Status::InvalidArgument(
-                "sys.ranges: the first range row for relation " + std::to_string(row.rel_oid) +
-                " must be at lo = 0 - a directory describes the whole id space or it is not a "
-                "partition - and this one is at lo = " + std::to_string(row.lo));
-        }
-    } else {
-        for (const SysRangeRow& have : existing.value()) {
-            if (have.lo == row.lo) {
-                return Status::InvalidArgument(
-                    "sys.ranges: relation " + std::to_string(row.rel_oid) +
-                    " already has a range at lo = " + std::to_string(row.lo) +
-                    "; a boundary belongs to one range");
-            }
-        }
-    }
-
-    // Issued after every refusal above, so a rejected insert spends no id.
-    auto range_id = AllocateRowId(kSysRangesTable);
-    if (!range_id.ok()) return range_id.status();
-    row.range_id = range_id.value();
-
-    Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageRanges, row, trx_id, where);
-    if (where != nullptr) where->rel_oid = kSysRangesTable;
-    return s;
-}
-
-Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary) {
-    // **`<= 1`, and it is a different question from the router's.**
-    // `range_directory.hpp` branches on `ranges.empty()` because a
-    // one-row directory still has to be *resolved*, its entry page being
-    // the directory's rather than `sys.tables`'. This
-    // gate asks whether the relation is *partitioned*, and one range is
-    // not. The shape is reachable: a crash between `OpenRangeRows`' two
-    // writes leaves exactly it, and refusing every index and FK on such a
-    // relation forever - with a message reading "split
-    // across 1 ranges" - would be a self-refuting refusal.
-    if (access.ranges.size() <= 1) return Status::OK();
-    return Status::NotImplemented(
-        "relation oid " + std::to_string(access.oid) + " is split across " +
-        std::to_string(access.ranges.size()) + " ranges, and " + std::string(auxiliary) +
-        " on a split relation is declined until where it lives under a boundary is decided "
-        "(docs/spec/crosscore.md §6a, §9)");
-}
-
-StatusOr<PageId> Catalog::CreateRangeEntryPage(Oid rel_oid, std::uint64_t lo) {
-    if (lo == 0) {
-        return Status::InvalidArgument(
-            "sys.ranges: relation " + std::to_string(rel_oid) +
-            " cannot open a range at lo = 0 - that boundary is the relation as it already is, "
-            "written as the opening row, and asking for it as a split would describe the whole "
-            "id space twice");
-    }
-    if (lo > kMaxKeystoneId) {
-        return Status::InvalidArgument(
-            "sys.ranges: range boundary " + std::to_string(lo) + " for relation " +
-            std::to_string(rel_oid) + " is above the 40-bit Keystone id ceiling (" +
-            std::to_string(kMaxKeystoneId) + "), so no id could ever fall in it");
-    }
-    auto created = store_.CreateNew();
-    if (!created.ok()) return created.status();
-    const PageId entry_page = created.value().first;
-    auto page = heap::PageView::CreateEmpty(created.value().second.bytes(), lo, rel_oid);
-    if (!page.ok()) return page.status();
-
-    // `wal::LogPageInit` directly and not `LogCatPageInit`: that helper
-    // pins `min_key = 0`, which is right for a catalog page and wrong for
-    // this one. A range head replayed with `min_key = 0` would accept ids
-    // below its boundary after a recovery and only after one, which is
-    // invariant 3 lost in the one place nothing would look.
-    if (auto rec = wal::LogPageInit(wal_, wal::kNoTxnId, entry_page, PageType::kHeap, lo, rel_oid);
-        !rec.ok()) {
-        return rec.status();
-    }
-    return entry_page;
-}
-
-Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo,
-                              PageId entry_page) {
-    if (lo == 0) {
-        return Status::InvalidArgument(
-            "sys.ranges: relation " + std::to_string(rel_oid) +
-            " cannot open a range at lo = 0 - that boundary is the relation as it already is");
-    }
-    if (entry_page == kInvalidPageId) {
-        return Status::InvalidArgument(
-            "sys.ranges: a range of relation " + std::to_string(rel_oid) +
-            " needs an entry page; CC8 makes a range its own sub-structure, and a row naming "
-            "none would describe a partition with nowhere to put a row");
-    }
-    // The relation's own facts, and the failure is the caller's answer: a
-    // relation with no sys.tables row has nothing to partition.
-    auto access = InitTableAccess(rel_oid);
-    if (!access.ok()) return access.status();
-    // Copied out, not held: the publication below frees the entry this
-    // pointer names. One field taken before any write is the whole of
-    // what this call needs from it.
-    const PageId relation_head = access.value()->desc_page_id;
-
-    // The opening row first, and only if the directory is empty. Read
-    // through `RangesOf` rather than `access->ranges` so the check is
-    // against the page rather than against a cache entry this call is
-    // about to invalidate.
-    auto existing = RangesOf(rel_oid);
-    if (!existing.ok()) return existing.status();
-
-    if (existing.value().empty()) {
-        SysRangeRow opening{};
-        opening.rel_oid = rel_oid;
-        opening.lo = 0;
-        opening.entry_page = relation_head;
-        if (Status s = WriteRangeRow(opening, kBootstrapXid, nullptr); !s.ok()) return s;
-    }
-
-    SysRangeRow split{};
-    split.rel_oid = rel_oid;
-    split.lo = lo;
-    split.entry_page = entry_page;
-    if (Status s = WriteRangeRow(split, kBootstrapXid, nullptr); !s.ok()) return s;
-
-    // **One publication for the pair, and it is the last thing this call
-    // does** (CC10 step 5). Two rows through `InsertRangeRow` would bump
-    // twice, and the first bump would announce a directory whose second
-    // row does not exist yet - a partition a peer could read mid-write.
-    BumpVersion("sys.ranges open");
-    return Status::OK();
 }
 
 Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
@@ -2251,21 +2028,6 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
         }
     };
 
-    // sys.ranges (RD2): a dropped relation's ranges go with it.
-    //
-    // **Order among the sweeps is no longer load-bearing**, and saying so is
-    // the honest replacement for what stood here. RD1 put this first because
-    // the placeholder it held refused *every* tuple, which made it a probe
-    // that ran before the destructive sweeps had retired anything; the real
-    // codec refuses only a wrong length, exactly like its siblings, so
-    // there is nothing left to probe. It stays first because moving it would
-    // be a diff with no reason.
-    if (Status s = sweep(SysRangeRow{}, kCatalogPageRanges,
-                         [&](const SysRangeRow& r) { return r.rel_oid == table_oid; });
-        !s.ok()) {
-        return s;
-    }
-
     if (Status s = sweep(SysTableRow{}, kCatalogPageTables,
                          [&](const SysTableRow& r) { return r.oid == table_oid; });
         !s.ok()) {
@@ -2601,23 +2363,6 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
               [](const TableAccess::IndexRef& a, const TableAccess::IndexRef& b) {
                   return a.index_oid < b.index_oid;
               });
-
-    // The relation's ranges (RD3, CC9), in one sys.ranges scan like the
-    // three above, and **empty on every relation this engine has today** -
-    // nothing allocates a second range until RD5.
-    //
-    // Fatal, and for the index list's reason rather than the Cabin's. A
-    // directory this call cannot read leaves `access.ranges` empty, which
-    // by CC9 *means* "one range, headed by
-    // `desc_page_id`" - so a split relation whose rows are unreadable
-    // would route every statement to the core and the chain head of its
-    // lower range and answer from there. That is a wrong answer with
-    // nothing logged, which is the class RD6's insert-head defect belongs
-    // to; failing the fill keeps it a refusal, and keeps it scoped to the
-    // one relation whose rows are torn.
-    auto ranges = RangesOf(oid);
-    if (!ranges.ok()) return ranges.status();
-    access.ranges = RangeTargetsFrom(ranges.value());
 
     return cache_.PutTableAccess(std::move(access));
 }
@@ -3261,14 +3006,11 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     auto access = InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
     // **§6a's converse was here and is gone** (SB3,
-    // `instructions/v2.7.1/workorder-sb.md`): a Cabin on a split relation
-    // is admitted, and is born correctly scoped rather than born
-    // incomplete: a set is authoritative for the observed value
-    // (`docs/spec/cabin.md` §4b as rewritten at AT-S7), and what a step
-    // may bank from or answer from is its own walk's span - enforced at
-    // the serve site in `step_vm.cpp` and at the build in
-    // `cabin_optimizer_exec.cpp`, which walks every chain this core owns
-    // rather than the `lo = 0` one. The **auto** path came through here
+    // `instructions/v2.7.1/workorder-sb.md`), and the split relation it
+    // guarded went on 2026-09-30 (`crosscore.md` CC8): a set is
+    // authoritative for the observed value (`docs/spec/cabin.md` §4b as
+    // rewritten at AT-S7), and every walk that banks one covers the whole
+    // relation. The **auto** path came through here
     // too and is admitted on the same terms.
     if (col_pos >= access.value()->schema.columns.size()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(rel_oid) +
@@ -3383,19 +3125,6 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     if (!child.ok()) return child.status();
     auto parent = InitTableAccess(parent_rel_oid);
     if (!parent.ok()) return parent.status();
-
-    // §6a's converse, at **both** ends: an FK's validation reads the
-    // linked relation, so a boundary on either side is the same undecided
-    // placement question. §6a gates the split on `fkeys_out` and
-    // `fkeys_in` alike, and this is that gate read backwards.
-    if (Status s = RefuseAuxiliaryOnSplitRelation(*child.value(), "a foreign key"); !s.ok()) {
-        return s;
-    }
-    if (Status s = RefuseAuxiliaryOnSplitRelation(*parent.value(),
-                                                  "a foreign key referencing it");
-        !s.ok()) {
-        return s;
-    }
 
     if (child_column_no >= child.value()->schema.columns.size()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(child_rel_oid) +
@@ -3550,14 +3279,6 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
 
     auto access = InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
-    // §6a's converse (`RefuseAuxiliaryOnSplitRelation`): whether an index
-    // under a boundary is per-range or global is `index.md` §13's, and
-    // until that is answered a split relation takes none. Here rather than
-    // only at the dispatcher, this file's own doctrine - this is the door
-    // every non-DDL caller comes through.
-    if (Status s = RefuseAuxiliaryOnSplitRelation(*access.value(), "an index"); !s.ok()) {
-        return s;
-    }
     const Schema& schema = access.value()->schema;
     // A heap relation has no pk index, so resolving an entry's pk would be a
     // chain scan and an index over it would turn one full scan into N

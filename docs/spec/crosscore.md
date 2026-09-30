@@ -23,7 +23,7 @@ what is shared declared, no exceptions, deterministic testability).
 
 **There is no ownership unit since AT-S9.** It was the primary-key range
 (CC8), with `sys.tables.owner_core` the one-range case; both are retired,
-and a range is now only a sub-structure of a pre-AT split relation.
+and since 2026-09-30 the range itself is: a relation is one structure.
 
 ## 1. Decisions
 
@@ -31,16 +31,16 @@ and a range is now only a sub-structure of a pre-AT split relation.
 |---|----------|-----------|
 | CC1 | Execution model | **Every statement runs on the core its session is on** (AT-S5 writes, AT-S6 reads, AT-S9 the last two routes), **and no part of one runs anywhere else** (AT-S10). A session's core is the one that accepted its connection (every core listens with `SO_REUSEPORT`, AT-S8), or, where the port cannot be shared, the core core 0 handed it to (D19's fallback, AT-S10c; `include/kds/server/connection_handoff.hpp`, `sched.md` §5) - a connection crosses once, at placement, and never by a ring kind. The step pipeline this row named - each step on the core owning its range, output flowing to the next step's core - lost its last producers at AT-S9, the single-step fan-in over a split relation and the two-step join pipeline, both of which chose their cores by ownership; AT-S10 deleted the protocol itself (AT-0 item 4, answered *struck*). **There is no ring since AT-S10d** (§3): its last two kinds, the id leases, lost their users at AT-S10b when every core began issuing its own ids, and the transport went with them |
 | CC2 | Intermediate transfer | **None since AT-S10**: no row crosses a core. It was KWP binary row batches (protocol D5) in chunked ring messages under credit-based flow control (§4). What stands is the rule it imposed: **one row encoding**, `wire/row_codec.hpp`, whose one consumer is now the KWP wire - result batches and the load stream's chunks (`protocol.md` §6, `bulkinsert.md` BI6) |
-| CC3 | Write scope | A transaction's writes run on the core its session is on (AT-S5), and a transaction is one core's, whole (AT-S6). **Nothing is refused for touching two ranges or two relations** since AT-S9: the multi-owner refusals (a write naming no pk, a join, `LIMIT`/`OFFSET`, a sort, DDL on a relation with two or more ranges) went with the owners they described |
+| CC3 | Write scope | A transaction's writes run on the core its session is on (AT-S5), and a transaction is one core's, whole (AT-S6). **Nothing is refused for touching two relations** since AT-S9: the multi-owner refusals (a write naming no pk, a join, `LIMIT`/`OFFSET`, a sort, DDL on a split relation) went with the owners they described |
 | CC4 | Remote-read isolation | **There is no remote read since AT-S10.** Every read takes the snapshot its own statement or transaction holds on the session's core (`txn.md` §4.1), so the per-stage view this row described - a remote step's latest-committed snapshot, minted per stage and outside any asking transaction - has nothing left to describe (§5) |
 | CC5 | Cancellation & errors | **Nothing cross-core to cancel since AT-S10**: a statement's errors are its own core's, framed by its session. The `STEP_CANCEL`/`STEP_ERROR` propagation this row named went with the protocol (§7), and the tag `(session_core, request_id, step_id)` it routed by went with the message header at AT-S10d (§3) |
 | CC6 | Scheduling | **Nothing crosses to be scheduled since AT-S10d**: a kick carries no group, and the woken core's own parked task runs in its own group. A ring message's task ran in the scheduling group its sender designated on the header until the transport retired; the rule before that - remote step tasks in `foreground`, because step chains are the OLTP path - retired with the protocol at AT-S10 |
-| CC7 | Page ownership | **None, since AT-S9** (AR0-5 D17). Pages were the core's that `sys.tables.owner_core` named; that column's four bytes are reserved now - written 0, never read, so a pre-AT volume's value is ignored where it lies and the volume mounts unchanged. Every core reads and writes every page under the page latch (CC11, `page.md` §6). The history of how ownership was realized - the flush-then-grant handoff AW-S1b deleted, the owner-built index and assertion paths AT-S5d/S5e retired - is git's |
-| CC8 | Ranges | **A pk range `[lo, hi)` is a sub-structure of one relation, and owned by nothing** (AT-S9). A heap range is its own chain with its own head, the entry page riding the directory row (CC9); a btree relation does not split (§6a). Ranges exist only on relations split before AT-S9 retired spreading (and, for a relation created since SUS-1, not even then). **Every walk covers every range** (`TableAccess::WalkHeads`), and a row lands in the range its id falls in (`HeapChainFor`, which refuses an id in no range) |
-| CC9 | Range directory | `sys.ranges` (rel oid, lo, a reserved word where the owner core was, entry page; hi is the next row's lo, and a **non-empty directory carries a row at lo = 0**, so the rows partition the whole id space) records every split a pre-AT volume made; a relation with no rows there is one range headed by `sys.tables.desc_page_id`. Resolved from the executing core's catalog cache. A directory write bumps the schema version word as DDL does (`catalog.md` CT2) |
-| CC10 | Range split | **No range is opened since AT-S9**, which retired insert spreading - the only path that created one - with range ownership, on the operator's ruling. `range_size_ids` is refused by name. What a split relation already has is read and written whole; `Catalog::OpenRangeRows` survives with no production caller, as the way a cell builds the state a pre-AT volume can hold. The rules this row carried for opening a range (a page-boundary split, the durable row before the grant, the pre-grant Cabin discard) are git's |
-| CC11 | Shared-structure access | **Every core reads and writes with the same authority** (AT-S5; AR0-5 §0). **Which transactions are running** is every core's to read since AX-S1: each core publishes its own into an in-flight table no other core writes, so `IsInFlight` is the instance's answer (`txn.md` §4.1, `rules.md` §3). The rule that stood here until then — *core 0 alone writes the superblock, the free map and the catalog pages, and one writer is the serialization mechanism* — is retired with the store's `MayWrite` arm that enforced it (the predicate itself, answering yes from then on, deleted at AT-S18) and the `catalog_read_only_` flag that routed around it. What serialises each of the three now is named where it is written: the **page latch** across cores for the bytes of any page (`page.md` §6), and within one core the rule that no task parks under a page span, which is what makes a catalog row's read-modify-write atomic (`catalog.md` CT5, `AdmitExplicitRowId`'s hook); the free map's own `map_latch_` for allocation (AM-S3, `page.md` §5); the **schema version word** for every core's memo of the catalog (`catalog.md` CT2), which replaced the invalidation broadcast at AT-S2; and page 0's persisted transaction-id ceiling, which every core's `TrxIdSequence::Carve` reads and raises in one step under the superblock latch since AT-S10b (`txn.md` §4.2) — core 0 alone carved until then, by the lease's routing. A relation's row-id mark is a catalog row like any other, bumped in place under its page latch by whichever core issues (`heap-and-tuple.md` §4.1a). DDL runs where the session is, under the DDL's own relation `X` (`txn.md` §5) where it has one; a name-creating DDL - `CREATE TABLE`, `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, an index's or an assertion's name - checks and writes the name under one hold of its catalog relation's root page since AT-S17 (`catalog.md` CT7). A peer's fill path was already the shared frame (AM-S2 step 3) and is unchanged. A split relation's range chains are pages like any other, under the same latch; a btree relation never split (CC8) |
-| CC12 | Catalog page placement | **CR1 — a catalog relation's root page stays in the reserved range; its var-heap does not.** `kCatalogPageTypes = 4` through `kCatalogPageRanges = 15` (`include/kds/catalog/well_known.hpp`) sit below `kFirstUserPageId = 128` because they must be findable at bootstrap *without* a catalog read. A catalog relation's **var-heap** root is allocated through `CreateNew()` and recorded in `sys.tables`, binding on any catalog relation with a var-heap. The cost this carried — a page outside the range was not peer-readable, so the one peer-readable catalog var-heap, `sys.assertions`, was reached by granting the individual pages a row names — **went with the fault grants at AW-S1b**. Every core faults every page, so a var-heap root's id no longer decides who can read it. `exec::CatalogSpillPages` survives with its other consumer, the mount's var-heap sweep. **CR2 is retired at AT-S5, and its sentence stood here until AT-S5b** — *DDL executes on core 0; a peer sends and waits*, shipping the request and falling back on `PeerDdlRefused` for what the ship did not cover. DDL runs where the session is (CC11, CC13's CR5), both the ship and the refusal are gone, and a peer that has to **grow** a catalog chain places the page itself since AT-S5b (`catalog.md` CT5). **CR3 — a catalog page may leave the reserved range once grown.** Catalog pages are allocated and initialised inside the range at bootstrap; beyond bootstrap a catalog page **may be managed outside it** in either of two cases — the relation grows past what the reserved range holds, or every peer must read *and write* the page equally. Such a page takes the ordinary relation rules: allocation from the general supply, free-map accounting, and the WAL logging catalog change already has. No catalog page has left the range; a var-heap root outside it is found through `sys.tables` — the indirection `varheap_page_id` uses, DDL-immutable and therefore cacheable per `rows.hpp` |
+| CC7 | Page ownership | **None, since AT-S9** (AR0-5 D17). Pages were the core's that `sys.tables.owner_core` named; that column's four bytes are reserved now - written 0, never read. A volume from before the version-18 bump no longer mounts at all (CC8). Every core reads and writes every page under the page latch (CC11, `page.md` §6). The history of how ownership was realized - the flush-then-grant handoff AW-S1b deleted, the owner-built index and assertion paths AT-S5d/S5e retired - is git's |
+| CC8 | Ranges | **Retired 2026-09-30** (`instructions/v3.0.0/raft-marks-2026-09-30.md` §9). **A relation is one structure headed by `sys.tables.desc_page_id`** - one heap chain or one btree - and nothing divides it by pk. A range existed only on a heap relation split before AT-S9 retired insert spreading; the directory that described it, the resolver, the per-range chain routing and the last auxiliary gate are deleted, and a volume that could carry one (superblock version 17 or below) is refused at mount, so no build reads a relation from its first chain alone. The rules this row, CC9 and CC10 stated are `git show 7c51f82:docs/spec/crosscore.md` |
+| CC9 | Range directory | **Removed with CC8.** `sys.ranges`, its row and its codec are gone; its root page 15 and its oid 133 are unused and not reissued |
+| CC10 | Range split | **Retired with CC8.** Nothing has opened a range since AT-S9, and `range_size_ids` is still refused by name |
+| CC11 | Shared-structure access | **Every core reads and writes with the same authority** (AT-S5; AR0-5 §0). **Which transactions are running** is every core's to read since AX-S1: each core publishes its own into an in-flight table no other core writes, so `IsInFlight` is the instance's answer (`txn.md` §4.1, `rules.md` §3). The rule that stood here until then — *core 0 alone writes the superblock, the free map and the catalog pages, and one writer is the serialization mechanism* — is retired with the store's `MayWrite` arm that enforced it (the predicate itself, answering yes from then on, deleted at AT-S18) and the `catalog_read_only_` flag that routed around it. What serialises each of the three now is named where it is written: the **page latch** across cores for the bytes of any page (`page.md` §6), and within one core the rule that no task parks under a page span, which is what makes a catalog row's read-modify-write atomic (`catalog.md` CT5, `AdmitExplicitRowId`'s hook); the free map's own `map_latch_` for allocation (AM-S3, `page.md` §5); the **schema version word** for every core's memo of the catalog (`catalog.md` CT2), which replaced the invalidation broadcast at AT-S2; and page 0's persisted transaction-id ceiling, which every core's `TrxIdSequence::Carve` reads and raises in one step under the superblock latch since AT-S10b (`txn.md` §4.2) — core 0 alone carved until then, by the lease's routing. A relation's row-id mark is a catalog row like any other, bumped in place under its page latch by whichever core issues (`heap-and-tuple.md` §4.1a). DDL runs where the session is, under the DDL's own relation `X` (`txn.md` §5) where it has one; a name-creating DDL - `CREATE TABLE`, `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, an index's or an assertion's name - checks and writes the name under one hold of its catalog relation's root page since AT-S17 (`catalog.md` CT7). A peer's fill path was already the shared frame (AM-S2 step 3) and is unchanged. |
+| CC12 | Catalog page placement | **CR1 — a catalog relation's root page stays in the reserved range; its var-heap does not.** `kCatalogPageTypes = 4` through `kCatalogPageAssertions = 14` (`include/kds/catalog/well_known.hpp`; page 15 unused since `sys.ranges` went) sit below `kFirstUserPageId = 128` because they must be findable at bootstrap *without* a catalog read. A catalog relation's **var-heap** root is allocated through `CreateNew()` and recorded in `sys.tables`, binding on any catalog relation with a var-heap. The cost this carried — a page outside the range was not peer-readable, so the one peer-readable catalog var-heap, `sys.assertions`, was reached by granting the individual pages a row names — **went with the fault grants at AW-S1b**. Every core faults every page, so a var-heap root's id no longer decides who can read it. `exec::CatalogSpillPages` survives with its other consumer, the mount's var-heap sweep. **CR2 is retired at AT-S5, and its sentence stood here until AT-S5b** — *DDL executes on core 0; a peer sends and waits*, shipping the request and falling back on `PeerDdlRefused` for what the ship did not cover. DDL runs where the session is (CC11, CC13's CR5), both the ship and the refusal are gone, and a peer that has to **grow** a catalog chain places the page itself since AT-S5b (`catalog.md` CT5). **CR3 — a catalog page may leave the reserved range once grown.** Catalog pages are allocated and initialised inside the range at bootstrap; beyond bootstrap a catalog page **may be managed outside it** in either of two cases — the relation grows past what the reserved range holds, or every peer must read *and write* the page equally. Such a page takes the ordinary relation rules: allocation from the general supply, free-map accounting, and the WAL logging catalog change already has. No catalog page has left the range; a var-heap root outside it is found through `sys.tables` — the indirection `varheap_page_id` uses, DDL-immutable and therefore cacheable per `rows.hpp` |
 | CC13 | DDL's route, and where a core's statistics are written | **CR5 is retired at AT-S5**: a peer routed DDL to core 0 by shipping the statement, detected at dispatch on `catalog_read_only_` and the `CREATE`/`ALTER`/`DROP` tokens, with `PeerDdlRefused` for what the ship did not cover; DDL runs where the session is now (CC11). **CR6 — a catalog relation whose content is only a statistic is written unlogged**, the sole exception to the rule that catalog writes are WAL-logged and replayed (`docs/spec/ddl-transactional.md` §7; the rule text is `docs/rules/rules.md` §5). **CR7 and CR8 are retired at AT-S7.** CR7 had a peer batch its access shapes locally and flush them to core 0 over `kAccessStatsBatch`, because `sys.access_stats` sits at page 11 inside the reserved range and only core 0 could write it; CR8 made that send the engine's one **droppable** message, invariant 8 pricing a lost statistic as performance and never a result. Every core writes every page since AT-S5, so **a core writes its own access statistics where the statement ran** - the batch, the ring kind, the drop and the five `SHOW META` counters are gone, and a peer's count is in the row before its statement returns rather than on the next tick. What stands from CR7 is the part that was never about the wire: **`sys.access_stats` is one relation at page 11 (`kCatalogPageAccessStats`)** and there are no per-core statistics relations - `SysAccessStatRow` is a 33-byte fixed row with no `core_id` field (`catalog/rows.hpp`), so every core's counts **fold into the one `(kind, rel_id, column_mask)` shape**. `Catalog::RecordAccess` holds that relation's root page exclusive for its whole body, which is what makes the fold and the admission of a shape nobody has seen one act across cores. `RecordAccess` costs +1-2% on a point lookup (`docs/spec/heap-and-tuple.md` §7) |
 
 ## 2. Execution Model
@@ -49,8 +49,7 @@ The session core owns the statement end to end: it parses, compiles the
 step chain (the written-order contract of `docs/spec/parser-v2.md` — *the
 statement is the chain*, never silently reordered) from its catalog cache,
 and executes every step of it itself, reading every page through the
-instance's one frame table (CC7, CC11). A walk of a split relation covers
-every range (CC8, `TableAccess::WalkHeads`). There is **one path**, the
+instance's one frame table (CC7, CC11). There is **one path**, the
 single-core code; what was the "local fast path" is all there is.
 
 Trail and statistics recording is the executing core's: a core writes
@@ -65,34 +64,13 @@ projected columns to the next step's core) - and AT-S10 deleted the
 protocol they ran on. The full description is
 `git show 91111e3:docs/spec/crosscore.md` §2.
 
-## 2a. Ranges on a Pre-AT Split Relation
+## 2a. Ranges
 
-A relation split before AT-S9 keeps its ranges, and nothing opens, merges
-or moves one (CC10). What such a relation does now:
-
-- **A read walks every range** (`TableAccess::WalkHeads`, CC8), on the
-  session's core, so no walk answers short and none is refused for where
-  it reads.
-- **A write lands by its id.** A named pk lands in the range its id falls
-  in (`HeapChainFor`, which refuses an id in no range); an omitted pk is
-  issued from the relation's one row-id mark (`heap-and-tuple.md` §4.1a),
-  which is above every range's `lo`, so it lands in the top range.
-- **The directory is read-mostly.** `sys.ranges` is read from the
-  executing core's catalog cache (CC9). **A resolved range is never cached
-  across a suspension**: a peer's cache is dropped by the schema word's
-  `Revalidate()` at a task boundary, which never advances
-  `catalog_version()` - that counter is one core's (`catalog.md` CT1) -
-  so a range fact guarded by it would be wrong on every peer.
-- **Advisory structures never narrow a write's target set.** Invariant
-  9's licence is *where to look*; for a write, executing on fewer ranges
-  than hold matching rows is a missed write, not a slower one. DML target
-  resolution is pk arithmetic against the directory alone. A Cabin set
-  speaks for every range of its relation (`cabin.md` §4b) and a
-  Waystone trail names pages, neither of which knows a core.
-
-The routing this section carried - a range naming its owner core, a
-fan-in over the owners, a trail missing on the owner check - is git's
-(`git show 2b20369:docs/spec/crosscore.md` §2a).
+**Retired 2026-09-30** (CC8). A relation split before AT-S9 kept its
+ranges - one chain per range, a read walking every one, a write landing by
+its id - until the operator retired the concept; the section is
+`git show 7c51f82:docs/spec/crosscore.md` §2a, and the routing it carried
+before AT-S9 is `git show 2b20369:docs/spec/crosscore.md` §2a.
 
 ## 3. Messages
 
@@ -233,11 +211,10 @@ write-coupled auxiliary lived on its relation's one owner core, and a
 split would have given it two; with no owner, an auxiliary is written by
 whichever core runs the statement, under the latch or registry its own
 spec names (`index.md`, `cabin.md`, `assertion.md` §6.1,
-`foreign-keys.md`). A pre-AT split relation that carries one keeps it,
-walked whole. **Creating one on a split relation** is AR0 D7's lift, per
-auxiliary: a Cabin has been admitted since SB3, an assertion since AY-S9
-(its build walks every chain, `assertion.md` §8.1); an index and a foreign
-key are refused `NotImplemented` by `RefuseAuxiliaryOnSplitRelation`. The gates' text is `git show 2b20369:docs/spec/crosscore.md`
+`foreign-keys.md`). The converse gate - no auxiliary *created on* a
+relation already split, `RefuseAuxiliaryOnSplitRelation` - went on
+2026-09-30 with the split relation itself (CC8), which also answers AR0
+D7's last gate. The gates' text is `git show 2b20369:docs/spec/crosscore.md`
 §6a.
 
 ### 6b. Inserts and the Tail
@@ -285,15 +262,11 @@ AT-S10, their cells deleted with the services they pinned.
    is no pipeline layer.)*
 8. *(Retired at AT-S10: the per-stage RR weakening, which had no stage to
    apply to.)*
-9. **Range equivalence:** every shape over a split relation returns
-   byte-identical result sets to the same statement over the same rows
-   unsplit — the split as the only variable, over data where matching
-   rows straddle the boundary.
-10. **Shared statement view:** a transaction writing two relations *or*
-   two ranges of one relation commits while a statement reads them; the
-   statement's answer contains all of that transaction's writes or none
-   (§5's one view per statement, pinned against the torn read in both
-   shapes).
+9. *(Retired 2026-09-30: range equivalence; no relation is split, CC8.)*
+10. **Shared statement view:** a transaction writing two relations
+   commits while a statement reads them; the statement's answer contains
+   all of that transaction's writes or none (§5's one view per
+   statement, pinned against the torn read).
 11. *(No test: the engine does not migrate a range.)*
 12. **One sequence across cores** (it was *insert spreading* until AT-S9
    retired spreading): k cores inserting omitted-pk rows into one

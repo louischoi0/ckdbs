@@ -253,30 +253,6 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
     // ring consumer (spec-eviction §5, EVT06): a census of a relation
     // larger than memory must not flood the pool it is surveying for.
     auto ring = store.OpenScanRing();
-    // **One walk per range, in `lo` order** (H3, and RD6's rule reaching
-    // the third caller of it). `desc_page_id` heads the lo = 0 range and
-    // nothing more: once a relation has one chain per range, walking it
-    // alone reports the *lower* range's `chain_pages`, `live_tuples` and
-    // `delete_marked`, and every density the planner derives is computed
-    // from an undersized relation. Not a data defect - Part I is
-    // shadow-only and every move is blocked by a §6 gate - but it is the
-    // "wrong reading with nothing logged" shape RD6 exists to end, and
-    // `workplan-range-directory.md` §14e named this instance rather than
-    // closing it.
-    //
-    // `WalkHeads` answers `desc_page_id` for an unsplit relation off one
-    // branch on a cached field, so this is the walk it always was wherever
-    // no directory exists - every relation created since AT-S9.
-    //
-    // **Every range, since AT-S9.** This took this core's heads alone and
-    // reported the rest missing through `surveyed_ranges`, because a range
-    // another core owned was one this core could not fault. Ranges have no
-    // owners and every page is every core's to fault, so the survey is
-    // whole; `surveyed_ranges` equals `relation_ranges` and still says so.
-    const std::vector<PageId> heads = access.value()->WalkHeads();
-    survey.surveyed_ranges = static_cast<std::uint32_t>(heads.size());
-    survey.relation_ranges = static_cast<std::uint32_t>(
-        access.value()->ranges.empty() ? 1 : access.value()->ranges.size());
     const auto visit = [&](PageId page_id, heap::PageView& page,
                            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             // Priced like any other relation read (V19): a spent budget
@@ -297,11 +273,9 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
             }
         return storage::VisitControl::kContinue;
     };
-    for (PageId head : heads) {
-        Status walked = heap::ChainVisit(store, head, storage::PageAccess::kRead, visit,
-                                         ring.get());
-        if (!walked.ok()) return walked;
-    }
+    Status walked = heap::ChainVisit(store, access.value()->desc_page_id,
+                                     storage::PageAccess::kRead, visit, ring.get());
+    if (!walked.ok()) return walked;
 
     report.value().survey = survey;
     report.value().plans = BuildPlans(report.value().shapes, report.value().survey);

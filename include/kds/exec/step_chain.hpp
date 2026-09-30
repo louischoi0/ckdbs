@@ -7,7 +7,6 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
-#include "kds/catalog/range_directory.hpp"
 #include "kds/parser/ast.hpp"
 
 // The compiled form of a SELECT-class statement: an ordered list of steps,

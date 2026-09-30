@@ -88,20 +88,6 @@ struct RelationSurvey {
     std::uint64_t live_tuples = 0;
     std::uint64_t delete_marked = 0;    // upper bound on reclaimable (see above)
     std::uint64_t tuples_per_page = 0;  // from the schema constant, TuplesPerPage()
-
-    // **How much of the relation this survey actually saw** (H3,
-    // 2026-08-29). A relation is one chain per range since RD6, and the
-    // survey walks the ranges *this core* owns - so on a spread relation
-    // the two differ, and every count above is that fraction of the whole.
-    //
-    // Reported rather than refused, and reported rather than left implicit:
-    // a partial survey that says it is partial is worth more than none, and
-    // one that does not say so is exactly the wrong-reading-with-nothing-
-    // logged shape this row exists to end. Equal on every relation since
-    // AT-S9 made the survey walk every range, and `1`/`1` on every unsplit
-    // one.
-    std::uint32_t surveyed_ranges = 1;
-    std::uint32_t relation_ranges = 1;
 };
 
 // One candidate plan. R9's pair is `predicted_*` / `measured_*`: the
@@ -191,11 +177,6 @@ StatusOr<std::vector<RelationReport>> PlanAllRelations(catalog::Catalog& catalog
 // The surveyed form: adds the read-only chain walk for a heap relation
 // (budget-charged per slot examined; a spent budget fails the call with
 // the budget's own error). A btree relation gets shapes and no survey.
-//
-// A relation is **one chain per range** since RD6 (H3), and the walk
-// covers every range (AT-S9: ranges have no owners, so there is no longer
-// a core whose share it is). `RelationSurvey::surveyed_ranges` /
-// `relation_ranges` still say how much of the relation was surveyed.
 StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageStore& store,
                                       catalog::Oid rel_oid, exec::Budget& budget,
                                       const sched::Clock* clock,

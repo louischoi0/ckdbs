@@ -47,6 +47,11 @@ static_assert(kKeystoneWordSize * 8 ==
 // Largest id representable in 40 bits; Encode() rejects anything above this.
 inline constexpr std::uint64_t kMaxKeystoneId = (std::uint64_t{1} << kKeystoneIdBits) - 1;
 
+// One past the largest id: the exclusive upper bound of a relation's whole
+// id space, so `[0, kIdSpaceEnd)` is "every row" wherever a half-open pk
+// interval is declared (a read borrow, a range lock).
+inline constexpr std::uint64_t kIdSpaceEnd = kMaxKeystoneId + 1;
+
 // The decoded form of a tuple's Keystone column.
 struct Keystone {
     std::uint64_t id;

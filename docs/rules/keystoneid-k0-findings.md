@@ -27,7 +27,7 @@ id space with one implementation:
 |---|---|
 | `src/server/command_dispatcher.cpp` | a user tuple's pk — the Keystone id |
 | `Catalog::RegisterPattern` | the **oid** a `sys.patterns` row carries: a body field, not a Keystone word |
-| `src/exec/assertion_catalog.cpp`, `src/exec/index_ddl.cpp`, the range, cabin and fkey catalog writes | the Keystone id of a catalog row (`sys.assertions`, `sys.indexes`, `sys.ranges`, `sys.cabins`, `sys.fkeys`) |
+| `src/exec/assertion_catalog.cpp`, `src/exec/index_ddl.cpp`, the cabin and fkey catalog writes (and the range writes, until `sys.ranges` was removed on 2026-09-30) | the Keystone id of a catalog row (`sys.assertions`, `sys.indexes`, `sys.ranges`, `sys.cabins`, `sys.fkeys`) |
 
 **K1 binds both spaces, for one reason**: the `sys.patterns` oid takes a
 persistent sequence precisely because the general oid counter is not one

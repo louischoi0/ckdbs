@@ -1,3 +1,4 @@
+#include "kds/storage/keystone.hpp"
 #include "kds/exec/step_vm.hpp"
 
 #include <optional>
@@ -538,7 +539,7 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
 
     ASSERT_FALSE(seen.at.empty());
     EXPECT_EQ(seen.at.front().lo, 0u);
-    EXPECT_EQ(seen.at.front().hi, catalog::kIdSpaceEnd)
+    EXPECT_EQ(seen.at.front().hi, kIdSpaceEnd)
         << "before its first page a walk is positioned anywhere in the relation";
     ASSERT_GT(seen.at.size(), 2u) << "600 rows must span several pages, or this cell tests one";
 
@@ -550,7 +551,7 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
     std::uint64_t previous = 0;
     for (std::size_t i = 1; i < seen.at.size(); ++i) {
         EXPECT_EQ(seen.at[i].rel, seen.at.front().rel);
-        EXPECT_EQ(seen.at[i].hi, catalog::kIdSpaceEnd);
+        EXPECT_EQ(seen.at[i].hi, kIdSpaceEnd);
         EXPECT_GE(seen.at[i].lo, previous) << "the position only moves forward, at report " << i;
         previous = seen.at[i].lo;
     }
@@ -575,13 +576,13 @@ TEST_F(ExecChainTest, AWalkReportsWhereItIsAtEveryPageBoundary) {
     ASSERT_TRUE(ran_one.ok()) << ran_one.message();
     ASSERT_EQ(small.at.size(), 1u) << "a one-page walk declares its position exactly once";
     EXPECT_EQ(small.at.front().lo, 0u);
-    EXPECT_EQ(small.at.front().hi, catalog::kIdSpaceEnd);
+    EXPECT_EQ(small.at.front().hi, kIdSpaceEnd);
 }
 
 TEST_F(ExecChainTest, AHeapWalkDeclaresTheRelationAndNoSlice) {
     // The other half of the same ruling, and the reason it is not an
-    // omission: a heap chain is not walked in key order - RD6 walks a chain
-    // per range, and invariant 4 leaves a page's tuples unordered - so
+    // omission: a heap chain is not walked in key order - invariant 4
+    // leaves a page's tuples unordered - so
     // `min_key` of the page a heap walk is on bounds nothing about what it
     // has left to read. Declaring a slice from it would name an interval
     // the walk is not in.
@@ -601,7 +602,7 @@ TEST_F(ExecChainTest, AHeapWalkDeclaresTheRelationAndNoSlice) {
 
     ASSERT_EQ(seen.at.size(), 1u) << "a heap walk reports once, before its first page";
     EXPECT_EQ(seen.at.front().lo, 0u);
-    EXPECT_EQ(seen.at.front().hi, catalog::kIdSpaceEnd);
+    EXPECT_EQ(seen.at.front().hi, kIdSpaceEnd);
 }
 
 }  // namespace kds::exec

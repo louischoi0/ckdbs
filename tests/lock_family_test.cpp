@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/storage/keystone.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/sched/clock.hpp"
@@ -502,7 +503,7 @@ TEST_F(LockDeadlockTest, AWholeRelationWriteIsNotHeldUpByAPositionedReader) {
     ASSERT_TRUE(locks_
                     ->Acquire(reader_id,
                               txn::LockKey::Slice(static_cast<catalog::Oid>(oid), 1,
-                                                  catalog::kIdSpaceEnd),
+                                                  kIdSpaceEnd),
                               txn::LockMode::kIntentionShared, reader)
                     .value()
                     .granted);

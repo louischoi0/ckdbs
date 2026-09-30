@@ -386,12 +386,8 @@ DROP CABIN ON accounts(owner);
 - Refused on the primary key and on a `NO CABIN` column, whoever asks.
 - `SHOW CABINS` lists them. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
-- **A Cabin serves a relation split into ranges** as it serves any other,
-  since v3.0.0's M3: every read walks every range on the core it runs on,
-  so a set speaks for the whole relation. (A relation can only have been
-  split before M3; nothing splits one now.) `SHOW CABINS` no longer prints
-  `scope_declines`: with every walk covering the whole relation, no probe
-  falls through for its scope.
+- `SHOW CABINS` no longer prints `scope_declines`: every walk covers the
+  whole relation, so no probe falls through for its scope.
 
 ### CREATE PATTERN / DROP PATTERN — withdrawn
 

@@ -242,23 +242,9 @@ inline constexpr Oid kSysCabinsTable = 131;
 // mis-attribute.
 inline constexpr Oid kSysFkeysTable = 132;
 
-// sys.ranges (docs/spec/crosscore.md CC9): one row per range of a split
-// relation - rel oid, lo, a reserved word (the owner core until AT-S9),
-// entry page per CC9's cell; hi is the next row's lo. A relation with no
-// rows here is one range, its own chain, which is every relation created
-// since AT-S9.
-//
-// **Created empty at bootstrap (RD1); its row is `SysRangeRow` (RD2,
-// 2026-08-28).** Fixed-offset and typed, as RD1 predicted it would be:
-// everything CC9 names is fixed-width, so none of sys.assertions' reasons
-// for the user-tuple format apply. **Still empty on every existing file** -
-// nothing writes a row until RD5's allocator exists, which is what made
-// defining the format free of a version bump. It bootstraps at a fixed low
-// page because the catalog's page span is a compile-time range (and a peer
-// could fault only pages below kFirstUserPageId until AW-S1b), so a
-// directory every core reads cannot come from the general supply
-// (workplan-range-directory.md §3a's C1).
-inline constexpr Oid kSysRangesTable = 133;
+// Oid 133 was `sys.ranges`' until the split relation was retired
+// (2026-09-30). Unused and not reissued: nothing below kUserOidStart is
+// generated.
 
 // The **floor** for user-created object oids, not a counter.
 //
@@ -312,7 +298,7 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
     kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
-    kSysRangesTable,      kUserOidStart,
+    kUserOidStart,
 };
 
 // O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
@@ -390,9 +376,9 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // relation rules) is what governs.
 inline constexpr PageId kCatalogPageAssertions = 14;
 
-// Root heap page of sys.ranges (RD1). Fixed for the reason kSysRangesTable
-// states.
-inline constexpr PageId kCatalogPageRanges = 15;
+// Page 15 was `sys.ranges`' root until the split relation was retired
+// (2026-09-30). Nothing creates it; `kCatalogOverflowFirst` stays at 16,
+// because moving it back would buy one page for a format event.
 
 // Every catalog relation's **root** page, in id order.
 //
@@ -414,7 +400,7 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,    kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,    kCatalogPagePatterns,
     kCatalogPageAccessStats, kCatalogPageCabins,     kCatalogPageFkeys,
-    kCatalogPageAssertions,  kCatalogPageRanges,
+    kCatalogPageAssertions,
 };
 
 // ---- Where a catalog chain grows into ------------------------------------

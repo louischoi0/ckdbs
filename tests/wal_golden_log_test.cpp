@@ -39,7 +39,12 @@ namespace {
 // script's one spill (the updates spill nothing and no index exists), so its
 // two spill records move ahead of the row's own undo record and `HEAP_INSERT`;
 // RV3's undo-before-append order holds, and no record's bytes change.
-constexpr std::uint32_t kGoldenLogCrc = 0xb89d4f16u;
+// **Re-pinned when the split relation was retired** (on
+// `retire-split-relations`, `raft-marks-2026-09-30.md` §9): bootstrap no
+// longer creates `sys.ranges`, so its `sys.objects` and `sys.tables` rows -
+// both logged through `InsertRow` - leave the stream, and every later
+// record's LSN moves with them.
+constexpr std::uint32_t kGoldenLogCrc = 0xdd14ffedu;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

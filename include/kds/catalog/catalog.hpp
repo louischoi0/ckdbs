@@ -97,34 +97,6 @@ struct CatalogRowRef {
     Oid rel_oid = 0;
 };
 
-
-// The **converse** of `crosscore.md` §6a's gates, and the half that turns
-// them from a check into a closed race (`workplan-range-directory.md`
-// §9b).
-//
-// §6a decides what may *split*; nothing decided what may be **created on a
-// relation already split** — an index, a Cabin (the optimizer's auto path
-// included), an assertion, or a foreign key naming it. Both orders reached
-// the same unsound state, so both doors refuse; while DDL ran on core 0's
-// single catalog stream (until AT-S5) whichever write landed second was
-// refused. Nothing opens a range since AT-S9, so only a relation split
-// before then meets this door. **Its callers are the index and the foreign
-// key since AY-S9**, which lifted the assertion's arm (its build walks every
-// chain, `assertion.md` §8.1) under AR0 D7; the Cabin's went at SB3.
-//
-// **More than one range**, not "has a directory": a one-row directory is
-// one range, and `range_directory.hpp` branches the other way because it
-// asks a different question - whether routing must be *resolved*, which a
-// migration's single row also requires.
-//
-// `NotImplemented`, not retryable and carrying no byte position: the
-// statement is well formed and what it asks for is unbuilt rather than
-// inadmissible - D7 admits each auxiliary once a cell shows its build and
-// maintenance cover every chain - and there is no offending token — ranges are an engine
-// decision no statement asked for (§0's direction), so nothing in the text
-// the user wrote is at fault.
-Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary);
-
 // One catalog row a DROP changed, and enough to undo it
 // (workplan-ddl-transactional.md DT5). Two shapes: a delete-mark, which a
 // rollback clears; and an in-place overwrite, which a rollback rewrites
@@ -1026,88 +998,6 @@ public:
     // instead of calling this per row (catalog_cache.hpp's absence rule).
     StatusOr<SysFkeyRow> FindForeignKeyOnColumn(Oid child_rel_oid, std::uint16_t child_column_no);
 
-    // ---- sys.ranges — the range directory (CC9, RD2) -------------------
-    //
-    // **The door CC9's two rules are enforced at.** The rules themselves are
-    // stated once, at `SysRangeRow` (`rows.hpp`), because they are
-    // properties of the row *format*'s meaning; what is local here is that
-    // a reader and a writer refuse them under **different codes**, and why.
-    //
-    // `RangesOf` returns one relation's rows in ascending `lo` order — the
-    // order a range scan concatenates in (RD7) and the order `hi` derives
-    // along. A set that breaks either rule is **Corruption**: no writer
-    // produces one, so reaching it means the bytes are not what this
-    // catalog wrote, and no caller can handle it.
-    //
-    // **An empty answer is the ordinary answer** and is not an error: a
-    // relation with no rows here is one range, its own chain, which is
-    // every relation created since AT-S9 (nothing opens a second range).
-    // Callers on the unsplit path must not reach this at all
-    // — RD3's zero-cost invariant is that they read the cached field and
-    // stop — so this is the allocation and inspection surface, never the
-    // resolver.
-    StatusOr<std::vector<SysRangeRow>> RangesOf(Oid rel_oid);
-
-    // Writes one range row, refusing anything that would break the
-    // partition before it lands rather than leaving it for the next reader.
-    // **`InvalidArgument`, not Corruption**: a caller asking for an
-    // overlapping or gap-leaving boundary is wrong, not corrupt, and RD5's
-    // allocator is the caller that has to be told so. The first row for a
-    // relation must carry `lo = 0` — opening a directory means describing
-    // the range that already exists, and only then splitting it.
-    //
-    // `range_id` is issued here, not by the caller: it is this relation's
-    // own Keystone sequence and the caller has no way to draw from it.
-    //
-    // **What this cannot yet promise, and RB2 owns** (RD5): `where` records
-    // the row so a `ROLLBACK` can compensate it, but a directory whose
-    // `lo = 0` row and whose later boundaries were written by *different*
-    // transactions can be left, by a mount that undoes only some of them,
-    // with rows and no `lo = 0` row — which `RangesOf` then refuses as
-    // Corruption for that relation's life. Nothing here can prevent that;
-    // the allocator has to write a relation's opening row and its first
-    // split in one transaction, and that is a sequencing rule, not a check.
-    Status InsertRangeRow(SysRangeRow row, std::uint64_t trx_id = kBootstrapXid,
-                          CatalogRowRef* where = nullptr);
-
-    // Opening a range is **two calls, and the split is CC10's ordering
-    // rather than decomposition for its own sake** (RD5, CC8, CC10). The
-    // caller has to interpose between them: step 1 flushes the head page,
-    // step 2 logs its `PAGE_HANDOFF` and waits for durability, and only
-    // step 3 may write the boundary that names it. A single call would
-    // have to publish before the page it names is durable or handed off.
-    // **No production caller since AT-S9** retired range opening with insert
-    // spreading; the pair stays for the cells that build a split relation,
-    // which a pre-AT volume can still carry.
-    //
-    // The head page is fresh, formatted, empty and carries **`min_key =
-    // lo`**, which is what makes CC10's page-boundary rule vacuous here
-    // rather than checked: the new range starts as its own empty
-    // sub-structure, no existing page straddles the boundary, and
-    // invariant 3 holds by construction because the page refuses any id
-    // below its own `min_key`.
-    StatusOr<PageId> CreateRangeEntryPage(Oid rel_oid, std::uint64_t lo);
-
-    // The boundary itself, published once and last (CC10 steps 3 and 5).
-    //
-    // **Writes the relation's opening row too, when there is none.** A
-    // directory describes the whole id space or it is not a partition, so
-    // opening one means recording the range that already exists —
-    // `{lo = 0, desc_page_id}` — and only then the split. `InsertRangeRow`'s
-    // note names the shape that would otherwise be reachable: rows and no
-    // `lo = 0` row, permanent Corruption for that relation. Both rows are
-    // `kBootstrapXid` and the `lo = 0` row is written **first**, which is
-    // what closes it: a crash between the two leaves a one-row directory,
-    // which is a legal partition, and nothing undoes either row so no
-    // rollback can invert the pair.
-    //
-    // **No production caller since AT-S9**, which retired insert spreading
-    // with ownership: nothing opens a range any more. A pre-AT volume can
-    // still hold a split relation, and this is how a cell builds one; the
-    // engine serves such a relation by walking every range where the
-    // session is. It does not gate.
-    Status OpenRangeRows(Oid rel_oid, std::uint64_t lo, PageId entry_page);
-
     // The `trx_id` on these three is the row's MVCC stamp (DT2). It
     // defaults to `kBootstrapXid` because every caller that does not pass
     // one is bootstrap, and a bootstrap row must be visible to every read
@@ -1426,12 +1316,6 @@ private:
     // Debug line. Call it *after* the page write succeeds - a failed
     // mutation staled nothing.
     void BumpVersion(std::string_view what);
-
-    // `InsertRangeRow` without the publication, so `OpenRangeRows` can
-    // write a pair of rows and announce them once, after the head page
-    // they name is durable (CC10). Every refusal `InsertRangeRow` makes is
-    // this function's; publication is the only difference.
-    Status WriteRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where);
 
     storage::PageStore& store_;
 

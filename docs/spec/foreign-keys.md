@@ -319,10 +319,9 @@ saw only some of the children is a dangling foreign key with the
 constraint reporting success, which §1 names as the one degraded mode a
 constraint may not have.
 
-**So the check sees all of them.** `CheckNoChildReferences` walks every
-chain the child relation has — `TableAccess::WalkHeads`, one entry per
-range, or `desc_page_id` unsplit — and a btree child is
-descended whole. Two things stood in the way and both are gone: the
+**So the check sees all of them.** `CheckNoChildReferences` walks the
+child relation whole - its one heap chain from `desc_page_id`, or a btree
+child descended whole. Two things stood in the way and both are gone: the
 refusal for a child with a range this core did not own, and the fan-out
 that replaced it (one `kFkReverseProbeRequest` per child owner, a
 collect pass to name the rows, a registration to hold the window open
@@ -334,9 +333,9 @@ hand before the walk starts, and a DELETE on the synchronous path runs
 exactly as it does on a served one.
 
 **The read path asks the same question since AT-S9.** It walked only the
-ranges its core owned while a fan-in concatenated the rest, under a second
-method (`WalkHeadsFor`); ranges have no owners and the fan-in is retired,
-so a read and this check both call `WalkHeads`.
+ranges its core owned while a fan-in concatenated the rest; ranges have no
+owners since AT-S9 and no relation is split since 2026-09-30
+(`crosscore.md` CC8), so a read and this check walk the same structure.
 
 Verdicts are the local check's: no visible child → clear; a committed
 visible child → `kFkViolation` (terminal); a row with an in-flight
@@ -486,6 +485,4 @@ recorded here.
 Not in this engine, all refused at the statement: composite
 (multi-column) foreign keys; a reference to any column but the parent's
 Keystone id (`REFERENCES p(col)` is refused with a position, F1);
-`DEFERRABLE` semantics (checks are immediate); and a foreign key on a
-relation of two or more ranges — an FK parent or child does not split,
-and FK is refused on a split relation (`docs/spec/crosscore.md` §6a).
+and `DEFERRABLE` semantics (checks are immediate).

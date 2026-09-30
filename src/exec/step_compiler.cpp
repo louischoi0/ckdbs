@@ -12,7 +12,7 @@
 // codec owns which parser that means - which is what keeps the value a
 // predicate compares and the value a write keys on identical by
 // construction rather than by two call sites agreeing.
-#include "kds/catalog/range_directory.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
+#include "kds/storage/keystone.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
@@ -1372,7 +1372,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // bind is a claim on the relation and not on any part of it; the
         // walk narrows it to a slice later through this same sink.
         if (declare != nullptr) {
-            declare->Position(oid.value(), 0, catalog::kIdSpaceEnd);
+            declare->Position(oid.value(), 0, kIdSpaceEnd);
         }
         // AF-T3, and this is the one site that covers FROM, every JOIN and
         // every subquery block - they all bind through this loop.

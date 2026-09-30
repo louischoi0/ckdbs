@@ -1408,35 +1408,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // fell through only for a walk narrower than its relation, which was a
     // remote stage's slice, and nothing opens a stage.
 
-    // **How many ranges each split relation has** (R4-R §7's instrument
-    // gap, added with RR1): `sys.ranges` has no column definitions, so
-    // nothing else reports it from outside the process. Absent when nothing
-    // is split - `SHOW META`'s absent-rather-than-zeroed rule, and since
-    // AT-S9 retired range opening, the reading of every volume created
-    // since: only a pre-AT split relation can print here.
-    //
-    // Keyed `oid:ranges`. It was `oid:ranges@stages`, the second number the
-    // count of same-owner runs a fan-in read opened one upstream per; the
-    // fan-in and the owners are gone, and every range is walked here.
-    {
-        std::map<catalog::Oid, std::size_t> split;
-        if (auto tables = catalog_.ListTables(); tables.ok()) {
-            for (const catalog::SysObjectRow& row : tables.value()) {
-                auto ranges = catalog_.RangesOf(row.oid);
-                if (!ranges.ok() || ranges.value().size() < 2) continue;
-                split.emplace(row.oid, ranges.value().size());
-            }
-        }
-        if (!split.empty()) {
-            os << " split_relations=" << split.size() << " split_relation_detail=";
-            bool first = true;
-            for (const auto& [oid, count] : split) {
-                if (!first) os << ',';
-                os << oid << ':' << count;
-                first = false;
-            }
-        }
-    }
 
     // **CR7's block went with the batch** (AT-S7): `access_batches_sent`,
     // `access_entries_sent`, `access_batches_dropped`, the two applied
@@ -3003,16 +2974,6 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
                << " live=" << report.survey->live_tuples
                << " delete_marked=" << report.survey->delete_marked
                << " tuples_per_page=" << report.survey->tuples_per_page;
-            // **Absent when the survey covered the whole relation** (H3),
-            // which is every relation since AT-S9 made the survey walk
-            // every range - the absent-rather-than-zeroed rule, for its
-            // reason: a field that reads
-            // `1/1` forever teaches a reader to skip it, and then it is
-            // not read on the one relation where it matters.
-            if (report.survey->surveyed_ranges != report.survey->relation_ranges) {
-                os << " surveyed_ranges=" << report.survey->surveyed_ranges << "/"
-                   << report.survey->relation_ranges;
-            }
         }
 
         if (report.plans.empty()) {
@@ -4334,9 +4295,8 @@ Status CommandDispatcher::CheckWriteAdmission(const catalog::TableAccess& access
     // write landed in and counted a write to another core's range
     // (`cross_core_write_refusal`, the evidence D18 kept of ownership); the
     // owners are gone with `owner_core` (D17), and with them the counter and
-    // the range resolution it needed. An id outside every range is still
-    // refused, by `TableAccess::HeapChainFor` where the row is placed. Its
-    // history - PW1c-5's shape gate on peers, the btree, indexed, key-mode,
+    // the range resolution it needed, and the split relation itself went
+    // on 2026-09-30 (`crosscore.md` CC8). Its history - PW1c-5's shape gate on peers, the btree, indexed, key-mode,
     // assertion, foreign-key and Cabin arms lifting one by one - is
     // `workplan-peer-writer.md` §4's and git's.
     //
@@ -4615,9 +4575,8 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // row id this core would issue, asked which core owned the range that
     // id fell in, and pumped row-id lease demand so core 0 would open a
     // range for this core - insert spreading. Spreading retired with ownership (the
-    // operator's ruling at AT-S9): no range is opened, and a row lands in
-    // whichever existing range its id falls in (`TableAccess::HeapChainFor`,
-    // which refuses an id in no range), on the core the session is on.
+    // operator's ruling at AT-S9), and a row lands in its relation's one
+    // structure on the core the session is on.
 
     // Before anything is written, once per statement - every row goes to
     // the one relation.
@@ -4845,58 +4804,8 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         payloads.push_back(std::move(encoded.value()));
     }
 
-    // RD6, and the batch needs one range for the **whole** run: the ids
-    // are `[first, first + rows)` contiguous, so they share a chain
-    // exactly when the run does not cross a boundary.
-    //
-    // **The reason is mechanical, not a rule the engine holds.** An
-    // earlier draft cited `crosscore.md:311-314`'s cross-range DML
-    // refusal; that passage is about a statement spanning two *owners*,
-    // and a straddling batch need not span one. **Corrected at R4**: two
-    // ranges of a split relation *can* now have different owners - that is
-    // what insert spreading produces - but the ownership question is the
-    // check above's, answered before this one and in its own words, and a
-    // straddle inside **one** core's two ranges still reaches here. Nor
-    // does the engine refuse the equivalent by another route: two
-    // single-row INSERTs in one transaction land on either side of a
-    // boundary through `InsertIntoRelation` and nothing objects. What
-    // actually forces this is that `ChainAppendBatch` takes **one head**.
-    //
-    // That makes the refusal an implementation limit surfacing as a user
-    // error, which §0's direction argues against - *a range is information
-    // the user does not have* - and partitioning the run at the boundary
-    // would remove it (the ids are contiguous, so the split index is
-    // `boundary - first` and each sub-run is still contiguous).
-    // Deliberately **not** done here: it changes what RD8 pins, and
-    // whether a user-visible refusal is acceptable for a fact the user
-    // cannot see is the operator's call. `workplan-range-directory.md`
-    // §14f carries the proposal.
-    auto chain = ta.HeapChainFor(first.value());
-    if (!chain.ok()) {
-        return {ErrorReply(chain.status()), false, 0, chain.status()};
-    }
-    if (!ta.ranges.empty()) {
-        auto last = ta.HeapChainFor(first.value() + payloads.size() - 1);
-        if (!last.ok()) {
-            return {ErrorReply(last.status()), false, 0, last.status()};
-        }
-        if (last.value().head != chain.value().head) {
-            // Rendered through `ErrorReply`, which is where the retryable
-            // bit is spelled: a TxnConflict written out as its bare
-            // message loses the `TXN_CONFLICT retryable=1 ` token a client
-            // library's retry loop switches on, and this refusal *is*
-            // retryable - the id block is already burnt, so the same
-            // statement re-issued carves above the boundary and lands in
-            // one range.
-            return {ErrorReply(Status::TxnConflict(
-                        "this multi-row INSERT spans a range boundary of relation '" +
-                        stmt.table_name +
-                        "'; retry it as separate statements, or as rows that fall in one range")),
-                    false};
-        }
-    }
-    auto filled = heap::ChainAppendBatch(page_store_, chain.value().head, first.value(), payloads,
-                                         WriterId(scope), ta.oid, chain.value().tail_hint);
+    auto filled = heap::ChainAppendBatch(page_store_, ta.desc_page_id, first.value(), payloads,
+                                         WriterId(scope), ta.oid, &ta.heap_tail_hint);
     if (!filled.ok()) {
         return {ErrorReply(filled.status()), false, 0, filled.status()};
     }
@@ -5345,15 +5254,8 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // one page rather than failing. Duplicate-key and min_key
             // enforcement live in there - they are heap invariants, not
             // dispatcher policy.
-            // RD6: the head is the *range's*, not the relation's
-            // (`TableAccess::HeapChainFor` owns the argument). On an
-            // unsplit relation it is `desc_page_id` and `heap_tail_hint`,
-            // byte for byte what this line was. An id in no range is
-            // refused by the resolve inside it.
-            auto chain = access.HeapChainFor(id);
-            if (!chain.ok()) return chain.status();
-            auto placed = heap::ChainInsert(page_store_, chain.value().head, id, payload, trx_id,
-                                            access.oid, chain.value().tail_hint);
+            auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id, payload, trx_id,
+                                            access.oid, &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
 
             out.page_id = placed.value().page_id;
@@ -5385,86 +5287,62 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
                               " has an unknown clustered_type");
 }
 
-Status CommandDispatcher::WalkHeapChains(
-    std::span<const PageId> heads, storage::PageAccess page_access,
+Status CommandDispatcher::WalkHeapChain(
+    PageId head, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
     WalkCursor* cursor) {
     // Where this walk starts. A cursor that is not active is a first walk,
-    // which starts at the first range's head and slot 0 - written as the
-    // same three variables so the resumed and the first walk are one loop
-    // rather than two shapes that have to be kept agreeing.
+    // which starts at the head and slot 0 - written as the same two
+    // variables so the resumed and the first walk are one loop rather than
+    // two shapes that have to be kept agreeing.
     const bool resuming = cursor != nullptr && cursor->active;
-    std::size_t range_index = resuming ? cursor->range : 0;
-    // A resumed cursor names a page in the middle of its chain; a first
-    // walk starts at the head. Both are "the page this range starts at".
-    PageId resume_page = resuming ? cursor->page : kInvalidPageId;
-    std::uint16_t resume_slot = resuming ? cursor->slot : 0;
+    PageId cur = resuming ? cursor->page : head;
+    const std::uint16_t first_slot = resuming ? cursor->slot : 0;
 
-    // **Set by the wrapper below, read by both loops.** `ChainVisitOnePage`
+    // **Set by the wrapper below, read by the loop.** `ChainVisitOnePage`
     // answers a visitor stop and a chain end with the same kInvalidPageId,
-    // so the flag is the only thing that tells them apart - and the
-    // difference is load-bearing here in a way it never was for
-    // `heap::ChainVisit`: a stop must end the walk over *every remaining
-    // range*, where a chain end must step to the next one (RD6). The
-    // pre-AO-S3b code called `ChainVisit` per range and so continued to the
-    // next range after a stop; no visitor of a split relation returned one,
-    // which is why that never showed.
+    // so the flag is the only thing that tells them apart.
     bool cut = false;
     PageId cut_page = kInvalidPageId;
     std::uint16_t cut_slot = 0;
 
-    for (; range_index < heads.size(); ++range_index) {
-        PageId cur = resume_page != kInvalidPageId ? resume_page : heads[range_index];
-        // Consumed: only the range the cursor named resumes mid-chain, and
-        // every range after it starts at its own head.
-        const std::uint16_t first_slot = resume_page != kInvalidPageId ? resume_slot : 0;
-        resume_page = kInvalidPageId;
-        resume_slot = 0;
-
-        // Per chain, as `heap::ChainVisit` applies it - the budget bounds
-        // one chain's hops, not the relation's, and a walk of several
-        // ranges is several chains.
-        const PageId walk_origin = cur;
-        for (std::uint32_t pages = 0;; ++pages) {
-            if (Status s = storage::CheckPageWalkBudget(pages, walk_origin, "relation walk");
-                !s.ok()) {
-                return s;
-            }
-            const bool on_resume_page = pages == 0 && first_slot != 0;
-            const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
-                                                                std::uint16_t)>
-                guarded = [&](PageId page_id, heap::PageView& page,
-                              std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-                // The skip is here rather than in `ChainVisitOnePage`
-                // because it costs nothing to iterate a slot we do not
-                // read: the tuple is only touched inside `fn`.
-                if (on_resume_page && slot < first_slot) return storage::VisitControl::kContinue;
-                auto outcome = fn(page_id, page, slot);
-                if (!outcome.ok() || !outcome.has_value()) return outcome;
-                if (outcome.value() == storage::VisitControl::kStop) {
-                    cut = true;
-                    cut_page = page_id;
-                    // **The slot the walk stops *at*, not after it.** The
-                    // visitor that stopped did not finish this row - it is
-                    // the row it is waiting for - so a resume must offer
-                    // the same slot again rather than step past it.
-                    cut_slot = slot;
-                }
-                return outcome;
-            };
-            auto next = heap::ChainVisitOnePage(page_store_, cur, page_access, guarded);
-            if (!next.ok()) return next.status();
-            if (cut) break;
-            if (next.value() == kInvalidPageId) break;
-            cur = next.value();
+    const PageId walk_origin = cur;
+    for (std::uint32_t pages = 0;; ++pages) {
+        if (Status s = storage::CheckPageWalkBudget(pages, walk_origin, "relation walk"); !s.ok()) {
+            return s;
         }
+        const bool on_resume_page = pages == 0 && first_slot != 0;
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>
+            guarded = [&](PageId page_id, heap::PageView& page,
+                          std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            // The skip is here rather than in `ChainVisitOnePage`
+            // because it costs nothing to iterate a slot we do not
+            // read: the tuple is only touched inside `fn`.
+            if (on_resume_page && slot < first_slot) return storage::VisitControl::kContinue;
+            auto outcome = fn(page_id, page, slot);
+            if (!outcome.ok() || !outcome.has_value()) return outcome;
+            if (outcome.value() == storage::VisitControl::kStop) {
+                cut = true;
+                cut_page = page_id;
+                // **The slot the walk stops *at*, not after it.** The
+                // visitor that stopped did not finish this row - it is
+                // the row it is waiting for - so a resume must offer
+                // the same slot again rather than step past it.
+                cut_slot = slot;
+            }
+            return outcome;
+        };
+        auto next = heap::ChainVisitOnePage(page_store_, cur, page_access, guarded);
+        if (!next.ok()) return next.status();
         if (cut) break;
+        if (next.value() == kInvalidPageId) break;
+        cur = next.value();
     }
 
     if (cursor != nullptr) {
         if (cut) {
-            cursor->range = range_index;
             cursor->page = cut_page;
             cursor->slot = cut_slot;
             cursor->active = true;
@@ -5584,46 +5462,11 @@ Status CommandDispatcher::VisitRelation(
     const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    catalog::PkSpan span, WalkCursor* cursor) {
+    WalkCursor* cursor) {
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap:
-            // RD6: **one chain per range** (CC8), so a walk is one walk per
-            // range in `lo` order - which is the order RD7 concatenates in,
-            // established here once rather than by two implementations
-            // matching.
-            //
-            // The unsplit path is the single `ChainVisit` it always was,
-            // reached by one branch on a cached field.
-            if (!access.ranges.empty()) {
-                // **The ranges this statement can touch**, which is all of
-                // them unless the caller narrowed the pk window (R4/IS4).
-                // Narrowing is sound because a row's id decides its range
-                // (invariant 3 per range), so a pk outside `span` cannot be
-                // in a range outside it either - and it is what lets a
-                // `WHERE pk = k` write walk the one chain k can be in rather
-                // than every range's.
-                auto touched = catalog::ResolveRanges(access.ranges, span);
-                if (!touched.ok()) return touched.status();
-                // **Every range's chain is walked here** (AT-S5). The refusal
-                // that stood here - a range another core owned, "which this
-                // core cannot read locally" - was true of a per-core pool and
-                // false since one frame table serves every core (AM-S2 step
-                // 3); it kept a walk from skipping a foreign range silently,
-                // and walking every range keeps that property better than
-                // refusing did. Nothing chooses another core for a read
-                // since AT-S9 (D18).
-                std::vector<PageId> heads;
-                heads.reserve(touched.value().size());
-                for (const catalog::RangeTarget& range : touched.value()) {
-                    heads.push_back(range.entry_page);
-                }
-                return WalkHeapChains(heads, page_access, fn, cursor);
-            }
-            return WalkHeapChains({&access.desc_page_id, 1}, page_access, fn, cursor);
+            return WalkHeapChain(access.desc_page_id, page_access, fn, cursor);
         case catalog::ClusteredType::kBtree:
-            // No range arm: D1 declines every btree relation, so one never
-            // has a directory. Left as an absence rather than a refusal,
-            // because the gate is what makes it unreachable.
             return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor);
     }
     return Status::Corruption("relation oid " + std::to_string(access.oid) +
@@ -6558,15 +6401,14 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
 
-    // **Every read runs where the session is, walking every range** (AT-S9,
+    // **Every read runs where the session is, walking the whole relation** (AT-S9,
     // AT-0 item 4 answered "struck"). Two routes stood here and both chose
     // a core by ownership: the single-step fan-in sent a split relation's
     // ranges to the cores that owned them, and the two-step pipeline sent a
     // join to its relations' owners. Ownership is gone with `owner_core`
     // (D17), and neither route had a reason left that was not ownership:
     // one frame table serves every core (AM-S2 step 3), so every page is
-    // this core's to fault, and a walk here reaches the whole relation
-    // (`TableAccess::WalkHeads`).
+    // this core's to fault, and a walk here reaches the whole relation.
     //
     // **The two-step route was also wrong**, which is why it goes whole
     // rather than behind a guard. Its stages read under their own
@@ -7686,7 +7528,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             return storage::VisitControl::kContinue;
         },
         // R4/IS4: the pk window this statement can touch.
-        WriteWalkSpan(ta, stmt.where),
         &walk_cursor);
     if (!scan.ok()) {
         // Partial **within the statement**, which is section 6's stated
@@ -8327,7 +8168,7 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     // snapshot. A range over the whole space says the same thing about
     // keys and meets other writers exactly where every other declared
     // window does.
-    if (where.empty()) return txn::LockKey::Range(access.oid, 0, catalog::kIdSpaceEnd);
+    if (where.empty()) return txn::LockKey::Range(access.oid, 0, kIdSpaceEnd);
 
     // Otherwise, the pk window the conjuncts name - if they name one.
     //
@@ -8337,7 +8178,7 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     // a borrow over a superset covers every row written. That is what makes
     // it sound to ignore `WHERE name = 'x'` sitting beside `WHERE id < 50`.
     std::uint64_t lo = 0;
-    std::uint64_t hi = catalog::kIdSpaceEnd;
+    std::uint64_t hi = kIdSpaceEnd;
     bool bounded = false;
 
     for (const parser::Condition& cond : where) {
@@ -8353,7 +8194,7 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
                          catalog::NameView(access.schema.columns.front().name))) {
                 continue;
             }
-            // Inclusive at both ends (`ast.hpp`), and `PkSpan` is half-open.
+            // Inclusive at both ends (`ast.hpp`), and a range lock is half-open.
             lo = std::max(lo, static_cast<std::uint64_t>(cond.val.int_val));
             hi = std::min(hi, static_cast<std::uint64_t>(cond.val_high.int_val) + 1);
             bounded = true;
@@ -9079,7 +8920,6 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             return storage::VisitControl::kContinue;
         },
         // R4/IS4: the pk window this statement can touch.
-        WriteWalkSpan(ta, stmt.where),
         &walk_cursor);
     if (!scan.ok()) return {ErrorReply(scan), false, 0, scan};
 

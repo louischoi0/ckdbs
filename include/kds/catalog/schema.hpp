@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "kds/base/common.hpp"
-#include "kds/catalog/range_directory.hpp"
 #include "kds/catalog/rows.hpp"
 
 // In-memory schema, built from the sys.columns rows for a given rel_id,
@@ -206,81 +205,6 @@ struct TableAccess {
     // **No `owner_core` since AT-S9** (D17): nothing reads a relation's
     // core any more, because every read and write runs where its session is
     // and every page is every core's to fault.
-
-    // This relation's ranges, as `sys.ranges` describes them (CC9, RD3),
-    // filled from `Catalog::RangesOf` through `RangeTargetsFrom`.
-    // **Empty is the ordinary value** and means one range headed by
-    // `desc_page_id`, which is the branch
-    // RD3's zero-cost invariant is read from - `range_directory.hpp` owns
-    // that argument and the resolver that enforces it.
-    //
-    // Cacheable by this struct's own admission test, on a fact that is not
-    // DDL but publishes like it: `Catalog::InsertRangeRow` ends in
-    // `BumpVersion`, so a new boundary drops every entry here, this one
-    // included. That is the §2b choice and its consequence in one place -
-    // whoever writes a range row may **not** be holding a
-    // `const TableAccess*`, because this vector dies with the entry.
-    std::vector<RangeTarget> ranges;
-
-    // ---- RD6: which chain a row belongs in ------------------------------
-    //
-    // A heap relation is one chain until it is split and **one chain per
-    // range** after (CC8), so "where does this row go" stops being a field
-    // and becomes a question about the id. This is that question, asked
-    // once so no write path re-derives it.
-    //
-    // **The defect it closes is a wrong answer with nothing logged.**
-    // `desc_page_id` is CREATE-fixed, and every insert path used it as the
-    // head. After a cut it heads the *lower* range, `ChainTail` returns
-    // that range's last page, and since a high id clears that page's
-    // `min_key` the row is **accepted there** - `heap_chain.hpp`'s
-    // `OutOfRange` guard only fires on an id *below* the tail's `min_key`,
-    // so nothing refuses. The pk then routes the reader to the upper range
-    // and the row is gone. Closing it at the head is what makes the class
-    // gone rather than the instance.
-    struct HeapChain {
-        PageId head = kInvalidPageId;
-        // The hint to start the tail search from and to write the landing
-        // page back into - `&heap_tail_hint` unsplit, the range's own
-        // otherwise. Never null.
-        //
-        // **It points into the cache entry and dies with it**, so it may
-        // not be held across a park: `CatalogCache::Invalidate()` frees
-        // the storage, and the same rule `range_directory.hpp` states for
-        // a resolved range span applies here for the same reason. Both
-        // callers are synchronous.
-        PageId* tail_hint = nullptr;
-    };
-
-    // **The entry pages a walk of `span` covers, in `lo` order** - every
-    // range the span meets, on whichever core asks (AT-S9). It was
-    // *walk what you own* until ranges stopped having owners: a fan-in's
-    // stages each walked their owner's ranges and the session concatenated
-    // them, and a check that had to see the whole relation asked a second
-    // function. With the fan-in retired, the read path and a constraint
-    // check ask the same question, and one walk here reaches all of it.
-    //
-    // Empty `ranges` answers the one entry it always did, which is the
-    // unsplit path and RD3's zero-cost invariant reaching the walk. It took
-    // a span until AT-S10, for a remote stage's assigned slice (RD7).
-    std::vector<PageId> WalkHeads() const;
-
-    // The chain a row with `id` belongs in. Heap relations only; a btree
-    // relation descends and has no chain.
-    //
-    // **The unsplit answer is one predictable branch on a cached field**
-    // (`ranges.empty()`) and then the two fields it always was, which is
-    // RD3's zero-cost invariant reaching the write path. A split relation
-    // resolves through `ResolveRanges`, whose refusals cross unchanged -
-    // an id outside the 40-bit space is a caller that computed one.
-    StatusOr<HeapChain> HeapChainFor(std::uint64_t id) const;
-
-    // The directory row an `id` falls in, or **null on an unsplit
-    // relation**, where there is no row and the answer is `sys.tables`'s
-    // own fields. The resolution behind `HeapChainFor`, and the refusal of
-    // an id in no range. Not private only because this struct is an
-    // aggregate and an access specifier would stop it being one.
-    StatusOr<const RangeTarget*> RangeFor(std::uint64_t id) const;
 
     // Whether an id has ever landed on this relation out of order
     // (well_known.hpp's KeyOrder, docs/spec/heap-and-tuple.md section 4.1), from
