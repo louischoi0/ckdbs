@@ -156,3 +156,17 @@ AY-S6's review.
 | **Word** | **"Close it in S6 (Recommended)"**: *"BuildSeededSets makes the serve path's two calls: announce each seed's set before the walk (BeginRecording), and ask the gate (AnyUnresolved, CommitCeiling) before committing. That is the known-gaps entry's own prescription. Red first, with a two-core cell that commits a child during the controller's walk; the gap entry closes. The review's open question (CREATE/DROP CABIN take no relation lock) is checked in the same stage."* |
 | **Mark** | AY-S6 closes `known-gaps.md`'s "the cabin optimizer's build does not announce" entry as stated, and checks the `CREATE`/`DROP CABIN` question |
 | **Recorded at** | `workorder-ay-following-letter.md` §6 |
+
+## 13. AY-Q6 marked (C): the superblock moves, and no pre-AY stream is read
+
+Recorded on `worktree-ay-q6-mark` from `24cf703` (`v2.7.0-523-g24cf703`),
+with AY-S6 on `main` at `24cf703`.
+
+| | |
+|---|---|
+| **Question** | AY-Q6: an `ASSERT_SNAPSHOT` written before AY-S8 carries `reserved == 0`, which AY-R7's `chunk_index:u16 \| chunk_count:u16` can tell apart (a new record's count is at least 1). The order offered (A) read it by today's rule - the two under-counts kept for an old log's first mount - or (B) not a base, the assertion unenforcing and its relation's writes refused. CLA put a third, which the order could not have at `58198cb`: since `62a6cb3` `Decode` refuses any superblock version but its own, so a pre-AY log lives only on a v18 volume made between `62a6cb3` and AY-S8's landing; **(C)** moves the superblock 18 -> 19 in AY-S8, and no pre-AY log can be read at all |
+| **Word** | *"AY-Q6 (C)로 마킹해줘"* |
+| **Mark** | **AY-Q6 (C)**: AY-S8 moves `kSuperBlockVersion` 18 -> 19, so a volume whose log may hold a snapshot with no chunk count is refused at mount (D14's rule, as §9 applied it: no compatibility kept). Neither (A) nor (B) is built; recovery has no pre-AY arm, and an `ASSERT_SNAPSHOT` whose `chunk_count` is 0 is `Corruption` |
+| **Reading** | The cost is every v18 volume - development volumes, made since `62a6cb3` - which must be recreated. AY-R7's "room for the count with no format bump" is given up: the word still carries the count, and the version is what keeps an old log from being read. S8's exit clause "a pre-AY stream ... read as marked" becomes a v18 image refused at mount and a zero-count snapshot refused `Corruption` |
+| **Does not settle** | AY-Q7 (a run torn at scan end), and so AY-S8's start; AY-Q11; AY-S11 |
+| **Recorded at** | `workorder-ay-following-letter.md` §2 (AY-R7), §3 (AY-S8), §4 (AY-Q6), `index.md` |
