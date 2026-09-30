@@ -531,6 +531,41 @@ there is no second core's registration to be answered by.
   bind failed loudly. Unobserved, and a flake rather than an engine defect.
   Owner: the test fixture.
 
+- **An eight-core append workload reaches the clustered tree's bounded
+  re-descent refusal, and the cause is not established.** Measured by the
+  scenario rebaseline on `bench-rerun-scenarios` at
+  `v2.7.0-531-g9a0525d` (2026-09-30,
+  `bench/v3.0.0/results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §6,
+  `results-scenario2-freight-v2.7.0-531-g9a0525d.md`). A write descent
+  whose leaf no longer covers its key restarts from the root
+  `storage::kMaxDescentRestarts` (4) times and is then refused
+  `TXN_CONFLICT retryable=1 btree descent for key K from page P gave up
+  after 5 attempts` (`btree.cpp`). Scenario0's `cores = 8`, `strict` cell
+  hit it on one `trades` insert in 3 of 3 runs, the same key 113 from the
+  same root page 138 each time, and in none of its nine other cells.
+  Scenario2's `cores = 8`, `group` cell hit it three times: run 2 on
+  `freights` (key 107, page 145) and `charges` (key 135, page 147), run 3
+  on `charges` at the same key and page. All were on fresh
+  relations under eight appending sessions. The message names two causes
+  and does not choose: split churn outrunning the descent, or a core
+  descending from a memoised root that has since grown a level. The source
+  comment calls the stale root the everyday one. The same key and page in
+  every repeat, and a `catalog changed ... runs again` re-run logged in the
+  same second of one run, fit that reading but do not prove it. A refusal,
+  never a wrong answer, and retryable by design: the client's retry crosses
+  a task boundary, where `Revalidate()` drops the memo. Scenario2's driver
+  retried and lost nothing. Scenario0's driver does not retry, so each such
+  cell tears one transaction and exits 1. The engine could tell the two
+  causes apart and does not: since AT-S16 a root a level grows over carries
+  the grown-over mark, which `SecureParents` reads and `DescendTo` does not,
+  though it reads that root page on every attempt - the comment saying a
+  stale root "does not look different from here" predates the mark (AT-S5c).
+  And §5's "a restart makes progress" holds under split churn only: from a
+  stale root every attempt fails the same way (`insert_placement.hpp` says
+  so). What is open is whether a stale-root miss should re-read the anchor
+  inside the statement rather than cost the client a round trip. No cell
+  isolates which cause fires. Owner: `docs/spec/heap-and-tuple.md` §5.
+
 - **No cell drives a stale writeback against a re-faulted frame.** Verified
   at `aaf0f47`. AT-S8 step 1b draws every frame's dirty generation from the
   store's own counter, so a frame evicted and faulted back never repeats the

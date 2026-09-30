@@ -211,8 +211,8 @@ anything racing at all". The same key and page in 3 of 3 runs, and in run 3
 a `catalog changed between this statement's resolution and its first write`
 re-run logged in the same second (absorbed by the server, never a client
 error), fit that reading; this run does not prove it. The same refusal
-reached scenario2's `s2-c8-g` under `group` (keys 107 and 135, pages 145 and
-147), so "only under `strict`" holds for this scenario alone. The refusal is
+reached scenario2's `s2-c8-g` under `group` three times (`freights` key 107
+page 145 once, `charges` key 135 page 147 twice), so "only under `strict`" holds for this scenario alone. The refusal is
 documented and `retryable=1`; **this driver does not retry**, so that leg is
 lost, the transaction is counted `torn` (1) and the driver exits 1.
 `docs/inflight/known-gaps.md` at `9a0525d` has no entry recording that this

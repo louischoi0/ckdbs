@@ -131,8 +131,9 @@ span. Values in microseconds.
 
 Runs 2 and 3, booking, commit and the two appends only (the rest is in the
 archive). The `errors` of `s2-c8-g`'s appends in runs 2 and 3 are the btree
-re-descent refusal of scenario0's section 6 (`freights` key 107 page 145,
-`charges` key 135 page 147), retried by the driver. Run 2:
+re-descent refusal of scenario0's section 6 (run 2: `freights` key 107 page
+145 and `charges` key 135 page 147; run 3: `charges` at the same key and
+page), retried by the driver. Run 2:
 
 | cell | phase | ops | p0 | p25 | p50 | p95 | p99 | max | errors |
 |---|---|---|---|---|---|---|---|---|---|
