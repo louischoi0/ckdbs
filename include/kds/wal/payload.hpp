@@ -802,29 +802,42 @@ StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in);
 // (`storage/cabin_bound_page.hpp`), so the linkage is rebuilt by scanning the
 // cabin's own pages, and this payload stays O(groups).
 //
-// **Chunked, with no continuation flag.** A payload must fit a segment and a
-// cabin's group count is bounded by the data, so a cabin may need several
-// records. The loader is additive over whatever chunks it meets - each names
-// its own groups and nothing else - so there is nothing for a flag to say. The
-// only ordering that matters is that every chunk precedes the ASSERT_* records
-// folded onto it, which putting them inside the checkpoint achieves.
+// **Chunked, and each chunk says where it stands in its run** (AY-S8,
+// AY-R7). A payload must fit a segment and a cabin's group count is bounded by
+// the data, so a cabin may need several records - a *run*, written back to
+// back by one `LogAssertionSnapshot` call. The run is whole when it has
+// `chunk_count` chunks, indexed from 0. It cannot be told whole by what
+// follows it: under one stream another core's record can land between two
+// chunks, and a crash can end the log inside a run. A run short of its count
+// is never a base (`assertion_recover.cpp`, AY-Q7).
+//
+// `chunk_count` is at least 1 on every record this build writes - an empty
+// cabin still gets one record (`checkpointer.hpp`) - so 0 is the word a
+// pre-AY-S8 writer left there. Such a log sits on a version-18 volume, which
+// the superblock refuses (AY-Q6); the decoder refuses the record too.
 struct AssertSnapshotPayload {
     std::uint64_t assertion_id;
     std::uint32_t group_count;  // groups in *this* chunk
-    std::uint32_t reserved;     // 0
+    std::uint16_t chunk_index;  // this chunk's place in its run, from 0
+    std::uint16_t chunk_count;  // chunks in the run, >= 1
 };
 
 inline constexpr std::size_t kAssertSnapshotAssertionIdOffset = 0;
 inline constexpr std::size_t kAssertSnapshotGroupCountOffset = 8;
-inline constexpr std::size_t kAssertSnapshotReservedOffset = 12;
-// 8+4+4 = 16; the groups follow, each one a header block then its key bytes.
+inline constexpr std::size_t kAssertSnapshotChunkIndexOffset = 12;
+inline constexpr std::size_t kAssertSnapshotChunkCountOffset = 14;
+// 8+4+2+2 = 16; the groups follow, each one a header block then its key bytes.
 inline constexpr std::size_t kAssertSnapshotFixedSize = 16;
+// The most chunks one run can say it has. A cabin needing more is refused
+// `OutOfSpace` at the writer, as a group too large for any record is.
+inline constexpr std::size_t kMaxAssertSnapshotChunks = 0xFFFF;
 
 static_assert(offsetof(AssertSnapshotPayload, assertion_id) ==
               kAssertSnapshotAssertionIdOffset);
 static_assert(offsetof(AssertSnapshotPayload, group_count) ==
               kAssertSnapshotGroupCountOffset);
-static_assert(offsetof(AssertSnapshotPayload, reserved) == kAssertSnapshotReservedOffset);
+static_assert(offsetof(AssertSnapshotPayload, chunk_index) == kAssertSnapshotChunkIndexOffset);
+static_assert(offsetof(AssertSnapshotPayload, chunk_count) == kAssertSnapshotChunkCountOffset);
 static_assert(sizeof(AssertSnapshotPayload) == kAssertSnapshotFixedSize);
 
 // One group inside the payload: `{group_id, key, count, sum}` per AS6a, with
@@ -863,7 +876,9 @@ struct DecodedAssertSnapshot {
 
 // `fields.group_count` is ignored on encode - it is set from `groups`, so the
 // count on disk and the blocks on disk cannot disagree. Fails with
-// InvalidArgument on a key longer than a uint32 length or an output too small.
+// InvalidArgument on a key longer than a uint32 length, an output too small, or
+// a chunk place no run has (`chunk_count` 0, or `chunk_index` past it); the
+// decoder answers Corruption for the same two.
 StatusOr<std::size_t> EncodeAssertSnapshot(std::span<std::byte> out,
                                           const AssertSnapshotPayload& fields,
                                           std::span<const SnapshotGroupEntry> groups);

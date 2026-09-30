@@ -721,5 +721,29 @@ TEST(WalPayloadTest, AssertSnapshotWithAZeroChunkCountIsCorruption) {
     EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
+TEST(WalPayloadTest, AssertSnapshotCarriesItsPlaceInTheRun) {
+    std::array<std::byte, kAssertSnapshotFixedSize> buf{};
+    AssertSnapshotPayload fields{};
+    fields.assertion_id = 77;
+    fields.chunk_index = 2;
+    fields.chunk_count = 3;
+    auto used = EncodeAssertSnapshot(buf, fields, {});
+    ASSERT_TRUE(used.ok()) << used.status().message();
+
+    auto decoded = DecodeAssertSnapshot(std::span(buf).first(used.value()));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().fields.assertion_id, 77u);
+    EXPECT_EQ(decoded.value().fields.chunk_index, 2u);
+    EXPECT_EQ(decoded.value().fields.chunk_count, 3u);
+
+    // An index past the count is no place in any run, on either side.
+    fields.chunk_index = 3;
+    EXPECT_EQ(EncodeAssertSnapshot(buf, fields, {}).status().code(),
+              StatusCode::kInvalidArgument);
+    const std::uint16_t past = 3;
+    std::memcpy(buf.data() + kAssertSnapshotChunkIndexOffset, &past, sizeof(past));
+    EXPECT_EQ(DecodeAssertSnapshot(buf).status().code(), StatusCode::kCorruption);
+}
+
 }  // namespace
 }  // namespace kds::wal

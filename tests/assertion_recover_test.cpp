@@ -499,6 +499,26 @@ TEST_F(AssertionRecoverTest, AForeignRecordBetweenChunksLeavesTheBaseWhole) {
     EXPECT_EQ(rebuilt.group_count(), live.group_count());
 }
 
+TEST_F(AssertionRecoverTest, TheWriterNumbersEveryChunkOfItsRun) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(live);
+    const auto chunks = SnapshotChunks(live);
+    ASSERT_GT(chunks.size(), 1u);
+    for (std::size_t i = 0; i < chunks.size(); ++i) {
+        auto decoded = wal::DecodeAssertSnapshot(chunks[i]);
+        ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+        EXPECT_EQ(decoded.value().fields.chunk_index, i);
+        EXPECT_EQ(decoded.value().fields.chunk_count, chunks.size());
+    }
+
+    BoundCabin empty(BoundAggregate::kSum, /*bound=*/1'000'000);
+    const auto one = SnapshotChunks(empty);
+    ASSERT_EQ(one.size(), 1u) << "an empty cabin still gets its one record";
+    auto decoded = wal::DecodeAssertSnapshot(one[0]);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().fields.chunk_count, 1u);
+}
+
 // AY-Q7 (B): a run the scan ends inside - a crash after some of its chunks - is
 // not a base. Adopting it restores only the groups its chunks carried, and an
 // admission check on that directory admits what the assertion forbids.

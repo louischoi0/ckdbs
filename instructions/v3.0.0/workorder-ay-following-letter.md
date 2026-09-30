@@ -233,7 +233,7 @@ Each stage waits for the operator's word, as AT's did.
 | AY-Q8 | **A parent `DELETE` meeting a child row whose writer holds no `S(P)`** - a child `DELETE`, or an `UPDATE` moving the fk column - is refused, not waited | user-visible | carry the child's transaction id out of the check and park mid-walk, inside AY-S5, its cell in AY-S4. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §2) |
 | AY-Q9 | **The seven uninventoried cells** ran with no lock table, an arm no production assembly builds | scope | port only the premises that still hold onto AY-S1's table fixture; two have table-backed successors already. **Marked as proposed 2026-09-29** (`raft-marks-2026-09-29.md` §17); built with AY-S3, §6 |
 | AY-Q10 | **E10** - put back by the 2026-09-29 marks (§11) | spec | retire it: nothing splits since AT-S9 and a pre-AT split relation's schema cannot change - **Struck 2026-09-30**: the split relation is retired and `sys.ranges` removed (`raft-marks-2026-09-30.md` §9), so there is no gate left to lift; §6 carries the stage that did it |
-| AY-Q11 | **AR1's AQ/AR** - AT-0 item 6 lists them; AR1 §14 names them letters behind AP | scope | their own letters, after AP's order is settled |
+| AY-Q11 | **AR1's AQ/AR** - AT-0 item 6 lists them; AR1 §14 names them letters behind AP | scope | their own letters, after AP's order is settled. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §15): carried by AY's close, not built |
 | AY-Q12 | **A zero-row `UPDATE`** takes the `S` at the hoist | cost | accept. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §7) |
 
 ## 5. Sequencing

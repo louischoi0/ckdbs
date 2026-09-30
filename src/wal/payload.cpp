@@ -823,6 +823,12 @@ StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in) {
 StatusOr<std::size_t> EncodeAssertSnapshot(std::span<std::byte> out,
                                           const AssertSnapshotPayload& fields,
                                           std::span<const SnapshotGroupEntry> groups) {
+    if (fields.chunk_count == 0 || fields.chunk_index >= fields.chunk_count) {
+        return Status::InvalidArgument("wal payload: assert snapshot chunk " +
+                                       std::to_string(fields.chunk_index) + " of " +
+                                       std::to_string(fields.chunk_count) +
+                                       " is no place in a run");
+    }
     std::size_t total = kAssertSnapshotFixedSize;
     for (const SnapshotGroupEntry& group : groups) {
         if (group.key.size() > 0xFFFFFFFFull) {
@@ -840,7 +846,8 @@ StatusOr<std::size_t> EncodeAssertSnapshot(std::span<std::byte> out,
     // blocks on disk cannot disagree.
     Store<std::uint32_t>(out, kAssertSnapshotGroupCountOffset,
                          static_cast<std::uint32_t>(groups.size()));
-    Store<std::uint32_t>(out, kAssertSnapshotReservedOffset, 0);
+    Store<std::uint16_t>(out, kAssertSnapshotChunkIndexOffset, fields.chunk_index);
+    Store<std::uint16_t>(out, kAssertSnapshotChunkCountOffset, fields.chunk_count);
 
     std::size_t at = kAssertSnapshotFixedSize;
     for (const SnapshotGroupEntry& group : groups) {
@@ -868,7 +875,17 @@ StatusOr<DecodedAssertSnapshot> DecodeAssertSnapshot(std::span<const std::byte> 
     DecodedAssertSnapshot decoded{};
     decoded.fields.assertion_id = Load<std::uint64_t>(in, kAssertSnapshotAssertionIdOffset);
     decoded.fields.group_count = Load<std::uint32_t>(in, kAssertSnapshotGroupCountOffset);
-    decoded.fields.reserved = Load<std::uint32_t>(in, kAssertSnapshotReservedOffset);
+    decoded.fields.chunk_index = Load<std::uint16_t>(in, kAssertSnapshotChunkIndexOffset);
+    decoded.fields.chunk_count = Load<std::uint16_t>(in, kAssertSnapshotChunkCountOffset);
+    // A count of 0 is a pre-AY-S8 writer's word (payload.hpp) or wrong bytes;
+    // an index past the count is wrong bytes. Neither is read as a chunk.
+    if (decoded.fields.chunk_count == 0 ||
+        decoded.fields.chunk_index >= decoded.fields.chunk_count) {
+        return Status::Corruption("wal payload: ASSERT_SNAPSHOT names chunk " +
+                                  std::to_string(decoded.fields.chunk_index) + " of " +
+                                  std::to_string(decoded.fields.chunk_count) +
+                                  ", which no run has");
+    }
 
     // Sized from the payload before anything is reserved, the rule
     // `DecodeCheckpointBegin` above follows and for the same reason: the count

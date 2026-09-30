@@ -231,7 +231,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // missing with nothing logged - so the version is what refuses it, on
 // D14's rule: no compatibility was asked for, and none is kept. Page 15 and
 // oid 133 are left unused rather than reissued.
-inline constexpr std::uint32_t kSuperBlockVersion = 18;
+// 18 -> 19 (2026-09-30, AY-S8): **an `ASSERT_SNAPSHOT` carries its run's
+// chunk count** (`wal/payload.hpp`), and recovery takes a run as a base only
+// once it has that many chunks. A version-18 volume's log holds snapshots
+// with no count, which this build does not read; the version refuses the
+// volume rather than giving it a reader (AY-Q6 (C), `raft-marks-2026-09-30.md`
+// §13). The WAL segment's own format version does not move: a log is read
+// only with its own volume, so the volume's word is the one that decides, and
+// a count-less record that reaches a reader anyway is Corruption.
+inline constexpr std::uint32_t kSuperBlockVersion = 19;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

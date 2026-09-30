@@ -339,7 +339,9 @@ On a multi-core instance:
 - **An assertion the registry knows of and cannot enforce refuses the
   relation's writes, on every core.** Refusing is recoverable; admitting an
   unchecked write is not. What reaches "cannot enforce" is a revive that
-  failed and a checkpoint whose snapshots do not cover the base.
+  failed and a mount whose scan holds no whole snapshot run for the
+  assertion - none at all, or only runs cut short (§7, AY-S8) - and it
+  lasts until `DROP` and `CREATE ASSERTION`.
 - **The file that made a cabin unenforceable is not one any more** (AW-S1b):
   a cabin page is a *user* page and every core writes those, so a chain
   core 0 built for a relation another core owned is appended to like any
@@ -497,6 +499,32 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > `group_id`, rebuilding the linkage → `ASSERT_*` records are folded from
   > the checkpoint forward. Bounded by the cabin's own pages: not by the
   > relation, and not by the log.
+  >
+  > **A snapshot is a run, and a run is whole by its own count** (AY-S8).
+  > A cabin whose headers outgrow one record's payload is written as
+  > several `ASSERT_SNAPSHOT` records back to back, each carrying
+  > `chunk_index` and `chunk_count` (`wal/payload.hpp`). Recovery holds a
+  > run's groups until all `chunk_count` chunks have arrived in order, and
+  > only then restores them and walks the pages; what follows a chunk says
+  > nothing about whether the run is whole, because under one stream
+  > another core's record can land between two chunks. A run that stops
+  > short - the scan ends inside it (a crash), or a chunk 0 of the same
+  > assertion opens another run first (a failed append) - is **discarded,
+  > never a base**: its missing groups would restore as absent, and an
+  > admission check on that directory admits what the assertion forbids
+  > (AY-Q7). The assertion is then unrecovered (below). A chunk whose run
+  > began before the scan's start is skipped. `chunk_count` is at least 1;
+  > a record with 0 is Corruption - the word a pre-AY-S8 writer left, on a
+  > version-18 volume the superblock no longer mounts (AY-Q6). A cabin
+  > needing more than 65,535 chunks is refused `OutOfSpace` at the writer,
+  > before any chunk is appended, as a group too large for any record is.
+  >
+  > **An unrecovered assertion stays unrecovered until it is dropped and
+  > created again.** Its relation's writes are refused on every core
+  > (§6.1). No checkpoint snapshots it - a checkpoint snapshots the
+  > registry's enforced assertions only - so a later mount finds no base
+  > either; `DROP ASSERTION` clears the refusal and `CREATE ASSERTION`
+  > builds a new directory.
   >
   > **Why not from `ASSERT_BUILD`.** Starting replay at each cabin's build
   > record makes RTO a function of the assertion's lifetime, but the

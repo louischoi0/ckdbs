@@ -146,35 +146,62 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         return nullptr;
     };
 
-    // Assertions whose base is still being read: a cabin's snapshot is
-    // **chunked** (`wal/payload.hpp`), so more `ASSERT_SNAPSHOT` records for the
-    // same assertion may still follow. Bounded by the assertion count, so a
-    // vector and a linear find rather than a second set.
-    std::vector<std::uint64_t> open_base;
+    // Runs still being read: a cabin's snapshot is **chunked** (`wal/payload.hpp`),
+    // and a run is a base only once all `chunk_count` of its chunks have been
+    // seen, in order (AY-S8, AY-R7). Its groups are held here, not restored,
+    // until then - a run that never completes is discarded whole, so a partial
+    // one leaves nothing in the cabin for a whole one after it to collide with
+    // in `RestoreGroup`. Keys are copied: the record's bytes do not outlive the
+    // visit.
+    struct PendingGroup {
+        std::uint32_t group_id = 0;
+        std::string key;
+        std::int64_t count = 0;
+        std::int64_t sum = 0;
+    };
+    struct PendingRun {
+        std::uint16_t chunk_count = 0;
+        std::uint16_t next_index = 0;
+        std::vector<PendingGroup> groups;
+    };
+    std::map<std::uint64_t, PendingRun> pending;
 
-    // The base is complete: rebuild the linkage from the cabin's own pages,
-    // once, and mark the assertion foldable. **Once and not once per chunk** -
-    // the second chunk's walk sees the first chunk's groups already restored and
-    // would attach their entries a second time, which is the duplicate §7's
-    // `VerifyAgainstEntries` exists to catch. And **before the fold**, because a
-    // reservation made before the checkpoint and rolled back after it needs its
-    // (page, index) pair present for `Unapply` to find (AS6a's own note) - which
-    // this walk supplies only while the abort's mark has not reached the device.
-    // Once it has, the skip below drops the pair and `ReplayRollback` is what
-    // puts it back (AS6b, `assertion_replay.cpp`); the ordering here is still
-    // required, because that is the *other* half of the same note.
-    auto close_bases = [&]() -> Status {
-        for (std::uint64_t id : open_base) {
-            const RecoverableAssertion* a = by_id.at(id);
-            auto attached = AttachEntriesFromPages(store, a->root_page_id, *a->cabin);
-            if (!attached.ok()) return attached.status();
-            if (AssertionRecoveryResult* r = result_for(id); r != nullptr) {
-                r->entries_attached += attached.value();
-                r->recovered = true;
-            }
-            context.MarkBased(id);
+    auto discard = [&](std::uint64_t id) {
+        if (pending.erase(id) == 0) return;
+        if (AssertionRecoveryResult* r = result_for(id); r != nullptr) {
+            ++r->partial_runs_discarded;
         }
-        open_base.clear();
+    };
+
+    // The run is whole: restore its groups, rebuild the linkage from the
+    // cabin's own pages, once, and mark the assertion foldable. **Once and not
+    // once per chunk** - a later chunk's walk would see the earlier chunks'
+    // groups already restored and attach their entries a second time, which is
+    // the duplicate §7's `VerifyAgainstEntries` exists to catch. And **before
+    // the fold**, because a reservation made before the checkpoint and rolled
+    // back after it needs its (page, index) pair present for `Unapply` to find
+    // (AS6a's own note) - which this walk supplies only while the abort's mark
+    // has not reached the device. Once it has, the skip below drops the pair and
+    // `ReplayRollback` is what puts it back (AS6b, `assertion_replay.cpp`); the
+    // ordering here is still required, because that is the *other* half of the
+    // same note.
+    auto close_base = [&](std::uint64_t id, const PendingRun& run) -> Status {
+        const RecoverableAssertion* a = by_id.at(id);
+        AssertionRecoveryResult* r = result_for(id);
+        for (const PendingGroup& group : run.groups) {
+            if (Status s = a->cabin->RestoreGroup(group.group_id, group.key, group.count,
+                                                  group.sum);
+                !s.ok()) {
+                return s.WithContext("assertion recovery: restoring assertion " +
+                                     std::to_string(id));
+            }
+            ++r->groups_restored;
+        }
+        auto attached = AttachEntriesFromPages(store, a->root_page_id, *a->cabin);
+        if (!attached.ok()) return attached.status();
+        r->entries_attached += attached.value();
+        r->recovered = true;
+        context.MarkBased(id);
         return Status::OK();
     };
 
@@ -206,33 +233,38 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
                 // logged whether or not a checkpoint follows it.
                 return Status::OK();
             }
-            AssertionRecoveryResult* r = result_for(id);
-            BoundCabin& cabin = *known->second->cabin;
+            const wal::AssertSnapshotPayload& fields = decoded.value().fields;
 
+            // A chunk 0 opens a run, and a run still open for the same
+            // assertion is one that stopped short - `LogAssertionSnapshot`
+            // failing an append mid-run, or a crash before a later writer's run
+            // - so it is discarded. Any other chunk continues the open run or
+            // belongs to one whose start is not in range (the scan can begin at
+            // a page record between two chunks); a run it cannot finish is
+            // discarded and the chunk with it.
+            if (fields.chunk_index == 0) {
+                discard(id);
+                pending[id].chunk_count = fields.chunk_count;
+            } else if (auto open = pending.find(id);
+                       open == pending.end() || open->second.chunk_count != fields.chunk_count ||
+                       open->second.next_index != fields.chunk_index) {
+                discard(id);
+                return Status::OK();
+            }
+
+            PendingRun& run = pending[id];
             for (const wal::SnapshotGroupEntry& group : decoded.value().groups) {
-                const std::string key(reinterpret_cast<const char*>(group.key.data()),
-                                      group.key.size());
-                if (Status s = cabin.RestoreGroup(group.group_id, key, group.count, group.sum);
-                    !s.ok()) {
-                    return s.WithContext("assertion recovery: restoring assertion " +
-                                         std::to_string(id));
-                }
-                ++r->groups_restored;
+                run.groups.push_back(PendingGroup{
+                    group.group_id,
+                    std::string(reinterpret_cast<const char*>(group.key.data()), group.key.size()),
+                    group.count, group.sum});
             }
-
-            // AS6a's step 3 waits for the rest of the chunks - see `close_bases`.
-            if (std::find(open_base.begin(), open_base.end(), id) == open_base.end()) {
-                open_base.push_back(id);
+            if (++run.next_index < run.chunk_count) {
+                return Status::OK();  // AS6a's step 3 waits for the rest of the run
             }
-            return Status::OK();
-        }
-
-        // The first record that is not a snapshot ends the snapshot run, which
-        // is what says the base is whole. `LogAssertionSnapshots` emits a
-        // cabin's chunks consecutively inside the checkpoint (checkpointer.cpp),
-        // so nothing else can land between them.
-        if (!open_base.empty()) {
-            if (Status s = close_bases(); !s.ok()) return s;
+            const PendingRun whole = std::move(run);
+            pending.erase(id);
+            return close_base(id, whole);
         }
 
         if (!IsAssertionRecord(record.type())) {
@@ -289,11 +321,12 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         // error channel (log_scanner.hpp's veto rule).
         return scanned.status().WithContext("assertion recovery");
     }
-    // A stream whose last record is a snapshot leaves the base open - the shape
-    // a crash between the last chunk and CHECKPOINT_END gives.
-    if (Status s = close_bases(); !s.ok()) {
-        return s.WithContext("assertion recovery");
-    }
+    // A run the scan ended inside is not a base (AY-Q7): a crash cut it, and
+    // the groups it did not reach would restore as absent - an under-count an
+    // admission check admits past. Its assertion stays unrecovered and its
+    // relation's writes are refused, which is recoverable; the under-count was
+    // not. A run whose last chunk made it is already closed, whatever followed.
+    while (!pending.empty()) discard(pending.begin()->first);
 
     // The linkage the walk and the fold both attached, reconciled once - see
     // `BoundCabin::DedupeEntryLinkage`. Without it §7's `VerifyAgainstEntries`
@@ -310,10 +343,14 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
     if (log != nullptr) {
         for (const AssertionRecoveryResult& r : report.assertions) {
             if (!r.recovered) {
-                log->Error("recovery",
-                           "assertion " + std::to_string(r.assertion_id) +
-                               " found no group snapshot at or after the last checkpoint, so it "
-                               "cannot enforce until it is rebuilt (docs/spec/assertion.md §7)");
+                const std::string found =
+                    r.partial_runs_discarded == 0
+                        ? " found no group snapshot at or after the last checkpoint"
+                        : " found only group snapshots cut short (" +
+                              std::to_string(r.partial_runs_discarded) + " run(s) discarded)";
+                log->Error("recovery", "assertion " + std::to_string(r.assertion_id) + found +
+                                           ", so it cannot enforce until it is dropped and "
+                                           "created again (docs/spec/assertion.md §7)");
                 continue;
             }
             log->Info("recovery", "assertion " + std::to_string(r.assertion_id) + ": " +

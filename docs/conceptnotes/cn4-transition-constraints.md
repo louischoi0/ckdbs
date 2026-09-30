@@ -78,8 +78,9 @@ way around the same guarantee (§6, T9).
 - **No derived state.** Everything a Transition needs is its catalog row.
   There is no structure to build, reserve into, snapshot or recover —
   the whole of what `docs/spec/assertion.md` §5–§7 carries for an
-  assertion, and where both of its open defects live
-  (`docs/inflight/bugs/a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.md`,
+  assertion, and where both of its open defects lived when this note was
+  written (`a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.md`,
+  fixed at AY-S8 and deleted, and
   `docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`).
   No WAL record kind, no ring kind, no cross-core protocol.
 - **No new concurrency.** What makes the old value the one being replaced

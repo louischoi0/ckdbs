@@ -36,46 +36,66 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
 
 Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin) {
     // The chunk bound: what one record's payload may hold. A cabin's group count
-    // is bounded by the data, so a cabin can need several records - the loader is
-    // additive over them (payload.hpp), which is why no continuation flag exists.
+    // is bounded by the data, so a cabin can need several records - a run, each
+    // chunk naming its place in it (payload.hpp, AY-R7).
     const std::size_t budget = wal.usable_payload_bytes();
-    std::vector<std::byte> scratch;
 
-    std::size_t at = 0;
-    // A cabin with no groups still gets one record - see the header.
-    do {
-        std::vector<SnapshotGroupEntry> chunk;  // views into the owned keys
+    // **The run is cut before anything is written**, because every chunk
+    // carries the count. That also puts both refusals ahead of the first
+    // record, so neither leaves a partial run in the log; an append that fails
+    // mid-run still can, and the reader discards it.
+    struct Chunk {
+        std::size_t first = 0;  // into `cabin.groups`
+        std::size_t end = 0;
         std::size_t bytes = kAssertSnapshotFixedSize;
-        while (at < cabin.groups.size()) {
-            const std::size_t cost = AssertSnapshotGroupBytes(cabin.groups[at].key.size());
-            if (!chunk.empty() && bytes + cost > budget) {
-                break;
-            }
-            if (bytes + cost > budget) {
-                // One group too large for an entire record. Refused rather than
-                // dropped: a base missing a group under-counts, and an admission
-                // check built on it would admit a write that violates the
-                // assertion.
-                return Status::OutOfSpace(
-                    "assertion snapshot: assertion " + std::to_string(cabin.assertion_id) +
-                    " has a group key of " + std::to_string(cabin.groups[at].key.size()) +
-                    " bytes, which no ASSERT_SNAPSHOT record can carry");
-            }
-            bytes += cost;
+    };
+    std::vector<Chunk> chunks(1);  // a cabin with no groups still gets one - see the header
+    for (std::size_t at = 0; at < cabin.groups.size(); ++at) {
+        const std::size_t cost = AssertSnapshotGroupBytes(cabin.groups[at].key.size());
+        if (kAssertSnapshotFixedSize + cost > budget) {
+            // One group too large for an entire record. Refused rather than
+            // dropped: a base missing a group under-counts, and an admission
+            // check built on it would admit a write that violates the
+            // assertion.
+            return Status::OutOfSpace(
+                "assertion snapshot: assertion " + std::to_string(cabin.assertion_id) +
+                " has a group key of " + std::to_string(cabin.groups[at].key.size()) +
+                " bytes, which no ASSERT_SNAPSHOT record can carry");
+        }
+        if (chunks.back().end > chunks.back().first && chunks.back().bytes + cost > budget) {
+            chunks.push_back(Chunk{at, at, kAssertSnapshotFixedSize});
+        }
+        chunks.back().end = at + 1;
+        chunks.back().bytes += cost;
+    }
+    if (chunks.size() > kMaxAssertSnapshotChunks) {
+        // Refused for the same reason: the count could not say the run.
+        return Status::OutOfSpace("assertion snapshot: assertion " +
+                                  std::to_string(cabin.assertion_id) + " needs " +
+                                  std::to_string(chunks.size()) + " ASSERT_SNAPSHOT records, " +
+                                  "more than one run can count");
+    }
+
+    std::vector<std::byte> scratch;
+    for (std::size_t i = 0; i < chunks.size(); ++i) {
+        std::vector<SnapshotGroupEntry> entries;  // views into the owned keys
+        entries.reserve(chunks[i].end - chunks[i].first);
+        for (std::size_t at = chunks[i].first; at < chunks[i].end; ++at) {
             const AssertionSnapshotGroup& group = cabin.groups[at];
             SnapshotGroupEntry entry;
             entry.group_id = group.group_id;
             entry.count = group.count;
             entry.sum = group.sum;
             entry.key = std::as_bytes(std::span<const char>(group.key.data(), group.key.size()));
-            chunk.push_back(entry);
-            ++at;
+            entries.push_back(entry);
         }
 
-        scratch.assign(bytes, std::byte{0});
+        scratch.assign(chunks[i].bytes, std::byte{0});
         AssertSnapshotPayload fields{};
         fields.assertion_id = cabin.assertion_id;
-        auto encoded = EncodeAssertSnapshot(scratch, fields, chunk);
+        fields.chunk_index = static_cast<std::uint16_t>(i);
+        fields.chunk_count = static_cast<std::uint16_t>(chunks.size());
+        auto encoded = EncodeAssertSnapshot(scratch, fields, entries);
         if (!encoded.ok()) {
             return encoded.status();
         }
@@ -84,7 +104,7 @@ Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin
         if (!lsn.ok()) {
             return lsn.status();
         }
-    } while (at < cabin.groups.size());
+    }
     return Status::OK();
 }
 

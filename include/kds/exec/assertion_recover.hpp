@@ -71,6 +71,12 @@ struct AssertionRecoveryResult {
     // steps are correct in isolation, and this is the number that says how much
     // they overlapped.
     std::uint64_t duplicate_links_dropped = 0;
+
+    // Snapshot runs for this assertion opened in range that stopped short of
+    // their chunk count - cut by a crash or a failed append - and were
+    // discarded rather than taken as a base (AY-S8, AY-Q7). A run whose chunk 0
+    // precedes the scan's start is skipped chunk by chunk and not counted.
+    std::uint64_t partial_runs_discarded = 0;
 };
 
 struct AssertionRecoveryReport {

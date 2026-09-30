@@ -184,3 +184,16 @@ with AY-Q6's mark on `main` at `e7eba85`.
 | **Reading** | The refusal lasts until `DROP ASSERTION` and `CREATE ASSERTION`: no checkpoint snapshots an unenforceable assertion (`SnapshotLocked` walks `live_` only, `assertion_check.cpp:118-128`), so no later mount finds a base, and `Evict` clears the record. The order's AY-Q6 row said "until its next checkpoint" of the same state; that was wrong, and is corrected there. **The Question's "only where one of those has already failed" misses one path in normal operation** (the mark's review, source read at `e7eba85`, not run): a peer's `CREATE ASSERTION` logs its publish run, and is adopted into `live_` only after `CreateAssertion` returns (`command_dispatcher.cpp:2834`); a core-0 checkpoint whose `CHECKPOINT_BEGIN` and snapshot fall between the two is in range and whole but does not carry the assertion, and once every page dirtied before the publish run is clean at that `BEGIN` - the redo start ignores active transactions (`RedoStartFrom`, `analysis.cpp:23-31`) - the anchor passes the publish run. The assertion's first run in range is then the next core-0 checkpoint's, torn if a crash cuts it; (B) fails closed there too. With no torn run the same path leaves the assertion no base at all - unenforcing after an ordinary restart, a defect of its own and not AY-Q7's (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`) |
 | **Does not settle** | AY-Q11; AY-S8's start, which waits for the word; the no-base path the Reading names; AY-S11 |
 | **Recorded at** | `workorder-ay-following-letter.md` §2 (AY-R7), §3 (AY-S8), §4 (AY-Q6, AY-Q7), `index.md` |
+
+## 15. AY-S8 started, and AY run to its close on CLA's proposals
+
+Recorded on `worktree-ay-s8-snapshot-chunk-count` from `6e84c23`
+(`v2.7.0-527-g6e84c23`), with AY-Q7's mark on `main` at `6e84c23`.
+
+| | |
+|---|---|
+| **Word** | *"go ahead for AY-S8"*; then, while AY-S8 was being built, *"go ahead until closing AY milestone, follow CLA proposals"* |
+| **Mark** | **AY-S8 starts**: the chunk count (AY-R7), with AY-Q6 (C) and AY-Q7 (B). **AY runs to its close**: AY-S8, then AY-S11, each on CLA's proposal where the order leaves a choice. **AY-Q11 as proposed**: AR1's AQ and AR are their own letters, after AP's order is settled, and AY carries them rather than building them |
+| **Reading** | "Until closing" read as the Session Workflow's chain through AY-S11 - each stage reviewed, the suite run, and landed - with the milestone's overhead measurement (§8) at AY-S11. Anything the close finds that the order does not already decide is carried, not built |
+| **Does not settle** | The peer `CREATE ASSERTION` no-base path (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`) - no letter carries it; the next letter; the v3.0.0 tag, which waits on M4 |
+| **Recorded at** | `workorder-ay-following-letter.md` §4 (AY-Q11) and §6, `index.md` |

@@ -44,11 +44,9 @@ The relation's writes are then refused `CannotEnforce` on every core until
 `DROP ASSERTION` and `CREATE ASSERTION`. No checkpoint snapshots an
 assertion outside `live_`, so a restart does not clear it.
 
-- **Before AY-S8:** if the crash in step 4 cuts core 0's next run, today's
-  `close_bases` adopts the partial run. That under-counts, which is a
-  **quiet wrong answer**.
-- **After AY-S8:** AY-Q7 (B) refuses a partial run, so both shapes end in
-  the refusal above.
+If the crash in step 4 cuts core 0's next run, the mount discards that run
+too (AY-S8, AY-Q7 (B)), so it ends in the same refusal. Before AY-S8 it was
+adopted and under-counted: a **quiet wrong answer**.
 
 ## Reproduction
 
