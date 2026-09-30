@@ -192,26 +192,6 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
                                    "-byte limit on a single stored value");
     }
 
-    // §6a's converse at the **door**, not only at `PrepareAssertionDef`
-    // (workplan-range-directory.md §9b), and the difference is a race
-    // rather than a duplicate: between the prepare and this row landing -
-    // the build's whole length - the owner's drain tick could open a range
-    // for that relation, until AT-S9 retired range opening. (The peer path,
-    // which parked between the two until AT-S5d, made the window longer.) §9b's
-    // rule is that the catalog serializes the pair and whichever write
-    // lands second is refused;
-    // `Catalog::CreateIndex` re-checks `CheckIndexDef` for exactly this
-    // reason, and without the same re-check here the assertion window the
-    // enumeration named stays open in the one direction RD5 cannot see.
-    {
-        auto target = catalog.InitTableAccess(target_oid);
-        if (!target.ok()) return target.status();
-        if (Status s = catalog::RefuseAuxiliaryOnSplitRelation(*target.value(), "an assertion");
-            !s.ok()) {
-            return s;
-        }
-    }
-
     auto access = OpenAssertions(catalog);
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
@@ -487,17 +467,6 @@ StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
     if (!oid.ok()) return oid.status();
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();
-    // §6a's converse (`catalog::RefuseAuxiliaryOnSplitRelation`,
-    // workplan-range-directory.md §9b). Before the column resolution
-    // rather than after, on `PrepareAssertionDef`'s own stated rule that
-    // the cheap refusals come before the scan: an assertion's Bound Cabin
-    // is one chain held by one core, which is the fifth gate exactly, and
-    // a boundary is the thing it cannot cross.
-    if (Status s = catalog::RefuseAuxiliaryOnSplitRelation(*access.value(), "an assertion");
-        !s.ok()) {
-        return s;
-    }
-
     auto columns = ResolveAssertionColumns(*access.value(), stmt);
     if (!columns.ok()) return columns.status();
 

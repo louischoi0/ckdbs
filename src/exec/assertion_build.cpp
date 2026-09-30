@@ -182,124 +182,132 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
     if (Status s = build.chain.EnsureRoot(store, wal); !s.ok()) return s;
 
     // A btree leaf is a heap page, so the walk below is one loop for both
-    // clustered forms - only the first leaf differs.
-    PageId leaf = access.desc_page_id;
+    // clustered forms - only the first leaf differs. A heap relation split
+    // before AT-S9 is one chain per range, and every one of them is walked
+    // (`WalkHeads`, CC8): a build that stopped at `desc_page_id` would
+    // under-count a group whose rows sit in a later range and admit what
+    // the assertion forbids (AY-S9). A btree relation never splits (CC8).
+    std::vector<PageId> heads;
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
         if (!first.ok()) return first.status();
-        leaf = first.value();
+        heads.push_back(first.value());
+    } else {
+        heads = access.WalkHeads();
     }
 
     std::vector<parser::AstValue> group_values(group_cols.size());
-    const PageId walk_origin = leaf;
-    for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation leaf chain");
-            !s.ok()) {
-            return s;
-        }
-
-        // ---- Phase 1: copy out, with no page fetch under the span --------
-        std::vector<StagedRow> staged;
-        PageId next = kInvalidPageId;
-        {
-            auto bytes = store.GetForRead(leaf);
-            if (!bytes.ok()) return bytes.status();
-            heap::PageView page(bytes.value().bytes());
-            const std::uint16_t n = page.slot_count();
-            staged.reserve(n);
-            for (std::uint16_t i = 0; i < n; ++i) {
-                auto tuple = page.ReadTuple(i);
-                if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired slot
-                if (!tuple.ok()) return tuple.status();
-
-                switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
-                                             tuple.value().deleted)) {
-                    case txn::CheckVerdict::kBusy:
-                        // See the header: counting it and losing the abort
-                        // overstates the group forever, skipping it and
-                        // seeing the commit understates it. Refuse,
-                        // retryably - F3's shape.
-                        return Status::TxnConflict(
-                            "relation '" + stmt.table_name +
-                            "' has a row written by an in-flight transaction; CREATE "
-                            "ASSERTION reads settled state - retry when it has ended");
-                    case txn::CheckVerdict::kAbsent:
-                        continue;
-                    case txn::CheckVerdict::kLive:
-                        break;
-                }
-
-                auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
-                if (!pk.ok()) return pk.status();
-
-                StagedRow row;
-                row.pk = pk.value();
-                row.slot = i;
-                row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-                staged.push_back(std::move(row));
-            }
-            next = page.next_page_id();
-        }
-
-        // ---- Phase 2: decode, append, accumulate, check ------------------
-        for (const StagedRow& row : staged) {
-            std::vector<PendingSpill> spills;
-            auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
-            if (!decoded.ok()) return decoded.status();
-            // Safe here and only here: the leaf's span was dropped with
-            // phase 1, so a spilled group value may fetch its var-heap page.
-            if (Status s = ResolveSpills(store, spills, decoded.value()); !s.ok()) return s;
-
-            for (std::size_t i = 0; i < group_cols.size(); ++i) {
-                group_values[i] = decoded.value()[group_cols[i]];
-            }
-            const std::string key = EncodeGroupKey(group_values);
-            // Through the one contribution rule (bound_cabin.hpp), not a
-            // second reading of `int_val`: a backfill that folded a NULL as
-            // 0-by-accident would build a total the write path's admission
-            // does not reproduce the day the decoder leaves a stale one.
-            const std::int64_t delta = aggregate == BoundAggregate::kSum
-                                           ? SumContribution(decoded.value()[sum_col])
-                                           : std::int64_t{1};
-
-            BoundCabinEntry entry;
-            entry.pk = row.pk;
-            entry.flags = kEntryHintValid;  // committed: no kEntryReserved
-            entry.page_id = leaf;
-            entry.page_epoch = 0;  // no page epoch exists; written 0 like every hint
-            entry.slot = row.slot;
-            entry.value = delta;
-            // AS6a: stamped before the append, because the page write precedes
-            // the Apply that would otherwise create the group. An entry written
-            // with `group_id = 0` is an entry recovery cannot attribute.
-            entry.group_id = build.cabin.EnsureGroupId(key);
-
-            auto at = build.chain.Append(store, wal, entry, key,
-                                         wal::RecordType::kAssertBuild, wal::kNoTxnId);
-            if (!at.ok()) return at.status();
-            if (Status s = build.cabin.Apply(key, delta, at.value().first, at.value().second);
+    for (const PageId walk_origin : heads) {
+        PageId leaf = walk_origin;
+        for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
+            if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation leaf chain");
                 !s.ok()) {
-                return s;  // checked-arithmetic overflow: the AG3 statement error
+                return s;
             }
-            ++build.rows_incorporated;
 
-            // The admission check the data itself has to pass, run as each
-            // row lands so "the first violating group" is deterministic in
-            // scan order rather than in hash-map order.
-            const GroupHeader* header = build.cabin.Find(key);
-            if (header != nullptr && header->aggregate(aggregate) > build.cabin.bound()) {
-                std::vector<GroupKeyPart> parts(group_cols.size());
-                for (std::size_t i = 0; i < group_cols.size(); ++i) {
-                    parts[i].column = stmt.group_columns[i].name;
-                    parts[i].type_val = access.schema.columns[group_cols[i]].type_val;
-                    parts[i].value = group_values[i];
+            // ---- Phase 1: copy out, with no page fetch under the span --------
+            std::vector<StagedRow> staged;
+            PageId next = kInvalidPageId;
+            {
+                auto bytes = store.GetForRead(leaf);
+                if (!bytes.ok()) return bytes.status();
+                heap::PageView page(bytes.value().bytes());
+                const std::uint16_t n = page.slot_count();
+                staged.reserve(n);
+                for (std::uint16_t i = 0; i < n; ++i) {
+                    auto tuple = page.ReadTuple(i);
+                    if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired slot
+                    if (!tuple.ok()) return tuple.status();
+
+                    switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
+                                                 tuple.value().deleted)) {
+                        case txn::CheckVerdict::kBusy:
+                            // See the header: counting it and losing the abort
+                            // overstates the group forever, skipping it and
+                            // seeing the commit understates it. Refuse,
+                            // retryably - F3's shape.
+                            return Status::TxnConflict(
+                                "relation '" + stmt.table_name +
+                                "' has a row written by an in-flight transaction; CREATE "
+                                "ASSERTION reads settled state - retry when it has ended");
+                        case txn::CheckVerdict::kAbsent:
+                            continue;
+                        case txn::CheckVerdict::kLive:
+                            break;
+                    }
+
+                    auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
+                    if (!pk.ok()) return pk.status();
+
+                    StagedRow row;
+                    row.pk = pk.value();
+                    row.slot = i;
+                    row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+                    staged.push_back(std::move(row));
                 }
-                return Status::AssertionViolation(AssertionViolationMessage(
-                    stmt.name, parts, aggregate, stmt.sum_column.name, build.cabin.bound()));
+                next = page.next_page_id();
             }
-        }
 
-        leaf = next;
+            // ---- Phase 2: decode, append, accumulate, check ------------------
+            for (const StagedRow& row : staged) {
+                std::vector<PendingSpill> spills;
+                auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
+                if (!decoded.ok()) return decoded.status();
+                // Safe here and only here: the leaf's span was dropped with
+                // phase 1, so a spilled group value may fetch its var-heap page.
+                if (Status s = ResolveSpills(store, spills, decoded.value()); !s.ok()) return s;
+
+                for (std::size_t i = 0; i < group_cols.size(); ++i) {
+                    group_values[i] = decoded.value()[group_cols[i]];
+                }
+                const std::string key = EncodeGroupKey(group_values);
+                // Through the one contribution rule (bound_cabin.hpp), not a
+                // second reading of `int_val`: a backfill that folded a NULL as
+                // 0-by-accident would build a total the write path's admission
+                // does not reproduce the day the decoder leaves a stale one.
+                const std::int64_t delta = aggregate == BoundAggregate::kSum
+                                               ? SumContribution(decoded.value()[sum_col])
+                                               : std::int64_t{1};
+
+                BoundCabinEntry entry;
+                entry.pk = row.pk;
+                entry.flags = kEntryHintValid;  // committed: no kEntryReserved
+                entry.page_id = leaf;
+                entry.page_epoch = 0;  // no page epoch exists; written 0 like every hint
+                entry.slot = row.slot;
+                entry.value = delta;
+                // AS6a: stamped before the append, because the page write precedes
+                // the Apply that would otherwise create the group. An entry written
+                // with `group_id = 0` is an entry recovery cannot attribute.
+                entry.group_id = build.cabin.EnsureGroupId(key);
+
+                auto at = build.chain.Append(store, wal, entry, key,
+                                             wal::RecordType::kAssertBuild, wal::kNoTxnId);
+                if (!at.ok()) return at.status();
+                if (Status s = build.cabin.Apply(key, delta, at.value().first, at.value().second);
+                    !s.ok()) {
+                    return s;  // checked-arithmetic overflow: the AG3 statement error
+                }
+                ++build.rows_incorporated;
+
+                // The admission check the data itself has to pass, run as each
+                // row lands so "the first violating group" is deterministic in
+                // scan order rather than in hash-map order.
+                const GroupHeader* header = build.cabin.Find(key);
+                if (header != nullptr && header->aggregate(aggregate) > build.cabin.bound()) {
+                    std::vector<GroupKeyPart> parts(group_cols.size());
+                    for (std::size_t i = 0; i < group_cols.size(); ++i) {
+                        parts[i].column = stmt.group_columns[i].name;
+                        parts[i].type_val = access.schema.columns[group_cols[i]].type_val;
+                        parts[i].value = group_values[i];
+                    }
+                    return Status::AssertionViolation(AssertionViolationMessage(
+                        stmt.name, parts, aggregate, stmt.sum_column.name, build.cabin.bound()));
+                }
+            }
+
+            leaf = next;
+        }
     }
 
     build.cabin_root = build.chain.root();

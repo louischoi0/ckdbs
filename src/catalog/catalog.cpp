@@ -1159,8 +1159,8 @@ Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_vie
     // the directory's rather than `sys.tables`'. This
     // gate asks whether the relation is *partitioned*, and one range is
     // not. The shape is reachable: a crash between `OpenRangeRows`' two
-    // writes leaves exactly it, and refusing every index, Cabin, assertion
-    // and FK on such a relation forever - with a message reading "split
+    // writes leaves exactly it, and refusing every index and FK on such a
+    // relation forever - with a message reading "split
     // across 1 ranges" - would be a self-refuting refusal.
     if (access.ranges.size() <= 1) return Status::OK();
     return Status::NotImplemented(
