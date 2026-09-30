@@ -1034,6 +1034,9 @@ polls; its Foreign keys row already carried AY-S5 and AY-S6. **The suite
 was not executed on the close**, which touches no source: the last run is
 3055/3055 at `0552d55` (Debug, one pre-existing disabled cell), and the
 close was pushed with the pre-push hook skipped on the operator's word.
+**Run after the push**: 3055/3055 in Debug (`scripts/test.sh`, `ctest -LE
+heap-suspended`, one pre-existing disabled cell) on `worktree-ay-s11-close`,
+whose source is `80af40a`'s - the close changes documents only.
 
 **The close's review** (`critics-developer`, on `9a0525d`, applied after it
 was pushed) found the close's own commit wrong in one claim: cell 3's cost
