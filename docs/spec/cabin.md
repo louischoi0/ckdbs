@@ -260,10 +260,9 @@ store for the instance, into which every core appends, so the per-core
 scope rule that stood here - *"(observed value × the ranges its core
 owns)"*, resting on a write hook that appended only on the writing core -
 is struck with the per-core store that forced it. The second is AT-S10's:
-a split relation's walk covers every range (`TableAccess::WalkHeads`), and
-no step is assigned a slice of one, so a step banks from and serves to a
-walk of the whole relation and there is nothing for a set to answer short
-or twice. §1's promise holds unqualified.
+no step is assigned a slice of a relation, so a step banks from and serves
+to a walk of the whole relation and there is nothing for a set to answer
+short or twice. §1's promise holds unqualified.
 
 **The span rule that followed is retired at AT-S10.** It read: a step may
 bank only from a walk that would have reached every qualifying row, and
@@ -276,8 +275,8 @@ went together. A walk that *stops* early is a different matter and stays
 C1's: its set is partial and never commits (§4a).
 
 **The transition rule was the discard**, `crosscore.md` CC10's pre-grant
-drop of sets banked while a relation was whole. No relation is split since
-AT-S9, so there is no transition to guard.
+drop of sets banked while a relation was whole. No relation is split (CC8),
+so there is no transition to guard.
 
 ### 4c. What the serve path reports
 

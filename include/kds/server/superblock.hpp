@@ -223,7 +223,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // could make them one stream's - and nothing to migrate *for*: the version
 // of record is `v2.7.0` and v3 is unreleased, so what this strands is
 // development volumes.
-inline constexpr std::uint32_t kSuperBlockVersion = 17;
+// 17 -> 18 (2026-09-30): **bootstrap lost `sys.ranges`**, and the split
+// relation with it (`raft-marks-2026-09-30.md` §9). A relation is one
+// structure headed by `desc_page_id`, always, and this build reads nothing
+// else. A version-17 file that holds a relation split before AT-S9 would
+// mount and be read from its first chain alone - every later range's rows
+// missing with nothing logged - so the version is what refuses it, on
+// D14's rule: no compatibility was asked for, and none is kept. Page 15 and
+// oid 133 are left unused rather than reissued.
+inline constexpr std::uint32_t kSuperBlockVersion = 18;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

@@ -76,12 +76,8 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     const catalog::TableAccess& access, std::uint16_t col_pos, std::uint64_t cabin_id,
     const std::function<bool()>& enabled, bool* aborted) {
     *aborted = false;
-    // **§4b's span rule holds here by construction** since AT-S9: the walk
-    // below covers every range of the relation (`WalkHeads`), so the set
-    // this banks speaks for exactly what it read. It declined a relation
-    // this core did not wholly hold until ranges stopped having owners - a
-    // set banked from fewer ranges than it will speak for is a subset
-    // served as authoritative, recorded once and wrong forever after.
+    // The walk below covers the whole relation, so the set this banks
+    // speaks for exactly what it read.
     //
     // **This path does not announce** (AT-S7), so a write landing during
     // its walk is lost where the serve site's build would have kept it.
@@ -110,24 +106,13 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
 
     // A btree leaf is a heap page, so one loop serves both clustered forms
     // - only the first leaf differs (the assertion builder's shape).
-    //
-    // **RD6: one chain per range, so this is one walk per chain** -
-    // `WalkHeads`, the same rule `VisitRelation` takes, rather than a
-    // second spelling of it. A build that walked
-    // `desc_page_id` alone would cover the `lo = 0` range and stop, then
-    // commit the result as an **observed** set: a subset served as
-    // authoritative, which is the C1 break `cabin_store.hpp` forbids and
-    // the one this build could make permanent. It became reachable when
-    // SB3 admitted `CREATE CABIN` on a split relation, the optimizer's
-    // automatic path included. Unsplit, `WalkHeads` answers the one
-    // head this always walked. A btree relation never splits (D1), so its
-    // arm needs no range handling and says so by taking `desc_page_id`.
-    std::vector<PageId> heads = access.WalkHeads();
+    PageId leaf = access.desc_page_id;
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);
         if (!first.ok()) return first.status();
-        heads.assign(1, first.value());
+        leaf = first.value();
     }
+    const PageId walk_origin = leaf;
 
     struct StagedRow {
         std::uint64_t pk = 0;
@@ -135,101 +120,97 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
         std::vector<std::byte> payload;
     };
 
-    for (const PageId head : heads) {
-        PageId leaf = head;
-        const PageId walk_origin = leaf;
-        for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-            if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation chain");
-                !s.ok()) {
-                return s;
-            }
-            // PO8, between pages: an OFF mid-build discards cleanly, because
-            // nothing commits until the walk completes.
-            if (!enabled()) {
-                *aborted = true;
-                return std::size_t{0};
-            }
-
-            // Phase 1: copy out under the ring page, no fetch beneath it. The
-            // ring's stricter lifetime is honored the same way: this page is
-            // finished before anything can rotate it away.
-            std::vector<StagedRow> staged;
-            PageId next = kInvalidPageId;
-            std::uint32_t page_epoch = 0;
-            {
-                auto bytes = ring->Fetch(leaf);
-                if (!bytes.ok()) return bytes.status();
-                heap::PageView page(bytes.value());
-                page_epoch = static_cast<std::uint32_t>(page.RelayoutEpoch());
-                const std::uint16_t n = page.slot_count();
-                staged.reserve(n);
-                for (std::uint16_t i = 0; i < n; ++i) {
-                    auto tuple = page.ReadTuple(i);
-                    if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired
-                    if (!tuple.ok()) return tuple.status();
-
-                    switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
-                                                 tuple.value().deleted)) {
-                        case txn::CheckVerdict::kBusy:
-                            // An in-flight row can neither be counted (its
-                            // abort would leave a phantom entry) nor skipped
-                            // (its commit already passed the write hook while
-                            // the value was unobserved). Defer the whole build;
-                            // demand re-nominates (AST06's argument).
-                            *aborted = true;
-                            return std::size_t{0};
-                        case txn::CheckVerdict::kAbsent:
-                            continue;
-                        case txn::CheckVerdict::kLive:
-                            break;
-                    }
-
-                    auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
-                    if (!pk.ok()) return pk.status();
-                    StagedRow row;
-                    row.pk = pk.value();
-                    row.slot = i;
-                    row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-                    staged.push_back(std::move(row));
-                }
-                next = page.next_page_id();
-            }
-
-            // **The span is finished with; the ring's hold is not** (AM-R8).
-            // A `ScanFetcher` drops its pin and its shared page latch at the
-            // *next* `Fetch`, so the fetches below run under `S(leaf)` and
-            // the pair `S(heap leaf) -> S(var-heap page)` is on
-            // `device_page_store.hpp`'s page-against-page list because of
-            // this loop. Two shares never block each other, so nothing waits
-            // here today. What this loop must not do is *park*: a fetcher's
-            // pin and latch outlive the call that returned the span, and
-            // AR2 R2 forbids holding a latch across a suspension. It does
-            // not - there is no `co_await` in this file.
-            //
-            // Phase 2: decode and collect. Spill fetches are legal here - the
-            // page span is finished with - and they go through the ordinary
-            // path, never the ring.
-            for (const StagedRow& row : staged) {
-                std::vector<PendingSpill> spills;
-                auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
-                if (!decoded.ok()) return decoded.status();
-                if (Status s = ResolveSpills(store_, spills, decoded.value()); !s.ok()) return s;
-
-                auto key = stats::MakeCabinKey(cabin_id, decoded.value()[col_pos]);
-                if (!key.has_value()) continue;  // NULL: never observable
-                auto bucket = collected.find(*key);
-                if (bucket == collected.end()) continue;  // not a seeded value
-
-                stats::CabinEntry entry;
-                entry.pk = row.pk;
-                entry.page_id = leaf;
-                entry.page_epoch = page_epoch;
-                entry.slot = row.slot;
-                entry.flags = stats::kCabinHintValid;
-                bucket->second.push_back(entry);
-            }
-            leaf = next;
+    for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
+        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation chain");
+            !s.ok()) {
+            return s;
         }
+        // PO8, between pages: an OFF mid-build discards cleanly, because
+        // nothing commits until the walk completes.
+        if (!enabled()) {
+            *aborted = true;
+            return std::size_t{0};
+        }
+
+        // Phase 1: copy out under the ring page, no fetch beneath it. The
+        // ring's stricter lifetime is honored the same way: this page is
+        // finished before anything can rotate it away.
+        std::vector<StagedRow> staged;
+        PageId next = kInvalidPageId;
+        std::uint32_t page_epoch = 0;
+        {
+            auto bytes = ring->Fetch(leaf);
+            if (!bytes.ok()) return bytes.status();
+            heap::PageView page(bytes.value());
+            page_epoch = static_cast<std::uint32_t>(page.RelayoutEpoch());
+            const std::uint16_t n = page.slot_count();
+            staged.reserve(n);
+            for (std::uint16_t i = 0; i < n; ++i) {
+                auto tuple = page.ReadTuple(i);
+                if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired
+                if (!tuple.ok()) return tuple.status();
+
+                switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
+                                             tuple.value().deleted)) {
+                    case txn::CheckVerdict::kBusy:
+                        // An in-flight row can neither be counted (its
+                        // abort would leave a phantom entry) nor skipped
+                        // (its commit already passed the write hook while
+                        // the value was unobserved). Defer the whole build;
+                        // demand re-nominates (AST06's argument).
+                        *aborted = true;
+                        return std::size_t{0};
+                    case txn::CheckVerdict::kAbsent:
+                        continue;
+                    case txn::CheckVerdict::kLive:
+                        break;
+                }
+
+                auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
+                if (!pk.ok()) return pk.status();
+                StagedRow row;
+                row.pk = pk.value();
+                row.slot = i;
+                row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+                staged.push_back(std::move(row));
+            }
+            next = page.next_page_id();
+        }
+
+        // **The span is finished with; the ring's hold is not** (AM-R8).
+        // A `ScanFetcher` drops its pin and its shared page latch at the
+        // *next* `Fetch`, so the fetches below run under `S(leaf)` and
+        // the pair `S(heap leaf) -> S(var-heap page)` is on
+        // `device_page_store.hpp`'s page-against-page list because of
+        // this loop. Two shares never block each other, so nothing waits
+        // here today. What this loop must not do is *park*: a fetcher's
+        // pin and latch outlive the call that returned the span, and
+        // AR2 R2 forbids holding a latch across a suspension. It does
+        // not - there is no `co_await` in this file.
+        //
+        // Phase 2: decode and collect. Spill fetches are legal here - the
+        // page span is finished with - and they go through the ordinary
+        // path, never the ring.
+        for (const StagedRow& row : staged) {
+            std::vector<PendingSpill> spills;
+            auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
+            if (!decoded.ok()) return decoded.status();
+            if (Status s = ResolveSpills(store_, spills, decoded.value()); !s.ok()) return s;
+
+            auto key = stats::MakeCabinKey(cabin_id, decoded.value()[col_pos]);
+            if (!key.has_value()) continue;  // NULL: never observable
+            auto bucket = collected.find(*key);
+            if (bucket == collected.end()) continue;  // not a seeded value
+
+            stats::CabinEntry entry;
+            entry.pk = row.pk;
+            entry.page_id = leaf;
+            entry.page_epoch = page_epoch;
+            entry.slot = row.slot;
+            entry.flags = stats::kCabinHintValid;
+            bucket->second.push_back(entry);
+        }
+        leaf = next;
     }
 
     // The walk completed - the superset invariant's precondition - so
@@ -258,10 +239,8 @@ Status CabinOptimizerExecutor::ApplyCreate(const stats::ActionItem& action,
         // and retries.
         // `kNotImplemented` sits beside `kUnsupported` here, and must
         // (2026-08-31): the two differ in what a *client* should do across
-        // releases, never in whether this process can retry - and the
-        // refusal that reaches this arm today, a Cabin on a split relation
-        // (catalog.cpp, crosscore.md §6a), is one of the codes that moved.
-        // Reading it as transient would retry a settled refusal every
+        // releases, never in whether this process can retry. Reading a
+        // `NotImplemented` refusal as transient would retry a settled refusal every
         // confirm cycle forever, which is the bug this test exists to stop.
         if (created.status().code() != StatusCode::kInvalidArgument &&
             created.status().code() != StatusCode::kUnsupported &&

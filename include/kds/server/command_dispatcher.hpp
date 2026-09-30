@@ -1849,31 +1849,22 @@ private:
     // (exec/catalog_view.hpp).
     DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt);
 
-    // `span` is the pk window the statement can possibly touch (R4/IS4),
-    // and it narrows *which ranges are walked* - never which rows match,
-    // which stays `fn`'s. `PkSpan::Whole()` is the whole relation, which is
-    // what a predicate naming no pk means; a `WHERE pk = k` write passes
-    // `PkSpan::Equality`, and on a spread relation that is the difference
-    // between walking one range and meeting the ownership refusal on
-    // somebody else's. Not defaulted: both callers have an answer, and a
-    // default here would let a third one walk every range by omission.
     // `cursor` is AO-S3b's resume position: null for a walk that cannot
     // park (every read walk), otherwise in **and** out - read to start
     // where a parked walk stopped, written when this walk stops. Not
-    // defaulted, for `span`'s reason: a caller that cannot park says so by
-    // passing null rather than by omission.
+    // defaulted: a caller that cannot park says so by passing null rather
+    // than by omission.
     Status VisitRelation(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        catalog::PkSpan span, WalkCursor* cursor);
+        WalkCursor* cursor);
 
     // The page loop `VisitRelation`'s heap arm owns since AO-S3b, hoisted
     // out of `heap::ChainVisit` so the gap between two pages - no pin, no
     // span - is a place the statement above it may park (AO-R2).
-    // `heads` is one chain per range in `lo` order (RD6).
-    Status WalkHeapChains(
-        std::span<const PageId> heads, storage::PageAccess page_access,
+    Status WalkHeapChain(
+        PageId head, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
         WalkCursor* cursor);
@@ -2005,18 +1996,6 @@ private:
     std::optional<std::uint64_t> PkEqualityTarget(
         const catalog::TableAccess& access,
         const std::vector<parser::Condition>& where) const;
-
-    // The pk window a predicate-shaped write walks (R4/IS4): one id when
-    // the WHERE is a bare pk equality inside the 40-bit space, so a split
-    // relation's walk visits the one range that can hold it, and the whole
-    // relation otherwise. A literal above the space names no row and walks
-    // whole, answering `0 rows` rather than a resolve error.
-    catalog::PkSpan WriteWalkSpan(const catalog::TableAccess& access,
-                                  const std::vector<parser::Condition>& where) const {
-        const std::optional<std::uint64_t> pk = PkEqualityTarget(access, where);
-        return pk.has_value() && *pk <= kMaxKeystoneId ? catalog::PkSpan::Equality(*pk)
-                                                       : catalog::PkSpan::Whole();
-    }
 
     // Diagnostics. Levels are chosen so the default (info) is quiet under
     // load: DDL and SYNC are Info because they are rare and consequential,

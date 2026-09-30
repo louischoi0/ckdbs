@@ -196,12 +196,6 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
 struct WalkMark {
     PageId page = kInvalidPageId;
     std::uint32_t visited = 0;
-    // Which of the relation's ranges `page` sits in (RD6). Carried because
-    // a page id cannot answer it: a resumed walk starts in the middle of a
-    // relation, and one that assumed the *first* range would walk every
-    // range from there again - emitting their rows a second time and then
-    // claiming the relation covered.
-    std::size_t range = 0;
 };
 
 // What a resumable walk reads and writes: where to start, how far it got,
@@ -1680,15 +1674,6 @@ private:
         const bool prefixed = prefix != nullptr;
         const PageId resume_page = prefixed ? prefix->resume.page : kInvalidPageId;
         const std::uint32_t resume_visited = prefixed ? prefix->resume.visited : 0;
-        // Which range's chain the walk is in, so a chain end can find the
-        // next one - and so a *resume* does not restart at the first. Only
-        // meaningful for a split heap relation; `ranges.size()` is the
-        // terminating value for every other shape.
-        std::size_t range_index = prefixed ? prefix->resume.range : 0;
-        // The chain heads this walk covers, in `lo` order
-        // (`TableAccess::WalkHeads`): every range. One entry - the
-        // relation's own head - for every unsplit relation.
-        std::vector<PageId> walk_heads;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -1836,7 +1821,7 @@ private:
                     mark_frozen = true;
                     return s;
                 }
-                prefix->mark = WalkMark{page_id, visited_on_page, range_index};
+                prefix->mark = WalkMark{page_id, visited_on_page};
                 return s;
             };
 
@@ -1913,24 +1898,6 @@ private:
         // is what makes the seek an accelerator that cannot change the
         // answer - the same property tail pruning rests on.
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
-        // Filled **before** the start is chosen, and only for a *split*
-        // heap relation.
-        //
-        // Before, because a resumed walk (JB6) starts at its mark and still
-        // needs the next range's head when that chain ends: filling this
-        // only on the from-the-head path left a resumed walk with no heads
-        // at all, so it stopped at the range it resumed in and then set
-        // `prefix->complete` - a partial map reported as total, which is
-        // the one thing a prefix may not conclude.
-        //
-        // Only when split, because `WalkHeads` answers an unsplit
-        // relation with a one-element vector: that is a heap allocation on
-        // every walk - and a walk runs once per outer row under a
-        // correlated sub-chain - where RD3's zero-cost invariant is one
-        // load of the field it always was.
-        if (!is_btree && !access.ranges.empty()) {
-            walk_heads = access.WalkHeads();
-        }
         PageId cur = kInvalidPageId;
         if (resume_page != kInvalidPageId) {
             // Resuming (JB6): the mark names the page and the skip above
@@ -1953,17 +1920,7 @@ private:
                 cur = first.value();
             }
         } else {
-            // RD6: a heap relation is one chain until it is split and
-            // **one chain per range** after (CC8), so the walk starts at
-            // the first range's head and steps to the next range's when a
-            // chain ends. `ranges` is ascending by `lo`, which is the
-            // order this walk therefore emits in.
-            //
-            // Unsplit is the field it always was, reached by one branch on
-            // a cached vector's emptiness.
-            // A split relation's heads are never empty: `WalkHeads` returns
-            // one per range.
-            cur = access.ranges.empty() ? access.desc_page_id : walk_heads.front();
+            cur = access.desc_page_id;
         }
 
         // ---- The page loop, owned by the coroutine (P4d-3) ---------------
@@ -1989,7 +1946,7 @@ private:
         // space, which is the relation - what the walk is positioned in
         // before it is positioned anywhere.
         if (position_ != nullptr && index == 0) {
-            position_->Position(access.oid, 0, catalog::kIdSpaceEnd);
+            position_->Position(access.oid, 0, kIdSpaceEnd);
         }
 
         const PageId walk_origin = cur;
@@ -2008,23 +1965,6 @@ private:
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) {
-                // RD6: a chain that ended is not the relation that ended,
-                // once a relation has several. Step to the next range's
-                // head and keep walking; **only when there is none is the
-                // relation covered**, which is what the completeness claim
-                // below rests on - a walk that stopped at the first chain
-                // would let a later bucket miss conclude absence for rows
-                // it never looked at.
-                //
-                // A `cut` ends the walk here whatever ranges remain: the
-                // visitor asked to stop, and the two endings are told apart
-                // by `cut` alone (the page primitives answer both with
-                // kInvalidPageId).
-                if (!cut && !is_btree && range_index + 1 < walk_heads.size()) {
-                    ++range_index;
-                    cur = walk_heads[range_index];
-                    continue;
-                }
                 // Both endings arrive here - the page primitives answer a
                 // visitor stop and a chain end with the same id - and only
                 // `cut` tells them apart. A walk that ran out of relation
@@ -2052,10 +1992,10 @@ private:
             // interval would under-declare exactly the keys a resumed walk
             // is about to visit.
             //
-            // Btree only. A heap chain is not key-ordered - RD6 walks a
-            // chain per range and invariant 4 leaves a page's tuples
-            // unordered - so `min_key` of the page a heap walk is on is not
-            // a bound on what it has yet to read; there the relation
+            // Btree only. A heap chain is not key-ordered - invariant 4
+            // leaves a page's tuples unordered - so `min_key` of the page a
+            // heap walk is on is not a bound on what it has yet to read;
+            // there the relation
             // reported above is the whole declaration. Since SUS-1 every
             // relation created is a btree.
             // `parent_ == nullptr`: a sub-chain's walk is `index == 0` in
@@ -2063,7 +2003,7 @@ private:
             // row, over-declaring a position the relation `IS` above
             // already covers. The M2 rule: a nested walk declares no slice.
             if (position_ != nullptr && index == 0 && parent_ == nullptr && is_btree) {
-                position_->Position(live_access->oid, walk_page_min_key, catalog::kIdSpaceEnd);
+                position_->Position(live_access->oid, walk_page_min_key, kIdSpaceEnd);
             }
         }
     }

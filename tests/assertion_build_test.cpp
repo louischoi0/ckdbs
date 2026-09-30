@@ -14,7 +14,6 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
-#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -206,88 +205,6 @@ TEST_F(AssertionBuildTest, ASpilledGroupValueResolvesBeforeGrouping) {
     EXPECT_EQ(out.substr(0, 7), "CREATED") << out;
     EXPECT_NE(out.find(" rows=3"), std::string::npos) << out;
     EXPECT_NE(out.find(" groups=2"), std::string::npos) << out;
-}
-
-// ---- A relation split before AT-S9 (AR0 D7, AY-S9) -------------------------
-//
-// Nothing opens a range since AT-S9, so no volume reaches a split relation
-// through SQL; the directory rows are written directly, as a pre-AT volume
-// carries them. A split relation is always heap (CC8), so the relation is
-// `HEAP`. The row that decides each cell lives in the **second** chain, and
-// `desc_page_id` alone is the first: a build that stopped there would
-// under-count the group and admit what the assertion forbids.
-
-// Splits `name` at `lo`, and checks the split took.
-void SplitRelation(catalog::Catalog& catalog, const char* name, std::uint64_t lo) {
-    auto oid = catalog.FindTableOidByName(name, nullptr);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    auto head = catalog.CreateRangeEntryPage(oid.value(), lo);
-    ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog.OpenRangeRows(oid.value(), lo, head.value()).ok());
-    auto access = catalog.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok()) << access.status().message();
-    ASSERT_EQ(access.value()->ranges.size(), 2u);
-}
-
-// The slots on the second chain's entry page: the cells' premise, that the
-// deciding row is in the chain `desc_page_id` does not reach.
-std::uint16_t SecondChainSlots(catalog::Catalog& catalog, storage::PageStore& store,
-                               const char* name) {
-    auto oid = catalog.FindTableOidByName(name, nullptr);
-    EXPECT_TRUE(oid.ok()) << oid.status().message();
-    auto access = catalog.InitTableAccess(oid.value());
-    EXPECT_TRUE(access.ok()) << access.status().message();
-    auto page = store.GetForRead(access.value()->ranges.at(1).entry_page);
-    EXPECT_TRUE(page.ok()) << page.status().message();
-    return heap::PageView(page.value().bytes()).slot_count();
-}
-
-TEST_F(AssertionBuildTest, ABuildOverASplitRelationCountsEveryChain) {
-    ASSERT_EQ(Run("CREATE TABLE ledger_h (id int64, book int64) HEAP").substr(0, 7), "CREATED");
-    // Ids 1 and 2, in the first chain.
-    ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");
-    ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");
-    SplitRelation(boot_->catalog, "ledger_h", /*lo=*/3);
-    // Id 3, the first row of the second chain: the group's third row.
-    ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");
-    ASSERT_EQ(SecondChainSlots(boot_->catalog, store_, "ledger_h"), 1u);
-
-    const std::string refused =
-        Run("CREATE ASSERTION book_cap ON ledger_h GROUP BY (book) CHECK COUNT(*) <= 2");
-    EXPECT_EQ(refused.substr(0, 23), "ERR ASSERTION_VIOLATION") << refused;
-    EXPECT_NE(refused.find("book=7"), std::string::npos) << refused;
-
-    // The converse, so the cell is not passing by refusing everything.
-    const std::string out =
-        Run("CREATE ASSERTION book_cap ON ledger_h GROUP BY (book) CHECK COUNT(*) <= 3");
-    EXPECT_EQ(out.substr(0, 7), "CREATED") << out;
-    EXPECT_NE(out.find(" rows=3"), std::string::npos) << out;
-    EXPECT_NE(out.find(" groups=1"), std::string::npos) << out;
-    EXPECT_NE(out.find("enforcing=1"), std::string::npos) << out;
-}
-
-TEST_F(AssertionBuildTest, AnUpperRangeWritePastTheBoundOfASplitRelationIsRefused) {
-    ASSERT_EQ(Run("CREATE TABLE ledger_h (id int64, book int64) HEAP").substr(0, 7), "CREATED");
-    ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");  // id 1
-    SplitRelation(boot_->catalog, "ledger_h", /*lo=*/2);
-    ASSERT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");  // id 2
-    ASSERT_EQ(SecondChainSlots(boot_->catalog, store_, "ledger_h"), 1u);
-
-    const std::string out =
-        Run("CREATE ASSERTION book_cap ON ledger_h GROUP BY (book) CHECK COUNT(*) <= 2");
-    ASSERT_EQ(out.substr(0, 7), "CREATED") << out;
-    EXPECT_NE(out.find(" rows=2"), std::string::npos) << out;
-
-    // Id 3, in the second chain. Against a build that saw one row this
-    // would be the second and admitted.
-    const std::string refused = Run("INSERT INTO ledger_h VALUES (7)");
-    EXPECT_EQ(refused.substr(0, 23), "ERR ASSERTION_VIOLATION") << refused;
-
-    // The delete locates the upper row, and its departure frees the
-    // group's ground.
-    ASSERT_EQ(Run("DELETE FROM ledger_h WHERE id = 2"), "DELETED 1");
-    EXPECT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 8), "INSERTED");
-    EXPECT_EQ(Run("INSERT INTO ledger_h VALUES (7)").substr(0, 23), "ERR ASSERTION_VIOLATION");
 }
 
 // ---- The WAL half: emission, then the AST05 fold over what was emitted ----

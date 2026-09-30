@@ -438,8 +438,7 @@ TEST(FkCrossCoreRigTest, ARangeDeleteOfParentsParksOnAChildsOpenReference) {
 // E3 (iv), AY-Q3. The self-referencing arm is not hoisted and checks per
 // row; it takes the same `IS` + `S` there. No `CREATE TABLE` can declare a
 // self-reference (`ASelfReferencingForeignKeyCannotBeDeclared`), so the key
-// is written through `Catalog::CreateForeignKey` directly, the way a
-// split relation's directory rows are written in the cells that need one.
+// is written through `Catalog::CreateForeignKey` directly.
 TEST(FkCrossCoreRigTest, ASelfReferencingChildsOpenReferenceParksTheParentsDelete) {
     catalog::Oid s_oid = 0;
     ScriptRig f({"DELETE FROM s WHERE id = 1"}, {"BEGIN", "INSERT INTO s VALUES (2, 1)", "COMMIT"},

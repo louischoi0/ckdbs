@@ -578,8 +578,6 @@ is a read accelerator that cannot fail a write for a reason of its own.
 Also refused, each naming the reason:
 
 - **A heap-clustered relation** (IX3, `InvalidArgument`).
-- **A relation of two or more ranges** (`RefuseAuxiliaryOnSplitRelation`,
-  `NotImplemented`); a split relation never gains an index.
 - **A nullable key column** (`NotImplemented`, `docs/spec/null.md`).
 - **An index on the primary key** — the clustered tree already is one.
 - **A `float` column** — nothing settled its encoding, so it is not

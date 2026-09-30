@@ -5,7 +5,7 @@
 #include <optional>
 #include <vector>
 
-#include "kds/catalog/range_directory.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/txn/lock_table.hpp"
 
@@ -72,7 +72,7 @@ public:
     ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken,
                catalog::Oid rel) noexcept
         : ReadBorrow(locks, holder, taken) {
-        Position(rel, 0, catalog::kIdSpaceEnd);
+        Position(rel, 0, kIdSpaceEnd);
     }
     ReadBorrow(const ReadBorrow&) = delete;
     ReadBorrow& operator=(const ReadBorrow&) = delete;
@@ -115,7 +115,7 @@ public:
         if (!ask->granted) return;
         // The whole id space is the relation, which is already held - what
         // every bind declares, and what a walk's first report carries.
-        if (lo == 0 && hi == catalog::kIdSpaceEnd) return;
+        if (lo == 0 && hi == kIdSpaceEnd) return;
 
         const txn::LockKey slice = txn::LockKey::Slice(rel, lo, hi);
         if (slice_.has_value() && *slice_ == slice) return;

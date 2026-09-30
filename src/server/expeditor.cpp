@@ -145,8 +145,7 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
         // ownership, and this key was its arming bit.
         {"range_size_ids",
          "range_size_ids is retired since v3.0.0's M3: insert spreading went with range "
-         "ownership, so no range is opened; a relation split before it is still read and "
-         "written whole; remove the key"},
+         "ownership, so no range is opened and a relation is one structure; remove the key"},
     };
 }
 

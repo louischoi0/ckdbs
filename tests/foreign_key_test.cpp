@@ -685,8 +685,7 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
 // child has no descent to heal a failed hint with, so the reverse check
 // un-observes the value and walks; the entries it did not reach are the
 // ones a "no children" would have skipped. The hint is written wrong
-// through the store's own heal, the way a split's directory rows are written
-// directly - no SQL moves a heap row.
+// through the store's own heal, because no SQL moves a heap row.
 //
 // **Mutation**: the set cleared whenever its loop ends, a broken-off loop
 // included - `DELETED 1` for a parent whose one child is the entry skipped.
@@ -719,75 +718,6 @@ TEST_F(ForeignKeyCheckTest, AHeapChildWhoseHintFailsIsWalkedNotCleared) {
     EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1").substr(0, 16), "ERR FK_VIOLATION");
     EXPECT_FALSE(cabins_->Find(*key).valid()) << "the abandoned set is still served";
 }
-
-// ---- The reverse check under a split child (SA-T6's prerequisite) ----
-//
-// Nothing opens a range since AT-S9 (and `RangeEligible`'s `kForeignKey`
-// arm refused a split on either side of an FK before then), so no volume
-// reaches the state below through SQL; the directory rows are written
-// directly. Both cells exist because RESTRICT
-// needs an authoritative *"no children"* (F6), and a reverse check that
-// saw less than the whole child and answered `kPass` would not be a slow
-// constraint - it would be an absent one.
-//
-// **Until AT-S5f they pinned a refusal; they pin the answer now.** What
-// stood here was `CheckNoChildReferences`' scope guard - a child with a
-// range this core did not own was refused `NotImplemented`, fail-closed,
-// because the walk covered this core's chains alone. The walk covers every
-// chain of the relation now (`WalkHeads`), and since AT-S9 no range has an
-// owner, which is why one cell remains where there were two.
-
-// Splits `name` at `lo`.
-void SplitChild(catalog::Catalog& catalog, const char* name, std::uint64_t lo) {
-    auto oid = catalog.FindTableOidByName(name, nullptr);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-    auto head = catalog.CreateRangeEntryPage(oid.value(), lo);
-    ASSERT_TRUE(head.ok()) << head.status().message();
-    ASSERT_TRUE(catalog.OpenRangeRows(oid.value(), lo, head.value()).ok());
-}
-
-TEST_F(ForeignKeyCheckTest, AChildInASecondOwnedRangeStillBlocksTheParent) {
-    // The cell that bites. The referencing row lives in the **second** chain, and
-    // `desc_page_id` alone is the first. A walk that stopped there would
-    // report "no children", delete the parent, and leave a dangling
-    // foreign key with nothing logged.
-    //
-    // The child is heap: D1 declines every btree relation a directory, so
-    // a btree child could never reach this arm, and SUS-1 made BTREE the
-    // default - the word `HEAP` is what keeps the directory walk under test.
-    ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
-                  "qty int64) HEAP")
-                  .substr(0, 7),
-              "CREATED");
-    // Ids 1 and 2, both below the boundary, and neither references
-    // account 1 - so the first chain is a walk that finds nothing.
-    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 100)").substr(0, 8), "INSERTED");
-    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 200)").substr(0, 8), "INSERTED");
-
-    SplitChild(boot_->catalog, "trades_h", /*lo=*/3);
-
-    // Id 3: the first row of the second chain, and the only reference to
-    // account 1 anywhere.
-    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (1, 300)").substr(0, 8), "INSERTED");
-
-    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1").substr(0, 16), "ERR FK_VIOLATION");
-    EXPECT_EQ(RowCount("SELECT * FROM accounts WHERE id = 1"), 1u);
-
-    // The converse, so the cell is not passing by refusing everything:
-    // account 2 is referenced only from the first chain, and deleting it
-    // is still refused for the ordinary reason.
-    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 2").substr(0, 16), "ERR FK_VIOLATION");
-}
-
-// **The Cabin arm's cell lives on the two-core rig** (AT-S5f):
-// `FkCrossCoreRigTest.ADrainedCabinSetDoesNotClearAParentAChildOnAnotherCoreReferences`.
-// `ACabinCannotAnswerForAChildRangeOnAnotherCore` stood here and pinned the
-// scope refusal that went with the guard; a first replacement tried to pin
-// the fall-through from one core and **could not**, which is the finding
-// worth the lines: on a single dispatcher the store sees every write, so a
-// set that would drain always holds the live child and the check returns
-// from inside the loop. The drained return needs two stores, and two
-// stores need two cores.
 
 // ---- NULL fk values: MATCH SIMPLE, both directions (null.md §4) ------
 

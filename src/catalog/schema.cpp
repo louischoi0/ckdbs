@@ -89,42 +89,4 @@ Status CheckKeystoneColumn(const Schema& schema) {
     return Status::OK();
 }
 
-std::vector<PageId> TableAccess::WalkHeads() const {
-    if (ranges.empty()) return {desc_page_id};
-    std::vector<PageId> heads;
-    heads.reserve(ranges.size());
-    // `ranges` is held in `lo` order, so this is too. Every range, whoever
-    // wrote it: a range has no owner since AT-S9.
-    for (const RangeTarget& range : ranges) heads.push_back(range.entry_page);
-    return heads;
-}
-
-StatusOr<const RangeTarget*> TableAccess::RangeFor(std::uint64_t id) const {
-    // RD3's zero-cost invariant, reaching the write path: one load from an
-    // entry the caller is already holding, one predictable branch, and the
-    // two fields every insert used before ranges existed.
-    if (ranges.empty()) return nullptr;
-    auto resolved = ResolveRanges(ranges, PkSpan::Equality(id));
-    if (!resolved.ok()) return resolved.status();
-    // Exactly one range holds an id: the rows partition the space, so an
-    // equality names one and `ResolveRanges` never answers empty for a
-    // call it accepted. Checked rather than assumed, because what a wrong
-    // answer here produces is a row in the wrong chain, which is the
-    // defect this function exists to close.
-    if (resolved.value().size() != 1) {
-        return Status::Corruption(
-            "relation oid " + std::to_string(oid) + ": id " + std::to_string(id) +
-            " resolved to " + std::to_string(resolved.value().size()) +
-            " ranges; a single id belongs to exactly one");
-    }
-    return &resolved.value().front();
-}
-
-StatusOr<TableAccess::HeapChain> TableAccess::HeapChainFor(std::uint64_t id) const {
-    auto range = RangeFor(id);
-    if (!range.ok()) return range.status();
-    if (range.value() == nullptr) return HeapChain{desc_page_id, &heap_tail_hint};
-    return HeapChain{range.value()->entry_page, &range.value()->tail_hint};
-}
-
 }  // namespace kds::catalog

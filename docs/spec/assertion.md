@@ -606,12 +606,7 @@ only what `ListAssertions` returns.
 
 1. Create-time validation (§3.1).
 2. Full scan of the target relation where the session is, inside the
-   statement - **every chain of it** (`TableAccess::WalkHeads`,
-   `crosscore.md` CC8): a heap relation split before AT-S9 is one chain per
-   range, and a scan of `desc_page_id` alone would under-count a group with
-   rows in a later range and admit what the assertion forbids. Since AY-S9
-   an assertion is created on such a relation like any other; maintenance
-   was already per row and chain-blind.
+   statement.
 3. Build Bound Cabin entries and group aggregates; emit `ASSERT_BUILD` WAL.
 4. If any group violates the bound ⇒ CREATE fails with `AssertionViolation`
    naming the first violating group; the partial build is discarded.

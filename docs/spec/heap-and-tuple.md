@@ -235,15 +235,10 @@ the ring. The transaction-id sequence keeps its per-core block
 (`txn.md` §4.2), because no reader decides by a transaction id's order
 since AN-S2 (`txn.md` §4.1).
 
-**Insert spreading is retired (AT-S9)**, with range ownership: no range is
-opened, and `range_size_ids` is refused by name. A relation split before
-it keeps its ranges, each its own chain whose head page is created with
-`min_key = lo` (`Catalog::CreateRangeEntryPage`), and a row lands in the
-range its id falls in (`HeapChainFor`, `crosscore.md` CC8), so invariant 3
-holds per range structurally. `ORDER BY <pk>` over a split relation is
-ordered by the walk's range order, not by `key_order`: one walk covers
-every range, and `TableAccess::WalkHeads` answers their heads in `lo`
-order.
+**Insert spreading is retired (AT-S9)**, with range ownership, and the
+split relation it produced is retired with its directory (2026-09-30,
+`crosscore.md` CC8): a relation is one structure headed by `desc_page_id`,
+and `range_size_ids` is refused by name.
 
 **What a client may rely on.** The pk is an identity **and a sequence**,
 monotonic in issue order, on every relation and whichever cores insert;
@@ -252,7 +247,7 @@ sequence and `key_order` records that it has (§4.1). Comparing two ids of
 one relation orders them in issue order while `key_order` is `kAscending`,
 and never across relations or histories (§4.1).
 
-**Issue order is not placement order across cores, and on an unsplit heap
+**Issue order is not placement order across cores, and on a heap
 relation that can be a refusal.** The bump and the placement are two
 latched spans, not one: a core can issue `n`, a second core issue `n + 1`
 and place it first, and if that placement opened a new tail page -

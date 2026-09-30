@@ -212,7 +212,7 @@ Each stage waits for the operator's word, as AT's did.
 | AY-S7 | **`AllocateCatalogPage`** (AY-R6) | red first: a cell through the undo-hook seam in which another core's flush of the new page waits for its record | S |
 | AY-S8 | **The chunk count** (AY-R7) | a foreign record between chunks, a pre-AY stream, a torn tail and a partial run each read as marked; the "no continuation flag" comments (`payload.hpp:805-810`, `checkpointer.cpp:37-39`) rewritten; `assertion.md` §7 | M |
 | AY-S9 | **D7: the assertion** (AY-R8) | `HEAP` cells: rows in both chains at build, an upper-range write past the bound refused; both gates gone | M |
-| AY-S10 | **D7: index and FK**; `RefuseAuxiliaryOnSplitRelation` deleted; the stale text - `catalog.hpp`, `cabin.md`, `cabin_optimizer_exec.cpp`; SB3's cell given `HEAP` | an FK on a split child through `SplitChild` with a row in each chain; cells pinning IX3 and F1 as the answers on a split relation | S |
+| AY-S10 | **D7: index and FK**; `RefuseAuxiliaryOnSplitRelation` deleted; the stale text - `catalog.hpp`, `cabin.md`, `cabin_optimizer_exec.cpp`; SB3's cell given `HEAP` | an FK on a split child through `SplitChild` with a row in each chain; cells pinning IX3 and F1 as the answers on a split relation | S - **Struck 2026-09-30**: the split relation is retired and `sys.ranges` removed (`raft-marks-2026-09-30.md` §9), so there is no gate left to lift; §6 carries the stage that did it |
 | AY-S11 | **AY's close** | a row per stage; what AY carries | S |
 
 ## 4. Items for the operator
@@ -223,12 +223,12 @@ Each stage waits for the operator's word, as AT's did.
 | AY-Q2 | **`S` before the descent** - the mark says "at the hoist" and not the order | `[quiet-wrong]` if reversed | `S` first, then the descent: after a passing check, a whole `DELETE` fits before the grant. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §2) |
 | AY-Q3 | **The self-referencing arm** is not hoisted | `[quiet-wrong]` if skipped | `IS` + `S` in the per-row arm, the wait recorded as the insert's own tuple borrow records its. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §2), restated exactly at §3: `IS`, then `S`, then the descent, per row, held to the decide; a busy parent waited for, not refused |
 | AY-Q4 | **DDL on the parent waits for open child writers** - `CREATE`/`DROP INDEX`, `CREATE ASSERTION` meet the held `IS` | user-visible | accept and state it; a steady stream can refuse the DDL at the 1 s net, as AO-0 item 25 accepts for `DROP TABLE`. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §5) |
-| AY-Q5 | **D7's cell condition for the index and the FK parent cannot be met literally** - no SQL reaches either on a split relation; the FK child arm can be, and is AY-S10's cell | spec | lift both behind cells pinning the refusal that answers instead - IX3 (`NotImplemented` becomes `InvalidArgument`) and F1; if marked, AY-S10 need not follow AY-S5, the FK child's reverse walk being chain-complete already; an auxiliary that fails its cell stays refused and does not block the letter (§3 of the 2026-09-29 marks, *Does not settle*) |
+| AY-Q5 | **D7's cell condition for the index and the FK parent cannot be met literally** - no SQL reaches either on a split relation; the FK child arm can be, and is AY-S10's cell | spec | lift both behind cells pinning the refusal that answers instead - IX3 (`NotImplemented` becomes `InvalidArgument`) and F1; if marked, AY-S10 need not follow AY-S5, the FK child's reverse walk being chain-complete already; an auxiliary that fails its cell stays refused and does not block the letter (§3 of the 2026-09-29 marks, *Does not settle*) - **Struck 2026-09-30**: the split relation is retired and `sys.ranges` removed (`raft-marks-2026-09-30.md` §9), so there is no gate left to lift; §6 carries the stage that did it |
 | AY-Q6 | **A pre-AY snapshot** has no count | `[quiet-wrong]` either way it is read wrong | `reserved == 0` is pre-AY, read by today's rule - which keeps today's two under-counts for the first mount of an old binary's log; the alternative, not a base, fails closed and leaves every such assertion unenforcing until its next checkpoint |
 | AY-Q7 | **A snapshot run torn at scan end** is a base today | `[quiet-wrong]` today | not a base: the assertion comes up unenforcing - fails closed, a behaviour change |
 | AY-Q8 | **A parent `DELETE` meeting a child row whose writer holds no `S(P)`** - a child `DELETE`, or an `UPDATE` moving the fk column - is refused, not waited | user-visible | carry the child's transaction id out of the check and park mid-walk, inside AY-S5, its cell in AY-S4. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §2) |
 | AY-Q9 | **The seven uninventoried cells** ran with no lock table, an arm no production assembly builds | scope | port only the premises that still hold onto AY-S1's table fixture; two have table-backed successors already. **Marked as proposed 2026-09-29** (`raft-marks-2026-09-29.md` §17); built with AY-S3, §6 |
-| AY-Q10 | **E10** - put back by the 2026-09-29 marks (§11) | spec | retire it: nothing splits since AT-S9 and a pre-AT split relation's schema cannot change |
+| AY-Q10 | **E10** - put back by the 2026-09-29 marks (§11) | spec | retire it: nothing splits since AT-S9 and a pre-AT split relation's schema cannot change - **Struck 2026-09-30**: the split relation is retired and `sys.ranges` removed (`raft-marks-2026-09-30.md` §9), so there is no gate left to lift; §6 carries the stage that did it |
 | AY-Q11 | **AR1's AQ/AR** - AT-0 item 6 lists them; AR1 §14 names them letters behind AP | scope | their own letters, after AP's order is settled |
 | AY-Q12 | **A zero-row `UPDATE`** takes the `S` at the hoist | cost | accept. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §7) |
 
@@ -718,3 +718,57 @@ and `CLAUDE.md`'s row restated.
 changes (`ctest -LE heap-suspended -j8`, one pre-existing disabled cell).
 Overhead not measured; measured at the milestone's close (`CLAUDE.md` step
 3, `raft-marks-2026-09-30.md` §8).
+
+### AY-S10 — struck 2026-09-30: the split relation retired
+
+On `worktree-retire-split-relations` from `7c51f82`, on the operator's
+*"split relation 이라는 개념을 아예 폐기 해야해"* and *"하위 호환성은 고려하지
+않아도 돼. 나는 해당 테이블을 제거했으면 좋겠어"* (`raft-marks-2026-09-30.md`
+§9). It replaces AY-S10 and answers AY-Q5 and AY-Q10: with no split relation
+there is no gate to lift and no E10 subject.
+
+**Built** at `62a6cb3`. A relation is one structure headed by
+`desc_page_id`. Deleted: `range_directory.{hpp,cpp}`, `SysRangeRow` and its
+codec, the catalog's range door (`RangesOf`, `InsertRangeRow`,
+`WriteRangeRow`, `CreateRangeEntryPage`, `OpenRangeRows`),
+`RefuseAuxiliaryOnSplitRelation` (D7's last gate), `TableAccess::ranges`,
+`WalkHeads`, `HeapChainFor` and `RangeFor`, `PkSpan`, the cursor's and the
+walk mark's range index, `SHOW META`'s `split_relations`, and the relayout
+survey's range counts. Every walk takes the one head. `sys.ranges` leaves
+bootstrap; page 15 and oid 133 stay unused. The superblock moves 17 -> 18,
+so an older volume is refused rather than read from its first chain.
+AY-S9's multi-chain assertion build and its two cells are reverted to
+`c4d8e55^`. The WAL golden log is re-pinned: bootstrap's two `sys.ranges`
+catalog rows no longer enter the stream.
+
+**Not red first.** Nothing the removal fixes fails today: a split relation
+can no longer be built, so what could be pinned is the removal itself -
+`BootstrapCreatesNoRangeDirectory` - and the version refusal
+`superblock_test.cpp` already covers for any version but the current.
+
+**The review** (`critics-developer`, one pass) found no correctness defect:
+every walk reduces to the old unsplit path, `WalkHeapChain` matches the old
+`WalkHeapChains` for one head including the cursor, and the old
+`HeapChainFor` answered `{desc_page_id, &heap_tail_hint}` for every unsplit
+id. The reviewer fixed, in place: `range_size_ids`' refusal text, which
+still promised that a split relation is read whole; two comments left above
+`&walk_cursor` after the span argument went; a "walks every range";
+`catalog.md`'s citation of the deleted header; "the twelve root ids".
+Taken: `kSysTables` sized by the compiler - the one defect this change made
+on the way, a 10-entry array left with a zero entry that failed every
+bootstrap, cannot recur; the includes' order; a double blank line; a long
+comment line.
+
+Rejected:
+
+- **Trimming the history in `fk_check.cpp`, `CheckWriteAdmission`,
+  `HandleSelect` and `CreateCabin`'s comments.** Each already says the split
+  relation went; the history beside it is the file's idiom, and a comment-only
+  rewrite of four files is not this stage's.
+- **Deleting `BootstrapCreatesNoRangeDirectory`.** It is the one cell that
+  names the removal; cheap to keep.
+
+**Suite**: 3040/3040 in Debug (`ctest -LE heap-suspended -j8`, one
+pre-existing disabled cell) at `62a6cb3`, and 3040/3040 again with the
+review's changes. Overhead not measured; measured at AY's close
+(`raft-marks-2026-09-30.md` §8).

@@ -13,6 +13,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -502,7 +503,7 @@ TEST_F(LockDeadlockTest, AWholeRelationWriteIsNotHeldUpByAPositionedReader) {
     ASSERT_TRUE(locks_
                     ->Acquire(reader_id,
                               txn::LockKey::Slice(static_cast<catalog::Oid>(oid), 1,
-                                                  catalog::kIdSpaceEnd),
+                                                  kIdSpaceEnd),
                               txn::LockMode::kIntentionShared, reader)
                     .value()
                     .granted);
