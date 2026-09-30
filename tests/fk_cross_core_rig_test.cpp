@@ -382,8 +382,8 @@ sched::Coro RunScript(CommandDispatcher& d, Script& s) {
 // A script per core over `p` (parents 7 and 8) and `c`, plus whatever
 // `seed` writes from core 0 and `prepare` does before the reactors start;
 // both scripts are submitted then and wait for their first `Allow`.
-struct FenceRig {
-    FenceRig(std::vector<std::string> on0, std::vector<std::string> on1,
+struct ScriptRig {
+    ScriptRig(std::vector<std::string> on0, std::vector<std::string> on1,
              const std::vector<std::string>& seed = {},
              const std::function<bool(TwoCoreRig&)>& prepare = nullptr)
         : core0(std::move(on0)), core1(std::move(on1)), r({}) {
@@ -417,21 +417,24 @@ struct FenceRig {
         script.Allow(n);
         return KickUntil(*r.rig, core, [&] { return script.Done(n); }, 4000ms);
     }
-    std::size_t Waiters(catalog::Oid rel, std::uint64_t pk) {
-        return r.rig->locks().WaiterCount(txn::LockKey::Tuple(rel, pk));
-    }
     // Whether `script`'s statement `n - 1` is parked on the row `(rel, pk)`
     // rather than finished: what "parks on the parent row" means below.
     bool ParkedOn(std::uint32_t core, Script& script, std::size_t n, catalog::Oid rel,
                   std::uint64_t pk) {
         script.Allow(n);
-        KickUntil(*r.rig, core, [&] { return script.Done(n) || Waiters(rel, pk) >= 1; }, 4000ms);
-        return !script.Done(n) && Waiters(rel, pk) >= 1;
+        const txn::LockKey row = txn::LockKey::Tuple(rel, pk);
+        auto waiting = [&] { return r.rig->locks().WaiterCount(row) >= 1; };
+        KickUntil(*r.rig, core, [&] { return script.Done(n) || waiting(); }, 4000ms);
+        return !script.Done(n) && waiting();
     }
     // Whether `script`'s statement `n - 1` is still unanswered after
-    // `given`: a wait, whichever unit it is on.
+    // `given`: a wait, whichever unit it is on. **`given` stays under the
+    // lock family's 1 s fault net** (`kLockWaitFaultNetNs`): a wait still
+    // open at the net is refused `TxnConflict`, so a longer look would read
+    // a correct park as an answer, and the cell has to end the wait itself
+    // before the net does.
     bool StillWaiting(std::uint32_t core, Script& script, std::size_t n,
-                      std::chrono::milliseconds given = 1500ms) {
+                      std::chrono::milliseconds given = 500ms) {
         script.Allow(n);
         KickUntil(*r.rig, core, [&] { return script.Done(n); }, given);
         return !script.Done(n);
@@ -452,7 +455,7 @@ struct FenceRig {
 // pins the unit because the interval before the write (the window cell
 // below) is covered by nothing else.
 TEST(FkCrossCoreRigTest, DISABLED_AChildsOpenReferenceParksAParentDeleteOnTheParentRow) {
-    FenceRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
+    ScriptRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
     ASSERT_TRUE(f.ok);
     ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
     ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
@@ -461,7 +464,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AChildsOpenReferenceParksAParentDeleteOnThePar
         << "the parent DELETE did not park on the parent row: " << f.core0.Reply(0);
 
     ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
-    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
     EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
 }
 
@@ -469,7 +472,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AChildsOpenReferenceParksAParentDeleteOnThePar
 // the child's tuple `S` only in the lock table's verify arm: AY-S2's
 // containment wake is what parks it, on the parent row's entry.
 TEST(FkCrossCoreRigTest, DISABLED_ARangeDeleteOfParentsParksOnAChildsOpenReference) {
-    FenceRig f({"DELETE FROM p WHERE id >= 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
+    ScriptRig f({"DELETE FROM p WHERE id >= 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
     ASSERT_TRUE(f.ok);
     ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
 
@@ -477,7 +480,7 @@ TEST(FkCrossCoreRigTest, DISABLED_ARangeDeleteOfParentsParksOnAChildsOpenReferen
         << "the range DELETE did not park on the referenced parent: " << f.core0.Reply(0);
 
     ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
-    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
     // Statement-atomic: 8 is unreferenced, and the refusal over 7 keeps it.
     EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
     EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p").response, "id\\n7\\n8");
@@ -486,10 +489,11 @@ TEST(FkCrossCoreRigTest, DISABLED_ARangeDeleteOfParentsParksOnAChildsOpenReferen
 // E3 (iv), AY-Q3. The self-referencing arm is not hoisted and checks per
 // row; it takes the same `IS` + `S` there. No `CREATE TABLE` can declare a
 // self-reference (`ASelfReferencingForeignKeyCannotBeDeclared`), so the key
-// is written through the catalog's door, as a split's rows are.
+// is written through `Catalog::CreateForeignKey` directly, the way a
+// split relation's directory rows are written in the cells that need one.
 TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildsOpenReferenceParksTheParentsDelete) {
     catalog::Oid s_oid = 0;
-    FenceRig f({"DELETE FROM s WHERE id = 1"}, {"BEGIN", "INSERT INTO s VALUES (2, 1)", "COMMIT"},
+    ScriptRig f({"DELETE FROM s WHERE id = 1"}, {"BEGIN", "INSERT INTO s VALUES (2, 1)", "COMMIT"},
                {"CREATE TABLE s (id int64, pid int64 NULL) BTREE", "INSERT INTO s VALUES (1, NULL)"},
                [&](TwoCoreRig& rig) {
                    auto oid = rig.core(0).catalog().FindTableOidByName("s");
@@ -508,8 +512,36 @@ TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildsOpenReferenceParksThePar
         << "the parent DELETE did not park on the parent row: " << f.core0.Reply(0);
 
     ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
-    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
     EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
+}
+
+// AY-Q3's other half (`raft-marks-2026-09-30.md` §3): a self-referencing
+// child whose parent row is being written by an undecided transaction
+// waits for it, as a hoisted parent does, rather than being refused - and
+// passes when it commits.
+TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildWaitsOutItsParentsWriterAndPasses) {
+    catalog::Oid s_oid = 0;
+    ScriptRig f({"BEGIN", "INSERT INTO s VALUES (1, NULL)", "COMMIT"},
+                {"INSERT INTO s VALUES (2, 1)"},
+                {"CREATE TABLE s (id int64, pid int64 NULL) BTREE"}, [&](TwoCoreRig& rig) {
+                    auto oid = rig.core(0).catalog().FindTableOidByName("s");
+                    if (!oid.ok()) return false;
+                    s_oid = oid.value();
+                    auto fk = rig.core(0).catalog().CreateForeignKey(s_oid, 1, s_oid);
+                    EXPECT_TRUE(fk.ok()) << fk.status().message();
+                    return fk.ok();
+                });
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    ASSERT_EQ(f.core0.Reply(1).rfind("INSERTED", 0), 0u) << f.core0.Reply(1);
+
+    EXPECT_TRUE(f.ParkedOn(1, f.core1, 1, s_oid, 1))
+        << "the self-referencing child did not wait on its parent's writer: " << f.core1.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(0, f.core0, 3)) << f.core0.Reply(2);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 1));
+    EXPECT_EQ(f.core1.Reply(0).rfind("INSERTED", 0), 0u) << f.core1.Reply(0);
 }
 
 // E3 (v), and AY-Q1's cost. Two transactions each write a child of 7 and
@@ -517,7 +549,7 @@ TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildsOpenReferenceParksThePar
 // the second asker closes the cycle and is refused naming deadlock. Without
 // the `S` the two updates serialise on the row's `X`.
 TEST(FkCrossCoreRigTest, DISABLED_TwoChildWritersThatThenUpdateTheirParentDeadlock) {
-    FenceRig f(
+    ScriptRig f(
         {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 1 WHERE id = 7", "ROLLBACK"},
         {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 2 WHERE id = 7", "ROLLBACK"});
     ASSERT_TRUE(f.ok);
@@ -526,6 +558,10 @@ TEST(FkCrossCoreRigTest, DISABLED_TwoChildWritersThatThenUpdateTheirParentDeadlo
 
     EXPECT_TRUE(f.ParkedOn(0, f.core0, 3, f.r.parent_oid, 7))
         << "a parent UPDATE ran past another transaction's open child: " << f.core0.Reply(2);
+    // The waiter count moves inside the ask and the wait-for edge is drawn
+    // just after it, with no suspension between; asked in that gap, core 1
+    // would find no cycle yet and core 0 would close it instead.
+    std::this_thread::sleep_for(20ms);
 
     ASSERT_TRUE(f.RunTo(1, f.core1, 3));
     EXPECT_NE(f.core1.Reply(2).find("deadlock"), std::string::npos) << f.core1.Reply(2);
@@ -614,7 +650,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AParentDeletedBetweenAChildsCheckAndItsWriteLe
 // writer rather than being refused; the writer's commit leaves the parent
 // unreferenced.
 TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAnOpenChildDeleteAndPassesAtItsCommit) {
-    FenceRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "DELETE FROM c WHERE id = 1", "COMMIT"},
+    ScriptRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "DELETE FROM c WHERE id = 1", "COMMIT"},
                {"INSERT INTO c VALUES (7)"});
     ASSERT_TRUE(f.ok);
     ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
@@ -624,7 +660,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAnOpenChildDeleteAndPasse
         << "the parent DELETE was answered with the child's writer open: " << f.core0.Reply(0);
 
     ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
-    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
     EXPECT_EQ(f.core0.Reply(0), "DELETED 1");
 }
 
@@ -633,7 +669,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAnOpenChildDeleteAndPasse
 // `DELETE` of 7 that reads the moved row and answers "no children" removes
 // a parent the child's rollback then references again.
 TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback) {
-    FenceRig f({"DELETE FROM p WHERE id = 7"},
+    ScriptRig f({"DELETE FROM p WHERE id = 7"},
                {"BEGIN", "UPDATE c SET pid = 8 WHERE id = 1", "ROLLBACK"},
                {"INSERT INTO c VALUES (7)"});
     ASSERT_TRUE(f.ok);
@@ -644,7 +680,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAChildMovedOffItAndRefuse
         << "the parent DELETE was answered with the child's writer open: " << f.core0.Reply(0);
 
     ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
-    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    ASSERT_TRUE(f.RunTo(0, f.core0, 1));
     EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
     // Whatever the answer, the child row references 7 again, so 7 is there.
     EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p WHERE id = 7").response,

@@ -219,9 +219,9 @@ Each stage waits for the operator's word, as AT's did.
 
 | # | item | class | CLA proposal |
 |---|---|---|---|
-| AY-Q1 | **What D9(a)'s tuple `S` costs**: it blocks every `UPDATE` of the parent row while a child writer is open, not only its `DELETE`; two transactions that each write a child of P and then update P deadlock and one is refused (today they serialise) - "insert a trade, then update its account" is that shape; a transaction referencing more than `max_locks_per_txn` distinct parents is refused (no escalation, AO-R10) | user-visible; a cost | build D9(a) as ratified and state all three in `foreign-keys.md`; an *existence* unit only `DELETE` takes is an AR2 unit change, put forward as its own item if the cost is measured to matter |
+| AY-Q1 | **What D9(a)'s tuple `S` costs**: it blocks every `UPDATE` of the parent row while a child writer is open, not only its `DELETE`; two transactions that each write a child of P and then update P deadlock and one is refused (today they serialise) - "insert a trade, then update its account" is that shape; a transaction referencing more than `max_locks_per_txn` distinct parents is refused (no escalation, AO-R10) | user-visible; a cost | build D9(a) as ratified and state all three in `foreign-keys.md`; an *existence* unit only `DELETE` takes is an AR2 unit change, put forward as its own item if the cost is measured to matter. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §4) |
 | AY-Q2 | **`S` before the descent** - the mark says "at the hoist" and not the order | `[quiet-wrong]` if reversed | `S` first, then the descent: after a passing check, a whole `DELETE` fits before the grant. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §2) |
-| AY-Q3 | **The self-referencing arm** is not hoisted | `[quiet-wrong]` if skipped | `IS` + `S` in the per-row arm, the wait recorded as the insert's own tuple borrow records its. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §2) |
+| AY-Q3 | **The self-referencing arm** is not hoisted | `[quiet-wrong]` if skipped | `IS` + `S` in the per-row arm, the wait recorded as the insert's own tuple borrow records its. **Marked as proposed 2026-09-30** (`raft-marks-2026-09-30.md` §2), restated exactly at §3: `IS`, then `S`, then the descent, per row, held to the decide; a busy parent waited for, not refused |
 | AY-Q4 | **DDL on the parent waits for open child writers** - `CREATE`/`DROP INDEX`, `CREATE ASSERTION` meet the held `IS` | user-visible | accept and state it; a steady stream can refuse the DDL at the 1 s net, as AO-0 item 25 accepts for `DROP TABLE` |
 | AY-Q5 | **D7's cell condition for the index and the FK parent cannot be met literally** - no SQL reaches either on a split relation; the FK child arm can be, and is AY-S10's cell | spec | lift both behind cells pinning the refusal that answers instead - IX3 (`NotImplemented` becomes `InvalidArgument`) and F1; if marked, AY-S10 need not follow AY-S5, the FK child's reverse walk being chain-complete already; an auxiliary that fails its cell stays refused and does not block the letter (§3 of the 2026-09-29 marks, *Does not settle*) |
 | AY-Q6 | **A pre-AY snapshot** has no count | `[quiet-wrong]` either way it is read wrong | `reserved == 0` is pre-AY, read by today's rule - which keeps today's two under-counts for the first mount of an old binary's log; the alternative, not a base, fails closed and leaves every such assertion unenforcing until its next checkpoint |
@@ -567,3 +567,68 @@ Rejected:
 **Suite**: 3095/3095 in Debug (`ctest -LE heap-suspended -j8`, one
 pre-existing disabled cell) at `557f1d1`, and 3095/3095 again with the
 review's changes applied. Overhead not measured.
+
+### AY-S4 — built 2026-09-30
+
+On `worktree-ay-s4-fk-cells-red` from `64b97e7`, on the operator's
+*"follow CLA proposal for AY-Q2, AY-Q3, AY-Q8, start AY-S4"*, with AY-Q2's
+lock read back to the operator and answered `IS` on the relation and `S` on
+the tuple, and AY-Q3 restated (`raft-marks-2026-09-30.md` §2, §3).
+
+**The D9(a) cells, red at `64b97e7`**, each 5/5, in
+`tests/fk_cross_core_rig_test.cpp` on a script-per-core rig (`ScriptRig`).
+**Committed `DISABLED_` until AY-S5**, so the suite that gates every step
+stays a gate:
+
+| cell | E3 / item | what it saw at `64b97e7` |
+|---|---|---|
+| `AChildsOpenReferenceParksAParentDeleteOnTheParentRow` | (i) | the parent `DELETE` refused `TxnConflict` at once: "a row of 'c' referencing id=7 is being written" |
+| `AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan` | (ii), the window | `INSERTED` and `DELETED 1`: a child of 8 with no 8 - **the orphan `known-gaps.md` (Foreign keys) describes, reproduced** |
+| `ARangeDeleteOfParentsParksOnAChildsOpenReference` | (iii) | refused `TxnConflict` at once |
+| `ASelfReferencingChildsOpenReferenceParksTheParentsDelete` | (iv), AY-Q3 | refused `TxnConflict` at once |
+| `ASelfReferencingChildWaitsOutItsParentsWriterAndPasses` | AY-Q3 (§3) | the child refused `TxnConflict`: the self-referencing arm never waits |
+| `TwoChildWritersThatThenUpdateTheirParentDeadlock` | (v), AY-Q1 | the first parent `UPDATE` ran past the other's open child, `UPDATED 1` |
+| `AParentDeleteWaitsOutAnOpenChildDeleteAndPassesAtItsCommit` | AY-Q8 | refused `TxnConflict` at once |
+| `AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback` | AY-Q8 | `DELETED 1`, and the child's rollback left it referencing the deleted 7 - **a live orphan the survey had as a refusal**, now `bugs/a-parent-delete-misses-a-child-an-open-update-moved-off-it.md` |
+
+The window cell drives the insert path's one seam on a two-row `INSERT`
+whose rows land in the rightmost and leftmost leaves of a multi-leaf `c`.
+The seam runs under AT-S21's hold on row 1's leaf, so the parent `DELETE`'s
+reverse walk has passed row 2's leaf before row 2 is written, whichever core
+then runs first.
+
+**AT-S14's statement cells**, `tests/btree_lookup_statement_test.cpp`: a
+point `SELECT` and an FK forward check over `ActOnFetchStore` at the leaf's
+second fetch - the store `DivideOnRefetchStore` is, at `nth = 2` - with the
+divide a second dispatcher's `INSERT`. Green, 5/5. With the mutant
+(`BtreeLookup` releasing its leaf and re-fetching it by id) both went red:
+the `SELECT` answered zero rows, and the check refused an existing parent 70
+`FK_VIOLATION`. `btree.cpp` restored from a copy.
+
+**The review** (`critics-developer`, one pass) found one defect, fixed by
+the reviewer: `StillWaiting` looked for 1.5 s, past the lock family's 1 s
+fault net, so both AY-Q8 cells would have stayed red against a correct
+AY-S5; it looks for 500 ms. Taken:
+
+- a 20 ms settle in the deadlock cell between core 0's park and core 1's
+  ask, since the waiter count moves just before the wait-for edge is drawn;
+- the bug entry's single-core claim marked as inferred rather than run;
+- the rig renamed `ScriptRig` (a "fence" is a range unit in the lock
+  family), `Waiters` inlined, the repeated wait written as `RunTo`;
+- the self-reference comment's "as a split's rows are" said plainly.
+
+Rejected:
+
+- **Moving the file's three older cells onto `Script`.** Their helpers'
+  comments carry the reasoning of AO-S5(b) and AT-S5f, and the cells are not
+  this stage's.
+- **Folding `btree_test.cpp`'s `DivideOnRefetchStore` into
+  `ActOnFetchStore`.** It predates this stage, which does not touch that
+  file.
+- **The AT-S14 cells' `nth = 2` going vacuous if something fetches the
+  leaf before the descent.** True of `btree_test.cpp`'s cell too; the
+  mutant run is the check, and it bit.
+
+**Suite**: 3097/3097 in Debug at `86b61b3` (`ctest -LE heap-suspended -j8`;
+seven D9(a) cells and one pre-existing cell disabled), and 3097/3097
+again with the review's changes and the eighth cell. Overhead not measured.

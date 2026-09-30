@@ -21,8 +21,9 @@ version is A's, `pid = 8`, so the row is skipped. The version B's view would
 see, `pid = 7`, is never read, and A's in-flight write never makes the check
 busy.
 
-It is not a cross-core defect. Two sessions on one core reach it the same
-way. The two-core rig is only where the cell lives.
+**Inferred, not run: it is not a cross-core defect.** Nothing in the
+visitor asks which core wrote the row, so two sessions on one core should
+reach it the same way. The two-core rig is only where the cell lives.
 
 AY's order put this shape under AY-Q8 as "refused, not waited". That is
 right for a child `DELETE`, which the check sees as busy and refuses

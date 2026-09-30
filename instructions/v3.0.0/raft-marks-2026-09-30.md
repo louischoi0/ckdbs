@@ -32,3 +32,29 @@ Recorded on `worktree-ay-s4-fk-cells-red` from `64b97e7`
 | **Answers** | Three of the order's `[quiet-wrong]`-tagged or user-visible items: AY-Q2 and AY-Q3 `[quiet-wrong]`, AY-Q8 user-visible |
 | **Does not settle** | AY-S5 or any other stage; AY-Q1, AY-Q4-Q7, Q10-Q12 |
 | **Recorded at** | `workorder-ay-following-letter.md` §4 and §6, `index.md` |
+
+## 3. AY-Q3 restated
+
+Recorded on `worktree-ay-s4-fk-cells-red` at `86b61b3`, during AY-S4's
+review.
+
+| | |
+|---|---|
+| **Word** | *"AY-Q3 as proposed: the self-referencing FK arm takes the hoist`s pair per row - IS on the relation, then S on the parent tuple, then the descent (AY-Q2`s order), held to decide. A busy parent is waited for, not refused; the wait is recorded as the insert`s own tuple borrow records its."* |
+| **Mark** | §2's AY-Q3, made exact: per row, `IS` on the relation, `S` on the parent tuple, then the descent, both held to the decide; **a busy parent is waited for, not refused**, the wait recorded as the insert's own tuple borrow records its |
+| **Answers** | What §2's "as proposed" left implicit: the order within the per-row arm, and what a busy self-referenced parent gets |
+| **Does not settle** | AY-S5 or any other stage |
+| **Recorded at** | `workorder-ay-following-letter.md` §4 and §6 |
+
+## 4. AY-Q1 as proposed, and AY-S5 started
+
+Recorded on `worktree-ay-s4-fk-cells-red` at `86b61b3`, with AY-S4 built on
+that branch and not yet pushed.
+
+| | |
+|---|---|
+| **Word** | *"follow CLA proposal for AY-Q1, start AY-S5"* |
+| **Mark** | **AY-Q1 as proposed**: D9(a) is built as ratified, and `foreign-keys.md` states its three costs - the tuple `S` blocks every `UPDATE` of the parent row while a child writer is open, not only its `DELETE`; two transactions that each write a child of P and then update P deadlock and one is refused; a transaction referencing more than `max_locks_per_txn` distinct parents is refused (no escalation, AO-R10). An existence-only unit is not built; it is an AR2 unit change, put forward as its own item only if the cost is measured to matter. **AY-S5 starts**: D9(a) (AY-R4) |
+| **Reading** | S5 follows S4 (§5 of the order: S4's cells before S5, so the fence lands against red). S4 is built on its branch and finishes first - its review, AY-Q3's busy-parent cell (§3 here), the suite - and S5 branches from S4's tip |
+| **Does not settle** | AY-S6 or any later stage; AY-Q4-Q7, Q10-Q12 |
+| **Recorded at** | `workorder-ay-following-letter.md` §4 and §6, `index.md` |
