@@ -1311,25 +1311,27 @@ private:
     // statement's snapshot, because a check reads latest state.
     txn::ReadView CheckView(const WriteScope& scope);
 
+    // Whether the statement's transaction already holds the row in some
+    // mode, asked before a parent check's `S` so a failed check gives back
+    // only what its own ask took (AZ-S5).
+    bool HoldsRow(const WriteScope& scope, catalog::Oid rel, std::uint64_t pk) const;
+
+    // A refused parent-row hold's status, restated as the foreign key's
+    // (a conflict names the child and parent relations; any other code
+    // stands).
+    Status ParentRowHeld(const catalog::TableAccess& child, catalog::Oid parent_rel,
+                         std::uint64_t pk, const Status& held);
+
     // The forward check for one foreign key and one written value (§2),
     // **answered from what the extraction pass already resolved** (§2a,
     // AH-T1). OK when the value is not an id at all - the row codec has the
-    // better error for that.
+    // better error for that. A violation gives back the parent's `S` when
+    // this statement's ask took it (AZ-S5).
     //
     // One arm descends here: a **self-referencing** foreign key, which
     // `ResolveForeignKeyParents` deliberately does not hoist. It holds the
     // parent row first, as the hoist does, and a refused hold is recorded
     // as a wait on `scope` (AY-Q3).
-    // A refused parent-row hold's status, restated as the foreign key's
-    // (a conflict names the child and parent relations; any other code
-    // stands).
-    // Whether the statement's transaction already holds the row in some
-    // mode, asked before a parent check's `S` so a failed check gives back
-    // only what its own ask took (AZ-S5).
-    bool HoldsRow(const WriteScope& scope, catalog::Oid rel, std::uint64_t pk) const;
-    Status ParentRowHeld(const catalog::TableAccess& child, catalog::Oid parent_rel,
-                         std::uint64_t pk, const Status& held);
-
     Status CheckForeignKeyOnWrite(const catalog::TableAccess& child,
                                   const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
                                   const exec::FkParentVerdicts& held, const WriteScope& scope);

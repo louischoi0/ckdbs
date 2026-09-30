@@ -81,6 +81,8 @@ protected:
     std::string Run(Session& s, const std::string& sql) {
         return dispatcher_->Dispatch(sql, &s).response;
     }
+    // Another session's statement, on the second dispatcher.
+    std::string Other(const std::string& sql) { return other_->Dispatch(sql).response; }
 
     storage::InMemoryPageStore backing_{kFirstUserPageId};
     testing_race::ActOnFetchStore store_{backing_};
@@ -240,17 +242,13 @@ TEST_F(FkParentHoldTest, AChildMovedOffTheParentInABankedSetIsNotAClear) {
 // violation names), killed by the held-before cell; the `IS` released with
 // the `S`, killed by the intention cell.
 
-std::string OtherRun(std::optional<CommandDispatcher>& other, const std::string& sql) {
-    return other->Dispatch(sql).response;
-}
-
 TEST_F(FkParentHoldTest, AFailedCheckGivesBackTheAbsentParentsHold) {
     Session child;
     ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
     const std::string failed = Run(child, "INSERT INTO c VALUES (99)");
     ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
 
-    const std::string parent = OtherRun(other_, "INSERT INTO p VALUES (99, 0)");
+    const std::string parent = Other("INSERT INTO p VALUES (99, 0)");
     EXPECT_EQ(parent.rfind("INSERTED", 0), 0u)
         << "the failed check still holds the absent parent: " << parent;
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
@@ -266,7 +264,7 @@ TEST_F(FkParentHoldTest, AHoldTakenByAnEarlierStatementSurvivesTheViolation) {
     const std::string failed = Run(child, "INSERT INTO c VALUES (99)");
     ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
 
-    const std::string parent = OtherRun(other_, "INSERT INTO p VALUES (99, 0)");
+    const std::string parent = Other("INSERT INTO p VALUES (99, 0)");
     EXPECT_EQ(parent.rfind("ERR TXN_CONFLICT", 0), 0u)
         << "the violation gave back a hold an earlier statement took: " << parent;
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
@@ -282,10 +280,10 @@ TEST_F(FkParentHoldTest, TheRelationsIntentionOutlivesAFailedChecksHold) {
     const std::string failed = Run(child, "INSERT INTO c VALUES (99), (10)");
     ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
 
-    const std::string index = OtherRun(other_, "CREATE INDEX pv ON p (v)");
+    const std::string index = Other("CREATE INDEX pv ON p (v)");
     EXPECT_EQ(index.rfind("ERR TXN_CONFLICT", 0), 0u)
         << "a relation X was granted over a held parent row: " << index;
-    EXPECT_EQ(OtherRun(other_, "INSERT INTO p VALUES (99, 0)").rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(Other("INSERT INTO p VALUES (99, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
 }
 }  // namespace

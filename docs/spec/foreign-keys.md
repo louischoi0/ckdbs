@@ -227,7 +227,9 @@ writer of that row on whichever core either runs (§3a).
   then `S`, then the descent - held to the decide, and a busy parent is
   waited for rather than refused, the wait recorded as the insert's own
   row borrow records its (AY-Q3). A parent the statement wrote itself is
-  its own `X`, which never refuses its own `S`.
+  its own `X`, which never refuses its own `S`. **The arm is unreachable**:
+  a self-referencing key cannot be declared
+  (`ForeignKeyCheckTest.ASelfReferencingForeignKeyCannotBeDeclared`).
 - **Without a lock table** - a dispatcher built without one - nothing is
   held, and a busy parent is `NoteBlockingWriter`'s `IsInFlight` poll
   (AO-S3's wait, unchanged). With a table a busy verdict under a granted
@@ -298,6 +300,12 @@ D9(a) is built as ratified, and its costs are the engine's:
   The hoist records which rows its asks took (`FkParentVerdicts::Asked`);
   the self-referencing arm tests the same before its ask, and is
   unreachable while no self-referencing key can be declared.
+  **A statement that parked after its hoist keeps the `S`**: it runs again
+  whole, and its first run's `S` is still in the transaction's ledger, so
+  the re-run's test reads it as held before. Inside `BEGIN` - a violation
+  after a wait on a child row another transaction held - the `S` then
+  stays until the rollback, as it did before AZ-S5
+  (`known-gaps.md`, Foreign keys).
 
 An existence-only unit that only a `DELETE` would take is not built; it is
 a change to AR2's units, and would be put forward as its own item if these
@@ -482,7 +490,8 @@ implementation is the failure mode to refuse in review.
 - **No gap locks.** D8 as ratified closes write skew by named units; the
   foreign key's is the parent row's `S` (§2a), and an absent parent is
   held by the same `S` on its key, which a concurrent insert of that
-  parent's `X` meets.
+  parent's `X` meets - for as long as the check stands; a failed one gives
+  back the `S` its own ask took (§2c).
 - **Both checks wait, on the lock table** (AY-S5): the forward check on
   the parent row's `S`, the reverse check on the undecided child row's
   writer. A waiter records `waiter -> holder` in the wait-for graph and a
