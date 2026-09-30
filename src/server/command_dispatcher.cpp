@@ -2825,15 +2825,11 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // bound, TXN_CONFLICT for an unsettled relation - and both are
     // compatibility surfaces a client switches on.
     auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_,
-                                         after_assertion_publish_run_for_test_);
+                                         *enforcer_, after_assertion_publish_run_for_test_);
     if (!created.ok()) {
         return {ErrorReply(created.status()), false, 0, created.status()};
     }
-    exec::AssertionDdlResult& result = created.value();
-    const bool adopted = result.live.has_value();
-    if (adopted) {
-        enforcer_->Adopt(std::move(*result.live));
-    }
+    const exec::AssertionDdlResult& result = created.value();
     // After the adoption, deliberately (the review's asymmetry note): a
     // sync failure then answers ERR with the live registry still enforcing
     // what the log already holds - over-enforcing until the operator
@@ -2842,16 +2838,16 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
 
     // Truthful now in the other direction: the check runs (AST07), so a
-    // freshly created assertion **is** enforcing - and says so. The
-    // conjunction matters after a restart, when the catalog row survives
-    // and this registry does not; SHOW derives the same answer the same
-    // way, so the two surfaces cannot disagree.
+    // freshly created assertion **is** enforcing - and says so: a create
+    // that returns was adopted inside `CreateAssertion` (AZ-S2). After a
+    // restart the catalog row survives and this registry does not, so SHOW
+    // derives its answer from the registry instead.
     std::ostringstream os;
     os << "CREATED ASSERTION name=" << stmt.name
        << " assertion_id=" << result.assertion_id << " on=" << stmt.table_name
        << " cabin_root=" << result.cabin_root << " rows=" << result.rows_incorporated
        << " groups=" << result.group_count
-       << " enforcing=" << ((kWritePathEnforcesAssertions && adopted) ? 1 : 0);
+       << " enforcing=" << (kWritePathEnforcesAssertions ? 1 : 0);
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "created assertion '" + stmt.name + "' on '" + stmt.table_name +
                               "' (built, enforcing)");

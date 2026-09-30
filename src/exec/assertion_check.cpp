@@ -59,6 +59,21 @@ Status Refuse(const LiveAssertion& a, std::span<const parser::AstValue> values,
         a.name, parts, a.aggregate, a.sum_col_name, a.cabin.bound()));
 }
 
+// One cabin's base, headers only: what a checkpoint and a create both log.
+wal::AssertionCabinSnapshot SnapshotOf(std::uint64_t assertion_id, const BoundCabin& cabin) {
+    wal::AssertionCabinSnapshot out;
+    out.assertion_id = assertion_id;
+    for (const BoundCabin::GroupSnapshot& group : cabin.SnapshotGroups()) {
+        wal::AssertionSnapshotGroup entry;
+        entry.group_id = group.group_id;
+        entry.count = group.count;
+        entry.sum = group.sum;
+        entry.key = group.key;
+        out.groups.push_back(std::move(entry));
+    }
+    return out;
+}
+
 }  // namespace
 
 // ---- The latched surface ------------------------------------------------
@@ -123,17 +138,7 @@ std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotLocked() con
     std::vector<wal::AssertionCabinSnapshot> out;
     out.reserve(live_.size());
     for (const auto& [assertion_id, live] : live_) {
-        wal::AssertionCabinSnapshot cabin;
-        cabin.assertion_id = assertion_id;
-        for (const BoundCabin::GroupSnapshot& group : live->a.cabin.SnapshotGroups()) {
-            wal::AssertionSnapshotGroup entry;
-            entry.group_id = group.group_id;
-            entry.count = group.count;
-            entry.sum = group.sum;
-            entry.key = group.key;
-            cabin.groups.push_back(std::move(entry));
-        }
-        out.push_back(std::move(cabin));
+        out.push_back(SnapshotOf(assertion_id, live->a.cabin));
     }
     // Ordered by assertion id, for the reason SnapshotGroups() orders by group
     // id: a checkpoint's bytes must be a function of its input, and an
@@ -158,13 +163,32 @@ Status AssertionEnforcer::VisitSnapshots(const wal::SnapshotVisitor& visit) cons
 }
 
 void AssertionEnforcer::Adopt(LiveAssertion assertion) {
+    auto live = MakeLive(std::move(assertion));
+    const LatchGuard guard(latch_.get());
+    AdoptLocked(std::move(live));
+}
+
+Status AssertionEnforcer::AdoptLogged(LiveAssertion assertion, const wal::SnapshotVisitor& log) {
+    auto live = MakeLive(std::move(assertion));
+    const std::vector<wal::AssertionCabinSnapshot> run = {
+        SnapshotOf(live->a.assertion_id, live->a.cabin)};
+    const LatchGuard guard(latch_.get());
+    if (Status s = log(run); !s.ok()) return s;
+    AdoptLocked(std::move(live));
+    return Status::OK();
+}
+
+std::shared_ptr<AssertionEnforcer::Live> AssertionEnforcer::MakeLive(
+    LiveAssertion assertion) const {
     auto live = std::make_shared<Live>();
     live->a = std::move(assertion);
     if (latch_ != nullptr) live->chain_latch = std::make_unique<Latch>();
+    return live;
+}
+
+void AssertionEnforcer::AdoptLocked(std::shared_ptr<Live> live) {
     const std::uint64_t id = live->a.assertion_id;
     const catalog::Oid oid = live->a.target_oid;
-
-    const LatchGuard guard(latch_.get());
     live_.insert_or_assign(id, std::move(live));
     auto& ids = by_oid_[oid];
     if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);

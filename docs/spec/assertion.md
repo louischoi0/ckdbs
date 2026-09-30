@@ -325,7 +325,8 @@ unit.
 On a multi-core instance:
 
 - **`CREATE ASSERTION` is built where its session is** and adopts into the
-  instance's registry. It was built by the relation's owner from PW1c-6c,
+  instance's registry, before its row and with its base logged under the
+  same hold (§8.1, AZ-S2). It was built by the relation's owner from PW1c-6c,
   shipped to it and adopted into its registry; the ship and its three ring
   kinds went at AT-S5d. **The build holds the relation `X`** (§8.1, AT-S5e),
   so no writer on any core runs beside it.
@@ -522,6 +523,14 @@ use since AO-S6e-c is the family's **wait**, and §6.1 and §6.2 say where.
   > needing more than 65,535 chunks is refused `OutOfSpace` at the writer,
   > before any chunk is appended, as a group too large for any record is.
   >
+  > **Two writers make a base, and their runs never cross.** Core 0's
+  > checkpoints write a run for every assertion the registry enforces, and
+  > `CREATE ASSERTION` writes one for its new cabin as it is adopted (§8.1).
+  > Both append under the directory latch, the create's run and its
+  > adoption under one hold (AZ-S2), so two runs of one id never
+  > interleave, and every checkpoint after a create's run names the
+  > assertion.
+  >
   > **An unrecovered assertion stays unrecovered until it is dropped and
   > created again.** Its relation's writes are refused on every core
   > (§6.1). No checkpoint snapshots it - a checkpoint snapshots the
@@ -628,12 +637,21 @@ forever, and skipping it and seeing the commit would understate it.
 The steps below are three entry points - `PrepareAssertionDef`
 (validation and the id), the build, the publish - and since AT-S5d all
 three run where the session is (§6.1); the build was the relation owner's
-until then. AS6a's base is logged at the end of the *build* rather than
-after the publish, the order the owner's build needed because it could
-not see core 0's row and had to reply before it existed. What that costs is
-an `ASSERT_SNAPSHOT` for an assertion whose publish then fails — a base for
-a cabin no catalog row names, which no mount folds, since a mount folds
-only what `ListAssertions` returns.
+until then. **The build is adopted into the registry before the publish,
+and AS6a's base is logged under the same hold of the directory latch**
+(AZ-S2, `AssertionEnforcer::AdoptLogged`). A core-0 checkpoint snapshots
+exactly the registry, so a create adopted after its row left a window in
+which a checkpoint wrote a run without it; once the redo start passed the
+create's own run, a mount found no base and the assertion came up
+unenforcing. Adopted first but logged outside the hold, a checkpoint's run
+of the same id could cross the create's chunk by chunk, and recovery
+discards both (§7, AS6a). The adoption is safe before the row because the
+relation `X` is held across all of it: no writer meets the assertion before
+it is published. **A publish that is then refused evicts the directory**
+before its `ASSERT_DROP`; a refused base adopts nothing. What remains is an
+`ASSERT_SNAPSHOT` for an assertion whose publish failed — a base for a
+cabin no catalog row names, which no mount folds, since a mount folds only
+what `ListAssertions` returns.
 
 1. Create-time validation (§3.1).
 2. Full scan of the target relation where the session is, inside the

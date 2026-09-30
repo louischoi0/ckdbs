@@ -1,16 +1,21 @@
 #include "kds/exec/assertion_recover.hpp"
 
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/assertion_check.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/storage/device_page_store.hpp"
@@ -608,6 +613,94 @@ TEST_F(AssertionRecoverTest, AChunkOutOfSequenceDiscardsItsRun) {
     EXPECT_TRUE(report.value().assertions[0].recovered);
     EXPECT_EQ(report.value().assertions[0].partial_runs_discarded, 1u);
     EXPECT_EQ(rebuilt.group_count(), live.group_count());
+}
+
+// **A create's publish run and a checkpoint's run of the same id never
+// interleave** (AZ-S2, AZ-R2). Recovery keys runs by id alone, so two runs
+// of one id crossed chunk by chunk - C0 C1 P0 C2 P1 P2 - are both discarded,
+// and the assertion comes up unenforcing. `AdoptLogged` holds the directory
+// latch from before the publish run until the adoption, and a checkpoint
+// snapshots under the same latch, so the second run waits for the first.
+//
+// Each writer stops where the other's chunk would have to land for the
+// crossing: the create after announcing itself and after its first chunk,
+// the checkpoint after its second. With the one hold, each wait of the
+// create's times out - the checkpoint is parked on the latch - and the log
+// reads P0 P1 P2 C0 C1 C2.
+//
+// **Mutation**, measured: `AdoptLogged` releasing the latch between the
+// adoption and the log, killed - the log reads C0 C1 P0 C2 P1 P2.
+TEST_F(AssertionRecoverTest, ACreatesPublishRunAndACheckpointsRunOfItNeverInterleave) {
+    BoundCabin cabin(BoundAggregate::kSum, /*bound=*/1'000'000);
+    FillToChunk(cabin);
+    for (int i = 0; i < 700; ++i) {  // a third chunk, so a run has a middle
+        cabin.EnsureGroupId(Key("more-" + std::string(60, 'k') + std::to_string(i)));
+    }
+    const auto chunks = SnapshotChunks(cabin);
+    ASSERT_GT(chunks.size(), 2u) << "a run of two chunks has no middle to cross at";
+    const std::size_t groups = cabin.group_count();
+
+    LiveAssertion created;
+    created.assertion_id = kAssertionId;
+    created.target_oid = 4000;
+    created.aggregate = BoundAggregate::kSum;
+    created.cabin = std::move(cabin);
+    AssertionEnforcer registry(/*shared=*/true);
+
+    std::mutex m;
+    std::condition_variable cv;
+    bool announced = false;
+    bool checkpoint_mid_run = false;
+    bool publish_began = false;
+    bool checkpoint_done = false;
+    const auto signal = [&](bool& flag) {
+        const std::lock_guard<std::mutex> lock(m);
+        flag = true;
+        cv.notify_all();
+    };
+    // Bounded: with the one hold, the create's waits are for a checkpoint
+    // parked on the latch the create holds.
+    const auto await = [&](const bool& flag) {
+        std::unique_lock<std::mutex> lock(m);
+        return cv.wait_for(lock, std::chrono::milliseconds(200), [&] { return flag; });
+    };
+
+    std::thread create([&] {
+        const Status s = registry.AdoptLogged(
+            std::move(created), [&](const std::vector<wal::AssertionCabinSnapshot>&) -> Status {
+                signal(announced);
+                (void)await(checkpoint_mid_run);
+                AppendChunk(chunks[0]);
+                signal(publish_began);
+                (void)await(checkpoint_done);
+                for (std::size_t i = 1; i < chunks.size(); ++i) AppendChunk(chunks[i]);
+                return Status::OK();
+            });
+        EXPECT_TRUE(s.ok()) << s.message();
+    });
+
+    // Core 0's checkpoint, once the create has begun.
+    ASSERT_TRUE(await(announced)) << "the create never reached its log";
+    const Status snapshot = registry.VisitSnapshots(
+        [&](const std::vector<wal::AssertionCabinSnapshot>& cabins) -> Status {
+            EXPECT_EQ(cabins.size(), 1u) << "the checkpoint ran without the created assertion";
+            AppendChunk(chunks[0]);
+            AppendChunk(chunks[1]);
+            signal(checkpoint_mid_run);
+            (void)await(publish_began);
+            for (std::size_t i = 2; i < chunks.size(); ++i) AppendChunk(chunks[i]);
+            signal(checkpoint_done);
+            return Status::OK();
+        });
+    create.join();
+    ASSERT_TRUE(snapshot.ok()) << snapshot.message();
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(/*from_lsn=*/0, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered)
+        << "the two runs crossed and recovery discarded both";
+    EXPECT_EQ(rebuilt.group_count(), groups);
 }
 
 TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {

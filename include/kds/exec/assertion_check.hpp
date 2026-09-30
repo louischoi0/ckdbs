@@ -209,6 +209,14 @@ public:
     std::optional<LiveAssertion::Counters> CountersOf(std::uint64_t assertion_id) const;
 
     void Adopt(LiveAssertion assertion);
+    // **A create's adoption** (AZ-S2, AZ-R2): `log` runs over the new
+    // cabin's snapshot and the assertion enters the registry, under **one**
+    // hold of the directory latch. Adopted before its publish run, a
+    // checkpoint's run of the same id could interleave with it chunk by
+    // chunk, and recovery discards both; adopted after, a checkpoint in
+    // between wrote a run without it. `log` first, so a refused run adopts
+    // nothing. The caller evicts on any later failure.
+    Status AdoptLogged(LiveAssertion assertion, const wal::SnapshotVisitor& log);
     // Forgets `assertion_id` in **both** senses: the live directory if the
     // registry holds one, and the unenforceable record if it holds that
     // instead. A DROP says the id, not which.
@@ -354,6 +362,10 @@ private:
     void ReleaseHoldLocked(std::uint64_t serial);
     std::vector<wal::AssertionCabinSnapshot> SnapshotLocked() const;
     void PublishDeclaredLocked() noexcept;
+    // `Adopt`'s two halves: the directory built outside the latch, entered
+    // under it.
+    std::shared_ptr<Live> MakeLive(LiveAssertion assertion) const;
+    void AdoptLocked(std::shared_ptr<Live> live);
 
     // **Nothing declared, asked without the latch** (the AT-S5d review). The
     // write path asks the registry on every row of every relation, and a

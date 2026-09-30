@@ -193,12 +193,6 @@ struct AssertionDdlResult {
     std::size_t rows_incorporated = 0;
     std::size_t group_count = 0;
 
-    // Everything the write hook needs, resolved here where the statement,
-    // the schema and the build are all in hand - the dispatcher moves it
-    // into its `AssertionEnforcer`. An optional rather than a value because
-    // a moved-from one held beside a published root would look exactly like
-    // an empty relation's.
-    std::optional<LiveAssertion> live;
 };
 
 // The live half of a **surviving** assertion, rebuilt from its stored
@@ -250,15 +244,18 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 // manager, which is the pre-MVCC engine exactly). `wal` may be null: the
 // build is then unlogged, like every other DDL today.
 //
-// **Publishing does not enforce.** The write-path check is AST07's; a
-// caller that reports `enforcing=1` because a root exists is lying.
+// **The build is adopted into `enforcer` before the row is written**
+// (AZ-S2), with its publish run logged under the same hold of the
+// registry's latch, and evicted again if the row is refused. The caller
+// holds the relation `X` across the call, so no writer meets the
+// assertion before it is published.
 //
-// `after_publish_run_for_test`, when set, runs once, after the build's
-// publish run is logged and immediately before the `sys.assertions` row -
-// the window a checkpoint on another core can fall into (AZ-S2).
+// `after_publish_run_for_test`, when set, runs once, after the adoption and
+// immediately before the `sys.assertions` row - the window a checkpoint on
+// another core falls into.
 StatusOr<AssertionDdlResult> CreateAssertion(
     catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
-    const txn::ReadView& check_view, wal::WalManager* wal,
+    const txn::ReadView& check_view, wal::WalManager* wal, AssertionEnforcer& enforcer,
     const std::function<void()>& after_publish_run_for_test = {});
 
 // `DROP ASSERTION`: the catalog row retired, `ASSERT_DROP` logged when

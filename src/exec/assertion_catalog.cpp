@@ -547,36 +547,6 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
     }
     live.chain = build.value().chain;
     live.cabin = std::move(build.value().cabin);
-
-    // **The new cabin's base, at its build** (AS6a, RC07). Without it an
-    // assertion created after the last checkpoint has no base in any range: the
-    // mount cannot recover it, so it stays out of the registry, so the completion
-    // checkpoint - which snapshots the registry - cannot give it one either, and
-    // `enforcing=0` is *permanent* until DROP + CREATE. With a long
-    // `checkpoint_interval_ms` that is every new assertion.
-    //
-    // Logged before the publish rather than after it, the order the
-    // owner-built path needed while the build ran on another core and could
-    // not wait for core 0's row (PW1c-6c, retired at AT-S5d). What it costs
-    // is an `ASSERT_SNAPSHOT` for an assertion whose publish then fails - a
-    // base no catalog row names, which no mount folds, because a mount folds
-    // only what `ListAssertions` returns. Moving it after the publish would
-    // be a durability change of its own, and is not made here.
-    if (wal != nullptr) {
-        wal::AssertionCabinSnapshot base;
-        base.assertion_id = assertion_id;
-        for (const BoundCabin::GroupSnapshot& group : live.cabin.SnapshotGroups()) {
-            wal::AssertionSnapshotGroup entry;
-            entry.group_id = group.group_id;
-            entry.count = group.count;
-            entry.sum = group.sum;
-            entry.key = group.key;
-            base.groups.push_back(std::move(entry));
-        }
-        if (Status s = wal::LogAssertionSnapshot(*wal, base); !s.ok()) {
-            return s.WithContext("publishing assertion \"" + stmt.name + "\"'s group snapshot");
-        }
-    }
     return out;
 }
 
@@ -585,7 +555,7 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
 StatusOr<AssertionDdlResult> CreateAssertion(
     catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
     const txn::ReadView& check_view, wal::WalManager* wal,
-    const std::function<void()>& after_publish_run_for_test) {
+    AssertionEnforcer& enforcer, const std::function<void()>& after_publish_run_for_test) {
     // **The order is validate -> build -> publish** (§8.1): the three entry
     // points a cross-core create split across until AT-S5d, back to back.
     auto prepared = PrepareAssertionDef(catalog, store, stmt);
@@ -594,6 +564,31 @@ StatusOr<AssertionDdlResult> CreateAssertion(
     auto build = BuildAssertionCabin(catalog, store, stmt, prepared.value().assertion_id,
                                      check_view, wal);
     if (!build.ok()) return build.status();
+
+    // ---- The new cabin's base, adopted with it (AS6a, RC07; AZ-S2) --------
+    //
+    // Without a base of its own, an assertion created after the last
+    // checkpoint has none in any range: the mount cannot recover it, and
+    // `enforcing=0` is permanent until DROP + CREATE. The run is logged and
+    // the directory adopted under one hold of the registry's latch
+    // (`AdoptLogged`), because a core-0 checkpoint snapshots exactly the
+    // registry: one landing between the two would write a run without this
+    // assertion, and once the redo start passed this run the mount found no
+    // base at all. Adopting here, before the row, is safe for the relation:
+    // its writers wait on the build's relation `X` until the statement ends.
+    // A base for an assertion whose publish then fails is harmless - a
+    // mount folds only what `ListAssertions` returns.
+    const std::uint64_t assertion_id = prepared.value().assertion_id;
+    const PageId cabin_root = build.value().cabin_root;
+    if (Status s = enforcer.AdoptLogged(
+            std::move(build.value().live),
+            [wal](const std::vector<wal::AssertionCabinSnapshot>& run) -> Status {
+                if (wal == nullptr) return Status::OK();
+                return wal::LogAssertionSnapshot(*wal, run.front());
+            });
+        !s.ok()) {
+        return s.WithContext("publishing assertion \"" + stmt.name + "\"'s group snapshot");
+    }
     if (after_publish_run_for_test) after_publish_run_for_test();
 
     // ---- The publish: the single commit point (§8.1a) ---------------------
@@ -606,25 +601,25 @@ StatusOr<AssertionDdlResult> CreateAssertion(
     // fact (AST07, whose check steps make a plan a function of the
     // assertion set) is the task that must make this publish invalidate
     // plans, and it owns choosing the door.
-    if (Status s = InsertAssertion(catalog, store, wal, prepared.value().assertion_id,
+    if (Status s = InsertAssertion(catalog, store, wal, assertion_id,
                                    prepared.value().target_oid, stmt.name, stmt.source_text,
-                                   build.value().cabin_root);
+                                   cabin_root);
         !s.ok()) {
-        if (Status drop = EmitAssertDrop(wal, prepared.value().assertion_id,
-                                         build.value().cabin_root);
-            !drop.ok()) {
+        // Out of the registry first, so no checkpoint snapshots it after
+        // its discard marker; then the marker.
+        enforcer.Evict(assertion_id);
+        if (Status drop = EmitAssertDrop(wal, assertion_id, cabin_root); !drop.ok()) {
             return drop;
         }
         return s;
     }
 
     AssertionDdlResult result;
-    result.assertion_id = prepared.value().assertion_id;
+    result.assertion_id = assertion_id;
     result.target_oid = prepared.value().target_oid;
-    result.cabin_root = build.value().cabin_root;
+    result.cabin_root = cabin_root;
     result.rows_incorporated = build.value().rows_incorporated;
     result.group_count = build.value().group_count;
-    result.live.emplace(std::move(build.value().live));
     return result;
 }
 
