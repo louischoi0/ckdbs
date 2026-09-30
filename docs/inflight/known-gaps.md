@@ -465,6 +465,13 @@ statement about an engine that no longer exists; re-verify or strike it.
   Owner: the following letter (`workorder-at-m3-uniformity.md` AT-0
   item 6), with `docs/spec/foreign-keys.md` §3a stating the window.
 
+  **Reproduced at `64b97e7`** on `ay-s4-fk-cells-red` (AY-S4):
+  `FkCrossCoreRigTest.DISABLED_AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`
+  answers `INSERTED` and `DELETED 1` and leaves a child of a deleted
+  parent, 5/5. Disabled until AY-S5 builds the fence. A second orphaning
+  shape, a child `UPDATE` moving off the parent, needs no second core and is
+  a bug entry (`bugs/a-parent-delete-misses-a-child-an-open-update-moved-off-it.md`).
+
 The entry that stood here before it - a transaction whose
 participant was deleting the parent answered `busy` across cores where one
 core answered `violation`, and could not clear inside an explicit

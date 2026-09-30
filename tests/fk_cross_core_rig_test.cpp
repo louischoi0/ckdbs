@@ -37,12 +37,16 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <functional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/base/current_core.hpp"
+#include "kds/catalog/catalog.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
@@ -330,6 +334,321 @@ TEST(FkCrossCoreRigTest, ADrainedCabinSetDoesNotClearAParentAChildOnAnotherCoreR
     // and the walk is what answers.
     const std::string del = d0.Dispatch("DELETE FROM p WHERE id = 7").response;
     EXPECT_NE(del.find("FK_VIOLATION"), std::string::npos) << del;
+}
+
+// ---- D9(a)'s cells, red first (AY-S4) --------------------------------------
+//
+// **Red until AY-S5, and disabled until then**, so the suite that gates
+// every step stays a gate; each cell's red at the commit that wrote it is in
+// `workorder-ay-following-letter.md` §6, AY-S4. D9(a) as marked: the
+// child's forward check takes `IS` on the parent relation, then `S` on the
+// parent row, **then** descends (AY-Q2), and holds both to its decide; the
+// self-referencing arm takes the same pair per row (AY-Q3); and a parent
+// `DELETE` meeting a child row whose writer holds no `S` on it - a child
+// `DELETE`, or an `UPDATE` moving the fk column - waits for that writer
+// mid-walk rather than being refused (AY-Q8). AR2 E3 retires when the
+// parent-`DELETE`-against-child-write cells pass (`raft-marks-2026-09-29.md`
+// §4).
+
+// One session's statements on one core, each run only once the cell allows
+// it: `allowed` is how many may have started, `done` how many have ended.
+// The statements are fixed before `Start()`, so `outs` never reallocates
+// under a running statement.
+struct Script {
+    explicit Script(std::vector<std::string> s)
+        : statements(std::move(s)), outs(statements.size()) {}
+    Session session;
+    std::vector<std::string> statements;
+    std::vector<DispatchOutcome> outs;
+    std::function<bool()> pred;
+    std::atomic<std::size_t> allowed{0};
+    std::atomic<std::size_t> done{0};
+
+    void Allow(std::size_t n) { allowed.store(n, std::memory_order_release); }
+    bool Done(std::size_t n) const { return done.load(std::memory_order_acquire) >= n; }
+    const std::string& Reply(std::size_t i) const { return outs[i].response; }
+};
+
+sched::Coro RunScript(CommandDispatcher& d, Script& s) {
+    for (std::size_t i = 0; i < s.statements.size(); ++i) {
+        s.pred = [&s, i] { return s.allowed.load(std::memory_order_acquire) > i; };
+        co_await sched::WaitUntil{&s.pred};
+        co_await d.DispatchAsync(s.statements[i], &s.session, &s.outs[i]);
+        s.done.store(i + 1, std::memory_order_release);
+    }
+    co_return Status::OK();
+}
+
+// A script per core over `p` (parents 7 and 8) and `c`, plus whatever
+// `seed` writes from core 0 and `prepare` does before the reactors start;
+// both scripts are submitted then and wait for their first `Allow`.
+struct FenceRig {
+    FenceRig(std::vector<std::string> on0, std::vector<std::string> on1,
+             const std::vector<std::string>& seed = {},
+             const std::function<bool(TwoCoreRig&)>& prepare = nullptr)
+        : core0(std::move(on0)), core1(std::move(on1)), r({}) {
+        if (r.rig == nullptr) return;
+        if (Status s = r.Seed(); !s.ok()) {
+            ADD_FAILURE() << s.message();
+            return;
+        }
+        CommandDispatcher& d0 = r.rig->core(0).dispatcher();
+        std::vector<std::string> rows = {"INSERT INTO p VALUES (7, 0)",
+                                         "INSERT INTO p VALUES (8, 0)"};
+        rows.insert(rows.end(), seed.begin(), seed.end());
+        for (const std::string& sql : rows) {
+            const std::string reply = d0.Dispatch(sql).response;
+            if (reply.rfind("ERR", 0) == 0) {
+                ADD_FAILURE() << sql << " -> " << reply;
+                return;
+            }
+        }
+        if (prepare && !prepare(*r.rig)) return;
+        r.rig->core(0).scheduler().Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground, RunScript(r.rig->core(0).dispatcher(), core0)));
+        r.rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground, RunScript(r.rig->core(1).dispatcher(), core1)));
+        r.rig->Start();
+        ok = true;
+    }
+
+    // Runs `script` through its statement `n - 1` on `core` and waits.
+    bool RunTo(std::uint32_t core, Script& script, std::size_t n) {
+        script.Allow(n);
+        return KickUntil(*r.rig, core, [&] { return script.Done(n); }, 4000ms);
+    }
+    std::size_t Waiters(catalog::Oid rel, std::uint64_t pk) {
+        return r.rig->locks().WaiterCount(txn::LockKey::Tuple(rel, pk));
+    }
+    // Whether `script`'s statement `n - 1` is parked on the row `(rel, pk)`
+    // rather than finished: what "parks on the parent row" means below.
+    bool ParkedOn(std::uint32_t core, Script& script, std::size_t n, catalog::Oid rel,
+                  std::uint64_t pk) {
+        script.Allow(n);
+        KickUntil(*r.rig, core, [&] { return script.Done(n) || Waiters(rel, pk) >= 1; }, 4000ms);
+        return !script.Done(n) && Waiters(rel, pk) >= 1;
+    }
+    // Whether `script`'s statement `n - 1` is still unanswered after
+    // `given`: a wait, whichever unit it is on.
+    bool StillWaiting(std::uint32_t core, Script& script, std::size_t n,
+                      std::chrono::milliseconds given = 1500ms) {
+        script.Allow(n);
+        KickUntil(*r.rig, core, [&] { return script.Done(n); }, given);
+        return !script.Done(n);
+    }
+
+    // The scripts before the rig: coroutine frames the reactors hold borrow
+    // them, and reverse destruction tears the frames down first.
+    Script core0;
+    Script core1;
+    FkRig r;
+    bool ok = false;
+};
+
+// E3 (i). A child's open reference parks a parent `DELETE` **on the parent
+// row**, which the child's `S` holds until it decides. Without the `S` the
+// delete reaches its reverse check and waits on the child's row instead -
+// the interval after the child's write, which was always covered. The cell
+// pins the unit because the interval before the write (the window cell
+// below) is covered by nothing else.
+TEST(FkCrossCoreRigTest, DISABLED_AChildsOpenReferenceParksAParentDeleteOnTheParentRow) {
+    FenceRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
+
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 1, f.r.parent_oid, 7))
+        << "the parent DELETE did not park on the parent row: " << f.core0.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
+}
+
+// E3 (iii). A multi-key parent `DELETE` declares a range `X`, which meets
+// the child's tuple `S` only in the lock table's verify arm: AY-S2's
+// containment wake is what parks it, on the parent row's entry.
+TEST(FkCrossCoreRigTest, DISABLED_ARangeDeleteOfParentsParksOnAChildsOpenReference) {
+    FenceRig f({"DELETE FROM p WHERE id >= 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 1, f.r.parent_oid, 7))
+        << "the range DELETE did not park on the referenced parent: " << f.core0.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    // Statement-atomic: 8 is unreferenced, and the refusal over 7 keeps it.
+    EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
+    EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p").response, "id\\n7\\n8");
+}
+
+// E3 (iv), AY-Q3. The self-referencing arm is not hoisted and checks per
+// row; it takes the same `IS` + `S` there. No `CREATE TABLE` can declare a
+// self-reference (`ASelfReferencingForeignKeyCannotBeDeclared`), so the key
+// is written through the catalog's door, as a split's rows are.
+TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildsOpenReferenceParksTheParentsDelete) {
+    catalog::Oid s_oid = 0;
+    FenceRig f({"DELETE FROM s WHERE id = 1"}, {"BEGIN", "INSERT INTO s VALUES (2, 1)", "COMMIT"},
+               {"CREATE TABLE s (id int64, pid int64 NULL) BTREE", "INSERT INTO s VALUES (1, NULL)"},
+               [&](TwoCoreRig& rig) {
+                   auto oid = rig.core(0).catalog().FindTableOidByName("s");
+                   if (!oid.ok()) return false;
+                   s_oid = oid.value();
+                   auto fk = rig.core(0).catalog().CreateForeignKey(s_oid, 1, s_oid);
+                   EXPECT_TRUE(fk.ok()) << fk.status().message();
+                   return fk.ok();
+               });
+    ASSERT_TRUE(f.ok);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1).rfind("INSERTED", 0), 0u) << f.core1.Reply(1);
+
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 1, s_oid, 1))
+        << "the parent DELETE did not park on the parent row: " << f.core0.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
+}
+
+// E3 (v), and AY-Q1's cost. Two transactions each write a child of 7 and
+// then update 7: each holds `S(7)` and asks `X(7)` over the other's, and
+// the second asker closes the cycle and is refused naming deadlock. Without
+// the `S` the two updates serialise on the row's `X`.
+TEST(FkCrossCoreRigTest, DISABLED_TwoChildWritersThatThenUpdateTheirParentDeadlock) {
+    FenceRig f(
+        {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 1 WHERE id = 7", "ROLLBACK"},
+        {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 2 WHERE id = 7", "ROLLBACK"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(0, f.core0, 2)) << f.core0.Reply(1);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+
+    EXPECT_TRUE(f.ParkedOn(0, f.core0, 3, f.r.parent_oid, 7))
+        << "a parent UPDATE ran past another transaction's open child: " << f.core0.Reply(2);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3));
+    EXPECT_NE(f.core1.Reply(2).find("deadlock"), std::string::npos) << f.core1.Reply(2);
+
+    // The victim's rollback releases its `S`, and the first update proceeds.
+    ASSERT_TRUE(f.RunTo(1, f.core1, 4)) << f.core1.Reply(3);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(3); }, 4000ms));
+    EXPECT_EQ(f.core0.Reply(2), "UPDATED 1");
+    ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
+}
+
+// E3 (ii), the window itself: a parent deleted **between the child's
+// check and its write**, which only the `S` held from the hoist closes
+// (`foreign-keys.md` §3a). The window is the insert path's one seam
+// (`SetBeforeInsertLogForTest`) on a two-row `INSERT`: both parents are
+// resolved before any row, row 1 is placed, and core 1 deletes row 2's
+// parent before row 2 exists.
+//
+// **Where the rows land is what makes it deterministic.** The seam runs
+// under the hold that placed row 1 (AT-S21), so the delete's reverse walk
+// of `c` stops at row 1's leaf until core 0 goes on. Row 1 is therefore the
+// rightmost leaf's and row 2 the leftmost's: the walk has passed row 2's
+// leaf before row 2 is written, whatever order the two cores then run in.
+//
+// The reactors are not started; both dispatchers run on threads of the
+// cell's own, `insert_log_crash_rig_test.cpp`'s shape.
+TEST(FkCrossCoreRigTest, DISABLED_AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan) {
+    FkRig r({});
+    ASSERT_NE(r.rig, nullptr);
+    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
+    CommandDispatcher& d0 = r.rig->core(0).dispatcher();
+    CommandDispatcher& d1 = r.rig->core(1).dispatcher();
+
+    for (const char* row : {"INSERT INTO p VALUES (1, 0)", "INSERT INTO p VALUES (8, 0)"}) {
+        ASSERT_EQ(d0.Dispatch(row).response.rfind("INSERTED", 0), 0u) << row;
+    }
+    // Committed children of 1 at ids 20..10000, so `c` spans several leaves
+    // and 10 is free at the far left.
+    for (std::uint64_t id = 20; id <= 10000; id += 10) {
+        const std::string sql = "INSERT INTO c VALUES (" + std::to_string(id) + ", 1)";
+        ASSERT_EQ(d0.Dispatch(sql).response.rfind("INSERTED", 0), 0u) << sql;
+    }
+    // Core 1's first transaction carves its id window through `Sync()`,
+    // which waits out every held dirty frame - core 0's leaf, inside the
+    // seam. Carved now, it is not the thing the seam waits on.
+    ASSERT_EQ(d1.Dispatch("INSERT INTO p VALUES (9, 0)").response.rfind("INSERTED", 0), 0u);
+
+    std::string deleted;
+    std::atomic<bool> delete_done{false};
+    std::thread other;
+    // One-shot by `other`: resetting the hook from inside it would destroy
+    // the function while it runs.
+    d0.SetBeforeInsertLogForTest([&] {
+        if (other.joinable()) return;
+        other = std::thread([&] {
+            deleted = d1.Dispatch("DELETE FROM p WHERE id = 8").response;
+            delete_done.store(true, std::memory_order_release);
+        });
+        // Long enough for the walk to pass the leftmost leaf; the delete
+        // then waits on row 1's leaf, or on the parent row, or is done.
+        const auto until = std::chrono::steady_clock::now() + 500ms;
+        while (!delete_done.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(2ms);
+        }
+    });
+    const std::string inserted = d0.Dispatch("INSERT INTO c VALUES (100000, 1), (10, 8)").response;
+    d0.SetBeforeInsertLogForTest(nullptr);
+    ASSERT_TRUE(other.joinable()) << "the seam never ran; the cell tested nothing";
+    other.join();
+
+    // At most one of the two may have succeeded: both is a child of 8
+    // with no 8.
+    const bool child_written = inserted.rfind("INSERTED", 0) == 0;
+    const bool parent_gone = deleted.rfind("DELETED 1", 0) == 0;
+    EXPECT_FALSE(child_written && parent_gone)
+        << "insert: " << inserted << "; delete: " << deleted;
+    const std::string orphans = d0.Dispatch("SELECT id FROM c WHERE pid = 8").response;
+    const std::string parent = d0.Dispatch("SELECT id FROM p WHERE id = 8").response;
+    EXPECT_TRUE(orphans == "id" || parent == "id\\n8")
+        << "children of 8: " << orphans << "; parent: " << parent;
+}
+
+// AY-Q8. A child `DELETE` holds no `S` on the parent it stops referencing.
+// The parent `DELETE` meets its row mid-walk, undecided, and waits for that
+// writer rather than being refused; the writer's commit leaves the parent
+// unreferenced.
+TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAnOpenChildDeleteAndPassesAtItsCommit) {
+    FenceRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "DELETE FROM c WHERE id = 1", "COMMIT"},
+               {"INSERT INTO c VALUES (7)"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1), "DELETED 1");
+
+    EXPECT_TRUE(f.StillWaiting(0, f.core0, 1))
+        << "the parent DELETE was answered with the child's writer open: " << f.core0.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    EXPECT_EQ(f.core0.Reply(0), "DELETED 1");
+}
+
+// AY-Q8's other shape, and the one that is quietly wrong if answered early:
+// an `UPDATE` moving the child off 7 holds `S(8)`, not `S(7)`. A parent
+// `DELETE` of 7 that reads the moved row and answers "no children" removes
+// a parent the child's rollback then references again.
+TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback) {
+    FenceRig f({"DELETE FROM p WHERE id = 7"},
+               {"BEGIN", "UPDATE c SET pid = 8 WHERE id = 1", "ROLLBACK"},
+               {"INSERT INTO c VALUES (7)"});
+    ASSERT_TRUE(f.ok);
+    ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
+    ASSERT_EQ(f.core1.Reply(1), "UPDATED 1");
+
+    EXPECT_TRUE(f.StillWaiting(0, f.core0, 1))
+        << "the parent DELETE was answered with the child's writer open: " << f.core0.Reply(0);
+
+    ASSERT_TRUE(f.RunTo(1, f.core1, 3)) << f.core1.Reply(2);
+    ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(1); }, 4000ms));
+    EXPECT_NE(f.core0.Reply(0).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(0);
+    // Whatever the answer, the child row references 7 again, so 7 is there.
+    EXPECT_EQ(f.r.rig->core(0).dispatcher().Dispatch("SELECT id FROM p WHERE id = 7").response,
+              "id\\n7");
 }
 
 }  // namespace
