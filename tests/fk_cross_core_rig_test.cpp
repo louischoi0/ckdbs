@@ -47,6 +47,9 @@
 
 #include "kds/base/current_core.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/cabin_optimizer_exec.hpp"
+#include "kds/stats/cabin_optimizer.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
@@ -724,6 +727,88 @@ TEST(FkCrossCoreRigTest, ASetBankedWhileAChildInsertIsOpenIsDeclinedAndTheWalkAn
     EXPECT_NE(f.core0.Reply(1).find("FK_VIOLATION"), std::string::npos) << f.core0.Reply(1);
     EXPECT_EQ(AccessUses(d0, "FilterScan", "c"), walks_before + 1)
         << "the parent's DELETE was answered from a set banked while its child was open";
+}
+
+// **The controller's build banks what it did not read, since AY-S6** - by
+// announcing each seed's set before it walks, as the serve path's build
+// does (`cabin.md` §6), and asking the banking gate before it walks
+// (`raft-marks-2026-09-30.md` §12). Until then `BuildSeededSets` walked and
+// then committed: a child of 7 written on another core behind the walk -
+// on a leaf it had already read - found 7 unobserved, so its hook appended
+// nothing, and the set banked without it. With the clearing return that is
+// an orphan: the parent's `DELETE` is cleared from the set.
+//
+// The walk is driven from the cell's thread over the rig's one store, with
+// core 0's catalog, the instance's Cabin store and core 0's manager, and
+// its page-boundary switch (`enabled`) is the seam: at the third leaf,
+// core 1's dispatcher writes a child of 7 at id 5, which sorts into the
+// first. Not at the second: the walk's scan ring holds the leaf it last
+// fetched shared until its next fetch, so the first leaf is free only once
+// the second is fetched - which is when another core's writer, waiting on
+// that latch, would get it. **Red at `445e00d`**: the set banked empty and
+// `DELETED 1`.
+TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBanks) {
+    FkRig r({});
+    ASSERT_NE(r.rig, nullptr);
+    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
+    CommandDispatcher& d0 = r.rig->core(0).dispatcher();
+    CommandDispatcher& d1 = r.rig->core(1).dispatcher();
+
+    for (const char* row : {"INSERT INTO p VALUES (1, 0)", "INSERT INTO p VALUES (7, 0)"}) {
+        ASSERT_EQ(d0.Dispatch(row).response.rfind("INSERTED", 0), 0u) << row;
+    }
+    // Children of 1 at ids 10..10000, so `c` spans several leaves and 5
+    // sorts into the first.
+    for (std::uint64_t id = 10; id <= 10000; id += 10) {
+        const std::string sql = "INSERT INTO c VALUES (" + std::to_string(id) + ", 1)";
+        ASSERT_EQ(d0.Dispatch(sql).response.rfind("INSERTED", 0), 0u) << sql;
+    }
+    // Core 1's id window, carved before the seam.
+    ASSERT_EQ(d1.Dispatch("INSERT INTO p VALUES (9, 0)").response.rfind("INSERTED", 0), 0u);
+
+    // An optimizer-owned Cabin on `c.pid`, and 7 sighted once: seeded, not
+    // observed (the auto threshold is two).
+    catalog::Catalog& catalog = r.rig->core(0).catalog();
+    auto c_oid = catalog.FindTableOidByName("c");
+    ASSERT_TRUE(c_oid.ok());
+    auto cabin = catalog.CreateCabin(c_oid.value(), /*col_pos=*/1, catalog::kCabinOriginAuto);
+    ASSERT_TRUE(cabin.ok()) << cabin.status().message();
+    ASSERT_EQ(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response, "id");
+    stats::CabinStore& cabins = *r.rig->core(0).cabins();
+    ASSERT_EQ(cabins.SightedUnobservedOf(cabin.value()).size(), 1u);
+
+    stats::ActionItem extend;
+    extend.action = stats::CabinAction::kExtend;
+    extend.reason = stats::ActionReason::kCoverageExpansion;
+    extend.cabin_id = cabin.value();
+    extend.rel_oid = c_oid.value();
+    extend.col_pos = 1;
+    std::string written;
+    int boundaries = 0;
+    // The action's boundary, then one per leaf: the fourth is the third leaf.
+    const std::function<bool()> enabled = [&] {
+        if (++boundaries == 4) written = d1.Dispatch("INSERT INTO c VALUES (5, 7)").response;
+        return true;
+    };
+    stats::CabinOptimizer controller;
+    exec::CabinOptimizerExecutor executor(catalog, r.rig->store(), cabins, controller,
+                                          &r.rig->core(0).transactions());
+    ASSERT_TRUE(executor.Apply({extend}, enabled).ok());
+    ASSERT_GE(boundaries, 4) << "the walk read under three leaves; the cell tested nothing";
+    ASSERT_EQ(written.rfind("INSERTED", 0), 0u) << written;
+
+    parser::AstValue seven;
+    seven.type = parser::ValueType::kInt;
+    seven.int_val = 7;
+    auto key = stats::MakeCabinKey(cabin.value(), seven);
+    ASSERT_TRUE(key.has_value());
+    const stats::CabinSet set = cabins.Find(*key);
+    ASSERT_TRUE(set.valid()) << "the build banked nothing";
+    EXPECT_EQ(set.size(), 1u) << "the child written behind the walk is not in the set";
+
+    const std::string deleted = d0.Dispatch("DELETE FROM p WHERE id = 7").response;
+    EXPECT_NE(deleted.find("FK_VIOLATION"), std::string::npos)
+        << "the parent was cleared from a set missing its child: " << deleted;
 }
 
 }  // namespace

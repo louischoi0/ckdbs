@@ -144,3 +144,15 @@ Recorded on `worktree-ay-s6-fk-cabin-clearing-return` at `2d2d96b`.
 | **Word** | **"Serve-proof + hint cell (Recommended)"**: *"Restore f247c52's return. Cells, red first on today's walk: (1) a drained set clears from the Cabin with a Cabin probe in SHOW ACCESS and no walk, and a child committed on the other core is found in the set; (2) a set banked while a child insert is open is declined by the gate and the walk answers; (3) a heap child with a failed hint abandons the set and walks. Mutants: 'clears unconditionally', killed by (3); 'the walk kept', killed by (1)'s probe; D9(a)'s S removed, to show the return depends on it."* |
 | **Mark** | AY-S6's exit as that option states it. The order's "a skipped hook" is read as the placement-to-hook gap, the cell D9(a)'s mutant needs |
 | **Recorded at** | `workorder-ay-following-letter.md` §6 |
+
+## 12. AY-S6: the controller's build announced and gated
+
+Recorded on `worktree-ay-s6-fk-cabin-clearing-return` at `445e00d`, during
+AY-S6's review.
+
+| | |
+|---|---|
+| **Question** | The review's C1: with `CABIN_OPTIMIZER` on, `BuildSeededSets` walks and commits its set with no announce and no banking gate, so a child committed on another core during the walk is missing from the set, and the restored clearing return then clears its parent - an orphan. What does AY-S6 do? |
+| **Word** | **"Close it in S6 (Recommended)"**: *"BuildSeededSets makes the serve path's two calls: announce each seed's set before the walk (BeginRecording), and ask the gate (AnyUnresolved, CommitCeiling) before committing. That is the known-gaps entry's own prescription. Red first, with a two-core cell that commits a child during the controller's walk; the gap entry closes. The review's open question (CREATE/DROP CABIN take no relation lock) is checked in the same stage."* |
+| **Mark** | AY-S6 closes `known-gaps.md`'s "the cabin optimizer's build does not announce" entry as stated, and checks the `CREATE`/`DROP CABIN` question |
+| **Recorded at** | `workorder-ay-following-letter.md` §6 |
