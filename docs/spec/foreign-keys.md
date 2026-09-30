@@ -418,12 +418,11 @@ walk child_rel
   child `DELETE`, an `UPDATE` of other columns, one moving the column off.
   A violation costs a prefix; only a pass costs the relation.
 - Cost: a full child walk per deleted parent. `CREATE CABIN ON
-  child(fk_col)` (F6) pays for the **violation** half of it: the reverse
-  check consults an active Cabin on the child's fk column **read-only**,
-  an observed value's entry set is resolved and key-re-checked, and a live
-  match there answers `kFkViolation` or busy without walking. A set that
-  drains answers "no children" without walking too (§3a), so a Cabin pays
-  for the pass as well. A heap child with a failed hint, or a row an
+  child(fk_col)` (F6) pays for both halves of it: the reverse check
+  consults an active Cabin on the child's fk column **read-only**, an
+  observed value's entry set is resolved and key-re-checked, a live match
+  there answers `kFkViolation` or busy without walking, and a set that
+  drains answers "no children" without walking (§3a). A heap child with a failed hint, or a row an
   undecided writer moved off the parent, gives the set up and walks.
 
 There is no reverse check for parent UPDATE: K2 makes pk update

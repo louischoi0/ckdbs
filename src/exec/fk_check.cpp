@@ -39,6 +39,15 @@ parser::AstValue PkValue(std::uint64_t pk) {
     return value;
 }
 
+// **A row an undecided writer may have moved off the value it is checked
+// against** (AY-Q8): written by a transaction the check's view cannot see,
+// over an earlier version. The undo test first: it is a field read, and the
+// visibility test a latched window lookup for a recent writer.
+bool UndecidedWithEarlierVersion(const txn::ReadView& view, const heap::PageView::Tuple& tuple) {
+    return tuple.undo_ptr != txn::kNoUndoPtr &&
+           txn::CheckVisibility(view, tuple) == txn::CheckVerdict::kBusy;
+}
+
 // Reads the foreign-key column of one tuple as an id.
 //
 // Returns nullopt for a column that is not an integer in this row - which
@@ -168,8 +177,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // so the walk below covers the child's one structure, and an answer
     // from this core is an answer for the whole relation. The Cabin is handled where
     // it is read rather than by a guard over the whole function: a set may
-    // *find* a child and may not *clear* one (AT-R15, D4's first half) - a
-    // rule made while the store was per-core and kept since (below).
+    // *find* a child and, since AY-S6, *clear* a parent (below).
 
     FkReverseOutcome outcome;
 
@@ -220,8 +228,8 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     if (!is_btree) {
                         // No descent to heal the hint with. Abandon the
                         // set for this check - `ServeFromCabin`'s answer
-                        // for the same reason - and take the walk, which
-                        // is where every exit from this loop goes now.
+                        // for the same reason - and take the walk: a set
+                        // given up is not exhausted and clears nothing.
                         options.cabins->Unobserve(*key);
                         usable = false;
                         break;
@@ -270,9 +278,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     // the writer's rollback references again. The set is
                     // given up for this check and the walk, which reads such
                     // a row's earlier version, answers.
-                    if (tuple.value().undo_ptr != txn::kNoUndoPtr &&
-                        txn::CheckVisibility(check_view, tuple.value()) ==
-                            txn::CheckVerdict::kBusy) {
+                    if (UndecidedWithEarlierVersion(check_view, tuple.value())) {
                         usable = false;
                         break;
                     }
@@ -294,26 +300,11 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 }
             }
 
-            // **An exhausted set clears the parent** (AY-S6, restoring the
-            // return AT-S5f took away). Every entry was checked and none is a
-            // live or undecided child, and the set holds every pk that
-            // carries this value (`cabin.md` §1). Two things made that
-            // untrue and neither stands:
-            //
-            // - **The store was a dispatcher's own** until AT-S7, so a child
-            //   written on another core never reached this set. It is the
-            //   instance's.
-            // - **A child could be written past the set's count** - fixed at
-            //   `Find` - or between its placement and its hook. D9(a) closes
-            //   both: every writer that sets the fk to this parent holds the
-            //   parent row's `S` from before its descent, and the caller
-            //   holds that row's `X`, so no such writer is between its check
-            //   and its decide while this runs. A writer that holds no `S` -
-            //   a child `DELETE`, or an `UPDATE` moving the column off - is
-            //   met above, as a match or as a moved row that gives the set up.
-            //
-            // A loop that gave the set up - a heap child's failed hint, a
-            // moved row - is not exhausted, and the walk answers.
+            // **An exhausted set clears the parent** (AY-S6): every entry
+            // checked, none a live or undecided child. `foreign-keys.md` §3a
+            // states what that rests on - the instance's one store, D9(a)'s
+            // `S` under the caller's `X`, the banking gate - and a loop that
+            // gave the set up above is not exhausted.
             if (usable) {
                 outcome.verdict = FkVerdict::kPass;
                 outcome.served_from_cabin = true;
@@ -387,10 +378,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             return value.status();
         }
         if (!value.value().has_value() || *value.value() != parent_pk) {
-            // The undo test first: it is a field read, and the visibility
-            // test a latched window lookup for a recent writer.
-            if (tuple.value().undo_ptr != txn::kNoUndoPtr &&
-                txn::CheckVisibility(check_view, tuple.value()) == txn::CheckVerdict::kBusy) {
+            if (UndecidedWithEarlierVersion(check_view, tuple.value())) {
                 const auto bytes = tuple.value().payload;
                 moved.push_back(Moved{tuple.value().trx_id, tuple.value().deleted,
                                       tuple.value().undo_ptr,
