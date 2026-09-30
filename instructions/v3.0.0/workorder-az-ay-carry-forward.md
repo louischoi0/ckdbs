@@ -702,7 +702,8 @@ is recorded here, not closed.
   the check reads as absent protects no row - while any `S` is held no
   other transaction can take the key's `X`, so absent means absent at every
   grant, or deleted by this transaction under its own `X`. That closes the
-  gap, deletes `HoldsRow` and the asked set, and flips the held-before cell.
+  gap, deletes the took-it test (`HoldsRow` then, `TookShare` since
+  `198181e`) and the asked set, and flips the held-before cell.
   It is recorded in §2c and `known-gaps.md`, and not assumed.
 - **Taken:**
   - §5's "an absent parent is held by the same `S`";
@@ -727,15 +728,18 @@ landed on `main` before this session.
 
 | stage | what landed | its code commits | suite |
 |---|---|---|---|
-| AZ-S1 | the catalog tail arm (item 2) | `aa9c3ef`, `55a5aab`, `2bb1f9d` | on `main` |
+| AZ-S1 | the catalog tail arm (item 2) | `aa9c3ef`, `55a5aab`, `2bb1f9d` | 3059/3059 at `2bb1f9d` (its commit message; landed on `main`) |
 | AZ-S2 | a create adopted with its publish run under one hold (item 1) | `647eec7`, `38bb8a8`, `47c9f6b` | 3063/3063 at `38bb8a8` |
-| AZ-S3 | the run cut to the ring, refused at admission, failed closed at a checkpoint (item 7) | `197eb2e`, `a7d4030`, `9af46f2` | 3071/3071 at `9af46f2` |
-| AZ-S4 | the two unreproduced failures instrumented (item 6) | `6ebe6e1`, `67aa3e9` | 3059/3059 at `67aa3e9` |
-| AZ-S5 | a failed check gives back its own `S` (item 3) | `f882e75`, `92e14c7`, `d5b0165`, `198181e` | 3062/3062 at `d5b0165` |
+| AZ-S3 | the run cut to the ring, refused at admission, failed closed at a checkpoint (item 7) | `197eb2e`, `a7d4030`, `9af46f2` | 3069/3069 at `a7d4030`; after the review, 3071/3071 at `9af46f2` |
+| AZ-S4 | the two unreproduced failures instrumented (item 6) | `6ebe6e1`, `67aa3e9` | 3059/3059 at `6ebe6e1`; after the review, 3059/3059 at `67aa3e9` |
+| AZ-S5 | a failed check gives back its own `S` (item 3) | `f882e75`, `92e14c7`, `d5b0165`, `198181e` | 3062/3062 at `92e14c7`; after the review, 3062/3062 at `d5b0165` |
 | AZ-S6 | struck (item 4, accepted as priced) | - | - |
 
 The merged tree ran 3074/3074 under `-j8` at `273416c` and again at
-`9f170b1`, after the fix below.
+`9f170b1`, after the fix below. Every suite in this table was run by CLA
+in this session through `ctest --output-on-failure -LE heap-suspended -j8`;
+the logs stayed in the session scratchpad, not the tree. The post-review
+runs are the rows' own results, recorded here rather than in those rows.
 
 **The overhead, measured once over the whole change** (`ck-tester`,
 `build-release` from `git archive`, interleaved A/B, `cores = 1`,
@@ -755,7 +759,11 @@ The merged tree ran 3074/3074 under `-j8` at `273416c` and again at
   - The chain stopped there.
 - **The fix, `198181e`.** `TookShare` reads whether the ask appended the
   ledger's newest record (`LockHoldings::LastIs`), which is O(1). Its two
-  mutants were killed.
+  mutants were killed. **A third survives** (the close's review): the
+  ledger-grew guard removed, 3/3 runs. No synchronous shape leaves an
+  earlier statement's `S` as the newest record at a later statement's ask.
+  The one shape that does is a statement re-run after a park, which is the
+  recorded gap above. The guard stays, because AZ-R5 requires it.
 - **Second run: B `9f170b1`**
   (`bench/v3.0.0/results-az-s7-overhead-v2.7.0-568-g9f170b1.md`).
   - **Cell 3's K-dependent excess is gone**: −0.09 µs a row at K = 4,096 and
@@ -784,6 +792,17 @@ The merged tree ran 3074/3074 under `-j8` at `273416c` and again at
   - a `CREATE ASSERTION` over rows that already hold an oversized key is
     refused by the log rather than at admission.
 - **Item 5**, AQ and AR: their own letters, with AP first (AZ-Q5).
+- **Pre-existing, cited by AZ and not taken up**:
+  `a-ddl-rollback-compensates-logged-catalog-pages-unlogged.md` (AZ-R1).
+- **Recorded departures and leftovers of the stages**:
+  - AZ-S1: a refused report on a new page spends one reserved catalog page
+    (`known-gaps.md`);
+  - AZ-S3: the admission refusal carries no byte position, and the scan of
+    in-flight holds under a transaction holding many new groups was not
+    measured;
+  - AZ-S4: a failed `ASSERT` in a rig cell can destroy statements a reactor
+    still touches;
+  - AZ-S5: the self-referencing release is written and reached by no cell.
 - **The two `-j8` flakes (item 6)**: instrumented, not explained. The next
   failure prints its cause.
 

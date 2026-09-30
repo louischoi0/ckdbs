@@ -134,8 +134,8 @@ commit is 82–85 % of an update and would hide what is measured), BTREE,
 `log_level = warn`, otherwise defaults; **a fresh server and data file for
 every (cell, run)**: 25 pairs. The two servers of a pair run side by side and
 the driver alternates which goes first per block, so only one is active at a
-time. `strict` was not measured. Behaviour: no code changed in this stage, so
-the test suite was **not executed**; correctness of the measured statements
+time. `strict` was not measured. Behaviour: B carries `198181e`'s engine
+change, and this run did **not execute** the test suite; correctness of the measured statements
 is witnessed only by zero driver errors in every arm of every run, and by
 `SHOW ASSERTIONS` reporting `enforcing=1` on both servers in every cell-1
 run (`show_assertions` in each `c1-*` JSON).
