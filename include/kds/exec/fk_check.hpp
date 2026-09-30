@@ -12,6 +12,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/read_view.hpp"
+#include "kds/txn/undo_log.hpp"
 
 // The two foreign-key checks (docs/spec/foreign-keys.md §§2-3, FK-M2 and
 // FK-M3): does the parent a child row names exist, and does any child still
@@ -89,13 +90,12 @@ enum class FkVerdict : std::uint8_t {
 // out anyway because a check that cannot run is worse than a check that runs
 // slowly, and because "can't happen" is not a thing to encode as an error.
 // `busy_trx`, when given, is set to the transaction holding the parent row
-// on a `kBusy` verdict and to 0 otherwise. **AO-S3 needs it because a busy
-// answer becomes a wait**, and a wait has to name what it is waiting for:
-// the dispatcher waits for it - on the parent row's slot where there is a
-// lock table, on `IsInFlight(busy_trx)` where there is none
-// (`WaitForParentRowWriter`). Optional so the paths that
-// cannot wait - `Dispatch()`, with no reactor to park on - are unchanged
-// and keep F3's retryable refusal.
+// on a `kBusy` verdict and to 0 otherwise. **Since AY-S5 only a dispatcher
+// with no lock table reads it**: with one, the caller holds the parent
+// row's `S` before it descends, a writer's `X` refuses that ask, and the
+// refusal is the wait - so a busy answer under the `S` does not arise.
+// Without one, `IsInFlight(busy_trx)` is AO-S3's poll. Optional so the
+// paths that cannot wait keep F3's retryable refusal.
 StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
                                        const catalog::TableAccess& parent,
                                        std::uint64_t parent_pk,
@@ -180,6 +180,13 @@ struct FkReverseOptions {
     // There is deliberately no `declared` flag beside it: that one exists to
     // decide n=1 versus n=2 *when recording*, and this check never records.
     std::uint64_t cabin_id = 0;
+
+    // The log a child row's earlier version is read back through (AY-Q8):
+    // a row an undecided `UPDATE` moved off the parent carries another
+    // value in its page and the parent's in the version before it. Null
+    // answers every such row busy, which waits where a read would not have
+    // had to and never answers "no children" wrongly.
+    txn::UndoLog* undo = nullptr;
 };
 
 struct FkReverseOutcome {
@@ -187,6 +194,12 @@ struct FkReverseOutcome {
 
     // The answer came from the Cabin's observed set: no walk happened.
     bool served_from_cabin = false;
+
+    // On `kBusy`, the child row the answer rests on and the undecided
+    // transaction writing it (AY-Q8): what a parent `DELETE` waits for,
+    // since that writer holds no `S` on the parent to be refused by.
+    std::uint64_t busy_trx = 0;
+    std::uint64_t busy_pk = 0;
 };
 
 // **The reverse check** (§3): does any row of `child` reference `parent_pk`

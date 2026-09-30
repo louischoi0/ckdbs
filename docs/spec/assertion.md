@@ -579,7 +579,12 @@ build holds the relation `X`** (AT-S5e, the operator's mark on
 `workorder-at-m3-uniformity.md` AT-0 item 13): every writer of the relation
 holds its `IX` from before its admission until it decides, so the build
 starts when none is mid-statement and every writer arriving during it parks
-until the directory is adopted, then re-runs against it. The holder is a
+until the directory is adopted, then re-runs against it. **On a relation
+other relations reference, the `X` waits for every open child writer too**
+(D9(a), AY-Q4; `foreign-keys.md` §2c): a child writer holds the parent
+relation's `IS` until it decides, so a steady stream of child writers can
+refuse the `CREATE` `TxnConflict` at the lock family's 1 s fault net, as
+AO-0 item 25 accepts for `DROP TABLE`. The holder is a
 transaction of the statement's own, rolled back at its end
 (`ddl-transactional.md` §5f). From AT-S5 until then a write on another core
 could land a row the scan had passed before the adoption, in neither the

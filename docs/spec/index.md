@@ -500,7 +500,14 @@ SHOW INDEXES
 > every pre-existing line must pass unchanged.
 
 `CREATE INDEX` and `DROP INDEX` run under a transaction;
-`docs/spec/ddl-transactional.md` owns what each guarantees.
+`docs/spec/ddl-transactional.md` owns what each guarantees. Both take the
+relation's `X` (AT-S5e), and **on a relation other relations reference
+that `X` waits for every open child writer's `IS` on it** as well as for
+the relation's own writers (D9(a), AY-Q4; `foreign-keys.md` §2c): a child
+writer holds the parent relation's `IS` and a parent row's `S` until it
+decides, so a steady stream of child writers can refuse the DDL
+`TxnConflict` at the lock family's 1 s fault net, as AO-0 item 25 accepts
+for `DROP TABLE`.
 
 An index's **name is unique instance-wide**, so `DROP INDEX` names only it.
 That is where an index and a Cabin differ and why: `(relation, column)`

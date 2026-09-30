@@ -435,44 +435,20 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Foreign keys
 
-- **A child's forward check holds nothing, so a parent can be deleted
-  between the check and the child's write — across cores.** Opened by
-  AT-S5f (2026-09-23) and found by its own `critics-developer` pass;
-  verified by source read at `f247c52` on `at-s5f-fk-local`.
+No open entry. **The check-to-write window closed at AY-S5** (on
+`ay-s5-d9a-parent-fence`): a child's forward check holds the parent row's
+`S` from before its descent to its decide (D9(a), `foreign-keys.md` §2a,
+§3a), so a parent `DELETE` on any core waits for it. The entry that stood
+here recorded the window from AT-S5f (verified at `f247c52`), and AY-S4
+reproduced it at `64b97e7`
+(`FkCrossCoreRigTest.AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`,
+an orphan 5/5). A second orphaning shape AY-S4 found - a parent `DELETE`
+answered "no children" over a child an undecided `UPDATE` had moved off it,
+the rollback then restoring the reference - closed in the same stage, the
+reverse check reading such a row's earlier version (AY-Q8); its bug entry
+went with it.
 
-  **Cost: a quiet wrong answer**, and the one `foreign-keys.md` §1 says a
-  constraint may not have — a committed child referencing a deleted
-  parent, both statements reporting success.
-
-  `ResolveForeignKeyParents` asks the lock table only on `kBusy`
-  (`src/server/command_dispatcher.cpp`, `WaitForParentRowWriter`'s one
-  caller), so a parent that passes is unheld from the check to the row
-  write. The parent's `DELETE` takes that row's `X` and walks the child
-  before marking, but the child row does not exist yet, so the walk is
-  honest and empty. **One core closes it by running to completion**
-  between the fork and the write; two reactors do not.
-
-  **What it replaced is wider, not narrower.** Until AT-S5f a passing
-  forward probe left a row-scoped reference intent on the parent's owner,
-  and that owner's `DELETE` answered busy while one was live — the
-  interval `[check, decide]`. The intent went with the probe protocol
-  (AT-R15's D5, the operator's ruling), and this window is what the
-  ruling entails rather than an oversight in carrying it out.
-
-  **The fix is D9(a)'s `S` fence** and needs nothing else: the parent's
-  `DELETE` already takes the row's `X` ahead of its walk, so an `S` the
-  child's check holds from the check to its decide is refused by it.
-  Owner: the following letter (`workorder-at-m3-uniformity.md` AT-0
-  item 6), with `docs/spec/foreign-keys.md` §3a stating the window.
-
-  **Reproduced at `64b97e7`** on `ay-s4-fk-cells-red` (AY-S4):
-  `FkCrossCoreRigTest.DISABLED_AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`
-  answers `INSERTED` and `DELETED 1` and leaves a child of a deleted
-  parent, 5/5. Disabled until AY-S5 builds the fence. A second orphaning
-  shape, a child `UPDATE` moving off the parent, needs no second core and is
-  a bug entry (`bugs/a-parent-delete-misses-a-child-an-open-update-moved-off-it.md`).
-
-The entry that stood here before it - a transaction whose
+The entry before that - a transaction whose
 participant was deleting the parent answered `busy` across cores where one
 core answered `violation`, and could not clear inside an explicit
 transaction (AO-S5(b) C1, verified on `ao-s5b-c1c2` over `25c5849`) -

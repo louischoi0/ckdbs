@@ -44,6 +44,7 @@ add_executable(kds_tests
     heap_chain_test.cpp
     btree_test.cpp
     btree_lookup_statement_test.cpp
+    fk_parent_hold_test.cpp
     btree_race_test.cpp
     index_key_test.cpp
     index_tree_test.cpp

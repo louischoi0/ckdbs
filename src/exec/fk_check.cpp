@@ -272,6 +272,8 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 if (seen_as == txn::CheckVerdict::kBusy) {
                     outcome.verdict = FkVerdict::kBusy;
                     outcome.served_from_cabin = true;
+                    outcome.busy_trx = tuple.value().trx_id;
+                    outcome.busy_pk = entry.pk;
                     return outcome;
                 }
             }
@@ -316,6 +318,23 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     Status inner = Status::OK();
     std::vector<parser::AstValue> scratch;
 
+    // **A row an undecided writer moved off the parent** (AY-Q8; found by
+    // AY-S4's cell `AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback`).
+    // Its page holds the writer's value and not the parent's, so the key
+    // test below skips it - and the writer's rollback would put the
+    // reference back after this check said "no children". Such a row is
+    // copied out here and read back through its undo after the walk, when
+    // no span is live: busy if the version the check's view can see
+    // references the parent. A fresh insert has no earlier version and is
+    // not collected.
+    struct Moved {
+        std::uint64_t trx_id = 0;
+        bool deleted = false;
+        std::uint64_t undo_ptr = 0;
+        std::vector<std::byte> payload;
+    };
+    std::vector<Moved> moved;
+
     auto visitor = [&](PageId, heap::PageView& page,
                        std::uint16_t slot) -> StatusOr<storage::VisitControl> {
         auto tuple = page.ReadTuple(slot);
@@ -339,14 +358,28 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             inner = value.status();
             return value.status();
         }
+        const txn::CheckVerdict seen_as = txn::CheckVisibility(check_view, tuple.value());
         if (!value.value().has_value() || *value.value() != parent_pk) {
+            if (seen_as == txn::CheckVerdict::kBusy && tuple.value().undo_ptr != txn::kNoUndoPtr) {
+                const auto bytes = tuple.value().payload;
+                moved.push_back(Moved{tuple.value().trx_id, tuple.value().deleted,
+                                      tuple.value().undo_ptr,
+                                      std::vector<std::byte>(bytes.begin(), bytes.end())});
+            }
             return storage::VisitControl::kContinue;
         }
-
-        const txn::CheckVerdict seen_as = txn::CheckVisibility(check_view, tuple.value());
         if (seen_as == txn::CheckVerdict::kAbsent) return storage::VisitControl::kContinue;
 
         verdict = seen_as == txn::CheckVerdict::kBusy ? FkVerdict::kBusy : FkVerdict::kViolation;
+        if (verdict == FkVerdict::kBusy) {
+            auto pk = RowKeystoneId(tuple.value().payload);
+            if (!pk.ok()) {
+                inner = pk.status();
+                return pk.status();
+            }
+            outcome.busy_trx = tuple.value().trx_id;
+            outcome.busy_pk = pk.value();
+        }
         return storage::VisitControl::kStop;
     };
 
@@ -388,6 +421,31 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     }
     if (!inner.ok()) return inner;
     if (!walked.ok()) return walked;
+
+    // The moved rows, only when the walk found nothing: a match already
+    // answers, and a moved row can only turn "no children" into busy.
+    for (Moved& row : moved) {
+        if (verdict != FkVerdict::kPass) break;
+        auto pk = RowKeystoneId(row.payload);
+        if (!pk.ok()) return pk.status();
+        bool references = true;  // with no log to read, the row may reference it
+        if (options.undo != nullptr) {
+            auto seen = txn::ResolveThroughUndo(check_view, *options.undo, row.trx_id, row.deleted,
+                                                row.undo_ptr, row.payload);
+            if (!seen.ok()) return seen.status();
+            references = false;
+            if (seen.value() == txn::Visibility::kVisible) {
+                auto value = ForeignKeyValue(child, child_column_no, row.payload, scratch);
+                if (!value.ok()) return value.status();
+                references = value.value().has_value() && *value.value() == parent_pk;
+            }
+        }
+        if (references) {
+            verdict = FkVerdict::kBusy;
+            outcome.busy_trx = row.trx_id;
+            outcome.busy_pk = pk.value();
+        }
+    }
 
     outcome.verdict = verdict;
     return outcome;

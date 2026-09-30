@@ -338,8 +338,8 @@ TEST(FkCrossCoreRigTest, ADrainedCabinSetDoesNotClearAParentAChildOnAnotherCoreR
 
 // ---- D9(a)'s cells, red first (AY-S4) --------------------------------------
 //
-// **Red until AY-S5, and disabled until then**, so the suite that gates
-// every step stays a gate; each cell's red at the commit that wrote it is in
+// **Written red at AY-S4 and disabled until AY-S5 built D9(a)**; each
+// cell's red at the commit that wrote it is in
 // `workorder-ay-following-letter.md` §6, AY-S4. D9(a) as marked: the
 // child's forward check takes `IS` on the parent relation, then `S` on the
 // parent row, **then** descends (AY-Q2), and holds both to its decide; the
@@ -454,7 +454,7 @@ struct ScriptRig {
 // the interval after the child's write, which was always covered. The cell
 // pins the unit because the interval before the write (the window cell
 // below) is covered by nothing else.
-TEST(FkCrossCoreRigTest, DISABLED_AChildsOpenReferenceParksAParentDeleteOnTheParentRow) {
+TEST(FkCrossCoreRigTest, AChildsOpenReferenceParksAParentDeleteOnTheParentRow) {
     ScriptRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
     ASSERT_TRUE(f.ok);
     ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
@@ -471,7 +471,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AChildsOpenReferenceParksAParentDeleteOnThePar
 // E3 (iii). A multi-key parent `DELETE` declares a range `X`, which meets
 // the child's tuple `S` only in the lock table's verify arm: AY-S2's
 // containment wake is what parks it, on the parent row's entry.
-TEST(FkCrossCoreRigTest, DISABLED_ARangeDeleteOfParentsParksOnAChildsOpenReference) {
+TEST(FkCrossCoreRigTest, ARangeDeleteOfParentsParksOnAChildsOpenReference) {
     ScriptRig f({"DELETE FROM p WHERE id >= 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
     ASSERT_TRUE(f.ok);
     ASSERT_TRUE(f.RunTo(1, f.core1, 2)) << f.core1.Reply(1);
@@ -491,7 +491,7 @@ TEST(FkCrossCoreRigTest, DISABLED_ARangeDeleteOfParentsParksOnAChildsOpenReferen
 // self-reference (`ASelfReferencingForeignKeyCannotBeDeclared`), so the key
 // is written through `Catalog::CreateForeignKey` directly, the way a
 // split relation's directory rows are written in the cells that need one.
-TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildsOpenReferenceParksTheParentsDelete) {
+TEST(FkCrossCoreRigTest, ASelfReferencingChildsOpenReferenceParksTheParentsDelete) {
     catalog::Oid s_oid = 0;
     ScriptRig f({"DELETE FROM s WHERE id = 1"}, {"BEGIN", "INSERT INTO s VALUES (2, 1)", "COMMIT"},
                {"CREATE TABLE s (id int64, pid int64 NULL) BTREE", "INSERT INTO s VALUES (1, NULL)"},
@@ -520,7 +520,7 @@ TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildsOpenReferenceParksThePar
 // child whose parent row is being written by an undecided transaction
 // waits for it, as a hoisted parent does, rather than being refused - and
 // passes when it commits.
-TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildWaitsOutItsParentsWriterAndPasses) {
+TEST(FkCrossCoreRigTest, ASelfReferencingChildWaitsOutItsParentsWriterAndPasses) {
     catalog::Oid s_oid = 0;
     ScriptRig f({"BEGIN", "INSERT INTO s VALUES (1, NULL)", "COMMIT"},
                 {"INSERT INTO s VALUES (2, 1)"},
@@ -548,7 +548,7 @@ TEST(FkCrossCoreRigTest, DISABLED_ASelfReferencingChildWaitsOutItsParentsWriterA
 // then update 7: each holds `S(7)` and asks `X(7)` over the other's, and
 // the second asker closes the cycle and is refused naming deadlock. Without
 // the `S` the two updates serialise on the row's `X`.
-TEST(FkCrossCoreRigTest, DISABLED_TwoChildWritersThatThenUpdateTheirParentDeadlock) {
+TEST(FkCrossCoreRigTest, TwoChildWritersThatThenUpdateTheirParentDeadlock) {
     ScriptRig f(
         {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 1 WHERE id = 7", "ROLLBACK"},
         {"BEGIN", "INSERT INTO c VALUES (7)", "UPDATE p SET v = 2 WHERE id = 7", "ROLLBACK"});
@@ -588,7 +588,7 @@ TEST(FkCrossCoreRigTest, DISABLED_TwoChildWritersThatThenUpdateTheirParentDeadlo
 //
 // The reactors are not started; both dispatchers run on threads of the
 // cell's own, `insert_log_crash_rig_test.cpp`'s shape.
-TEST(FkCrossCoreRigTest, DISABLED_AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan) {
+TEST(FkCrossCoreRigTest, AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan) {
     FkRig r({});
     ASSERT_NE(r.rig, nullptr);
     if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
@@ -649,7 +649,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AParentDeletedBetweenAChildsCheckAndItsWriteLe
 // The parent `DELETE` meets its row mid-walk, undecided, and waits for that
 // writer rather than being refused; the writer's commit leaves the parent
 // unreferenced.
-TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAnOpenChildDeleteAndPassesAtItsCommit) {
+TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAnOpenChildDeleteAndPassesAtItsCommit) {
     ScriptRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "DELETE FROM c WHERE id = 1", "COMMIT"},
                {"INSERT INTO c VALUES (7)"});
     ASSERT_TRUE(f.ok);
@@ -668,7 +668,7 @@ TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAnOpenChildDeleteAndPasse
 // an `UPDATE` moving the child off 7 holds `S(8)`, not `S(7)`. A parent
 // `DELETE` of 7 that reads the moved row and answers "no children" removes
 // a parent the child's rollback then references again.
-TEST(FkCrossCoreRigTest, DISABLED_AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback) {
+TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback) {
     ScriptRig f({"DELETE FROM p WHERE id = 7"},
                {"BEGIN", "UPDATE c SET pid = 8 WHERE id = 1", "ROLLBACK"},
                {"INSERT INTO c VALUES (7)"});

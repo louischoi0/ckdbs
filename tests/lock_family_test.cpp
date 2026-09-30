@@ -696,10 +696,10 @@ TEST_F(LockDeadlockTest, ARepeatableReadChildWaitsOutItsParentBecauseTheCheckVie
     // `FkViolation`. A level test here would answer the same `INSERT`
     // differently depending on nothing the client can see.
     //
-    // **The mutation** (measured, AY-Q9): a repeatable-read test in
-    // `WaitForParentRowWriter`'s table path - which asks the parent row's
-    // `S` and does not go through `NoteBlockingWriter`'s level guard - and
-    // the child is refused `TxnConflict` here, where the same statement at
+    // **The mutation** (measured at AY-Q9, against the wait's shape then):
+    // a repeatable-read test on the parent row's `S` ask - which the
+    // hoist's `BorrowOrWait` makes with `kCapable` since AY-S5 - and the
+    // child is refused `TxnConflict` here, where the same statement at
     // READ COMMITTED waits.
     ASSERT_EQ(Local("CREATE TABLE accounts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
     ASSERT_EQ(Local("CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts) BTREE")
@@ -810,10 +810,10 @@ TEST_F(LockDeadlockTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid) {
 TEST_F(LockDeadlockTest, AChildWhoseParentIsUnderARangeFenceWaitsForTheFence) {
     // A parent `DELETE` with a pk window declares a range `X` and takes no
     // tuple `X` per row, so the child's forward check - its tuple `S` on the
-    // parent row, asked because the row's header is busy - meets the fence
+    // parent row, held from before the descent since AY-S5 - meets the fence
     // only in the lock table's verify arm. Until AY-S2 that refusal had no
-    // slot and `WaitForParentRowWriter` returned on it, so the child was
-    // refused at once; it now waits on the fence's entry for its release.
+    // slot and the child was refused at once; it now waits on the fence's
+    // entry for its release.
     //
     // **Mutation**: the verify's scans registering nothing - the child is
     // answered at once, with the busy verdict.

@@ -925,7 +925,8 @@ private:
     // asks for a tuple and may be refused by a fence, and a declared range
     // may be refused by a tuple holder that wrote the row.
     std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit,
-                                       RepeatableReadWait rerun);
+                                       RepeatableReadWait rerun,
+                                       txn::LockMode mode = txn::LockMode::kExclusive);
 
     // Is `cond` a non-negative integer literal compared against `access`'s
     // primary key, and if so which id? The shared half of the test
@@ -1024,8 +1025,12 @@ private:
     std::optional<Status> BorrowRelationForDdl(txn::Transaction* holder, catalog::Oid oid,
                                                bool poisons = true);
 
+    // `mode` is the unit's: `X` for a writer's row, range or fence, `S` for
+    // a foreign key's parent row (D9(a), AY-S5). The intention asked above
+    // it follows - `IX` over `X`, `IS` over `S`.
     StatusOr<bool> BorrowChain(const WriteScope& scope, const txn::LockKey& unit,
-                               std::uint64_t* blocker = nullptr);
+                               std::uint64_t* blocker = nullptr,
+                               txn::LockMode mode = txn::LockMode::kExclusive);
 
     // **One wait per statement, and the registration of the one it drops
     // goes with it.** A statement can reach two asks that each want to
@@ -1311,14 +1316,13 @@ private:
     // AH-T1). OK when the value is not an id at all - the row codec has the
     // better error for that.
     //
-    // `check_view` is still taken, and is used by exactly one arm: a
-    // **self-referencing** foreign key, which `ResolveForeignKeyParents`
-    // deliberately does not hoist. See its comment for why that arm is not
-    // a hole in AH-R1.
+    // One arm descends here: a **self-referencing** foreign key, which
+    // `ResolveForeignKeyParents` deliberately does not hoist. It holds the
+    // parent row first, as the hoist does, and a refused hold is recorded
+    // as a wait on `scope` (AY-Q3).
     Status CheckForeignKeyOnWrite(const catalog::TableAccess& child,
                                   const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
-                                  const txn::ReadView& check_view,
-                                  const exec::FkParentVerdicts& held);
+                                  const exec::FkParentVerdicts& held, const WriteScope& scope);
 
     // The extraction pass (§2a, AH-R1): resolves every parent pk one row's
     // body names, into `into`, deduplicated by (parent relation, pk) so a
@@ -1328,28 +1332,14 @@ private:
     // whose rows are all known there, and once per row otherwise. Nothing it
     // does may depend on a row having been written, which is what makes it
     // legal to run early and what the self-referencing carve-out protects.
-    // `waiter` is the transaction this statement runs in (null in
-    // autocommit before one is opened); it is what decides whether a busy
-    // parent becomes a wait - see `WaitForParentRowWriter`.
+    // **Each parent is held before it is descended** (D9(a), AY-S5): `IS`
+    // on its relation and `S` on its row, into `scope`'s transaction until
+    // it decides, and a refused `S` is a wait. The descent reads a view
+    // minted after the grant.
     Status ResolveForeignKeyParents(const catalog::TableAccess& child,
                                      const std::vector<parser::AstValue>& body,
-                                     const txn::ReadView& check_view,
-                                     exec::FkParentVerdicts& into,
-                                     txn::Transaction* waiter = nullptr);
+                                     exec::FkParentVerdicts& into, const WriteScope& scope);
 
-    // **The forward check's wait** (AT-S5f): the parent row named by `pk`
-    // is held by `holder`, which has not decided, so the statement waits
-    // for it rather than being refused. Records the wait; it is taken in
-    // `AwaitStatementWaits`, outside every page span, exactly as a write
-    // block's is.
-    //
-    // Two shapes for one wait, and which one is used is a property of the
-    // dispatcher rather than of the parent: with a lock table the parent
-    // row's own borrow is asked for, so a holder on any core is waited
-    // for; without one there is no slot to park on and `NoteBlockingWriter`'s
-    // `IsInFlight` poll is the honest wait. The body states both.
-    void WaitForParentRowWriter(txn::Transaction* waiter, catalog::Oid parent_rel,
-                                std::uint64_t pk, std::uint64_t holder);
 
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
     // columns after the pk, which is the shape every downstream consumer
@@ -1364,8 +1354,19 @@ private:
     // Every child is walked here since AT-S5f, whoever owns it: the answer
     // is this core's for the whole relation, so there is nothing resolved
     // elsewhere to read.
+    //
+    // `waits_on` is set to the child writer a busy answer recorded a wait
+    // for (AY-Q8), and to 0 otherwise; the caller parks its walk on it.
     Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
-                                       const txn::ReadView& check_view);
+                                       const txn::ReadView& check_view, const WriteScope& scope,
+                                       std::uint64_t* waits_on);
+
+    // **The reverse check's wait** (AY-Q8): the child row `pk` of
+    // `child_rel` is being written by `holder`, which holds no `S` on the
+    // parent. Registers a wake on that row where a table and a reactor exist,
+    // records the block, and answers whether it was recorded.
+    bool WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t pk,
+                               std::uint64_t holder);
 
     // One access shape, recorded by hand because a check is not a step
     // (FK-M4). Never fails a write.

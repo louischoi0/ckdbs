@@ -192,32 +192,46 @@ dispatch fork. Two things pay for it, and neither is a ring round trip:
 
 **Nothing inside an open `WriteScope` waits or crosses**, which was
 AH-R1's rule and survives it: the per-row check answers from the resolved
-verdicts and local state alone.
+verdicts and local state alone. The self-referencing arm's hold (below) is
+asked there and, refused, is *recorded* - the insert's own row borrow is
+recorded the same way - and the statement ends to wait outside the scope.
 
-**A parent held by an undecided writer is waited for, on whichever core
-holds it.** The row's own borrow is what the wait is taken on: its writer
-holds the tuple `X` (AO-S6a), the lock table is the instance's (AO-S5(a)),
-and a refused `TryAcquire` leaves a wake registration whose slot the
-holder's release flips from whichever core releases. The statement then
-runs again whole. **A parent row under a range fence is waited for the same
-way** since AY-S2 - a parent `DELETE` with a pk window takes the range and
-no per-row `X`, so the child's ask meets the fence in the lock table's
-verify and is registered on the fence's entry; before AY-S2 that refusal
-carried no slot and the child was refused at once.
+**The parent row is held before it is read, and held to the decide**
+(D9(a), AY-S5). For each distinct parent the check takes `IS` on the parent
+relation and `S` on the parent row, into the transaction's borrows, and only
+then descends - under a check view minted after the grant, so a writer that
+decided in between is visible rather than busy. Both are released with the
+transaction's other borrows at commit or abort. So a parent `DELETE`, which
+takes the row's `X` before its reverse walk, waits for every open child
+writer of that row on whichever core either runs (§3a).
 
-- **A refused ask acquires nothing.** No queue position, nothing in the
-  transaction's holdings, only the registration — so the check takes no
-  fence over the parent and holds nothing after it. That is why D9(a)'s
-  `S` fence is still a separate decision and not a side effect of this
-  wait.
-- **A granted ask means the holder decided** between the header read and
-  the ask; the borrow is released at once and the statement takes the busy
-  verdict's retryable refusal, which is what a decided holder has always
-  produced.
-- **Without a lock table** — a dispatcher built without one — there is no
-  slot to park on, and `NoteBlockingWriter`'s `IsInFlight` poll (the
-  instance's since AX-S1) is the honest wait, woken by a poll rather than a
-  kick (AO-S3's, unchanged).
+- **`S` before the descent, never after** (AY-Q2, `[quiet-wrong]` if
+  reversed): after a passing descent a whole `DELETE` of the parent fits
+  before the grant, and the check would have passed a row that is gone.
+  With the `S` first, a parent row held by a writer is not read at all
+  until the writer decides (`FkParentHoldTest`).
+- **A refused `S` is the wait.** A writer of the parent row holds its `X`
+  (AO-S6a), and a parent `DELETE` with a pk window holds a range over it,
+  met in the lock table's verify (AY-S2); the refused ask registers a wake
+  on the entry that refused it, and the statement - which has written
+  nothing - parks and runs again at the release, from whichever core
+  releases. The waiter records `waiter -> holder` in the wait-for graph,
+  and a wait that would close a cycle is refused naming deadlock.
+- **Counted against `max_locks_per_txn`**, one `S` per distinct parent a
+  transaction references, and refused `ResourceExhausted` past it: no
+  escalation (AO-R10). Until AY-S5 the check asked the table with the cap
+  ignored, holding nothing after the ask.
+- **The self-referencing arm** is not hoisted (a parent the same statement
+  writes would read "no such parent" at the fork) and checks per row. It
+  takes the same pair per row - `IS`, which the write's `IX` already covers,
+  then `S`, then the descent - held to the decide, and a busy parent is
+  waited for rather than refused, the wait recorded as the insert's own
+  row borrow records its (AY-Q3). A parent the statement wrote itself is
+  its own `X`, which never refuses its own `S`.
+- **Without a lock table** - a dispatcher built without one - nothing is
+  held, and a busy parent is `NoteBlockingWriter`'s `IsInFlight` poll
+  (AO-S3's wait, unchanged). With a table a busy verdict under a granted
+  `S` does not arise; if it did, it would refuse retryably.
 - **At every isolation level**, because the check view is minted at the
   check and not at `BEGIN` (`txn.md` §5): a commit makes the parent
   visible to the re-run and an abort makes the violation terminal, so
@@ -246,6 +260,34 @@ write for carrying a foreign key.
 the KWP load path, which takes the same hoist at its own batch boundary.
 It never had text to re-run with and never needs any: nothing it does can
 park.
+
+### 2c. What the held `S` costs (AY-Q1, AY-Q4)
+
+D9(a) is built as ratified, and its costs are the engine's:
+
+- **Every `UPDATE` of a parent row waits while a child writer of it is
+  open**, not only its `DELETE`: the `UPDATE`'s row `X` meets the child's
+  `S`. The `S` protects the row's existence and the lock family has one
+  unit per row.
+- **Two transactions that each write a child of P and then update P
+  deadlock**, and the second to ask is refused naming deadlock; before
+  AY-S5 the two updates serialised on P's `X`. "Insert a trade, then
+  update its account" is that shape
+  (`FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentDeadlock`).
+- **A transaction referencing more distinct parents than
+  `max_locks_per_txn`** is refused `ResourceExhausted` (§2a).
+- **A DDL that takes a parent relation's `X`** - `CREATE INDEX`,
+  `DROP INDEX`, `CREATE ASSERTION` on it, and `DROP TABLE` - **waits for
+  every open child writer's `IS` on it**, and a steady stream of child
+  writers can refuse the DDL `TxnConflict` at the lock family's 1 s fault
+  net, as AO-0 item 25 accepts for `DROP TABLE` (AY-Q4).
+- **An `UPDATE` that sets an fk column takes the `S` at the hoist**, before
+  its walk, so one that matches no row still holds the parent it names
+  until its transaction decides.
+
+An existence-only unit that only a `DELETE` would take is not built; it is
+a change to AR2's units, and would be put forward as its own item if these
+costs are measured to matter.
 
 ### 2b. What the crossing was, and what went with it
 
@@ -298,41 +340,33 @@ so a read and this check both call `WalkHeads`.
 
 Verdicts are the local check's: no visible child → clear; a committed
 visible child → `kFkViolation` (terminal); a row with an in-flight
-`trx_id` → busy (`TxnConflict`, retryable, F3), whichever core is writing
-it. §4's one-MVCC rule is untouched.
+`trx_id` → busy, which the `DELETE` waits out (below), whichever core is
+writing it.
 
-**A parent being written is protected by the walk**: the child row is
-written before its transaction decides, the walk reads it, and an
-uncommitted row answers busy. That covers the interval `[the child's
-write, its decide]`.
+**Both intervals of a child write are closed since AY-S5.** A child writer
+holds the parent row's `S` from its check to its decide (§2a), and the
+parent's `DELETE` takes that row's `X` before it walks, so the `DELETE`
+waits for the child writer on whichever core either runs - before the
+child's row is written as well as after it. What stood here was the
+interval before the write, open across cores from AT-S5f, which removed the
+reference intent that had closed it: a `DELETE` on one core walked an honest
+empty child between another core's passing check and its row write, and
+both statements reported success over a child of a deleted parent.
+`FkCrossCoreRigTest.AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`
+reproduced it at `64b97e7`.
 
-**The interval before it is open across cores, and the intent used to
-close it** (AT-S5f's own finding, from its review). The forward check
-takes no borrow on a parent it passes, so between the check and the
-child's write there is nothing holding the parent still:
-
-```
-core 0: DELETE p WHERE id=7 — takes the row's X, walks the child, finds
-        nothing, marks, commits
-core 1: INSERT INTO c VALUES (7) — passed its check a moment earlier on
-        a live header, now writes the row and commits
-```
-
-and the result is a committed child referencing a deleted parent, both
-statements reporting success — §1's one forbidden answer. **On one core
-this cannot happen**: a statement runs to completion between the fork and
-the write, so the `DELETE` has no place to interleave. Across cores two
-reactors run at once and it can.
-
-What closed it was the reference intent: the probe granted one on a pass,
-and the parent's owner answered its own `DELETE` busy while one was live
-(`[check, decide]`, wider than the window needs). Nothing replaces it
-here, and nothing in this section should be read as claiming otherwise.
-**The replacement is D9(a)'s `S` fence** — the parent's `DELETE` already
-takes that row's `X` before it walks, so an `S` held from the check to
-the child's decide is refused by it and the window closes exactly. D9(a)
-is the following letter's (AT-0 item 6), and this window is its first
-named consequence: `docs/inflight/known-gaps.md` carries it until then.
+**A child writer that holds no `S` on the parent is met by the walk
+instead** (AY-Q8): a child `DELETE`, or an `UPDATE` moving the fk column
+off it. The walk answers busy and carries that writer's id and the row's pk
+out; the `DELETE` parks mid-walk on the row, nothing of the parent row
+written yet, and runs the check again at the writer's decide - a commit
+leaves the parent unreferenced, a rollback puts the reference back and the
+re-check refuses. **A row an undecided `UPDATE` moved off the parent holds
+another value in its page**, so the key test alone would skip it; the walk
+copies such a row out and, after the walk, reads the version before it
+through the undo log, answering busy if that version references the
+parent. Until AY-S5 the walk skipped it, and the writer's rollback left a
+child of a deleted parent with nothing refused.
 
 **The Cabin may find a child and may not clear one** (AT-R15, D4). The
 rule was made while `stats::CabinStore` was a dispatcher's own: a write
@@ -364,12 +398,13 @@ walk child_rel
       stop:     VisitControl::kStop on first visible match
 ```
 
-- First visible child → `kFkViolation` (RESTRICT). In-flight child
-  insert encountered → busy (`TxnConflict`, F3) — the in-place row with
-  a foreign `trx_id` *is* the lock record this check reads. **Not because
-  no lock manager exists** — there has been one since M2 — but because a row being
-  written already carries its writer, and a check that asked the table
-  would ask it about a row the header has already answered for. A violation costs a prefix; only a pass costs the relation.
+- First visible child → `kFkViolation` (RESTRICT). An undecided child
+  row → busy, and the `DELETE` parks on that row's writer and re-checks at
+  its decide (§3a, AY-Q8) - the in-place row with a foreign `trx_id` names
+  the writer, and the wait is on the row's own entry in the lock table. A
+  child writer that *references* the parent never reaches this: its `S`
+  refused the `DELETE`'s `X` first. A violation costs a prefix; only a pass
+  costs the relation.
 - Cost: a full child walk per deleted parent. `CREATE CABIN ON
   child(fk_col)` (F6) pays for the **violation** half of it: the reverse
   check consults an active Cabin on the child's fk column **read-only**,
@@ -393,7 +428,9 @@ snapshot visibility routine over the same three tuple fields, against a
 read view **minted at check time** (`TransactionManager::MintCheckView`,
 which registers nothing and holds no horizon) rather than the statement's.
 Latest-state semantics means the answer is the version on the page, so the
-check never steps back through undo:
+check steps back through undo in one case only - the reverse check's row an
+undecided writer moved off the parent (§3a), whose page holds the writer's
+value; its busy verdict is still this table's:
 
 | tuple's own version, against a freshly minted view | verdict |
 |---|---|
@@ -416,29 +453,23 @@ implementation is the failure mode to refuse in review.
 
 ## 5. What is deliberately absent
 
-- The lock family is **not consulted for the reverse check's own answer**
-  (a `DELETE` meeting a child row being written is still answered `busy`;
-  D9(a)'s `S` fence is the following letter's, and AO-R14 says so). The
-  engine has wait queues and a deadlock detector since M2 — this bullet
-  is about which answer this check takes, not about what exists — F3 plus
-  in-place `trx_id` makes the uncommitted row itself the conflict signal,
-  and run-to-completion removes the check-to-write race that gap locks
-  exist to close elsewhere. That is true of a child on any core since
-  AT-S5f: the walk reads the row's header wherever the writer is.
-- **The forward check waits, and the wait is one mechanism** (AT-S5f). A
-  parent being written is waited for on whichever core holds it, on the
-  parent row's own entry in the instance's lock table; the waiter records
-  `waiter -> holder` in the wait-for graph and a wait that would close a
-  cycle is refused naming deadlock rather than netted (AO-S4a, `txn.md`
-  §5). Past the lock family's fault net with the holder undecided the
-  answer is the busy verdict's refusal, which is the net's shape rather
-  than the ordinary one.
+- **No gap locks.** D8 as ratified closes write skew by named units; the
+  foreign key's is the parent row's `S` (§2a), and an absent parent is
+  held by the same `S` on its key, which a concurrent insert of that
+  parent's `X` meets.
+- **Both checks wait, on the lock table** (AY-S5): the forward check on
+  the parent row's `S`, the reverse check on the undecided child row's
+  writer. A waiter records `waiter -> holder` in the wait-for graph and a
+  wait that would close a cycle is refused naming deadlock rather than
+  netted (AO-S4a, `txn.md` §5). Past the lock family's fault net with the
+  holder undecided the answer is a retryable refusal, which is the net's
+  shape rather than the ordinary one.
 - **A transaction's own pending image answers at once**, which needs no
   special case now that the check reads the row itself: §4's `own_trx_id`
   rule sees the transaction's own uncommitted parent and answers pass or
-  violation rather than parking on it. Forward only — the reverse check's
-  view stays writerless, so a transaction's own child rows answer busy to
-  its own reverse check as any writer's do.
+  violation rather than parking on it. **The reverse check's view is
+  minted the same way**, with the deleter's id, so a transaction's own
+  child rows answer violation to its own reverse check rather than busy.
 - No ON UPDATE actions of any kind (K2).
 - No cross-relation write hooks: both checks are *reads* injected into
   the writing statement's own path; FK never writes to the other

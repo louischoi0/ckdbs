@@ -3324,9 +3324,8 @@ std::vector<parser::AstValue> CommandDispatcher::InsertBodyOf(
 
 Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& child,
                                                     const std::vector<parser::AstValue>& body,
-                                                    const txn::ReadView& check_view,
                                                     exec::FkParentVerdicts& into,
-                                                    txn::Transaction* waiter) {
+                                                    const WriteScope& scope) {
     for (const catalog::ForeignKeyRef& fk : child.fkeys_out) {
         if (fk.column_no == 0 || fk.column_no > body.size()) continue;
         const parser::AstValue& value = body[fk.column_no - 1];
@@ -3373,28 +3372,52 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // parent, under the same view and through the same descent, which
         // is the whole of D5's shape (AT-R15).
 
+        // ---- D9(a): `IS`, then `S`, then the descent (AY-R4, AY-Q2) -------
+        //
+        // **The parent row is held from here to this transaction's decide**,
+        // so a parent `DELETE` - which takes the row's `X` ahead of its
+        // reverse walk - waits for it on whichever core it runs, and the
+        // window between this check and the child's write is closed
+        // (`foreign-keys.md` §3a). A parent `UPDATE` waits for it too, which
+        // is AY-Q1's first cost.
+        //
+        // **Before the descent, not after it** (AY-Q2, `[quiet-wrong]` if
+        // reversed): after a passing descent a whole `DELETE` of the parent
+        // fits before the grant, and the check would have passed a row that
+        // is gone.
+        //
+        // **A refused `S` is the wait.** The parent's writer holds the row's
+        // `X`; the ask registers a wake on it, and the statement - which has
+        // written nothing yet - parks and runs again at the release, from
+        // whichever core releases. That is AT-S5f's `WaitForParentRowWriter`
+        // folded into the ask, since the ask now outlives the check. Counted
+        // against `max_locks_per_txn` and refused `ResourceExhausted` past
+        // it - no escalation (AO-R10) - where the check used to ask with the
+        // cap ignored.
+        if (std::optional<Status> held =
+                BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, pk),
+                             RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
+            return *held;
+        }
+
+        // The view is minted **after** the grant, so a writer that decided
+        // between the statement's start and the grant is visible to it
+        // rather than read as busy.
+        const txn::ReadView check_view = CheckView(scope);
         std::uint64_t busy_trx = 0;
         auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), pk, check_view,
                                                 &budget_, &busy_trx);
         if (!verdict.ok()) return verdict.status();
 
-        // **F3's forward busy is a wait, on a parent held anywhere**
-        // (AO-3 B row 3; AO-S3 built the same-core half and AO-S5(b) the
-        // shipped probe's, and AT-S5f makes the two one). The parent row is
-        // held by a transaction that has not decided, and the answer
-        // genuinely depends on how it ends - commit makes the child legal,
-        // abort makes it a violation. Refusing retryably told the client to
-        // come back and ask again, which is a wait written in the client's
-        // loop instead of here.
-        //
-        // This runs at the dispatch fork, before any row work, so the
-        // statement has written nothing and re-running it is exactly what
-        // the client would do. **D9(a)'s `S` fence is not this** - that
-        // keeps the parent alive for the child's whole transaction and is
-        // the following letter's; this only changes *when* the check runs,
-        // never what protects the row afterwards (AO-R14).
-        if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0) {
-            WaitForParentRowWriter(waiter, fk.rel_oid, pk, busy_trx);
+        // **Busy under a granted `S` is a writer the lock table does not
+        // know**, which is a dispatcher built without one: every writer of a
+        // row holds its `X` (AO-S6a), and the `S` above would have been
+        // refused. There `NoteBlockingWriter`'s `IsInFlight` poll is AO-S3's
+        // wait, unchanged. With a table the busy verdict stands and refuses
+        // the statement retryably, which is the defensive answer to a state
+        // the table rules out.
+        if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0 && locks_ == nullptr) {
+            NoteBlockingWriter(scope.txn, busy_trx, pk, RepeatableReadWait::kCapable);
         }
 
         // Recorded **per resolution, not per row**, which is the mechanism
@@ -3407,96 +3430,11 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
     return Status::OK();
 }
 
-void CommandDispatcher::WaitForParentRowWriter(txn::Transaction* waiter,
-                                               catalog::Oid parent_rel, std::uint64_t pk,
-                                               std::uint64_t holder) {
-    // **The wait is on the table's slot, because the holder may be on any
-    // core** (AO-S6e-b's finding, reached here by AT-S5f). Until AX-S1
-    // `NoteBlockingWriter`'s predicate, `TransactionManager::IsInFlight`,
-    // was *this core's* live set and answered "not in flight" for a
-    // transaction very much in flight on a peer - sound while a foreign
-    // parent was deferred to its owner, whose core held it (AO-S5(b)), and
-    // a spin to the fault net once the descent ran here. It is the
-    // instance's since, and the slot is still the better wait: the release
-    // flips it and kicks this core, which nothing does for a poll (AX-S2b
-    // gave the row wait the same shape).
-    //
-    // So the parent row's own borrow is asked for instead. Its writer holds
-    // the tuple `X` (AO-S6a), the table is the instance's (AO-S5(a)), and
-    // the slot is flipped by the release from whichever core releases.
-    //
-    // **Nothing is acquired by the arm that matters.** A refused
-    // `TryAcquire` leaves the table as it found it - no queue position,
-    // nothing in `holdings`, only the wake registration - so this check
-    // takes no fence over the parent and holds nothing after it. That
-    // distinction is the whole of why D9(a)'s `S` fence is a separate
-    // decision and not a side effect of this line, and it is also why the
-    // window before the child's write stays open across cores
-    // (`foreign-keys.md` §3a, `known-gaps.md`).
-    //
-    // **And no `IS` above it**, which `lock_table.hpp` calls a wrong
-    // answer given quietly: a unit held under a relation entry with no
-    // intention on it is invisible to a relation-level ask. It is sound
-    // here for a reason that is about this ask and not about the rule -
-    // the only arm that lasts is the *refused* one, which holds nothing
-    // for a relation ask to miss, and a grant is released before this
-    // function returns with no page touched in between. A borrow that
-    // outlived the ask would need the intention and would be D9(a).
-    if (locks_ == nullptr || waiter == nullptr) {
-        // No table to ask - a dispatcher built without one, which is the
-        // configuration `CheckWriteConflictBlocking` keeps its own union
-        // for - or no transaction to ask under. `NoteBlockingWriter`'s
-        // `IsInFlight` poll reaches a holder on any core since AX-S1, woken
-        // by a poll rather than a kick: AO-S3's wait, unchanged.
-        NoteBlockingWriter(waiter, holder, pk, RepeatableReadWait::kCapable);
-        return;
-    }
-    // `NoteBlockingWriter`'s own first two guards, on the path that does
-    // not go through it: no park without the allowance, and no second
-    // wait beside one the outcome already carries.
-    if (!may_park_ || lock_wait_.has_value()) return;
-
-    const txn::LockKey unit = txn::LockKey::Tuple(parent_rel, pk);
-    std::uint64_t blocker = 0;
-    txn::LockWake wake;
-    auto took = locks_->TryAcquire(waiter->id(), unit, txn::LockMode::kShared, waiter->borrows(),
-                                   &blocker, &wake);
-    if (!took.ok()) {
-        // The cap, which is not a conflict and names nobody. The statement
-        // is refused by the busy verdict the caller already holds; a
-        // borrow-cap refusal raised here would replace an answer about the
-        // client's own data with one about a ledger it cannot act on.
-        return;
-    }
-    if (took.value()) {
-        // **Granted, which means the holder decided between the header read
-        // and this ask.** The `S` is released at once and nothing waits: a
-        // decided holder is exactly the state `NoteBlockingWriter` answers
-        // by recording nothing, so this arm behaves as the same-core wait
-        // always has, and the busy verdict refuses the statement retryably.
-        locks_->ReleaseOne(waiter->id(), unit, txn::LockMode::kShared, waiter->borrows());
-        return;
-    }
-    // **A parent row under a range fence waits too since AY-S2**: the
-    // refusal is found in the verify arm, on the fence's entry, and is
-    // registered there - so the wake is on the fence's key, not the row's.
-    // Before it this arm had no slot and returned, and the child was
-    // refused where it now waits for the fence's release. Every refusal of
-    // an ask that asked for a wake carries a slot since AY-S2; the test
-    // stays so that a table that stops registering one answers the busy
-    // verdict, as before AY-S2, instead of parking on a null slot, which
-    // `LockWaitReady` answers with a crash (measured with the stage's
-    // mutant).
-    if (wake.slot == nullptr) return;
-    lock_wait_ = DispatchOutcome::LockWait{wake.key, blocker != 0 ? blocker : holder,
-                                           std::move(wake.slot)};
-}
-
 Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& child,
                                                  const catalog::ForeignKeyRef& fk,
                                                  const parser::AstValue& value,
-                                                 const txn::ReadView& check_view,
-                                                 const exec::FkParentVerdicts& held) {
+                                                 const exec::FkParentVerdicts& held,
+                                                 const WriteScope& scope) {
     // A value that is not an id cannot reference one. Left alone rather than
     // failed here, and the same bail carries two different outcomes:
     //   - a NULL is MATCH SIMPLE's vacuous pass - the codec stores it if the
@@ -3519,12 +3457,25 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         resolved = *found;
     } else if (fk.rel_oid == child.oid) {
         // The self-referencing arm, the one case the extraction pass
-        // deliberately skips (see there). It can never be foreign, so the
-        // descent is local by construction.
+        // deliberately skips (see there).
+        //
+        // **It takes the hoist's pair, per row** (AY-Q3,
+        // `raft-marks-2026-09-30.md` §3): `IS` on the relation - which the
+        // write already covers with its `IX` - then `S` on the parent row,
+        // then the descent, held to the decide. A busy parent is waited
+        // for rather than refused: a refused `S` records its wait exactly as
+        // the insert's own tuple borrow records its (`BorrowOrWait`), and
+        // the statement ends there to park. A parent this statement wrote
+        // itself is its own `X`, which never conflicts with its own `S`.
+        if (std::optional<Status> row_held =
+                BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, parent_pk),
+                             RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
+            return *row_held;
+        }
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
         if (!parent.ok()) return parent.status();
-        auto verdict =
-            exec::CheckParentPresent(page_store_, *parent.value(), parent_pk, check_view, &budget_);
+        auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), parent_pk,
+                                                CheckView(scope), &budget_);
         if (!verdict.ok()) return verdict.status();
         RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
         resolved = verdict.value();
@@ -3558,15 +3509,13 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kPass:
             return Status::OK();
         case exec::FkVerdict::kBusy:
-            // **Two paths reach here since AT-S5f**, so the sentence names
-            // the holder's state and not a mechanism: the extraction pass's
-            // descent, whose wait ran to the lock family's fault net
-            // (`WaitForParentRowWriter`), and the self-referencing arm
-            // above, which never waits at all. The three the probe protocol
-            // made - a foreign parent's park on its owner's core, a parent
-            // the owner had registered for deletion - went with it.
-            // Retryable in both: the holder decides and the retry gets a
-            // real answer.
+            // **Reached only by a writer the lock table does not know**
+            // since AY-S5: both arms take the parent row's `S` before they
+            // descend, and a writer holding its `X` refuses that ask, which
+            // is a wait. What is left is a dispatcher with no table, where
+            // the extraction pass recorded `NoteBlockingWriter`'s poll.
+            // Retryable: the holder decides and the retry gets a real
+            // answer.
             return Status::TxnConflict("row id=" + std::to_string(value.int_val) + " of '" +
                                        RelationNameOf(fk.rel_oid) +
                                        "' is being written by another transaction that has "
@@ -3582,7 +3531,10 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
 
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,
                                                       std::uint64_t parent_pk,
-                                                      const txn::ReadView& check_view) {
+                                                      const txn::ReadView& check_view,
+                                                      const WriteScope& scope,
+                                                      std::uint64_t* waits_on) {
+    *waits_on = 0;
     // ---- Nothing is asked of another core, since AT-S5f -----------------
     //
     // Two things stood here and both were the same absence. A **reference
@@ -3608,6 +3560,7 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
         if (!child.ok()) return child.status();
 
         exec::FkReverseOptions options;
+        if (txn_ != nullptr) options.undo = &txn_->undo();
         const catalog::TableAccess::CabinRef cabin = child.value()->CabinOn(fk.column_no);
         if (cabins_ != nullptr && cabin.id != 0) {
             options.cabins = cabins_;
@@ -3633,10 +3586,24 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
         switch (outcome.value().verdict) {
             case exec::FkVerdict::kPass:
                 continue;
-            case exec::FkVerdict::kBusy:
-                return Status::TxnConflict("a row of '" + RelationNameOf(fk.rel_oid) +
-                                           "' referencing id=" + std::to_string(parent_pk) +
-                                           " is being written by another transaction");
+            case exec::FkVerdict::kBusy: {
+                // **A child writer that holds no `S` on this parent is
+                // waited for, not refused** (AY-Q8): a child `DELETE`, or
+                // an `UPDATE` moving the fk column off it. A child writer
+                // that references this parent holds its `S` since AY-S5,
+                // and the row's `X` this statement took before the walk
+                // was refused by it - so what reaches here is the other
+                // kind, and its decide is what the answer depends on.
+                const Status busy = Status::TxnConflict(
+                    "a row of '" + RelationNameOf(fk.rel_oid) + "' referencing id=" +
+                    std::to_string(parent_pk) + " is being written by another transaction");
+                if (outcome.value().busy_trx != 0 &&
+                    WaitForChildRowWriter(scope, fk.rel_oid, outcome.value().busy_pk,
+                                          outcome.value().busy_trx)) {
+                    *waits_on = outcome.value().busy_trx;
+                }
+                return busy;
+            }
             case exec::FkVerdict::kViolation:
                 return Status::FkViolation("row id=" + std::to_string(parent_pk) +
                                            " is still referenced by '" +
@@ -3644,6 +3611,41 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
         }
     }
     return Status::OK();
+}
+
+bool CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel,
+                                              std::uint64_t pk, std::uint64_t holder) {
+    // **The wake is the child row's own**, asked for the way the forward
+    // check asked for its parent's until AY-S5 folded that into its `S`: the
+    // writer holds the row's `X` (AO-S6a), the table is the instance's, and
+    // the release flips the slot from whichever core releases. A refused
+    // ask leaves the table as it found it but for the registration, and a
+    // granted one - the writer released between the walk and this line -
+    // is given back at once; nothing here outlives the ask, which is why no
+    // intention is taken above it.
+    //
+    // **Not over a hold this transaction already has**: the child row is a
+    // parent of its own children, and an `S` taken on it for a grandchild's
+    // reference would be the one the grant arm's release drops.
+    const txn::LockKey unit = txn::LockKey::Tuple(child_rel, pk);
+    if (locks_ != nullptr && scope.txn != nullptr && may_park_ &&
+        !scope.txn->borrows().Holds(unit)) {
+        std::uint64_t blocker = 0;
+        txn::LockWake wake;
+        auto took = locks_->TryAcquire(scope.txn->id(), unit, txn::LockMode::kShared,
+                                       scope.txn->borrows(), &blocker, &wake);
+        if (took.ok() && took.value()) {
+            locks_->ReleaseOne(scope.txn->id(), unit, txn::LockMode::kShared, scope.txn->borrows());
+        } else if (took.ok() && wake.slot != nullptr) {
+            TakeLockWait(blocking_wake_, DispatchOutcome::LockWait{
+                                             wake.key, blocker != 0 ? blocker : holder,
+                                             std::move(wake.slot)});
+        }
+    }
+    // The reverse check reads latest state and the writer's decide changes
+    // it either way, so the re-run is not futile at any level.
+    NoteBlockingWriter(scope.txn, holder, pk, RepeatableReadWait::kCapable);
+    return blocking_writer_ == holder;
 }
 
 StatusOr<catalog::Oid> CommandDispatcher::ResolveCreateNamespace(std::string_view qualifier,
@@ -4680,10 +4682,9 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // a peer, went with the probes at AT-S5f.
     exec::FkParentVerdicts fk_held;
     if (!ta->fkeys_out.empty()) {
-        const txn::ReadView view = CheckView(scope);
         for (const auto& values : stmt.rows) {
             const std::vector<parser::AstValue> body = InsertBodyOf(*ta, values);
-            if (Status s = ResolveForeignKeyParents(*ta, body, view, fk_held, scope.txn); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(*ta, body, fk_held, scope); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -4753,9 +4754,8 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // body is the row.
     exec::FkParentVerdicts fk_held;
     if (!ta.fkeys_out.empty()) {
-        const txn::ReadView view = CheckView(scope);
         for (const auto& values : stmt.rows) {
-            if (Status s = ResolveForeignKeyParents(ta, values, view, fk_held, scope.txn); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(ta, values, fk_held, scope); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -4776,11 +4776,10 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             err = "ERR expected " + std::to_string(ncols - 1) +
                   " value(s) after the primary key, got " + std::to_string(values.size());
         } else if (!ta.fkeys_out.empty()) {
-            const txn::ReadView view = CheckView(scope);
             for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
                 if (fk.column_no == 0 || fk.column_no > values.size()) continue;
-                if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1], view,
-                                                      fk_held);
+                if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1], fk_held,
+                                                      scope);
                     !s.ok()) {
                     err = ErrorReply(s);
                     break;
@@ -5028,10 +5027,9 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // What is left here is the per-row *answer*, which is what keeps the
     // refusal on the row that caused it.
     if (!ta.fkeys_out.empty()) {
-        const txn::ReadView view = CheckView(scope);
         for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
             if (fk.column_no == 0 || fk.column_no > body.size()) continue;
-            if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1], view, fk_held);
+            if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1], fk_held, scope);
                 !s.ok()) {
                 return ErrorReply(s);
             }
@@ -7167,17 +7165,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
     }
 
-    // Minted once per statement rather than per row. The argument that
-    // stood here - a write to this relation could only come from the core
-    // that owned it, which was this one (crosscore.md CC3) - is false since
-    // AT-S5: another core's writer can join or leave the live set while
-    // this statement runs, and a parent deleted after the check is the
-    // forward check's open interval `known-gaps.md` (Foreign keys) records.
-    txn::ReadView check_view = txn::ReadView::Everything();
+    // No view is minted here since AY-S5: each check mints its own after
+    // it holds the parent row (`ResolveForeignKeyParents`).
     exec::FkParentVerdicts fk_held;
     if (!fk_assignments.empty()) {
-        check_view = CheckView(scope);
-
         // ---- The extraction pass (foreign-keys.md §2a, AH-R1) -----------
         //
         // A SET assigns a literal, so the parent set is a property of the
@@ -7198,7 +7189,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                   : 0);
             if (fk->column_no == 0 || fk->column_no > one.size()) continue;
             one[fk->column_no - 1] = *value;
-            if (Status s = ResolveForeignKeyParents(ta, one, check_view, fk_held, scope.txn); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(ta, one, fk_held, scope); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -7398,7 +7389,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // answering `UPDATED 0` rather than a violation it never used to
         // report.
         for (const auto& [fk, value] : fk_assignments) {
-            if (Status s = CheckForeignKeyOnWrite(ta, *fk, *value, check_view, fk_held); !s.ok()) {
+            if (Status s = CheckForeignKeyOnWrite(ta, *fk, *value, fk_held, scope); !s.ok()) {
                 return s;
             }
         }
@@ -8201,7 +8192,7 @@ void CommandDispatcher::TakeLockWait(std::optional<DispatchOutcome::LockWait>& i
 
 StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
                                              const txn::LockKey& unit,
-                                             std::uint64_t* blocker) {
+                                             std::uint64_t* blocker, txn::LockMode mode) {
     if (locks_ == nullptr || scope.txn == nullptr) return true;
     txn::LockHoldings& holdings = scope.txn->borrows();
     const std::uint64_t id = scope.txn->id();
@@ -8246,11 +8237,19 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // `BorrowRelationForDdl`'s wait, from the other side. (The row-level
     // wait's `IsInFlight` read a DDL on a peer as decided until AX-S1, so
     // that wait would have refused the write rather than held it.)
+    //
+    // **`IS` over a shared unit** (D9(a), AY-S5): a foreign key's parent row
+    // is read and held, not written, so the relation above it is declared
+    // for reading - which a DDL's `X` refuses all the same (AY-Q4), and
+    // another writer's `IX` does not.
     const txn::LockKey relation = txn::LockKey::Relation(unit.rel_oid);
     const bool first_intention = !holdings.Holds(relation);
+    const txn::LockMode intention = mode == txn::LockMode::kShared
+                                        ? txn::LockMode::kIntentionShared
+                                        : txn::LockMode::kIntentionExclusive;
     txn::LockWake wake;
-    auto rel = locks_->TryAcquire(id, relation, txn::LockMode::kIntentionExclusive, holdings,
-                                  blocker, may_park_ ? &wake : nullptr);
+    auto rel = locks_->TryAcquire(id, relation, intention, holdings, blocker,
+                                  may_park_ ? &wake : nullptr);
     if (!rel.ok()) return refused(rel.status());
     if (!rel.value()) {
         if (wake.slot != nullptr) {
@@ -8300,7 +8299,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // then that refusal came back with no slot and the wait was a poll of
     // `IsInFlight` that no release kicked.
     txn::LockWake unit_wake;
-    auto under = locks_->TryAcquire(id, unit, txn::LockMode::kExclusive, holdings, blocker,
+    auto under = locks_->TryAcquire(id, unit, mode, holdings, blocker,
                                     may_park_ ? &unit_wake : nullptr);
     if (!under.ok()) return refused(under.status());
     if (!under.value() && unit_wake.slot != nullptr) {
@@ -8424,9 +8423,10 @@ Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
 
 std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
                                                       const txn::LockKey& unit,
-                                                      RepeatableReadWait rerun) {
+                                                      RepeatableReadWait rerun,
+                                                      txn::LockMode mode) {
     std::uint64_t blocker = 0;
-    auto took = BorrowChain(scope, unit, &blocker);
+    auto took = BorrowChain(scope, unit, &blocker, mode);
     if (!took.ok()) return took.status();
     if (took.value() || blocker == 0) return std::nullopt;
     // Refused at the relation: parked on the slot `BorrowChain` registered,
@@ -8947,7 +8947,17 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // check-before-write ordering INSERT uses, and here it also means a
         // refused delete leaves no undo record behind.
         if (!ta.fkeys_in.empty()) {
-            if (Status s = CheckNoChildrenBeforeDelete(ta, id, check_view); !s.ok()) {
+            std::uint64_t waits_on = 0;
+            if (Status s = CheckNoChildrenBeforeDelete(ta, id, check_view, scope, &waits_on);
+                !s.ok()) {
+                // AY-Q8: a child row whose writer has not decided parks the
+                // walk here, as a held row does above - nothing of this row
+                // is written yet.
+                if (waits_on != 0) {
+                    parked_on_row = true;
+                    blocked_verdict = s;
+                    return Status::OK();
+                }
                 return s;
             }
         }
