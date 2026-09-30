@@ -382,9 +382,13 @@ StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
 //   out again, so recovery's undo meets it dead and never another row
 //   (`recovery_undo.cpp`, "nothing to retire"). `LogCatInsert` fails before
 //   its append or not at all: the stamp after it is on a page this holds
-//   pinned and exclusive, which is always resident.
+//   pinned and exclusive, which is always resident. **This arm leaves the
+//   dead slot no record describes** that the first arm avoids. On a tail
+//   page, a later logged insert followed by a crash before writeback refuses
+//   the mount; taking the row back instead would let another row reach a
+//   slot the undo record names. It is open, in `known-gaps.md` (WAL).
 Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
-                       storage::PageStore& store, PageId page_id, heap::PageView page,
+                       storage::PageStore& store, PageId page_id, heap::PageView& page,
                        std::uint16_t slot, std::span<const std::byte> encoded,
                        std::uint64_t trx_id) {
     if (hook) {
@@ -416,9 +420,10 @@ Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
 // so there is no key to order by and every page carries `min_key = 0` - the
 // chain here is an append list, not a semi-sorted heap. Sharing the heap's
 // insert would mean inventing an id for a row nothing looks up by id.
-// `where`, when given, receives the (page, slot) the row landed at
-// (workplan-ddl-transactional.md DT3a). A transactional DDL registers
-// that address on its transaction's trail so `Abort` can retire the slot -
+// `where`, when given, receives the (page, slot) the row landed at, once
+// the row's record is logged (workplan-ddl-transactional.md DT3a; AZ-S1).
+// A transactional DDL registers that address on its transaction's trail so
+// `Abort` can retire the slot -
 // the engine hides aborted work by compensation, not by visibility (spec
 // §2's correction), so without this a rolled-back CREATE TABLE stays.
 template <typename RowT>

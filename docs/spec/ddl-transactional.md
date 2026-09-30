@@ -60,7 +60,9 @@ not registered, because that write removes it** (AZ-S1). If the undo hook
 refused, nothing names the row, so it is taken back whole
 (`PageView::UnInsertTuple`) and the page is as it was. If the hook
 succeeded and the row's record was refused, the undo record names the
-slot, so the slot is retired in place and is never reused. Isolation and
+slot, so the slot is retired in place and is never reused. That dead slot
+is described by no record, which can refuse a later mount
+(`known-gaps.md`, WAL). Isolation and
 atomicity are separate phases, and only the first is delivered by the read
 filter.
 

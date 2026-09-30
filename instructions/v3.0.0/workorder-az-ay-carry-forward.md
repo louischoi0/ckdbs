@@ -374,10 +374,10 @@ placed. The arms set `where` only once the row is logged.
   in that area is the reverse one,
   `docs/inflight/bugs/a-ddl-rollback-compensates-logged-catalog-pages-unlogged.md`,
   which this stage does not take up. The crash-and-mount cells the exit
-  named were not written: with the row taken back or retired before any
-  record, a mount has nothing of it to replay, and recovery's undo
-  already answers a dead or missing slot as "nothing to retire"
-  (`recovery_undo.cpp`).
+  named were not written. For the arm that takes the row back, a mount has
+  nothing of it to replay. For the retire arm, recovery's undo answers a
+  dead or missing slot as "nothing to retire" (`recovery_undo.cpp`), but
+  redo does not - see the review below.
 
 **The cells.**
 
@@ -398,3 +398,32 @@ placed. The arms set `where` only once the row is logged.
 - `ddl-transactional.md` §2 states the rule.
 - The bug entry is deleted.
 - Overhead not measured; it is measured at AZ's close.
+
+**The review** (`critics-developer`, on `55a5aab`) found one defect, and
+it is not fixed here.
+
+- **The retire arm leaves the dead slot no record describes, which this
+  row had rejected for the hook arm.** A later DDL's logged insert on the
+  same tail page, then a crash before writeback, makes redo refuse the
+  mount (the dense-slot rule).
+  - It predates the stage: the same arm left a live, unlogged row with the
+    same redo shape.
+  - Taking the row back instead fails another way: recovery's identity
+    check meets a reused slot.
+  - The cure is a design call - stop on the append failure, hold the page
+    until a record describes the slot, or accept it. It is recorded in
+    `known-gaps.md` (WAL), and is **the operator's**, not assumed.
+- **The docs claimed it closed.** Corrected: `ddl-transactional.md` §2,
+  `ReportPlacedRow`'s comment, and this row.
+- **Also taken:**
+  - `InsertRow`'s comment says `where` is set once the row is logged;
+  - `ReportPlacedRow` takes the page by reference, as its sibling helpers
+    do;
+  - a refused report on a new page spending one reserved catalog page is
+    recorded in `known-gaps.md`.
+- **Rejected:**
+  - dropping the unreachable take-back and retire failure contexts - kept,
+    since they cost nothing and a failure there would otherwise hide the
+    original error;
+  - removing `UnInsertTuple`'s redundant `length == 0` check - kept, for
+    symmetry with the page's other slot tests.
