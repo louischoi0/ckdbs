@@ -1,0 +1,41 @@
+T 1790757639 0.67 1.85 2.24
+T 1790757641 0.70 1.83 2.23
+  X  226717 37.1       1 postgres        postgres: cdkbs bench 127.0.0.1(56212) COMMIT
+T 1790757643 0.70 1.83 2.23
+  X  226717 43.8       3 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle in transaction
+T 1790757645 0.70 1.83 2.23
+  X  226717 45.6       5 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle in transaction
+T 1790757647 0.72 1.82 2.22
+  X  226717 46.1       7 postgres        postgres: cdkbs bench 127.0.0.1(56212) INSERT
+T 1790757649 0.72 1.82 2.22
+  X  226717 46.6       9 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle in transaction
+T 1790757651 0.74 1.80 2.22
+  X  226717 45.4      11 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle in transaction
+T 1790757653 0.74 1.80 2.22
+  X  226717 45.3      13 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle in transaction
+T 1790757655 0.74 1.80 2.22
+  X  226717 45.3      15 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle
+T 1790757657 0.77 1.79 2.21
+  X  226717 42.8      17 postgres        postgres: cdkbs bench 127.0.0.1(56212) SELECT
+T 1790757660 0.77 1.79 2.21
+  X  226717 41.0      19 postgres        postgres: cdkbs bench 127.0.0.1(56212) INSERT
+T 1790757662 0.78 1.78 2.20
+  X  226717 42.7      21 postgres        postgres: cdkbs bench 127.0.0.1(56212) SELECT
+T 1790757664 0.78 1.78 2.20
+  X  226717 46.6      23 postgres        postgres: cdkbs bench 127.0.0.1(56212) SELECT
+T 1790757666 0.78 1.78 2.20
+  X  226717 45.9      25 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle
+T 1790757668 0.80 1.76 2.20
+  X  226717 44.2      27 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle
+T 1790757670 0.80 1.76 2.20
+  X  226717 42.1      29 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle
+T 1790757672 0.82 1.75 2.19
+  X  226717 40.7      31 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle
+T 1790757674 0.82 1.75 2.19
+  X  226717 39.8      33 postgres        postgres: cdkbs bench 127.0.0.1(56212) SELECT
+T 1790757676 0.82 1.75 2.19
+  X  226717 40.3      35 postgres        postgres: cdkbs bench 127.0.0.1(56212) COMMIT
+T 1790757678 0.91 1.76 2.19
+  X  226717 38.6      37 postgres        postgres: cdkbs bench 127.0.0.1(56212) COMMIT
+T 1790757680 0.91 1.76 2.19
+  X  226717 37.3      39 postgres        postgres: cdkbs bench 127.0.0.1(56212) idle

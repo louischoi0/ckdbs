@@ -3,12 +3,15 @@
 **Finding.** Against PostgreSQL 18.6 at its defaults, KDS is **in the same
 league and not ahead**: at the same durability point (`group`, both durable at
 the reply) it is 0.88x to 0.93x of PostgreSQL on four-statement autocommit
-traffic (inside PostgreSQL's 19 % run-to-run spread) and 0.96x on the matched
-single-client freight booking; with indexed equalities it is 0.95x to 0.97x
-over twelve read shapes. It is **behind by a factor of two** wherever it walks
+traffic (inside PostgreSQL's 19 % three-run spread, but that spread is one
+run; four of its five executions lie within 1.8 %, which makes a 5 to 12 %
+deficit the likelier reading) and 0.96x on the matched single-client
+freight booking; with the indexes built it is 0.95x to 0.97x (geometric mean
+over twelve read shapes, `cores = 1`). It is **behind by a factor of two** wherever it walks
 rows (70 ns per row against 34), **0.24x to 0.47x under `strict`** with
-concurrent committers (one fsync per commit against PostgreSQL's 3.9 commits
-per fsync), and **ahead only where a Cabin or a join path applies**: the
+concurrent committers (at one core the rate matches one fsync per commit,
+inferred and not counted, against PostgreSQL's measured 3.9 commits per
+fsync), and **ahead only where a Cabin or a join path applies**: the
 controller arm 1.20x to 1.30x and a declared Cabin 1.52x to 1.72x of
 PostgreSQL's seqscan on a hot equality, and 1.24x to 2.06x on the correlated
 `EXISTS` (and 2.50x on the join without a literal, indexed, at 10,000 rows). PostgreSQL is the floor: it says the
@@ -28,7 +31,7 @@ comparators: the `-v2.7.0-531-g9a0525d` files of the same scenarios.
 
 | Field | Value |
 |---|---|
-| Date and time | 2026-09-30, PostgreSQL cells 08:23 to 08:41 UTC (re-runs to 08:39), KDS `--bookers 1` cells 08:23 to 08:27 |
+| Date and time | 2026-09-30, PostgreSQL cells 08:23 to 08:41 UTC (re-runs to 08:41, instrumented probes to 08:43), KDS `--bookers 1` cells 08:23 to 08:27 |
 | Worktree / branch | `bench-pg-floor` / `worktree-bench-pg-floor` |
 | HEAD | `f2f1ee7`, `git describe --tags` = `v2.7.0-545-gf2f1ee7`; tree clean at the start (`git status` empty), nothing under `src/`, `include/`, `tools/` edited or built by this run |
 | Engine the KDS numbers describe | `9a0525d` (`v2.7.0-531-g9a0525d`). `git diff --stat 9a0525d HEAD -- src include CMakeLists.txt tools` lists one file, `tools/fk_overhead_benchmark.py` (7 insertions, 5 deletions), so no engine source, build file or scenario/pg driver differs at HEAD (`archive/.../stamp.txt`) |
@@ -37,7 +40,7 @@ comparators: the `-v2.7.0-531-g9a0525d` files of the same scenarios.
 | Cluster | `tools/pg_setup.sh`, unmodified, with `PGROOT=/home/cdkbs/pg-bench-18`, `PGPORT=15700` (not 15432, held by an unrelated server; checked free with `ss -ltn`); trust auth on loopback; **a fresh `initdb` per cell** (`pg_setup.sh destroy --yes` then `init`), the counterpart of the KDS side's fresh data file per cell. Settings are PostgreSQL's defaults plus what `pg_setup.sh` writes (port, listen_addresses, unix_socket_directories, logging_collector, log_min_duration_statement = -1, log_line_prefix); the full `pg_settings WHERE source <> 'default'` dump is `logs/<cell>.pg_settings` in the archive. In force: `synchronous_commit = on`, `fsync = on`, `wal_sync_method = fdatasync`, `full_page_writes = on`, `shared_buffers = 128MB`, `max_wal_size = 1GB`, `max_connections = 100`, `autovacuum = on`, `io_method = worker` |
 | Device | data directory `/home/cdkbs/pg-bench-18/data`, `/dev/root`, `ext4` (`df -T`, archived in `stamp.txt` and `pg-build-evidence.txt`); never tmpfs. Deleted after each cell |
 | Host | 8 logical CPUs (AMD EPYC 9V74, 1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure. **The client processes and the servers share those eight CPUs**; PostgreSQL runs one process per connection over all of them |
-| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.5) and were re-run, 12 cells in all (`contaminated/`). The cells reported here have no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
+| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.8) and were re-run, 12 cells in all (`contaminated/`). The window `validity.py` checks opens at the cell's `start` line, before the quiet-wait, so a cell that waited is flagged for what it waited out: `s0-pg-on-r1`'s first execution (711.2 tps) waited 100 s for a `ctest` that ended at 08:22:55 and then ran 08:22:56 to 08:23:06 with no foreign process in the monitor. **One reported cell has flagged samples**: the re-run of `s3-pg-n10000-all-r3` (08:38:24 to 08:39:16, 10 of 26 samples in `validity.txt`: a foreign `kds_tests` at 15 to 17 % CPU at 08:38:31 to 08:38:33, then a `claude`/`node` process at 10 to 126 % from 08:38:49 to 08:39:03). It was not re-run again; dropping it moves no scenario 3 ratio by more than 0.02 and no geometric mean by more than 0.003. Every other reported cell has no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
 | Drivers | unmodified `tools/pg_scenario*.py` (and, for the `--bookers 1` KDS cells, `tools/scenario2_freight.py`); the run scripts are in the archive |
 | What "durable" means on each side | KDS `strict` and `group` both acknowledge after the commit record is flushed and device-synced (`docs/spec/wal.md` §1: "`D1/D2` differ only in batching, never in the durability point"); PostgreSQL's default `synchronous_commit = on` does the same. **PostgreSQL is therefore the comparator for both KDS modes**, and `synchronous_commit = off` (non-durable) is reported in the per-scenario files only as a labelled control and appears in no like-for-like table below |
 | Concurrency mapping | KDS's `cores` is a server knob with no PostgreSQL equivalent (one backend per connection over all eight CPUs). A PG cell corresponds to a KDS cell **by client concurrency** and is compared against both `c1` and `c8`; scenario 2 is the exception, section 3 |
@@ -57,12 +60,16 @@ PostgreSQL `on`. Not like-for-like and excluded: PostgreSQL
 | KDS `s0-c1-s` (cores 1, strict) | strict | 169.4 tps | 6.1 % | 0.24x |
 | KDS `s0-c8-s` (cores 8, strict) | strict | 331.7 tps | 20.0 % | 0.47x |
 
-`group` is the same speed as PostgreSQL within its 19.0 % spread (0.88x and
-0.93x); `strict` is 0.24x and 0.47x, and no floor explains it: PostgreSQL's
+`group` is 0.88x and 0.93x, inside PostgreSQL's 19.0 % spread; that spread
+is the one re-run at 831.1 tps, and the other four PostgreSQL `on`
+executions (698.6 to 711.2 tps, 1.8 %) put `group` 5 to 12 % behind.
+`strict` is 0.24x and 0.47x, and no floor explains it: PostgreSQL's
 lowest run (698.6 tps) is 2.1x KDS's best `strict` median. An instrumented PostgreSQL
 cell counted 3.9 commits per WAL fsync (21,258 commits, 5,441 fsyncs).
-KDS `strict`'s throughput is what one fsync per commit costs on this
-device; its fsync count was not measured.
+KDS `strict`'s rate at one core is what one fsync per commit costs on this
+device (an inference: `SHOW META`'s `wal_syncs` exists at `9a0525d` and was
+not sampled); at eight cores it is faster than serial flushes allow, so some
+syncs are shared there.
 
 ## 3. Scenario 2, freight booking
 
@@ -80,7 +87,7 @@ drive eight contended bookers. The like-for-like pair is therefore KDS
 | `s2-c8-s` 8 bookers | 864.2 tps | 392.2 tps | 2.20x | no: 8 clients vs 1 |
 
 Matched, one client, durable: **0.96x in both modes**, with the commit fsync
-57 to 62 % of every booking on both engines. KDS's write statements are
+56 to 62 % of every booking on both engines. KDS's write statements are
 0.95x to 1.19x of PostgreSQL's rate, its pk reads 0.84x to 0.87x, and its
 two non-pk reads (which PostgreSQL serves from an index the twin creates)
 0.47x to 0.48x and 0.28x to 0.29x. The 1.23x to 3.87x rows compare eight clients with one and
@@ -96,8 +103,8 @@ full per-shape matrices are in the scenario 3 file. Durability does not enter a 
 
 | KDS cores | n=200 none | n=200 all | n=1,000 none | n=1,000 all | n=10,000 none | n=10,000 all |
 |---|---|---|---|---|---|---|
-| 1 | 0.87x (1 of 12 ahead) | 0.96x (3 of 12 ahead) | 0.77x (1 of 12 ahead) | 0.97x (4 of 12 ahead) | 0.62x (1 of 12 ahead) | 0.95x (4 of 12 ahead) |
-| 8 | 0.82x (1 of 12 ahead) | 0.92x (2 of 12 ahead) | 0.72x (1 of 12 ahead) | 0.93x (3 of 12 ahead) | 0.60x (1 of 12 ahead) | 0.91x (4 of 12 ahead) |
+| 1 core | 0.87x (1 of 12 ahead) | 0.96x (3 of 12 ahead) | 0.77x (1 of 12 ahead) | 0.97x (4 of 12 ahead) | 0.62x (1 of 12 ahead) | 0.95x (4 of 12 ahead) |
+| 8 cores | 0.82x (1 of 12 ahead) | 0.92x (2 of 12 ahead) | 0.72x (1 of 12 ahead) | 0.93x (3 of 12 ahead) | 0.60x (1 of 12 ahead) | 0.91x (4 of 12 ahead) |
 
 Indexed, KDS is at 0.91x to 0.97x; unindexed it is at 0.60x to 0.87x and the
 gap widens with rows, because an unindexed KDS equality costs 63 to 84 µs
@@ -134,13 +141,13 @@ compared against PostgreSQL's seqscan only.
 KDS refuses the driver (SUS-1: `daily_stats` and `model_results` are created
 `HEAP`), so **there is no KDS counterpart**. PostgreSQL ran once at the
 driver's defaults as a standalone floor (`results-scenario1-backtest-pg18-...`):
-an unindexed non-pk equality at 414 qps that a btree index lifts 22x to 8,892
+an unindexed non-pk equality at 414 qps that a btree index lifts 21.5x to 8,892
 qps, a durable autocommit insert rate of 659 rows/s that 1,000-row batches
 lift to 18,757, and 4.41x the join throughput at eight connections.
 
 ## 7. What it says about KDS
 
-1. **`group` is at the floor, `strict` is not**: the `D1`/`D2` batching
+1. **`group` is near the floor, `strict` is not**: the `D1`/`D2` batching
    difference `docs/spec/wal.md` describes is worth 3.7x (one core) and 2.0x (eight) to KDS on
    concurrent autocommit traffic (the 9a0525d file), and zero on a single committer (scenario 2:
    378.2 and 377.7 tps).
@@ -150,8 +157,9 @@ lift to 18,757, and 4.41x the join throughput at eight connections.
    PostgreSQL's. It is the measured optimisation target of this series.
 3. **Indexes and Cabins are what put KDS at or over the floor**: within 5 %
    with indexes, 1.2x to 1.7x over a seqscan with a Cabin.
-4. **The fixed round trip is 4 to 10 µs more** than PostgreSQL's 62 to 69 µs
-   mean (the `pk` controls in scenarios 2 to 4).
+4. **The fixed round trip is 4 to 17 µs more** than PostgreSQL's 62 to 79 µs
+   mean: 4 to 10 µs on scenario 3's `pk-user`, 10 to 14 µs on scenario 2's
+   pk reads, 11 to 17 µs on scenario 4's `pk` control.
 5. **Not measured, and the open comparisons**: PostgreSQL under eight
    contended bookers (scenario 2), PostgreSQL with an index on scenario 4's
    board, KDS's non-durable class against `synchronous_commit = off`, and

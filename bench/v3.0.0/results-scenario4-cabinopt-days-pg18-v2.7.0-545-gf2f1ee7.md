@@ -35,7 +35,7 @@ the shape and becomes its baseline.
 | Cluster | `tools/pg_setup.sh`, unmodified, with `PGROOT=/home/cdkbs/pg-bench-18`, `PGPORT=15700` (not 15432, held by an unrelated server; checked free with `ss -ltn`); trust auth on loopback; **a fresh `initdb` per cell** (`pg_setup.sh destroy --yes` then `init`), the counterpart of the KDS side's fresh data file per cell. Settings are PostgreSQL's defaults plus what `pg_setup.sh` writes (port, listen_addresses, unix_socket_directories, logging_collector, log_min_duration_statement = -1, log_line_prefix); the full `pg_settings WHERE source <> 'default'` dump is `logs/<cell>.pg_settings` in the archive. In force: `synchronous_commit = on`, `fsync = on`, `wal_sync_method = fdatasync`, `full_page_writes = on`, `shared_buffers = 128MB`, `max_wal_size = 1GB`, `max_connections = 100`, `autovacuum = on`, `io_method = worker` |
 | Device | data directory `/home/cdkbs/pg-bench-18/data`, `/dev/root`, `ext4` (`df -T`, archived in `stamp.txt` and `pg-build-evidence.txt`); never tmpfs. Deleted after each cell |
 | Host | 8 logical CPUs (AMD EPYC 9V74, 1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure. **The client processes and the servers share those eight CPUs**; PostgreSQL runs one process per connection over all of them |
-| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.5) and were re-run, 12 cells in all (`contaminated/`). The cells reported here have no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
+| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.8) and were re-run, 12 cells in all (`contaminated/`). The window `validity.py` checks opens at the cell's `start` line, before the quiet-wait, so a cell that waited is flagged for what it waited out: `s0-pg-on-r1`'s first execution (711.2 tps) waited 100 s for a `ctest` that ended at 08:22:55 and then ran 08:22:56 to 08:23:06 with no foreign process in the monitor. **One reported cell has flagged samples**: the re-run of `s3-pg-n10000-all-r3` (08:38:24 to 08:39:16, 10 of 26 samples in `validity.txt`: a foreign `kds_tests` at 15 to 17 % CPU at 08:38:31 to 08:38:33, then a `claude`/`node` process at 10 to 126 % from 08:38:49 to 08:39:03). It was not re-run again; dropping it moves no scenario 3 ratio by more than 0.02 and no geometric mean by more than 0.003. Every other reported cell has no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
 | Drivers | unmodified `tools/pg_scenario*.py` (and, for the `--bookers 1` KDS cells, `tools/scenario2_freight.py`); the run scripts are in the archive |
 
 ## 2. What was run
@@ -88,8 +88,9 @@ Cabin arms show: KDS `on` is 1.20x and 1.30x PostgreSQL's seqscan, `declared`
 1.52x and 1.72x, and both are above the 1.15x floor. On `tape1k` the `on` arm is
 0.82x and `declared` 0.91x, and on `tape200` 0.69x and 0.70x: at small
 relations PostgreSQL's seqscan over 200 rows is already a round trip (79
-µs mean), and KDS's fixed 7 to 10 µs extra shows (`pk` 0.79x to 0.85x is that
-offset). `open` (240 durable inserts, one fsync each) is 0.75x to 0.84x
+µs mean), and KDS's fixed extra is 11 to 17 µs here (`pk` 0.79x to 0.85x:
+KDS 75.1 to 81.2 µs mean against PostgreSQL's 63.9); `tape200`'s 34 to 48 µs
+gap is more than that offset. `open` (240 durable inserts, one fsync each) is 0.75x to 0.84x
 and `close` (`COUNT`/`SUM`/`GROUP BY` full scans of the board, three
 rounds) is 0.49x to 0.51x in every arm, the same 2x per-row cost.
 
@@ -209,8 +210,9 @@ only evidence of what a probe returns.
    reaches 79 % (board) and 75 % (tape10k) of the declared arm's rate.
 2. **Without a Cabin, the KDS walk is half PostgreSQL's speed** (`off`
    0.48x on the board and `tape10k`, 0.50x on `close`), 2x in every
-   measurement of this series and the same 70 against 34 ns per row of
-   scenario 3. It is what a Cabin or an index avoids, and the reason the
+   measurement of this series and the same ratio as scenario 3's 70 against
+   34 ns per row (here about 94 against 43 ns per board row: the board
+   mean less the `pk` mean, over the 10,240 rows the `EXPLAIN` filters). It is what a Cabin or an index avoids, and the reason the
    optimizer's value shows most on scans this engine does slowly.
 3. **The `on` arm's tail is a real cost of being automatic**: `d1-tape10k[on]`
    p95 is 1,107.9 µs (a walk) against a p50 of 112.9 µs, i.e. about 5 % or more of

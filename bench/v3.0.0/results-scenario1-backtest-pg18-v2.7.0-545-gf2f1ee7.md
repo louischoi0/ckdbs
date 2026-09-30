@@ -3,9 +3,10 @@
 **One line.** KDS refuses this scenario (SUS-1: `daily_stats` and
 `model_results` are created `HEAP`), so there is **no KDS counterpart**, and
 this file is a standalone PostgreSQL 18.6 floor for the workload at the
-driver's defaults, one run: 128,536 rows loaded at 14,000 rows/s, a
-359-period, 8-model backtest in 4.9 s, an unindexed non-pk equality
-(`day-slice`) at 414 qps that a btree index lifts 22x to 8,892 qps, and a
+driver's defaults, one run: 128,536 rows loaded in 14.3 s (about 14,000
+statements/s in the bar and feature phases), a 359-period, 8-model backtest
+in 5.4 s, an unindexed non-pk equality (`day-slice`) at 414 qps that a btree
+index lifts 21.5x to 8,892 qps, and a
 durable insert rate of 659 rows/s in autocommit that batching lifts 28x to
 18,757 rows/s at 1,000 rows per transaction. The next KDS run of this
 scenario, once its schema is BTREE-only, is read against this file.
@@ -32,7 +33,7 @@ three cells that stopped at `CREATE TABLE ... HEAP` (byte 219,
 | Cluster | `tools/pg_setup.sh`, unmodified, with `PGROOT=/home/cdkbs/pg-bench-18`, `PGPORT=15700` (not 15432, held by an unrelated server; checked free with `ss -ltn`); trust auth on loopback; **a fresh `initdb` per cell** (`pg_setup.sh destroy --yes` then `init`), the counterpart of the KDS side's fresh data file per cell. Settings are PostgreSQL's defaults plus what `pg_setup.sh` writes (port, listen_addresses, unix_socket_directories, logging_collector, log_min_duration_statement = -1, log_line_prefix); the full `pg_settings WHERE source <> 'default'` dump is `logs/<cell>.pg_settings` in the archive. In force: `synchronous_commit = on`, `fsync = on`, `wal_sync_method = fdatasync`, `full_page_writes = on`, `shared_buffers = 128MB`, `max_wal_size = 1GB`, `max_connections = 100`, `autovacuum = on`, `io_method = worker` |
 | Device | data directory `/home/cdkbs/pg-bench-18/data`, `/dev/root`, `ext4` (`df -T`, archived in `stamp.txt` and `pg-build-evidence.txt`); never tmpfs. Deleted after each cell |
 | Host | 8 logical CPUs (AMD EPYC 9V74, 1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure. **The client processes and the servers share those eight CPUs**; PostgreSQL runs one process per connection over all of them |
-| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.5) and were re-run, 12 cells in all (`contaminated/`). The cells reported here have no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
+| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.8) and were re-run, 12 cells in all (`contaminated/`). The window `validity.py` checks opens at the cell's `start` line, before the quiet-wait, so a cell that waited is flagged for what it waited out: `s0-pg-on-r1`'s first execution (711.2 tps) waited 100 s for a `ctest` that ended at 08:22:55 and then ran 08:22:56 to 08:23:06 with no foreign process in the monitor. **One reported cell has flagged samples**: the re-run of `s3-pg-n10000-all-r3` (08:38:24 to 08:39:16, 10 of 26 samples in `validity.txt`: a foreign `kds_tests` at 15 to 17 % CPU at 08:38:31 to 08:38:33, then a `claude`/`node` process at 10 to 126 % from 08:38:49 to 08:39:03). It was not re-run again; dropping it moves no scenario 3 ratio by more than 0.02 and no geometric mean by more than 0.003. Every other reported cell has no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
 | Drivers | unmodified `tools/pg_scenario*.py` (and, for the `--bookers 1` KDS cells, `tools/scenario2_freight.py`); the run scripts are in the archive |
 
 ## 2. What was run
@@ -70,7 +71,7 @@ the sweeps (autocommit 745.8 against 659 rows/s, batch 1,000 15,396 against
 
 `day-slice` and `cross-join` are the shapes whose filter is a non-pk
 equality on an unindexed relation: 414 and 376 qps cold, 8,892 and 3,983 qps
-with the index built (22.2x and 10.3x), back to 409 and 380 after it is
+with the index built (21.5x and 10.6x over cold), back to 409 and 380 after it is
 dropped. `symbol-history` returns 7,560 rows, so an index changes nothing
 (33 to 34 qps): it is a 30 ms result set, bound by rows returned.
 `model-join` returns 8 rows from an 8-row model table and gains 1.10x.
@@ -80,12 +81,12 @@ Cold and warm agree within about 3 %: the data is in `shared_buffers`.
 
 | rows per BEGIN/COMMIT | qps | errors |
 |---|---|---|
-| 1 | 658.7 qps | 0 errors |
-| 10 | 4,883.3 qps | 0 errors |
-| 100 | 14,048.4 qps | 0 errors |
-| 1000 | 18,756.6 qps | 0 errors |
+| 1 row | 658.7 qps | 0 errors |
+| 10 rows | 4,883.3 qps | 0 errors |
+| 100 rows | 14,048.4 qps | 0 errors |
+| 1,000 rows | 18,756.6 qps | 0 errors |
 
-Autocommit is 1,517 µs per row (one commit fsync each, the same 1.3 ms
+Autocommit is 1,518 µs per row (one commit fsync each, the same 1.3 ms
 flush scenario 2 isolates); a batch of 1,000 spreads it to 53 µs per row,
 28x, which is the driver's own comment: "every row is one round trip in
 every case; what changes is how many durability points they cost".
@@ -95,10 +96,10 @@ per connection.**
 
 | connections | qps | errors |
 |---|---|---|
-| 1 | 390.7 qps | 0 errors |
-| 2 | 760.8 qps | 0 errors |
-| 4 | 1,432.3 qps | 0 errors |
-| 8 | 1,725.1 qps | 0 errors |
+| 1 connection | 390.7 qps | 0 errors |
+| 2 connections | 760.8 qps | 0 errors |
+| 4 connections | 1,432.3 qps | 0 errors |
+| 8 connections | 1,725.1 qps | 0 errors |
 
 The backtest's 3-relation join at 1, 2, 4 and 8 connections: 391 qps, then
 1.95x, 3.67x and 4.41x (the last is 216 qps per connection, the eight

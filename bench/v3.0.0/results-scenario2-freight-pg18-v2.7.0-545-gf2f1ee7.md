@@ -4,14 +4,15 @@
 freight booking runs **392.2 tps** on PostgreSQL 18.6 (median of three,
 spread 2.4 %) and **378.2 tps (group) / 377.7 tps (strict)** on KDS at
 `cores = 1` with `--bookers 1`, measured in this run: KDS is **0.96x** of
-PostgreSQL in both modes, and the commit fsync is 57 to 62 % of every one
+PostgreSQL in both modes, and the commit fsync is 56 to 62 % of every one
 of those bookings on both engines. The 9a0525d KDS figures (1,519.0 tps at
 `c8-g`, 3.87x PostgreSQL) are **not** a like-for-like comparison: they drive
 eight contended bookers and the PostgreSQL twin has one connection. What
 the matched cells show is that KDS's write statements are as fast as
 PostgreSQL's (0.95x to 1.19x), its non-pk reads that PostgreSQL serves from
-an index it was given are 2 to 3.5x slower, and the durable commit is the
-same fsync on both. PostgreSQL is the floor; KDS clears it, by nothing.
+an index it was given are 2.1x to 3.6x slower, and the durable commit is the
+same fsync on both. PostgreSQL is the floor; KDS is 4 % under it, at the edge
+of the spreads.
 
 Driver: `tools/pg_scenario2_freight.py`, run through
 `pg_s2_shim.py` (below), same workload arguments as the KDS cells. KDS
@@ -34,7 +35,7 @@ this shape and becomes its baseline.
 | Cluster | `tools/pg_setup.sh`, unmodified, with `PGROOT=/home/cdkbs/pg-bench-18`, `PGPORT=15700` (not 15432, held by an unrelated server; checked free with `ss -ltn`); trust auth on loopback; **a fresh `initdb` per cell** (`pg_setup.sh destroy --yes` then `init`), the counterpart of the KDS side's fresh data file per cell. Settings are PostgreSQL's defaults plus what `pg_setup.sh` writes (port, listen_addresses, unix_socket_directories, logging_collector, log_min_duration_statement = -1, log_line_prefix); the full `pg_settings WHERE source <> 'default'` dump is `logs/<cell>.pg_settings` in the archive. In force: `synchronous_commit = on`, `fsync = on`, `wal_sync_method = fdatasync`, `full_page_writes = on`, `shared_buffers = 128MB`, `max_wal_size = 1GB`, `max_connections = 100`, `autovacuum = on`, `io_method = worker` |
 | Device | data directory `/home/cdkbs/pg-bench-18/data`, `/dev/root`, `ext4` (`df -T`, archived in `stamp.txt` and `pg-build-evidence.txt`); never tmpfs. Deleted after each cell |
 | Host | 8 logical CPUs (AMD EPYC 9V74, 1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure. **The client processes and the servers share those eight CPUs**; PostgreSQL runs one process per connection over all of them |
-| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.5) and were re-run, 12 cells in all (`contaminated/`). The cells reported here have no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
+| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.8) and were re-run, 12 cells in all (`contaminated/`). The window `validity.py` checks opens at the cell's `start` line, before the quiet-wait, so a cell that waited is flagged for what it waited out: `s0-pg-on-r1`'s first execution (711.2 tps) waited 100 s for a `ctest` that ended at 08:22:55 and then ran 08:22:56 to 08:23:06 with no foreign process in the monitor. **One reported cell has flagged samples**: the re-run of `s3-pg-n10000-all-r3` (08:38:24 to 08:39:16, 10 of 26 samples in `validity.txt`: a foreign `kds_tests` at 15 to 17 % CPU at 08:38:31 to 08:38:33, then a `claude`/`node` process at 10 to 126 % from 08:38:49 to 08:39:03). It was not re-run again; dropping it moves no scenario 3 ratio by more than 0.02 and no geometric mean by more than 0.003. Every other reported cell has no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
 | Drivers | unmodified `tools/pg_scenario*.py` (and, for the `--bookers 1` KDS cells, `tools/scenario2_freight.py`); the run scripts are in the archive |
 | Driver shim | `pg_s2_shim.py` (archive). **`pg_scenario2_freight.py --verify N` crashes after the measurement**: `verify()` returns a `(checks, failures, first)` tuple and the shared printer `print_bookings` (`tools/scenario2_freight.py`) reads `v.checks`, so `AttributeError: 'tuple' object has no attribute 'checks'` fires before `--json` is written (log: `s2-pg-driver-verify-crash.log`). The shim replaces only that print step, converting the tuple to the attribute object the printer reads; nothing measured, sent to the server or verified differs |
 
@@ -62,8 +63,9 @@ repeat of the 9a0525d cells: it is a different client concurrency.
 streams differ between the two drivers' attempt loops: KDS attempted 3,402
 (328 rejected for capacity, 74 for credit), PostgreSQL 3,340 (289, 51).
 tps is committed bookings over elapsed time, so the rejected attempts
-(2 % of the attempts, about 100 µs each) are in both denominators; the
-difference in attempts cannot account for more than about 2 %. The relation
+(10 to 12 % of the attempts: the four reads and a rollback, the `booking`
+p0 of 336 to 475 µs) are in both denominators; KDS's 62 extra attempts at
+under 0.5 ms each are under 31 ms of a 7.9 s run, about 0.4 %. The relation
 set matches; on PostgreSQL `freights`/`charges` carry a pk index and
 `freights(operation_id)`, `recipes(cargo_type)` carry the index a DBA would
 add (the driver's stated choice), where KDS's `recipe-read` is a FilterScan
@@ -284,7 +286,7 @@ the commit path at eight are that file's findings):
 |---|---|
 | Durability / commit | **62.4 % of a PostgreSQL booking, 57.7 % (group) and 56.3 % (strict) of a KDS booking, and 4.2 % of a PostgreSQL booking with `synchronous_commit = off`**. `commit` p50 is 1,383.6 µs on PostgreSQL, 1,325.5 µs at KDS group and 1,283.8 µs at KDS strict (run 1), against 39.8 µs non-durable: the WAL flush is 1.3 to 1.4 ms on this device on both engines, and a single committer cannot share it (in the instrumented PG cell 9,592 commits, including the load's and the read-only ones, meet 7,751 WAL fsyncs: 1.2 commits per fsync, against 3.9 in scenario 0) |
 | Write statements | `freight-insert`, `charge-insert`, `operation-update`, `org-update`: 2.3 to 12.3 % each on the two durable engines; the KDS ones are 0.95x to 1.19x of PostgreSQL's rate (the per-phase table above) |
-| Reads | `cargo-lookup`, `credit-lookup`, `capacity-read` are pk-addressed: KDS 0.84x to 0.87x of PostgreSQL. `recipe-read` (a non-pk equality) and `manifest-scan` are the two the PostgreSQL twin gets an index for: KDS at 0.47x to 0.48x and 0.28x to 0.29x |
+| Reads | `cargo-lookup`, `credit-lookup`, `capacity-read` are pk-addressed: KDS 0.84x to 0.87x of PostgreSQL. `recipe-read` (a non-pk equality) and `manifest-scan` are the two the PostgreSQL twin gets an index for: KDS at 0.47x to 0.48x and 0.28x to 0.29x. `manifest-scan` is also not run the same way: the KDS driver's reporter is a second process, concurrent with the booker on the one reactor (its p95 is 1.7x to 6x its p50), where the twin interleaves it between bookings, so the 0.28x is not the walk alone; the "1 booker" cells are one booker plus that reporter |
 | Lock or conflict wait | none: one connection, 0 conflicts, 0 error replies in all twelve cells |
 | Client and socket | the unattributed column, 3.0 to 4.5 % on the durable cells and 7.4 % on `off`, where the Python client is a larger share of a 910 µs booking |
 
@@ -314,8 +316,8 @@ each. What they measure is how KDS scales with concurrent clients (2.83x
 from one core to eight under `group`, the 9a0525d file's headline); how
 PostgreSQL scales under eight contended bookers this run cannot say,
 because the twin has one connection. Its only PG
-concurrency figure is scenario 1's connection sweep (395.5 qps at one
-connection to 1,591.9 at eight, 4.0x, in that file), on a different shape.
+concurrency figure is scenario 1's connection sweep (390.7 qps at one
+connection to 1,725.1 at eight, 4.4x, in that file), on a different shape.
 The 3.87x is therefore not "KDS beats PostgreSQL by 3.9x"; it is one figure
 of a comparison whose other side was never measured at eight clients.
 
@@ -370,7 +372,7 @@ process, `validity.py`):
 ## 9. What the run says about the engine
 
 1. **At one client the durable booking is bound by the device's flush, and
-   KDS pays it exactly as PostgreSQL does.** 57 to 62 % of a booking is
+   KDS pays it exactly as PostgreSQL does.** 56 to 62 % of a booking is
    the commit, 1.3 to 1.4 ms on both, 648/s (PostgreSQL) and 650 to 672/s
    (KDS) commits at the mean. Removing the wait (PostgreSQL `off`) takes the
    booking from 2,276 to 910 µs. Nothing in KDS's commit path adds a measurable
@@ -383,8 +385,8 @@ process, `validity.py`):
    and `manifest-scan` at 0.28x to 0.29x, the two statements PostgreSQL answers
    from an index the twin creates for it. The KDS driver declares no index
    and no Cabin on those columns, so both walk their relation; the pk reads
-   are 0.84x to 0.87x, 10 to 13 µs of fixed cost per statement, the same
-   offset scenario 3 shows on `pk-user`.
+   are 0.84x to 0.87x, 10 to 14 µs of fixed cost per statement, above the
+   4 to 10 µs scenario 3 shows on `pk-user`.
 4. **`group` and `strict` are the same mode for one committer**: 378.2 and
    377.7 tps, commit p50 1,325.5 and 1,283.8 µs. The gap the scenario 0 file
    reports (`strict` at 0.24x to 0.47x) needs concurrent committers to

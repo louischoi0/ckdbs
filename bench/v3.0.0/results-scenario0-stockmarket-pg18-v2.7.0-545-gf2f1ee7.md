@@ -2,14 +2,17 @@
 
 **One line.** With eight concurrent traders and four autocommit statements per
 business transaction, PostgreSQL 18.6 at its defaults (`synchronous_commit =
-on`, a WAL fsync per commit) runs **710.8 tps** (median of three, spread
-19.0 %). KDS under `durability = group` is **0.88x to 0.93x** of that
-(626.0 and 661.0 tps), inside PostgreSQL's own run-to-run spread, so the
-two are indistinguishable on this shape; KDS under `strict` is **0.24x to
-0.47x** (169.4 and 331.7 tps), outside every floor. The gap is the commit
-path: PostgreSQL merged 3.9 commits into each WAL fsync in an instrumented
-cell, and KDS `strict`'s throughput is what one fsync per commit costs on
-this device. PostgreSQL is the floor here, not the reference: this file says
+on`, every commit waits for its WAL flush) runs **710.8 tps** (median of
+three, spread 19.0 %). KDS under `durability = group` is **0.88x to 0.93x**
+of that (626.0 and 661.0 tps). That is inside the three-run spread, but the
+spread is one run: four of the five `on` executions (the two other runs, the
+discarded first execution and the instrumented cell) lie within 698.6 to
+711.2 tps, 1.8 %, and only the re-run at 831.1 tps is outside, so a 5 to 12 %
+`group` deficit is the likelier reading, not a tie. KDS under `strict` is
+**0.24x to 0.47x** (169.4 and 331.7 tps), outside every floor. The gap is the
+commit path: PostgreSQL merged 3.9 commits into each WAL fsync in an
+instrumented cell, and KDS `strict`'s rate at one core is what one fsync per
+commit would cost on this device (inferred; KDS's sync count was not read). PostgreSQL is the floor here, not the reference: this file says
 the engine is in the league under `group`, and that `strict` is not.
 
 Driver: `tools/pg_scenario0_stockmarket.py`, unmodified, `--txn` off (four
@@ -32,7 +35,7 @@ the baseline the next one is read against.
 | Cluster | `tools/pg_setup.sh`, unmodified, with `PGROOT=/home/cdkbs/pg-bench-18`, `PGPORT=15700` (not 15432, held by an unrelated server; checked free with `ss -ltn`); trust auth on loopback; **a fresh `initdb` per cell** (`pg_setup.sh destroy --yes` then `init`), the counterpart of the KDS side's fresh data file per cell. Settings are PostgreSQL's defaults plus what `pg_setup.sh` writes (port, listen_addresses, unix_socket_directories, logging_collector, log_min_duration_statement = -1, log_line_prefix); the full `pg_settings WHERE source <> 'default'` dump is `logs/<cell>.pg_settings` in the archive. In force: `synchronous_commit = on`, `fsync = on`, `wal_sync_method = fdatasync`, `full_page_writes = on`, `shared_buffers = 128MB`, `max_wal_size = 1GB`, `max_connections = 100`, `autovacuum = on`, `io_method = worker` |
 | Device | data directory `/home/cdkbs/pg-bench-18/data`, `/dev/root`, `ext4` (`df -T`, archived in `stamp.txt` and `pg-build-evidence.txt`); never tmpfs. Deleted after each cell |
 | Host | 8 logical CPUs (AMD EPYC 9V74, 1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure. **The client processes and the servers share those eight CPUs**; PostgreSQL runs one process per connection over all of them |
-| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.5) and were re-run, 12 cells in all (`contaminated/`). The cells reported here have no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
+| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.8) and were re-run, 12 cells in all (`contaminated/`). The window `validity.py` checks opens at the cell's `start` line, before the quiet-wait, so a cell that waited is flagged for what it waited out: `s0-pg-on-r1`'s first execution (711.2 tps) waited 100 s for a `ctest` that ended at 08:22:55 and then ran 08:22:56 to 08:23:06 with no foreign process in the monitor. **One reported cell has flagged samples**: the re-run of `s3-pg-n10000-all-r3` (08:38:24 to 08:39:16, 10 of 26 samples in `validity.txt`: a foreign `kds_tests` at 15 to 17 % CPU at 08:38:31 to 08:38:33, then a `claude`/`node` process at 10 to 126 % from 08:38:49 to 08:39:03). It was not re-run again; dropping it moves no scenario 3 ratio by more than 0.02 and no geometric mean by more than 0.003. Every other reported cell has no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
 | Drivers | unmodified `tools/pg_scenario*.py` (and, for the `--bookers 1` KDS cells, `tools/scenario2_freight.py`); the run scripts are in the archive |
 
 ## 2. What was run
@@ -76,8 +79,8 @@ the measured unit does not scale with `trades`' row count.
 
 ## 3. Throughput
 
-**PostgreSQL's durable default and KDS `group` are within noise of each
-other; KDS `strict` is not.**
+**KDS `group` is inside PostgreSQL's three-run spread but probably 5 to 12 %
+behind it; KDS `strict` is far behind.**
 
 | cell | synchronous_commit | run 1 | run 2 | run 3 | median | spread (max/min-1) | durable at the reply |
 |---|---|---|---|---|---|---|---|
@@ -100,8 +103,11 @@ over PostgreSQL `on`, above 1.00x KDS is faster):
 | KDS `s0-c8-s` (cores 8, strict) | strict | 331.7 tps | 20.0 % | 0.47x |
 
 Reading it: `group` is 0.88x and 0.93x, both inside the 19.0 % PostgreSQL
-spread and above the KDS cells' own 3.8 % and 6.8 %, so the honest reading
-is "the same speed, PostgreSQL's floor unresolved to about 20 %". `strict` is
+spread and above the KDS cells' own 3.8 % and 6.8 %. The 19.0 % is carried
+by the one re-run at 831.1 tps: runs 2 and 3, the discarded first execution
+of run 1 (711.2 tps) and the instrumented cell (698.8 tps) span 1.8 %, and
+against that cluster `group` is 5 to 12 % slower. The reading is "in the
+same league, probably somewhat slower", not "the same speed". `strict` is
 4.2x and 2.1x slower than PostgreSQL at one and eight cores; the lowest
 `on` run (698.6 tps) is still 2.1x `c8-s`'s median, so no floor explains it.
 
@@ -114,13 +120,14 @@ statement waits for:
 
 | Wait | Estimate | How derived |
 |---|---|---|
-| Durability, commit fsync | **95.0 % of PostgreSQL's mean transaction** (run 1: 9,614 µs mean with the fsync, 478 µs with `synchronous_commit = off`) | `on` against `off`, same workload; the `off` cells' reporter never woke (a 0.3 s run is shorter than its 1 s interval, `profit-scan` 0 ops), so `off` is also 300 to 350 statements lighter |
+| Durability, commit fsync | **95.0 % of PostgreSQL's mean transaction** (run 1: 9,614 µs mean with the fsync, 478 µs with `synchronous_commit = off`) | `on` against `off`, same workload; the `off` cells' reporter never woke (a 0.3 s run is shorter than its 1 s interval, `profit-scan` 0 ops), so `off` is also 500 to 600 statements lighter (250 to 300 `profit-scan` plus as many `profit-insert` in the `on` cells) |
 | Batching of that wait | **3.9 commits per WAL fsync** in the `on` cell: 21,258 commits, 5,437 client-backend and 5,441 total WAL fsyncs over the whole cell (load, run and `CHECKPOINT` included) | instrumented extra cell `s0-pg-on-fsyncprobe` (`pg_stat_database.xact_commit`, `pg_stat_io` `object = 'wal'`), 698.8 tps in that cell; `xact_commit` also counts the reporter's and the verify pass's read-only transactions (several hundred), which do not fsync, so the ratio is a slight over-count of write commits per fsync |
-| Client and socket | not isolated; inside every number. p0 of a PostgreSQL `trade-insert` with `off` is 57.9 µs, so the fixed part of a statement is below 60 µs | `off` cells' p0 |
+| Client and socket | not isolated; inside every number. p0 of a PostgreSQL `trade-insert` with `off` is 58.8 to 61.7 µs, so the fixed part of a statement is at most about 60 µs | `off` cells' p0 |
 | Lock or conflict wait | none visible: 0 error replies in all six cells, `torn` 0 | error columns |
-| Page work | not separable from the commit wait in the `on` cells; with `off`, `trade-insert` p50 is 105.6 µs and `account-update` 116.2 µs, so a statement is about 100 µs | `off` p50 |
+| Page work | not separable from the commit wait in the `on` cells; with `off`, `trade-insert` p50 is 105.8 µs and `account-update` 118.7 µs (median of the three runs' p50), so a statement is about 100 µs | `off` p50 |
 
-**KDS `strict` is one fsync per commit and PostgreSQL is not.** At one core
+**At one core, KDS `strict`'s rate is what one fsync per commit costs
+(inferred); PostgreSQL batches.** At one core
 `strict` sustains 169.4 tps x 4 = 678 durable statements per second, one every
 1.5 ms; the device's own fsync is about that long (in the single-client cells of scenario 2 a
 durable commit runs at 648/s for PostgreSQL and 650 to 672/s for KDS, derived
@@ -128,12 +135,17 @@ from the commit phase's mean). PostgreSQL's eight concurrent committers
 share a flush: 3.9 commits per fsync turns the same device into 2,843
 durable statements per second (710.8 x 4). KDS `group` reaches the same
 place, 2,504 statements per second at `c1` and 2,644 at `c8`, by batching its
-flushes. That the KDS `group` figure is the *same* as PostgreSQL's is the
+flushes. That the KDS `group` figure is in PostgreSQL's range is the
 finding; that `strict` is a quarter to a half of it says what `strict`
-buys (a flush per commit that no concurrent commit can share) and what it
-costs on this shape. The KDS-side fsync count was not measured (no server
-counter is exposed), so "one fsync per commit" is the inference from the
-arithmetic above and the wal.md description, not a count.
+costs on this shape. The KDS-side sync count was not read: `SHOW META`
+exposes `wal_syncs`, `wal_group_commits` and `wal_mean_group_batch` at
+`9a0525d`, and neither run sampled them, so "one fsync per commit" is the
+inference from the arithmetic above and the wal.md description, not a count.
+It holds at one core only: at `c8-s`, 331.7 tps x 4 = 1,327 durable
+statements per second, one every 0.75 ms, is faster than one 1.3 to 1.5 ms
+flush at a time, so at eight cores some syncs are shared or overlapped; the
+mechanism was not isolated (peers' syncs go through core 0's writer,
+`wal.md` §3).
 
 The reporter's read differs by engine: `profit-scan` (a non-pk equality over
 287 accounts, no index, concurrent with the traders) has p50 139.1 to 143.9
@@ -247,10 +259,13 @@ PostgreSQL cells have no `TXN_CONFLICT` analogue.
 
 The floor is the three-run spread: 19.0 % for `on` (698.6, 710.8, 831.1
 tps) and 16.3 % for `off`. PostgreSQL is noisier than KDS `group` here (3.8 %
-and 6.8 % in the 9a0525d file), which is why the `group` comparison is read as
-"unresolved" rather than as a 0.88x loss; run 1 of `on` at 831.1 tps is the
-re-run after the first execution (711.2 tps, inside the same spread) overlapped a foreign `ctest`
-and was discarded by rule, not because it read differently (`contaminated/s0-pg-on-r1.*`). The device thermometer
+and 6.8 % in the 9a0525d file). Run 1 of `on` at 831.1 tps is the re-run;
+the first execution (711.2 tps) was discarded because its window, which
+`validity.py` opens before the quiet-wait, held 100 s of waiting on a foreign
+`ctest` that ended at 08:22:55; the measurement itself ran 08:22:56 to
+08:23:06 with no foreign process in `logs/monitor.log`
+(`contaminated/s0-pg-on-r1.*`). Without the re-run the spread is 1.8 %, which
+is why section 3 reads the `group` gap as a probable 5 to 12 % deficit. The device thermometer
 of the KDS files (`load-users` p50) is not applicable to PostgreSQL's load
 phases, which run 100 to 287 rows. Every cell: monitored window with no
 foreign process (`validity.py`), loadavg and `pgrep` at the start:
@@ -266,16 +281,18 @@ foreign process (`validity.py`), loadavg and `pgrep` at the start:
 
 ## 8. What the run says about the engine
 
-1. **KDS `group` is at PostgreSQL's speed on a durable, fsync-bound write
-   workload.** 626.0 and 661.0 tps against 710.8 with a 19.0 % floor. On
-   the one number this scenario reports, KDS is in the right league, which
-   is all a floor is for; it does not say KDS is as fast (the floor's own
-   spread is larger than the gap).
+1. **KDS `group` is in PostgreSQL's league on a durable, fsync-bound write
+   workload.** 626.0 and 661.0 tps against 710.8 with a 19.0 % floor that
+   one run carries; four of five PostgreSQL executions sit within 1.8 %, so
+   KDS is probably 5 to 12 % slower here. It is in the right league, which
+   is all a floor is for; it does not say KDS is as fast.
 2. **`strict` is the price of not batching.** 0.24x and 0.47x. The
    PostgreSQL instrumented cell shows the mechanism it avoids: 3.9 commits
    per fsync. `docs/spec/wal.md` §1 states that `D1` and `D2` differ only in
-   batching; this run puts a size on that difference for four-statement
-   autocommit traffic from eight clients: 4.2x at one core, 2.1x at eight.
+   batching; the 9a0525d medians put a size on that difference for
+   four-statement autocommit traffic from eight clients: `group` is 3.7x
+   `strict` at one core and 2.0x at eight (this run adds that PostgreSQL is
+   4.2x and 2.1x `strict`).
    An application that needs the per-commit flush semantics pays it; one
    that is content with group commit's zero loss window need not.
 3. **Eight cores close half of `strict`'s gap** (0.24x to 0.47x): the

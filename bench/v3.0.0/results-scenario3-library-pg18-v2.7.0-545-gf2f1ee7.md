@@ -11,8 +11,9 @@ size. The indexed equalities on `loans` land within 7 % of each other
 KDS gains 8.5x from the index and PostgreSQL 4.4x; KDS wins outright on
 `exists-correlated`, and with indexes on `join-loan-user`, `count-by-user` and
 `join-no-literal` at 10,000. PostgreSQL is the
-floor: KDS clears it on the indexed shapes and is inside 0.5x to 0.9x of it
-on everything else.
+floor: indexed, KDS's `cores = 1` geometric mean is 3 to 5 % under it (not over it) and it
+clears it only on those joins, `count-by-user` and `exists-correlated`;
+unindexed it is at 0.46x to 0.96x on every shape but `exists-correlated`.
 
 Driver: `tools/pg_scenario3_library.py`, unmodified, `--loans {200, 1000,
 10000} --index-mode {none, all} --seed 1`, three runs per cell. KDS side:
@@ -33,7 +34,7 @@ PostgreSQL run of the shape and becomes its baseline.
 | Cluster | `tools/pg_setup.sh`, unmodified, with `PGROOT=/home/cdkbs/pg-bench-18`, `PGPORT=15700` (not 15432, held by an unrelated server; checked free with `ss -ltn`); trust auth on loopback; **a fresh `initdb` per cell** (`pg_setup.sh destroy --yes` then `init`), the counterpart of the KDS side's fresh data file per cell. Settings are PostgreSQL's defaults plus what `pg_setup.sh` writes (port, listen_addresses, unix_socket_directories, logging_collector, log_min_duration_statement = -1, log_line_prefix); the full `pg_settings WHERE source <> 'default'` dump is `logs/<cell>.pg_settings` in the archive. In force: `synchronous_commit = on`, `fsync = on`, `wal_sync_method = fdatasync`, `full_page_writes = on`, `shared_buffers = 128MB`, `max_wal_size = 1GB`, `max_connections = 100`, `autovacuum = on`, `io_method = worker` |
 | Device | data directory `/home/cdkbs/pg-bench-18/data`, `/dev/root`, `ext4` (`df -T`, archived in `stamp.txt` and `pg-build-evidence.txt`); never tmpfs. Deleted after each cell |
 | Host | 8 logical CPUs (AMD EPYC 9V74, 1 socket x 4 cores x 2 threads), Linux 7.0.0-1014-azure. **The client processes and the servers share those eight CPUs**; PostgreSQL runs one process per connection over all of them |
-| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.5) and were re-run, 12 cells in all (`contaminated/`). The cells reported here have no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
+| Host quiet | before each cell the run script waited until no `cc1plus` / `cmake --build` / `ctest` process existed and the one-minute load was at most 1.6, and recorded `/proc/loadavg` and the `pgrep` result (per-cell tables below). **A 2-second monitor ran through the whole matrix** (`logs/monitor.log`, `validity.py`): a cell with a foreign process above 10 % CPU or a build/test process inside its window is discarded and re-run. Other sessions build and test on this host: a first pass of the matrix (08:04 to 08:20 UTC, no monitor yet) had three cells overlap a foreign `ctest` and was **discarded in full**; in the monitored pass 7 cells had a foreign build/test process in their window and 5 more started right after one (one-minute load 2.5 to 4.8) and were re-run, 12 cells in all (`contaminated/`). The window `validity.py` checks opens at the cell's `start` line, before the quiet-wait, so a cell that waited is flagged for what it waited out: `s0-pg-on-r1`'s first execution (711.2 tps) waited 100 s for a `ctest` that ended at 08:22:55 and then ran 08:22:56 to 08:23:06 with no foreign process in the monitor. **One reported cell has flagged samples**: the re-run of `s3-pg-n10000-all-r3` (08:38:24 to 08:39:16, 10 of 26 samples in `validity.txt`: a foreign `kds_tests` at 15 to 17 % CPU at 08:38:31 to 08:38:33, then a `claude`/`node` process at 10 to 126 % from 08:38:49 to 08:39:03). It was not re-run again; dropping it moves no scenario 3 ratio by more than 0.02 and no geometric mean by more than 0.003. Every other reported cell has no flagged sample. The monitor's limit: it sees CPU-busy processes at 2 s spacing, so a sub-2 s burst or a process that has only just become busy is not excluded |
 | Drivers | unmodified `tools/pg_scenario*.py` (and, for the `--bookers 1` KDS cells, `tools/scenario2_freight.py`); the run scripts are in the archive |
 
 ## 2. What was run
@@ -131,8 +132,8 @@ Summary of the twelve shapes per cell, geometric mean of the ratio:
 
 | KDS cores | n=200 none | n=200 all | n=1,000 none | n=1,000 all | n=10,000 none | n=10,000 all |
 |---|---|---|---|---|---|---|
-| 1 | 0.87x (1 of 12 ahead) | 0.96x (3 of 12 ahead) | 0.77x (1 of 12 ahead) | 0.97x (4 of 12 ahead) | 0.62x (1 of 12 ahead) | 0.95x (4 of 12 ahead) |
-| 8 | 0.82x (1 of 12 ahead) | 0.92x (2 of 12 ahead) | 0.72x (1 of 12 ahead) | 0.93x (3 of 12 ahead) | 0.60x (1 of 12 ahead) | 0.91x (4 of 12 ahead) |
+| 1 core | 0.87x (1 of 12 ahead) | 0.96x (3 of 12 ahead) | 0.77x (1 of 12 ahead) | 0.97x (4 of 12 ahead) | 0.62x (1 of 12 ahead) | 0.95x (4 of 12 ahead) |
+| 8 cores | 0.82x (1 of 12 ahead) | 0.92x (2 of 12 ahead) | 0.72x (1 of 12 ahead) | 0.93x (3 of 12 ahead) | 0.60x (1 of 12 ahead) | 0.91x (4 of 12 ahead) |
 
 KDS `cores = 1`, derived qps, same cells (9a0525d, median of three):
 
@@ -246,78 +247,78 @@ does not.
 
 | n | mode | shape | p0 | p25 | p50 | p95 | p99 | plan (EXPLAIN top node, recorded for 5 shapes) |
 |---|---|---|---|---|---|---|---|---|
-| 200 | none | pk-user | 58.5 µs | 59.8 µs | 60.3 µs | 74.5 µs | 87.0 µs | not recorded by the driver |
-| 200 | none | loans-by-user | 61.5 µs | 68.2 µs | 71.6 µs | 84.9 µs | 89.4 µs | Seq Scan on loans_082706 |
-| 200 | none | loans-by-book | 63.1 µs | 67.4 µs | 70.5 µs | 80.6 µs | 90.5 µs | not recorded by the driver |
-| 200 | none | resv-by-user | 57.2 µs | 60.9 µs | 62.2 µs | 77.2 µs | 97.7 µs | not recorded by the driver |
-| 200 | none | books-by-author | 57.4 µs | 60.0 µs | 64.2 µs | 78.7 µs | 84.2 µs | not recorded by the driver |
-| 200 | none | books-by-genre | 57.2 µs | 59.2 µs | 61.1 µs | 73.1 µs | 79.3 µs | Seq Scan on books_082706 |
-| 200 | none | loans-by-daterange | 71.5 µs | 77.8 µs | 81.0 µs | 97.1 µs | 104.3 µs | not recorded by the driver |
-| 200 | none | overdue | 69.9 µs | 77.1 µs | 79.8 µs | 93.7 µs | 100.1 µs | Seq Scan on loans_082706 |
-| 200 | none | join-loan-user | 84.3 µs | 93.5 µs | 97.0 µs | 113.3 µs | 140.3 µs | not recorded by the driver |
-| 200 | none | join-no-literal | 210.3 µs | 213.5 µs | 215.6 µs | 231.8 µs | 238.8 µs | Hash Join |
-| 200 | none | exists-correlated | 166.5 µs | 169.4 µs | 170.6 µs | 186.6 µs | 197.6 µs | Hash Join |
-| 200 | none | count-by-user | 69.0 µs | 69.8 µs | 70.3 µs | 85.0 µs | 90.2 µs | not recorded by the driver |
-| 200 | all | pk-user | 80.6 µs | 81.8 µs | 82.5 µs | 101.5 µs | 107.9 µs | not recorded by the driver |
-| 200 | all | loans-by-user | 90.3 µs | 99.2 µs | 103.2 µs | 124.1 µs | 132.5 µs | Seq Scan on loans_082708 |
-| 200 | all | loans-by-book | 92.7 µs | 98.6 µs | 101.6 µs | 118.0 µs | 125.0 µs | not recorded by the driver |
-| 200 | all | resv-by-user | 61.6 µs | 87.4 µs | 89.0 µs | 108.7 µs | 132.6 µs | not recorded by the driver |
-| 200 | all | books-by-author | 61.7 µs | 64.6 µs | 69.2 µs | 84.4 µs | 93.4 µs | not recorded by the driver |
-| 200 | all | books-by-genre | 63.3 µs | 65.0 µs | 67.1 µs | 80.7 µs | 89.6 µs | Seq Scan on books_082708 |
-| 200 | all | loans-by-daterange | 72.5 µs | 79.7 µs | 82.9 µs | 98.3 µs | 104.8 µs | not recorded by the driver |
-| 200 | all | overdue | 79.0 µs | 86.3 µs | 89.0 µs | 101.7 µs | 111.5 µs | Seq Scan on loans_082708 |
-| 200 | all | join-loan-user | 90.0 µs | 99.8 µs | 103.1 µs | 117.5 µs | 122.1 µs | not recorded by the driver |
-| 200 | all | join-no-literal | 224.3 µs | 243.6 µs | 256.2 µs | 277.6 µs | 287.0 µs | Hash Join |
-| 200 | all | exists-correlated | 204.8 µs | 207.6 µs | 209.6 µs | 230.9 µs | 236.3 µs | Hash Join |
-| 200 | all | count-by-user | 100.7 µs | 102.2 µs | 102.9 µs | 122.2 µs | 128.8 µs | not recorded by the driver |
-| 1,000 | none | pk-user | 62.3 µs | 63.4 µs | 64.0 µs | 78.6 µs | 92.6 µs | not recorded by the driver |
-| 1,000 | none | loans-by-user | 90.2 µs | 96.3 µs | 100.2 µs | 122.2 µs | 128.8 µs | Seq Scan on loans_082710 |
-| 1,000 | none | loans-by-book | 91.1 µs | 96.6 µs | 99.8 µs | 121.7 µs | 125.8 µs | not recorded by the driver |
-| 1,000 | none | resv-by-user | 69.8 µs | 74.1 µs | 76.2 µs | 96.6 µs | 101.9 µs | not recorded by the driver |
-| 1,000 | none | books-by-author | 60.3 µs | 65.5 µs | 68.2 µs | 89.3 µs | 97.3 µs | not recorded by the driver |
-| 1,000 | none | books-by-genre | 70.9 µs | 78.7 µs | 81.2 µs | 99.2 µs | 116.4 µs | Seq Scan on books_082710 |
-| 1,000 | none | loans-by-daterange | 102.2 µs | 158.0 µs | 165.0 µs | 185.7 µs | 205.8 µs | not recorded by the driver |
-| 1,000 | none | overdue | 102.1 µs | 141.9 µs | 146.3 µs | 161.8 µs | 171.4 µs | Seq Scan on loans_082710 |
-| 1,000 | none | join-loan-user | 119.6 µs | 126.2 µs | 130.1 µs | 156.7 µs | 265.2 µs | not recorded by the driver |
-| 1,000 | none | join-no-literal | 273.4 µs | 277.8 µs | 281.6 µs | 306.1 µs | 366.9 µs | Hash Join |
-| 1,000 | none | exists-correlated | 282.2 µs | 291.6 µs | 296.0 µs | 316.3 µs | 324.9 µs | Hash Join |
-| 1,000 | none | count-by-user | 95.9 µs | 97.3 µs | 97.8 µs | 112.4 µs | 115.9 µs | not recorded by the driver |
-| 1,000 | all | pk-user | 64.3 µs | 65.5 µs | 66.1 µs | 81.0 µs | 87.4 µs | not recorded by the driver |
-| 1,000 | all | loans-by-user | 71.0 µs | 80.1 µs | 83.7 µs | 102.4 µs | 115.3 µs | Bitmap Heap Scan on loans_082714 |
-| 1,000 | all | loans-by-book | 71.0 µs | 78.2 µs | 80.9 µs | 93.6 µs | 103.0 µs | not recorded by the driver |
-| 1,000 | all | resv-by-user | 61.9 µs | 67.6 µs | 72.1 µs | 84.5 µs | 94.0 µs | not recorded by the driver |
-| 1,000 | all | books-by-author | 67.7 µs | 73.0 µs | 75.7 µs | 90.0 µs | 99.3 µs | not recorded by the driver |
-| 1,000 | all | books-by-genre | 80.1 µs | 87.2 µs | 89.6 µs | 103.7 µs | 109.9 µs | Seq Scan on books_082714 |
-| 1,000 | all | loans-by-daterange | 111.5 µs | 160.6 µs | 166.2 µs | 186.1 µs | 189.8 µs | not recorded by the driver |
-| 1,000 | all | overdue | 81.2 µs | 125.0 µs | 134.8 µs | 182.7 µs | 201.4 µs | Bitmap Heap Scan on loans_082714 |
-| 1,000 | all | join-loan-user | 103.7 µs | 112.8 µs | 115.4 µs | 136.7 µs | 154.3 µs | not recorded by the driver |
-| 1,000 | all | join-no-literal | 294.6 µs | 298.9 µs | 301.8 µs | 317.2 µs | 347.0 µs | Hash Join |
-| 1,000 | all | exists-correlated | 191.9 µs | 193.5 µs | 195.0 µs | 211.5 µs | 222.7 µs | Nested Loop Semi Join |
-| 1,000 | all | count-by-user | 78.2 µs | 80.8 µs | 81.5 µs | 97.2 µs | 101.2 µs | not recorded by the driver |
-| 10,000 | none | pk-user | 59.2 µs | 60.3 µs | 61.0 µs | 81.5 µs | 90.7 µs | not recorded by the driver |
-| 10,000 | none | loans-by-user | 385.5 µs | 396.3 µs | 407.0 µs | 428.8 µs | 469.5 µs | Seq Scan on loans_082718 |
-| 10,000 | none | loans-by-book | 403.9 µs | 414.4 µs | 424.0 µs | 446.0 µs | 460.7 µs | not recorded by the driver |
-| 10,000 | none | resv-by-user | 214.5 µs | 223.2 µs | 228.6 µs | 251.6 µs | 259.3 µs | not recorded by the driver |
-| 10,000 | none | books-by-author | 131.1 µs | 137.7 µs | 142.2 µs | 163.5 µs | 171.2 µs | not recorded by the driver |
-| 10,000 | none | books-by-genre | 293.6 µs | 317.2 µs | 325.4 µs | 357.1 µs | 427.1 µs | Seq Scan on books_082718 |
-| 10,000 | none | loans-by-daterange | 496.2 µs | 927.6 µs | 944.6 µs | 988.1 µs | 1,266.3 µs | not recorded by the driver |
-| 10,000 | none | overdue | 467.1 µs | 891.5 µs | 904.2 µs | 929.2 µs | 936.2 µs | Seq Scan on loans_082718 |
-| 10,000 | none | join-loan-user | 416.3 µs | 426.2 µs | 441.2 µs | 458.9 µs | 465.5 µs | not recorded by the driver |
-| 10,000 | none | join-no-literal | 649.6 µs | 669.3 µs | 676.6 µs | 693.0 µs | 714.0 µs | Hash Join |
-| 10,000 | none | exists-correlated | 1,299.2 µs | 1,325.6 µs | 1,333.8 µs | 1,366.1 µs | 1,418.6 µs | Hash Join |
-| 10,000 | none | count-by-user | 391.1 µs | 398.1 µs | 407.7 µs | 450.4 µs | 601.1 µs | not recorded by the driver |
-| 10,000 | all | pk-user | 59.0 µs | 60.2 µs | 60.9 µs | 77.5 µs | 91.6 µs | not recorded by the driver |
-| 10,000 | all | loans-by-user | 70.9 µs | 81.9 µs | 88.1 µs | 113.8 µs | 140.8 µs | Bitmap Heap Scan on loans_082748 |
-| 10,000 | all | loans-by-book | 65.4 µs | 75.1 µs | 78.8 µs | 97.6 µs | 103.5 µs | not recorded by the driver |
-| 10,000 | all | resv-by-user | 60.9 µs | 68.4 µs | 70.8 µs | 89.9 µs | 95.2 µs | not recorded by the driver |
-| 10,000 | all | books-by-author | 64.7 µs | 73.4 µs | 75.9 µs | 90.9 µs | 111.5 µs | not recorded by the driver |
-| 10,000 | all | books-by-genre | 228.0 µs | 247.6 µs | 255.6 µs | 271.0 µs | 289.0 µs | Bitmap Heap Scan on books_082748 |
-| 10,000 | all | loans-by-daterange | 495.7 µs | 903.2 µs | 919.1 µs | 959.6 µs | 1,168.6 µs | not recorded by the driver |
-| 10,000 | all | overdue | 84.3 µs | 499.9 µs | 524.6 µs | 573.4 µs | 582.1 µs | Bitmap Heap Scan on loans_082748 |
-| 10,000 | all | join-loan-user | 96.7 µs | 104.5 µs | 108.5 µs | 126.6 µs | 144.2 µs | not recorded by the driver |
-| 10,000 | all | join-no-literal | 663.5 µs | 677.2 µs | 684.2 µs | 759.2 µs | 813.5 µs | Hash Join |
-| 10,000 | all | exists-correlated | 185.1 µs | 187.1 µs | 189.1 µs | 208.1 µs | 247.8 µs | Nested Loop Semi Join |
-| 10,000 | all | count-by-user | 78.1 µs | 80.7 µs | 82.2 µs | 109.2 µs | 141.1 µs | not recorded by the driver |
+| 200 loans | none | pk-user | 58.5 µs | 59.8 µs | 60.3 µs | 74.5 µs | 87.0 µs | not recorded by the driver |
+| 200 loans | none | loans-by-user | 61.5 µs | 68.2 µs | 71.6 µs | 84.9 µs | 89.4 µs | Seq Scan on loans_082706 |
+| 200 loans | none | loans-by-book | 63.1 µs | 67.4 µs | 70.5 µs | 80.6 µs | 90.5 µs | not recorded by the driver |
+| 200 loans | none | resv-by-user | 57.2 µs | 60.9 µs | 62.2 µs | 77.2 µs | 97.7 µs | not recorded by the driver |
+| 200 loans | none | books-by-author | 57.4 µs | 60.0 µs | 64.2 µs | 78.7 µs | 84.2 µs | not recorded by the driver |
+| 200 loans | none | books-by-genre | 57.2 µs | 59.2 µs | 61.1 µs | 73.1 µs | 79.3 µs | Seq Scan on books_082706 |
+| 200 loans | none | loans-by-daterange | 71.5 µs | 77.8 µs | 81.0 µs | 97.1 µs | 104.3 µs | not recorded by the driver |
+| 200 loans | none | overdue | 69.9 µs | 77.1 µs | 79.8 µs | 93.7 µs | 100.1 µs | Seq Scan on loans_082706 |
+| 200 loans | none | join-loan-user | 84.3 µs | 93.5 µs | 97.0 µs | 113.3 µs | 140.3 µs | not recorded by the driver |
+| 200 loans | none | join-no-literal | 210.3 µs | 213.5 µs | 215.6 µs | 231.8 µs | 238.8 µs | Hash Join |
+| 200 loans | none | exists-correlated | 166.5 µs | 169.4 µs | 170.6 µs | 186.6 µs | 197.6 µs | Hash Join |
+| 200 loans | none | count-by-user | 69.0 µs | 69.8 µs | 70.3 µs | 85.0 µs | 90.2 µs | not recorded by the driver |
+| 200 loans | all | pk-user | 80.6 µs | 81.8 µs | 82.5 µs | 101.5 µs | 107.9 µs | not recorded by the driver |
+| 200 loans | all | loans-by-user | 90.3 µs | 99.2 µs | 103.2 µs | 124.1 µs | 132.5 µs | Seq Scan on loans_082708 |
+| 200 loans | all | loans-by-book | 92.7 µs | 98.6 µs | 101.6 µs | 118.0 µs | 125.0 µs | not recorded by the driver |
+| 200 loans | all | resv-by-user | 61.6 µs | 87.4 µs | 89.0 µs | 108.7 µs | 132.6 µs | not recorded by the driver |
+| 200 loans | all | books-by-author | 61.7 µs | 64.6 µs | 69.2 µs | 84.4 µs | 93.4 µs | not recorded by the driver |
+| 200 loans | all | books-by-genre | 63.3 µs | 65.0 µs | 67.1 µs | 80.7 µs | 89.6 µs | Seq Scan on books_082708 |
+| 200 loans | all | loans-by-daterange | 72.5 µs | 79.7 µs | 82.9 µs | 98.3 µs | 104.8 µs | not recorded by the driver |
+| 200 loans | all | overdue | 79.0 µs | 86.3 µs | 89.0 µs | 101.7 µs | 111.5 µs | Seq Scan on loans_082708 |
+| 200 loans | all | join-loan-user | 90.0 µs | 99.8 µs | 103.1 µs | 117.5 µs | 122.1 µs | not recorded by the driver |
+| 200 loans | all | join-no-literal | 224.3 µs | 243.6 µs | 256.2 µs | 277.6 µs | 287.0 µs | Hash Join |
+| 200 loans | all | exists-correlated | 204.8 µs | 207.6 µs | 209.6 µs | 230.9 µs | 236.3 µs | Hash Join |
+| 200 loans | all | count-by-user | 100.7 µs | 102.2 µs | 102.9 µs | 122.2 µs | 128.8 µs | not recorded by the driver |
+| 1,000 loans | none | pk-user | 62.3 µs | 63.4 µs | 64.0 µs | 78.6 µs | 92.6 µs | not recorded by the driver |
+| 1,000 loans | none | loans-by-user | 90.2 µs | 96.3 µs | 100.2 µs | 122.2 µs | 128.8 µs | Seq Scan on loans_082710 |
+| 1,000 loans | none | loans-by-book | 91.1 µs | 96.6 µs | 99.8 µs | 121.7 µs | 125.8 µs | not recorded by the driver |
+| 1,000 loans | none | resv-by-user | 69.8 µs | 74.1 µs | 76.2 µs | 96.6 µs | 101.9 µs | not recorded by the driver |
+| 1,000 loans | none | books-by-author | 60.3 µs | 65.5 µs | 68.2 µs | 89.3 µs | 97.3 µs | not recorded by the driver |
+| 1,000 loans | none | books-by-genre | 70.9 µs | 78.7 µs | 81.2 µs | 99.2 µs | 116.4 µs | Seq Scan on books_082710 |
+| 1,000 loans | none | loans-by-daterange | 102.2 µs | 158.0 µs | 165.0 µs | 185.7 µs | 205.8 µs | not recorded by the driver |
+| 1,000 loans | none | overdue | 102.1 µs | 141.9 µs | 146.3 µs | 161.8 µs | 171.4 µs | Seq Scan on loans_082710 |
+| 1,000 loans | none | join-loan-user | 119.6 µs | 126.2 µs | 130.1 µs | 156.7 µs | 265.2 µs | not recorded by the driver |
+| 1,000 loans | none | join-no-literal | 273.4 µs | 277.8 µs | 281.6 µs | 306.1 µs | 366.9 µs | Hash Join |
+| 1,000 loans | none | exists-correlated | 282.2 µs | 291.6 µs | 296.0 µs | 316.3 µs | 324.9 µs | Hash Join |
+| 1,000 loans | none | count-by-user | 95.9 µs | 97.3 µs | 97.8 µs | 112.4 µs | 115.9 µs | not recorded by the driver |
+| 1,000 loans | all | pk-user | 64.3 µs | 65.5 µs | 66.1 µs | 81.0 µs | 87.4 µs | not recorded by the driver |
+| 1,000 loans | all | loans-by-user | 71.0 µs | 80.1 µs | 83.7 µs | 102.4 µs | 115.3 µs | Bitmap Heap Scan on loans_082714 |
+| 1,000 loans | all | loans-by-book | 71.0 µs | 78.2 µs | 80.9 µs | 93.6 µs | 103.0 µs | not recorded by the driver |
+| 1,000 loans | all | resv-by-user | 61.9 µs | 67.6 µs | 72.1 µs | 84.5 µs | 94.0 µs | not recorded by the driver |
+| 1,000 loans | all | books-by-author | 67.7 µs | 73.0 µs | 75.7 µs | 90.0 µs | 99.3 µs | not recorded by the driver |
+| 1,000 loans | all | books-by-genre | 80.1 µs | 87.2 µs | 89.6 µs | 103.7 µs | 109.9 µs | Seq Scan on books_082714 |
+| 1,000 loans | all | loans-by-daterange | 111.5 µs | 160.6 µs | 166.2 µs | 186.1 µs | 189.8 µs | not recorded by the driver |
+| 1,000 loans | all | overdue | 81.2 µs | 125.0 µs | 134.8 µs | 182.7 µs | 201.4 µs | Bitmap Heap Scan on loans_082714 |
+| 1,000 loans | all | join-loan-user | 103.7 µs | 112.8 µs | 115.4 µs | 136.7 µs | 154.3 µs | not recorded by the driver |
+| 1,000 loans | all | join-no-literal | 294.6 µs | 298.9 µs | 301.8 µs | 317.2 µs | 347.0 µs | Hash Join |
+| 1,000 loans | all | exists-correlated | 191.9 µs | 193.5 µs | 195.0 µs | 211.5 µs | 222.7 µs | Nested Loop Semi Join |
+| 1,000 loans | all | count-by-user | 78.2 µs | 80.8 µs | 81.5 µs | 97.2 µs | 101.2 µs | not recorded by the driver |
+| 10,000 loans | none | pk-user | 59.2 µs | 60.3 µs | 61.0 µs | 81.5 µs | 90.7 µs | not recorded by the driver |
+| 10,000 loans | none | loans-by-user | 385.5 µs | 396.3 µs | 407.0 µs | 428.8 µs | 469.5 µs | Seq Scan on loans_082718 |
+| 10,000 loans | none | loans-by-book | 403.9 µs | 414.4 µs | 424.0 µs | 446.0 µs | 460.7 µs | not recorded by the driver |
+| 10,000 loans | none | resv-by-user | 214.5 µs | 223.2 µs | 228.6 µs | 251.6 µs | 259.3 µs | not recorded by the driver |
+| 10,000 loans | none | books-by-author | 131.1 µs | 137.7 µs | 142.2 µs | 163.5 µs | 171.2 µs | not recorded by the driver |
+| 10,000 loans | none | books-by-genre | 293.6 µs | 317.2 µs | 325.4 µs | 357.1 µs | 427.1 µs | Seq Scan on books_082718 |
+| 10,000 loans | none | loans-by-daterange | 496.2 µs | 927.6 µs | 944.6 µs | 988.1 µs | 1,266.3 µs | not recorded by the driver |
+| 10,000 loans | none | overdue | 467.1 µs | 891.5 µs | 904.2 µs | 929.2 µs | 936.2 µs | Seq Scan on loans_082718 |
+| 10,000 loans | none | join-loan-user | 416.3 µs | 426.2 µs | 441.2 µs | 458.9 µs | 465.5 µs | not recorded by the driver |
+| 10,000 loans | none | join-no-literal | 649.6 µs | 669.3 µs | 676.6 µs | 693.0 µs | 714.0 µs | Hash Join |
+| 10,000 loans | none | exists-correlated | 1,299.2 µs | 1,325.6 µs | 1,333.8 µs | 1,366.1 µs | 1,418.6 µs | Hash Join |
+| 10,000 loans | none | count-by-user | 391.1 µs | 398.1 µs | 407.7 µs | 450.4 µs | 601.1 µs | not recorded by the driver |
+| 10,000 loans | all | pk-user | 59.0 µs | 60.2 µs | 60.9 µs | 77.5 µs | 91.6 µs | not recorded by the driver |
+| 10,000 loans | all | loans-by-user | 70.9 µs | 81.9 µs | 88.1 µs | 113.8 µs | 140.8 µs | Bitmap Heap Scan on loans_082748 |
+| 10,000 loans | all | loans-by-book | 65.4 µs | 75.1 µs | 78.8 µs | 97.6 µs | 103.5 µs | not recorded by the driver |
+| 10,000 loans | all | resv-by-user | 60.9 µs | 68.4 µs | 70.8 µs | 89.9 µs | 95.2 µs | not recorded by the driver |
+| 10,000 loans | all | books-by-author | 64.7 µs | 73.4 µs | 75.9 µs | 90.9 µs | 111.5 µs | not recorded by the driver |
+| 10,000 loans | all | books-by-genre | 228.0 µs | 247.6 µs | 255.6 µs | 271.0 µs | 289.0 µs | Bitmap Heap Scan on books_082748 |
+| 10,000 loans | all | loans-by-daterange | 495.7 µs | 903.2 µs | 919.1 µs | 959.6 µs | 1,168.6 µs | not recorded by the driver |
+| 10,000 loans | all | overdue | 84.3 µs | 499.9 µs | 524.6 µs | 573.4 µs | 582.1 µs | Bitmap Heap Scan on loans_082748 |
+| 10,000 loans | all | join-loan-user | 96.7 µs | 104.5 µs | 108.5 µs | 126.6 µs | 144.2 µs | not recorded by the driver |
+| 10,000 loans | all | join-no-literal | 663.5 µs | 677.2 µs | 684.2 µs | 759.2 µs | 813.5 µs | Hash Join |
+| 10,000 loans | all | exists-correlated | 185.1 µs | 187.1 µs | 189.1 µs | 208.1 µs | 247.8 µs | Nested Loop Semi Join |
+| 10,000 loans | all | count-by-user | 78.1 µs | 80.7 µs | 82.2 µs | 109.2 µs | 141.1 µs | not recorded by the driver |
 
 Setup phases, PostgreSQL run 1 (one statement per row, an fsync each, which
 the 1.4 ms load mean shows; KDS's load phase is not compared because its
@@ -325,12 +326,12 @@ phase is the same shape and adds nothing to a read benchmark):
 
 | n | mode | ddl | load | create-index |
 |---|---|---|---|---|
-| 200 | none | 4 ops, mean 2,808.8 µs | 380 ops, mean 1,411.0 µs | - |
-| 200 | all | 4 ops, mean 2,820.5 µs | 380 ops, mean 1,362.0 µs | 12 ops, mean 1,667.7 µs |
-| 1,000 | none | 4 ops, mean 4,995.3 µs | 1,900 ops, mean 1,370.3 µs | - |
-| 1,000 | all | 4 ops, mean 3,817.0 µs | 1,900 ops, mean 1,418.4 µs | 12 ops, mean 2,014.4 µs |
-| 10,000 | none | 4 ops, mean 3,283.7 µs | 19,000 ops, mean 1,444.2 µs | - |
-| 10,000 | all | 4 ops, mean 3,399.9 µs | 19,000 ops, mean 1,529.8 µs | 12 ops, mean 5,563.3 µs |
+| 200 loans | none | 4 ops, mean 2,808.8 µs | 380 ops, mean 1,411.0 µs | - |
+| 200 loans | all | 4 ops, mean 2,820.5 µs | 380 ops, mean 1,362.0 µs | 12 ops, mean 1,667.7 µs |
+| 1,000 loans | none | 4 ops, mean 4,995.3 µs | 1,900 ops, mean 1,370.3 µs | - |
+| 1,000 loans | all | 4 ops, mean 3,817.0 µs | 1,900 ops, mean 1,418.4 µs | 12 ops, mean 2,014.4 µs |
+| 10,000 loans | none | 4 ops, mean 3,283.7 µs | 19,000 ops, mean 1,444.2 µs | - |
+| 10,000 loans | all | 4 ops, mean 3,399.9 µs | 19,000 ops, mean 1,529.8 µs | 12 ops, mean 5,563.3 µs |
 
 ## 8. Where the time goes
 
@@ -358,7 +359,9 @@ PostgreSQL cells is the floor:
 
 ## 9. Host stamps
 
-Every cell (monitored window with no foreign process, `validity.py`):
+Every cell has a monitored window with no foreign process (`validity.py`)
+except `s3-pg-n10000-all-r3`, which has 10 flagged samples of 26 (section 1,
+"Host quiet"):
 
 | cell | precheck UTC | loadavg 1/5/15 | cc1plus / cmake --build / ctest |
 |---|---|---|---|
