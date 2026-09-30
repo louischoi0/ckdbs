@@ -596,3 +596,46 @@ defects, all fixed here.
 Most of it was the 64 MiB segment's scan, and at 4 MiB the cell takes 1.3 s.
 Recovery's `RestoreGroup` walks every bucket per group (`FindById`), which
 is quadratic in a cabin's groups at mount. That is not measured here.
+### AZ-S4 — built 2026-09-30
+
+On `worktree-az-s4-instrument-failures` from `cd433ea`, on *"start
+AZ-S*"*. AZ-R4 as written: instrumented, nothing repaired, no bound widened,
+the port probe unchanged.
+
+- **`expeditor_test.cpp`**: all fourteen `Start()` assertions - ten on
+  `db`, four on `opened.value()` - go through `Started`, which prints the
+  status's code and message (`6ebe6e1`).
+- **`row_wait_wake_rig_test.cpp`**: every `Within` prints what it saw, and
+  so do the holder's `COMMIT` waits.
+  - `Seen` prints the statement's response only once its `done` is seen.
+  - After the kick, `Since` prints the wake path from a baseline taken
+    before the sim releases the kick: kicks still held, kicks skipped on a
+    clear sleep flag, wakes received and idle blocks on core 1.
+- Checked by forcing a wait false: the first idle-block wait printed "saw
+  the statement not done"; the kick wait printed "0 kick(s) held in the
+  sim, 0 skipped, 1 wake(s) received and 1 idle block(s) on core 1".
+- `known-gaps.md`'s two Testing entries restated, including what the new
+  output still cannot tell apart.
+- The suite at `6ebe6e1`: 3059/3059 under `-j8`. No engine code changed, so
+  there is no overhead to measure.
+
+**The review** (`critics-developer`, on `6ebe6e1`):
+
+- **Taken:**
+  - **a data race the stage introduced**: the messages read the statement's
+    response while its reactor could still be writing it - exactly in the
+    slow-statement case they exist for. `Seen` reads it only after `done`;
+  - the kick message printed the kicks asked for, which an earlier assertion
+    already pins, so it could not show a kick that never landed. It prints
+    the wake path's counters from a baseline instead (`Since`);
+  - the holder's `COMMIT` waits (`KickUntil`, 2 s) had no message and are as
+    likely a site of the lost failure;
+  - `known-gaps.md` claimed the output separates causes it does not; it now
+    says what it can and cannot tell apart;
+  - `expeditor_test.cpp`'s probe comment said nothing passes
+    `SO_REUSEPORT`; above one core the default port is bound with it
+    (AT-S8).
+- **Recorded, not changed**: a failed `ASSERT` in a rig cell returns and
+  destroys the cell's statements while the reactors may still touch them
+  until the rig joins. The file had that shape before AZ-S4; the message is
+  printed before it can matter.
