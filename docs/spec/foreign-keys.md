@@ -274,10 +274,13 @@ D9(a) is built as ratified, and its costs are the engine's:
   AY-S5 the two updates serialised on P's `X`. "Insert a trade, then
   update its account" is that shape
   (`FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentDeadlock`).
-- **A transaction referencing more distinct parents than
-  `max_locks_per_txn`** is refused `ResourceExhausted` (§2a).
+- **Each distinct parent's `S` counts against `max_locks_per_txn`**
+  beside the transaction's own row borrows, so a transaction reaches the
+  cap sooner - a bulk insert whose every row names a distinct parent at
+  about half the rows it reached before - and past it is refused
+  `ResourceExhausted` (§2a).
 - **A DDL that takes a parent relation's `X`** - `CREATE INDEX`,
-  `DROP INDEX`, `CREATE ASSERTION` on it, and `DROP TABLE` - **waits for
+  `DROP INDEX`, `CREATE ASSERTION` on it - **waits for
   every open child writer's `IS` on it**, and a steady stream of child
   writers can refuse the DDL `TxnConflict` at the lock family's 1 s fault
   net, as AO-0 item 25 accepts for `DROP TABLE` (AY-Q4).
@@ -356,12 +359,15 @@ both statements reported success over a child of a deleted parent.
 reproduced it at `64b97e7`.
 
 **A child writer that holds no `S` on the parent is met by the walk
-instead** (AY-Q8): a child `DELETE`, or an `UPDATE` moving the fk column
-off it. The walk answers busy and carries that writer's id and the row's pk
+instead** (AY-Q8): a child `DELETE`, an `UPDATE` of other columns, or
+one moving the fk column off it. The walk answers busy and carries that writer's id and the row's pk
 out; the `DELETE` parks mid-walk on the row, nothing of the parent row
 written yet, and runs the check again at the writer's decide - a commit
 leaves the parent unreferenced, a rollback puts the reference back and the
-re-check refuses. **A row an undecided `UPDATE` moved off the parent holds
+re-check refuses. The check's view is minted per checked row, after the
+row's `X`: every child writer that set the fk to the parent has decided by
+then and is visible to it, where a view taken at the statement's start
+would read a child committed since as never inserted. **A row an undecided `UPDATE` moved off the parent holds
 another value in its page**, so the key test alone would skip it; the walk
 copies such a row out and, after the walk, reads the version before it
 through the undo log, answering busy if that version references the
@@ -402,9 +408,11 @@ walk child_rel
   row → busy, and the `DELETE` parks on that row's writer and re-checks at
   its decide (§3a, AY-Q8) - the in-place row with a foreign `trx_id` names
   the writer, and the wait is on the row's own entry in the lock table. A
-  child writer that *references* the parent never reaches this: its `S`
-  refused the `DELETE`'s `X` first. A violation costs a prefix; only a pass
-  costs the relation.
+  child writer that *set* the fk column to the parent - an insert, or an
+  update of the column - never reaches this: its `S` refused the `DELETE`'s
+  `X` first. Every other undecided writer of a referencing row does: a
+  child `DELETE`, an `UPDATE` of other columns, one moving the column off.
+  A violation costs a prefix; only a pass costs the relation.
 - Cost: a full child walk per deleted parent. `CREATE CABIN ON
   child(fk_col)` (F6) pays for the **violation** half of it: the reverse
   check consults an active Cabin on the child's fk column **read-only**,
