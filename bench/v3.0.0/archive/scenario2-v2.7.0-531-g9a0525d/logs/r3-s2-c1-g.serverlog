@@ -1,0 +1,11 @@
+1790750879 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 3455583 WHERE id = 574" -> ERR TXN_CONFLICT retryable=1 row id=574 was written by transaction 9808 in 10us
+1790750879 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 310000, revenue = 1938228 WHERE id = 429" -> ERR TXN_CONFLICT retryable=1 row id=429 was written by transaction 9898 in 10us
+1790750879 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 1208745 WHERE id = 371" -> ERR TXN_CONFLICT retryable=1 row id=371 was written by transaction 10106 in 13us
+1790750880 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 883000, revenue = 7031244 WHERE id = 579" -> ERR TXN_CONFLICT retryable=1 row id=579 was written by transaction 10348 in 12us
+1790750880 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1073000, revenue = 7945133 WHERE id = 446" -> ERR TXN_CONFLICT retryable=1 row id=446 was written by transaction 10401 in 9us
+1790750881 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1385000, revenue = 9369788 WHERE id = 362" -> ERR TXN_CONFLICT retryable=1 row id=362 was written by transaction 11071 in 14us
+1790750881 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 1721257 WHERE id = 316" -> ERR TXN_CONFLICT retryable=1 row id=316 was written by transaction 11168 in 6us
+1790750881 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 5375343 WHERE id = 327" -> ERR TXN_CONFLICT retryable=1 row id=327 was written by transaction 11344 in 12us
+1790750881 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 2315000, revenue = 14505161 WHERE id = 506" -> ERR TXN_CONFLICT retryable=1 row id=506 was written by transaction 11345 in 7us
+1790750883 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1609000, revenue = 12591404 WHERE id = 588" -> ERR TXN_CONFLICT retryable=1 row id=588 was written by transaction 12069 in 7us
+1790750884 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 2326000, revenue = 15920030 WHERE id = 573" -> ERR TXN_CONFLICT retryable=1 row id=573 was written by transaction 12750 in 7us

@@ -1,0 +1,291 @@
+{
+  "meta": {
+    "engine": "ckdbs",
+    "scenario": "scenario3-library",
+    "columns": 34,
+    "rows": 10000,
+    "host": "127.0.0.1",
+    "port": 15620,
+    "table": "users_r2_s3_c8_n10000_none, books_r2_s3_c8_n10000_none, reservations_r2_s3_c8_n10000_none, loans_r2_s3_c8_n10000_none",
+    "connections": 1,
+    "sizes": {
+      "users": 2000,
+      "books": 2000,
+      "reservations": 5000,
+      "loans": 10000
+    },
+    "index_mode": "none",
+    "index_when": "after",
+    "server_indexes": "on",
+    "cabin": false,
+    "matches_per_key": 5,
+    "ops_per_shape": 200,
+    "seed": 1,
+    "started_utc": "2026-09-30T07:03:42+00:00",
+    "git": {
+      "branch": "worktree-bench-rerun-scenarios",
+      "commit": "fc2d343",
+      "dirty": false,
+      "committed_at": "2026-09-30T06:29:21+00:00"
+    },
+    "server_meta": "version=19 create_time=1790751821 last_mount_time=1790751821 wal_topology=single cabin_optimizer=off core=5 catalog_marks_purged=0 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_",
+    "plans": {
+      "loans-by-user": [
+        "FilterScan"
+      ],
+      "loans-by-book": [
+        "FilterScan"
+      ],
+      "resv-by-user": [
+        "FilterScan"
+      ],
+      "books-by-author": [
+        "FilterScan"
+      ],
+      "books-by-genre": [
+        "FilterScan"
+      ],
+      "loans-by-daterange": [
+        "Scan"
+      ],
+      "overdue": [
+        "FilterScan"
+      ],
+      "join-no-literal": [
+        "Range",
+        "Scan"
+      ],
+      "exists-correlated": [
+        "Range",
+        "Scan"
+      ]
+    },
+    "verify_problems": []
+  },
+  "phases": [
+    {
+      "phase": "ddl",
+      "detail": "CREATE TABLE x4",
+      "ops": 4,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 2013.9,
+      "p0_us": 1365.2,
+      "p25_us": 1365.2,
+      "p50_us": 1563.2,
+      "p95_us": 3535.8,
+      "p99_us": 3535.8,
+      "max_us": 3535.8
+    },
+    {
+      "phase": "load",
+      "detail": "INSERT x all four relations",
+      "ops": 19000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 1563.9,
+      "p0_us": 1079.2,
+      "p25_us": 1290.2,
+      "p50_us": 1362.0,
+      "p95_us": 2614.5,
+      "p99_us": 6000.5,
+      "max_us": 23199.7
+    },
+    {
+      "phase": "pk-user",
+      "detail": "WHERE id = ? - Lookup, the control",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 74.3,
+      "p0_us": 65.4,
+      "p25_us": 67.6,
+      "p50_us": 70.2,
+      "p95_us": 92.5,
+      "p99_us": 115.9,
+      "max_us": 170.0
+    },
+    {
+      "phase": "loans-by-user",
+      "detail": "WHERE user_id = ? - ~5 matches",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 829.0,
+      "p0_us": 786.4,
+      "p25_us": 817.3,
+      "p50_us": 828.7,
+      "p95_us": 854.3,
+      "p99_us": 900.6,
+      "max_us": 972.9
+    },
+    {
+      "phase": "loans-by-book",
+      "detail": "WHERE book_id = ? - ~5 matches",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 841.3,
+      "p0_us": 780.6,
+      "p25_us": 815.8,
+      "p50_us": 826.5,
+      "p95_us": 896.9,
+      "p99_us": 1114.9,
+      "max_us": 1213.7
+    },
+    {
+      "phase": "resv-by-user",
+      "detail": "WHERE user_id = ? on reservations",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 427.3,
+      "p0_us": 395.5,
+      "p25_us": 414.1,
+      "p50_us": 426.8,
+      "p95_us": 446.7,
+      "p99_us": 511.7,
+      "max_us": 604.0
+    },
+    {
+      "phase": "books-by-author",
+      "detail": "WHERE author_id = ? - middle selectivity",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 253.0,
+      "p0_us": 221.2,
+      "p25_us": 237.8,
+      "p50_us": 247.9,
+      "p95_us": 286.5,
+      "p99_us": 362.2,
+      "max_us": 405.6
+    },
+    {
+      "phase": "books-by-genre",
+      "detail": "WHERE genre = ? - 1/16 of the relation",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 608.5,
+      "p0_us": 534.3,
+      "p25_us": 579.0,
+      "p50_us": 592.3,
+      "p95_us": 747.2,
+      "p99_us": 848.5,
+      "max_us": 884.2
+    },
+    {
+      "phase": "loans-by-daterange",
+      "detail": "WHERE loaned_day BETWEEN ? AND ? - 30 days",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 2035.0,
+      "p0_us": 931.1,
+      "p25_us": 2003.2,
+      "p50_us": 2055.0,
+      "p95_us": 2158.7,
+      "p99_us": 2204.8,
+      "max_us": 2563.9
+    },
+    {
+      "phase": "overdue",
+      "detail": "WHERE status = ? AND due_day BETWEEN ? AND ?",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 1721.3,
+      "p0_us": 950.5,
+      "p25_us": 1711.1,
+      "p50_us": 1753.7,
+      "p95_us": 1865.3,
+      "p99_us": 1893.0,
+      "max_us": 1934.2
+    },
+    {
+      "phase": "join-loan-user",
+      "detail": "loans JOIN users ON user_id = id",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 844.7,
+      "p0_us": 793.5,
+      "p25_us": 830.4,
+      "p50_us": 838.1,
+      "p95_us": 884.4,
+      "p99_us": 1054.5,
+      "max_us": 1073.8
+    },
+    {
+      "phase": "join-no-literal",
+      "detail": "JOIN ON user_id, u.id BETWEEN 1 AND 16 - no literal to propagate",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 1368.7,
+      "p0_us": 1323.5,
+      "p25_us": 1341.8,
+      "p50_us": 1352.1,
+      "p95_us": 1456.6,
+      "p99_us": 1784.0,
+      "max_us": 1881.6
+    },
+    {
+      "phase": "exists-correlated",
+      "detail": "EXISTS(loans.user_id = users.id), 20 outer rows - under --cabin the mean mixes the observation charge",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 682.8,
+      "p0_us": 641.7,
+      "p25_us": 667.0,
+      "p50_us": 679.1,
+      "p95_us": 738.7,
+      "p99_us": 753.1,
+      "max_us": 767.0
+    },
+    {
+      "phase": "count-by-user",
+      "detail": "SELECT COUNT(*) ... WHERE user_id = ?",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0,
+      "qps": 0.0,
+      "mean_us": 807.6,
+      "p0_us": 768.9,
+      "p25_us": 797.6,
+      "p50_us": 805.4,
+      "p95_us": 829.7,
+      "p99_us": 885.1,
+      "max_us": 1003.0
+    }
+  ]
+}

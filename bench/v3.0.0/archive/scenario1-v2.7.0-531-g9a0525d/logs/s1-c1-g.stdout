@@ -1,0 +1,3 @@
+loading: 30 years x 252 sessions x 8 symbols = 60,480 bars, 60,480 feature rows  (tables suffixed _s1_c1_g)  [daily_bars BTREE]  [200-row transactions]
+scenario1 aborted: could not create daily_stats_s1_c1_g
+  server said: ERR HEAP storage is suspended (SUS-1) and no new heap relation is created (byte 219); BTREE is the default and every existing heap relation still mounts and serves. The suspension, its rulings and the condition that lifts it are instructions/v3.0.0/workorder-as-sus1-heap-suspended.md
