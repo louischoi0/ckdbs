@@ -772,3 +772,82 @@ Rejected:
 pre-existing disabled cell) at `62a6cb3`, and 3040/3040 again with the
 review's changes. Overhead not measured; measured at AY's close
 (`raft-marks-2026-09-30.md` §8).
+
+### AY-S6 — built 2026-09-30
+
+On `worktree-ay-s6-fk-cabin-clearing-return` from `2d2d96b`, on the
+operator's *"start AY-S6"*, with its cells re-read under D9(a) and the
+review's C1 closed in the stage (`raft-marks-2026-09-30.md` §10-§12).
+`origin/main`'s split-relation retirement was merged mid-stage at
+`1b3de6c` (its §9 there), which also struck AY-S10 and left AY-Q5 and
+AY-Q10 with no subject.
+
+**The order's exit, re-read.** With D9(a) built, every cell the stage row
+listed parks on the child's `S(P)` before the Cabin is read, so the order's
+mutant ("clears unconditionally") could differ from the restored return
+only where the loop gives the set up. The operator chose (§11): a
+serve-proof cell red first, a banking cell, a failed-hint cell, and three
+mutants.
+
+**Red first**, at `e52476f` against `2d2d96b`:
+`FkCrossCoreRigTest.ADrainedCabinSetClearsTheParentAndAChildOnAnotherCoreIsFoundInIt`
+- the pass walked `c` (a `FilterScan`) where the drained set should have
+cleared it. Four soundness cells, green on the walk:
+`ASetBankedWhileAChildInsertIsOpenIsDeclinedAndTheWalkAnswers`,
+`ForeignKeyCheckTest.AHeapChildWhoseHintFailsIsWalkedNotCleared`,
+`FkParentHoldTest.AChildWrittenWhileTheSetIsReadCannotBeMadeToReferenceTheParent`
+(the set's count fixed at `Find`, a child written inside the loop's verify)
+and `FkParentHoldTest.AChildMovedOffTheParentInABankedSetIsNotAClear`.
+The stale drained-set cell (`ADrainedCabinSetDoesNotClearAParent...`) is
+replaced.
+
+**Built** at `6097a92`: f247c52's return restored behind `usable`, and one
+condition the order did not name - **a non-matching entry whose writer is
+undecided over an earlier version gives the set up**. An `UPDATE` moving a
+child off P leaves its pk in P's set with the new value in its page; the
+naive restoration skipped it, cleared P, and the mover's rollback left an
+orphan (AY-Q8 through the Cabin, the last cell above).
+
+**Mutants**, each built and run:
+
+| mutant | killed by |
+|---|---|
+| an exhausted set clears unconditionally | the failed-hint cell and the moved-row cell |
+| the walk kept (the code replaced) | the drained-set cell's `CabinProbe` / `FilterScan` counts |
+| the moved-row guard dropped | the moved-row cell |
+| D9(a)'s `S` not asked in the hoist | the count-fixed-at-`Find` cell (orphan); with the walk kept instead the same mutation leaves none, which is why the return rests on the `S` |
+| the controller's build not announced (below) | `AChildCommittedDuringTheControllersBuildIsInTheSetItBanks` |
+
+**The review** (`critics-developer`, one pass) found the return sound on
+every path the stage owns - every writer that sets the fk goes through the
+hoist's or the self-referencing arm's `S` and the hook, the KWP load path
+included; rollback, restart, cap un-observe, `Rebuild`, a bank by the
+`DELETE`'s own transaction and the dedup set all hold - and **one way to an
+orphan, C1**: `CabinOptimizerExecutor::BuildSeededSets` walked and
+committed with no announce and no gate (`known-gaps.md`, "the cabin
+optimizer's build does not announce"), so with `CABIN_OPTIMIZER` on a child
+committed behind its walk was missing from the set and its parent was
+cleared. Put to the operator and **closed in the stage** (§12): red at
+`8ea3fce` against `445e00d` - the set banked empty and `DELETED 1` - the
+build driven from the cell's thread over the rig's one store with core 1's
+write at the third leaf (the scan ring holds the leaf it last fetched until
+its next fetch). Built at `1fc554b`: each seed announced before the walk,
+the view gated as the serve path's, every early exit cancelling the
+announce. The gap entry closes; `physical-optimizer.md` PO4, `cabin.md` §6
+and `foreign-keys.md` §3a restated.
+
+**The review's open question**, `CREATE`/`DROP CABIN` taking no relation
+lock, was checked by reading: a writer whose table access predates a
+`CREATE CABIN` writes without the hook, but it is unresolved while it does,
+which the banking gate declines, and its rows are committed and visible to
+any later bank; its next statement revalidates the catalog. Stated in §3a.
+
+Also taken: the moved-row test written once (`UndecidedWithEarlierVersion`),
+the clearing comment cut to a pointer at §3a, two stale comments fixed by
+the reviewer, the §3 cost bullet. Rejected: `continue` in place of `break`
+on a moved row, which the review itself declined - it would only sometimes
+serve a violation from the set.
+
+**Suite**: 3045/3045 in Debug at `6097a92`, and 3046/3046 with the review's
+changes (`ctest -LE heap-suspended -j8`, one pre-existing disabled cell).
+Overhead not measured; measured at the milestone's close.
