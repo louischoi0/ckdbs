@@ -646,8 +646,18 @@ public:
         before_insert_log_for_test_ = std::move(hook);
     }
 
+    // **A test seam on CREATE ASSERTION** (AZ-S2): runs once per create,
+    // after the build's publish run is logged and immediately before the
+    // `sys.assertions` row - where a checkpoint on another core, a writer
+    // on another core, or a racing create of the same name is put. Unset
+    // in production.
+    void SetAfterAssertionPublishRunForTest(std::function<void()> hook) {
+        after_assertion_publish_run_for_test_ = std::move(hook);
+    }
+
 private:
     std::function<void()> before_insert_log_for_test_;
+    std::function<void()> after_assertion_publish_run_for_test_;
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
     DispatchOutcome HandleBegin(std::string_view args, Session& session);

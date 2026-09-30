@@ -160,6 +160,10 @@ public:
         return Status::OK();
     }
     storage::DevicePageStore& store() noexcept { return *store_; }
+    // The instance's one stream and its device: what a cell checkpoints
+    // into, and what a mount's scan reads back.
+    wal::WalManager& wal() noexcept { return *wal_; }
+    wal::FileLogDevice& log_device() noexcept { return *log_device_; }
     sched::SimWakerTable& wake() noexcept { return *sim_; }
     // The real table under the sim: what was actually written, and the
     // registry a teardown kicks through.

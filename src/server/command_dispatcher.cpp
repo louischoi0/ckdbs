@@ -2824,7 +2824,8 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // two coded spellings - ASSERTION_VIOLATION for data already past the
     // bound, TXN_CONFLICT for an unsettled relation - and both are
     // compatibility surfaces a client switches on.
-    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_);
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_,
+                                         after_assertion_publish_run_for_test_);
     if (!created.ok()) {
         return {ErrorReply(created.status()), false, 0, created.status()};
     }

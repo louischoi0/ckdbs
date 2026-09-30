@@ -582,11 +582,10 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
 
 }  // namespace
 
-StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
-                                             storage::PageStore& store,
-                                             const parser::AssertionStmt& stmt,
-                                             const txn::ReadView& check_view,
-                                             wal::WalManager* wal) {
+StatusOr<AssertionDdlResult> CreateAssertion(
+    catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
+    const txn::ReadView& check_view, wal::WalManager* wal,
+    const std::function<void()>& after_publish_run_for_test) {
     // **The order is validate -> build -> publish** (§8.1): the three entry
     // points a cross-core create split across until AT-S5d, back to back.
     auto prepared = PrepareAssertionDef(catalog, store, stmt);
@@ -595,6 +594,7 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
     auto build = BuildAssertionCabin(catalog, store, stmt, prepared.value().assertion_id,
                                      check_view, wal);
     if (!build.ok()) return build.status();
+    if (after_publish_run_for_test) after_publish_run_for_test();
 
     // ---- The publish: the single commit point (§8.1a) ---------------------
     //

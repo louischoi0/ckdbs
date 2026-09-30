@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -251,11 +252,14 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 //
 // **Publishing does not enforce.** The write-path check is AST07's; a
 // caller that reports `enforcing=1` because a root exists is lying.
-StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
-                                             storage::PageStore& store,
-                                             const parser::AssertionStmt& stmt,
-                                             const txn::ReadView& check_view,
-                                             wal::WalManager* wal);
+//
+// `after_publish_run_for_test`, when set, runs once, after the build's
+// publish run is logged and immediately before the `sys.assertions` row -
+// the window a checkpoint on another core can fall into (AZ-S2).
+StatusOr<AssertionDdlResult> CreateAssertion(
+    catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
+    const txn::ReadView& check_view, wal::WalManager* wal,
+    const std::function<void()>& after_publish_run_for_test = {});
 
 // `DROP ASSERTION`: the catalog row retired, `ASSERT_DROP` logged when
 // `wal` is attached (before the row goes - WAL before data), and the
