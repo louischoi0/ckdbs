@@ -1,0 +1,6 @@
+B INSERTED oid=4003 id=100 page=132 slot=0
+B parent delete during open child txn: ERR TXN_CONFLICT retryable=1 row id=1 is held by transaction 7, which has not decided after 1000 ms; the write hit the lock-wait fault net and was refused. A wait ends when the holder decides, so reaching the net means a deadlock went undetected or a holder is stuck - not that the row was busy 1.00s
+B COMMIT
+A INSERTED oid=4003 id=100 page=132 slot=0
+A parent delete during open child txn: ERR TXN_CONFLICT retryable=1 a row of 'ch' referencing id=1 is being written by another transaction 0.00s
+A COMMIT

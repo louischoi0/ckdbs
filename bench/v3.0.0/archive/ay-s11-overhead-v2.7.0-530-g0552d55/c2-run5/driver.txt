@@ -1,0 +1,24 @@
+host before: 0.94 1.26 1.81 1/242 153012  competing: none
+host after : 1.03 1.28 1.82 1/243 153018  competing: none
+== B
+  child-insert-fk            p50=    51.7 p99=    73.8 qps=   18130 err=0
+  child-insert-fk-txn        p50=   112.7 p99=   168.5 qps=    8125 err=0
+  child-insert-fk-txn:stmt   p50=    52.4 p99=    89.7 qps=       0 err=0
+  child-insert-plain         p50=    70.9 p99=    93.5 qps=   14970 err=0
+  parent-update              p50=    50.4 p99=    71.0 qps=   18831 err=0
+  child-update               p50=    50.6 p99=    72.4 qps=   18699 err=0
+  child-update-again         p50=    50.7 p99=    74.0 qps=   18953 err=0
+  select                     p50=    65.0 p99=    91.4 qps=   14660 err=0
+  ping                       p50=    38.2 p99=    58.5 qps=   20056 err=0
+== A
+  child-insert-fk            p50=    51.0 p99=    71.5 qps=   18295 err=0
+  child-insert-fk-txn        p50=   117.5 p99=   171.9 qps=    7678 err=0
+  child-insert-fk-txn:stmt   p50=    54.7 p99=    92.8 qps=       0 err=0
+  child-insert-plain         p50=    49.7 p99=    74.7 qps=   18216 err=0
+  parent-update              p50=    50.4 p99=    72.8 qps=   18345 err=0
+  child-update               p50=    50.9 p99=    74.3 qps=   18354 err=0
+  child-update-again         p50=    50.8 p99=    77.2 qps=   18746 err=0
+  select                     p50=    64.7 p99=    91.5 qps=   14679 err=0
+  ping                       p50=    46.0 p99=    65.3 qps=   21199 err=0
+raw: /home/cdkbs/bench-runs/ay-s11/c2-run5/result.json
+driver exit 0

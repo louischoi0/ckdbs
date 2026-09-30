@@ -1,0 +1,248 @@
+{
+  "driver": "lock_contention_benchmark.py",
+  "prove_run": false,
+  "sessions": 8,
+  "rows": 256,
+  "ops_per_session_per_arm": 2000,
+  "blocks": 4,
+  "host_before": {
+    "loadavg": "0.96 1.83 2.42 1/247 150293",
+    "competing": []
+  },
+  "host_after": {
+    "loadavg": "1.12 1.84 2.41 1/237 150686",
+    "competing": []
+  },
+  "show_meta_before": {
+    "B": {
+      "0": "version=19 create_time=1790748180 last_mount_time=1790748180 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=0 wal_syncs=5 wal_interval_syncs=3 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=1135035 sched_iterations=1342 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=1124368 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=5950 sched_foreground_polls=266 sched_foreground_consumed_us=5950 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=36497 recovery_redo_us=34324 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=7823 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0"
+    },
+    "A": {
+      "0": "version=17 create_time=1790748180 last_mount_time=1790748180 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=0 wal_syncs=4 wal_interval_syncs=2 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=1136177 sched_iterations=1347 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=1125603 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=5985 sched_foreground_polls=266 sched_foreground_consumed_us=5985 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=36595 recovery_redo_us=34587 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=9796 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0"
+    }
+  },
+  "show_meta_after": {
+    "B": {
+      "0": "version=19 create_time=1790748180 last_mount_time=1790748180 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 undo_pages_live=2 undo_pages_recycled=442 wal_syncs=438 wal_interval_syncs=418 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=10988153 sched_iterations=101949 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=8329491 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=1547845 sched_foreground_polls=96267 sched_foreground_consumed_us=547834 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=36497 recovery_redo_us=34324 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=7823 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0"
+    },
+    "A": {
+      "0": "version=17 create_time=1790748180 last_mount_time=1790748180 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 undo_pages_live=2 undo_pages_recycled=442 wal_syncs=436 wal_interval_syncs=417 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=10989352 sched_iterations=101907 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=8317385 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=1544633 sched_foreground_polls=96267 sched_foreground_consumed_us=544623 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=36595 recovery_redo_us=34587 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=9796 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0"
+    }
+  },
+  "pools": {
+    "B": {
+      "port": 15600,
+      "pin_core": null,
+      "opened": 8,
+      "cores": [
+        "0"
+      ]
+    },
+    "A": {
+      "port": 15601,
+      "pin_core": null,
+      "opened": 8,
+      "cores": [
+        "0"
+      ]
+    }
+  },
+  "arms": {
+    "B": {
+      "update-hot": {
+        "phase": "update-hot",
+        "detail": "every session on one row - the tuple X, fought over",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.789454,
+        "qps": 20267.2,
+        "mean_us": 386.1,
+        "p0_us": 37.8,
+        "p25_us": 240.1,
+        "p50_us": 340.3,
+        "p95_us": 760.9,
+        "p99_us": 1019.3,
+        "max_us": 8077.1
+      },
+      "update-disjoint": {
+        "phase": "update-disjoint",
+        "detail": "one row each - R3's relation IX, alone",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.811708,
+        "qps": 19711.5,
+        "mean_us": 397.6,
+        "p0_us": 50.9,
+        "p25_us": 238.2,
+        "p50_us": 340.8,
+        "p95_us": 754.6,
+        "p99_us": 1003.9,
+        "max_us": 15874.4
+      },
+      "update-disjoint-again": {
+        "phase": "update-disjoint-again",
+        "detail": "the noise floor: the row above, repeated",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.812273,
+        "qps": 19697.8,
+        "mean_us": 399.4,
+        "p0_us": 35.5,
+        "p25_us": 240.7,
+        "p50_us": 342.2,
+        "p95_us": 760.4,
+        "p99_us": 1038.7,
+        "max_us": 23090.3
+      },
+      "insert-omitted": {
+        "phase": "insert-omitted",
+        "detail": "pk omitted: one mark, one tail, every session (D20)",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.791528,
+        "qps": 20214.1,
+        "mean_us": 388.1,
+        "p0_us": 45.7,
+        "p25_us": 237.2,
+        "p50_us": 339.7,
+        "p95_us": 759.2,
+        "p99_us": 1019.1,
+        "max_us": 8077.2
+      },
+      "select-hot": {
+        "phase": "select-hot",
+        "detail": "control: a read takes no borrow",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.966714,
+        "qps": 16550.9,
+        "mean_us": 476.4,
+        "p0_us": 58.0,
+        "p25_us": 307.8,
+        "p50_us": 429.3,
+        "p95_us": 933.2,
+        "p99_us": 1232.8,
+        "max_us": 2369.3
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "control: SHOW META resolves no relation",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.76343,
+        "qps": 20958.1,
+        "mean_us": 367.9,
+        "p0_us": 36.7,
+        "p25_us": 215.7,
+        "p50_us": 325.8,
+        "p95_us": 764.3,
+        "p99_us": 1012.5,
+        "max_us": 1880.5
+      }
+    },
+    "A": {
+      "update-hot": {
+        "phase": "update-hot",
+        "detail": "every session on one row - the tuple X, fought over",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.787078,
+        "qps": 20328.3,
+        "mean_us": 386.1,
+        "p0_us": 44.4,
+        "p25_us": 240.7,
+        "p50_us": 340.8,
+        "p95_us": 761.1,
+        "p99_us": 1016.8,
+        "max_us": 4515.9
+      },
+      "update-disjoint": {
+        "phase": "update-disjoint",
+        "detail": "one row each - R3's relation IX, alone",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.791389,
+        "qps": 20217.6,
+        "mean_us": 388.3,
+        "p0_us": 46.5,
+        "p25_us": 240.6,
+        "p50_us": 342.7,
+        "p95_us": 752.6,
+        "p99_us": 1020.0,
+        "max_us": 4893.1
+      },
+      "update-disjoint-again": {
+        "phase": "update-disjoint-again",
+        "detail": "the noise floor: the row above, repeated",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.789607,
+        "qps": 20263.2,
+        "mean_us": 387.8,
+        "p0_us": 37.7,
+        "p25_us": 237.7,
+        "p50_us": 342.4,
+        "p95_us": 752.8,
+        "p99_us": 1031.8,
+        "max_us": 7007.3
+      },
+      "insert-omitted": {
+        "phase": "insert-omitted",
+        "detail": "pk omitted: one mark, one tail, every session (D20)",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.785054,
+        "qps": 20380.8,
+        "mean_us": 385.6,
+        "p0_us": 38.6,
+        "p25_us": 237.8,
+        "p50_us": 338.7,
+        "p95_us": 750.6,
+        "p99_us": 1033.6,
+        "max_us": 5792.3
+      },
+      "select-hot": {
+        "phase": "select-hot",
+        "detail": "control: a read takes no borrow",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.970184,
+        "qps": 16491.7,
+        "mean_us": 477.5,
+        "p0_us": 61.8,
+        "p25_us": 310.4,
+        "p50_us": 434.1,
+        "p95_us": 909.6,
+        "p99_us": 1222.5,
+        "max_us": 2093.1
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "control: SHOW META resolves no relation",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.777437,
+        "qps": 20580.4,
+        "mean_us": 373.8,
+        "p0_us": 40.8,
+        "p25_us": 221.4,
+        "p50_us": 328.2,
+        "p95_us": 770.0,
+        "p99_us": 1025.4,
+        "max_us": 9772.4
+      }
+    }
+  }
+}

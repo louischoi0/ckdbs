@@ -1,0 +1,21 @@
+
+sessions=8 rows=256 ops/arm/session=2000 blocks=4
+  B: cores accepted on = 0
+  A: cores accepted on = 0
+host before: 0.96 1.83 2.42 1/247 150293   competing: none
+host after : 1.12 1.84 2.41 1/237 150686   competing: none
+
+arm                                                      B                                 A
+                            p50us    p99us      qps    err    p50us    p99us      qps    err
+update-hot                  340.3   1019.3    20267      0    340.8   1016.8    20328      0
+update-disjoint             340.8   1003.9    19712      0    342.7   1020.0    20218      0
+update-disjoint-again       342.2   1038.7    19698      0    342.4   1031.8    20263      0
+insert-omitted              339.7   1019.1    20214      0    338.7   1033.6    20381      0
+select-hot                  429.3   1232.8    16551      0    434.1   1222.5    16492      0
+ping                        325.8   1012.5    20958      0    328.2   1025.4    20580      0
+
+B: noise floor (disjoint vs its repeat) p50 = 1.4 us; hot - disjoint p50 = -0.5 us
+A: noise floor (disjoint vs its repeat) p50 = 0.3 us; hot - disjoint p50 = -1.9 us
+
+raw summaries: /home/cdkbs/bench-runs/ay-s11/c1-run2/result.json
+driver exit 0

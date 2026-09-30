@@ -923,3 +923,97 @@ Rejected:
 **Suite**: 3053/3053 in Debug at `39b65a0` (`ctest -LE heap-suspended -j8`,
 one pre-existing disabled cell), and 3055/3055 with the review's changes.
 Overhead not measured; measured at the milestone's close.
+
+## 7. AY closed, 2026-09-30
+
+**The following letter is complete.** Every stage of §3 has landed on
+`main` or been struck: AY-S0 `69a1f76`, AY-S1 `ffdcfb1` (review `ac6baae`),
+AY-S2 `7d90ca7` (reproduction `a3db595`, review `33b9433`), AY-S3 `b201ed3`
+(reproduction `27ee3e3`, review `58e78c7`), AY-S7 `68d8b18` (reproduction
+`09b2924`, review `b5465a9`), AY-S9 `557f1d1` (reproduction `c4d8e55`,
+review `64b97e7`; its multi-chain build reverted with the split relation),
+AY-S4 `86b61b3` (review `5aac081`), AY-S5 `826d15b` (reviews `a72b070`,
+`9856d6b`, `2d2d96b`), AY-S10 struck for the split relation's retirement
+(`62a6cb3`, review `bb05aac`), AY-S6 `6097a92` (reproduction `e52476f`,
+reviews `445e00d`, `8ea3fce`, `1fc554b`), AY-S8 `39b65a0` (reproduction
+`4eab535`, review `0552d55`). Every §4 item is marked or struck: Q1-Q4, Q8,
+Q9, Q11, Q12 as proposed, Q6 (C), Q7 (B), Q5 and Q10 struck with no subject.
+Written on `worktree-ay-s11-close` from `0552d55` (`v2.7.0-530-g0552d55`),
+on the operator's *"go ahead until closing AY milestone, follow CLA
+proposals"* (`raft-marks-2026-09-30.md` §15).
+
+### What AY delivered
+
+| | what it is | where it lives |
+|---|---|---|
+| **R8.3's lock cells** (AY-S1) | the 53 lost lock-family cells back on a one-core base, and a direct `NoteWaitFor` cycle cell | `tests/lock_family_test.cpp`, `lock_table_test.cpp` |
+| **The containment wake** (AY-S2) | a refusal the lock table's verify finds parks on the unit that refused it, flipped at its release and kicked across | `txn.md` §5 |
+| **B6** (AY-S3) | a holder the refusing unit's wake names is waited for even once decided | `txn.md` §5 |
+| **The new catalog page held** (AY-S7) | `AllocateCatalogPage` returns its `PageRef`, held until the row's record stamps it | `catalog.md` |
+| **D9(a)** (AY-S4, AY-S5) | the forward check's `IS` on the parent relation and `S` on the parent row before the descent, held to the decide; a parent `DELETE` parks mid-walk on a child writer holding no `S`; E3 retired | `foreign-keys.md` §2a-§5 |
+| **The FK Cabin's clearing return** (AY-S6) | a drained Cabin set clears a parent again behind D9(a); the controller's build announced and gated | `foreign-keys.md` §3a, `cabin.md` §6, `physical-optimizer.md` PO4 |
+| **The chunk count** (AY-S8) | a snapshot run is a base only once its own count is met; partial and torn runs discarded; superblock v19 | `assertion.md` §6.1, §7 |
+| **D7's last gate** | gone with the split relation (AY-S10 struck, `raft-marks-2026-09-30.md` §9) | `crosscore.md` |
+
+**The measurement** (`raft-marks-2026-09-30.md` §8), the milestone's whole
+code change - `58198cb` against `0552d55`, release, `cores = 1`, `relaxed`,
+interleaved - in `bench/v3.0.0/results-ay-s11-overhead-v2.7.0-530-g0552d55.md`:
+
+- **The general statement mix** (AT-S13 cell 2's shape): not resolvable -
+  every write arm within -2.4 to +3.0 µs of ~340 µs end to end with the
+  controls moving as much, and +0.41, +0.03, -0.44 µs of ~16 µs of the
+  engine's own time per statement.
+- **D9(a)'s price on a child `INSERT`**: +0.40 µs p50 of ~51 µs end to end
+  (IQR +0.26 to +0.62), +0.24 µs of ~14 µs in the engine - resolved and
+  small, about 1.5x the floor; inside `BEGIN`/`COMMIT` not resolvable. The
+  controls sit inside the floor. The fence it prices is live: on `0552d55`
+  a parent `DELETE` against an open child waits and is refused at the 1 s
+  net, on `58198cb` the reverse check refuses it at once.
+- **The linear `Holds` scan**: a per-row cost growing about 0.2 ns x K with
+  the transaction's distinct parents - not resolved at K <= 1,024, marginal
+  at 4,096, +3.43 µs a row at 16,384 (+56 ms, ~6 %, on that transaction).
+
+Qualified: cells 2 and 3 run on a new driver (`tools/fk_overhead_benchmark.py`,
+in neither binary); the host showed a slow mode on either engine and cell 2
+uses only block pairs where both servers were fast; `cores > 1`, `group`
+durability and contended waits were not measured.
+
+### What AY carries forward - not closed by this close
+
+Each once, with its owner or the statement that it has none.
+
+1. **A peer's `CREATE ASSERTION` can miss every snapshot in the mount's
+   scan** and come up unenforcing, its relation's writes refused until
+   `DROP` and `CREATE` - found by AY-Q7's review, read and not run
+   (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`).
+   **No owner.** CLA's proposal: adopt into the registry before the publish
+   run is logged, in the letter that next takes the assertion subsystem.
+2. **A catalog row placed on a chain's tail is not reported when its
+   logging fails** - found by AY-S7's review
+   (`docs/inflight/bugs/a-catalog-row-placed-on-a-chains-tail-is-not-reported-when-its-logging-fails.md`).
+   **No owner.**
+3. **A child check that fails inside an explicit transaction keeps its `S`
+   on the absent parent key until the rollback** (`known-gaps.md`, Foreign
+   keys) - a bounded refusal. Releasing it changes what D9(a) holds.
+   **The operator's**, if it is to change.
+4. **The borrow ledger's `Holds` is a linear scan that D9(a) asks more**
+   (`known-gaps.md`, Foreign keys). **Priced by this close**: about
+   0.2 ns x K a row, unresolved up to K = 1,024 distinct parents and ~6 %
+   at 16,384. **No owner.** CLA's proposal: no change until a workload holds
+   thousands of parents in one transaction; a hashed holdings set is the
+   cut then.
+5. **AR1's AQ and AR** (AY-Q11, as proposed): their own letters, after AP's
+   order is settled.
+6. **Six uncounted 2PC-shaped cells and the one-off `Start()` failure**
+   (`known-gaps.md`, Testing), recorded at AY-S1 and AY-S2. **No owner.**
+7. **A cabin needing more than 65,535 snapshot chunks is refused** at every
+   checkpoint - no cell reaches it, 65,535 chunks of a ~61 KB payload being
+   about 4 GB of group headers. **No owner**; recorded so a refusal there
+   is read as the rule and not a fault.
+
+### What this close marks, and what it does not
+
+It opens nothing, decides none of the items above, and cuts no tag (the
+v3.0.0 tag waits on AR0 §8's chain through M4, `raft-marks-2026-09-26.md`
+§4). `CLAUDE.md`'s Assertions and Ranges rows carry AY-S8; its Foreign keys
+row already carried AY-S5 and AY-S6. SUITE-PENDING
