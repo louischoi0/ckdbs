@@ -435,7 +435,25 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Foreign keys
 
-No open entry. **The check-to-write window closed at AY-S5** (on
+- **A child check that fails inside an explicit transaction keeps its
+  hold on the parent key until the rollback.** Found by AY-S5's review on
+  `ay-s5-d9a-parent-fence` at `826d15b`; read, not run. D9(a)'s `S` is
+  taken before the descent and held to the decide, so an `INSERT` whose
+  parent does not exist holds `S` on that absent key; the statement fails
+  `FK_VIOLATION`, the transaction is poisoned, and until the client's
+  `ROLLBACK` an `INSERT` of that parent waits and is refused `TxnConflict`
+  at the 1 s fault net. **Cost: a refusal, bounded by the client's
+  rollback**, never a wrong answer. PostgreSQL's `FOR KEY SHARE` locks
+  nothing for a missing row. Releasing the `S` on a violation the ask
+  created is a change to what D9(a) holds, not decided.
+- **The borrow ledger's `Holds` is a linear scan, and D9(a) asks it more.**
+  Every parent `S` and the `IS` above it go through `BorrowChain`, whose
+  intention test scans the transaction's holdings, beside the row `X`s the
+  writes already took - so a transaction's asks are quadratic in its
+  borrows. Found by the same review; not measured. The overhead
+  measurement is AY's close's (`CLAUDE.md` step 3).
+
+**The check-to-write window closed at AY-S5** (on
 `ay-s5-d9a-parent-fence`): a child's forward check holds the parent row's
 `S` from before its descent to its decide (D9(a), `foreign-keys.md` §2a,
 §3a), so a parent `DELETE` on any core waits for it. The entry that stood

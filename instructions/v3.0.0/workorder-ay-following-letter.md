@@ -589,7 +589,7 @@ stays a gate:
 | `ASelfReferencingChildWaitsOutItsParentsWriterAndPasses` | AY-Q3 (§3) | the child refused `TxnConflict`: the self-referencing arm never waits |
 | `TwoChildWritersThatThenUpdateTheirParentDeadlock` | (v), AY-Q1 | the first parent `UPDATE` ran past the other's open child, `UPDATED 1` |
 | `AParentDeleteWaitsOutAnOpenChildDeleteAndPassesAtItsCommit` | AY-Q8 | refused `TxnConflict` at once |
-| `AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback` | AY-Q8 | `DELETED 1`, and the child's rollback left it referencing the deleted 7 - **a live orphan the survey had as a refusal**, now `bugs/a-parent-delete-misses-a-child-an-open-update-moved-off-it.md` |
+| `AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRollback` | AY-Q8 | `DELETED 1`, and the child's rollback left it referencing the deleted 7 - **a live orphan the survey had as a refusal**, then `bugs/a-parent-delete-misses-a-child-an-open-update-moved-off-it.md`, deleted at AY-S5 with its fix |
 
 The window cell drives the insert path's one seam on a two-row `INSERT`
 whose rows land in the rightmost and leftmost leaves of a multi-leaf `c`.
@@ -632,6 +632,92 @@ Rejected:
 **Suite**: 3097/3097 in Debug at `86b61b3` (`ctest -LE heap-suspended -j8`;
 seven D9(a) cells and one pre-existing cell disabled), and 3097/3097
 again with the review's changes and the eighth cell. Overhead not measured.
+
+### AY-S5 — built 2026-09-30
+
+On `worktree-ay-s5-d9a-parent-fence` from `5aac081` (AY-S4's tip), on the
+operator's *"follow CLA proposal for AY-Q1, start AY-S5"*, with AY-Q4, AY-Q8
+and AY-Q12 marked as proposed during it (`raft-marks-2026-09-30.md` §4-§7).
+
+**Built** at `826d15b`:
+
+- **The hoist** (`ResolveForeignKeyParents`): per distinct parent, `IS` on
+  the parent relation and `S` on the parent row through `BorrowOrWait`,
+  then the descent under a check view minted after the grant (AY-Q2).
+  `BorrowChain` takes the unit's mode and asks `IS` over an `S`. A refused
+  `S` is the wait; the cap refuses past `max_locks_per_txn`.
+  `WaitForParentRowWriter` is deleted, folded into the ask.
+- **The self-referencing arm** (`CheckForeignKeyOnWrite`) takes the same
+  pair per row, recorded as the insert's own row borrow records its (AY-Q3).
+- **The reverse check** (`CheckNoChildReferences`) carries a busy child's
+  writer and pk out, and reads a row an undecided `UPDATE` moved off the
+  parent through undo after the walk. The parent `DELETE` parks mid-walk on
+  that writer through `WaitForChildRowWriter` (AY-Q8).
+- **Cells**: AY-S4's eight enabled, green 10/10. `fk_parent_hold_test.cpp`
+  added (below).
+
+**Mutants**, each built and run:
+
+| mutant | killed by |
+|---|---|
+| (a) `S` after the descent - the order's first named mutant | **not by the window cell**, which the order said: nothing fetches between the descent and the ask, so no seam puts a `DELETE` there. Killed by `FkParentHoldTest.AParentRowHeldByAWriterIsNotReadBeforeTheChildHoldsIt`, which watches the parent's leaf and fails when it is read while its row is held |
+| (b) `S` released at statement end - the order's second | E3 (i), (iii), (v). The window cell survives it: in autocommit the statement's end is the decide |
+| (c) `S` released right after the descent - AT-S5f's shape | the window cell, and E3 (i), (iii), (v) |
+| (d) no hold in the self-referencing arm | both self-referencing cells |
+
+**Pushed before its review returned**, on the operator's *"push"*:
+`64b97e7..7c51f82`, the pre-push gate green (3106/3106). The review then
+found the defect below, so **`7c51f82` on `main` carries it**.
+
+**The review** (`critics-developer`, one pass) found **one quiet wrong
+answer**, fixed by the reviewer and landed red first here. `DeleteInner`
+minted the reverse check's view once, at the statement's start, and
+AY-Q8's undo read answers "no version" where a chain ends at an insert
+that view cannot see. So a child inserted and committed after the `DELETE`
+began, then moved off the parent by an open writer, read as absent: the
+parent was deleted and the writer's rollback left an orphan.
+`FkParentHoldTest.AChildCommittedAfterTheDeleteBeganIsSeenUnderItsMove`,
+red at `7c51f82` 3/3 (`DELETED 2`, `c(1, pid = 7)` with no 7), committed
+at `a72b070`. The fix, at `9856d6b`, mints the view per checked row after
+its `X`. Also taken:
+
+- the grant arm of `WaitForChildRowWriter` records an already-flipped wake,
+  so a writer that decided between the walk and the ask re-runs the
+  statement rather than refusing it;
+- the refusal on the path that cannot wait names the child and parent
+  relations again (`ParentRowHeld`), where the hold's refusal named a row
+  and holder only;
+- `waits_on` cut, the caller testing `blocking_writer_`; the visitor tests
+  `undo_ptr` before the visibility lookup; the hoist's comment cut to its
+  rule and a pointer to the spec;
+- the text: "a writer that references the parent never reaches the walk"
+  corrected to "a writer that *set* the fk column" (a child `DELETE` or an
+  `UPDATE` of other columns holds no `S`) in `foreign-keys.md` §3, the
+  dispatcher and `CLAUDE.md`; `DROP TABLE` struck from §2c's DDL list (a
+  referenced parent is refused RESTRICT before its `X`); the cap stated
+  as counting every borrow; stale comments in `BorrowOrWait` and the busy
+  arm; this order's cite of the deleted bug entry.
+
+Rejected, and recorded in `known-gaps.md` (Foreign keys):
+
+- **Releasing the `S` on an absent parent at the violation.** A failed
+  check in an explicit transaction holds `S` on the missing key until the
+  rollback. Releasing it changes what D9(a) holds; the cost is a bounded
+  refusal, not a wrong answer.
+- **The ledger's linear `Holds` scan.** Pre-existing, asked more by D9(a);
+  a performance question for AY's measurement.
+
+Rejected outright: nothing for the deadlock shape (AY-Q1, marked).
+
+**E3 retired** (`ar2-architecture-revision-borrow-model.md`). The
+`known-gaps.md` window entry closed, the moved-off bug entry deleted with
+its fix, `foreign-keys.md` §2a/§2c/§3/§3a/§4/§5, `index.md`, `assertion.md`
+and `CLAUDE.md`'s row restated.
+
+**Suite**: 3106/3106 in Debug at `826d15b`, and 3107/3107 with the review's
+changes (`ctest -LE heap-suspended -j8`, one pre-existing disabled cell).
+Overhead not measured; measured at the milestone's close (`CLAUDE.md` step
+3, `raft-marks-2026-09-30.md` §8).
 
 ### AY-S10 — struck 2026-09-30: the split relation retired
 

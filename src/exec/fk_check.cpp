@@ -323,8 +323,10 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // Its page holds the writer's value and not the parent's, so the key
     // test below skips it - and the writer's rollback would put the
     // reference back after this check said "no children". Such a row is
-    // copied out here and read back through its undo after the walk, when
-    // no span is live: busy if the version the check's view can see
+    // copied out here and read back through its undo after the walk, once
+    // the child's span is released (the parent `DELETE`'s own is still
+    // live, the exposure the header names): busy if the version the check's
+    // view can see
     // references the parent. A fresh insert has no earlier version and is
     // not collected.
     struct Moved {
@@ -358,9 +360,11 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             inner = value.status();
             return value.status();
         }
-        const txn::CheckVerdict seen_as = txn::CheckVisibility(check_view, tuple.value());
         if (!value.value().has_value() || *value.value() != parent_pk) {
-            if (seen_as == txn::CheckVerdict::kBusy && tuple.value().undo_ptr != txn::kNoUndoPtr) {
+            // The undo test first: it is a field read, and the visibility
+            // test a latched window lookup for a recent writer.
+            if (tuple.value().undo_ptr != txn::kNoUndoPtr &&
+                txn::CheckVisibility(check_view, tuple.value()) == txn::CheckVerdict::kBusy) {
                 const auto bytes = tuple.value().payload;
                 moved.push_back(Moved{tuple.value().trx_id, tuple.value().deleted,
                                       tuple.value().undo_ptr,
@@ -368,6 +372,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             }
             return storage::VisitControl::kContinue;
         }
+        const txn::CheckVerdict seen_as = txn::CheckVisibility(check_view, tuple.value());
         if (seen_as == txn::CheckVerdict::kAbsent) return storage::VisitControl::kContinue;
 
         verdict = seen_as == txn::CheckVerdict::kBusy ? FkVerdict::kBusy : FkVerdict::kViolation;

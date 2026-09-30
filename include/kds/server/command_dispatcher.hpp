@@ -1320,6 +1320,12 @@ private:
     // `ResolveForeignKeyParents` deliberately does not hoist. It holds the
     // parent row first, as the hoist does, and a refused hold is recorded
     // as a wait on `scope` (AY-Q3).
+    // A refused parent-row hold's status, restated as the foreign key's
+    // (a conflict names the child and parent relations; any other code
+    // stands).
+    Status ParentRowHeld(const catalog::TableAccess& child, catalog::Oid parent_rel,
+                         std::uint64_t pk, const Status& held);
+
     Status CheckForeignKeyOnWrite(const catalog::TableAccess& child,
                                   const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
                                   const exec::FkParentVerdicts& held, const WriteScope& scope);
@@ -1355,17 +1361,19 @@ private:
     // is this core's for the whole relation, so there is nothing resolved
     // elsewhere to read.
     //
-    // `waits_on` is set to the child writer a busy answer recorded a wait
-    // for (AY-Q8), and to 0 otherwise; the caller parks its walk on it.
+    // Called with the parent row's `X` held; the check view is minted
+    // inside, after that grant (the body says why).
+    //
+    // A busy answer naming a child writer records a wait on it (AY-Q8,
+    // `WaitForChildRowWriter`), which the caller parks its walk on.
     Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
-                                       const txn::ReadView& check_view, const WriteScope& scope,
-                                       std::uint64_t* waits_on);
+                                       const WriteScope& scope);
 
     // **The reverse check's wait** (AY-Q8): the child row `pk` of
     // `child_rel` is being written by `holder`, which holds no `S` on the
     // parent. Registers a wake on that row where a table and a reactor exist,
-    // records the block, and answers whether it was recorded.
-    bool WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t pk,
+    // and records the block.
+    void WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t pk,
                                std::uint64_t holder);
 
     // One access shape, recorded by hand because a check is not a step

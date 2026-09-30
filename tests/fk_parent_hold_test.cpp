@@ -51,11 +51,15 @@ protected:
         locks_ = std::move(table.value());
         txns_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr, /*visibility=*/nullptr, /*core=*/0,
                       locks_.get());
-        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
-                            /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
-                            exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
-                            /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
-        dispatcher_->set_locks(locks_.get());
+        // Two sessions' dispatchers over one catalog, manager and table:
+        // `other_` runs what another session does inside a fetch seam.
+        for (auto* d : {&dispatcher_, &other_}) {
+            d->emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                       /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
+                       exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                       /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
+            (*d)->set_locks(locks_.get());
+        }
 
         ASSERT_EQ(Run("CREATE TABLE p (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
         ASSERT_EQ(Run("CREATE TABLE c (id int64, pid int64 REFERENCES p) BTREE").rfind("CREATED", 0),
@@ -65,6 +69,11 @@ protected:
         auto access = boot_->catalog.InitTableAccess(oid.value());
         ASSERT_TRUE(access.ok()) << access.status().message();
         parent_leaf_ = access.value()->desc_page_id;  // one row: the root is the leaf
+        auto child = boot_->catalog.FindTableOidByName("c");
+        ASSERT_TRUE(child.ok()) << child.status().message();
+        auto child_access = boot_->catalog.InitTableAccess(child.value());
+        ASSERT_TRUE(child_access.ok()) << child_access.status().message();
+        child_leaf_ = child_access.value()->desc_page_id;
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
@@ -79,7 +88,9 @@ protected:
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> txns_;
     std::optional<CommandDispatcher> dispatcher_;
+    std::optional<CommandDispatcher> other_;
     PageId parent_leaf_ = kInvalidPageId;
+    PageId child_leaf_ = kInvalidPageId;
 };
 
 // **Mutation**: the `S` asked after `CheckParentPresent` in
@@ -101,6 +112,46 @@ TEST_F(FkParentHoldTest, AParentRowHeldByAWriterIsNotReadBeforeTheChildHoldsIt) 
     store_.OnFetch(parent_leaf_, 1, [&] { read_while_held = true; });
     EXPECT_EQ(Run("INSERT INTO c VALUES (7)").rfind("INSERTED", 0), 0u);
     EXPECT_TRUE(read_while_held) << "the check passed without descending the parent";
+}
+
+// **The reverse check reads under a view minted after the parent row is
+// held** (AY-S5's review). A `DELETE` whose view is older than a child it
+// meets can read that child's earlier version as absent: `ResolveThroughUndo`
+// answers "no version" where the chain ends at an insert the view cannot
+// see. So a child inserted and committed after the `DELETE` began, then
+// moved off the parent by a writer still open, was answered "no children" -
+// and that writer's rollback put a reference to a deleted parent back.
+//
+// Driven on one thread: inside the `DELETE`'s first read of the child's
+// leaf - row 1's reverse check, row 7's `X` not yet asked - another session
+// inserts and commits `c(1, pid = 7)`, and a third moves it to 8 and stays
+// open. The `DELETE` then holds 7 and walks.
+//
+// **Mutation**: the reverse check's view minted once per statement, at the
+// `DELETE`'s start - `DeleteInner`'s shape at `826d15b`. The `DELETE`
+// answers `DELETED 2` and the rollback leaves a child of 7 with no 7.
+TEST_F(FkParentHoldTest, AChildCommittedAfterTheDeleteBeganIsSeenUnderItsMove) {
+    ASSERT_EQ(Run("INSERT INTO p VALUES (1, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Run("INSERT INTO p VALUES (8, 1)").rfind("INSERTED", 0), 0u);
+
+    Session mover;
+    std::string inserted;
+    std::string moved;
+    store_.OnFetch(child_leaf_, 1, [&] {
+        inserted = other_->Dispatch("INSERT INTO c VALUES (1, 7)").response;
+        (void)other_->Dispatch("BEGIN", &mover);
+        moved = other_->Dispatch("UPDATE c SET pid = 8 WHERE id = 1", &mover).response;
+    });
+    const std::string deleted = Run("DELETE FROM p WHERE v = 0");
+    ASSERT_TRUE(store_.fired()) << "the seam never ran; the cell tested nothing";
+    ASSERT_EQ(inserted.rfind("INSERTED", 0), 0u) << inserted;
+    ASSERT_EQ(moved, "UPDATED 1");
+
+    // Whatever the DELETE answered, the child's rollback references 7 again.
+    ASSERT_EQ(other_->Dispatch("ROLLBACK", &mover).response.rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(Run("SELECT id FROM p WHERE id = 7"), "id\\n7")
+        << "the DELETE answered '" << deleted << "' and left c(1, pid = 7) without its parent";
 }
 
 }  // namespace
