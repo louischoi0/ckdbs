@@ -1355,11 +1355,13 @@ private:
     // is this core's for the whole relation, so there is nothing resolved
     // elsewhere to read.
     //
+    // Called with the parent row's `X` held; the check view is minted
+    // inside, after that grant (the body says why).
+    //
     // `waits_on` is set to the child writer a busy answer recorded a wait
     // for (AY-Q8), and to 0 otherwise; the caller parks its walk on it.
     Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
-                                       const txn::ReadView& check_view, const WriteScope& scope,
-                                       std::uint64_t* waits_on);
+                                       const WriteScope& scope, std::uint64_t* waits_on);
 
     // **The reverse check's wait** (AY-Q8): the child row `pk` of
     // `child_rel` is being written by `holder`, which holds no `S` on the

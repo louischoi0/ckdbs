@@ -3531,10 +3531,21 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
 
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,
                                                       std::uint64_t parent_pk,
-                                                      const txn::ReadView& check_view,
                                                       const WriteScope& scope,
                                                       std::uint64_t* waits_on) {
     *waits_on = 0;
+    // **Minted here, after the caller holds the parent row's `X`** - the
+    // forward hoist's rule from the other side, and load-bearing for the
+    // moved-row read (AY-Q8). A child that referenced this parent was
+    // written under its `S`, so its writer decided before that grant; a view
+    // minted earlier - once per statement, as this was - can see that writer
+    // as invisible, and `ResolveThroughUndo` then answers an inserted
+    // version "no version" where it references the parent: a `DELETE`
+    // reaching row 7 late in its walk, after a child of 7 was inserted and
+    // committed and an undecided `UPDATE` moved it off 7, answered "no
+    // children", and that `UPDATE`'s rollback restored a child of a
+    // deleted parent.
+    const txn::ReadView check_view = CheckView(scope);
     // ---- Nothing is asked of another core, since AT-S5f -----------------
     //
     // Two things stood here and both were the same absence. A **reference
@@ -8866,15 +8877,13 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         if (!matched.value()) return std::optional<std::uint64_t>{};
         return std::optional<std::uint64_t>{id.value()};
     };
-    // Minted once per statement, for the reason UPDATE's copy records.
-    txn::ReadView check_view = txn::ReadView::Everything();
     // **The reverse hoist is gone with the fan-out** (AT-S5f). It stood
     // here for AH-R1's reason one direction over - the last point before
     // the walk, and the walk is where nothing can park - and what it
     // hoisted was a question for another core. The check runs per row
     // inside the walk now, as the local arm always did, because a walk
-    // that sees every chain has nothing to ask anyone.
-    if (!ta.fkeys_in.empty()) check_view = CheckView(scope);
+    // that sees every chain has nothing to ask anyone - and it mints its
+    // own view, after the row's `X` (`CheckNoChildrenBeforeDelete`).
 
     std::uint32_t deleted = resume_from.rows_done;  // AO-S3b, as UPDATE
 
@@ -8948,7 +8957,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // refused delete leaves no undo record behind.
         if (!ta.fkeys_in.empty()) {
             std::uint64_t waits_on = 0;
-            if (Status s = CheckNoChildrenBeforeDelete(ta, id, check_view, scope, &waits_on);
+            if (Status s = CheckNoChildrenBeforeDelete(ta, id, scope, &waits_on);
                 !s.ok()) {
                 // AY-Q8: a child row whose writer has not decided parks the
                 // walk here, as a held row does above - nothing of this row
