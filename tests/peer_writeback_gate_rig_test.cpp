@@ -1,16 +1,16 @@
 // BA-S1: a peer's writeback waits on the WAL writer, not on core 0's inline
 // sync. Defect C of `instructions/v3.0.0/workorder-ba-parallelism.md` §1.7,
-// ruled by its BA-R1; the bug entry is
-// `docs/inflight/bugs/a-peers-writeback-runs-core-0s-wal-sync-on-the-peers-thread.md`.
+// ruled by its BA-R1 (the bug entry, deleted by BA-S1, is at
+// `git show e7617b2:docs/inflight/bugs/a-peers-writeback-runs-core-0s-wal-sync-on-the-peers-thread.md`).
 //
-// **The shared store has one WAL gate, core 0's owning manager** - here
-// `TwoCoreRig::wal()`, which no peer re-gates. A writeback on core 1 of a page
-// whose record is not yet durable therefore runs the owner's `Sync()` on core
-// 1's thread: the owning arm's `fdatasync` and its plain fields, which
-// `manager.hpp` says no other thread touches. The fix keeps a gate per core,
-// picked by `CurrentCore()`, and a peer's is its attached manager: a flush
-// through the stream latch and a wait on the writer, the route its commits
-// already take.
+// **Until BA-S1 the shared store had one WAL gate, core 0's owning manager** -
+// here `TwoCoreRig::wal()`, which no peer re-gated. A writeback on core 1 of a
+// page whose record was not yet durable therefore ran the owner's `Sync()` on
+// core 1's thread: the owning arm's `fdatasync` and its plain fields, which
+// `manager.hpp` says no other thread touches. The store keeps a gate per core
+// now, picked by `CurrentCore()`, and a peer's is its attached manager: a
+// flush through the stream latch and a wait on the writer, the route its
+// commits already take.
 //
 // **The red is the route, read off counters only one arm moves.** The owning
 // arm bumps the owner's `syncs` and `flushes` and is the one caller of
@@ -124,8 +124,8 @@ struct Gauges {
     }
 };
 
-// The red half of every peer cell: today each of these moves, on the peer's
-// thread.
+// The red half of every peer cell: at `597abf6` each of these moved, on the
+// peer's thread.
 void ExpectTheOwnerDidNotSync(TwoCoreRig& rig, const Gauges& before) {
     const Gauges now = Gauges::Read(rig);
     EXPECT_EQ(now.owner_syncs, before.owner_syncs)
@@ -150,7 +150,7 @@ void ExpectTheWriterSyncedPast(TwoCoreRig& rig, const Gauges& before, wal::Lsn l
 // anything: a writeback that never ran moves none of the counters, and would
 // pass `ExpectTheOwnerDidNotSync` for nothing.
 void ExpectWrittenBack(TwoCoreRig& rig, const Stamped& p) {
-    EXPECT_TRUE(rig.wal().IsDurable(p.lsn)) << "the page went out ahead of its record";
+    EXPECT_TRUE(rig.wal().IsDurable(p.lsn)) << "the record is not durable after the writeback";
     const std::vector<PageId> dirty = rig.store().DirtyPageIds();
     const bool still_dirty = std::find(dirty.begin(), dirty.end(), p.page) != dirty.end();
     EXPECT_FALSE(still_dirty) << "page " << p.page << " is still dirty: no writeback ran";
@@ -158,9 +158,8 @@ void ExpectWrittenBack(TwoCoreRig& rig, const Stamped& p) {
 
 TEST(PeerWritebackGateRigTest, APeersWritebackWaitsOnTheWriterNotCoreZerosInlineSync) {
     // The defect at its smallest, on one thread, so one run decides: core 1
-    // writes back one page whose record is not durable. Today the store's
-    // one gate is the owner and its inline arm runs here; fixed, core 1's
-    // gate flushes through the latch and waits on the writer.
+    // writes back one page whose record is not durable, and core 1's gate
+    // flushes through the latch and waits on the writer.
     auto rig = OpenRig();
     ASSERT_NE(rig, nullptr);
     Stamped p;
@@ -214,10 +213,14 @@ TEST(PeerWritebackGateRigTest, APeersWritebackOnItsOwnReactorWaitsOnTheWriter) {
     rig->core(1).scheduler().Submit(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
                                                          FlushOnThisReactor(rig->store(), flush)));
     rig->Start();
-    const bool ran =
-        KickUntil(*rig, 1, [&] { return flush.done.load(std::memory_order_acquire); });
+    // Generous, because the rig's log is a real file and a disk stall under
+    // `ctest -j8` can hold a sync for seconds; the verdict is read after
+    // `Stop()`, whose join orders it, not off the barrier.
+    (void)KickUntil(*rig, 1, [&] { return flush.done.load(std::memory_order_acquire); },
+                    std::chrono::milliseconds(30000));
     rig->Stop();
-    ASSERT_TRUE(ran) << "core 1's reactor never ran the writeback";
+    ASSERT_TRUE(flush.done.load(std::memory_order_acquire))
+        << "core 1's reactor never ran the writeback";
     ASSERT_TRUE(flush.status.ok()) << flush.status.message();
     EXPECT_EQ(flush.ran_as, 1u) << "the writeback did not run as its reactor's core";
 
@@ -354,7 +357,7 @@ TEST(PeerWritebackGateRigTest, AClientSyncOnAPeerWaitsOnTheWriter) {
         held.reply = rig->core(1).dispatcher().Dispatch("SYNC").response;
         held.replied.store(true, std::memory_order_release);
     });
-    ASSERT_TRUE(Within(2000ms, [&] { return rig->wal().writer_syncs() > before.writer_syncs; }))
+    ASSERT_TRUE(Within(30000ms, [&] { return rig->wal().writer_syncs() > before.writer_syncs; }))
         << "core 1's SYNC never synced the log";
 
     auto l2 = rig->core(0).wal().Append(
@@ -367,14 +370,14 @@ TEST(PeerWritebackGateRigTest, AClientSyncOnAPeerWaitsOnTheWriter) {
     ASSERT_TRUE(rig->store().StampPageLsn(p.page, p.lsn).ok());
     held.hold.Release();
 
-    ASSERT_TRUE(Within(2000ms, [&] { return held.replied.load(std::memory_order_acquire); }))
+    ASSERT_TRUE(Within(30000ms, [&] { return held.replied.load(std::memory_order_acquire); }))
         << "core 1's SYNC never finished";
     held.sync.join();
 
     EXPECT_EQ(held.reply, "OK synced");
     ExpectTheOwnerDidNotSync(*rig, before);
-    // SYNC's log sync is one; the gate's is the second, and today it is the
-    // owner's instead.
+    // SYNC's log sync is one; the gate's is the second (the owner's, at
+    // `597abf6`).
     EXPECT_GE(rig->wal().writer_syncs(), before.writer_syncs + 2)
         << "the gate's sync was not the writer's";
     ExpectWrittenBack(*rig, p);

@@ -215,9 +215,9 @@ Status WalManager::Sync() {
     // writes this manager's statistics, its batch and its D3 clock, which
     // `manager.hpp` gives to its core alone; a writeback on another core
     // asks that core's gate, never this one. Core identity rather than
-    // thread identity, because the startup thread mounts as core 0 and
-    // shutdown runs a peer's last sync from core 0's thread under that
-    // peer's guard - both legitimate, neither the reactor's thread.
+    // thread identity, because core 0's owning manager is also synced off
+    // its reactor - the startup thread mounts and recovers as core 0 before
+    // that reactor exists, and the shutdown tail runs on core 0's thread.
 #ifndef NDEBUG
     if (CurrentCore() != core_id_) {
         std::fprintf(stderr,

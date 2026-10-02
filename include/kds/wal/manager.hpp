@@ -364,8 +364,7 @@ private:
     // to ask, so this is `Sync()`.
     Status RequestSyncNow();
 
-    // The batch and the parked request, closed against the durable
-    // watermark. Called after every sync this manager performs and, on an
+    // The batch, closed against the durable watermark. Called after every sync this manager performs and, on an
     // attached manager, on every drain tick - because there the watermark
     // moves on other threads' syncs, and a batch made durable by one of
     // them must still be counted and cleared here.

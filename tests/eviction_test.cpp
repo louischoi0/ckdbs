@@ -340,7 +340,6 @@ public:
         return durable_.load(std::memory_order_acquire);
     }
     Status EnsureDurable(wal::Lsn lsn) override {
-        asked_.store(true, std::memory_order_release);
         if (asks_.fetch_add(1, std::memory_order_acq_rel) == 0 && on_first_ask) on_first_ask();
         wal::Lsn seen = durable_.load(std::memory_order_acquire);
         while (lsn >= seen && !durable_.compare_exchange_weak(seen, lsn + 1,
@@ -348,7 +347,7 @@ public:
         }
         return Status::OK();
     }
-    bool asked() const noexcept { return asked_.load(std::memory_order_acquire); }
+    bool asked() const noexcept { return asks() > 0; }
     int asks() const noexcept { return asks_.load(std::memory_order_acquire); }
 
     // Runs inside the first `EnsureDurable` (BA-S1's run-gate cell). The
@@ -358,7 +357,6 @@ public:
 
 private:
     std::atomic<wal::Lsn> durable_{1};  // a real record LSN is never 0
-    std::atomic<bool> asked_{false};
     std::atomic<int> asks_{0};
 };
 
@@ -619,19 +617,38 @@ TEST(EvictionWritebackTest, EachCoresWritebackAsksOnlyItsOwnGate) {
         EXPECT_EQ(core0_gate.asks(), 1) << "core 0's writeback did not ask the default";
         EXPECT_EQ(core1_gate.asks(), 1) << "core 0's writeback asked core 1's gate";
     }
-    // Taken back, core 1 asks the default again.
-    ASSERT_TRUE(store.SetCoreWalGate(1, nullptr).ok());
+    // **One owner per slot.** A second gate for a live core id is refused,
+    // and a clear by anyone but the owner leaves the owner's gate in place -
+    // the shape of a second runtime for one core id failing and tearing
+    // down beside a live one.
+    GateProbe intruder;
+    EXPECT_EQ(store.SetCoreWalGate(1, &intruder).code(), StatusCode::kAlreadyExists);
+    store.ClearCoreWalGate(1, &intruder);
+    {
+        const CurrentCoreGuard as_core_1(1);
+        const PageId page = dirty_page(91);
+        const PageId ids[] = {page};
+        ASSERT_TRUE(store.FlushPages(ids).ok());
+        EXPECT_EQ(core1_gate.asks(), 2) << "a refused or foreign clear moved core 1's gate";
+        EXPECT_EQ(intruder.asks(), 0);
+    }
+    // Taken back by its owner, core 1 asks the default again.
+    store.ClearCoreWalGate(1, &core1_gate);
     {
         const CurrentCoreGuard as_core_1(1);
         const PageId page = dirty_page(99);
         const PageId ids[] = {page};
         ASSERT_TRUE(store.FlushPages(ids).ok());
         EXPECT_EQ(core0_gate.asks(), 2) << "a core with no gate of its own did not ask the default";
-        EXPECT_EQ(core1_gate.asks(), 1);
+        EXPECT_EQ(core1_gate.asks(), 2);
     }
-    // Past the page latch's core-id bound there is no slot to give.
-    EXPECT_EQ(store.SetCoreWalGate(storage::kPageLatchMaxCoreId + 1, &core1_gate).code(),
+    // The page latch's last core id has a slot; past it there is none, and
+    // a null gate is a clear, not a set.
+    EXPECT_TRUE(store.SetCoreWalGate(kPageLatchMaxCoreId, &core1_gate).ok());
+    store.ClearCoreWalGate(kPageLatchMaxCoreId, &core1_gate);
+    EXPECT_EQ(store.SetCoreWalGate(kPageLatchMaxCoreId + 1, &core1_gate).code(),
               StatusCode::kInvalidArgument);
+    EXPECT_EQ(store.SetCoreWalGate(2, nullptr).code(), StatusCode::kInvalidArgument);
 }
 
 // **The run's gate is the batch's gate** (BA-S1). `WriteBack` asks twice: once

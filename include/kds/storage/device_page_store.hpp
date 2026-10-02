@@ -168,15 +168,16 @@
 //     latch can be held across an append's section, a segment roll
 //     included; a reader of that page elsewhere spins, then yields.
 //   - **Held across a durability wait only on the fault path.** WriteBack
-//     takes the WAL gate (EnsureDurable, a wait on the writer thread)
-//     before it writes any byte. It takes each page's latch shared for the
+//     takes the WAL gate (EnsureDurable: a wait on the writer thread for a
+//     peer, an inline sync for core 0) before it writes any byte. It takes each page's latch shared for the
 //     copy since AT-S8 step 1b, one page at a time and released before the
 //     gate, so no frame of its own is latched across the wait - waiting for
 //     a foreign exclusive holder on a flush, trying once and skipping in the
 //     background drain (`WriteBack`'s `HeldFrames`); but the sweep that reached
 //     WriteBack runs inside a fault, and the faulting task may hold *other*
-//     frames latched while it waits. Sound, because the writer thread takes
-//     no page latch; a latency cost under a shared pool, and AM-S3's to
+//     frames latched while it waits. Sound, because neither the writer
+//     thread nor core 0's inline sync takes a page latch; a latency cost
+//     under a shared pool, and AM-S3's to
 //     measure. **AM-S2 inherits one obligation here**: AwaitWalGate reads
 //     each frame's page_lsn *before* the gate call, so whatever latch that
 //     scan comes to need must be dropped before EnsureDurable, or the wait
@@ -436,13 +437,21 @@ public:
     // disables it for those cores. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
 
-    // Gives `core` a gate of its own (BA-S1), or with null takes it back so
-    // the core asks the default again. A slot is written before its core's
-    // first writeback and taken back before the gate is destroyed -
-    // `CoreRuntime::Open` and `~CoreRuntime` - and read only by threads
-    // running as that core. InvalidArgument past the page latch's core-id
-    // bound, which every core already lives under.
+    // Gives `core` a gate of its own (BA-S1), which that core's writebacks
+    // ask instead of the default until `ClearCoreWalGate` takes it back.
+    // `CoreRuntime::Open` sets it before the core's first writeback and
+    // `~CoreRuntime` clears it before the gate is destroyed; only threads
+    // running as that core read it. **One owner per slot, enforced**: a
+    // slot already holding another gate refuses with AlreadyExists, so a
+    // second runtime for a live core id cannot take the slot, and cannot
+    // later clear it out from under the first. InvalidArgument for a null
+    // gate, or past the page latch's core-id bound, which every core
+    // already lives under.
     Status SetCoreWalGate(std::uint32_t core, wal::WalDurability* gate);
+
+    // Takes back `core`'s gate if it is still `gate`; anything else is left
+    // alone. A no-op past the bound.
+    void ClearCoreWalGate(std::uint32_t core, const wal::WalDurability* gate) noexcept;
 
     // **`SetStreamCoreId` and `core_id()` are gone** (AM-S2 step 3). The
     // first existed for an ordering that no longer exists: recovery stamps

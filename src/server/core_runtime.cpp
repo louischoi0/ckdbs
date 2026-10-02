@@ -42,13 +42,10 @@ CoreRuntime::~CoreRuntime() {
     // one.
     const CurrentCoreGuard as_this_core(core_id());
     listener_.reset();
-    // **The WAL gate slot goes back before the manager does** (BA-S1).
-    // `wal_` is destroyed with the members after this body, and the shared
-    // store outlives this runtime, so a slot left set would hand the next
-    // writeback that runs as this core a destroyed manager. The condition
-    // is `Open`'s for setting it; it cannot fail for an id `Open` set.
-    if (owned_store_ == nullptr && store_ != nullptr && core_id() != 0) {
-        (void)store_->SetCoreWalGate(core_id(), nullptr);
+    // **The WAL gate slot goes back before `wal_` does** (BA-S1): the shared
+    // store outlives this runtime. Only this runtime's own gate is cleared.
+    if (owned_store_ == nullptr && store_ != nullptr && wal_ != nullptr) {
+        store_->ClearCoreWalGate(core_id(), wal_.get());
     }
     // R6-2's rollback of the cross-owner transactions this core was a
     // participant in stood here until AT-S6, which retired the participant:
@@ -163,16 +160,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // default gate every core without its own asks, and `SetFrameBudget`
     // would hand one pool a per-core share of itself.
     //
-    // **What a peer does set is its own gate** (BA-S1): this core's attached
-    // manager, so a writeback that runs as this core flushes through the
-    // stream latch and waits on the writer. The default is core 0's owning
-    // manager, whose not-durable arm syncs inline and writes that manager's
-    // own state; asked by a peer, it ran on the peer's thread
-    // (`wal/manager.hpp`'s ownership rule). Set before this core's first
-    // writeback, the completion checkpoint below; taken back in
-    // `~CoreRuntime`. Core 0 sets none: in production it is `Expeditor`'s,
-    // whose owning manager is the default, and a core-0 runtime - the rig's,
-    // the fixtures' - leaves the default as production has it.
+    // **A peer does set its own WAL gate** (BA-S1, `device_page_store.hpp`'s
+    // "Which gate"), before its first writeback - the completion checkpoint
+    // below - and `~CoreRuntime` takes it back. Core 0 keeps the store's
+    // default, which a core-0 runtime (the rig's, the fixtures') leaves as
+    // production has it.
     //
     // The unshared arm is a fixture's: its own store over the device,
     // allocating from the free map above the system range.

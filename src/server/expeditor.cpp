@@ -1637,8 +1637,7 @@ Status Expeditor::Start() {
         // was the writeback path rather than the pool: the store's gate is
         // a `wal::WalDurability` - a property of the log, not of a core -
         // and under AR0 M0 every core's manager attaches to core 0's
-        // stream, so any core's gate answers for all (and each core asks
-        // its own since BA-S1, `CoreRuntime::Open`). A pre-M0 volume mounted
+        // stream, so any core's gate answers for all. A pre-M0 volume mounted
         // per-core, where one gate would check a page logged in core 1's
         // stream against core 0's watermark and could write it out ahead of
         // the record that describes it. `SuperBlock::Decode` now refuses

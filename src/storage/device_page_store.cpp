@@ -1294,8 +1294,25 @@ Status DevicePageStore::SetCoreWalGate(std::uint32_t core, wal::WalDurability* g
                                        std::to_string(kPageLatchMaxCoreId) +
                                        ", so there is no WAL gate slot for it");
     }
-    core_wal_gates_[core].store(gate, std::memory_order_release);
+    if (gate == nullptr) {
+        return Status::InvalidArgument("DevicePageStore: a core's WAL gate is taken back with "
+                                       "ClearCoreWalGate, not set to null");
+    }
+    wal::WalDurability* expected = nullptr;
+    if (!core_wal_gates_[core].compare_exchange_strong(expected, gate, std::memory_order_acq_rel) &&
+        expected != gate) {
+        return Status::AlreadyExists("DevicePageStore: core " + std::to_string(core) +
+                                     " already has a WAL gate of its own; a second runtime for "
+                                     "a live core id would take its writebacks");
+    }
     return Status::OK();
+}
+
+void DevicePageStore::ClearCoreWalGate(std::uint32_t core,
+                                       const wal::WalDurability* gate) noexcept {
+    if (core > kPageLatchMaxCoreId) return;
+    wal::WalDurability* expected = const_cast<wal::WalDurability*>(gate);
+    core_wal_gates_[core].compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
 }
 
 wal::WalDurability* DevicePageStore::GateForCaller() const noexcept {

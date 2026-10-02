@@ -57,9 +57,9 @@ so every session on that core waits with it.
   snapshot across its sync:
   `a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md`
   (BA-S1c).
-- **C, a data race.** A peer's writeback runs core 0's WAL sync on the
-  peer's thread:
-  `a-peers-writeback-runs-core-0s-wal-sync-on-the-peers-thread.md` (BA-S1).
+- **C, a data race, fixed by BA-S1.** A peer's writeback ran core 0's WAL
+  sync on the peer's thread. BA-S1 deleted the entry, which is at
+  `git show e7617b2:docs/inflight/bugs/a-peers-writeback-runs-core-0s-wal-sync-on-the-peers-thread.md`.
 
 **What the tree has measured**, each pointing at its item:
 
@@ -424,8 +424,9 @@ segment is a correctness dependency, not an oversight: *"Do not 'optimise'
 it to the tail"* (`:366-377`).
 
 **Defect C:** a peer's writeback runs core 0's inline sync on the peer's
-thread, against `manager.hpp:29-31`
-(`docs/inflight/bugs/a-peers-writeback-runs-core-0s-wal-sync-on-the-peers-thread.md`).
+thread, against `manager.hpp:29-31`. BA-S1 fixed it and deleted its entry,
+which is at
+`git show e7617b2:docs/inflight/bugs/a-peers-writeback-runs-core-0s-wal-sync-on-the-peers-thread.md`.
 
 **PostgreSQL:** `XLogFlush` takes `WALWriteLock` by `LWLockAcquireOrWait`
 (`xlog.c:2854`). A backend whose record another backend's flush covered
@@ -1114,3 +1115,108 @@ most severe first:
 **Rejected: none.** The "only unsynced segments" item stays in BA-R4, with
 the warning's two reasons (`file_log_device.cpp:366-377`) as its conditions,
 which is what the finding asked.
+
+### BA-S1 — built 2026-10-02
+
+Started on the operator's word (`raft-marks-2026-10-02.md` §6) and built on
+`worktree-ba-s1-peer-writeback-gate` from `0c3268f`. Defect C is fixed: each
+core's writebacks ask that core's own WAL gate.
+
+**Red first, at `597abf6`.** The new file `peer_writeback_gate_rig_test.cpp`
+has eight two-core rig cells. Seven covered the peer paths, and on
+`0c3268f` all seven failed for the same reason: core 0's owning manager
+synced and flushed for the peer, the stream's own watermark moved, and the
+writer was never asked. The peer paths are:
+
+- a writeback as core 1, once on the rig thread and once on core 1's own
+  reactor;
+- the checkpoint flush;
+- the anchor publish;
+- the trx-id carve;
+- a client `SYNC` on a peer session;
+- the shutdown checkpoint, a fifth peer path the bug entry had not listed.
+
+The eighth cell checks that core 0's own writeback still syncs inline, and
+it was green there.
+
+**The fix, at `858ddc0`.**
+
+- **The store** keeps the default gate (`SetWalGate`) and one atomic slot
+  per core id up to `kPageLatchMaxCoreId`. Each `WriteBack` picks the
+  calling core's gate once (`GateForCaller`); the batch's call and every
+  run's use that one.
+- **`CoreRuntime::Open`** registers a peer's attached manager before the
+  peer's first writeback (the completion checkpoint). `~CoreRuntime` takes it
+  back before `wal_` is destroyed.
+- **Core 0 keeps the default**: its owning manager, which syncs inline.
+- **`WalManager::Sync()`'s owning arm** aborts in debug builds when it runs as
+  a core other than its own.
+- **Specs:** `wal.md` §8-1, `page.md` §8, and a new `rules.md` §3 row for the
+  slots.
+
+**The checkpointer cells, at `a8e68cd1`.** The first full suite failed 11
+`CheckpointerTest` cells on the new check. Their fixture drives an owning
+manager for core 3 from a thread running as core 0. The fixture now runs as
+core 3, and the two cells that use other managers declare their own cores.
+
+**The review**, of `858ddc0` by `critics-developer` plus three skeptics
+(concurrency and lifetime, durability, tests). It confirmed:
+
+- the slot lifetime on every teardown path;
+- that the attached manager's gate is as strong as the owner's;
+- that the gate is chosen once per writeback;
+- that `cores = 1` and the simulator are unchanged.
+
+**What the review changed:**
+
+- **One owner per slot.** `SetCoreWalGate` now refuses a second gate for a
+  live core id (`AlreadyExists`). `ClearCoreWalGate(core, gate)` clears only
+  the owner's own gate. Without this, a second runtime for one core id could
+  have cleared a live one's gate, and that core would have fallen back to
+  core 0's inline sync: the defect again, silently.
+- **The check is tested.** A death cell (`WalManagerTest.AnOwningSync…`)
+  covers it; before, deleting the check passed every cell.
+- **Boundary cells.** One cell for `kPageLatchMaxCoreId` itself, and one for
+  a null gate.
+- **Rig waits** raised to 30 s. The rig's log is a real file, and a disk
+  stall under `-j8` must not fail a cell.
+- **Text.**
+  - The rig test's present tense became past tense.
+  - A message that claimed an ordering it could not check was corrected.
+  - The abort's justification no longer cites a path that never reaches it.
+  - The stale "parked request", "a wait on the writer thread" and "no gate
+    installed" texts were corrected.
+- **Duplicates cut.** About 15 lines that repeated the rationale were
+  removed. Its homes are `device_page_store.hpp` and `wal.md`.
+- **The bug entry deleted**, and the citations to it now point at
+  `e7617b2`.
+
+**Rejected:**
+
+- **Narrowing the check to shared streams.** The rule stays one rule with no
+  exception, and the core-3 fixture now states its core.
+- **Wrapping the rig's device in `ProbedDevice`.** The write-after-durable
+  order belongs to `WriteBack`, which BA-S1 did not change, and the eviction
+  cells pin it.
+
+**Mutation: seven mutants, all killed.**
+
+- core forced to 0;
+- peer registration deleted;
+- core 0 registering too;
+- run gate on the default;
+- slot never taken back (a segfault on the destroyed manager);
+- the abort removed;
+- a slot set without the ownership check.
+
+Each was restored from a byte copy, never from git. The first, second and
+fourth were killed by the debug abort before any cell could fail. At
+`597abf6`, before the check existed, the same shape failed the cells
+themselves.
+
+**Suite:** 3,123 / 3,123 on the final tree (`scripts/test.sh`, Debug,
+269 s); 1 disabled test did not run.
+
+**Overhead: not measured; it is measured at the milestone's close**
+(BA-S17). At `cores = 1` the change adds one thread-local read and one
+acquire load per `WriteBack`.
