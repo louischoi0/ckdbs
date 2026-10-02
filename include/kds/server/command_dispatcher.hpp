@@ -1351,9 +1351,9 @@ private:
     // The forward check for one foreign key and one written value (§2),
     // **answered from what the extraction pass already resolved** (§2a,
     // AH-T1). OK when the value is not an id at all - the row codec has the
-    // better error for that. A violation gives back the parent's `S`,
-    // whoever took it (AZ-S5, AZ-R5 as amended 2026-10-02; `foreign-keys.md`
-    // §2c).
+    // better error for that. A violation gives back the `S` of every parent
+    // the statement resolved as absent, whoever took it (AZ-S5, AZ-R5 as
+    // amended 2026-10-02; `foreign-keys.md` §2c).
     //
     // One arm descends here: a **self-referencing** foreign key, which
     // `ResolveForeignKeyParents` deliberately does not hoist. It holds the

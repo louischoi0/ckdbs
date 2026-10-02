@@ -465,18 +465,17 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Foreign keys
 
-- **A failed statement keeps the `S` on every other absent parent it
-  resolved.** Found by the review of AZ-R5's amendment on
-  `worktree-az-q3-release-any-failed-check` at `7ce9718`; read, not run.
-  The hoist resolves every row's parents before any row is written, and a
-  violation gives back only the failing check's `S`
-  (`foreign-keys.md` §2c). In `BEGIN; INSERT INTO c VALUES (99), (98)`
-  with both absent, row 1 fails and `S(98)` stays to the rollback, so an
-  insert of 98 waits and is refused `TxnConflict` at the 1 s fault net.
-  **Cost: a refusal, bounded by the client's rollback**, never a wrong
-  answer. Giving back every `kViolation` verdict's `S` at the failure is
-  the same argument as the amendment's, and **the operator's** to mark.
-  **Owner: none.**
+- **A statement that fails for any reason but a foreign-key violation keeps
+  every absent parent's `S` it resolved.** Found by the review of AZ-R5's
+  second amendment on `worktree-az-q3b-release-every-absent-parent` at
+  `e2340c4`; read, not run. The hoist takes the parents' `S` before any row
+  is written, and only a failed foreign-key check gives the absent ones back
+  (`foreign-keys.md` §2c). In `BEGIN; INSERT INTO c VALUES (5, 10), (6, 98)`
+  where `c` row 5 exists, row 1 fails on its key and `S(98)` stays to the
+  rollback; an assertion refusal or the cap mid-hoist does the same. **Cost:
+  a refusal, bounded by the client's rollback**, never a wrong answer.
+  Giving them back at the statement's failure exit is the same argument,
+  and **the operator's** to mark. **Owner: none.**
 - **The borrow ledger's `Holds` is a linear scan, and D9(a) asks it more.**
   Every parent `S` and the `IS` above it go through `BorrowChain`, whose
   intention test scans the transaction's holdings, beside the row `X`s the

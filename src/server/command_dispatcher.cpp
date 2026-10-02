@@ -3482,16 +3482,32 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kViolation:
             break;
     }
-    // **The absent parent's `S` goes with the violation, whoever took it**
-    // (AZ-S5, AZ-R5 as amended 2026-10-02): it protects no row, and kept it
-    // refused every insert of that parent until the client's `ROLLBACK`
-    // (`foreign-keys.md` §2c says why it is sound). A row `X` this
-    // transaction holds is untouched, and nothing held is a no-op.
-    // **The relation's `IS` stays**: the statement's other parent rows stand
-    // under it, and without it a relation `X` could be granted over them.
+    // **Every absent parent's `S` goes with the violation, whoever took it**
+    // (AZ-S5, AZ-R5 as amended 2026-10-02): this one's, and every other the
+    // statement resolved as absent, whose rows it never reaches. None
+    // protects a row, and kept they refused every insert of those parents
+    // until the client's `ROLLBACK` (`foreign-keys.md` §2c says why it is
+    // sound). A present parent's `S` stays, and a row `X` this transaction
+    // holds is untouched; nothing held is a no-op.
+    // **The relation's `IS` stays**: the statement's present parent rows
+    // stand under it, and without it a relation `X` could be granted over
+    // them.
+    // One pass over the ledger, whatever the count (`LockTable::ReleaseIf`).
+    // The failing key is named on its own for the self-referencing arm,
+    // whose verdict is not in `held`; any other is in `held` already.
     if (locks_ != nullptr && scope.txn != nullptr) {
-        locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(fk.rel_oid, parent_pk),
-                           txn::LockMode::kShared, scope.txn->borrows());
+        const txn::LockKey failing = txn::LockKey::Tuple(fk.rel_oid, parent_pk);
+        locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
+                          [&](const txn::LockHoldings::Held& h) {
+                              if (h.mode != txn::LockMode::kShared ||
+                                  h.key.unit != txn::LockUnit::kTuple) {
+                                  return false;
+                              }
+                              if (h.key == failing) return true;
+                              const exec::FkVerdict* verdict = held.Find(h.key.rel_oid, h.key.lo);
+                              return verdict != nullptr &&
+                                     *verdict == exec::FkVerdict::kViolation;
+                          });
     }
     return Status::FkViolation("'" + column + "' references row id=" +
                                std::to_string(value.int_val) + " of '" +
