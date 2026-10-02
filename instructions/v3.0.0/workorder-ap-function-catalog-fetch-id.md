@@ -780,3 +780,57 @@ every accepted row, on every path it listed. Applied:
 - **The cabin optimizer's candidate pick.** `RecordOptimizerSignals` takes
   the lowest filtered column as a step's Cabin candidate, and that can now
   be a function's argument. This costs, and does not answer wrongly.
+
+### AP-S5 — the close, 2026-10-02
+
+On `worktree-ap-s5-close`, which merged AP-S4's branch over `origin/main`
+at `e7617b2` (BA-S0, documents only), giving `0c3268f`.
+
+| stage | what landed | commits | suite |
+|---|---|---|---|
+| AP-S0 | the order; opened with AP-Q0..Q5 marked as proposed | `2905ec6`, `8a1c017`, `f992e7e` | not executed (documents) |
+| AP-S1 | `fetch_id` | `6f32eab`, `5971270` | 3083/3083, then 3084/3084 |
+| AP-S2 | the trail and `sys.patterns` on `fetch_id`; version 1 → 2 | `749af9b`, `7fc2c57` | 3089/3089, then 3090/3090 |
+| AP-S3 | rule 0′ as wording, and the planted cell | `0fcdfcc`, `db5a5e6` | 3091/3091 |
+| AP-S4 | the function catalog, `DATE` and `NOW()`, the function conjunct | `010b8e0`, `c4b82e4` | 3108/3108, then 3111/3111 |
+
+**The overhead, measured once over the whole change** (`ck-tester`,
+`bench/v3.0.0/results-ap-s5-overhead-v2.7.0-606-g0c3268f.md`, committed at
+`795c9f0`). A = `4012617`, B = `c4b82e4`, Release built from `git archive`,
+`cores = 1`, `relaxed`, BTREE, interleaved.
+
+- **No resolvable cost** in these cells: the point `SELECT` (narrow or
+  wide select list), the pk `UPDATE`, and the walking `UPDATE`.
+- **One per-row cost** on a filter scan that rejects nearly every row:
+  - +1.35 / +4.65 / +79.2 µs at 1K / 10K / 60K rows, which is +1.0 /
+    +0.6 / +1.9 %, about 0.5–1.4 ns per examined row;
+  - 9, 8 and 9 of 10 pinned runs are positive;
+  - the line that carries it is not isolated.
+- **Using a function** (B only): `DATE(ts)` is about 18 ns per row dearer
+  than the same `BETWEEN`, and never uses an index on `ts`.
+- **Not measured:** `cores > 1`, `group` and `strict` durability, more than
+  one session, and the parked-write path.
+
+**What AP carries forward.**
+
+- **The scan's per-row cost.** Recorded here, unattributed. The candidates
+  are the `fn_residual` branch in `AcceptTupleAt` and `Step`'s larger
+  size.
+- **B3**, a quiet wrong answer that predates AP:
+  `docs/inflight/bugs/a-nested-uncorrelated-subquery-is-dropped.md`.
+  Owner: none.
+- **D1's fold, cover and monotone serving.** These are AQ's (AP-Q5,
+  AR1 §9.2). AQ's order is unwritten.
+- **The cabin optimizer's candidate pick.** It can now be a function's
+  argument. This costs, and does not answer wrongly.
+- **The `-j8` timeout** of `IdAllocationAcrossCores`, recorded in
+  `known-gaps.md`, Testing.
+- **Pre-existing, cited and not taken:** the `MutatePatternRow`
+  version-filter cell, and `RecordTrail`'s unreachable guard.
+- **Process.**
+  - `0c3268f` was pushed with `--no-verify` at the operator's word, so the
+    hook would not load the host during the measurement. Its engine is
+    `c4b82e4`'s, whose suite passed.
+  - This close was not reviewed by `critics-developer`.
+
+It cuts no tag.
