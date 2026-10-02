@@ -7,8 +7,8 @@ ratified (`raft-marks-2026-09-29.md` §5), and AZ-Q5 settled AP first
 (`raft-marks-2026-09-30.md` §16). AR1's status line says that settlement
 *"opens no letter"*; the word above is what opens this one.
 
-**This order is written, not opened.** Its §4 items are unmarked, and every
-stage waits for its own word. It cuts no tag; the v3.0.0 tag waits on M4
+**Opened as AP on 2026-10-02, with every §4 item marked as proposed**
+(`raft-marks-2026-10-02.md` §4). Every stage waits for its own word. It cuts no tag; the v3.0.0 tag waits on M4
 (`raft-marks-2026-09-30.md` §16).
 
 ## 0. What AP is
@@ -240,7 +240,7 @@ any of these could make it a key, a bound or a probe on `ts`, and the
 statement would return wrong rows with no error. **This is the one
 quiet-wrong surface AP itself opens.**
 
-## 2. Rulings — CLA's proposals, unmarked
+## 2. Rulings — CLA's proposals, marked as proposed 2026-10-02
 
 **AP-R1 — `fetch_id` is one more FNV state, fed only for a `SELECT`.**
 
@@ -404,10 +404,7 @@ an open item, and AP-S4's cells are its exit.
   S4 waits for AP-Q1 besides.
 - **AP-S5 is last.** The milestone's overhead is measured once over its
   whole code change (`raft-marks-2026-09-30.md` §8), from `4012617` to the
-  commit that closes it. If AP-Q1 is still unmarked when S1-S3 have
-  landed, CLA proposes that AP-S5 close over them and carry AP-S4. AQ then
-  opens with AP-S4 as its first stage, since AQ's expression shape needs a
-  `kImmutable` function anyway.
+  commit that closes it.
 
 ## 6. Row status
 
@@ -460,3 +457,23 @@ other session. AP-R1 now feeds the second state only for a `SELECT`, so a
 write pays nothing.
 
 **Rejected: none.**
+
+### AP opened, and §4 marked - 2026-10-02
+
+On *"CLA 제안대로 진행하고 main에 push해줘"*, every §4 item was marked as
+proposed (`raft-marks-2026-10-02.md` §4), and the order landed on `main`.
+
+- **Open, each on its own word:** AP-S1, S2, S3 and S5.
+- **AP-S4** is open too, since AP-Q1 named its functions: `DATE(timestamp)`
+  and `NOW()`.
+- **AP-S2 takes AP-Q2 (b).** The row is keyed by `fetch_id`, and
+  `kFingerprintVersion` moves 1 → 2. AP-S2's exit therefore gains three
+  things:
+  - the bump;
+  - the golden corpus re-pinned at version 2, with every `pattern_id`
+    value unchanged;
+  - a cell showing that a version-1 row is never found.
+- **AP-S4 builds no D1 fold** (AP-Q5). A `NOW()` statement is D0 to every
+  AP consumer.
+
+No stage has started.

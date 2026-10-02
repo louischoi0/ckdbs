@@ -25,3 +25,22 @@
 | **Reading** | An `S` on a parent the check reads as absent protects no row. While any `S` is held no other transaction can take the row's `X`, so the parent was absent at every grant, or this transaction deleted it under its own `X`, which the release does not touch. It closes the parked-statement gap AZ-S5's review found, and deletes the took-it test (`TookShare`, `LockHoldings::LastIs`) and the hoist's asked set |
 | **Does not settle** | anything else in D9(a) - the `S` a passing check takes is held to the decide as before |
 | **Recorded at** | `workorder-az-ay-carry-forward.md` §6, `foreign-keys.md` §2c, `known-gaps.md` (the entry deleted) |
+
+## 3. AP's order written
+
+| | |
+|---|---|
+| **Word** | *"b"*, answering CLA's three options with *"Write AP's work order (AP-S0) from AR1 §14"* |
+| **Mark** | `workorder-ap-function-catalog-fetch-id.md` is written: AP-S0 on `worktree-ap-s0-order` from `4012617`, reviewed at `8a1c017` |
+| **Does not settle** | the letter's opening and its §4 items (§4 below) |
+| **Recorded at** | the order's §6 |
+
+## 4. AP opened, and its six items marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"CLA 제안대로 진행하고 main에 push해줘"* |
+| **Mark** | AP-Q0..Q5 are marked as CLA proposed them (`workorder-ap-function-catalog-fetch-id.md` §4). **AP-Q0:** AP opens, and the trail's re-key to `fetch_id` is AP's, not AR's "Waystone re-key". **AP-Q1:** the first functions are `DATE(timestamp) → date` (`kImmutable`, with a cover) and `NOW()` (`kStable`), on the column side of a WHERE conjunct only; no `kVolatileRow` function ships. **AP-Q2 (b):** the existing row is keyed by `fetch_id` and `kFingerprintVersion` moves 1 → 2. **AP-Q3:** `InvalidArgument` for a name not in the catalog. **AP-Q4:** the wire's `pattern_id` stays the statement's. **AP-Q5:** D1's fold is deferred to AQ |
+| **Amends** | AR1 D6 ("`SysPatternRow` gains `fetch_id`") and AR1-3's "`kFingerprintVersion` does not move", both by AP-Q2 (b); AR1-2's D1 fold is deferred to AQ by AP-Q5. The `pattern_id` values do not move |
+| **Does not settle** | any AP stage's start - each waits for its own word; AQ's and AR's letters; the v3.0.0 tag, which waits on M4 |
+| **Recorded at** | the order's §4 and §6, AR1's status line, the index row |
