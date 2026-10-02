@@ -835,3 +835,26 @@ the S on any failed check, as the review proposed"*
   undecided delete either way.
 - **Docs.** `foreign-keys.md` §2c and §5 restated, and the CLAUDE.md
   Foreign keys row.
+- **The suite** at `7ce9718`: 3075/3075 under `-j8`. The change removes
+  work from the passing path, so it has no overhead of its own to measure.
+- **The review** (`critics-developer`, on `7ce9718`) found no correctness
+  bug. The soundness argument holds under both isolation levels, for a
+  parent inserted or deleted by the transaction itself, for the Cabin's
+  reliance on the `S`, and for `ReleaseOne` beside a held `X`.
+  - **Taken:**
+    - the argument's unstated premise - every check runs before its row is
+      placed, and a failure poisons the transaction - now in §2c;
+    - the stale test header, and the "since AZ-S5" attributions of the
+      amended behaviour;
+    - §2c's zero-row `UPDATE` sentence;
+    - the own-delete cell checks the lock table as well as the ledger, and
+      a new cell holds the parent at both `S` and `X` - the one shape where
+      the release removes something beside an `X`. Two mutants, both
+      killed: the row `X` given back too (both cells), and the table's
+      release ignoring the mode (the own-delete cell);
+    - the source comment trimmed to a pointer at §2c.
+  - **Recorded, the operator's** (`known-gaps.md`, Foreign keys): a failed
+    statement keeps the `S` on every *other* absent parent its hoist
+    resolved, whose rows it never reached - `INSERT INTO c VALUES (99),
+    (98)` with both absent keeps `S(98)`. The amendment's argument covers
+    it, but the mark named the failed check, and this goes further.

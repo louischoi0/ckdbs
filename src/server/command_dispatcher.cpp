@@ -3481,17 +3481,12 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
             break;
     }
     // **The absent parent's `S` goes with the violation, whoever took it**
-    // (AZ-S5; the operator's mark of 2026-10-02, `raft-marks-2026-10-02.md`
-    // §2). Kept, it refused every insert of that parent until the client's
-    // `ROLLBACK`, and it protects no row: while any `S` is held no other
-    // transaction can take the row's `X`, so a parent the check reads as
-    // absent was absent at every grant - no child of this transaction
-    // references it - or was deleted by this transaction under its own `X`,
-    // which stays. An `S` taken by an earlier statement, or by this one's
-    // run before it parked, goes too. Nothing held is a no-op.
-    // **The relation's `IS` stays**: every other parent row of this
-    // statement stands under it, and without it a relation `X` - `DROP
-    // TABLE`, `CREATE INDEX` - could be granted over their `S`.
+    // (AZ-S5, AZ-R5 as amended 2026-10-02): it protects no row, and kept it
+    // refused every insert of that parent until the client's `ROLLBACK`
+    // (`foreign-keys.md` §2c says why it is sound). A row `X` this
+    // transaction holds is untouched, and nothing held is a no-op.
+    // **The relation's `IS` stays**: the statement's other parent rows stand
+    // under it, and without it a relation `X` could be granted over them.
     if (locks_ != nullptr && scope.txn != nullptr) {
         locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(fk.rel_oid, parent_pk),
                            txn::LockMode::kShared, scope.txn->borrows());

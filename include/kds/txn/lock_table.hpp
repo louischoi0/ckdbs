@@ -632,7 +632,8 @@ public:
     // **moves** (AO-S6e-b) - it takes the slice it is entering before letting
     // go of the one it is leaving, so the position is never unheld between
     // two pages; a child-row wait gives back a grant it did not need; and a
-    // foreign-key check that failed gives back the parent's `S` (AZ-S5).
+    // foreign-key check that failed gives back the parent's `S` (AZ-S5,
+    // AZ-R5 as amended 2026-10-02).
     void ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
                     LockHoldings& holdings);
 

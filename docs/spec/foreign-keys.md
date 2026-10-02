@@ -288,7 +288,7 @@ D9(a) is built as ratified, and its costs are the engine's:
   net, as AO-0 item 25 accepts for `DROP TABLE` (AY-Q4).
 - **An `UPDATE` that sets an fk column takes the `S` at the hoist**, before
   its walk, so one that matches no row still holds the parent it names
-  until its transaction decides.
+  until its transaction decides, or a later check on that key fails.
 - **A check that fails gives back the parent row's `S`, whoever took it**
   (AZ-S5; the operator's mark of 2026-10-02, `raft-marks-2026-10-02.md`
   §2). An absent parent answers `FK_VIOLATION`, which poisons the
@@ -297,13 +297,17 @@ D9(a) is built as ratified, and its costs are the engine's:
   nothing for a missing row either. **The `S` protects no row**: while any
   `S` is held no other transaction can take the row's `X`, so a parent the
   check reads as absent was absent at every grant - no child this
-  transaction wrote references it - or was deleted by this transaction under
-  its own `X`, which the release leaves alone. So an `S` taken by an earlier
+  transaction wrote references it, since every check runs before its row is
+  placed and a failed one poisons the transaction - or was deleted by this
+  transaction under its own `X`, which the release leaves alone. So an `S` taken by an earlier
   statement (a zero-row `UPDATE`'s) goes too, and so does one this
   statement's run took before it parked and ran again. **The relation's `IS`
   stays**, since the statement's other parent rows stand under it. The
   self-referencing arm releases the same way, and is unreachable while no
-  self-referencing key can be declared.
+  self-referencing key can be declared. **Only the failing check's `S`
+  goes**: other absent parents the hoist resolved for the same statement,
+  whose rows are never reached, keep theirs to the rollback
+  (`known-gaps.md`, Foreign keys).
 
 An existence-only unit that only a `DELETE` would take is not built; it is
 a change to AR2's units, and would be put forward as its own item if these
