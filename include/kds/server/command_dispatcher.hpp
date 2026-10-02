@@ -1849,9 +1849,11 @@ private:
     // statement must not re-mint it, or the rows it already wrote and the
     // rows it has yet to reach would be read under two views.
     DispatchOutcome DeleteInner(std::string_view line, WriteScope& scope,
-                                const txn::Snapshot& snapshot, WalkCursor resume_from);
+                                const txn::Snapshot& snapshot, WalkCursor resume_from,
+                                const exec::StatementContext& context);
     DispatchOutcome UpdateInner(std::string_view line, WriteScope& scope,
-                                const txn::Snapshot& snapshot, WalkCursor resume_from);
+                                const txn::Snapshot& snapshot, WalkCursor resume_from,
+                                const exec::StatementContext& context);
     DispatchOutcome HandleSync();
 
     // Runs the insert against whichever storage the relation uses, and

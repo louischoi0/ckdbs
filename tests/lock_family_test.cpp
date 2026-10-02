@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/functions.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
@@ -1996,6 +1997,46 @@ TEST_F(MidWalkWaitTest, ATenRowUpdateMeetingAHeldRowKeepsWhatItWroteAndWaits) {
     EXPECT_EQ(walk.out->response.rfind("UPDATED 10", 0), 0u)
         << "all ten rows under one snapshot: " << walk.out->response;
     EXPECT_EQ(RowsWith(1), 10);
+}
+
+// AP-S4 (the review of 010b8e0, B1): `NOW()` is one instant for the whole
+// statement, and a mid-walk park splits a statement into two compiles. Rows
+// 1-7 are a day before the pinned instant and rows 8-10 half a day after
+// it; the clock moves two days on while the statement waits at row 7. Read
+// against one instant the statement writes rows 1-7. Re-taken at the resume,
+// rows 8-10 would pass `ts < NOW()` too.
+TEST_F(MidWalkWaitTest, NowIsOneInstantAcrossAMidWalkPark) {
+    ASSERT_EQ(Local("CREATE TABLE tn (id int64, v int64, ts timestamp) BTREE").rfind("CREATED", 0),
+              0u);
+    for (int id = 1; id <= 10; ++id) {
+        const std::string ts = id <= 7 ? "'2026-10-01 00:00:00'" : "'2026-10-02 12:00:00'";
+        ASSERT_EQ(Local("INSERT INTO tn VALUES (" + std::to_string(id) + ", 0, " + ts + ")")
+                      .rfind("INSERTED", 0),
+                  0u);
+    }
+    // 2026-10-02 00:00:00 UTC, then 2026-10-04: epoch day 20728 and 20730.
+    constexpr std::int64_t kMicrosPerDay = 86'400LL * 1'000'000LL;
+    exec::ScopedStatementClockForTest clock(20728 * kMicrosPerDay);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tn SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    Started walk = Start("UPDATE tn SET v = 1 WHERE ts < NOW()", w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << "the statement did not park: " << walk.out->response;
+
+    clock.Set(20730 * kMicrosPerDay);
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+
+    ASSERT_TRUE(*walk.done) << "the wait never ended after the holder decided";
+    EXPECT_EQ(walk.out->response.rfind("UPDATED 7", 0), 0u)
+        << "the resume filtered against a later instant: " << walk.out->response;
+    EXPECT_NE(Local("ANALYZE SELECT id FROM tn WHERE v = 1").find("rows=7 "), std::string::npos);
 }
 
 TEST_F(MidWalkWaitTest, ACoarseDeclarationWaitsBeforeItWritesAnythingAndThenSucceeds) {

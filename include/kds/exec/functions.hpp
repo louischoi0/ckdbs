@@ -58,11 +58,28 @@ enum class DeterminismClass : std::uint8_t { kD0 = 0, kD1 = 1, kD2 = 2 };
 
 DeterminismClass ClassOf(Purity purity) noexcept;
 
-// The statement's own constants a function may read. Taken once per statement
-// by the compiler (step_compiler.cpp), so `NOW()` is one value however many
-// times a statement calls it and however many rows it filters.
+// The statement's own constants a function may read. Taken once per statement,
+// so `NOW()` is one value however many times a statement calls it and however
+// many rows it filters. **Once per statement, not once per compile**: a write
+// parked mid-walk (AO-S3b) is compiled again when it resumes, so the dispatcher
+// takes the context when the statement starts and carries it across the park
+// (Session::ParkedWrite).
 struct StatementContext {
     std::int64_t now_us = 0;  // microseconds since the epoch, UTC (types.md TY4)
+};
+
+// The context of a statement starting now: the wall clock, UTC.
+StatementContext StatementContextNow();
+
+// Pins what StatementContextNow() reads, for this object's lifetime - **tests
+// only**, so a cell can move the clock between a park and its resume.
+class ScopedStatementClockForTest {
+public:
+    explicit ScopedStatementClockForTest(std::int64_t now_us);
+    ~ScopedStatementClockForTest();
+    void Set(std::int64_t now_us);
+    ScopedStatementClockForTest(const ScopedStatementClockForTest&) = delete;
+    ScopedStatementClockForTest& operator=(const ScopedStatementClockForTest&) = delete;
 };
 
 // The most arguments an entry may take. The evaluator keeps a call's
@@ -84,7 +101,9 @@ struct FunctionEntry {
     std::uint32_t result_type_val = 0;
 
     // A NULL argument yields NULL before this is called, so it never sees one.
-    parser::AstValue (*evaluate)(std::span<const parser::AstValue> args,
+    // The arguments are the frame's own values, by pointer: this runs per
+    // filtered row, and a copy would copy each value's strings.
+    parser::AstValue (*evaluate)(std::span<const parser::AstValue* const> args,
                                  const StatementContext& context) = nullptr;
 };
 

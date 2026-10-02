@@ -220,9 +220,17 @@ StatusOr<AstValue> Parser::ParseValue() {
                                        "' is not bindable in the newline protocol (byte " +
                                        std::to_string(tok.byte_offset) + ")");
         default:
+            // A call where a value is read - a BETWEEN bound, a SET value,
+            // an INSERT value: understood and not built (AP-S4), refused by
+            // name rather than as a malformed value.
+            if (tok.type == TokenType::kIdent && lexer_.Peek().type == TokenType::kLParen) {
+                return Status::NotImplemented(
+                    "a function call is supported in a WHERE comparison only (byte " +
+                    std::to_string(tok.byte_offset) + ")");
+            }
             return Status::InvalidArgument(
                 "expected value (integer, number, 'string', or NULL), got '" +
-                std::string(Describe(tok)) + "'");
+                std::string(Describe(tok)) + "' (byte " + std::to_string(tok.byte_offset) + ")");
     }
 }
 
@@ -403,29 +411,35 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
     // and without it §2's correlated forms could not be spelled at all.
     // One token of lookahead separates the two: a value literal is never
     // an identifier, and an identifier is never a value.
+    cond.kind = PredicateKind::kCompareValue;
+    if (Status s = ParseComparisonRhs(cond); !s.ok()) return s;
+    return cond;
+}
+
+// One token of lookahead separates a column from a value: a value literal
+// is never an identifier, and an identifier is never a value. An
+// identifier with `(` after it is a call (raft-marks-2026-10-02.md §5:
+// `ts < NOW()`), and makes the whole condition a function comparison.
+Status Parser::ParseComparisonRhs(Condition& cond) {
     if (lexer_.Peek().type == TokenType::kIdent) {
         auto rhs = ParseColumnName();
         if (!rhs.ok()) return rhs.status();
-        // A call on the right (raft-marks-2026-10-02.md §5): `ts < NOW()`.
         if (StartsFunctionCall(rhs.value())) {
             auto call = ParseFunctionCall(std::move(rhs.value()));
             if (!call.ok()) return call.status();
             cond.kind = PredicateKind::kCompareFunction;
             cond.rhs_fn = std::move(call.value());
-            return cond;
+            return Status::OK();
         }
-        cond.kind = PredicateKind::kCompareValue;
         cond.rhs_kind = RhsKind::kColumn;
         cond.rhs_col = std::move(rhs.value());
-        return cond;
+        return Status::OK();
     }
-
     auto val = ParseValue();
     if (!val.ok()) return val.status();
-    cond.kind = PredicateKind::kCompareValue;
     cond.rhs_kind = RhsKind::kLiteral;
     cond.val = std::move(val.value());
-    return cond;
+    return Status::OK();
 }
 
 // `IS` is contextual - an unreserved word like REFERENCES, so it still
@@ -520,24 +534,7 @@ StatusOr<Condition> Parser::ParseFunctionComparison(Condition cond) {
         return Status::NotImplemented("a function call compared with a subquery (byte " +
                                       std::to_string(next.byte_offset) + ")");
     }
-    if (lexer_.Peek().type == TokenType::kIdent) {
-        auto rhs = ParseColumnName();
-        if (!rhs.ok()) return rhs.status();
-        if (StartsFunctionCall(rhs.value())) {
-            auto call = ParseFunctionCall(std::move(rhs.value()));
-            if (!call.ok()) return call.status();
-            cond.rhs_fn = std::move(call.value());
-            return cond;
-        }
-        cond.rhs_kind = RhsKind::kColumn;
-        cond.rhs_col = std::move(rhs.value());
-        return cond;
-    }
-
-    auto val = ParseValue();
-    if (!val.ok()) return val.status();
-    cond.rhs_kind = RhsKind::kLiteral;
-    cond.val = std::move(val.value());
+    if (Status s = ParseComparisonRhs(cond); !s.ok()) return s;
     return cond;
 }
 

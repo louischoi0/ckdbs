@@ -81,7 +81,8 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 // predicate can be checked against it. Predicates carrying subqueries are
 // Unsupported here until V18.
 // Returns a one-relation Step carrying the clause: `residual` for the
-// ordinary conjuncts and `sub_chains` for the subquery ones.
+// ordinary conjuncts, `fn_residual` for the function conjuncts (AP-S4) and
+// `sub_chains` for the subquery ones.
 //
 // Every sub-chain is attached to the step, including uncorrelated ones -
 // so an uncorrelated subquery is re-evaluated per row here, where a SELECT
@@ -95,11 +96,17 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 // already resolved by the caller, but the subqueries this lowers bind
 // relations of their own, and a write statement's *read* of another
 // relation is a read like any other (AT-R1).
+//
+// `context` is the statement's (exec/functions.hpp): a write parked mid-walk
+// recompiles on its resume and must hand the same one back, or `NOW()` would
+// filter the rows after the park against a later instant. Null takes a fresh
+// one, which is right for a statement compiled once.
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
                             const std::vector<parser::Condition>& where,
                             const txn::ReadView* view = nullptr,
-                            PositionSink* declare = nullptr);
+                            PositionSink* declare = nullptr,
+                            const StatementContext* context = nullptr);
 
 // Resolve an UPDATE's SET list against the relation, before any storage is
 // touched (keystoneid-invariant.md K-M3).

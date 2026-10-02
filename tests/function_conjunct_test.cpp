@@ -7,8 +7,11 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/functions.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
@@ -30,10 +33,11 @@
 namespace kds::server {
 namespace {
 
-parser::AstValue PlusOne(std::span<const parser::AstValue> args, const exec::StatementContext&) {
+parser::AstValue PlusOne(std::span<const parser::AstValue* const> args,
+                         const exec::StatementContext&) {
     parser::AstValue out;
     out.type = parser::ValueType::kInt;
-    out.int_val = args[0].int_val + 1;
+    out.int_val = args[0]->int_val + 1;
     return out;
 }
 
@@ -58,9 +62,13 @@ protected:
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
         recorder_.emplace(boot_->catalog, store_);
+        // A Cabin store, or `CREATE CABIN` below declares a Cabin nothing
+        // serves from and the Cabin cell walks every time.
+        cabins_.emplace();
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
-                            exec::Budget(), &*recorder_, /*replay=*/true);
+                            exec::Budget(), &*recorder_, /*replay=*/true,
+                            /*access_statistics=*/true, &*cabins_);
 
         Ok("CREATE TABLE t (id int64, v int64, k int64, sym varchar, ts timestamp NULL) BTREE");
         Ok("CREATE INDEX t_by_v ON t (v)");
@@ -95,6 +103,7 @@ protected:
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<stats::TrailRecorder> recorder_;
+    std::optional<stats::CabinStore> cabins_;
     std::optional<CommandDispatcher> dispatcher_;
 };
 
@@ -154,6 +163,10 @@ TEST_F(FunctionConjunctTest, BesideACabinedEqualityItStillFilters) {
     const std::string plain = "SELECT id FROM t WHERE sym = 'a' AND v = 30";
     EXPECT_EQ(Run(fn), Run(plain));
     EXPECT_EQ(Run(fn), Run(plain));
+    // And the Cabin is what served it, or this cell says nothing about one.
+    const std::string analyzed = Run("ANALYZE " + fn);
+    EXPECT_NE(analyzed.find("CabinProbe"), std::string::npos) << analyzed;
+    EXPECT_NE(analyzed.find("cabin_hits="), std::string::npos) << analyzed;
 }
 
 TEST_F(FunctionConjunctTest, OverAJoinColumnItIsNotAProbeOrABuild) {
@@ -188,6 +201,45 @@ TEST_F(FunctionConjunctTest, AFunctionArgumentReachingOutwardCorrelatesTheSubque
               Run("SELECT id FROM t WHERE id BETWEEN 2 AND 6"));
     EXPECT_EQ(Run("SELECT id FROM t WHERE EXISTS (SELECT id FROM u WHERE plus_one(u.w) = t.id)"),
               Run("SELECT id FROM t"));
+}
+
+// Placement, the other half of correlation: the sub-chain's only reference
+// into the outer chain's *second* step is a function conjunct's column,
+// `u.id`. It must run at that step, after u's row is in the frame;
+// `plus_one(x.w) = x.id` for every x, so the EXISTS holds for every joined
+// row.
+TEST_F(FunctionConjunctTest, ASubqueryReachingALaterStepOnlyThroughAFunctionRunsThere) {
+    exec::ScopedTestFunction plus_one(kPlusOne);
+    EXPECT_EQ(Run("SELECT t.id FROM t JOIN u ON t.id = u.id WHERE EXISTS "
+                  "(SELECT id FROM u AS x WHERE plus_one(x.w) = u.id)"),
+              Run("SELECT t.id FROM t JOIN u ON t.id = u.id"));
+}
+
+// One instant per statement, not per conjunct: every function conjunct in
+// a compiled chain carries the same context.
+TEST_F(FunctionConjunctTest, EveryConjunctInAStatementSharesOneInstant) {
+    auto parsed = parser::Parse(
+        "SELECT id FROM t WHERE ts < NOW() AND ts > NOW() AND EXISTS "
+        "(SELECT id FROM u WHERE DATE(t.ts) = '2026-10-01')");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    auto chain = exec::Compile(boot_->catalog, std::get<parser::SelectStmt>(parsed.value()));
+    ASSERT_TRUE(chain.ok()) << chain.status().message();
+    std::vector<std::int64_t> instants;
+    for (const exec::Step& step : chain.value().steps) {
+        for (const exec::FunctionPredicate& pred : step.fn_residual) {
+            instants.push_back(pred.context.now_us);
+        }
+        for (const exec::SubChain& sub : step.sub_chains) {
+            for (const exec::Step& inner : sub.steps) {
+                for (const exec::FunctionPredicate& pred : inner.fn_residual) {
+                    instants.push_back(pred.context.now_us);
+                }
+            }
+        }
+    }
+    ASSERT_EQ(instants.size(), 3u);
+    EXPECT_EQ(instants[0], instants[1]);
+    EXPECT_EQ(instants[0], instants[2]);
 }
 
 TEST_F(FunctionConjunctTest, APlanShowsAFunctionConjunctUnderItsOwnWord) {
@@ -262,9 +314,11 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
     const Case cases[] = {
         // AP-Q3: an unknown name is simply wrong, as an unknown column is.
         {"SELECT id FROM t WHERE nosuch(v) = 1", "unknown function 'nosuch' at byte 23"},
-        {"SELECT id FROM t WHERE DATE(v) = '2026-10-01'", "does not take column 'v'"},
+        {"SELECT id FROM t WHERE DATE(v) = '2026-10-01'",
+         "does not take column 'v': it is not of the argument's type at byte 28"},
         {"SELECT id FROM t WHERE DATE(ts, ts) = '2026-10-01'", "takes 1 argument(s), got 2"},
-        {"SELECT id FROM t WHERE DATE(ts) = 5000000", "at byte"},
+        {"SELECT id FROM t WHERE DATE(ts) = 5000000",
+         "a function comparison's literal at byte 34"},
         {"SELECT id FROM t WHERE v = NOW()", "different types at byte 27"},
         // Understood and not built.
         {"SELECT DATE(ts) FROM t", "NOT_IMPLEMENTED retryable=0 a function call is supported "
@@ -278,6 +332,11 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
         {"SELECT id FROM t WHERE DATE(ts) BETWEEN '2026-10-01' AND '2026-10-02'",
          "NOT_IMPLEMENTED"},
         {"SELECT id FROM t WHERE DATE(ts) IN (SELECT id FROM u)", "NOT_IMPLEMENTED"},
+        // A value position reads no call: named, not "expected value".
+        {"SELECT id FROM t WHERE ts BETWEEN NOW() AND NOW()",
+         "a function call is supported in a WHERE comparison only (byte 34)"},
+        {"UPDATE t SET k = NOW() WHERE id = 1",
+         "a function call is supported in a WHERE comparison only (byte 17)"},
         {"SELECT * FROM sys.tables WHERE DATE(oid) = '2026-10-01'",
          "a function call over a catalog view (byte"},
     };
@@ -295,6 +354,8 @@ TEST_F(FunctionConjunctTest, AnAggregatesNameInAPredicateIsNotAFunction) {
     EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
     EXPECT_EQ(reply.find("unknown function"), std::string::npos) << reply;
 }
+
+
 
 
 }  // namespace

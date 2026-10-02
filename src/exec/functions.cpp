@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <optional>
 #include <cctype>
 #include <cstdlib>
 #include <vector>
@@ -25,15 +27,17 @@ parser::AstValue IntValue(std::int64_t v) {
 
 // DATE(timestamp): the UTC day the instant falls on. **Floor**, not
 // truncation: 1969-12-31 23:00 is day -1, and C++'s `/` would give 0.
-parser::AstValue EvaluateDate(std::span<const parser::AstValue> args, const StatementContext&) {
-    const std::int64_t us = args[0].int_val;
+parser::AstValue EvaluateDate(std::span<const parser::AstValue* const> args,
+                              const StatementContext&) {
+    const std::int64_t us = args[0]->int_val;
     std::int64_t days = us / kMicrosPerDay;
     if (us % kMicrosPerDay < 0) --days;
     return IntValue(days);
 }
 
 // NOW(): the statement's instant, the same for every call in it.
-parser::AstValue EvaluateNow(std::span<const parser::AstValue>, const StatementContext& context) {
+parser::AstValue EvaluateNow(std::span<const parser::AstValue* const>,
+                             const StatementContext& context) {
     return IntValue(context.now_us);
 }
 
@@ -51,6 +55,12 @@ static_assert(std::all_of(kBuiltins.begin(), kBuiltins.end(),
 std::vector<const FunctionEntry*>& TestEntries() {
     static std::vector<const FunctionEntry*> entries;
     return entries;
+}
+
+// ScopedStatementClockForTest's pin; empty means the wall clock.
+std::optional<std::int64_t>& PinnedClock() {
+    static std::optional<std::int64_t> pinned;
+    return pinned;
 }
 
 bool IEquals(std::string_view a, std::string_view b) noexcept {
@@ -81,6 +91,24 @@ const FunctionEntry* FindFunction(std::string_view name) noexcept {
     }
     return nullptr;
 }
+
+StatementContext StatementContextNow() {
+    StatementContext out;
+    if (PinnedClock().has_value()) {
+        out.now_us = *PinnedClock();
+        return out;
+    }
+    out.now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count();
+    return out;
+}
+
+ScopedStatementClockForTest::ScopedStatementClockForTest(std::int64_t now_us) {
+    PinnedClock() = now_us;
+}
+ScopedStatementClockForTest::~ScopedStatementClockForTest() { PinnedClock().reset(); }
+void ScopedStatementClockForTest::Set(std::int64_t now_us) { PinnedClock() = now_us; }
 
 ScopedTestFunction::ScopedTestFunction(const FunctionEntry& entry) {
     // A test entry is held to the same bound the built-ins are asserted to.
