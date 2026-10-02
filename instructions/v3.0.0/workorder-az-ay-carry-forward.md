@@ -876,3 +876,24 @@ back the S on every absent parent too"* (`raft-marks-2026-10-02.md` §3).
   - every resolved parent's `S`, present ones included: the intention cell.
 - **Docs.** `foreign-keys.md` §2c restated and the CLAUDE.md Foreign keys
   row; the `known-gaps.md` entry is deleted.
+- **The suite** at `e2340c4`: 3077/3077 under `-j8`.
+- **The review** (`critics-developer`, on `e2340c4`) found no correctness
+  bug: every `kViolation` entry was granted its `S` and belongs to a row
+  never reached, every caller builds a fresh set per run, and a repeated
+  release does nothing.
+  - **Taken**: the failure path released each absent parent with its own
+    `ReleaseOne`, a back-scan and a mid-vector erase each, O(k x ledger) for
+    k absent parents - the class of cost the close measured in `HoldsRow`.
+    `LockTable::ReleaseIf` gives them back in one pass over the ledger, and
+    `ForEachViolation` went with it. **Not measured**: the single pass is
+    taken because it is O(ledger) and no more code. Four mutants, all
+    killed: the failing key only, present parents too, any mode (the row
+    `X` given back), no release. Also taken: the
+    dispatcher and lock-table comments, §2c's `IS` and zero-row `UPDATE`
+    sentences, and the index row for `raft-marks-2026-10-02.md`.
+  - **Recorded, the operator's** (`known-gaps.md`, Foreign keys): a
+    statement that fails for any reason but a foreign-key violation - its
+    own key, an assertion, the cap - keeps every absent parent's `S` to the
+    rollback.
+  - **Not taken**: removing `FkParentVerdicts`' unused `collected` flag and
+    `size`/`empty` - dead before this change, and outside it.

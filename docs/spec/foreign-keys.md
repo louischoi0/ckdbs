@@ -288,7 +288,8 @@ D9(a) is built as ratified, and its costs are the engine's:
   net, as AO-0 item 25 accepts for `DROP TABLE` (AY-Q4).
 - **An `UPDATE` that sets an fk column takes the `S` at the hoist**, before
   its walk, so one that matches no row still holds the parent it names
-  until its transaction decides, or a later check on that key fails.
+  until its transaction decides, or a later statement that resolves the key
+  as absent fails its check.
 - **A check that fails gives back the parent row's `S`, whoever took it**
   (AZ-S5; the operator's mark of 2026-10-02, `raft-marks-2026-10-02.md`
   §2). An absent parent answers `FK_VIOLATION`, which poisons the
@@ -302,14 +303,15 @@ D9(a) is built as ratified, and its costs are the engine's:
   transaction under its own `X`, which the release leaves alone. So an `S` taken by an earlier
   statement (a zero-row `UPDATE`'s) goes too, and so does one this
   statement's run took before it parked and ran again. **The relation's `IS`
-  stays**, since the statement's other parent rows stand under it. The
+  stays**, since the statement's present parent rows stand under it. The
   self-referencing arm releases the same way, and is unreachable while no
   self-referencing key can be declared. **Every absent parent the statement
   resolved goes with it** (`raft-marks-2026-10-02.md` §3): the hoist
   resolves every row's parents before any row is written, so a statement
   naming two absent parents holds both and fails at the first; the second's
   row is never reached, and its `S` protects no row either. A present
-  parent's `S` stays.
+  parent's `S` stays. They go in one pass over the ledger
+  (`LockTable::ReleaseIf`), O(ledger) however many there are.
 
 An existence-only unit that only a `DELETE` would take is not built; it is
 a change to AR2's units, and would be put forward as its own item if these

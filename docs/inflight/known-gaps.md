@@ -465,6 +465,17 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Foreign keys
 
+- **A statement that fails for any reason but a foreign-key violation keeps
+  every absent parent's `S` it resolved.** Found by the review of AZ-R5's
+  second amendment on `worktree-az-q3b-release-every-absent-parent` at
+  `e2340c4`; read, not run. The hoist takes the parents' `S` before any row
+  is written, and only a failed foreign-key check gives the absent ones back
+  (`foreign-keys.md` §2c). In `BEGIN; INSERT INTO c VALUES (5, 10), (6, 98)`
+  where `c` row 5 exists, row 1 fails on its key and `S(98)` stays to the
+  rollback; an assertion refusal or the cap mid-hoist does the same. **Cost:
+  a refusal, bounded by the client's rollback**, never a wrong answer.
+  Giving them back at the statement's failure exit is the same argument,
+  and **the operator's** to mark. **Owner: none.**
 - **The borrow ledger's `Holds` is a linear scan, and D9(a) asks it more.**
   Every parent `S` and the `IS` above it go through `BorrowChain`, whose
   intention test scans the transaction's holdings, beside the row `X`s the

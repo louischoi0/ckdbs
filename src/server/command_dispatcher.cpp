@@ -3490,13 +3490,22 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     // **The relation's `IS` stays**: the statement's present parent rows
     // stand under it, and without it a relation `X` could be granted over
     // them.
+    // One pass over the ledger, whatever the count (`LockTable::ReleaseIf`).
+    // The failing key is named on its own for the self-referencing arm,
+    // whose verdict is not in `held`; any other is in `held` already.
     if (locks_ != nullptr && scope.txn != nullptr) {
-        const auto give_back = [&](catalog::Oid rel, std::uint64_t pk) {
-            locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(rel, pk),
-                               txn::LockMode::kShared, scope.txn->borrows());
-        };
-        give_back(fk.rel_oid, parent_pk);
-        held.ForEachViolation(give_back);
+        const txn::LockKey failing = txn::LockKey::Tuple(fk.rel_oid, parent_pk);
+        locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
+                          [&](const txn::LockHoldings::Held& h) {
+                              if (h.mode != txn::LockMode::kShared ||
+                                  h.key.unit != txn::LockUnit::kTuple) {
+                                  return false;
+                              }
+                              if (h.key == failing) return true;
+                              const exec::FkVerdict* verdict = held.Find(h.key.rel_oid, h.key.lo);
+                              return verdict != nullptr &&
+                                     *verdict == exec::FkVerdict::kViolation;
+                          });
     }
     return Status::FkViolation("'" + column + "' references row id=" +
                                std::to_string(value.int_val) + " of '" +
