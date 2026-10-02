@@ -627,10 +627,10 @@ private:
         replayed_ = false;
         if (replay_ == nullptr) co_return Status::OK();
 
-        // Rule 0 is **this lookup**. The index is keyed on (step_id, pk) and
-        // `key` was just re-derived from the current outer row, so an entry
-        // is only found by matching it. There is no separate check to
-        // forget, which is what the P13 amendment asks for.
+        // Rule 0 is **this lookup** (spec section 2 rule 0, the driving step
+        // included). The index is keyed on (step_id, pk) and `key` was just
+        // derived for this step, so an entry is only found by matching it.
+        // There is no separate check to forget.
         const TrailLocation* at = replay_->Find(step.step_id, key);
         if (at == nullptr) co_return Status::OK();
 
@@ -644,6 +644,8 @@ private:
         // are all the same answer here - the caller descends - which is
         // deliberate: a caller that could tell them apart would be tempted
         // to treat one of them as authoritative.
+        // Verified against the derived `key`, not an entry pk - the
+        // location carries none - which is rule 0's second hold.
         VerifiedTuple verified =
             VerifyTupleAt(store_, at->page_id, at->slot, key, at->page_epoch);
         if (!verified.ok()) {

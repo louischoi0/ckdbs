@@ -618,3 +618,59 @@ Rejected:
   stage.
 - **A `MutatePatternRow` version-filter cell.** The gap predates the stage
   and belongs in `catalog_test.cpp`. It is recorded here, not taken.
+
+### AP-S3 — built 2026-10-02
+
+On `worktree-ap-s3-rule-0-prime` from `7fc2c57`, on *"main에 push하고 AP-S3 시작해줘"*.
+
+- **The wording.** `waystone-concpets.md` §2 rule 0 now covers every
+  replayed step, the driving step included, where it said "any join
+  replay". `parser-v2.md` I17 and its `Lookup` row say the same.
+- **No code change.** The code already met the rule. Two comments were
+  corrected (`trail_replay.hpp`, `step_vm.cpp`), so the exit's "no `src/`
+  change" holds for code and not for comments.
+- **What mutation found.** The rule is held twice, and the spec now says
+  so:
+  - the replay index finds an entry only by the key the step derived;
+  - `TryReplay` verifies the location against that same derived key,
+    since a `TrailLocation` carries no pk.
+  - So rule 1's sentence now names the derived key. **This goes beyond
+    AP-R3's wording**, which named the index key alone. The second hold is
+    a fact of the code that mutation surfaced, not ratified text.
+- **The cell.** `ADrivingEntryForAnotherKeyIsNeverFoundEvenWhereItIsValid`
+  plants, under row 3's instance key, an entry for row 5 at row 5's real
+  location and epoch. It asserts the reply, and that the entry is neither
+  served nor found.
+- **Mutants.**
+  - `Find` ignoring its key: killed by this cell.
+  - The verifier's pk check removed: killed by
+    `AWrongKeystoneAtTheTargetIsAMissNotAWrongRow`.
+  - Both together: killed by this cell.
+- **Suite.**
+  - 3091/3091 at `0fcdfcc`.
+  - After the review, the first full run failed
+    `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence` at
+    its 20 s timeout, as in AP-S2. The rerun was 3091/3091.
+  - The flake is now recorded in `known-gaps.md`, Testing.
+  - All runs used `ctest -LE heap-suspended -j8`, Debug. Overhead not
+    measured; it is measured at AP-S5.
+
+**The review** (`critics-developer`, on `0fcdfcc`, read-only) confirmed
+every claim the commit made about `src/`. It found no code defect. Applied:
+
+- **The cell claimed more than it asserted.** It showed "never served",
+  not "never found". It now also asserts no `trail_misses=`, which is what
+  kills the `Find` mutant that had survived.
+- **`EntryOf` copies the entry's `page_epoch`.** It planted epoch 0, which
+  matched current pages only by coincidence.
+- **Rule 1 contradicted the new rule 0.** It said "the entry's `pk`"; it
+  now names the derived key.
+- **Provenance and history** were removed from the rule's text, and
+  "driving row" became "outer row", so it no longer collides with "driving
+  step".
+- **I17's mechanism sentence** now cites rule 0 instead of restating it.
+- **Test comments.** The `arg_hash`-collision caveat is added, the
+  re-plant's reason corrected, and the comment trimmed to the spec
+  citation and the mutants it kills.
+
+**Rejected: none.**

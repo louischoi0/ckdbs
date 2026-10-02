@@ -58,7 +58,7 @@ Every SELECT-class statement compiles to a **step chain**: an ordered list of st
 
 | Kind | Authoritative work | Trail-replayable? |
 |---|---|---|
-| `Lookup` | pk-equality descent (constant or bound param) | **yes** — completeness follows from pk uniqueness |
+| `Lookup` | pk-equality descent (constant or bound param) | **yes** — completeness follows from pk uniqueness, **and only under rule 0** (I17) |
 | `Probe` | pk-equality descent keyed by a value produced by an earlier step or outer row | **yes** — same argument, per producing row, **and only under rule 0** (I17) |
 | `Range` | pk range via the leaf chain | no — search; prefetch only |
 | `Scan` | heap chain or full scan with a predicate | no — search; prefetch only |
@@ -181,11 +181,11 @@ NULL is storable (`docs/spec/null.md`), and comparison is three-valued. The eval
 - **`Exists` replay is positive-only**, and the asymmetry is the whole point: a validated witness *proves* non-emptiness, because presence has a witness. A missing or invalid witness proves nothing and the probe runs. A trail can never conclude absence.
 
 **I17 — Rule 0: the key must be re-derived, at every replayed step.**
-Before a trail entry for a `Probe` step may be trusted, the executor derives the probe key from the **current** producing row it has in hand and requires it to equal the entry's `pk`. A mismatch is a miss for that step alone. **The driving step is under the same rule** (AR1's rule 0′, AP-S3): a `Lookup`'s entry is found only by the key the step derives from this execution's own values, so a trail recorded under another driving key is never consulted, whatever the instance key that led to it.
+Before a trail entry for a `Probe` step may be trusted, the executor derives the probe key from the **current** producing row it has in hand and requires it to equal the entry's `pk`. A mismatch is a miss for that step alone. **The driving step is under the same rule** (AR1's rule 0′): a `Lookup`'s key is derived from the statement's own values, and an entry filed under another key is turned away whatever instance key led to it.
 
 Without it, replay is a wrong-answer generator, and no other rule catches it. Suppose the producing row's join column was updated from 77 to 91 between recording and replay. The entry for pk 77 passes every other check in `waystone-concpets.md` §2 — `rel_oid` matches, the Keystone id at the recorded slot is 77, the epoch matches, MVCC says visible — because **every other rule validates the trail against storage and none of them looks at the query**. `UPDATE` overwrites in place and keeps `(page_id, slot)`, so nothing about the producing row looks stale. The join would emit row 77; the correct answer is row 91.
 
-The check is free at runtime: the producing row is already decoded by R1 and the probe key is already a resolved `ColumnRef`. It is `waystone-concpets.md` §2's rule 0, built as the replay index's lookup key (`include/kds/exec/trail_replay.hpp`, keyed on `(step_id, pk)`), so an entry can only be found by matching the freshly derived key and there is no separate check to forget.
+The check is free at runtime: the producing row is already decoded by R1 and the probe key is already a resolved `ColumnRef`. How it is held - the replay index's key and rule 1's check against the derived key - is `waystone-concpets.md` §2 rule 0's.
 
 ## 7. Executor
 

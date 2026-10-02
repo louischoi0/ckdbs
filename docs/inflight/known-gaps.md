@@ -53,6 +53,21 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
+- **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
+  times out under `-j8`, twice in one day.**
+  - **The failures.** On `worktree-ap-s2-trail-on-fetch-id` at `7fc2c57`'s
+    tree, and again on `worktree-ap-s3-rule-0-prime` at `0fcdfcc` plus
+    comment edits, one full Debug suite each failed the cell's
+    `KickUntil(..., 20000ms)` (`tests/id_allocation_across_cores_test.cpp:74`)
+    after about 21 s. Neither stage touches the insert path the cell drives.
+  - **The reruns.** The cell then passed 10/10 alone, and the next full
+    suite was green both times.
+  - **What a failure cannot say.** The wait's message does not say which
+    writer had not finished, or how far it got. So a slow host cannot be
+    told apart from a writer that stopped.
+  - **Owner: none.** The bound was not widened, since no cause has been
+    observed.
+
 - **An expeditor's `Start()` failed once under `-j8` and did not
   reproduce.** On `ay-s2-containment-wake` at `33b9433`, one full Debug
   suite failed `ExpeditorTest.AtOneCoreTheDispatcherHoldsTheInstancesLockTable`
