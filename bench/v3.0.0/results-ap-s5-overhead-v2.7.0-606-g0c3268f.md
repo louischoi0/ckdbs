@@ -13,6 +13,12 @@ shapes: it has no earlier kdbs number to read against, and **this file is the
 baseline the next run of this driver is read against**. A is the baseline inside
 the run.
 
+**B − A is not AP alone** (the close's review). `4012617..c4b82e4` also carries
+AZ-R5's engine commits `7ce9718`, `878f40a`, `e2340c4` and `9439497` (a failed
+foreign-key check gives back its parent `S`), which touch `fk_check.hpp`,
+`lock_table.hpp` and the dispatcher. Their path is foreign-key only and no cell
+here reaches it; they count only under the code-layout reading below.
+
 **The short answer.** `cores = 1`, `relaxed`, BTREE, one session, a fresh
 server and data file per (cell, run). B − A is the median over runs of the
 per-run difference of the client p50, with the pinned series (servers on CPU 2,
@@ -23,7 +29,7 @@ client on CPU 4; see *Noise*) beside the control that cannot be affected by AP
 |---|---|---|---|---|---|---|---|
 | C1 | `SELECT * FROM ap_t WHERE id = <k>`, literal differs per statement, 82 µs | 200 / 1,000 / 10,000 | +0.05 / +0.35 / +0.20 µs (+0.1 / +0.4 / +0.2 %) | +0.20 / +0.40 / 0.00 µs | −0.20 / +0.25 / −0.10 µs | −0.05 / +0.25 / +0.05 µs | **no cost resolvable**: inside the control's spread |
 | C2 | the same with ten named columns (the skipped window), 83 µs | 200 / 1,000 / 10,000 | +0.30 / +0.15 / +0.35 µs | +0.80 / −0.10 / +0.40 µs | as above | (no repeat arm) | **no cost resolvable** |
-| C3 | `SELECT id FROM ap_s WHERE v = <x>`, unindexed, one match: 132 µs / 745 µs / 4,107 µs | 1,000 / 10,000 / 60,000 | **+1.35 / +4.65 / +79.2 µs** (+1.0 / +0.6 / +1.9 %), 9 / 8 / 9 of 10 runs positive | +2.0 / +12.2 / +56.7 µs (IQR at 60,000 −14.9 to +94.8) | 0.00 / 0.00 / +0.25 µs | +1.40 / +4.60 / +75.95 µs | **a per-row cost: +1.4 / +0.5 / +1.3 ns a row examined**, resolved only in the pinned series |
+| C3 | `SELECT id FROM ap_s WHERE v = <x>`, unindexed, one match: 132 µs / 745 µs / 4,107 µs | 1,000 / 10,000 / 60,000 | **+1.35 / +4.65 / +79.2 µs** (+1.0 / +0.6 / +1.9 %), 9 / 8 / 9 of 10 runs positive | +2.0 / +12.2 / +56.7 µs (IQR at 60,000 −14.9 to +94.8) | 0.00 / 0.00 / +0.25 µs | +1.40 / +4.60 / +75.95 µs | **a per-row cost: +1.4 / +0.5 / +1.3 ns a row examined**; the default series resolves it at 10,000 too (IQR +7.05 to +20.5, 13 of 15 positive) but not at 60,000 |
 | C4 | `UPDATE ap_t SET a1 = <n> WHERE id = <k>`, 51–52 µs | 200 / 1,000 / 10,000 | +0.15 / +0.35 / −0.10 µs | +0.20 / −0.10 / +0.10 µs | −0.20 / +0.25 / −0.10 µs | +0.15 / +0.40 / +0.05 µs | **at the floor**: at most +0.4 µs (0.8 %), the control's size |
 | C4 | `UPDATE ap_t SET a2 = <n> WHERE v = <7k>`, walks N rows, one match: 67 µs / 128 µs / 801 µs | 200 / 1,000 / 10,000 | −0.05 / −0.15 / −3.70 µs | −0.30 / −0.80 / −9.00 µs | as above | (no repeat arm) | **no cost**; the walk's per-row cost of C3 does not show here |
 | info | `WHERE DATE(ts) = '<day>'` against `ts BETWEEN '<day> 00:00:00' AND '<day> 23:59:59.999999'`, B only | 1,000 / 10,000 / 60,000 | not a delta; see *Information only* | | | | DATE() 17.6 / 18.4 / 19.3 ns a row dearer than the same range as a scan; a `BETWEEN` can take an index, a function conjunct never does |
@@ -45,14 +51,28 @@ B − A = +1.4, +0.5 and +1.3 ns for each row it examines at 1,000, 10,000 and
 positive, IQR +37.5 to +109.4 µs)**, all of it inside the engine (the engine's
 own time rose by +80 µs of 4,016 µs, the client's by +75 µs). The cost is
 real in sign and small in size, it does not grow linearly with the row count
-(0.47 ns at 10,000 against 1.3 ns at 60,000), and the run does not identify
-which line of `AcceptTupleAt` or `FilterColumnsOf`/`ReadColumnsOf` carries it.
+(0.47 ns at 10,000 against 1.3 ns at 60,000), and **no line AP added runs on a
+rejected row**: `AcceptTupleAt`'s `fn_residual` test sits after the residual's
+reject (`src/exec/step_vm.cpp:2280` at `c4b82e4`), and `FilterColumnsOf`/
+`ReadColumnsOf` run at compile only. Unattributed; code layout is the reading
+left (the close's review).
 It does not show in the `UPDATE` that walks (−3.7 µs of 801 µs at 10,000 rows),
 whose per-row work is the same walk. Measured at one core, `relaxed`, one
 serial session; nothing here says what `group` or `strict` durability, more
 than one core or more than one session do to any of it.
 
 ---
+
+
+**Rule 4 and the exclusion rule, as run** (the close's review). The per-cell
+`/proc/loadavg` and `pgrep` evidence is in the archive's `host.txt`, not tabled
+in this file as the README asks - a departure, kept rather than regenerated. A
+run was excluded when its one-minute load after the cell exceeded 1.3 or a
+competing process was seen. `point-n200-run14` went out on an after-load of
+1.36 (kept runs reached 1.23). `pin-scan-n60000-run3` had a
+`cmake --build -j8` from `ba-s1-peer-writeback-gate` running before the cell
+started (the pair script's 180 s wait ran out). The excluded pinned-scan runs
+read −181 µs at 60,000 rows and +11.7 µs at 10,000, and are in no number above.
 
 ## What was measured
 
@@ -228,7 +248,7 @@ which is the same number again and so is a repeat and not an independent
 control; the independent control is `ping` (0.00 / 0.00 / +0.25 µs). The cost
 is not linear in rows: 0.37 ns a row between 1,000 and 10,000 and 1.5 ns a row
 between 10,000 and 60,000. At 60,000 rows the relation is ~3 MB of tuples and
-about six times what it is at 10,000, so a term that touches more memory per row (the `Step` is larger by a vector; `FilterColumnsOf`/`ReadColumnsOf` now walk `fn_residual`) would grow faster than the row count; that is a reading, not a measurement, and a different code layout would move it as well. The run did not isolate it (no profile, no
+about six times what it is at 10,000. No line AP added runs per rejected row (the `fn_residual` test follows the residual's reject at `step_vm.cpp:2280`; the column masks are compile-time), so what is left is the `Step` grown by a vector and code layout - a reading, not a measurement. The run did not isolate it (no profile, no
 mutated build). The default-placement series agrees in sign and mean but its IQR
 crosses zero at 60,000 rows because the slow-mode runs add ±100–600 µs
 (+572 and +613 µs in one run), which is why the pinned series carries the
@@ -394,10 +414,9 @@ reads 2.1× (170.5 against 80.6 µs). The repeated `fn-date` arm reads −0.4 / 
 - **The one measurable cost is per row, and it is the walk.** +0.5 to +1.4 ns a
   row examined on a statement that rejects nearly every row, engine-side
   (+80 µs of 4,016 µs at 60,000 rows), 0.6–1.9 % of the scan. AP-R2/AP-R4 did not
-  predict a per-row term for statements with no function in them; the test
-  `step.fn_residual.empty()` after the residual in `AcceptTupleAt` is the line
-  that changed on this path, and the run neither confirms nor excludes it as the
-  cause.
+  predict a per-row term for statements with no function in them, and no line
+  AP added runs on a rejected row (`step_vm.cpp:2280`); the cost is
+  unattributed, with code layout the reading left.
 - **Waystone now shares one trail between select lists, as AP-R2 says.** A probe on both engines (`waystone-probe/probe2.txt`, `SHOW PATTERNS`) shows A registering one pattern per select list (two lists, two patterns, two waystone roots, 149 and 445) and B registering one `fetch_id` pattern whose `uses` count accumulates both lists' statements (1,207 after 1,506 statements, the first ~300 not counted). When a shape registers was not isolated: the first list took between 299 and 598 statements on both engines, A's second under 30. The point cells' timings are taken with those rows registered on both sides.
 - **A function costs what it forecloses.** See above: ~18 ns a row as a post-filter,
   5–6× a keyed range when an index on the column could have served the
