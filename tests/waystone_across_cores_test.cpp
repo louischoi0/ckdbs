@@ -77,10 +77,12 @@ TEST(WaystoneAcrossCores, APeersRepeatedStatementRegistersItsPattern) {
     rig->Start();
     for (int round = 0; round < 8; ++round) {
         OneShot peer;
-        // A **different** shape from core 0's: one pattern row per shape,
+        // A **different** fetch from core 0's: one pattern row per fetch,
         // so the peer re-running core 0's would move a `use_count` and no
-        // row count.
-        peer.statement = "SELECT v FROM r0 WHERE id = 1";
+        // row count. A different select list alone is not enough since
+        // AP-S2 - it shares core 0's row - so the `LIMIT` makes the fetch
+        // differ and leaves the step a keyed lookup that records.
+        peer.statement = "SELECT v FROM r0 WHERE id = 1 LIMIT 1";
         rig->core(1).scheduler().Submit(sched::MakeCoroTask(
             sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), peer)));
         ASSERT_TRUE(KickUntil(*rig, 1, [&] { return peer.done.load(std::memory_order_acquire); },

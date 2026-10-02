@@ -37,9 +37,9 @@ std::uint8_t TrailRecorder::Observe(const InstanceKey& key) {
     return count;
 }
 
-const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t pattern_id,
+const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t fetch_id,
                                                            std::uint8_t stmt_class) {
-    if (auto found = catalog_.FindPattern(pattern_id); found.ok()) return found.value();
+    if (auto found = catalog_.FindPattern(fetch_id); found.ok()) return found.value();
 
     // Not registered - so this shape has now been seen enough times to be
     // worth a catalog row.
@@ -54,7 +54,7 @@ const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t pattern
     // version (waystone-concpets.md section 4): absences are never cached,
     // so no cached entry claims this pattern is missing, and the
     // `const TableAccess*` the running statement is holding cannot dangle.
-    auto registered = catalog_.RegisterPattern(pattern_id, stmt_class);
+    auto registered = catalog_.RegisterPattern(fetch_id, stmt_class);
     if (!registered.ok()) return nullptr;
     ++stats_.patterns_registered;
     return registered.value();
@@ -88,7 +88,7 @@ StatusOr<std::pair<PageId, std::uint8_t>> TrailRecorder::EnsureDirectory(
     // winner's rather than repointing the row at its own, which would
     // strand every trail already written into the first. The loser's page
     // is leaked, and a leaked page is what every unreferenced page here is.
-    auto claimed = catalog_.ClaimPatternWaystoneRoot(pattern.pattern_id, root.value(), 1);
+    auto claimed = catalog_.ClaimPatternWaystoneRoot(pattern.fetch_id, root.value(), 1);
     if (!claimed.ok()) return claimed.status();
     return claimed.value();
 }
@@ -124,7 +124,7 @@ void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCol
     // about to repeat.
     if (!WouldRecord(seen)) return;
 
-    const catalog::PatternAccess* pattern = EnsurePattern(key.pattern_id, stmt_class);
+    const catalog::PatternAccess* pattern = EnsurePattern(key.fetch_id, stmt_class);
     if (pattern == nullptr) {
         ++stats_.write_failures;
         return;
@@ -153,7 +153,7 @@ void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCol
     // Heat last, and its failure is ignored for the same reason: these
     // counters rank patterns for retention and nothing reports them, so a
     // dropped bump loses a statistic rather than a trail.
-    (void)catalog_.TouchPattern(key.pattern_id, now);
+    (void)catalog_.TouchPattern(key.fetch_id, now);
 }
 
 }  // namespace kds::stats

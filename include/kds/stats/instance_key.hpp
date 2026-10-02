@@ -6,18 +6,25 @@
 // The identity of one **pattern instance**: a statement shape with its
 // arguments bound (docs/spec/waystone-concpets.md sections 1 and 5).
 //
-//   pattern_id   the shape, from parse (parser/fingerprint.hpp)
+//   fetch_id     the shape the trail is keyed on, from parse
+//                (parser/fingerprint.hpp): the statement's pattern_id with
+//                the leading SELECT's select list left out (AP-S2)
 //   arg_hash     the arguments bound into it
 //
 // A waystone is keyed on the pair, and neither half means anything alone: a
-// `pattern_id` names a shape that may have millions of instances, and an
+// `fetch_id` names a shape that may have millions of instances, and an
 // `arg_hash` is a hash of some arguments with no statement attached.
+//
+// **Not the statement's pattern_id.** Two statements differing only in
+// their select list fetch the same tuples by the same path, so they share
+// a trail; the cabin optimizer and `ANALYZE` keep the statement's own
+// pattern_id, which this type does not carry.
 //
 // ---- Why this is a type and not two parameters ---------------------------
 //
 // Both halves are `std::uint64_t`, so every signature that took them
-// positionally - `WaystonePageHolds(page, pattern_id, arg_hash)`,
-// `FormatWaystonePage(page, pattern_id, arg_hash, ts)`, the directory walk,
+// positionally - `WaystonePageHolds(page, fetch_id, arg_hash)`,
+// `FormatWaystonePage(page, fetch_id, arg_hash, ts)`, the directory walk,
 // and every recorder/replayer entry point still to be written - accepted
 // them in either order and compiled cleanly when swapped. The failure that
 // produces is quiet in exactly the wrong way: a swapped pair still hashes,
@@ -36,7 +43,7 @@
 namespace kds::stats {
 
 struct InstanceKey {
-    std::uint64_t pattern_id = 0;
+    std::uint64_t fetch_id = 0;
     std::uint64_t arg_hash = 0;
 
     // Defaulted rather than written out: the identity of an instance is
@@ -47,7 +54,7 @@ struct InstanceKey {
 
 // For the core-local hash tables the recorder and the sighting counter will
 // key by instance. Mixed with the same odd-multiplier fold the standard
-// library's own pair hashing uses in spirit, rather than XOR: `pattern_id ^
+// library's own pair hashing uses in spirit, rather than XOR: `fetch_id ^
 // arg_hash` collapses to 0 for the (impossible today, but not guarded)
 // case where they are equal, and more usefully it loses the ordering that
 // makes this type worth having.
@@ -58,7 +65,7 @@ struct InstanceKey {
 // hash would invite someone to persist it later.
 struct InstanceKeyHash {
     std::size_t operator()(const InstanceKey& key) const noexcept {
-        std::uint64_t h = key.pattern_id * 0x9E3779B97F4A7C15ull;
+        std::uint64_t h = key.fetch_id * 0x9E3779B97F4A7C15ull;
         h ^= key.arg_hash + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
         return static_cast<std::size_t>(h);
     }

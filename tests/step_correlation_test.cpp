@@ -24,7 +24,7 @@
 //         correlation values read through the frame stack.
 //
 // That is structural, not a heuristic - which matters beyond tidiness.
-// The chain layout is a pure function of the AST, hence of pattern_id, and
+// The chain layout is a pure function of the AST, hence of fetch_id, and
 // a Waystone trail is recorded against it. A placement that varied with a
 // cost estimate would make a recorded trail describe a shape the next
 // execution does not have.

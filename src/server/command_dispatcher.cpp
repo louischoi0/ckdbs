@@ -1594,11 +1594,13 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
     os << "patterns=" << rows.value().size();
 
     for (const catalog::SysPatternRow& row : rows.value()) {
-        // pattern_id in hex, because it is a hash: the decimal form of a
+        // fetch_id in hex, because it is a hash: the decimal form of a
         // 64-bit fingerprint is 20 unreadable digits, and the thing an
-        // operator does with this value is compare it to another one.
-        os << "\\n" << "pattern_id=0x" << std::hex << row.pattern_id << std::dec
-           << " oid=" << row.oid;
+        // operator does with this value is compare it to another one -
+        // `ANALYZE`'s `fetch_id=` (AP-S2). A version-1 row was keyed by the
+        // statement's pattern_id, and is labelled with what it holds.
+        os << "\\n" << (row.fingerprint_version == 1 ? "pattern_id=0x" : "fetch_id=0x")
+           << std::hex << row.fetch_id << std::dec << " oid=" << row.oid;
 
         // Origin and pinning are separate fields and are printed
         // separately, which is how the row stores them (rows.hpp). Both
@@ -3480,16 +3482,32 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kViolation:
             break;
     }
-    // **The absent parent's `S` goes with the violation, whoever took it**
-    // (AZ-S5, AZ-R5 as amended 2026-10-02): it protects no row, and kept it
-    // refused every insert of that parent until the client's `ROLLBACK`
-    // (`foreign-keys.md` §2c says why it is sound). A row `X` this
-    // transaction holds is untouched, and nothing held is a no-op.
-    // **The relation's `IS` stays**: the statement's other parent rows stand
-    // under it, and without it a relation `X` could be granted over them.
+    // **Every absent parent's `S` goes with the violation, whoever took it**
+    // (AZ-S5, AZ-R5 as amended 2026-10-02): this one's, and every other the
+    // statement resolved as absent, whose rows it never reaches. None
+    // protects a row, and kept they refused every insert of those parents
+    // until the client's `ROLLBACK` (`foreign-keys.md` §2c says why it is
+    // sound). A present parent's `S` stays, and a row `X` this transaction
+    // holds is untouched; nothing held is a no-op.
+    // **The relation's `IS` stays**: the statement's present parent rows
+    // stand under it, and without it a relation `X` could be granted over
+    // them.
+    // One pass over the ledger, whatever the count (`LockTable::ReleaseIf`).
+    // The failing key is named on its own for the self-referencing arm,
+    // whose verdict is not in `held`; any other is in `held` already.
     if (locks_ != nullptr && scope.txn != nullptr) {
-        locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(fk.rel_oid, parent_pk),
-                           txn::LockMode::kShared, scope.txn->borrows());
+        const txn::LockKey failing = txn::LockKey::Tuple(fk.rel_oid, parent_pk);
+        locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
+                          [&](const txn::LockHoldings::Held& h) {
+                              if (h.mode != txn::LockMode::kShared ||
+                                  h.key.unit != txn::LockUnit::kTuple) {
+                                  return false;
+                              }
+                              if (h.key == failing) return true;
+                              const exec::FkVerdict* verdict = held.Find(h.key.rel_oid, h.key.lo);
+                              return verdict != nullptr &&
+                                     *verdict == exec::FkVerdict::kViolation;
+                          });
     }
     return Status::FkViolation("'" + column + "' references row id=" +
                                std::to_string(value.int_val) + " of '" +
@@ -5892,8 +5910,8 @@ StatusOr<std::size_t> ResolveViewColumn(const exec::CatalogView& view,
 // `catalog_view.cpp`'s `Int()` casts it into `int_val` and keeps the
 // digits in `raw_int_text` - so comparing `int_val` signed puts every
 // value above INT64_MAX below every value under it. `sys.patterns`
-// carries exactly such a column: a `pattern_id` is a full-range 64-bit
-// fingerprint, and `WHERE pattern_id < 100` answered every id with the
+// carries exactly such a column: a `fetch_id` is a full-range 64-bit
+// fingerprint, and `WHERE fetch_id < 100` answered every id with the
 // top bit set. The value renders correctly all the while, because
 // `FormatValue` reads the digits - so the view showed a number and then
 // refused to compare it as that number.
@@ -5969,7 +5987,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     // a view can answer, does this column exist - and asking them inside
     // the row loop made the *refusal* depend on how many rows the catalog
     // happened to hold. `SELECT * FROM sys.patterns WHERE oid =
-    // pattern_id` answered a header on a fresh instance, because the loop
+    // fetch_id` answered a header on a fresh instance, because the loop
     // never ran, and refused over `sys.tables`, because it did. A refusal
     // that data can silence is not a refusal.
     std::vector<std::size_t> where_at;
@@ -6090,7 +6108,7 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 DispatchOutcome CommandDispatcher::RunAggregated(
     ResultSink& sink, TextResultSink& text_sink, const exec::StepChain& chain,
     exec::TrailCollector* trail, const exec::TrailReplay* replay,
-    const std::optional<stats::InstanceKey>& instance, const txn::Snapshot& snapshot,
+    const std::optional<StatementIdentity>& identity, const txn::Snapshot& snapshot,
     exec::PositionSink& borrow) {
     if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names, aggregate_limits_);
         !s.ok()) {
@@ -6141,7 +6159,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // Recorded after a *complete* execution, and unconditionally - the fold
     // is downstream of all three, so an aggregated statement records the
     // trail, the access shape and the signals its unaggregated twin would.
-    RecordExecution(instance, trail, chain, exec_stats_);
+    RecordExecution(identity, trail, chain, exec_stats_);
     return {text_sink.Take(), false};
 }
 
@@ -6156,7 +6174,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
 DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                                               exec::TrailCollector* trail,
                                               const exec::TrailReplay* replay,
-                                              const std::optional<stats::InstanceKey>& instance,
+                                              const std::optional<StatementIdentity>& identity,
                                               const txn::Snapshot& snapshot,
                                               exec::PositionSink& borrow) {
     exec::ExecStats stats;
@@ -6238,7 +6256,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         sorter_.Finish();
         exec::DrainSorted(quota, sorter_.rows(), [&](const exec::OutputSort::Row&) { ++rows; });
     }
-    RecordExecution(instance, trail, chain, stats);
+    RecordExecution(identity, trail, chain, stats);
 
     const exec::StepStats total = stats.Total();
     std::ostringstream os;
@@ -6262,15 +6280,18 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         os << " sorted=" << sorter_.rows().size();
     }
 
-    // The statement's own pattern_id, in the same hex `SHOW PATTERNS`
-    // lists a row under. That is what makes "which observed pattern did
-    // this statement match" answerable by comparing two numbers - no trail
-    // recorder has to exist for the comparison to be meaningful.
+    // The statement's own pattern_id, and the fetch_id its trail is keyed
+    // by - the hex `SHOW PATTERNS` lists a row under (AP-S2). The second is
+    // what makes "which recorded trail does this statement use" answerable
+    // by comparing two numbers, with no trail recorder needed for the
+    // comparison to mean something; the first is the shape the cabin
+    // optimizer counts.
     //
-    // Taken from the instance the caller already identified - which came
-    // from the parse, not from a second lex of `sql`.
-    if (instance.has_value()) {
-        os << " pattern_id=0x" << std::hex << instance->pattern_id << std::dec;
+    // Taken from the identity the caller already holds - which came from
+    // the parse, not from a second lex of `sql`.
+    if (identity.has_value()) {
+        os << " pattern_id=0x" << std::hex << identity->pattern_id
+           << " fetch_id=0x" << identity->trail.fetch_id << std::dec;
     }
 
     os << "\\n";
@@ -6472,7 +6493,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     const bool waystone_usable =
         (recorder_ != nullptr || replay_enabled_) && exec::HasReplayableStep(compiled);
 
-    std::optional<stats::InstanceKey> instance;
+    std::optional<StatementIdentity> identity;
     // The optimizer's S1 widens this beyond Waystone's shape guard, and the
     // difference is the point: a *scan-only* statement is exactly the shape
     // whose decayed frequency the cabin optimizer's CREATE decision prices
@@ -6482,7 +6503,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // here costs nothing they did not already pay.
     if (waystone_usable || optimizer_signals_ != nullptr) {
         if (auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
-            instance = stats::InstanceKey{fingerprint->pattern_id, fingerprint->arg_hash};
+            identity = StatementIdentity{
+                stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
+                fingerprint->pattern_id};
         }
     }
 
@@ -6495,14 +6518,14 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // already had to be hoisted to avoid.
     replay_scratch_.Clear();
     const exec::TrailReplay* replay_ptr = nullptr;
-    if (replay_enabled_ && instance.has_value()) {
+    if (replay_enabled_ && identity.has_value()) {
         // Served from the catalog cache, so a pattern nobody has recorded
         // costs a hash lookup and stops here. `has_waystone_directory()` is
         // the authority on whether there is anything to walk (rows.hpp).
-        if (auto pattern = catalog_.FindPattern(instance->pattern_id);
+        if (auto pattern = catalog_.FindPattern(identity->trail.fetch_id);
             pattern.ok() && pattern.value()->has_waystone_directory()) {
             auto entries = stats::ReadTrail(page_store_, pattern.value()->waystone_root,
-                                            pattern.value()->dir_depth, *instance);
+                                            pattern.value()->dir_depth, identity->trail);
             // A trail that cannot be read is a trail that does not exist:
             // the statement descends, exactly as it did before there were
             // trails at all (invariant 8).
@@ -6521,7 +6544,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // regression on a point join before this was hoisted onto the
     // dispatcher. Clear() keeps the reservation.
     exec::TrailCollector* trail = nullptr;
-    if (recorder_ != nullptr && instance.has_value()) {
+    if (recorder_ != nullptr && identity.has_value()) {
         trail_scratch_.Clear();
         trail = &trail_scratch_;
     }
@@ -6532,7 +6555,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
     if (analyze) {
-        return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value().snap, borrow);
+        return RunAnalyze(compiled, trail, replay_ptr, identity, snapshot.value().snap, borrow);
     }
 
     // ---- AG1: the fold wraps the sink, and nothing else moves -----------
@@ -6544,7 +6567,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // and access statistics hold unchanged" a structural fact rather than a
     // list of things that were remembered.
     if (compiled.aggregated()) {
-        return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, instance,
+        return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, identity,
                              snapshot.value().snap, borrow);
     }
 
@@ -6670,7 +6693,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         if (!drained.ok()) return {ErrorReply(drained), false, 0, drained};
     }
 
-    RecordExecution(instance, trail, compiled, exec_stats_);
+    RecordExecution(identity, trail, compiled, exec_stats_);
 
     if (logging(LogLevel::kTrace)) {
         log_->Trace("query", "chain of " + std::to_string(compiled.steps.size()) +
@@ -6680,13 +6703,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     return {text_sink.Take(), false};
 }
 
-void CommandDispatcher::RecordExecution(const std::optional<stats::InstanceKey>& instance,
+void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& identity,
                                         exec::TrailCollector* trail,
                                         const exec::StepChain& chain,
                                         const exec::ExecStats& stats) {
-    RecordTrail(instance, trail, chain);
+    RecordTrail(identity, trail, chain);
     RecordAccessShapes(chain);
-    RecordOptimizerSignals(instance, chain, stats);
+    RecordOptimizerSignals(identity, chain, stats);
 }
 
 void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
@@ -6793,7 +6816,7 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
     }
 }
 
-void CommandDispatcher::RecordTrail(const std::optional<stats::InstanceKey>& instance,
+void CommandDispatcher::RecordTrail(const std::optional<StatementIdentity>& identity,
                                      exec::TrailCollector* trail,
                                      const exec::StepChain& chain) {
     // Never on the failure path - both callers reach here only after the
@@ -6801,17 +6824,17 @@ void CommandDispatcher::RecordTrail(const std::optional<stats::InstanceKey>& ins
     // collector that gathered nothing describes no trail, and writing an
     // empty one would replace a populated trail with nothing.
     if (recorder_ == nullptr || trail == nullptr || trail->empty()) return;
-    if (!instance.has_value()) return;
-    recorder_->OnPatternResult(*instance, *trail, exec::StoredStatementClass(chain.klass));
+    if (!identity.has_value()) return;
+    recorder_->OnPatternResult(identity->trail, *trail, exec::StoredStatementClass(chain.klass));
 }
 
-void CommandDispatcher::RecordOptimizerSignals(const std::optional<stats::InstanceKey>& instance,
+void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIdentity>& identity,
                                                const exec::StepChain& chain,
                                                const exec::ExecStats& stats) {
     // Success path only, like its two siblings, and only for a statement
     // with an identity - the fingerprint is the key the cost-benefit model
     // aggregates by, so a statement without one has nowhere to be counted.
-    if (optimizer_signals_ == nullptr || !instance.has_value()) return;
+    if (optimizer_signals_ == nullptr || !identity.has_value()) return;
 
     // The shape's cabin candidacy (§II.4's Σ_i linkage): a kCabinProbe step
     // names its Cabin outright; otherwise the first kFilterScan's filtered
@@ -6837,7 +6860,7 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<stats::Instan
             }
         }
     }
-    optimizer_signals_->NoteExecution(instance->pattern_id, stats.Total().pages_fetched,
+    optimizer_signals_->NoteExecution(identity->pattern_id, stats.Total().pages_fetched,
                                       candidate);
 }
 

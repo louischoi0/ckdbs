@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -631,11 +632,26 @@ public:
     // unwinds a grant it just published; a positioned reader's borrow
     // **moves** (AO-S6e-b) - it takes the slice it is entering before letting
     // go of the one it is leaving, so the position is never unheld between
-    // two pages; a child-row wait gives back a grant it did not need; and a
-    // foreign-key check that failed gives back the parent's `S` (AZ-S5,
-    // AZ-R5 as amended 2026-10-02).
+    // two pages; and a child-row wait gives back a grant it did not need.
     void ReleaseOne(std::uint64_t txn, const LockKey& key, LockMode mode,
                     LockHoldings& holdings);
+
+    // Releases every one of `holdings`' borrows `give_back` selects, in one
+    // pass over the ledger: O(ledger) however many go, where a `ReleaseOne`
+    // per borrow scans and erases from the middle each time. A failed
+    // foreign-key statement gives back its absent parents' `S` this way
+    // (AZ-S5, AZ-R5 as amended 2026-10-02).
+    template <typename Select>
+    void ReleaseIf(std::uint64_t txn, LockHoldings& holdings, Select&& give_back) {
+        auto& held = holdings.held_;
+        held.erase(std::remove_if(held.begin(), held.end(),
+                                  [&](const LockHoldings::Held& h) {
+                                      if (!give_back(h)) return false;
+                                      ReleaseHeld(txn, h);
+                                      return true;
+                                  }),
+                   held.end());
+    }
 
     // Removes the wake registration `TryAcquire` handed back, by the slot's
     // own identity: the waiter it names is not addressable by transaction

@@ -150,14 +150,18 @@ StatusOr<CatalogView> TypesView(catalog::Catalog& catalog) {
 
 StatusOr<CatalogView> PatternsView(catalog::Catalog& catalog) {
     CatalogView view;
-    view.column_names = {"oid", "pattern_id", "fingerprint_version", "stmt_class", "use_count",
+    // `fetch_id`, not `pattern_id`, since AP-S2: the row is keyed by the
+    // fetch shape. A row of another `fingerprint_version` holds what that
+    // version keyed by - a version-1 row holds a pattern_id - and the
+    // version column beside it is how a reader tells.
+    view.column_names = {"oid", "fetch_id", "fingerprint_version", "stmt_class", "use_count",
                          "last_seen", "waystone_root", "dir_depth"};
 
     auto patterns = catalog.ListPatterns();
     if (!patterns.ok()) return patterns.status();
 
     for (const catalog::SysPatternRow& pattern : patterns.value()) {
-        view.rows.push_back({Int(pattern.oid), Int(pattern.pattern_id),
+        view.rows.push_back({Int(pattern.oid), Int(pattern.fetch_id),
                              Int(pattern.fingerprint_version), Int(pattern.stmt_class),
                              Int(pattern.use_count), Int(pattern.last_seen),
                              Int(pattern.waystone_root), Int(pattern.dir_depth)});

@@ -2700,7 +2700,7 @@ namespace {
 PatternAccess AccessOf(const SysPatternRow& row) noexcept {
     PatternAccess access{};
     access.oid = row.oid;
-    access.pattern_id = row.pattern_id;
+    access.fetch_id = row.fetch_id;
     access.fingerprint_version = row.fingerprint_version;
     access.waystone_root = row.waystone_root;
     access.stmt_class = row.stmt_class;
@@ -2740,12 +2740,12 @@ StatusOr<std::vector<SysPatternRow>> Catalog::ListPatterns() {
     return ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
 }
 
-StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t pattern_id) {
+StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t fetch_id) {
     auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
-        if (row.pattern_id != pattern_id) continue;
+        if (row.fetch_id != fetch_id) continue;
         // Rows from another fingerprint revision are invisible here, and
         // this is the only place that decision is made. Putting the filter
         // in the row lookup rather than in each caller is what stops a
@@ -2755,11 +2755,11 @@ StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t pattern_id) {
         if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) continue;
         return row;
     }
-    return Status::NotFound("no current sys.patterns row for this pattern_id");
+    return Status::NotFound("no current sys.patterns row for this fetch_id");
 }
 
-StatusOr<const PatternAccess*> Catalog::FindPattern(std::uint64_t pattern_id) {
-    if (const PatternAccess* cached = cache_.FindPattern(pattern_id); cached != nullptr) {
+StatusOr<const PatternAccess*> Catalog::FindPattern(std::uint64_t fetch_id) {
+    if (const PatternAccess* cached = cache_.FindPattern(fetch_id); cached != nullptr) {
         return cached;
     }
 
@@ -2767,13 +2767,13 @@ StatusOr<const PatternAccess*> Catalog::FindPattern(std::uint64_t pattern_id) {
     // revision arrives here as NotFound and never reaches the cache. That
     // ordering is the point: the cache holds current-version entries only,
     // by construction rather than by a check every reader has to remember.
-    auto row = GetSysPatternRow(pattern_id);
+    auto row = GetSysPatternRow(fetch_id);
     if (!row.ok()) return row.status();
 
     return cache_.PutPattern(AccessOf(row.value()));
 }
 
-StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id,
+StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t fetch_id,
                                                          std::uint8_t stmt_class) {
     // Read the page, not the cache: absences are never cached, so a cache
     // miss says nothing about whether the row exists. A row left behind by
@@ -2793,7 +2793,7 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
     auto held = store_.Get(kCatalogPagePatterns);
     if (!held.ok()) return held.status();
 
-    if (GetSysPatternRow(pattern_id).ok()) {
+    if (GetSysPatternRow(fetch_id).ok()) {
         return Status::AlreadyExists("catalog: this pattern is already registered");
     }
 
@@ -2802,7 +2802,7 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
 
     SysPatternRow row{};
     row.oid = oid.value();
-    row.pattern_id = pattern_id;
+    row.fetch_id = fetch_id;
     row.last_seen = 0;
     row.fingerprint_version = parser::kFingerprintVersion;
     row.waystone_root = kInvalidPageId;
@@ -2827,19 +2827,19 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
     // appearing (catalog.hpp states the argument, and the statement path
     // depends on it).
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("catalog", "registered pattern " + std::to_string(pattern_id) + " as oid " +
+        log_->Debug("catalog", "registered pattern " + std::to_string(fetch_id) + " as oid " +
                                    std::to_string(row.oid));
     }
     return cache_.PutPattern(AccessOf(row));
 }
 
-Status Catalog::MutatePatternRow(std::uint64_t pattern_id,
+Status Catalog::MutatePatternRow(std::uint64_t fetch_id,
                                   const std::function<void(SysPatternRow&)>& mutate) {
     auto acted = ForFirstRow<SysPatternRow>(
         store_, kCatalogPagePatterns,
         [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-        if (row.pattern_id != pattern_id) return false;
+        if (row.fetch_id != fetch_id) return false;
         // The same version filter GetSysPatternRow() applies, and for the
         // same reason: a row from another revision names a shape that is
         // not the one it claims, so it is not this pattern and must not be
@@ -2857,12 +2857,12 @@ Status Catalog::MutatePatternRow(std::uint64_t pattern_id,
         return true;
     });
     if (!acted.ok()) return acted.status();
-    if (!acted.value()) return Status::NotFound("no sys.patterns row for this pattern_id");
+    if (!acted.value()) return Status::NotFound("no sys.patterns row for this fetch_id");
     return Status::OK();
 }
 
 StatusOr<std::pair<PageId, std::uint8_t>> Catalog::ClaimPatternWaystoneRoot(
-    std::uint64_t pattern_id, PageId root, std::uint8_t depth) {
+    std::uint64_t fetch_id, PageId root, std::uint8_t depth) {
     if (Status s = CheckWaystonePair(root, depth); !s.ok()) return s;
 
     // **A claim, not a store** (AT-S7). Every core records trails now, so
@@ -2877,7 +2877,7 @@ StatusOr<std::pair<PageId, std::uint8_t>> Catalog::ClaimPatternWaystoneRoot(
     // it is how a directory is retired.
     PageId in_force = root;
     std::uint8_t depth_in_force = depth;
-    Status s = MutatePatternRow(pattern_id, [&](SysPatternRow& row) {
+    Status s = MutatePatternRow(fetch_id, [&](SysPatternRow& row) {
         const bool clearing = root == kInvalidPageId;
         if (!clearing && row.waystone_root != kInvalidPageId) {
             in_force = row.waystone_root;
@@ -2892,17 +2892,17 @@ StatusOr<std::pair<PageId, std::uint8_t>> Catalog::ClaimPatternWaystoneRoot(
     // Updated in place rather than invalidated, and only on success: a
     // failed overwrite moved nothing, and publishing the new pair into the
     // cache would make it disagree with the page.
-    cache_.UpdatePatternWaystone(pattern_id, in_force, depth_in_force);
+    cache_.UpdatePatternWaystone(fetch_id, in_force, depth_in_force);
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("catalog", "pattern " + std::to_string(pattern_id) +
+        log_->Debug("catalog", "pattern " + std::to_string(fetch_id) +
                                    " waystone root=" + std::to_string(in_force) +
                                    " depth=" + std::to_string(depth_in_force));
     }
     return std::make_pair(in_force, depth_in_force);
 }
 
-Status Catalog::TouchPattern(std::uint64_t pattern_id, std::uint64_t last_seen) {
-    return MutatePatternRow(pattern_id, [last_seen](SysPatternRow& row) {
+Status Catalog::TouchPattern(std::uint64_t fetch_id, std::uint64_t last_seen) {
+    return MutatePatternRow(fetch_id, [last_seen](SysPatternRow& row) {
         // Saturating, not wrapping: a use_count that rolled over would make
         // the hottest pattern in the database look like the coldest, which
         // is the one reading retention must never be handed.

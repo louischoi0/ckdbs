@@ -13,8 +13,8 @@
 // (docs/spec/waystone-concpets.md §§1, 6).
 //
 // A *pattern* is the shape of a statement, reduced at parse time to
-// `pattern_id`; a *pattern instance* is that shape with its arguments
-// bound, `(pattern_id, arg_hash)`. Executing an instance touches some set
+// `fetch_id`; a *pattern instance* is that shape with its arguments
+// bound, `(fetch_id, arg_hash)`. Executing an instance touches some set
 // of tuples, possibly across several relations. This page records their
 // Keystones and where each one was last seen, in execution order.
 //
@@ -67,8 +67,11 @@ struct WaystoneHeader {
     // purpose**: the directory that leads here is keyed by a hash of
     // `arg_hash`, so a collision can hand a reader the wrong page. These
     // two fields are what turn that into a miss instead of a wrong trail
-    // (see WaystonePageHolds below).
-    std::uint64_t pattern_id;
+    // (see WaystonePageHolds below). `fetch_id` is the instance key's shape
+    // half (instance_key.hpp); a page written before AP-S2 holds a
+    // pattern_id in these bytes, and a `SELECT`'s never equals its
+    // fetch_id, so such a page reads as a miss.
+    std::uint64_t fetch_id;
     std::uint64_t arg_hash;
 
     // Truncated logical timestamp of the execution that recorded this
@@ -90,7 +93,7 @@ struct WaystoneHeader {
     std::uint32_t reserved; // 0
 };
 
-inline constexpr std::size_t kWaystoneHeaderPatternIdOffset = 0;
+inline constexpr std::size_t kWaystoneHeaderFetchIdOffset = 0;
 inline constexpr std::size_t kWaystoneHeaderArgHashOffset = 8;
 inline constexpr std::size_t kWaystoneHeaderRecordedTsOffset = 16;
 inline constexpr std::size_t kWaystoneHeaderNextPageOffset = 24;
@@ -101,7 +104,7 @@ inline constexpr std::size_t kWaystoneHeaderReservedOffset = 36;
 // 8+8+8+4+4+2+2+4 = 40, every field naturally aligned, no tail padding.
 inline constexpr std::size_t kWaystoneHeaderSize = 40;
 
-static_assert(offsetof(WaystoneHeader, pattern_id) == kWaystoneHeaderPatternIdOffset);
+static_assert(offsetof(WaystoneHeader, fetch_id) == kWaystoneHeaderFetchIdOffset);
 static_assert(offsetof(WaystoneHeader, arg_hash) == kWaystoneHeaderArgHashOffset);
 static_assert(offsetof(WaystoneHeader, recorded_ts) == kWaystoneHeaderRecordedTsOffset);
 static_assert(offsetof(WaystoneHeader, next_page_id) == kWaystoneHeaderNextPageOffset);

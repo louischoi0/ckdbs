@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
@@ -210,6 +211,22 @@ const std::vector<std::string>& Queries() {
         "SELECT * FROM b WHERE id = 99 LIMIT 1",
         "SELECT label FROM b LIMIT 0",
         "SELECT a.label, c.w FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4 LIMIT 1",
+
+        // ---- One fetch, several select lists (AP-S2) -------------------
+        //
+        // A trail is keyed by `fetch_id`, so every statement below shares
+        // a trail with one above - `SELECT * FROM b WHERE id = 3` and its
+        // COUNT, the heap twin, and the join - and each is served from a
+        // trail another select list recorded. That is the claim AP-S2
+        // rests on (the order's §1.5: the chain does not read the
+        // projection), and these five configurations are where it is
+        // tested, including under the corrupted and deleted trails.
+        "SELECT label FROM b WHERE id = 3",
+        "SELECT v, id FROM b WHERE id = 3",
+        "SELECT label FROM h WHERE id = 3",
+        "SELECT MAX(v) FROM h WHERE id = 3",
+        "SELECT c.w FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
+        "SELECT COUNT(*) FROM h AS a JOIN j AS c ON a.id = c.id WHERE a.id = 6",
     };
     return kQueries;
 }
@@ -331,14 +348,20 @@ TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
     ASSERT_FALSE(patterns.value().empty());
 
     std::size_t poisoned = 0;
+    // Once per instance, not once per query: since AP-S2 several queries
+    // above share one `{fetch_id, arg_hash}`, and a second pass would read
+    // back the poisoned trail and flip each slot again - two passes put a
+    // slot-0 or slot-1 entry back where it was recorded.
+    std::unordered_set<stats::InstanceKey, stats::InstanceKeyHash> done;
     for (const catalog::SysPatternRow& row : patterns.value()) {
         if (!catalog::HasWaystoneDirectory(row)) continue;
         // Every instance of this pattern that we know how to name: the
         // queries above, re-fingerprinted.
         for (const std::string& sql : Queries()) {
             auto fp = parser::FingerprintOf(sql);
-            if (!fp.has_value() || fp->pattern_id != row.pattern_id) continue;
-            const stats::InstanceKey key{fp->pattern_id, fp->arg_hash};
+            if (!fp.has_value() || fp->fetch_id != row.fetch_id) continue;
+            const stats::InstanceKey key{fp->fetch_id, fp->arg_hash};
+            if (!done.insert(key).second) continue;
 
             auto existing = stats::ReadTrail(db.store(), row.waystone_root, row.dir_depth, key);
             ASSERT_TRUE(existing.ok());
@@ -455,9 +478,9 @@ TEST(WaystoneContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     ASSERT_TRUE(patterns.ok());
     bool checked = false;
     for (const catalog::SysPatternRow& row : patterns.value()) {
-        if (row.pattern_id != fp->pattern_id || !catalog::HasWaystoneDirectory(row)) continue;
+        if (row.fetch_id != fp->fetch_id || !catalog::HasWaystoneDirectory(row)) continue;
         auto trail = stats::ReadTrail(db.store(), row.waystone_root, row.dir_depth,
-                                      stats::InstanceKey{fp->pattern_id, fp->arg_hash});
+                                      stats::InstanceKey{fp->fetch_id, fp->arg_hash});
         ASSERT_TRUE(trail.ok());
         ASSERT_FALSE(trail.value().empty());
         for (const stats::WaystoneEntry& entry : trail.value()) {
@@ -520,7 +543,7 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
     auto patterns = db.catalog().ListPatterns();
     ASSERT_TRUE(patterns.ok()) << patterns.status().message();
     for (const catalog::SysPatternRow& row : patterns.value()) {
-        EXPECT_NE(row.pattern_id, fingerprint->pattern_id)
+        EXPECT_NE(row.fetch_id, fingerprint->fetch_id)
             << "the built join has a pattern row, so a build fed a trail";
     }
 
@@ -536,7 +559,7 @@ TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
     ASSERT_TRUE(after.ok()) << after.status().message();
     bool keyed_present = false;
     for (const catalog::SysPatternRow& row : after.value()) {
-        if (row.pattern_id == keyed_fp->pattern_id) keyed_present = true;
+        if (row.fetch_id == keyed_fp->fetch_id) keyed_present = true;
     }
     EXPECT_TRUE(keyed_present) << "nothing recorded at all, so the absence above proves nothing";
 }

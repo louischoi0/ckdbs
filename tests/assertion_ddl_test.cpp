@@ -235,7 +235,9 @@ TEST(AssertionDdlTest, AssertionDdlIsNotFingerprintedAndTheVersionDidNotMove) {
     // The version is pinned here as well as by the corpus, because this is
     // the assertion the workplan asks for in as many words: DML fingerprints
     // are unaffected by this change.
-    EXPECT_EQ(kFingerprintVersion, 1u);
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id without
+    // moving any hash (fingerprint.hpp); this change moved nothing either.
+    EXPECT_EQ(kFingerprintVersion, 2u);
 }
 
 // ---- Reserved and refused (AS11, AS3, AS7, §10) -------------------------

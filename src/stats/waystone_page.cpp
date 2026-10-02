@@ -35,7 +35,7 @@ void FormatWaystonePage(std::span<std::byte, kPageSize> page, const InstanceKey&
     storage::FormatPage(page, PageType::kWaystone);
 
     WaystoneHeader header{};
-    header.pattern_id = key.pattern_id;
+    header.fetch_id = key.fetch_id;
     header.arg_hash = key.arg_hash;
     header.recorded_ts = recorded_ts;
     header.next_page_id = kInvalidPageId;
@@ -52,7 +52,7 @@ void FormatWaystonePage(std::span<std::byte, kPageSize> page, const InstanceKey&
 WaystoneHeader ReadWaystoneHeader(std::span<const std::byte, kPageSize> page) {
     const std::size_t base = storage::kPageBodyOffset;
     WaystoneHeader h{};
-    h.pattern_id = Load<std::uint64_t>(page, base + kWaystoneHeaderPatternIdOffset);
+    h.fetch_id = Load<std::uint64_t>(page, base + kWaystoneHeaderFetchIdOffset);
     h.arg_hash = Load<std::uint64_t>(page, base + kWaystoneHeaderArgHashOffset);
     h.recorded_ts = Load<std::uint64_t>(page, base + kWaystoneHeaderRecordedTsOffset);
     h.next_page_id = Load<PageId>(page, base + kWaystoneHeaderNextPageOffset);
@@ -72,7 +72,7 @@ Status WriteWaystoneHeader(std::span<std::byte, kPageSize> page, const WaystoneH
     }
 
     const std::size_t base = storage::kPageBodyOffset;
-    Store<std::uint64_t>(page, base + kWaystoneHeaderPatternIdOffset, header.pattern_id);
+    Store<std::uint64_t>(page, base + kWaystoneHeaderFetchIdOffset, header.fetch_id);
     Store<std::uint64_t>(page, base + kWaystoneHeaderArgHashOffset, header.arg_hash);
     Store<std::uint64_t>(page, base + kWaystoneHeaderRecordedTsOffset, header.recorded_ts);
     Store<PageId>(page, base + kWaystoneHeaderNextPageOffset, header.next_page_id);
@@ -129,7 +129,7 @@ bool WaystonePageHolds(std::span<const std::byte, kPageSize> page,
     if (!storage::ValidatePageHeader(page, PageType::kWaystone).ok()) return false;
 
     const WaystoneHeader h = ReadWaystoneHeader(page);
-    return InstanceKey{h.pattern_id, h.arg_hash} == key;
+    return InstanceKey{h.fetch_id, h.arg_hash} == key;
 }
 
 }  // namespace kds::stats

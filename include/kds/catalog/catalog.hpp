@@ -702,7 +702,7 @@ public:
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
-    // The pattern `pattern_id` names, served from the cache after the first
+    // The pattern `fetch_id` names, served from the cache after the first
     // lookup. The pointer is reference-stable and stays valid until the
     // next Invalidate() - same contract as InitTableAccess().
     //
@@ -714,14 +714,14 @@ public:
     // been seen. The caller registers it afresh and the stale row becomes
     // garbage for retention to reclaim (P15). A version mismatch is never
     // an error - nothing about it should fail a statement.
-    StatusOr<const PatternAccess*> FindPattern(std::uint64_t pattern_id);
+    StatusOr<const PatternAccess*> FindPattern(std::uint64_t fetch_id);
 
     // Records a newly observed pattern and returns its cached access, so a
     // caller that just registered does not look it back up.
     //
     // **The version is stamped here, not passed in.** No caller has any
     // business recording a pattern under a revision other than the one
-    // that computed its `pattern_id`, so a version parameter could only
+    // that computed its `fetch_id`, so a version parameter could only
     // ever be passed wrong - and passing it wrong writes a row no build
     // will resolve. Removing the parameter is what makes "the cache holds
     // current-version entries only" true by construction.
@@ -744,7 +744,7 @@ public:
     // kUserOidStart every boot (well_known.hpp), which for a *persisted*
     // row means two patterns sharing an oid across a restart.
     //
-    // Fails with AlreadyExists if `pattern_id` is already registered at
+    // Fails with AlreadyExists if `fetch_id` is already registered at
     // the current version. A row left by an older revision does not count
     // as registered, so a version bump leaves every shape re-learnable
     // rather than permanently blocked.
@@ -755,7 +755,7 @@ public:
     // `origin` and `flags` were parameters until 2026-08-31: `CREATE
     // PATTERN` passed kOriginUser and kPatternPinned, and withdrawing
     // declared patterns left one caller and one value for each.
-    StatusOr<const PatternAccess*> RegisterPattern(std::uint64_t pattern_id,
+    StatusOr<const PatternAccess*> RegisterPattern(std::uint64_t fetch_id,
                                                     std::uint8_t stmt_class);
 
     // Points a pattern at its waystone directory, writing root and depth as
@@ -785,10 +785,10 @@ public:
     // caller holding a `const PatternAccess*` keeps a valid pointer and
     // sees the directory in force.
     //
-    // Fails with NotFound if no sys.patterns row carries `pattern_id`, and
+    // Fails with NotFound if no sys.patterns row carries `fetch_id`, and
     // with InvalidArgument for an incoherent pair. Page lifetime of the old
     // directory is the caller's business: this writes the row.
-    StatusOr<std::pair<PageId, std::uint8_t>> ClaimPatternWaystoneRoot(std::uint64_t pattern_id,
+    StatusOr<std::pair<PageId, std::uint8_t>> ClaimPatternWaystoneRoot(std::uint64_t fetch_id,
                                                                       PageId root,
                                                                       std::uint8_t depth);
 
@@ -815,8 +815,8 @@ public:
     // than wrapping - a wrapped count would make the hottest pattern look
     // cold.
     //
-    // Fails with NotFound when no current-version row carries `pattern_id`.
-    Status TouchPattern(std::uint64_t pattern_id, std::uint64_t last_seen);
+    // Fails with NotFound when no current-version row carries `fetch_id`.
+    Status TouchPattern(std::uint64_t fetch_id, std::uint64_t last_seen);
 
     // A `RetirePattern()` stood here - `DROP PATTERN`'s catalog half, and
     // the first path in the engine that removed a catalog row. It went with
@@ -827,7 +827,7 @@ public:
     //
     // **Unfiltered, unlike GetSysPatternRow()** - rows from another
     // fingerprint revision are included. That is not a hole in the version
-    // rule: the rule protects *lookup by pattern_id*, so a stale row can
+    // rule: the rule protects *lookup by fetch_id*, so a stale row can
     // never resolve as the pattern it names. This is an inspection surface,
     // and the stale rows are exactly what an operator wants to see - they
     // are the garbage a version bump left behind, waiting on retention.
@@ -859,7 +859,7 @@ public:
     // did not filter would let a stale row shadow the current one. Putting
     // the filter in the row lookup rather than in each caller is what
     // makes that impossible rather than merely unlikely.
-    StatusOr<SysPatternRow> GetSysPatternRow(std::uint64_t pattern_id);
+    StatusOr<SysPatternRow> GetSysPatternRow(std::uint64_t fetch_id);
 
     // Updates the desc_page_id field of table_oid's sys.tables row in
     // place - for a future btree root split/collapse to repoint at a new
@@ -1301,14 +1301,14 @@ private:
 
     // The in-place rewrite behind ClaimPatternWaystoneRoot() and
     // TouchPattern(): finds the current-version sys.patterns row for
-    // `pattern_id`, hands it to `mutate`, and writes it back over the same
+    // `fetch_id`, hands it to `mutate`, and writes it back over the same
     // slot. One scan and one version filter for every writer, so no two can
     // come to disagree about which row is "this pattern".
     //
     // Does not touch the cache - each caller publishes its own field set,
     // because a blanket "re-read the row into the cache" would republish
     // fields the caller did not write and had no lock on.
-    Status MutatePatternRow(std::uint64_t pattern_id,
+    Status MutatePatternRow(std::uint64_t fetch_id,
                             const std::function<void(SysPatternRow&)>& mutate);
 
     // The single invalidation point: bumps the version and drops every

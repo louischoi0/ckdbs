@@ -2,11 +2,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/catalog/rows.hpp"
+#include "kds/catalog/well_known.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/parser/fingerprint.hpp"
@@ -14,6 +18,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 // Replay: serving a keyed step from a recorded location instead of
@@ -69,12 +74,12 @@ protected:
     static stats::InstanceKey KeyOf(const std::string& sql) {
         auto fp = parser::FingerprintOf(sql);
         EXPECT_TRUE(fp.has_value());
-        return stats::InstanceKey{fp->pattern_id, fp->arg_hash};
+        return stats::InstanceKey{fp->fetch_id, fp->arg_hash};
     }
 
     // The pattern's directory pair, for tests that rewrite a trail by hand.
     std::pair<PageId, std::uint8_t> DirectoryOf(const std::string& sql) {
-        auto pattern = boot_->catalog.FindPattern(KeyOf(sql).pattern_id);
+        auto pattern = boot_->catalog.FindPattern(KeyOf(sql).fetch_id);
         EXPECT_TRUE(pattern.ok());
         return {pattern.value()->waystone_root, pattern.value()->dir_depth};
     }
@@ -98,6 +103,7 @@ protected:
             t.page_id = read.value()[0].page_id;
             t.slot = read.value()[0].slot;
             t.step_id = read.value()[0].step_id;
+            t.page_epoch = read.value()[0].page_epoch;
         }
         return t;
     }
@@ -225,6 +231,40 @@ TEST_F(WaystoneReplayTest, AnEntryForADifferentKeyIsNeverConsulted) {
     EXPECT_EQ(Run(sql), correct);
 }
 
+// Rule 0 at the **driving** step (waystone-concpets.md §2 rule 0, AP-S3).
+// The cell above leaves its entry at row 3's slot; this one plants, under
+// row 3's instance key, an entry for row 5 *at row 5's real location* and
+// epoch, so every storage rule would pass it. Short of an `arg_hash`
+// collision no SQL reaches this today; a row-volatile function would.
+//
+// It pins rule 0's first mechanism, the index key: the entry must not even
+// be found (`trail_misses=` counts entries found and then turned away).
+// The second, the verifier's check against the derived key, is pinned by
+// AWrongKeystoneAtTheTargetIsAMissNotAWrongRow.
+TEST_F(WaystoneReplayTest, ADrivingEntryForAnotherKeyIsNeverFoundEvenWhereItIsValid) {
+    const std::string sql = "SELECT * FROM t WHERE id = 3";
+    const std::string other = "SELECT * FROM t WHERE id = 5";
+    const std::string correct = RunUntilRecorded(sql);
+    RunUntilRecorded(other);
+
+    const exec::TouchedTuple entry = EntryOf(other);  // row 5, where row 5 is
+    ASSERT_EQ(entry.pk, 5u);
+    ASSERT_EQ(entry.step_id, EntryOf(sql).step_id) << "both are the driving step";
+    PoisonTrail(sql, entry);
+
+    const std::string analyzed = Run("ANALYZE " + sql);
+    EXPECT_NE(analyzed.find("rows=1"), std::string::npos) << analyzed;
+    EXPECT_EQ(analyzed.find("replays="), std::string::npos)
+        << "the planted entry was served under a key the step did not derive: " << analyzed;
+    EXPECT_EQ(analyzed.find("trail_misses="), std::string::npos)
+        << "the planted entry was found under a key the step did not derive: " << analyzed;
+
+    // Every execution re-records the trail, so it is planted again.
+
+    PoisonTrail(sql, entry);
+    EXPECT_EQ(Run(sql), correct);
+}
+
 // ---- Cross-relation replay (P13) -----------------------------------------
 
 TEST_F(WaystoneReplayTest, AJoinReplaysEveryKeyedStepAndReturnsTheSameRows) {
@@ -252,6 +292,105 @@ TEST_F(WaystoneReplayTest, AJoinReplaysEveryKeyedStepAndReturnsTheSameRows) {
     EXPECT_EQ(trail.value()[1].step_id, 1u);
 }
 
+// ---- One fetch, one trail (AP-S2) ----------------------------------------
+//
+// instructions/v3.0.0/workorder-ap-function-catalog-fetch-id.md AP-R2: a
+// trail is keyed by `{fetch_id, arg_hash}`, so statements differing only in
+// their select list share it. Each cell records under one select list and
+// asks ANALYZE whether another one replayed. Before AP-S2 every one of them
+// answered `replays=0`, which the mutation of the lookup back to pattern_id
+// reproduces.
+
+std::string Hex(std::uint64_t v) {
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%llx", static_cast<unsigned long long>(v));
+    return buf;
+}
+
+TEST_F(WaystoneReplayTest, AnotherSelectListOverTheSameFetchReplaysTheTrail) {
+    for (const char* rel : {"t", "h"}) {
+        const std::string recorded = std::string("SELECT id FROM ") + rel + " WHERE id = 3";
+        const std::string other = std::string("SELECT v, id FROM ") + rel + " WHERE id = 3";
+        Run(recorded);
+        Run(recorded);  // the second sighting records
+
+        const std::string analyzed = Run("ANALYZE " + other);
+        EXPECT_NE(analyzed.find("replays=1"), std::string::npos)
+            << rel << ": the other select list did not replay the trail: " << analyzed;
+    }
+}
+
+// Aggregated and plain over one fetch, in both orders: the fold changes the
+// plan and not the chain (AG1), so either one's trail serves the other.
+TEST_F(WaystoneReplayTest, AnAggregatedAndAPlainStatementShareATrailInBothOrders) {
+    const std::pair<const char*, const char*> orders[] = {
+        {"SELECT COUNT(*) FROM t WHERE id = 2", "SELECT * FROM t WHERE id = 2"},
+        {"SELECT * FROM t WHERE id = 4", "SELECT MAX(v) FROM t WHERE id = 4"},
+    };
+    for (const auto& [first, second] : orders) {
+        const std::string expected = Run(second);  // before any trail of this fetch
+        Run(first);
+        Run(first);
+        const std::string analyzed = Run(std::string("ANALYZE ") + second);
+        EXPECT_NE(analyzed.find("replays=1"), std::string::npos)
+            << second << " did not replay " << first << "'s trail: " << analyzed;
+        EXPECT_EQ(Run(second), expected) << "a shared trail changed " << second << "'s reply";
+    }
+}
+
+TEST_F(WaystoneReplayTest, AnalyzePrintsThePatternIdAndTheFetchIdItsTrailIsKeyedBy) {
+    const std::string sql = "SELECT v FROM t WHERE id = 3";
+    auto fp = parser::FingerprintOf(sql);
+    ASSERT_TRUE(fp.has_value());
+    ASSERT_NE(fp->pattern_id, fp->fetch_id);
+
+    const std::string analyzed = Run("ANALYZE " + sql);
+    EXPECT_NE(analyzed.find(" pattern_id=0x" + Hex(fp->pattern_id)), std::string::npos)
+        << analyzed;
+    EXPECT_NE(analyzed.find(" fetch_id=0x" + Hex(fp->fetch_id)), std::string::npos) << analyzed;
+}
+
+// A row a pre-AP-S2 build wrote is a version-1 row keyed by a pattern_id.
+// Planted here under the statement's own fetch_id - the worst case, a v1
+// key equal to a v2 one - it must still never be found: the version filter
+// hides it, the statement registers a row of its own, and SHOW PATTERNS
+// lists the old one as stale.
+TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain) {
+    const std::string sql = "SELECT * FROM t WHERE id = 5";
+    const std::uint64_t fetch_id = KeyOf(sql).fetch_id;
+    {
+        auto bytes = store_.Get(catalog::kCatalogPagePatterns);
+        ASSERT_TRUE(bytes.ok());
+        heap::PageView page(bytes.value().bytes());
+        catalog::SysPatternRow row{};
+        row.oid = 999'999;
+        row.fetch_id = fetch_id;
+        row.fingerprint_version = 1;
+        row.waystone_root = kInvalidPageId;
+        auto encoded = row.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
+    }
+    EXPECT_FALSE(boot_->catalog.FindPattern(fetch_id).ok());
+
+    const std::string first = Run(sql);
+    Run(sql);  // records under a version-2 row
+    auto found = boot_->catalog.FindPattern(fetch_id);
+    ASSERT_TRUE(found.ok());
+    EXPECT_NE(found.value()->oid, 999'999u) << "the version-1 row was taken as current";
+    EXPECT_EQ(found.value()->fingerprint_version, parser::kFingerprintVersion);
+
+    const std::string analyzed = Run("ANALYZE " + sql);
+    EXPECT_NE(analyzed.find("replays=1"), std::string::npos) << analyzed;
+    EXPECT_EQ(Run(sql), first);
+
+    // Listed stale, and under the name of what it holds: a version-1 key
+    // is a pattern_id, so it is never shown as a fetch_id.
+    const std::string shown = Run("SHOW PATTERNS");
+    EXPECT_NE(shown.find("stale=v1"), std::string::npos) << shown;
+    EXPECT_NE(shown.find("pattern_id=0x" + Hex(fetch_id) + " oid=999999"), std::string::npos)
+        << shown;
+}
+
 // ---- What must never be replayed -----------------------------------------
 
 TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
@@ -269,7 +408,7 @@ TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
     ASSERT_TRUE(chain.ok());
 
     // Nothing was recorded for it, so there is nothing to replay from...
-    auto pattern = boot_->catalog.FindPattern(KeyOf(sql).pattern_id);
+    auto pattern = boot_->catalog.FindPattern(KeyOf(sql).fetch_id);
     EXPECT_FALSE(pattern.ok()) << "a scan-only statement registers no pattern at all";
 
     // ...and even handed a fabricated trail naming its step, the executor

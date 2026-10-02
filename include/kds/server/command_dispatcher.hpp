@@ -400,6 +400,19 @@ struct OptimizerSurface {
     Latch* view_latch = nullptr;
 };
 
+// A fingerprinted SELECT's two identities, both from the parse (AP-R2,
+// instructions/v3.0.0/workorder-ap-function-catalog-fetch-id.md).
+//
+// `trail` is what the Waystone keys on - `{fetch_id, arg_hash}`, so two
+// statements differing only in their select list share a trail.
+// `pattern_id` is the statement's own shape, which the cabin optimizer
+// counts by and `ANALYZE` prints: a `SUM(x)` and an `x` over one fetch are
+// one trail and two plans.
+struct StatementIdentity {
+    stats::InstanceKey trail;
+    std::uint64_t pattern_id = 0;
+};
+
 class CommandDispatcher {
 public:
     // `log` and `clock` are optional and independently so: a null logger
@@ -477,7 +490,7 @@ public:
     //   SHOW TABLES           -> space-separated table names
     //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
     //                            section per sys.patterns row, identified
-    //                            by its hex pattern_id and carrying
+    //                            by its hex fetch_id and carrying
     //                            `origin=` and `pinned=`, both of which
     //                            read `auto` / `no` on every row since
     //                            declared patterns were withdrawn.
@@ -1338,9 +1351,9 @@ private:
     // The forward check for one foreign key and one written value (§2),
     // **answered from what the extraction pass already resolved** (§2a,
     // AH-T1). OK when the value is not an id at all - the row codec has the
-    // better error for that. A violation gives back the parent's `S`,
-    // whoever took it (AZ-S5, AZ-R5 as amended 2026-10-02; `foreign-keys.md`
-    // §2c).
+    // better error for that. A violation gives back the `S` of every parent
+    // the statement resolved as absent, whoever took it (AZ-S5, AZ-R5 as
+    // amended 2026-10-02; `foreign-keys.md` §2c).
     //
     // One arm descends here: a **self-referencing** foreign key, which
     // `ResolveForeignKeyParents` deliberately does not hoist. It holds the
@@ -1514,17 +1527,13 @@ private:
     // beside them. Split out so HandleSelect's row-formatting path and
     // this one visibly share everything above the sink.
     //
-    // `sql` is the stripped statement, taken so the reply can report the
-    // statement's `pattern_id` - the same number `SHOW PATTERNS` lists a
-    // row under, which is how an operator checks which observed pattern a
-    // statement actually matched.
     // `trail` and `replay` are the same two halves an ordinary execution
     // gets. ANALYZE takes them because its contract is that the run it
     // describes is the run that actually happened: a diagnostic that
     // skipped replay would report descents no real execution performs.
     //
-    // It takes no statement text: the `pattern_id` it prints comes from
-    // `instance`, which the caller got from the parse. It used to re-lex
+    // It takes no statement text: the `pattern_id` and `fetch_id` it
+    // prints come from `identity`, which the caller got from the parse. It used to re-lex
     // `sql` to recompute a number it had already been handed.
     //
     // `borrow` is the statement's read borrow, taken at the bind by
@@ -1532,7 +1541,7 @@ private:
     // execution would be made after the compile it exists to protect.
     DispatchOutcome RunAnalyze(const exec::StepChain& chain, exec::TrailCollector* trail,
                                const exec::TrailReplay* replay,
-                               const std::optional<stats::InstanceKey>& instance,
+                               const std::optional<StatementIdentity>& identity,
                                const txn::Snapshot& snapshot, exec::PositionSink& borrow);
 
 public:
@@ -1742,7 +1751,7 @@ private:
     DispatchOutcome RunAggregated(ResultSink& sink, TextResultSink& text_sink,
                                   const exec::StepChain& chain, exec::TrailCollector* trail,
                                   const exec::TrailReplay* replay,
-                                  const std::optional<stats::InstanceKey>& instance,
+                                  const std::optional<StatementIdentity>& identity,
                                   const txn::Snapshot& snapshot, exec::PositionSink& borrow);
 
     // **The success-path recording point.** Three collectors observe the
@@ -1750,14 +1759,14 @@ private:
     // place so a fourth cannot be added to two of the three sites. Every
     // caller reaches here only after the execution succeeded; there is
     // deliberately no failure-path form (see RecordTrail).
-    void RecordExecution(const std::optional<stats::InstanceKey>& instance,
+    void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
 
     // Hands a successful execution's trail to the recorder. Shared by the
     // row-returning path and ANALYZE so the two cannot come to disagree
     // about when a trail is written.
-    void RecordTrail(const std::optional<stats::InstanceKey>& instance,
+    void RecordTrail(const std::optional<StatementIdentity>& identity,
                      exec::TrailCollector* trail, const exec::StepChain& chain);
 
     // Counts one execution of every step's access shape. Shared by the
@@ -1771,7 +1780,7 @@ private:
     // SELECT, carrying the statement's page count. Beside RecordTrail and
     // RecordAccessShapes because it is the same moment - a completed
     // execution - observed by a third collector.
-    void RecordOptimizerSignals(const std::optional<stats::InstanceKey>& instance,
+    void RecordOptimizerSignals(const std::optional<StatementIdentity>& identity,
                                 const exec::StepChain& chain, const exec::ExecStats& stats);
 
     // ---- The Cabin write hook (docs/spec/cabin.md §5) --------------------

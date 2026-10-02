@@ -473,14 +473,23 @@ static_assert(offsetof(SysIndexRow, covered_cols) == SysIndexRow::kCoveredColsOf
 
 // ---- sys.patterns ----------------------------------------------------
 //
-// One row per observed query shape (docs/spec/waystone-concpets.md section 4).
-// `pattern_id` is the lookup key, not `oid`: callers arrive holding a
+// One row per observed fetch shape (docs/spec/waystone-concpets.md section 4).
+// **The table is the trail directory's and nothing else's**: the trail
+// recorder is its one writer, and a row exists only to hold a root. So it
+// is keyed by `fetch_id` - the statement's pattern_id with the select list
+// left out - and two statements differing only in what they project share
+// one row (AP-S2, AP-Q2 (b)). The bytes at `kFetchIdOffset` held a
+// pattern_id before AP-S2, which is why the fingerprint version moved
+// 1 -> 2: every such row is another version's, and the version filter
+// hides it by construction.
+//
+// `fetch_id` is the lookup key, not `oid`: callers arrive holding a
 // fingerprint computed at parse (parser/fingerprint.hpp) and never an oid,
 // which is the reverse of every other catalog relation here.
 //
 // The row carries three separable things, and it is worth naming them
 // because they change at different rates: the pattern's *identity*
-// (`pattern_id` + `fingerprint_version`), the *location* of its waystones
+// (`fetch_id` + `fingerprint_version`), the *location* of its waystones
 // (`waystone_root` + `dir_depth`), and its *heat* (`use_count`,
 // `last_seen`). Only the first is stable; the second changes when the
 // directory deepens, and the third on every execution.
@@ -493,9 +502,10 @@ static_assert(offsetof(SysIndexRow, covered_cols) == SysIndexRow::kCoveredColsOf
 struct SysPatternRow {
     Oid oid;
 
-    // The parse-time fingerprint of the statement's shape. Unique across
-    // live rows, and the key every lookup arrives with.
-    std::uint64_t pattern_id;
+    // The parse-time fingerprint of the statement's fetch shape
+    // (parser/fingerprint.hpp `fetch_id`). Unique across live rows, and the
+    // key every lookup arrives with.
+    std::uint64_t fetch_id;
 
     // Truncated logical timestamp of the last execution observed.
     // Best-effort, like use_count: it feeds retention, and nothing may
@@ -503,7 +513,7 @@ struct SysPatternRow {
     std::uint64_t last_seen;
 
     // Which revision of the fingerprinting algorithm produced
-    // `pattern_id` (parser/fingerprint.hpp kFingerprintVersion). A row
+    // `fetch_id` (parser/fingerprint.hpp kFingerprintVersion). A row
     // whose version is not the running build's is ignored - its hash names
     // a shape computed under different rules - and that is a miss, never
     // an error. 0 means unset, which a zeroed page decodes to and which is
@@ -577,7 +587,7 @@ struct SysPatternRow {
     std::uint8_t origin;
 
     static constexpr std::size_t kOidOffset = 0;
-    static constexpr std::size_t kPatternIdOffset = 8;
+    static constexpr std::size_t kFetchIdOffset = 8;
     static constexpr std::size_t kLastSeenOffset = 16;
     static constexpr std::size_t kFingerprintVersionOffset = 24;
     static constexpr std::size_t kWaystoneRootOffset = 28;
@@ -593,7 +603,7 @@ struct SysPatternRow {
 };
 
 static_assert(offsetof(SysPatternRow, oid) == SysPatternRow::kOidOffset);
-static_assert(offsetof(SysPatternRow, pattern_id) == SysPatternRow::kPatternIdOffset);
+static_assert(offsetof(SysPatternRow, fetch_id) == SysPatternRow::kFetchIdOffset);
 static_assert(offsetof(SysPatternRow, last_seen) == SysPatternRow::kLastSeenOffset);
 static_assert(offsetof(SysPatternRow, fingerprint_version) ==
               SysPatternRow::kFingerprintVersionOffset);

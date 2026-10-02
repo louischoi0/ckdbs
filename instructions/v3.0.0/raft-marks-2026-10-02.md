@@ -44,3 +44,13 @@
 | **Amends** | AR1 D6 ("`SysPatternRow` gains `fetch_id`") and AR1-3's "`kFingerprintVersion` does not move", both by AP-Q2 (b); AR1-2's D1 fold is deferred to AQ by AP-Q5. The `pattern_id` values do not move |
 | **Does not settle** | any AP stage's start - each waits for its own word; AQ's and AR's letters; the v3.0.0 tag, which waits on M4 |
 | **Recorded at** | the order's §4 and §6, AR1's status line, the index row |
+
+## 5. Every absent parent the failed statement resolved gives back its `S` too
+
+| | |
+|---|---|
+| **Word** | *"push it to main"*, then *"give back the S on every absent parent too"* |
+| **Mark** | §2 lands on `main` at `ca473a4`. **AZ-R5 is amended again**: a failed check gives back the `S` on every parent row the statement resolved as absent, not only the failing check's - the hoist resolves every row's parents before any row is written, so the others' rows are never reached. A present parent's `S` and the relation's `IS` stay. The review of §2 recorded it (`known-gaps.md`, Foreign keys, at `7ce9718`) |
+| **Reading** | §2's argument, applied to each: an `S` on a parent the check reads as absent protects no row |
+| **Does not settle** | anything else in D9(a) |
+| **Recorded at** | `workorder-az-ay-carry-forward.md` §6, `foreign-keys.md` §2c, `known-gaps.md` (the entry deleted) |

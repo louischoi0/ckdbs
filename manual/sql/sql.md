@@ -394,7 +394,13 @@ DROP CABIN ON accounts(owner);
 These statements existed and were removed on 2026-08-31. **A pattern is a
 case the engine identifies by fingerprint and tracks by statistics**; there
 is no way to declare one, and nothing replaces the grammar. `SHOW PATTERNS`
-lists what traffic registered, each row identified by its hex `pattern_id`.
+lists what traffic registered, each row identified by its hex `fetch_id`:
+the statement's shape with its select list left out, so `SELECT a ...` and
+`SELECT COUNT(*) ...` over the same `FROM ... WHERE` share one row and one
+trail. `ANALYZE` prints a statement's `pattern_id` (its whole shape) and its
+`fetch_id`, the second being the one to look for in `SHOW PATTERNS`. A row
+marked `stale=v1` was recorded by a build before this keying, is listed
+under the `pattern_id=` it was keyed by, and is never used.
 
 `CREATE PATTERN ...` now answers the ordinary refusal for an unknown
 `CREATE` target, and `$name` parameters are refused wherever they are
@@ -861,7 +867,7 @@ may be written qualified (`FROM sys.tables AS t ... WHERE t.oid = 100`),
 and a qualifier naming no relation in the statement is refused in the
 `WHERE` exactly as it is in the projection. A view's integers compare
 **unsigned**, because every one of them is stored as a `uint64` and
-`sys.patterns.pattern_id` really does use the full 64-bit range. One
+`sys.patterns.fetch_id` really does use the full 64-bit range. One
 consequence, the same one a `uint64` column on an ordinary relation has:
 a negative literal is not a `uint64`, so `WHERE oid > -1` is a non-match
 for every row rather than a comparison that succeeds.

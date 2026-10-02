@@ -325,6 +325,26 @@ TEST_F(FkParentHoldTest, AParentHeldAtBothSAndXLosesOnlyItsSToTheViolation) {
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
 }
 
+TEST_F(FkParentHoldTest, AFailedStatementGivesBackEveryAbsentParentItResolved) {
+    // The hoist resolves every row's parents before any row is written, so a
+    // statement naming two absent parents holds `S` on both and fails at the
+    // first. Both go (`raft-marks-2026-10-02.md` §5): the second row is never
+    // reached, and its parent's `S` protects no row either. A present
+    // parent's `S` stays - the intention cell below pins it.
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    const std::string failed = Run(child, "INSERT INTO c VALUES (99), (98)");
+    ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
+
+    const std::string reached = Other("INSERT INTO p VALUES (99, 0)");
+    EXPECT_EQ(reached.rfind("INSERTED", 0), 0u) << reached;
+    const std::string unreached = Other("INSERT INTO p VALUES (98, 0)");
+    EXPECT_EQ(unreached.rfind("INSERTED", 0), 0u)
+        << "the failed statement still holds the parent of a row it never reached: "
+        << unreached;
+    ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
+
 TEST_F(FkParentHoldTest, TheRelationsIntentionOutlivesAFailedChecksHold) {
     // One statement, an absent parent and a present one: the violation gives
     // back S(99) and keeps S(10) - and the `IS` on `p` both stood under. A
@@ -339,7 +359,12 @@ TEST_F(FkParentHoldTest, TheRelationsIntentionOutlivesAFailedChecksHold) {
     EXPECT_EQ(index.rfind("ERR TXN_CONFLICT", 0), 0u)
         << "a relation X was granted over a held parent row: " << index;
     EXPECT_EQ(Other("INSERT INTO p VALUES (99, 0)").rfind("INSERTED", 0), 0u);
+    // And S(10) itself: a present parent's `S` is not an absent one's.
+    const std::string update = Other("UPDATE p SET v = 1 WHERE id = 10");
+    EXPECT_EQ(update.rfind("ERR TXN_CONFLICT", 0), 0u)
+        << "the violation gave back a present parent's S: " << update;
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
 }
+
 }  // namespace
 }  // namespace kds::server

@@ -39,9 +39,10 @@
 // visibility, and the join emits the wrong row.
 //
 // Here that rule is **structural**: the index is keyed on `(step_id, pk)`,
-// and the caller's lookup key is the key its step just computed from the
-// current outer row. An entry can only be found by matching it. There is no
-// separate check to forget.
+// and the caller's lookup key is the key its step just computed - from the
+// current outer row for a probe, from the statement's own values for the
+// driving step, which the rule covers too (spec section 2 rule 0). An entry
+// can only be found by matching it. There is no separate check to forget.
 //
 // ---- What this deliberately cannot check ---------------------------------
 //
@@ -99,7 +100,7 @@ public:
     //
     // An entry naming a step id the chain does not have is dropped too: a
     // trail outlives the statement text only as far as the fingerprint says
-    // it does, and a chain that changed shape under one pattern_id is a
+    // it does, and a chain that changed shape under one fetch_id is a
     // collision, not a trail.
     void Build(const StepChain& chain, std::span<const stats::WaystoneEntry> entries);
 

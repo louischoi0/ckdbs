@@ -186,7 +186,10 @@ TEST(FingerprintTest, PatternIdAndArgHashAreStableAcrossBuilds) {
     const Fingerprint fp = Must("SELECT * FROM accounts WHERE id = 42");
     EXPECT_EQ(fp.pattern_id, 0xe0fa0b4bc8f0ebe2ull);
     EXPECT_EQ(fp.arg_hash, 0x182b9abf546ab5c4ull);
-    EXPECT_EQ(kFingerprintVersion, 1u);
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id and moved
+    // neither of the hashes above (fingerprint.hpp) - the one bump that is
+    // not a hash moving.
+    EXPECT_EQ(kFingerprintVersion, 2u);
 }
 
 // ---- Versioning (P02) -----------------------------------------------------
@@ -342,7 +345,9 @@ TEST(FingerprintTest, TheParamTokenNeededNoFingerprintVersionBump) {
     // The golden hashes above are the witness, and this is the reminder of
     // what they are witnessing. If a future change to the shape stream does
     // move them, the version has to move with it.
-    EXPECT_EQ(kFingerprintVersion, 1u);
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id without
+    // moving any hash (fingerprint.hpp); this change moved nothing either.
+    EXPECT_EQ(kFingerprintVersion, 2u);
     EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
 
     // A bare `$` is still a lexing failure, and a statement that will not
@@ -389,7 +394,9 @@ TEST(FingerprintTest, TheKeyModeWordNeededNoFingerprintVersionBump) {
     // This is here so that a later change which *does* move a hash cannot
     // pass by leaving the version alone quietly: the golden corpus pins the
     // hashes, and this pins the version they are relative to.
-    EXPECT_EQ(kFingerprintVersion, 1u);
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id without
+    // moving any hash (fingerprint.hpp); this change moved nothing either.
+    EXPECT_EQ(kFingerprintVersion, 2u);
     EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
 
     // And neither word is reserved, so one used as a column name is still
@@ -417,7 +424,9 @@ TEST(FingerprintTest, TheNamespaceSyntaxNeededNoFingerprintVersionBump) {
     //     statement fingerprintable that previously was not".
     //
     // So the version stays at 1, and the golden hash is the witness.
-    EXPECT_EQ(kFingerprintVersion, 1u);
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id without
+    // moving any hash (fingerprint.hpp); this change moved nothing either.
+    EXPECT_EQ(kFingerprintVersion, 2u);
     EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
 
     // `sys.tables` is the statement that could actually have moved - it is
@@ -453,7 +462,9 @@ TEST(FingerprintTest, TheNumericTokenNeededNoFingerprintVersionBump) {
     // production, and only statements that execute are recorded. The
     // golden corpus pins every pre-existing statement's hash unchanged;
     // this pins the version those pins are relative to.
-    EXPECT_EQ(kFingerprintVersion, 1u);
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id without
+    // moving any hash (fingerprint.hpp); this change moved nothing either.
+    EXPECT_EQ(kFingerprintVersion, 2u);
     EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
 }
 

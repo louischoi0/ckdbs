@@ -28,7 +28,7 @@
 //     name -> oid                    (sys.objects)
 //     oid  -> TableAccess            (sys.tables + sys.columns)
 //     the table list                 (sys.objects)
-//     pattern_id -> PatternAccess    (sys.patterns)
+//     fetch_id -> PatternAccess    (sys.patterns)
 //   cached, never dropped:
 //     sys.types              written only by Catalog::Bootstrap()
 //   never cached, always read from the page:
@@ -103,7 +103,7 @@ public:
     // entry already present wins over `access`, for the same reason.
     const TableAccess* PutTableAccess(TableAccess access);
 
-    // ---- pattern_id -> PatternAccess (sys.patterns) ----------------------
+    // ---- fetch_id -> PatternAccess (sys.patterns) ----------------------
     //
     // Keyed by the fingerprint rather than by oid, because that is what
     // every caller arrives holding (rows.hpp's note on SysPatternRow).
@@ -112,7 +112,7 @@ public:
     // without DDL, so it is not in the struct and cannot be cached by
     // accident.
 
-    const PatternAccess* FindPattern(std::uint64_t pattern_id) noexcept;
+    const PatternAccess* FindPattern(std::uint64_t fetch_id) noexcept;
 
     // Reference-stable and already-present-wins, exactly like
     // PutTableAccess() and for the same reason.
@@ -133,7 +133,7 @@ public:
     // A no-op when the pattern is not cached: there is nothing stale to
     // fix, and filling the entry here would cache a fact the caller may
     // never ask for.
-    void UpdatePatternWaystone(std::uint64_t pattern_id, PageId root,
+    void UpdatePatternWaystone(std::uint64_t fetch_id, PageId root,
                                std::uint8_t depth) noexcept;
 
     // Points a cached relation's index at a new root page, in place.

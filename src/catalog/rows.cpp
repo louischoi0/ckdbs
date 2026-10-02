@@ -218,7 +218,7 @@ std::array<std::byte, SysPatternRow::kOnDiskSize> SysPatternRow::Encode() const 
     std::array<std::byte, kOnDiskSize> buf{};
     std::byte* base = buf.data();
     std::memcpy(base + kOidOffset, &oid, sizeof(oid));
-    std::memcpy(base + kPatternIdOffset, &pattern_id, sizeof(pattern_id));
+    std::memcpy(base + kFetchIdOffset, &fetch_id, sizeof(fetch_id));
     std::memcpy(base + kLastSeenOffset, &last_seen, sizeof(last_seen));
     std::memcpy(base + kFingerprintVersionOffset, &fingerprint_version,
                 sizeof(fingerprint_version));
@@ -237,7 +237,7 @@ StatusOr<SysPatternRow> SysPatternRow::Decode(std::span<const std::byte> bytes) 
     SysPatternRow row{};
     const std::byte* base = bytes.data();
     std::memcpy(&row.oid, base + kOidOffset, sizeof(row.oid));
-    std::memcpy(&row.pattern_id, base + kPatternIdOffset, sizeof(row.pattern_id));
+    std::memcpy(&row.fetch_id, base + kFetchIdOffset, sizeof(row.fetch_id));
     std::memcpy(&row.last_seen, base + kLastSeenOffset, sizeof(row.last_seen));
     std::memcpy(&row.fingerprint_version, base + kFingerprintVersionOffset,
                 sizeof(row.fingerprint_version));

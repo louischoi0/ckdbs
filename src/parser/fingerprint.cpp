@@ -165,7 +165,7 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         // is load-bearing: `12.34` lexed *before* this token existed - as
         // kIntLit, kDot, kIntLit, all valid - so a statement containing it
         // was fingerprintable, and fusing the three tokens moves that
-        // statement's hash. `kFingerprintVersion` stays 1 anyway, because
+        // statement's hash. `kFingerprintVersion` did not move for it, because
         // the bump rule protects what is *stored*, and no such hash was
         // ever storable: int-dot-int parses in no production, a statement
         // that cannot parse cannot execute, and recording happens only on

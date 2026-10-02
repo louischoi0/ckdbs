@@ -388,7 +388,9 @@ TEST(AggregateContractShapeTest, TheFingerprintVersionDidNotMove) {
     // corpus holds: tests/parser_golden_test.cpp compares every statement
     // in it against a recorded value and fails loudly if one moves. A bump
     // here without that file changing is the contradiction to look for.
-    EXPECT_EQ(parser::kFingerprintVersion, 1u)
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id without
+    // moving any hash (fingerprint.hpp); this change moved nothing either.
+    EXPECT_EQ(parser::kFingerprintVersion, 2u)
         << "docs/spec/aggregate.md §2 claims no bump; a bump retires every stored waystone";
 }
 

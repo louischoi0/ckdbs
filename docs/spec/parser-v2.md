@@ -58,7 +58,7 @@ Every SELECT-class statement compiles to a **step chain**: an ordered list of st
 
 | Kind | Authoritative work | Trail-replayable? |
 |---|---|---|
-| `Lookup` | pk-equality descent (constant or bound param) | **yes** — completeness follows from pk uniqueness |
+| `Lookup` | pk-equality descent (constant or bound param) | **yes** — completeness follows from pk uniqueness, **and only under rule 0** (I17) |
 | `Probe` | pk-equality descent keyed by a value produced by an earlier step or outer row | **yes** — same argument, per producing row, **and only under rule 0** (I17) |
 | `Range` | pk range via the leaf chain | no — search; prefetch only |
 | `Scan` | heap chain or full scan with a predicate | no — search; prefetch only |
@@ -67,7 +67,7 @@ Every SELECT-class statement compiles to a **step chain**: an ordered list of st
 
 A join contributes one `Lookup`/`Probe`/`Scan` step per relation in written order. This table *is* `docs/spec/waystone-concpets.md` §2's trust model — a waystone may replace a lookup, never a search — extended with the negation rule: **negation steps are search-class by definition**.
 
-Step numbering is global in compile order (the outer chain and every sub-chain share one counter), so a trail entry's `step_id` is unambiguous without parent linkage. The chain layout is a pure function of the AST, hence of `pattern_id`, which is what makes a recorded trail replayable across executions of one instance.
+Step numbering is global in compile order (the outer chain and every sub-chain share one counter), so a trail entry's `step_id` is unambiguous without parent linkage. The chain layout is a pure function of the AST, and its steps of the AST without its select list (only the projection mask reads that), hence of `fetch_id` - which is what makes a recorded trail replayable across executions of one instance, and across statements that differ only in what they project (AP-S2, `waystone-concpets.md` §3).
 
 ## 2. Subqueries as steps
 
@@ -116,7 +116,7 @@ Any literal or parameter destined for a pk position is range-checked `< 2^40`, j
 
 ## 4. Grammar surface
 
-**I7 — `CREATE TABLE` options.** There is no `WITH (key = value, …)` option table; the storage form (`HEAP`/`BTREE`) is a trailing clause. **Waystone is not a table option**: it is keyed on `(pattern_id, arg_hash)`, not on a relation.
+**I7 — `CREATE TABLE` options.** There is no `WITH (key = value, …)` option table; the storage form (`HEAP`/`BTREE`) is a trailing clause. **Waystone is not a table option**: it is keyed on `(fetch_id, arg_hash)`, not on a relation.
 
 **I8 — Session and admin statements.** `SET DURABILITY {STRICT|GROUP|RELAXED}`, `SET ISOLATION LEVEL …`, `SHOW META`, `SHOW TABLES` and the other `SHOW` forms are *dispatcher* commands, not parser statements: ordinary statements returning ordinary result sets — one surface, one auth story. SET is excluded from fingerprinting.
 
@@ -175,17 +175,17 @@ NULL is storable (`docs/spec/null.md`), and comparison is three-valued. The eval
 
 ## 6. Trail integration
 
-- **Recording (J5, n = 2):** the first execution of an instance `(pattern_id, arg_hash)` only counts; the second records. Sightings live in a bounded, core-local in-memory table; eviction merely restarts the count, which is a performance event. `sys.patterns.use_count` continues independently for retention.
+- **Recording (J5, n = 2):** the first execution of an instance `(fetch_id, arg_hash)` only counts; the second records. Sightings live in a bounded, core-local in-memory table; eviction merely restarts the count, which is a performance event. `sys.patterns.use_count` continues independently for retention.
 - **Per-step recording:** `Lookup`/`Probe` steps append entries in execution order with their `step_id` and per-entry `rel_oid` — the existing 32-byte format, unchanged. `Exists` steps record the witnessing row only. `Range`/`Scan`/`NotExists` record nothing.
 - **Replay** consults the instance's trail for entries with the step's `step_id` and applies `docs/spec/waystone-concpets.md` §2 per entry; any miss falls through to the authoritative path *for that step alone*. Search-class steps use the trail only as a prefetch batch.
 - **`Exists` replay is positive-only**, and the asymmetry is the whole point: a validated witness *proves* non-emptiness, because presence has a witness. A missing or invalid witness proves nothing and the probe runs. A trail can never conclude absence.
 
-**I17 — Rule 0: the probe key must be re-derived.**
-Before a trail entry for a `Probe` step may be trusted, the executor derives the probe key from the **current** producing row it has in hand and requires it to equal the entry's `pk`. A mismatch is a miss for that step alone.
+**I17 — Rule 0: the key must be re-derived, at every replayed step.**
+Before a trail entry for a `Probe` step may be trusted, the executor derives the probe key from the **current** producing row it has in hand and requires it to equal the entry's `pk`. A mismatch is a miss for that step alone. **The driving step is under the same rule** (AR1's rule 0′): a `Lookup`'s key is derived from the statement's own values, and an entry filed under another key is turned away whatever instance key led to it.
 
 Without it, replay is a wrong-answer generator, and no other rule catches it. Suppose the producing row's join column was updated from 77 to 91 between recording and replay. The entry for pk 77 passes every other check in `waystone-concpets.md` §2 — `rel_oid` matches, the Keystone id at the recorded slot is 77, the epoch matches, MVCC says visible — because **every other rule validates the trail against storage and none of them looks at the query**. `UPDATE` overwrites in place and keeps `(page_id, slot)`, so nothing about the producing row looks stale. The join would emit row 77; the correct answer is row 91.
 
-The check is free at runtime: the producing row is already decoded by R1 and the probe key is already a resolved `ColumnRef`. It is `waystone-concpets.md` §2's rule 0, built as the replay index's lookup key (`include/kds/exec/trail_replay.hpp`, keyed on `(step_id, pk)`), so an entry can only be found by matching the freshly derived key and there is no separate check to forget.
+The check is free at runtime: the producing row is already decoded by R1 and the probe key is already a resolved `ColumnRef`. How it is held - the replay index's key and rule 1's check against the derived key - is `waystone-concpets.md` §2 rule 0's.
 
 ## 7. Executor
 

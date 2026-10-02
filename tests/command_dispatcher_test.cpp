@@ -54,7 +54,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsListsARegisteredPattern) {
     EXPECT_NE(out.response.find("patterns=1"), std::string::npos) << out.response;
     // Hex, because comparing two 64-bit fingerprints in decimal is not a
     // thing anyone can do by eye.
-    EXPECT_NE(out.response.find("pattern_id=0xabcd"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("fetch_id=0xabcd"), std::string::npos) << out.response;
     EXPECT_NE(out.response.find("uses=0"), std::string::npos) << out.response;
     // No trail has been recorded, so there is no directory - and the
     // report must say so rather than printing a root of page 0.
@@ -80,7 +80,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
     heap::PageView page(bytes.value().bytes());
     catalog::SysPatternRow row{};
     row.oid = 999;
-    row.pattern_id = 0x5151;
+    row.fetch_id = 0x5151;
     row.fingerprint_version = parser::kFingerprintVersion + 1;
     row.waystone_root = kInvalidPageId;
     auto encoded = row.Encode();
@@ -91,7 +91,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
 
     // Listed, not hidden: this is an inspection surface, and a row nothing
     // will ever look up again is exactly what an operator needs to see.
-    EXPECT_NE(out.response.find("pattern_id=0x5151"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("fetch_id=0x5151"), std::string::npos) << out.response;
     EXPECT_NE(out.response.find("stale=v"), std::string::npos) << out.response;
 
     // But it is still invisible to a lookup, which is where the version
@@ -1036,9 +1036,9 @@ TEST_F(CommandDispatcherTest, AWriteWhosePkPredicateIsBetweenTouchesEveryRowInTh
 
 TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
     // Every integer a view emits is built from a `uint64_t`
-    // (catalog_view.cpp's `Int()`), and `sys.patterns.pattern_id` is a
+    // (catalog_view.cpp's `Int()`), and `sys.patterns.fetch_id` is a
     // full-range 64-bit fingerprint - so comparing `int_val` signed put
-    // every id above INT64_MAX below every id under it. `pattern_id < 100`
+    // every id above INT64_MAX below every id under it. `fetch_id < 100`
     // answered the eight largest ids in the catalog, each printed in full
     // by the same statement that claimed it was small.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
@@ -1053,7 +1053,7 @@ TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
     // a FilterScan collects no trail, so traffic on these shapes registers
     // nothing (stats/trail_recorder.hpp).
     //
-    // Distinct bodies, because a pattern_id is the fingerprint of the shape
+    // Distinct bodies, because a fetch_id is the fingerprint of the shape
     // and identical shapes would collide into one row.
     const char* wheres[] = {"id = 1", "a = 1", "b = 1", "a > 1", "b > 1", "a < 1",
                             "b < 1", "a >= 1", "b >= 1", "a != 1", "b != 1",
@@ -1062,7 +1062,7 @@ TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
     for (const char* where : wheres) {
         const auto fp = parser::FingerprintOf(std::string("SELECT a FROM r WHERE ") + where);
         ASSERT_TRUE(fp.has_value()) << where;
-        if (boot_->catalog.RegisterPattern(fp->pattern_id, catalog::kStmtClassUnclassified)
+        if (boot_->catalog.RegisterPattern(fp->fetch_id, catalog::kStmtClassUnclassified)
                 .ok()) {
             ++made;
         }
@@ -1070,7 +1070,7 @@ TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
     ASSERT_GT(made, 0) << "the fixture must register patterns to have ids to compare";
 
     const std::string all = d.Dispatch("SELECT oid FROM sys.patterns").response;
-    const std::string ids = d.Dispatch("SELECT pattern_id FROM sys.patterns").response;
+    const std::string ids = d.Dispatch("SELECT fetch_id FROM sys.patterns").response;
     // Non-vacuous only if some id really does use the top bit. A
     // fingerprint is deterministic, so this either holds or the corpus
     // moved and the body list above wants another entry - which is what
@@ -1080,13 +1080,13 @@ TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
         at += 2;
         if (std::strtoull(ids.c_str() + at, nullptr, 10) > (1ull << 63)) any_high = true;
     }
-    ASSERT_TRUE(any_high) << "no pattern_id above INT64_MAX, so this proves nothing: " << ids;
+    ASSERT_TRUE(any_high) << "no fetch_id above INT64_MAX, so this proves nothing: " << ids;
 
     // Every uint64 is >= 0 and none is < 0. Signed, the high-bit ids
     // answered the second and were missing from the first.
-    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE pattern_id >= 0").response, all);
-    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE pattern_id < 0").response, "oid");
-    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE pattern_id < 100").response, "oid");
+    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE fetch_id >= 0").response, all);
+    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE fetch_id < 0").response, "oid");
+    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE fetch_id < 100").response, "oid");
 }
 
 TEST_F(CommandDispatcherTest, ACatalogViewRefusesABogusQualifierInAWhereToo) {
@@ -1130,7 +1130,7 @@ TEST_F(CommandDispatcherTest, ACatalogViewRefusesAMalformedPredicateWithNoRowsTo
     ASSERT_EQ(rows.find("\\n"), std::string::npos) << "sys.patterns must be empty here: " << rows;
 
     const std::string col_to_col =
-        d.Dispatch("SELECT * FROM sys.patterns WHERE oid = pattern_id").response;
+        d.Dispatch("SELECT * FROM sys.patterns WHERE oid = fetch_id").response;
     EXPECT_NE(col_to_col.find("column-to-column comparison"), std::string::npos) << col_to_col;
 
     const std::string no_column =
