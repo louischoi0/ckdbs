@@ -399,8 +399,8 @@ the statement's shape with its select list left out, so `SELECT a ...` and
 `SELECT COUNT(*) ...` over the same `FROM ... WHERE` share one row and one
 trail. `ANALYZE` prints a statement's `pattern_id` (its whole shape) and its
 `fetch_id`, the second being the one to look for in `SHOW PATTERNS`. A row
-marked `stale=v1` was recorded by a build before this keying and is never
-used.
+marked `stale=v1` was recorded by a build before this keying, is listed
+under the `pattern_id=` it was keyed by, and is never used.
 
 `CREATE PATTERN ...` now answers the ordinary refusal for an unknown
 `CREATE` target, and `$name` parameters are refused wherever they are

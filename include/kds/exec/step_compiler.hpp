@@ -18,9 +18,10 @@
 // Pure in the sense that matters: same statement plus same catalog gives
 // the same chain, bit for bit, every time. No clock, no randomness, no
 // container iteration order, no address-dependent decision. The chain
-// layout is therefore a function of the AST alone, hence of `pattern_id` -
-// which is what makes a trail recorded under one execution replayable
-// under the next.
+// layout is therefore a function of the AST alone - and its steps of the
+// AST without its select list, which only the projection mask reads, hence
+// of `fetch_id` (AP-S2) - which is what makes a trail recorded under one
+// execution replayable under the next, and under another select list.
 //
 // Name resolution lives here rather than in the parser (spec I5, under the
 // bolt-on). The parser produces `ColumnName{qualifier, name}`; this turns

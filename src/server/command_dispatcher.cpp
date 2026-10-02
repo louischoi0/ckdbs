@@ -1597,10 +1597,10 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         // fetch_id in hex, because it is a hash: the decimal form of a
         // 64-bit fingerprint is 20 unreadable digits, and the thing an
         // operator does with this value is compare it to another one -
-        // `ANALYZE`'s `fetch_id=` (AP-S2). A `stale=v1` row below holds a
-        // pattern_id here, which is what version 1 keyed by.
-        os << "\\n" << "fetch_id=0x" << std::hex << row.fetch_id << std::dec
-           << " oid=" << row.oid;
+        // `ANALYZE`'s `fetch_id=` (AP-S2). A version-1 row was keyed by the
+        // statement's pattern_id, and is labelled with what it holds.
+        os << "\\n" << (row.fingerprint_version == 1 ? "pattern_id=0x" : "fetch_id=0x")
+           << std::hex << row.fetch_id << std::dec << " oid=" << row.oid;
 
         // Origin and pinning are separate fields and are printed
         // separately, which is how the row stores them (rows.hpp). Both

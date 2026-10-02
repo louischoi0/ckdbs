@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
@@ -347,6 +348,11 @@ TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
     ASSERT_FALSE(patterns.value().empty());
 
     std::size_t poisoned = 0;
+    // Once per instance, not once per query: since AP-S2 several queries
+    // above share one `{fetch_id, arg_hash}`, and a second pass would read
+    // back the poisoned trail and flip each slot again - two passes put a
+    // slot-0 or slot-1 entry back where it was recorded.
+    std::unordered_set<stats::InstanceKey, stats::InstanceKeyHash> done;
     for (const catalog::SysPatternRow& row : patterns.value()) {
         if (!catalog::HasWaystoneDirectory(row)) continue;
         // Every instance of this pattern that we know how to name: the
@@ -355,6 +361,7 @@ TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
             auto fp = parser::FingerprintOf(sql);
             if (!fp.has_value() || fp->fetch_id != row.fetch_id) continue;
             const stats::InstanceKey key{fp->fetch_id, fp->arg_hash};
+            if (!done.insert(key).second) continue;
 
             auto existing = stats::ReadTrail(db.store(), row.waystone_root, row.dir_depth, key);
             ASSERT_TRUE(existing.ok());

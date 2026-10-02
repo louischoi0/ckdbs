@@ -67,7 +67,7 @@ Every SELECT-class statement compiles to a **step chain**: an ordered list of st
 
 A join contributes one `Lookup`/`Probe`/`Scan` step per relation in written order. This table *is* `docs/spec/waystone-concpets.md` §2's trust model — a waystone may replace a lookup, never a search — extended with the negation rule: **negation steps are search-class by definition**.
 
-Step numbering is global in compile order (the outer chain and every sub-chain share one counter), so a trail entry's `step_id` is unambiguous without parent linkage. The chain layout is a pure function of the AST, hence of `pattern_id`, which is what makes a recorded trail replayable across executions of one instance.
+Step numbering is global in compile order (the outer chain and every sub-chain share one counter), so a trail entry's `step_id` is unambiguous without parent linkage. The chain layout is a pure function of the AST, and its steps of the AST without its select list (only the projection mask reads that), hence of `fetch_id` - which is what makes a recorded trail replayable across executions of one instance, and across statements that differ only in what they project (AP-S2, `waystone-concpets.md` §3).
 
 ## 2. Subqueries as steps
 
@@ -116,7 +116,7 @@ Any literal or parameter destined for a pk position is range-checked `< 2^40`, j
 
 ## 4. Grammar surface
 
-**I7 — `CREATE TABLE` options.** There is no `WITH (key = value, …)` option table; the storage form (`HEAP`/`BTREE`) is a trailing clause. **Waystone is not a table option**: it is keyed on `(pattern_id, arg_hash)`, not on a relation.
+**I7 — `CREATE TABLE` options.** There is no `WITH (key = value, …)` option table; the storage form (`HEAP`/`BTREE`) is a trailing clause. **Waystone is not a table option**: it is keyed on `(fetch_id, arg_hash)`, not on a relation.
 
 **I8 — Session and admin statements.** `SET DURABILITY {STRICT|GROUP|RELAXED}`, `SET ISOLATION LEVEL …`, `SHOW META`, `SHOW TABLES` and the other `SHOW` forms are *dispatcher* commands, not parser statements: ordinary statements returning ordinary result sets — one surface, one auth story. SET is excluded from fingerprinting.
 
@@ -175,7 +175,7 @@ NULL is storable (`docs/spec/null.md`), and comparison is three-valued. The eval
 
 ## 6. Trail integration
 
-- **Recording (J5, n = 2):** the first execution of an instance `(pattern_id, arg_hash)` only counts; the second records. Sightings live in a bounded, core-local in-memory table; eviction merely restarts the count, which is a performance event. `sys.patterns.use_count` continues independently for retention.
+- **Recording (J5, n = 2):** the first execution of an instance `(fetch_id, arg_hash)` only counts; the second records. Sightings live in a bounded, core-local in-memory table; eviction merely restarts the count, which is a performance event. `sys.patterns.use_count` continues independently for retention.
 - **Per-step recording:** `Lookup`/`Probe` steps append entries in execution order with their `step_id` and per-entry `rel_oid` — the existing 32-byte format, unchanged. `Exists` steps record the witnessing row only. `Range`/`Scan`/`NotExists` record nothing.
 - **Replay** consults the instance's trail for entries with the step's `step_id` and applies `docs/spec/waystone-concpets.md` §2 per entry; any miss falls through to the authoritative path *for that step alone*. Search-class steps use the trail only as a prefetch batch.
 - **`Exists` replay is positive-only**, and the asymmetry is the whole point: a validated witness *proves* non-emptiness, because presence has a witness. A missing or invalid witness proves nothing and the probe runs. A trail can never conclude absence.

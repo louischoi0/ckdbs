@@ -490,7 +490,7 @@ public:
     //   SHOW TABLES           -> space-separated table names
     //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
     //                            section per sys.patterns row, identified
-    //                            by its hex pattern_id and carrying
+    //                            by its hex fetch_id and carrying
     //                            `origin=` and `pinned=`, both of which
     //                            read `auto` / `no` on every row since
     //                            declared patterns were withdrawn.
@@ -1527,10 +1527,6 @@ private:
     // beside them. Split out so HandleSelect's row-formatting path and
     // this one visibly share everything above the sink.
     //
-    // `sql` is the stripped statement, taken so the reply can report the
-    // statement's `pattern_id` - the same number `SHOW PATTERNS` lists a
-    // row under, which is how an operator checks which observed pattern a
-    // statement actually matched.
     // `trail` and `replay` are the same two halves an ordinary execution
     // gets. ANALYZE takes them because its contract is that the run it
     // describes is the run that actually happened: a diagnostic that

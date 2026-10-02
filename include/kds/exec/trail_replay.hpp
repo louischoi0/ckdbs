@@ -99,7 +99,7 @@ public:
     //
     // An entry naming a step id the chain does not have is dropped too: a
     // trail outlives the statement text only as far as the fingerprint says
-    // it does, and a chain that changed shape under one pattern_id is a
+    // it does, and a chain that changed shape under one fetch_id is a
     // collision, not a trail.
     void Build(const StepChain& chain, std::span<const stats::WaystoneEntry> entries);
 

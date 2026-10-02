@@ -348,8 +348,12 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
     EXPECT_NE(analyzed.find("replays=1"), std::string::npos) << analyzed;
     EXPECT_EQ(Run(sql), first);
 
+    // Listed stale, and under the name of what it holds: a version-1 key
+    // is a pattern_id, so it is never shown as a fetch_id.
     const std::string shown = Run("SHOW PATTERNS");
     EXPECT_NE(shown.find("stale=v1"), std::string::npos) << shown;
+    EXPECT_NE(shown.find("pattern_id=0x" + Hex(fetch_id) + " oid=999999"), std::string::npos)
+        << shown;
 }
 
 // ---- What must never be replayed -----------------------------------------

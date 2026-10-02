@@ -534,3 +534,87 @@ every window case it listed. It found one defect, which was applied.
   instead of feeding a second one. The double hash predates the stage,
   and its one caller is the golden corpus, not the statement path.
 
+
+### AP-S2 — built 2026-10-02
+
+On `worktree-ap-s2-trail-on-fetch-id` from `d3d90b5`, on *"main에 push하고 AP-S2 시작해줘"*.
+
+- **Built.**
+  - The trail keys on `{fetch_id, arg_hash}`, so statements differing
+    only in their select list share one trail and one `sys.patterns` row.
+  - The dispatcher carries `StatementIdentity` `{trail, pattern_id}`.
+    The cabin optimizer still counts by `pattern_id`, and `ANALYZE`
+    prints both ids.
+  - The trail layer's key field is `fetch_id` throughout: `InstanceKey`,
+    the waystone page header, `SysPatternRow`, `PatternAccess`, the
+    catalog calls, the `sys.patterns` view and `SHOW PATTERNS`. The bytes
+    and the layout are unchanged.
+- **The version.** `kFingerprintVersion` is 2, per AP-Q2 (b), and no hash
+  moved. A version-1 row is hidden by the existing filter, and
+  `SHOW PATTERNS` lists it `stale=v1` under the `pattern_id=` it was
+  keyed by.
+- **The wire.** `S_PARSE_OK`'s `pattern_id` is unchanged, per AP-Q4, and
+  `protocol.md` says so.
+- **Cells.**
+  - Another select list replays the trail, on the btree and the heap
+    relation.
+  - Aggregated and plain statements share a trail in both orders, and the
+    reply is unchanged.
+  - `ANALYZE` prints both ids.
+  - A version-1 row planted under the statement's own `fetch_id` is never
+    found, is labelled `pattern_id=`, and the statement records again.
+  - The optimizer still keeps two select lists apart.
+  - The contract suite gained six shared-fetch statements across all five
+    configurations.
+- **Mutants.**
+  - The key back on `pattern_id`, which is the pre-AP-S2 behaviour and so
+    the red-first check, was killed by the three replay cells.
+  - The optimizer counting by `fetch_id` was killed by its own cell and
+    the `ANALYZE` cell.
+- **A cell's premise changed.**
+  `WaystoneAcrossCores.APeersRepeatedStatementRegistersItsPattern` relied
+  on a different select list making a second row. Its peer now runs a
+  different fetch (`LIMIT 1`).
+- **Suite.**
+  - 3089/3089 at `749af9b`.
+  - After the review and the merge of `origin/main` (`17f4e1b`): 3090/3090
+    of 3091 registered, one disabled as before. The first run of that
+    tree failed `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
+    at its 20 s rig timeout under `-j8`. The cell is on the insert path,
+    which this stage does not touch. It then passed 10/10 alone and in a
+    clean full run.
+  - All runs used `ctest -LE heap-suspended -j8`, Debug.
+  - Overhead not measured; it is measured at AP-S5.
+
+**The review** (`critics-developer`, on `749af9b`) found no engine defect.
+It confirmed by source read:
+
+- **Sharing is sound.** The steps, the class and the step numbering do
+  not read the projection. `ReadColumnsOf` always decodes the pk of a
+  replayable step.
+- **The rename is complete in code**, and the version bump is correct
+  for every consumer.
+
+Applied:
+
+- **A test defect, fixed by the reviewer.** `ACorruptedTrailChangesNoReply`
+  iterated queries, not instances, so a shared instance could be poisoned
+  twice and restored. It now poisons each instance once.
+- **Stale sentences** that still said `pattern_id` where they meant the
+  trail key: `RunAnalyze`'s header, the `SHOW PATTERNS` doc line,
+  `trail_replay.hpp`, `step_compiler.hpp`, `parser-v2.md` (the chain-layout
+  sentence, I7, J5), `heap-and-tuple.md`, `step_correlation_test.cpp`, and
+  `fingerprint.cpp`'s "stays 1".
+- **The version-1 label**, so a pattern_id is never printed as a
+  `fetch_id=`.
+
+Rejected:
+
+- **Collapsing the seven version pins to one.** The `TypesContract` and
+  `AggregateContract` pins are numbered spec items in suites that keep one
+  test per item (CLAUDE.md). The four in `fingerprint_test.cpp` each pin
+  the hash beside the version for a named past change.
+- **The unreachable `!identity` guard in `RecordTrail`.** It predates the
+  stage.
+- **A `MutatePatternRow` version-filter cell.** The gap predates the stage
+  and belongs in `catalog_test.cpp`. It is recorded here, not taken.
