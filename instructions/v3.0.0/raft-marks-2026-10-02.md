@@ -25,3 +25,13 @@
 | **Reading** | An `S` on a parent the check reads as absent protects no row. While any `S` is held no other transaction can take the row's `X`, so the parent was absent at every grant, or this transaction deleted it under its own `X`, which the release does not touch. It closes the parked-statement gap AZ-S5's review found, and deletes the took-it test (`TookShare`, `LockHoldings::LastIs`) and the hoist's asked set |
 | **Does not settle** | anything else in D9(a) - the `S` a passing check takes is held to the decide as before |
 | **Recorded at** | `workorder-az-ay-carry-forward.md` §6, `foreign-keys.md` §2c, `known-gaps.md` (the entry deleted) |
+
+## 3. Every absent parent the failed statement resolved gives back its `S` too
+
+| | |
+|---|---|
+| **Word** | *"push it to main"*, then *"give back the S on every absent parent too"* |
+| **Mark** | §2 lands on `main` at `ca473a4`. **AZ-R5 is amended again**: a failed check gives back the `S` on every parent row the statement resolved as absent, not only the failing check's - the hoist resolves every row's parents before any row is written, so the others' rows are never reached. A present parent's `S` and the relation's `IS` stay. The review of §2 recorded it (`known-gaps.md`, Foreign keys, at `7ce9718`) |
+| **Reading** | §2's argument, applied to each: an `S` on a parent the check reads as absent protects no row |
+| **Does not settle** | anything else in D9(a) |
+| **Recorded at** | `workorder-az-ay-carry-forward.md` §6, `foreign-keys.md` §2c, `known-gaps.md` (the entry deleted) |

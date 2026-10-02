@@ -150,6 +150,15 @@ public:
     std::size_t size() const noexcept { return entries_.size(); }
     bool empty() const noexcept { return entries_.empty(); }
 
+    // Every parent row this statement resolved as absent, for the failure
+    // that gives back their `S` (`foreign-keys.md` §2c).
+    template <typename Visit>
+    void ForEachViolation(Visit&& visit) const {
+        for (const auto& [key, verdict] : entries_) {
+            if (verdict == FkVerdict::kViolation) visit(key.first, key.second);
+        }
+    }
+
     // AK-S3: whether the pks this holds were **collected** by a read-only
     // pass over the relation rather than named by the statement. It changes
     // what a miss in the per-row check means: for a named pk a miss is the

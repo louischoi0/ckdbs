@@ -3480,16 +3480,23 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kViolation:
             break;
     }
-    // **The absent parent's `S` goes with the violation, whoever took it**
-    // (AZ-S5, AZ-R5 as amended 2026-10-02): it protects no row, and kept it
-    // refused every insert of that parent until the client's `ROLLBACK`
-    // (`foreign-keys.md` §2c says why it is sound). A row `X` this
-    // transaction holds is untouched, and nothing held is a no-op.
-    // **The relation's `IS` stays**: the statement's other parent rows stand
-    // under it, and without it a relation `X` could be granted over them.
+    // **Every absent parent's `S` goes with the violation, whoever took it**
+    // (AZ-S5, AZ-R5 as amended 2026-10-02): this one's, and every other the
+    // statement resolved as absent, whose rows it never reaches. None
+    // protects a row, and kept they refused every insert of those parents
+    // until the client's `ROLLBACK` (`foreign-keys.md` §2c says why it is
+    // sound). A present parent's `S` stays, and a row `X` this transaction
+    // holds is untouched; nothing held is a no-op.
+    // **The relation's `IS` stays**: the statement's present parent rows
+    // stand under it, and without it a relation `X` could be granted over
+    // them.
     if (locks_ != nullptr && scope.txn != nullptr) {
-        locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(fk.rel_oid, parent_pk),
-                           txn::LockMode::kShared, scope.txn->borrows());
+        const auto give_back = [&](catalog::Oid rel, std::uint64_t pk) {
+            locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(rel, pk),
+                               txn::LockMode::kShared, scope.txn->borrows());
+        };
+        give_back(fk.rel_oid, parent_pk);
+        held.ForEachViolation(give_back);
     }
     return Status::FkViolation("'" + column + "' references row id=" +
                                std::to_string(value.int_val) + " of '" +

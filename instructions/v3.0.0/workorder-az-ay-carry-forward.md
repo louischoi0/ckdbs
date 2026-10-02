@@ -858,3 +858,21 @@ the S on any failed check, as the review proposed"*
     resolved, whose rows it never reached - `INSERT INTO c VALUES (99),
     (98)` with both absent keeps `S(98)`. The amendment's argument covers
     it, but the mark named the failed check, and this goes further.
+
+### AZ-R5 amended again — 2026-10-02
+
+On `worktree-az-q3b-release-every-absent-parent` from `ca473a4`, on *"give
+back the S on every absent parent too"* (`raft-marks-2026-10-02.md` §3).
+
+- **The reproduction** (`48f8191`) was red at `ca473a4`:
+  `BEGIN; INSERT INTO c VALUES (99), (98)` with both parents absent left
+  `S(98)` held.
+- **The fix.** The violation also gives back the `S` of every entry the
+  statement resolved as absent (`FkParentVerdicts::ForEachViolation`). A
+  present parent's `S`, the relation's `IS` and any row `X` stay. The
+  intention cell now pins the present parent's `S` too.
+- **Mutants: two, both killed.**
+  - the failing check's `S` only: the new cell;
+  - every resolved parent's `S`, present ones included: the intention cell.
+- **Docs.** `foreign-keys.md` §2c restated and the CLAUDE.md Foreign keys
+  row; the `known-gaps.md` entry is deleted.

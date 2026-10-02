@@ -304,10 +304,12 @@ D9(a) is built as ratified, and its costs are the engine's:
   statement's run took before it parked and ran again. **The relation's `IS`
   stays**, since the statement's other parent rows stand under it. The
   self-referencing arm releases the same way, and is unreachable while no
-  self-referencing key can be declared. **Only the failing check's `S`
-  goes**: other absent parents the hoist resolved for the same statement,
-  whose rows are never reached, keep theirs to the rollback
-  (`known-gaps.md`, Foreign keys).
+  self-referencing key can be declared. **Every absent parent the statement
+  resolved goes with it** (`raft-marks-2026-10-02.md` §3): the hoist
+  resolves every row's parents before any row is written, so a statement
+  naming two absent parents holds both and fails at the first; the second's
+  row is never reached, and its `S` protects no row either. A present
+  parent's `S` stays.
 
 An existence-only unit that only a `DELETE` would take is not built; it is
 a change to AR2's units, and would be put forward as its own item if these
