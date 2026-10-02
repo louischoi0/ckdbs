@@ -522,21 +522,23 @@ def verify(client, tables, state, sample, rng):
         if first is None:
             first = message
 
-    def unanswerable(invariant, subject):
-        """One check the server would not let this pass evaluate."""
+    def unanswerable(invariant, subject, error):
+        """One check the server would not let this pass evaluate; `error`
+        is the refused statement and its reply."""
         nonlocal unanswered, first_unanswered
         unanswered += 1
         if first_unanswered is None:
-            first_unanswered = f"{invariant} {subject}: {client.last_error}"
+            first_unanswered = f"{invariant} {subject}: {error}"
 
     booked = [op for op, total in state.booked_cbm.items() if total > 0]
     for op_id in rng.sample(booked, min(sample, len(booked))):
         ledger_rows = client.rows(f"SELECT SUM(cbm) FROM {tables['freights']} "
                                   f"WHERE operation_id = {op_id}")
+        refused = client.last_error if ledger_rows is None else None
         stored = client.rows(f"SELECT booked_cbm FROM {tables['operations']} "
                              f"WHERE id = {op_id}")
         if ledger_rows is None or stored is None:
-            unanswerable("I1/I2", f"operation {op_id}")
+            unanswerable("I1/I2", f"operation {op_id}", refused or client.last_error)
             continue
         if not stored:
             continue
@@ -558,24 +560,25 @@ def verify(client, tables, state, sample, rng):
             f"SELECT f.id, f.cbm, f.price_per_cbm FROM {tables['freights']} AS f "
             f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
             f"WHERE c.org_id = {org_id}")
+        refused = client.last_error if rows is None else None
         stored = client.rows(f"SELECT outstanding FROM {tables['organizations']} "
                              f"WHERE id = {org_id}")
         if rows is None or stored is None:
-            unanswerable("I3", f"organization {org_id}")
+            unanswerable("I3", f"organization {org_id}", refused or client.last_error)
             continue
         if not stored:
             continue
-        recomputed, refused = 0, False
+        recomputed = 0
         for freight in rows:
             freight_id, cbm, rate = int(freight[0]), int(freight[1]), int(freight[2])
             charged = client.rows(f"SELECT SUM(amount) FROM {tables['charges']} "
                                   f"WHERE freight_id = {freight_id}")
             if charged is None:
-                refused = True
+                recomputed = None
                 break
             recomputed += (cbm // MILLI) * rate + sum_value(charged)
-        if refused:
-            unanswerable("I3", f"organization {org_id}")
+        if recomputed is None:
+            unanswerable("I3", f"organization {org_id}", client.last_error)
             continue
         checks += 1
         if recomputed != int(stored[0][0]):
@@ -587,7 +590,7 @@ def verify(client, tables, state, sample, rng):
         rows = client.rows(f"SELECT id FROM {tables['charges']} "
                            f"WHERE freight_id = {freight_id}")
         if rows is None:
-            unanswerable("I4", f"freight {freight_id}")
+            unanswerable("I4", f"freight {freight_id}", client.last_error)
             continue
         checks += 1
         if len(rows) != state.freight_charges[freight_id]:
