@@ -139,16 +139,18 @@
 // id = ?` and `SELECT b FROM t WHERE id = ?` read the same tuples by the
 // same path, and a trail records where the tuples were, never what was
 // projected - so the trail's key should not tell them apart. `fetch_id` is
-// `pattern_id`'s hash with the tokens after the **leading** `SELECT` and
-// before its first `FROM` at parenthesis depth 0 left out. `pattern_id` stays
+// `pattern_id`'s hash with the leading `SELECT`'s select list left out: the
+// tokens after the **leading** `SELECT` and before the `FROM` that ends the
+// list. `pattern_id` stays
 // the statement's identity for everything that is not a trail.
 //
 // - A subquery's select list is shape. It comes after the outer `FROM`, so
 //   it is never inside the window: `IN (SELECT b FROM u)` and
 //   `IN (SELECT c FROM u)` fetch different values.
-// - The depth matters only because `FROM` is not reserved:
-//   `SELECT COUNT(from) FROM t` names a column called `from`, and the
-//   window must not close on it.
+// - `FROM` is not reserved, so a column may be named `from`:
+//   `SELECT from, t.from, COUNT(from) FROM t`. The window closes only on a
+//   `from` at parenthesis depth 0 that does not begin an item - one not
+//   right after the `SELECT`, a `,` or a `.` (fingerprint.cpp).
 // - Every other leading word skips nothing, so its `fetch_id` is its
 //   `pattern_id` - returned as such rather than hashed twice, so a write
 //   pays nothing for this.
@@ -344,10 +346,13 @@ private:
     bool insert_head_ = false;        // the leading word was INSERT
     bool first_group_closed_ = false; // ...and its first () group has ended
 
-    // fetch_id's window: open from a leading SELECT until its first FROM at
-    // depth 0, and while it is open nothing folds into `fetch_`.
+    // fetch_id's window: open from a leading SELECT until the FROM that
+    // ends its select list, and while it is open nothing folds into
+    // `fetch_`. `select_item_due_` says the next token begins an item, where
+    // a `from` can only be a column's name.
     bool select_head_ = false;
     bool select_list_open_ = false;
+    bool select_item_due_ = false;
 
     // Shared by the INSERT group and the SELECT window: one statement has
     // one leading word, so at most one of them ever counts.

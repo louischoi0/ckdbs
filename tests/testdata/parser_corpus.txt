@@ -380,8 +380,11 @@ NotImplemented	7bfb6efe6f64c69c	cbf29ce484222325	ac466d19a355cfcd	SELECT * FROM 
 #
 # Rejected — malformed select lists. `SELECT *, a` and `SELECT a, *` are
 # here because star is a whole select list, never a list element.
-InvalidArgument	d591805ceb2c9c23	cbf29ce484222325	d591805ceb2c9c23	SELECT FROM t
-InvalidArgument	65a9a93fb6b45224	cbf29ce484222325	d591805ceb2c9c23	SELECT a, FROM t
+# The next two have one fetch_id, the leading SELECT's alone: a `from` where
+# an item begins reads as a column named `from`, so the window never closes.
+# Neither parses, so neither is ever stored.
+InvalidArgument	d591805ceb2c9c23	cbf29ce484222325	ab4084f3e927f0c2	SELECT FROM t
+InvalidArgument	65a9a93fb6b45224	cbf29ce484222325	ab4084f3e927f0c2	SELECT a, FROM t
 InvalidArgument	a41e0c3299fb216c	cbf29ce484222325	d591805ceb2c9c23	SELECT a b FROM t
 InvalidArgument	4518328abb44759c	cbf29ce484222325	d591805ceb2c9c23	SELECT a., b FROM t
 InvalidArgument	ca77cd098eb35051	182b9abf546ab5c4	d591805ceb2c9c23	SELECT 42 FROM t

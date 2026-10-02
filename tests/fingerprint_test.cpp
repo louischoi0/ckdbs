@@ -513,6 +513,25 @@ TEST(FingerprintTest, AFromInsideACallDoesNotCloseTheWindow) {
               Must("SELECT COUNT(x) FROM t WHERE id = 1").fetch_id);
 }
 
+// Kills "close on any depth-0 `from`" (the review of 6f32eab): a column
+// named `from` at depth 0 begins an item - after the SELECT, a `,` or a
+// `.` - and every one of these parses. Closed there, each would have keyed
+// its trail on its own pattern_id.
+TEST(FingerprintTest, AColumnNamedFromDoesNotCloseTheWindow) {
+    const std::uint64_t plain = Must("SELECT a FROM t WHERE id = 1").fetch_id;
+    const char* const statements[] = {
+        "SELECT from FROM t WHERE id = 1",
+        "SELECT a, from FROM t WHERE id = 1",
+        "SELECT t.from FROM t WHERE id = 1",
+        "SELECT from, t.from FROM t WHERE id = 1",
+    };
+    for (const char* sql : statements) {
+        const Fingerprint fp = Must(sql);
+        EXPECT_EQ(fp.fetch_id, plain) << sql;
+        EXPECT_NE(fp.fetch_id, fp.pattern_id) << sql;
+    }
+}
+
 TEST(FingerprintTest, EveryOtherLeadingWordHasItsPatternIdAsItsFetchId) {
     const char* const statements[] = {
         "INSERT INTO t VALUES (1, 'a')",

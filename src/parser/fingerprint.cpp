@@ -109,13 +109,6 @@ enum class ArgTag : std::uint8_t {
     kStr = 2,
 };
 
-// Whether a statement whose first word is `word` has a pattern at all.
-// Everything else - CREATE, SET, SHOW, DESCRIBE, SYNC, and any word this
-// grammar does not know - reduces to nullopt.
-//
-// A list rather than a "not DDL" check: the safe default for an unknown
-// leading keyword is *not patternable*, and an allow-list is the only
-// shape that gets that right without being updated.
 // Whether `word` is `lower` case-insensitively. Folded as it compares, so
 // no caller needs a buffer.
 bool IsWord(std::string_view word, std::string_view lower) noexcept {
@@ -126,6 +119,13 @@ bool IsWord(std::string_view word, std::string_view lower) noexcept {
     return true;
 }
 
+// Whether a statement whose first word is `word` has a pattern at all.
+// Everything else - CREATE, SET, SHOW, DESCRIBE, SYNC, and any word this
+// grammar does not know - reduces to nullopt.
+//
+// A list rather than a "not DDL" check: the safe default for an unknown
+// leading keyword is *not patternable*, and an allow-list is the only
+// shape that gets that right without being updated.
 bool IsPatternableLeadingWord(std::string_view word) noexcept {
     return IsWord(word, "select") || IsWord(word, "insert") || IsWord(word, "update");
 }
@@ -214,6 +214,7 @@ void FingerprintAccumulator::Reset() noexcept {
     first_group_closed_ = false;
     select_head_ = false;
     select_list_open_ = false;
+    select_item_due_ = false;
     paren_depth_ = 0;
 }
 
@@ -243,6 +244,7 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
         insert_head_ = IsWord(tok.text, "insert");
         select_head_ = IsWord(tok.text, "select");
         select_list_open_ = select_head_;
+        select_item_due_ = select_head_;
 
         valid_ = true;
         Fnv1a shape(shape_);
@@ -316,20 +318,24 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
 
     // ---- fetch_id's window: the leading SELECT's select list -------------
     //
-    // Closed by the first `from` at depth 0, which is itself folded: the
+    // Closed by the `from` that ends the list, which is itself folded: the
     // window holds the select list and nothing else. `FROM` is unreserved,
-    // so it arrives as kIdent - and as a column name inside `COUNT(from)`,
-    // which the depth is there to pass over.
+    // so it arrives as kIdent, and a column may carry its name. The list is
+    // `*` or items - a column, `rel.column`, or an aggregate over one - so
+    // a column-named `from` sits either inside a call's parens (the depth)
+    // or where an item begins: after the SELECT, a `,` or a `.`. The `from`
+    // that ends the list is at depth 0 and follows an item's end instead.
     if (select_list_open_) {
         if (tok.type == TokenType::kLParen) {
             ++paren_depth_;
         } else if (tok.type == TokenType::kRParen) {
             if (paren_depth_ > 0) --paren_depth_;
-        } else if (paren_depth_ == 0 &&
-                   (tok.type == TokenType::kIdent || tok.type == TokenType::kKeyword) &&
+        } else if (paren_depth_ == 0 && !select_item_due_ && tok.type == TokenType::kIdent &&
                    IsWord(tok.text, "from")) {
             select_list_open_ = false;
         }
+        select_item_due_ = paren_depth_ == 0 &&
+                           (tok.type == TokenType::kComma || tok.type == TokenType::kDot);
     }
 
     ShapeTag tag;

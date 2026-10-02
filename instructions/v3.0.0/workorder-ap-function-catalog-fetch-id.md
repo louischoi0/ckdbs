@@ -178,10 +178,19 @@ The skip window starts after the **leading** `SELECT` and ends at the first
 after that `FROM`, outside the window. That is right, since
 `IN (SELECT b FROM u)` and `IN (SELECT c FROM u)` fetch different values.
 
-AR1 §4's "at parenthesis depth 0" matters only because `FROM` is not
-reserved (`src/parser/lexer.cpp:38-43`). In `SELECT COUNT(from) FROM t`,
-the `from` inside the call is a column, and a depth-blind window would end
-there.
+`FROM` is not reserved (`src/parser/lexer.cpp:38-43`), so a column may be
+named `from`, and AR1 §4's "first `FROM` at parenthesis depth 0" is not
+enough (AP-S1's review):
+
+- Inside a call, `SELECT COUNT(from) FROM t`, the depth passes over it.
+- At depth 0, `SELECT from FROM t`, `SELECT a, from FROM t` and
+  `SELECT t.from FROM t` all parse.
+
+The select list is `*` or items, and an item is a column, `rel.column`, or
+an aggregate over one (`src/parser/parser.cpp:1346-1427`). So a
+column-named `from` at depth 0 begins an item: it comes right after the
+`SELECT`, a `,` or a `.`. The `from` that ends the list follows the end of
+an item.
 
 ### 1.5 Sharing one trail across select lists is sound by construction
 
@@ -246,7 +255,9 @@ quiet-wrong surface AP itself opens.**
 
 - **Rule.** After a leading `SELECT`, the second state folds every token
   `pattern_id` folds, except those after that `SELECT` and before the
-  first `FROM` at parenthesis depth 0 (§1.4). For any other leading word
+  `FROM` that ends its select list. That `FROM` is the first `from` at
+  parenthesis depth 0 that does not begin an item (§1.4); the original
+  rule, amended at AP-S1's review, said only depth 0. For any other leading word
   the state is not fed, and `Result()` returns `shape_` as `fetch_id`. A
   write therefore pays nothing, and `fetch_id == pattern_id` holds for it
   by construction.
@@ -346,7 +357,7 @@ Each stage waits for the operator's word.
 | stage | what | exit | size |
 |---|---|---|---|
 | AP-S0 | This order; the index row | the files at the commit | S |
-| AP-S1 | **`fetch_id`** (AP-R1) | <ul><li>Unit cells: two select lists over one `FROM … WHERE` converge.</li><li>Two subquery select lists do not.</li><li>An aggregated and a plain select list converge.</li><li>`SELECT COUNT(from) FROM t` and `SELECT COUNT(x) FROM t` converge.</li><li>Every non-`SELECT` leading word gives `fetch_id == pattern_id`, including BI5's multi-row `INSERT`.</li><li>The golden corpus with `fetch_id` added and every `pattern_id` unchanged.</li><li>**Mutation:** the window reopened after every `SELECT`, killed by the subquery cell; depth ignored, killed by the `COUNT(from)` cell.</li></ul> | S |
+| AP-S1 | **`fetch_id`** (AP-R1) | <ul><li>Unit cells: two select lists over one `FROM … WHERE` converge.</li><li>Two subquery select lists do not.</li><li>An aggregated and a plain select list converge.</li><li>`SELECT COUNT(from) FROM t` and `SELECT COUNT(x) FROM t` converge, and so do `SELECT from`, `a, from` and `t.from` with `SELECT a` (added at the review).</li><li>Every non-`SELECT` leading word gives `fetch_id == pattern_id`, including BI5's multi-row `INSERT`.</li><li>The golden corpus with `fetch_id` added and every `pattern_id` unchanged.</li><li>**Mutation:** the window reopened after every `SELECT`, killed by the subquery cell; depth ignored, killed by the `COUNT(from)` cell; the item-begins guard removed, killed by the column-named-`from` cell.</li></ul> | S |
 | AP-S2 | **The trail on `fetch_id`** (AP-R2) - **gated on AP-Q2's mark** | <ul><li>Red first: `SELECT a …` records and `SELECT b …` with the same arguments replays nothing today.</li><li>Green: it replays, and its result is byte-identical with replay off (the waystone contract suite, extended).</li><li>An aggregated and a plain statement over one fetch, both orders, results identical to replay off.</li><li>A pre-change row is never found and never displayed as a `fetch_id` (AP-Q2's mechanism), and the statement records again.</li><li>The optimizer's signals still split by `pattern_id`.</li><li>**Mutation:** the lookup back on `pattern_id`, killed by the red cell.</li><li>`waystone-concpets.md` §1/§3/§5, the `sys.patterns` view, `SHOW PATTERNS`, `protocol.md` per AP-Q4, and `manual/` restated.</li></ul> | M |
 | AP-S3 | **Rule 0′** (AP-R3) | <ul><li>The two spec sentences.</li><li>The planted driving-step cell.</li><li>No `src/` change.</li></ul> | S |
 | AP-S4 | **The function catalog and the determinism class** (AP-R4) - **gated on AP-Q1** (and AP-Q5 for D1) | <ul><li>Per function: its evaluation, its NULL and type refusals, each with a position.</li><li>**§1.7's readers, `[quiet-wrong]`:** a function conjunct over the pk, over an indexed column, over a cabined column, over a join column, and over a column a `BETWEEN` would bound. Each result is byte-identical to a scan oracle with replay, index and Cabin off.</li><li>A D0 statement with an immutable function and a pk equality beside it (a keyed step, so it can record) records and replays.</li><li>A D2 statement through the test seam is never sighted, registered or recorded.</li><li>The default-purity cell.</li><li>D1 per AP-Q5.</li><li>The refusals of AP-R4 item 4, including `WHERE SUM(x) = 1` keeping its present refusal.</li><li>**Mutation:** the function conjunct lowered as a plain `StepPredicate` on its column, killed by the reader cells; the D2 gate removed, killed by the D2 cell; the default purity flipped to `kImmutable`, killed by the default-purity cell.</li><li>`parser-v2.md`, `fingerprint.hpp`'s comment on functions, `manual/sql/sql.md:907-911` rewritten, and `types.md` per function.</li></ul> | L |
@@ -477,3 +488,49 @@ proposed (`raft-marks-2026-10-02.md` §4), and the order landed on `main`.
   AP consumer.
 
 No stage has started.
+
+### AP-S1 — built 2026-10-02
+
+On `worktree-ap-s1-fetch-id` from `f992e7e`, on *"AP-S1 시작해줘"*.
+
+- **Built.** `Fingerprint::fetch_id`, from one more FNV state in
+  `FingerprintAccumulator`. It is fed only after a leading `SELECT`, so
+  every other leading word returns its `pattern_id` as its `fetch_id`.
+  The shape fold became one helper applied to both states, which is what
+  guarantees the two hashes differ only by the window's tokens.
+- **Nothing persisted moves.** `pattern_id`, `arg_hash` and
+  `kFingerprintVersion` are byte-unchanged: the corpus gained a
+  `fetch_id` column, and its other columns regenerate identically on all
+  287 rows. Two rows moved within the new column at the review, both
+  refused `InvalidArgument` and never storable (`SELECT FROM t`,
+  `SELECT a, FROM t`).
+- **The pin** `0xb5b2ac05aab0a3a9` was computed outside the code, by an
+  FNV model of the shape rules that reproduces `pattern_id`'s own pin.
+- **Mutants.** Each was run against the built tree, and each was killed:
+  - depth ignored, killed by the `COUNT(from)` cell;
+  - the window reopened at every `SELECT`, killed by the subquery cell
+    and the corpus;
+  - the item-begins guard removed, killed by the column-named-`from`
+    cell and the corpus.
+- **Suite.** 3083/3083 at `6f32eab`, and after the review 3084/3084, both
+  under `ctest -LE heap-suspended -j8`, Debug. Overhead not measured; it
+  is measured at the milestone's close (AP-S5).
+
+**The review** (`critics-developer`, on `6f32eab`) checked the change's
+claims by source read: the persisted bytes, the corpus, both pins, and
+every window case it listed. It found one defect, which was applied.
+
+- **The defect.** A column named `from` at depth 0 closed the window
+  early, so one fetch got two keys: a miss, never a wrong row. AP-R1 and
+  §1.4 are amended above. The window now closes only on a `from` that does
+  not begin an item.
+- **Applied:** the misplaced allow-list comment moved back, and the
+  `kKeyword` arm dropped from the `from` test, since `FROM` is not a
+  keyword.
+- **Rejected:** deleting `FingerprintAccumulator::Reset()`, which no code
+  calls. It is a public method that predates this stage, and removing it
+  is outside AP-S1.
+- **Rejected:** making `FingerprintOf` drain its lexer's own accumulator
+  instead of feeding a second one. The double hash predates the stage,
+  and its one caller is the golden corpus, not the statement path.
+
