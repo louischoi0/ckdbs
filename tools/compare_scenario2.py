@@ -290,9 +290,10 @@ def print_verify(left, right, left_name, right_name):
                   f"{v['failures']} FAILURE(S) - first: {v['first']}")
         else:
             print(f"  {name:<8} {v['checks']} checks, 0 failures")
-        # Absent on a run from before 2026-08-31, and on every PostgreSQL
-        # run - the twin has its own `verify` and no shape it refuses - so
-        # `.get` rather than `[]`, and silence means "none", never "unknown".
+        # Absent on a ckdbs run from before 2026-08-31 and on a PostgreSQL
+        # run from before eb4dfd1, both of which skipped a refused read
+        # uncounted - so `.get` rather than `[]`. On a file that carries the
+        # key, silence means "none".
         if v and v.get("unanswered"):
             print(f"  {'':<8} {v['unanswered']} check(s) the server refused, "
                   f"NOT verified - first: {v['first_unanswered']}")
