@@ -54,3 +54,13 @@
 | **Reading** | §2's argument, applied to each: an `S` on a parent the check reads as absent protects no row |
 | **Does not settle** | anything else in D9(a) |
 | **Recorded at** | `workorder-az-ay-carry-forward.md` §6, `foreign-keys.md` §2c, `known-gaps.md` (the entry deleted) |
+
+## 5. A function on the value side too
+
+| | |
+|---|---|
+| **Word** | answering *"How should AP-S4 treat NOW()?"* with *"Value side too (Recommended)"* |
+| **Mark** | **AP-Q1 is amended** (`workorder-ap-function-catalog-fetch-id.md`). A function call may stand on either side of a WHERE comparison: `F(col, …) op value`, `col op F(…)` and `F(…) op F(…)`. So `ts < NOW()` is written as it reads. Every such conjunct lowers to the function-conjunct residual kind of AP-R4 item 2. It is never a step key, a bound, an index key, a join key, a `BuildKey` or a Cabin probe, including when `col` is the pk. |
+| **Reading** | Under the first mark `NOW()`, which takes no column, could be written only as `NOW() op literal`. That compares the clock with a constant and filters no row. The value side is what makes `NOW()` the D1 example AR1 §3 names. |
+| **Does not settle** | anything else in AP-Q1 - the first functions are still `DATE(timestamp)` and `NOW()`, and still WHERE only |
+| **Recorded at** | the order's AP-R4 and its AP-S4 row |

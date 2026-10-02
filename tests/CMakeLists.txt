@@ -100,6 +100,7 @@ add_executable(kds_tests
     trail_store_test.cpp
     trail_recorder_test.cpp
     waystone_replay_test.cpp
+    function_conjunct_test.cpp
     waystone_contract_test.cpp
     cabin_contract_test.cpp
     foreign_key_test.cpp

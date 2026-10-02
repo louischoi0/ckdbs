@@ -314,9 +314,11 @@ in the same stage as the first entries that use them, in this order:
      (`include/kds/server/command_dispatcher.hpp:646`). That seam is how
      the D2 cells get a `kVolatileRow` entry without one shipping.
 2. **The predicate side.** `[quiet-wrong]`, §1.7.
-   - The first expression the grammar admits is a function call on the
-     column side of a WHERE conjunct, compared to a literal or `?`:
-     `F(col, …) op value`.
+   - The first expression the grammar admits is a function call on
+     either side of a WHERE comparison: `F(col, …) op value`,
+     `col op F(…)`, or one on each side. The value side was added by
+     the mark of 2026-10-02 (`raft-marks-2026-10-02.md` §5), because
+     `NOW()` takes no column.
    - It lowers to **a residual kind of its own**, a function conjunct,
      which none of §1.7's readers walks. It is filtered after the step's
      access, never used as a step key, a bound, an index key, a join key, a

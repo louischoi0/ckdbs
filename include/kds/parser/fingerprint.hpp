@@ -37,6 +37,12 @@
 //
 // ---- What is shape and what is argument ---------------------------------
 //
+// **A function's name is shape too** (AP-S4): it lexes as an identifier
+// and its parentheses as their own tags, so `DATE(ts) = '...'` and
+// `NOW() > '...'` are two patterns and its literal is an argument like any
+// other. A call parsed in no production before AP-S4, so no stored hash
+// held one and admitting it moved none (the refinement below).
+//
 // **Identifiers are shape.** `SELECT * FROM accounts WHERE id = 1` and
 // `SELECT * FROM trades WHERE id = 1` are different patterns, because
 // they read different relations and a trail from one is worthless to the

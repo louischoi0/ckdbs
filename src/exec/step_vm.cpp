@@ -2275,6 +2275,14 @@ private:
                            : EvaluateAll(schemas_, step.residual, frame_);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
+        // The function conjuncts (AP-S4), on the row the residual kept.
+        // A step carrying one takes no build annotation (step_compiler.cpp),
+        // so this never runs while a map is being filled.
+        if (!step.fn_residual.empty()) {
+            auto fn_matched = EvaluateFunctionConjuncts(step.fn_residual, frame_);
+            if (!fn_matched.ok()) return fn_matched.status();
+            if (!fn_matched.value()) return Status::OK();
+        }
         if (building_here) {
             // The cap (workplan JB5): a row that would push the map past
             // `max_rows` trips `over_cap` instead of entering - the rest
@@ -2728,6 +2736,11 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     auto matched = EvaluateAll(schemas, step.residual, frame);
     if (!matched.ok()) return matched.status();
     if (!matched.value()) return false;
+    if (!step.fn_residual.empty()) {
+        auto fn_matched = EvaluateFunctionConjuncts(step.fn_residual, frame);
+        if (!fn_matched.ok()) return fn_matched.status();
+        if (!fn_matched.value()) return false;
+    }
     if (step.sub_chains.empty()) return true;
 
     ExecStats local;

@@ -2,6 +2,9 @@
 
 #include "kds/exec/row_codec.hpp"
 
+#include <array>
+#include <span>
+
 namespace kds::exec {
 
 namespace {
@@ -114,6 +117,60 @@ StatusOr<bool> EvaluateAllExcept(const std::vector<const catalog::Schema*>& sche
         auto matched = EvaluateConjunct(schemas, predicates[i], frame);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return false;
+    }
+    return true;
+}
+
+namespace {
+
+// One side's value on the current row.
+StatusOr<parser::AstValue> SideValue(const FunctionSide& side, const StatementContext& context,
+                                     const ChainFrame& frame) {
+    if (!side.call.has_value()) {
+        if (side.plain.kind == OperandKind::kLiteral) {
+            // EvaluateConjunct's `$param` refusal, for the same reason.
+            if (side.plain.literal.type == parser::ValueType::kParam) {
+                return Status::Corruption("a parameter reached execution with no bound value");
+            }
+            return side.plain.literal;
+        }
+        if (!frame.CanResolve(side.plain.column)) {
+            return Status::Corruption("a function conjunct references a column the frame "
+                                      "cannot resolve; the chain is malformed");
+        }
+        return frame.Get(side.plain.column);
+    }
+    // On the stack, not a vector: this runs per filtered row, and the
+    // compiler holds every call to kMaxFunctionArgs (functions.hpp).
+    const FunctionTerm& call = *side.call;
+    std::array<parser::AstValue, kMaxFunctionArgs> args;
+    for (std::size_t i = 0; i < call.args.size(); ++i) {
+        if (!frame.CanResolve(call.args[i])) {
+            return Status::Corruption("a function argument references a column the frame "
+                                      "cannot resolve; the chain is malformed");
+        }
+        const parser::AstValue& arg = frame.Get(call.args[i]);
+        if (arg.type == parser::ValueType::kNull) return parser::AstValue{};  // NULL in, NULL out
+        args[i] = arg;
+    }
+    return call.fn->evaluate(std::span<const parser::AstValue>(args.data(), call.args.size()),
+                             context);
+}
+
+}  // namespace
+
+StatusOr<bool> EvaluateFunctionConjuncts(const std::vector<FunctionPredicate>& predicates,
+                                         const ChainFrame& frame) {
+    for (const FunctionPredicate& pred : predicates) {
+        auto lhs = SideValue(pred.lhs, pred.context, frame);
+        if (!lhs.ok()) return lhs.status();
+        parser::AstValue rhs;
+        if (pred.op != parser::CompareOp::kIsNull && pred.op != parser::CompareOp::kIsNotNull) {
+            auto value = SideValue(pred.rhs, pred.context, frame);
+            if (!value.ok()) return value.status();
+            rhs = std::move(value.value());
+        }
+        if (!CompareValues(pred.type_val, lhs.value(), rhs, pred.op)) return false;
     }
     return true;
 }

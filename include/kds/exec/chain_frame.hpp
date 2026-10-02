@@ -141,4 +141,11 @@ StatusOr<bool> EvaluateAllExcept(const std::vector<const catalog::Schema*>& sche
                                  const std::vector<StepPredicate>& predicates,
                                  const ChainFrame& frame, std::size_t skip);
 
+// Every function conjunct attached to one step (step_chain.hpp's
+// FunctionPredicate). Empty always matches. A NULL argument makes the call
+// NULL, and a comparison with NULL is not true - the same collapse every
+// other conjunct gets (null.md §4).
+StatusOr<bool> EvaluateFunctionConjuncts(const std::vector<FunctionPredicate>& predicates,
+                                         const ChainFrame& frame);
+
 }  // namespace kds::exec

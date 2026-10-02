@@ -214,6 +214,19 @@ enum class PredicateKind : std::uint8_t {
     // "downgrading any step to a plain scan cannot change the result"
     // true, which is the property invariant 9's fall-through rests on.
     kBetween,
+
+    // A comparison with a function call on at least one side (AP-S4,
+    // workorder-ap-function-catalog-fetch-id.md AP-R4): `DATE(ts) = '...'`,
+    // `ts < NOW()`. `lhs_fn` set means the left side is that call and `col`
+    // is unset; `rhs_fn` set means the right side is that call and `val` /
+    // `rhs_col` are unset. `op` is the comparison, `IS [NOT] NULL` included.
+    //
+    // **A kind of its own, so every reader that acts on a `kCompareValue`
+    // passes it by** - the point lookup's pk test, the write's lock window -
+    // rather than reading `col op val` off a conjunct that is about `f(col)`.
+    // It lowers to a function conjunct (step_chain.hpp) and never to a
+    // `StepPredicate`, which is what keeps it from ever being a key.
+    kCompareFunction,
 };
 
 // What sits on the right of a comparison.
@@ -225,6 +238,17 @@ enum class PredicateKind : std::uint8_t {
 // so the two are reconciled in favour of §2 - a feature J1 put in scope
 // cannot be unreachable from the grammar.
 enum class RhsKind : std::uint8_t { kLiteral, kColumn };
+
+// A scalar function call as written: `DATE(ts)`, `NOW()`. Its arguments are
+// column references - a literal or a nested call is refused at parse
+// (`NotImplemented`), since neither shipped function needs one. The name is
+// resolved against the function catalog at compile (exec/functions.hpp),
+// which is where an unknown one is refused.
+struct FunctionCall {
+    std::string name;
+    std::vector<ColumnName> args;
+    std::uint32_t byte_offset = 0;  // the name's first byte
+};
 
 struct Condition {
     PredicateKind kind = PredicateKind::kCompareValue;
@@ -249,6 +273,10 @@ struct Condition {
     AstValue val;       // rhs_kind == kLiteral; the low bound for kBetween
     AstValue val_high;  // kBetween only: the high bound
     ColumnName rhs_col; // rhs_kind == kColumn
+
+    // kCompareFunction only: the call on each side, where there is one.
+    std::optional<FunctionCall> lhs_fn;
+    std::optional<FunctionCall> rhs_fn;
 
     // The nested query block, for every kind but kCompareValue.
     //

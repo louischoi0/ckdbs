@@ -220,6 +220,19 @@ private:
     StatusOr<AstValue> ParseValue();
     StatusOr<CompareOp> ParseCompareOp();
     StatusOr<Condition> ParseOneCondition(std::uint32_t depth);
+
+    // AP-S4's call, its head already read as `head`: `(`, column
+    // arguments, `)`. Whether `head` names a function at all is the
+    // compiler's to answer (exec/functions.hpp).
+    StatusOr<FunctionCall> ParseFunctionCall(ColumnName head);
+    // Whether a name just read, with `(` next, is a call this grammar
+    // admits in a predicate: unqualified, and not an aggregate's name -
+    // which keeps the refusal it has always had there.
+    bool StartsFunctionCall(const ColumnName& head);
+    // The rest of a comparison whose left side is a call.
+    StatusOr<Condition> ParseFunctionComparison(Condition cond);
+    // `IS [NOT] NULL`, if it is next: true and `op` set, false if not.
+    StatusOr<bool> ParseIsNull(CompareOp& op);
     StatusOr<std::vector<Condition>> ParseOptionalWhere(std::uint32_t depth);
 
     StatusOr<std::string> ParseIdent();
