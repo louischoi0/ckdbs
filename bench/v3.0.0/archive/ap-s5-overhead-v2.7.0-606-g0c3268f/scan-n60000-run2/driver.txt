@@ -1,0 +1,13 @@
+host before: 1.08 1.82 2.84 1/276 648622  competing: none
+host after : 1.22 1.82 2.82 1/268 648661  competing: none
+update replies other than 'UPDATED 1': 0
+== B  cell=scan rows=60000
+  scan-reject          ops= 1000 p50=   4343.8 p90=   4435.7 p99=   4718.4 qps=     226 err=0
+  scan-reject-again    ops= 1000 p50=   4349.1 p90=   4434.0 p99=   4693.7 qps=     228 err=0
+  ping                 ops= 1000 p50=     37.7 p90=     45.3 p99=     54.6 qps=   25352 err=0
+== A  cell=scan rows=60000
+  scan-reject          ops= 1000 p50=   4068.3 p90=   4114.1 p99=   4349.3 qps=     245 err=0
+  scan-reject-again    ops= 1000 p50=   4118.3 p90=   4162.5 p99=   4436.5 qps=     243 err=0
+  ping                 ops= 1000 p50=     38.1 p90=     50.0 p99=     64.2 qps=   24245 err=0
+raw: /home/cdkbs/bench-runs/ap-s5/scan-n60000-run2/result.json
+driver exit 0

@@ -1,0 +1,11 @@
+host before: 0.95 1.71 2.77 1/259 648821  competing: none
+host after : 0.95 1.71 2.77 2/259 648827  competing: none
+update replies other than 'UPDATED 1': 0
+setup: {'days_with_different_rows': 0, 'rows_per_day_min': 100, 'rows_per_day_max': 100}
+== B  cell=fn rows=10000
+  fn-date              ops=  600 p50=   1106.4 p90=   1120.1 p99=   1192.1 qps=     896 err=0
+  between              ops=  600 p50=    921.7 p90=    964.7 p99=   1398.2 qps=    1053 err=0
+  fn-date-again        ops=  600 p50=   1107.8 p90=   1127.9 p99=   1171.8 qps=     894 err=0
+  ping                 ops=  600 p50=     37.8 p90=     40.1 p99=     56.5 qps=   25472 err=0
+raw: /home/cdkbs/bench-runs/ap-s5/fn-n10000-run2/result.json
+driver exit 0

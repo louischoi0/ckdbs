@@ -1,0 +1,8 @@
+A after 299 star pk -> patterns=0
+A after 299 wide pk -> patterns=0
+A after 49 scan -> patterns=0
+A after 49 update-walk -> patterns=0
+B after 299 star pk -> patterns=0
+B after 299 wide pk -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=299 last_seen=201825850105539 waystone=root=149,depth=1
+B after 49 scan -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=299 last_seen=201825850105539 waystone=root=149,depth=1
+B after 49 update-walk -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=299 last_seen=201825850105539 waystone=root=149,depth=1
