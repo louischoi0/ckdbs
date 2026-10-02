@@ -131,6 +131,33 @@
 // arg_hash covers inline literals only. When a BIND stage exists it must
 // fold the bound values in on top, in parameter order, to reach the final
 // instance key; `param_count` is how it knows how many to expect.
+//
+// ---- fetch_id: the shape without the select list --------------------------
+//
+// A third integer from the same pass (AR1 §4; instructions/v3.0.0/
+// workorder-ap-function-catalog-fetch-id.md AP-R1). `SELECT a FROM t WHERE
+// id = ?` and `SELECT b FROM t WHERE id = ?` read the same tuples by the
+// same path, and a trail records where the tuples were, never what was
+// projected - so the trail's key should not tell them apart. `fetch_id` is
+// `pattern_id`'s hash with the tokens after the **leading** `SELECT` and
+// before its first `FROM` at parenthesis depth 0 left out. `pattern_id` stays
+// the statement's identity for everything that is not a trail.
+//
+// - A subquery's select list is shape. It comes after the outer `FROM`, so
+//   it is never inside the window: `IN (SELECT b FROM u)` and
+//   `IN (SELECT c FROM u)` fetch different values.
+// - The depth matters only because `FROM` is not reserved:
+//   `SELECT COUNT(from) FROM t` names a column called `from`, and the
+//   window must not close on it.
+// - Every other leading word skips nothing, so its `fetch_id` is its
+//   `pattern_id` - returned as such rather than hashed twice, so a write
+//   pays nothing for this.
+// - The select list holds no literal and no `?` (only columns and the five
+//   aggregates), so the argument half of a trail key is `arg_hash` as it
+//   stands and there is no second argument stream.
+//
+// `kFingerprintVersion` covers this hash too: a change to the window is a
+// change to what a stored key means, and bumps it like any other.
 
 namespace kds::parser {
 
@@ -144,7 +171,8 @@ namespace kds::parser {
 // resolving.
 //
 // **The rule for bumping, stated once:** bump whenever an *already
-// fingerprintable* statement would hash differently than it does today.
+// fingerprintable* statement would hash differently than it does today -
+// in `pattern_id` or in `fetch_id`.
 // Concretely, that is a change to any of - the token stream a statement
 // reduces to (a new token type appearing in a shape, a change to what is
 // skipped), the shape or argument tag values, the framing of a hashed
@@ -211,6 +239,11 @@ struct Fingerprint {
     // `?` placeholders whose values arrive at BIND. Non-zero means
     // arg_hash is incomplete, not that it is wrong.
     std::uint32_t param_count = 0;
+
+    // The shape without the leading SELECT's select list - the trail's key
+    // (see "fetch_id" above). Equal to `pattern_id` for every statement
+    // that does not lead with SELECT.
+    std::uint64_t fetch_id = 0;
 };
 
 // Reduces `sql` to its function form, or reports that it has none.
@@ -291,6 +324,7 @@ private:
     // with the tag constants it feeds, which are format and belong together.
     std::uint64_t shape_ = 0;
     std::uint64_t args_ = 0;
+    std::uint64_t fetch_ = 0;  // fed only after a leading SELECT
 
     std::uint32_t literal_count_ = 0;
     std::uint32_t param_count_ = 0;
@@ -309,6 +343,14 @@ private:
     // folded nothing before either.
     bool insert_head_ = false;        // the leading word was INSERT
     bool first_group_closed_ = false; // ...and its first () group has ended
+
+    // fetch_id's window: open from a leading SELECT until its first FROM at
+    // depth 0, and while it is open nothing folds into `fetch_`.
+    bool select_head_ = false;
+    bool select_list_open_ = false;
+
+    // Shared by the INSERT group and the SELECT window: one statement has
+    // one leading word, so at most one of them ever counts.
     std::uint32_t paren_depth_ = 0;
 };
 

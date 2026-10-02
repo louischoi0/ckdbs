@@ -457,5 +457,84 @@ TEST(FingerprintTest, TheNumericTokenNeededNoFingerprintVersionBump) {
     EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
 }
 
+// ---- fetch_id: the shape without the select list (AP-S1) ------------------
+//
+// instructions/v3.0.0/workorder-ap-function-catalog-fetch-id.md AP-R1. The
+// trail's key leaves the leading SELECT's select list out; pattern_id keeps
+// it. Each cell below names the window property it pins.
+
+TEST(FingerprintTest, TwoSelectListsOverOneFetchShareAFetchId) {
+    const Fingerprint one = Must("SELECT a FROM t WHERE id = 1");
+    const Fingerprint two = Must("SELECT b, c FROM t WHERE id = 1");
+    const Fingerprint star = Must("select * from T where ID = 1");
+
+    EXPECT_EQ(one.fetch_id, two.fetch_id);
+    EXPECT_EQ(one.fetch_id, star.fetch_id);
+    // Still two statements to everything that is not a trail.
+    EXPECT_NE(one.pattern_id, two.pattern_id);
+    EXPECT_EQ(one.arg_hash, two.arg_hash);
+    // A SELECT's select list is never empty, so its fetch_id is never its
+    // pattern_id - which is why every trail recorded under pattern_id
+    // misses once trails key on fetch_id (the order's §1.3).
+    EXPECT_NE(one.fetch_id, one.pattern_id);
+}
+
+TEST(FingerprintTest, AnAggregatedAndAPlainSelectListShareAFetchId) {
+    EXPECT_EQ(Must("SELECT COUNT(*) FROM t WHERE id = 1").fetch_id,
+              Must("SELECT a FROM t WHERE id = 1").fetch_id);
+    EXPECT_EQ(Must("SELECT g, SUM(v) FROM t WHERE id > 1 GROUP BY g").fetch_id,
+              Must("SELECT g FROM t WHERE id > 1 GROUP BY g").fetch_id);
+}
+
+TEST(FingerprintTest, EverythingAfterTheFromIsStillShape) {
+    const std::uint64_t base = Must("SELECT a FROM t WHERE id = 1").fetch_id;
+    EXPECT_NE(base, Must("SELECT a FROM u WHERE id = 1").fetch_id);
+    EXPECT_NE(base, Must("SELECT a FROM t WHERE k = 1").fetch_id);
+    EXPECT_NE(base, Must("SELECT a FROM t WHERE id > 1").fetch_id);
+    EXPECT_NE(base, Must("SELECT a FROM t WHERE id = 1 ORDER BY a").fetch_id);
+}
+
+// Kills "reopen the window at every SELECT": a subquery's select list sits
+// after the outer FROM and decides which values the predicate compares.
+TEST(FingerprintTest, ASubquerysSelectListIsShape) {
+    const Fingerprint b = Must("SELECT a FROM t WHERE x IN (SELECT b FROM u WHERE id = 1)");
+    const Fingerprint c = Must("SELECT a FROM t WHERE x IN (SELECT c FROM u WHERE id = 1)");
+    EXPECT_NE(b.fetch_id, c.fetch_id);
+    // ...while the outer select list is still left out.
+    EXPECT_EQ(b.fetch_id,
+              Must("SELECT z FROM t WHERE x IN (SELECT b FROM u WHERE id = 1)").fetch_id);
+}
+
+// Kills "ignore the depth": FROM is not reserved, so `COUNT(from)` names a
+// column, and a window that closed on it would fold `) FROM t` where the
+// other statement folds `FROM t`.
+TEST(FingerprintTest, AFromInsideACallDoesNotCloseTheWindow) {
+    EXPECT_EQ(Must("SELECT COUNT(from) FROM t WHERE id = 1").fetch_id,
+              Must("SELECT COUNT(x) FROM t WHERE id = 1").fetch_id);
+}
+
+TEST(FingerprintTest, EveryOtherLeadingWordHasItsPatternIdAsItsFetchId) {
+    const char* const statements[] = {
+        "INSERT INTO t VALUES (1, 'a')",
+        "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')",  // BI5's suppression
+        "UPDATE t SET c = 5 WHERE id = 7",
+    };
+    for (const char* sql : statements) {
+        const Fingerprint fp = Must(sql);
+        EXPECT_EQ(fp.fetch_id, fp.pattern_id) << sql;
+    }
+}
+
+// Pinned beside pattern_id's own pin above, for the same reason: the value
+// is persisted once trails key on it, so a change to the window must fail
+// here and bump kFingerprintVersion. The value was computed outside this
+// code, from the shape rules alone - pattern_id's stream with `*` left out -
+// by a model that reproduces pattern_id's pin from the full stream.
+TEST(FingerprintTest, FetchIdIsStableAcrossBuilds) {
+    const Fingerprint fp = Must("SELECT * FROM accounts WHERE id = 42");
+    EXPECT_EQ(fp.fetch_id, 0xb5b2ac05aab0a3a9ull);
+    EXPECT_EQ(fp.pattern_id, 0xe0fa0b4bc8f0ebe2ull);
+}
+
 }  // namespace
 }  // namespace kds::parser
