@@ -39,6 +39,11 @@
 //                back up. A diff here is a format break for every stored
 //                waystone, so it fails loudly and on purpose.
 //
+//   fetch_id     pattern_id without the leading SELECT's select list
+//                (AP-S1, workorder-ap-function-catalog-fetch-id.md AP-R1),
+//                the trail's key from AP-S2 on. Pinned by the same rule:
+//                it must not move either.
+//
 // The verdicts were written by hand from src/parser/parser.cpp and then
 // checked against the implementation; the hashes were recorded from it.
 // That asymmetry is deliberate - a hand-written verdict that disagrees
@@ -93,8 +98,8 @@ std::string Hex64(std::uint64_t v) {
     return std::string(buf, 16);
 }
 
-// A corpus line is `verdict pattern_id arg_hash sql`: three whitespace-
-// delimited fields and then the rest of the line verbatim, so the SQL may
+// A corpus line is `verdict pattern_id arg_hash fetch_id sql`: four
+// whitespace-delimited fields and then the rest of the line verbatim, so the SQL may
 // contain spaces without quoting. `\n` in the SQL is an escape for a real
 // newline, which the `--` comment cases need.
 struct Entry {
@@ -102,6 +107,7 @@ struct Entry {
     std::string verdict;
     std::string pattern;
     std::string args;
+    std::string fetch;
     std::string sql;      // escapes resolved; what the parser is handed
     std::string sql_raw;  // as written in the file, so a regen can echo it back
 };
@@ -122,7 +128,7 @@ std::string Unescape(std::string_view s) {
 
 bool SplitLine(const std::string& line, Entry& out) {
     std::size_t pos = 0;
-    std::string* fields[3] = {&out.verdict, &out.pattern, &out.args};
+    std::string* fields[4] = {&out.verdict, &out.pattern, &out.args, &out.fetch};
     for (std::string* field : fields) {
         while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
         const std::size_t start = pos;
@@ -165,6 +171,7 @@ struct Actual {
     std::string verdict;
     std::string pattern;
     std::string args;
+    std::string fetch;
 };
 
 Actual Observe(const std::string& sql) {
@@ -175,6 +182,7 @@ Actual Observe(const std::string& sql) {
     const std::optional<Fingerprint> fp = FingerprintOf(sql);
     a.pattern = fp ? Hex64(fp->pattern_id) : "-";
     a.args = fp ? Hex64(fp->arg_hash) : "-";
+    a.fetch = fp ? Hex64(fp->fetch_id) : "-";
     return a;
 }
 
@@ -223,6 +231,8 @@ TEST(ParserGoldenTest, TheParseTimeFingerprintMatchesTheStandaloneOne) {
             << " and standalone fingerprints, for: " << e.sql_raw;
         EXPECT_EQ(during->arg_hash, standalone->arg_hash)
             << CorpusPath() << ":" << (i + 1) << ": arg_hash differs, for: " << e.sql_raw;
+        EXPECT_EQ(during->fetch_id, standalone->fetch_id)
+            << CorpusPath() << ":" << (i + 1) << ": fetch_id differs, for: " << e.sql_raw;
         EXPECT_EQ(during->literal_count, standalone->literal_count) << e.sql_raw;
         EXPECT_EQ(during->param_count, standalone->param_count) << e.sql_raw;
         ++compared;
@@ -274,13 +284,16 @@ TEST(ParserGoldenTest, CorpusIsWellFormed) {
         if (IsSkippable(lines[i])) continue;
         Entry e;
         ASSERT_TRUE(SplitLine(lines[i], e))
-            << CorpusPath() << ":" << (i + 1) << ": expected `verdict pattern arg sql`, got: "
+            << CorpusPath() << ":" << (i + 1) << ": expected `verdict pattern arg fetch sql`, got: "
             << lines[i];
         EXPECT_TRUE(e.pattern == "-" || e.pattern.size() == 16)
             << CorpusPath() << ":" << (i + 1) << ": pattern_id must be 16 hex digits or '-'";
-        EXPECT_EQ(e.pattern == "-", e.args == "-")
+        EXPECT_TRUE(e.fetch == "-" || e.fetch.size() == 16)
+            << CorpusPath() << ":" << (i + 1) << ": fetch_id must be 16 hex digits or '-'";
+        EXPECT_TRUE(e.pattern == "-" ? (e.args == "-" && e.fetch == "-")
+                                     : (e.args != "-" && e.fetch != "-"))
             << CorpusPath() << ":" << (i + 1)
-            << ": a statement is either fingerprintable in both columns or neither";
+            << ": a statement is either fingerprintable in all three columns or none";
         ++entries;
     }
 
@@ -321,7 +334,8 @@ TEST(ParserGoldenTest, EveryStatementStillBehavesAsRecorded) {
         const Actual a = Observe(e.sql);
         if (regen) {
             std::ostringstream row;
-            row << a.verdict << '\t' << a.pattern << '\t' << a.args << '\t' << e.sql_raw;
+            row << a.verdict << '\t' << a.pattern << '\t' << a.args << '\t' << a.fetch << '\t'
+                << e.sql_raw;
             regenerated.push_back(row.str());
             continue;
         }
@@ -335,6 +349,8 @@ TEST(ParserGoldenTest, EveryStatementStillBehavesAsRecorded) {
                "stored waystone, not a test to update";
         EXPECT_EQ(a.args, e.args)
             << CorpusPath() << ":" << e.line_no << ": arg_hash moved for: " << e.sql;
+        EXPECT_EQ(a.fetch, e.fetch)
+            << CorpusPath() << ":" << e.line_no << ": fetch_id moved for: " << e.sql;
     }
 
     if (regen) {

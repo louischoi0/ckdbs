@@ -1,10 +1,12 @@
 # V01 golden corpus — what the parser does today.
 #
-# Format:  verdict  pattern_id  arg_hash  sql
+# Format:  verdict  pattern_id  arg_hash  fetch_id  sql
 #   verdict     "ok", or the StatusCode name the parse was rejected with.
 #   pattern_id  16 hex digits, or "-" when FingerprintOf() returns nothing
 #   arg_hash    (leading word not SELECT/INSERT/UPDATE, or the text does
-#               not lex). Both columns are "-" together or neither is.
+#   fetch_id    not lex). The three are "-" together or none is. fetch_id
+#               is pattern_id without the leading SELECT's select list
+#               (AP-S1), so it equals pattern_id on every other line.
 #   sql         rest of the line, verbatim. `\n` is an escape for a real
 #               newline; nothing else is escaped.
 #
@@ -29,6 +31,9 @@
 #               carefully — fingerprint.cpp's kNumLit note is the shape of
 #               the argument required.
 #
+#   fetch_id    the same rule as pattern_id, from AP-S1 on: once trails key
+#               on it, a moved fetch_id retires every stored trail.
+#
 # Verdicts here were derived by reading src/parser/parser.cpp; hashes were
 # recorded from the build. See tests/parser_golden_test.cpp for why those
 # two are treated differently.
@@ -43,42 +48,42 @@
 # (tests/heap_suspension_env.cpp) so the heap paths stay exercised, and a
 # corpus recorded through that lift would pin a verdict no client can
 # observe. This file states what the shipped parser does.
-ok	-	-	CREATE TABLE t (id int)
-ok	-	-	CREATE TABLE t (id int, name varchar)
-ok	-	-	CREATE TABLE t (id bigint, a int, b varchar, c uint64)
-Unsupported	-	-	CREATE TABLE t (id int) HEAP
-ok	-	-	CREATE TABLE t (id int) BTREE
-Unsupported	-	-	CREATE TABLE t (id int) heap
-ok	-	-	CREATE TABLE t (id int);
-ok	-	-	create table t (id int)
+ok	-	-	-	CREATE TABLE t (id int)
+ok	-	-	-	CREATE TABLE t (id int, name varchar)
+ok	-	-	-	CREATE TABLE t (id bigint, a int, b varchar, c uint64)
+Unsupported	-	-	-	CREATE TABLE t (id int) HEAP
+ok	-	-	-	CREATE TABLE t (id int) BTREE
+Unsupported	-	-	-	CREATE TABLE t (id int) heap
+ok	-	-	-	CREATE TABLE t (id int);
+ok	-	-	-	create table t (id int)
 # The key-mode words after the mode's removal (heap-and-tuple.md §4.1,
 # 2026-08-25). `EXPLICIT` still parses and now does nothing - it states
 # what every relation is. `ASSIGNED` names a mode that no longer exists and
 # is refused here, `Unsupported` with its byte: ignoring it would be
 # accepting a spelling and enforcing something else. No hash moved either
 # way, so kFingerprintVersion did not (fingerprint_test.cpp).
-Unsupported	-	-	CREATE TABLE t (id int) ASSIGNED
-ok	-	-	CREATE TABLE t (id int) EXPLICIT
+Unsupported	-	-	-	CREATE TABLE t (id int) ASSIGNED
+ok	-	-	-	CREATE TABLE t (id int) EXPLICIT
 # Still Unsupported, but since SUS-1 for the *first* word rather than the
 # second: HEAP is refused before ASSIGNED is read. The code did not move, the
 # reason did.
-Unsupported	-	-	CREATE TABLE t (id int) HEAP ASSIGNED
-ok	-	-	CREATE TABLE t (id int) BTREE EXPLICIT
-ok	-	-	CREATE TABLE t (id int) EXPLICIT BTREE
-ok	-	-	CREATE TABLE t (id int) explicit btree
+Unsupported	-	-	-	CREATE TABLE t (id int) HEAP ASSIGNED
+ok	-	-	-	CREATE TABLE t (id int) BTREE EXPLICIT
+ok	-	-	-	CREATE TABLE t (id int) EXPLICIT BTREE
+ok	-	-	-	CREATE TABLE t (id int) explicit btree
 
 # ---- CREATE TABLE — rejected -----------------------------------------------
-InvalidArgument	-	-	CREATE t (id int)
-InvalidArgument	-	-	CREATE TABLE (id int)
-InvalidArgument	-	-	CREATE TABLE 42 (id int)
-InvalidArgument	-	-	CREATE TABLE t id int
-InvalidArgument	-	-	CREATE TABLE t ()
-InvalidArgument	-	-	CREATE TABLE t (42 int)
-InvalidArgument	-	-	CREATE TABLE t (id)
-InvalidArgument	-	-	CREATE TABLE t (id int
-InvalidArgument	-	-	CREATE TABLE t (id int,)
-InvalidArgument	-	-	CREATE TABLE t (id int) FOO
-InvalidArgument	-	-	CREATE TABLE
+InvalidArgument	-	-	-	CREATE t (id int)
+InvalidArgument	-	-	-	CREATE TABLE (id int)
+InvalidArgument	-	-	-	CREATE TABLE 42 (id int)
+InvalidArgument	-	-	-	CREATE TABLE t id int
+InvalidArgument	-	-	-	CREATE TABLE t ()
+InvalidArgument	-	-	-	CREATE TABLE t (42 int)
+InvalidArgument	-	-	-	CREATE TABLE t (id)
+InvalidArgument	-	-	-	CREATE TABLE t (id int
+InvalidArgument	-	-	-	CREATE TABLE t (id int,)
+InvalidArgument	-	-	-	CREATE TABLE t (id int) FOO
+InvalidArgument	-	-	-	CREATE TABLE
 # [PK03] one word per category, and an unknown word after both still
 # reaches the trailing-garbage check.
 #
@@ -86,21 +91,21 @@ InvalidArgument	-	-	CREATE TABLE
 # duplicate-storage-word refusal is never reached, because the first word is
 # `HEAP` and the suspension refuses it where it is read. `BTREE BTREE` below
 # is the line that still pins the duplicate refusal itself.
-Unsupported	-	-	CREATE TABLE t (id int) HEAP BTREE
-InvalidArgument	-	-	CREATE TABLE t (id int) BTREE BTREE
-Unsupported	-	-	CREATE TABLE t (id int) ASSIGNED EXPLICIT
-InvalidArgument	-	-	CREATE TABLE t (id int) EXPLICIT EXPLICIT
-InvalidArgument	-	-	CREATE TABLE t (id int) BTREE EXPLICIT FOO
+Unsupported	-	-	-	CREATE TABLE t (id int) HEAP BTREE
+InvalidArgument	-	-	-	CREATE TABLE t (id int) BTREE BTREE
+Unsupported	-	-	-	CREATE TABLE t (id int) ASSIGNED EXPLICIT
+InvalidArgument	-	-	-	CREATE TABLE t (id int) EXPLICIT EXPLICIT
+InvalidArgument	-	-	-	CREATE TABLE t (id int) BTREE EXPLICIT FOO
 # [V11] gains WITH (k = v); today the option list is trailing garbage.
-InvalidArgument	-	-	CREATE TABLE t (id int) WITH (PHYSICAL_OPTIMIZER = ON)
+InvalidArgument	-	-	-	CREATE TABLE t (id int) WITH (PHYSICAL_OPTIMIZER = ON)
 
 # ---- INSERT — accepted -----------------------------------------------------
-ok	a2266ff85c0a8df6	b5d414774c8002cc	INSERT INTO t VALUES (1)
-ok	d7eca698ca357b93	84884be60bc4fe0f	INSERT INTO t VALUES (1, 'abc', NULL)
-ok	a2266ff85c0a8df6	184a15bf54848454	INSERT INTO t VALUES (-5)
-ok	a2266ff85c0a8df6	67b70b73c6120ee9	INSERT INTO t VALUES (18446744073709551615)
-ok	a2266ff85c0a8df6	7a677b8bea1e608e	INSERT INTO t VALUES ('it is fine')
-ok	a2266ff85c0a8df6	b5d414774c8002cc	insert into t values (1);
+ok	a2266ff85c0a8df6	b5d414774c8002cc	a2266ff85c0a8df6	INSERT INTO t VALUES (1)
+ok	d7eca698ca357b93	84884be60bc4fe0f	d7eca698ca357b93	INSERT INTO t VALUES (1, 'abc', NULL)
+ok	a2266ff85c0a8df6	184a15bf54848454	a2266ff85c0a8df6	INSERT INTO t VALUES (-5)
+ok	a2266ff85c0a8df6	67b70b73c6120ee9	a2266ff85c0a8df6	INSERT INTO t VALUES (18446744073709551615)
+ok	a2266ff85c0a8df6	7a677b8bea1e608e	a2266ff85c0a8df6	INSERT INTO t VALUES ('it is fine')
+ok	a2266ff85c0a8df6	b5d414774c8002cc	a2266ff85c0a8df6	insert into t values (1);
 # [BLK] Multi-row VALUES (docs/spec/bulkinsert.md BI5): row count is not
 # part of the template, so the N-row statement carries the 1-row
 # statement's pattern_id - the same hash as the lines above - and later
@@ -108,66 +113,66 @@ ok	a2266ff85c0a8df6	b5d414774c8002cc	insert into t values (1);
 # suppression moved belonged to a statement that parsed in no production
 # (fingerprintable, never storable), the bump rule's permitted second
 # transition; the moved lines below say so where they sit.
-ok	a2266ff85c0a8df6	78f79099c419719c	INSERT INTO t VALUES (1), (2)
-ok	c323a07930901e82	3042954c6216ee3a	INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+ok	a2266ff85c0a8df6	78f79099c419719c	a2266ff85c0a8df6	INSERT INTO t VALUES (1), (2)
+ok	c323a07930901e82	3042954c6216ee3a	c323a07930901e82	INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')
 
 # ---- INSERT — rejected -----------------------------------------------------
-InvalidArgument	d6f585f4851f24f1	b5d414774c8002cc	INSERT t VALUES (1)
-InvalidArgument	a263b37257e147cb	b5d414774c8002cc	INSERT INTO t (1)
-InvalidArgument	98134bd285a35b74	b5d414774c8002cc	INSERT INTO VALUES (1)
-InvalidArgument	9c8c6c77485aab09	b5d414774c8002cc	INSERT INTO t VALUES 1
-InvalidArgument	5d4e1eaff2165e1e	cbf29ce484222325	INSERT INTO t VALUES ()
-InvalidArgument	a438de526814732c	cbf29ce484222325	INSERT INTO t VALUES (x)
-InvalidArgument	5d4e21aff2166337	b5d414774c8002cc	INSERT INTO t VALUES (1
-InvalidArgument	91dad60465ec5af2	b5d414774c8002cc	INSERT INTO t VALUES (1,)
-InvalidArgument	a2266ff85c0a8df6	cbf29ce484222325	INSERT INTO t VALUES (?)
+InvalidArgument	d6f585f4851f24f1	b5d414774c8002cc	d6f585f4851f24f1	INSERT t VALUES (1)
+InvalidArgument	a263b37257e147cb	b5d414774c8002cc	a263b37257e147cb	INSERT INTO t (1)
+InvalidArgument	98134bd285a35b74	b5d414774c8002cc	98134bd285a35b74	INSERT INTO VALUES (1)
+InvalidArgument	9c8c6c77485aab09	b5d414774c8002cc	9c8c6c77485aab09	INSERT INTO t VALUES 1
+InvalidArgument	5d4e1eaff2165e1e	cbf29ce484222325	5d4e1eaff2165e1e	INSERT INTO t VALUES ()
+InvalidArgument	a438de526814732c	cbf29ce484222325	a438de526814732c	INSERT INTO t VALUES (x)
+InvalidArgument	5d4e21aff2166337	b5d414774c8002cc	5d4e21aff2166337	INSERT INTO t VALUES (1
+InvalidArgument	91dad60465ec5af2	b5d414774c8002cc	91dad60465ec5af2	INSERT INTO t VALUES (1,)
+InvalidArgument	a2266ff85c0a8df6	cbf29ce484222325	a2266ff85c0a8df6	INSERT INTO t VALUES (?)
 # [BLK] The two hashes BI5's suppression moved, both never storable
 # (neither ever parsed): `... (1) extra` now hashes as the plain 1-row
 # insert, since `extra` sits past the first group and folds nothing; the
 # column-list form's first group is `(a, b)`, so its VALUES row became
 # args. Verdicts unchanged - the grammar still refuses both.
-InvalidArgument	a2266ff85c0a8df6	b5d414774c8002cc	INSERT INTO t VALUES (1) extra
-InvalidArgument	ce1fd11975f0684e	78f79099c419719c	INSERT INTO t (a, b) VALUES (1, 2)
+InvalidArgument	a2266ff85c0a8df6	b5d414774c8002cc	a2266ff85c0a8df6	INSERT INTO t VALUES (1) extra
+InvalidArgument	ce1fd11975f0684e	78f79099c419719c	ce1fd11975f0684e	INSERT INTO t (a, b) VALUES (1, 2)
 
 # ---- SELECT — accepted -----------------------------------------------------
-ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t
-ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t;
-ok	0455e27e7d802f0c	cbf29ce484222325	select * from t
-ok	0212b03badb413ad	b5d414774c8002cc	SELECT  *  FROM  t   WHERE  id  =  1
-ok	0212b03badb413ad	b5d414774c8002cc	SELECT * FROM t WHERE id = 1
-ok	020f463badb129b8	b5d414774c8002cc	SELECT * FROM t WHERE id != 1
-ok	020be03badae468f	b5d414774c8002cc	SELECT * FROM t WHERE id < 1
-ok	02087e3badab6a32	b5d414774c8002cc	SELECT * FROM t WHERE id <= 1
-ok	0205183bada88709	b5d414774c8002cc	SELECT * FROM t WHERE id > 1
-ok	0201ae3bada59d14	b5d414774c8002cc	SELECT * FROM t WHERE id >= 1
-ok	0212b03badb413ad	184a11bf54847d88	SELECT * FROM t WHERE id = -1
-ok	9f810de53a88593d	84710b9045511414	SELECT * FROM t WHERE name = 'x'
-ok	9f810ce53a88578a	cbf29ce484222325	SELECT * FROM t WHERE name = NULL
-ok	6e9ef19e09622392	2a44fca2241ecfc1	SELECT * FROM t WHERE id = 1 AND name = 'x'
-ok	bb3802e5c6f244c4	90e95572007153ff	SELECT * FROM t WHERE id = 1 AND a = 2 AND b = 3
-ok	efb110aaf70ee5ab	78f79099c419719c	SELECT * FROM t WHERE id = 1 and a = 2
+ok	0455e27e7d802f0c	cbf29ce484222325	d591805ceb2c9c23	SELECT * FROM t
+ok	0455e27e7d802f0c	cbf29ce484222325	d591805ceb2c9c23	SELECT * FROM t;
+ok	0455e27e7d802f0c	cbf29ce484222325	d591805ceb2c9c23	select * from t
+ok	0212b03badb413ad	b5d414774c8002cc	41b5d4d450506580	SELECT  *  FROM  t   WHERE  id  =  1
+ok	0212b03badb413ad	b5d414774c8002cc	41b5d4d450506580	SELECT * FROM t WHERE id = 1
+ok	020f463badb129b8	b5d414774c8002cc	41b93ed450534f75	SELECT * FROM t WHERE id != 1
+ok	020be03badae468f	b5d414774c8002cc	41af0cd4504aa5fa	SELECT * FROM t WHERE id < 1
+ok	02087e3badab6a32	b5d414774c8002cc	41b26ed4504d8257	SELECT * FROM t WHERE id <= 1
+ok	0205183bada88709	b5d414774c8002cc	41a83cd45044d8dc	SELECT * FROM t WHERE id > 1
+ok	0201ae3bada59d14	b5d414774c8002cc	41aba6d45047c2d1	SELECT * FROM t WHERE id >= 1
+ok	0212b03badb413ad	184a11bf54847d88	41b5d4d450506580	SELECT * FROM t WHERE id = -1
+ok	9f810de53a88593d	84710b9045511414	414fe15fe2f6bdb8	SELECT * FROM t WHERE name = 'x'
+ok	9f810ce53a88578a	cbf29ce484222325	414fe25fe2f6bf6b	SELECT * FROM t WHERE name = NULL
+ok	6e9ef19e09622392	2a44fca2241ecfc1	3180be9f1603d15d	SELECT * FROM t WHERE id = 1 AND name = 'x'
+ok	bb3802e5c6f244c4	90e95572007153ff	3a4ad050e52cd0b1	SELECT * FROM t WHERE id = 1 AND a = 2 AND b = 3
+ok	efb110aaf70ee5ab	78f79099c419719c	245f2983e7191d2e	SELECT * FROM t WHERE id = 1 and a = 2
 # The lexer runs an unterminated string to end-of-input and returns it as a
 # string literal rather than an error. Pinned because it is surprising, not
 # because it is right.
-ok	fcb5dfe6a19d91c8	19709035c6b7ceaf	SELECT * FROM t WHERE s = 'unterminated
-ok	0455e27e7d802f0c	cbf29ce484222325	-- leading comment\nSELECT * FROM t
-ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t -- trailing comment
+ok	fcb5dfe6a19d91c8	19709035c6b7ceaf	20583e6591ddff7b	SELECT * FROM t WHERE s = 'unterminated
+ok	0455e27e7d802f0c	cbf29ce484222325	d591805ceb2c9c23	-- leading comment\nSELECT * FROM t
+ok	0455e27e7d802f0c	cbf29ce484222325	d591805ceb2c9c23	SELECT * FROM t -- trailing comment
 
 # ---- SELECT — rejected -----------------------------------------------------
 # [V06 — done] an explicit select list parses now; this line was the
 # "only SELECT * is supported" refusal. It stays in the rejected block
 # because everything around it belongs here.
-ok	8559eaf40c115b0f	cbf29ce484222325	SELECT id FROM t
-InvalidArgument	06bf2f0ae0a17f05	cbf29ce484222325	SELECT * t
-InvalidArgument	5cd76da52108998a	cbf29ce484222325	SELECT * FROM
-InvalidArgument	caa8d797219ce218	182b9abf546ab5c4	SELECT * FROM 42
-InvalidArgument	8c4916d9f99529c9	cbf29ce484222325	SELECT * FROM t WHERE
-InvalidArgument	3ae8d6f27ff6b5e7	cbf29ce484222325	SELECT * FROM t WHERE id
-InvalidArgument	105b2d0f7037251d	cbf29ce484222325	SELECT * FROM t WHERE id =
-InvalidArgument	b5cb30768ad3df28	b5d414774c8002cc	SELECT * FROM t WHERE id = 1 AND
-InvalidArgument	39b3246828e08bf7	b5d414774c8002cc	SELECT * FROM t WHERE id == 1
-InvalidArgument	0212b03badb413ad	cbf29ce484222325	SELECT * FROM t WHERE id = ?
-InvalidArgument	2da70c29d3092a81	182b9abf546ab5c4	SELECT * FROM t WHERE 42 = id
+ok	8559eaf40c115b0f	cbf29ce484222325	d591805ceb2c9c23	SELECT id FROM t
+InvalidArgument	06bf2f0ae0a17f05	cbf29ce484222325	ab4084f3e927f0c2	SELECT * t
+InvalidArgument	5cd76da52108998a	cbf29ce484222325	372881bea5b15175	SELECT * FROM
+InvalidArgument	caa8d797219ce218	182b9abf546ab5c4	6b25edf38c4d6d35	SELECT * FROM 42
+InvalidArgument	8c4916d9f99529c9	cbf29ce484222325	f66fca67afceefa2	SELECT * FROM t WHERE
+InvalidArgument	3ae8d6f27ff6b5e7	cbf29ce484222325	c995d891e368947e	SELECT * FROM t WHERE id
+InvalidArgument	105b2d0f7037251d	cbf29ce484222325	f23375e56ab44482	SELECT * FROM t WHERE id =
+InvalidArgument	b5cb30768ad3df28	b5d414774c8002cc	939da3bf364bfc29	SELECT * FROM t WHERE id = 1 AND
+InvalidArgument	39b3246828e08bf7	b5d414774c8002cc	f8801ec478b954b4	SELECT * FROM t WHERE id == 1
+InvalidArgument	0212b03badb413ad	cbf29ce484222325	41b5d4d450506580	SELECT * FROM t WHERE id = ?
+InvalidArgument	2da70c29d3092a81	182b9abf546ab5c4	ecc7fd3d87a19594	SELECT * FROM t WHERE 42 = id
 # [V15 — done] a column on the right of a comparison. Spec I10 describes
 # the filter surface as `col op {slot}`, but §2's *correlated* subquery is
 # written `WHERE inner.col = outer.col` and cannot be spelled without
@@ -175,9 +180,9 @@ InvalidArgument	2da70c29d3092a81	182b9abf546ab5c4	SELECT * FROM t WHERE 42 = id
 # so the two are reconciled in favour of §2. Executing one still needs the
 # step chain; the dispatcher refuses it until V17 rather than comparing
 # against an unset value.
-ok	6c0be26239157118	cbf29ce484222325	SELECT * FROM t WHERE a = b
-InvalidArgument	46749465e53887c0	cbf29ce484222325	SELECT * FROM t extra
-InvalidArgument	92e35026b1321260	cbf29ce484222325	SELECT * FROM t; SELECT * FROM u
+ok	6c0be26239157118	cbf29ce484222325	24aab60bb021fd99	SELECT * FROM t WHERE a = b
+InvalidArgument	46749465e53887c0	cbf29ce484222325	5e2df55a02fd8b57	SELECT * FROM t extra
+InvalidArgument	92e35026b1321260	cbf29ce484222325	ba672db4dfa18315	SELECT * FROM t; SELECT * FROM u
 # [V04 — done] the dot token. These three lines are the whole permitted
 # "-" -> hash transition: before V04 a '.' lexed as kError, so no statement
 # containing one had a fingerprint at all. Nothing already stored changed
@@ -185,12 +190,12 @@ InvalidArgument	92e35026b1321260	cbf29ce484222325	SELECT * FROM t; SELECT * FROM
 # page kept its hash across V04, including the ones carrying the seven
 # newly reserved words - which is the evidence that reserving a word is a
 # grammar change and not a fingerprint change.
-InvalidArgument	b825796128f262f6	cbf29ce484222325	SELECT * FROM t WHERE a . b
+InvalidArgument	b825796128f262f6	cbf29ce484222325	3e093860aac211d3	SELECT * FROM t WHERE a . b
 # [V06 — done] a qualified column in a select list.
-ok	62bd6d094d21d3db	cbf29ce484222325	SELECT t.id FROM t
+ok	62bd6d094d21d3db	cbf29ce484222325	d591805ceb2c9c23	SELECT t.id FROM t
 # A comma FROM list is a cross join, which this grammar does not have.
 # Not reached by V05 and not planned: joins are written JOIN ... ON.
-InvalidArgument	2e2a3c1453705f3b	cbf29ce484222325	SELECT * FROM t, u
+InvalidArgument	2e2a3c1453705f3b	cbf29ce484222325	3b87475b5a043d32	SELECT * FROM t, u
 # [V05 — done] joins and aliases parse. These two flipped
 # InvalidArgument -> ok, and no hash moved with them: reserving LEFT,
 # RIGHT, FULL and OUTER alongside changed no pattern_id, which is the
@@ -200,29 +205,29 @@ InvalidArgument	2e2a3c1453705f3b	cbf29ce484222325	SELECT * FROM t, u
 # ok -> Unsupported. `SELECT *` is ambiguous across relations, so an
 # explicit list became mandatory as soon as there was one to write. Two
 # deliberate flips, two tasks; no hash moved in either.
-NotImplemented	e9242b44747c5e35	cbf29ce484222325	SELECT * FROM t JOIN u ON t.id = u.id
-ok	a91c9b42e1642b7c	cbf29ce484222325	SELECT * FROM t AS a
+NotImplemented	e9242b44747c5e35	cbf29ce484222325	c21eead1c0cbf3c0	SELECT * FROM t JOIN u ON t.id = u.id
+ok	a91c9b42e1642b7c	cbf29ce484222325	d11d5f4f8ad5dddd	SELECT * FROM t AS a
 # [V07] predicate-position subqueries.
-ok	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u)
-ok	5b6a4489f043e0d7	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u)
-ok	d9e6d16ebc7df09d	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT id FROM u)
+ok	e0208a3774f7afe5	cbf29ce484222325	adfb2afe9c63cdc2	SELECT * FROM t WHERE EXISTS (SELECT * FROM u)
+ok	5b6a4489f043e0d7	cbf29ce484222325	7e7f6c7b9864e1ea	SELECT * FROM t WHERE id IN (SELECT id FROM u)
+ok	d9e6d16ebc7df09d	cbf29ce484222325	b026099ec02acd20	SELECT * FROM t WHERE id = (SELECT id FROM u)
 # [V08 — BETWEEN half done] The IN-list half is still open and still fails.
 #
 # **The hashes did not move when BETWEEN became parseable**, and that is the
 # whole reason this line stayed pinned while its verdict flipped: BETWEEN has
 # lexed as a reserved keyword since V04, and a keyword hashes exactly as the
 # identifier it used to be. Becoming *parseable* changes no shape stream.
-InvalidArgument	b87254b3cae4a5b8	78f79099c419719c	SELECT * FROM t WHERE id IN (1, 2)
-ok	af3f6ac336bb68d8	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 AND 5
-ok	e55ef6c0ffc6290e	78f78f99c4196fe9	SELECT * FROM t WHERE v BETWEEN 1 AND 5
-ok	ba36feab6d6a3125	2435274fd957b578	SELECT * FROM t WHERE id BETWEEN 1 AND 5 AND name = 'x'
-ok	4aa155c62d488ef9	78f78f99c4196fe9	SELECT * FROM t AS a WHERE a.id BETWEEN 1 AND 5
+InvalidArgument	b87254b3cae4a5b8	78f79099c419719c	17393c1202798a91	SELECT * FROM t WHERE id IN (1, 2)
+ok	af3f6ac336bb68d8	78f78f99c4196fe9	2f0436283d128f81	SELECT * FROM t WHERE id BETWEEN 1 AND 5
+ok	e55ef6c0ffc6290e	78f78f99c4196fe9	4bb4c5b397d42325	SELECT * FROM t WHERE v BETWEEN 1 AND 5
+ok	ba36feab6d6a3125	2435274fd957b578	febd8d40371cccfe	SELECT * FROM t WHERE id BETWEEN 1 AND 5 AND name = 'x'
+ok	4aa155c62d488ef9	78f78f99c4196fe9	16278e48f6c6f5b0	SELECT * FROM t AS a WHERE a.id BETWEEN 1 AND 5
 # BETWEEN with a missing AND, or a missing bound, is a syntax error naming
 # the position - not a silent one-sided range. Both still *lex*, so both
 # still have a fingerprint: refusing to parse is not refusing to hash.
-InvalidArgument	5be869c8076bff1f	b5d414774c8002cc	SELECT * FROM t WHERE id BETWEEN 1
-InvalidArgument	97eadbe49c827e47	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 5
-InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 OR id = 2
+InvalidArgument	5be869c8076bff1f	b5d414774c8002cc	916070fdcb588850	SELECT * FROM t WHERE id BETWEEN 1
+InvalidArgument	97eadbe49c827e47	78f78f99c4196fe9	5f685140876fa356	SELECT * FROM t WHERE id BETWEEN 1 5
+InvalidArgument	4338879b6a60f25b	78f79099c419719c	63c0c9fa3ffd1d0a	SELECT * FROM t WHERE id = 1 OR id = 2
 # [V09] pagination. The tail parses since 2026-08-10, and the two hashes
 # that predate it did not move: `order`, `by`, `asc`, `limit` and `offset`
 # were always ordinary identifiers, so becoming parseable changed no shape
@@ -238,39 +243,39 @@ InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 O
 # select-list position, which is a second spelling of a thing that already
 # has one. An aggregated statement's tail also stays refused, which is what
 # keeps aggregate.md section 10's decision open.
-ok	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
-ok	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
-ok	cfd92d5cf2657bf9	183288bf5470b5dc	SELECT * FROM t LIMIT 20
-ok	a2ab37bd0b9912d1	6a2936eff68a8d8a	SELECT * FROM t LIMIT 10 OFFSET 5
-ok	d1d97970aff68c0c	b5d410774c7ffc00	SELECT * FROM t OFFSET 5
-ok	9e51e28ff0f77902	90e9577200715765	SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 2 OFFSET 1
-ok	7f56cd80953c49c8	cbf29ce484222325	SELECT limit, offset FROM t
-ok	44d61d637a45b7d0	cbf29ce484222325	SELECT * FROM t ORDER BY id DESC
-NotImplemented	e967d58b511229ec	b5d414774c8002cc	SELECT * FROM t ORDER BY 1
-ok	f54a1f175f7d80c0	cbf29ce484222325	SELECT * FROM t ORDER BY id, name
-NotImplemented	53268d89f9272838	b5d410774c7ffc00	SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5
-NotImplemented	da3c546ef95221a8	b5d416774c800632	SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 3)
-InvalidArgument	cfd92d5cf2657bf9	184a11bf54847d88	SELECT * FROM t LIMIT -1
-InvalidArgument	cfd92d5cf2657bf9	064a8a899bed480c	SELECT * FROM t LIMIT 1.5
-InvalidArgument	7a69afcc608c62f9	935e8a7428e56318	SELECT * FROM t OFFSET 5 LIMIT 10
+ok	2014153a5d44a3d2	cbf29ce484222325	73a4ec0681024335	SELECT * FROM t ORDER BY id
+ok	cfd92d5cf2657bf9	183c9abf547928f7	21f333ade8489fcc	SELECT * FROM t LIMIT 10
+ok	cfd92d5cf2657bf9	183288bf5470b5dc	21f333ade8489fcc	SELECT * FROM t LIMIT 20
+ok	a2ab37bd0b9912d1	6a2936eff68a8d8a	f153f6ae262a6dcc	SELECT * FROM t LIMIT 10 OFFSET 5
+ok	d1d97970aff68c0c	b5d410774c7ffc00	c7f2dd045c5d77f3	SELECT * FROM t OFFSET 5
+ok	9e51e28ff0f77902	90e9577200715765	12e52f7634f56f77	SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 2 OFFSET 1
+ok	7f56cd80953c49c8	cbf29ce484222325	d591805ceb2c9c23	SELECT limit, offset FROM t
+ok	44d61d637a45b7d0	cbf29ce484222325	0368a40393ebdec9	SELECT * FROM t ORDER BY id DESC
+NotImplemented	e967d58b511229ec	b5d414774c8002cc	3cb1dd5efee74e57	SELECT * FROM t ORDER BY 1
+ok	f54a1f175f7d80c0	cbf29ce484222325	4d0a258a737c7a97	SELECT * FROM t ORDER BY id, name
+NotImplemented	53268d89f9272838	b5d410774c7ffc00	e16902d9ae05d7bf	SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5
+NotImplemented	da3c546ef95221a8	b5d416774c800632	faff8ec542bd0073	SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 3)
+InvalidArgument	cfd92d5cf2657bf9	184a11bf54847d88	21f333ade8489fcc	SELECT * FROM t LIMIT -1
+InvalidArgument	cfd92d5cf2657bf9	064a8a899bed480c	21f333ade8489fcc	SELECT * FROM t LIMIT 1.5
+InvalidArgument	7a69afcc608c62f9	935e8a7428e56318	acd40ab6da5716dc	SELECT * FROM t OFFSET 5 LIMIT 10
 # [AG01] Aggregates. I14 is resolved by docs/spec/aggregate.md, so this
 # parses now — and the hash did not move, which is the whole of §2's
 # fingerprint argument: nothing was reserved and no token type was added,
 # so `count` lexes as the identifier it always was.
-ok	1dbdfb79bafd459e	cbf29ce484222325	SELECT COUNT(*) FROM t
-ok	e98a95e073db2017	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b
-ok	489356a113ef4e44	cbf29ce484222325	SELECT SUM(DISTINCT x) FROM t
+ok	1dbdfb79bafd459e	cbf29ce484222325	d591805ceb2c9c23	SELECT COUNT(*) FROM t
+ok	e98a95e073db2017	cbf29ce484222325	fa64ea250e9afbea	SELECT b, COUNT(*) FROM t GROUP BY b
+ok	489356a113ef4e44	cbf29ce484222325	d591805ceb2c9c23	SELECT SUM(DISTINCT x) FROM t
 # A column may still be named `count` or `group`: a function head is a name
 # from the set *followed by a paren*, and no production puts a paren after a
 # column reference.
-ok	ff41a860584dc5e0	cbf29ce484222325	SELECT count FROM t
-ok	060af4ce805c88ca	b5d414774c8002cc	SELECT * FROM t WHERE group = 1
+ok	ff41a860584dc5e0	cbf29ce484222325	d591805ceb2c9c23	SELECT count FROM t
+ok	060af4ce805c88ca	b5d414774c8002cc	fddbf2ecb90269a5	SELECT * FROM t WHERE group = 1
 # AVG folds since 2026-08-07 (aggregate.md §3.4): the verdict flipped
 # with its task, and the hash did not move - AVG was always an ordinary
 # identifier to the lexer, which is what the non-reservation rule buys.
 # The type rule (decimal columns only) is the compiler's, invisible here.
-ok	91fa1130f96f7220	cbf29ce484222325	SELECT AVG(x) FROM t
-ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
+ok	91fa1130f96f7220	cbf29ce484222325	d591805ceb2c9c23	SELECT AVG(x) FROM t
+ok	c827c5fe23c991df	cbf29ce484222325	d591805ceb2c9c23	SELECT AVG(DISTINCT x) FROM t
 # HAVING and ORDER BY over aggregated output. Both were refusals - AG7, and
 # §2's [PROPOSED] ORDER BY row - and both parse since 2026-08-24
 # (docs/inflight/in-progress/workplan-having.md HV-1): the verdicts flipped with the task that
@@ -278,39 +283,39 @@ ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
 # ordinary identifier it always was and a HAVING literal is a slot exactly
 # as a WHERE literal is. Same evidence AVG's flip above carries, and the
 # reason `kFingerprintVersion` did not move for either.
-ok	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
-ok	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
+ok	fe758a469156cb26	b5d414774c8002cc	35e5c4c06838a2b7	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
+ok	61193a3cf78e857f	cbf29ce484222325	bb8d52fd15f1001c	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
 
 # ---- ALTER (docs/spec/alter.md AL1, AL7) -----------------------------------
 # ALTER is not a patternable leading word, so every line is "-". The
 # refusal class is the feature: v1 is catalog-only, and ADD/DROP answer a
 # positioned Unsupported carrying invariant 13's reason.
-ok	-	-	ALTER TABLE t RENAME TO u
-ok	-	-	ALTER TABLE t RENAME COLUMN a TO b
-ok	-	-	alter table t rename to u;
-NotImplemented	-	-	ALTER TABLE t ADD COLUMN x int
-NotImplemented	-	-	ALTER TABLE t DROP COLUMN a
-InvalidArgument	-	-	ALTER TABLE t
-InvalidArgument	-	-	ALTER t RENAME TO u
+ok	-	-	-	ALTER TABLE t RENAME TO u
+ok	-	-	-	ALTER TABLE t RENAME COLUMN a TO b
+ok	-	-	-	alter table t rename to u;
+NotImplemented	-	-	-	ALTER TABLE t ADD COLUMN x int
+NotImplemented	-	-	-	ALTER TABLE t DROP COLUMN a
+InvalidArgument	-	-	-	ALTER TABLE t
+InvalidArgument	-	-	-	ALTER t RENAME TO u
 
 # ---- UPDATE — accepted -----------------------------------------------------
-ok	e11a9ee11c2d4d2e	b5d414774c8002cc	UPDATE t SET a = 1
-ok	dc85af0987beef36	2a44fca2241ecfc1	UPDATE t SET a = 1, b = 'x'
-ok	e11a9fe11c2d4ee1	cbf29ce484222325	UPDATE t SET a = NULL
-ok	18c7c047dc0f76f3	78f79099c419719c	UPDATE t SET a = 1 WHERE id = 2
-ok	587874169a79f78c	90e95572007153ff	UPDATE t SET a = 1 WHERE id = 2 AND b = 3
-ok	e11a9ee11c2d4d2e	b5d414774c8002cc	update t set a = 1;
+ok	e11a9ee11c2d4d2e	b5d414774c8002cc	e11a9ee11c2d4d2e	UPDATE t SET a = 1
+ok	dc85af0987beef36	2a44fca2241ecfc1	dc85af0987beef36	UPDATE t SET a = 1, b = 'x'
+ok	e11a9fe11c2d4ee1	cbf29ce484222325	e11a9fe11c2d4ee1	UPDATE t SET a = NULL
+ok	18c7c047dc0f76f3	78f79099c419719c	18c7c047dc0f76f3	UPDATE t SET a = 1 WHERE id = 2
+ok	587874169a79f78c	90e95572007153ff	587874169a79f78c	UPDATE t SET a = 1 WHERE id = 2 AND b = 3
+ok	e11a9ee11c2d4d2e	b5d414774c8002cc	e11a9ee11c2d4d2e	update t set a = 1;
 
 # ---- UPDATE — rejected -----------------------------------------------------
-InvalidArgument	efb58b4ca7e55ff4	b5d414774c8002cc	UPDATE SET a = 1
-InvalidArgument	d23b14459421e096	b5d414774c8002cc	UPDATE t a = 1
-InvalidArgument	2d4efb7b83e3d0e6	b5d414774c8002cc	UPDATE t SET a 1
-InvalidArgument	e11e00e11c30298b	b5d414774c8002cc	UPDATE t SET a != 1
-InvalidArgument	26cbf75fc63b2736	cbf29ce484222325	UPDATE t SET a = x
-InvalidArgument	4bfaf50ff154c09b	307dfbacf8ce886d	UPDATE t SET 42 = 1
-InvalidArgument	ad892082e0fa1af8	b5d414774c8002cc	UPDATE t SET a = 1,
-InvalidArgument	8af46ce9765f5fa1	cbf29ce484222325	UPDATE t
-InvalidArgument	914fcad80f252e1e	b5d414774c8002cc	UPDATE t SET a = 1 extra
+InvalidArgument	efb58b4ca7e55ff4	b5d414774c8002cc	efb58b4ca7e55ff4	UPDATE SET a = 1
+InvalidArgument	d23b14459421e096	b5d414774c8002cc	d23b14459421e096	UPDATE t a = 1
+InvalidArgument	2d4efb7b83e3d0e6	b5d414774c8002cc	2d4efb7b83e3d0e6	UPDATE t SET a 1
+InvalidArgument	e11e00e11c30298b	b5d414774c8002cc	e11e00e11c30298b	UPDATE t SET a != 1
+InvalidArgument	26cbf75fc63b2736	cbf29ce484222325	26cbf75fc63b2736	UPDATE t SET a = x
+InvalidArgument	4bfaf50ff154c09b	307dfbacf8ce886d	4bfaf50ff154c09b	UPDATE t SET 42 = 1
+InvalidArgument	ad892082e0fa1af8	b5d414774c8002cc	ad892082e0fa1af8	UPDATE t SET a = 1,
+InvalidArgument	8af46ce9765f5fa1	cbf29ce484222325	8af46ce9765f5fa1	UPDATE t
+InvalidArgument	914fcad80f252e1e	b5d414774c8002cc	914fcad80f252e1e	UPDATE t SET a = 1 extra
 
 # ---- Joins and aliases (V05) ------------------------------------------------
 # New forms, recorded here the moment they became reachable. Placeholder
@@ -322,84 +327,87 @@ InvalidArgument	914fcad80f252e1e	b5d414774c8002cc	UPDATE t SET a = 1 extra
 # when the star rule landed. Rewritten rather than left flipped, so this
 # section keeps testing what it is named for - that a join parses. The
 # star-over-a-join refusal has its own lines in the V06 section below.
-ok	e4edb2c8b4eb5d3c	cbf29ce484222325	SELECT t.id FROM t JOIN u ON t.id = u.id JOIN v ON u.id = v.id
-ok	5b47556ce9244d2e	cbf29ce484222325	SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id
+ok	e4edb2c8b4eb5d3c	cbf29ce484222325	ec4d4e06ecad2e24	SELECT t.id FROM t JOIN u ON t.id = u.id JOIN v ON u.id = v.id
+ok	5b47556ce9244d2e	cbf29ce484222325	ac466d19a355cfcd	SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id
 # The self-join. It is expressible only because the duplicate-binding rule
 # below refuses the version without aliases.
-ok	a9c615e6411952e5	cbf29ce484222325	SELECT a.id, b.id FROM t AS a JOIN t AS b ON a.id = b.id
-ok	ee7a5fe23cf0e3b8	cbf29ce484222325	select t.id from t join u on t.id = u.id
-ok	09203711bb6e1327	b5d414774c8002cc	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE t.id = 1
+ok	a9c615e6411952e5	cbf29ce484222325	54138bac27c6b410	SELECT a.id, b.id FROM t AS a JOIN t AS b ON a.id = b.id
+ok	ee7a5fe23cf0e3b8	cbf29ce484222325	c21eead1c0cbf3c0	select t.id from t join u on t.id = u.id
+ok	09203711bb6e1327	b5d414774c8002cc	e986047b2c67b70f	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE t.id = 1
 #
 # Declined — a well-formed statement this engine refuses, each with the byte
 # position of what it refused. Distinct from InvalidArgument, which means
 # "look for a typo"; and split in two since 2026-08-31, so each row says
 # whether a later release could lift it (NotImplemented) or the
 # architecture forbids it (Unsupported).
-NotImplemented	3597f4484605402f	cbf29ce484222325	SELECT * FROM t LEFT JOIN u ON t.id = u.id
-NotImplemented	8aec5874566e99c1	cbf29ce484222325	SELECT * FROM t RIGHT JOIN u ON t.id = u.id
-NotImplemented	f6e1013d24de0aa0	cbf29ce484222325	SELECT * FROM t FULL OUTER JOIN u ON t.id = u.id
+NotImplemented	3597f4484605402f	cbf29ce484222325	d5a845200a881a34	SELECT * FROM t LEFT JOIN u ON t.id = u.id
+NotImplemented	8aec5874566e99c1	cbf29ce484222325	5a26fb5fcd34dd24	SELECT * FROM t RIGHT JOIN u ON t.id = u.id
+NotImplemented	f6e1013d24de0aa0	cbf29ce484222325	50a3eea3c48fcf5b	SELECT * FROM t FULL OUTER JOIN u ON t.id = u.id
 # One relation named twice with no way to tell the occurrences apart.
-Unsupported	a297f62980ae08d9	cbf29ce484222325	SELECT * FROM t JOIN t ON t.id = t.id
-Unsupported	ec10eded05cdb080	cbf29ce484222325	SELECT * FROM t AS a JOIN u AS a ON a.id = a.id
+Unsupported	a297f62980ae08d9	cbf29ce484222325	f26df2aa36416d4c	SELECT * FROM t JOIN t ON t.id = t.id
+Unsupported	ec10eded05cdb080	cbf29ce484222325	3051d4ee8b21fe69	SELECT * FROM t AS a JOIN u AS a ON a.id = a.id
 # An unqualified ON column names no relation; V14 owns resolution.
-NotImplemented	f0039522b21c1cd9	cbf29ce484222325	SELECT * FROM t JOIN u ON id = u.id
+NotImplemented	f0039522b21c1cd9	cbf29ce484222325	c7de3b4834a982da	SELECT * FROM t JOIN u ON id = u.id
 #
 # Rejected outright — malformed, not merely undoable.
-InvalidArgument	a1bf63b73d194ba6	cbf29ce484222325	SELECT * FROM t JOIN u
-InvalidArgument	bbaee1ae8ff21642	cbf29ce484222325	SELECT * FROM t JOIN u ON t.id
-InvalidArgument	08439a09b1f071b0	cbf29ce484222325	SELECT * FROM t JOIN ON t.id = u.id
-InvalidArgument	7c7f9c7acd451965	cbf29ce484222325	SELECT * FROM t AS
-InvalidArgument	d1f04baacc6a2a05	182b9abf546ab5c4	SELECT * FROM t AS 42
+InvalidArgument	a1bf63b73d194ba6	cbf29ce484222325	4b7c968871e84e3b	SELECT * FROM t JOIN u
+InvalidArgument	bbaee1ae8ff21642	cbf29ce484222325	411c9cc5a07b633d	SELECT * FROM t JOIN u ON t.id
+InvalidArgument	08439a09b1f071b0	cbf29ce484222325	c3051fb2dec8055d	SELECT * FROM t JOIN ON t.id = u.id
+InvalidArgument	7c7f9c7acd451965	cbf29ce484222325	6b9396d385e5ec64	SELECT * FROM t AS
+InvalidArgument	d1f04baacc6a2a05	182b9abf546ab5c4	b1b5af6c85b0b152	SELECT * FROM t AS 42
 # INNER is not a reserved word and no production consumes it, so this is
 # trailing garbage rather than an accepted synonym. Spec I9 names only the
 # outer keywords as reserved.
-InvalidArgument	59b0f0f81477e5ef	cbf29ce484222325	SELECT * FROM t INNER JOIN u ON t.id = u.id
+InvalidArgument	59b0f0f81477e5ef	cbf29ce484222325	1172d0721ffce5b6	SELECT * FROM t INNER JOIN u ON t.id = u.id
 
 # ---- Projection and qualified names (V06) -----------------------------------
 # Accepted: an explicit select list, qualified or bare, and a WHERE column
 # that may now carry a qualifier.
-ok	e6d0ffbb18c65a07	cbf29ce484222325	SELECT a.x, b.y FROM t AS a JOIN u AS b ON a.id = b.id
-ok	7a7a7d26ac247ff9	cbf29ce484222325	SELECT t.id, u.note FROM t JOIN u ON t.id = u.t_id
-ok	655d6a159b20eaab	cbf29ce484222325	SELECT c, a, b FROM t
-ok	be8942f1a024546b	cbf29ce484222325	SELECT a.x, y, b.z FROM t AS a JOIN u AS b ON a.id = b.id
-ok	fca9c395f4a2af53	b5d414774c8002cc	SELECT * FROM t WHERE t.id = 1
-ok	c91e56fa7a992cb3	3ce015249a7377f5	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE u.status = 'open'
-ok	e1d213b42ea6b631	78f79099c419719c	UPDATE t SET a = 1 WHERE t.id = 2
+ok	e6d0ffbb18c65a07	cbf29ce484222325	ac466d19a355cfcd	SELECT a.x, b.y FROM t AS a JOIN u AS b ON a.id = b.id
+ok	7a7a7d26ac247ff9	cbf29ce484222325	770f010975ee5773	SELECT t.id, u.note FROM t JOIN u ON t.id = u.t_id
+ok	655d6a159b20eaab	cbf29ce484222325	d591805ceb2c9c23	SELECT c, a, b FROM t
+ok	be8942f1a024546b	cbf29ce484222325	ac466d19a355cfcd	SELECT a.x, y, b.z FROM t AS a JOIN u AS b ON a.id = b.id
+ok	fca9c395f4a2af53	b5d414774c8002cc	cba38c782536b46c	SELECT * FROM t WHERE t.id = 1
+ok	c91e56fa7a992cb3	3ce015249a7377f5	9b44cf3f24666b2b	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE u.status = 'open'
+ok	e1d213b42ea6b631	78f79099c419719c	e1d213b42ea6b631	UPDATE t SET a = 1 WHERE t.id = 2
 #
 # `SELECT *` has no answer today once there is more than one relation for
 # it to span, and written order being the client's to choose is exactly
 # what makes it unanswerable here. NotImplemented rather than Unsupported:
 # cross-relation `*` is a real SQL semantic a later release could adopt by
 # fixing an order, not something the architecture forbids.
-NotImplemented	7bfb6efe6f64c69c	cbf29ce484222325	SELECT * FROM t AS a JOIN u AS b ON a.id = b.id
+NotImplemented	7bfb6efe6f64c69c	cbf29ce484222325	ac466d19a355cfcd	SELECT * FROM t AS a JOIN u AS b ON a.id = b.id
 #
 # Rejected — malformed select lists. `SELECT *, a` and `SELECT a, *` are
 # here because star is a whole select list, never a list element.
-InvalidArgument	d591805ceb2c9c23	cbf29ce484222325	SELECT FROM t
-InvalidArgument	65a9a93fb6b45224	cbf29ce484222325	SELECT a, FROM t
-InvalidArgument	a41e0c3299fb216c	cbf29ce484222325	SELECT a b FROM t
-InvalidArgument	4518328abb44759c	cbf29ce484222325	SELECT a., b FROM t
-InvalidArgument	ca77cd098eb35051	182b9abf546ab5c4	SELECT 42 FROM t
-InvalidArgument	d4d7ff16193af251	cbf29ce484222325	SELECT a, * FROM t
-InvalidArgument	5efeb056abe3ea93	cbf29ce484222325	SELECT *, a FROM t
+# The next two have one fetch_id, the leading SELECT's alone: a `from` where
+# an item begins reads as a column named `from`, so the window never closes.
+# Neither parses, so neither is ever stored.
+InvalidArgument	d591805ceb2c9c23	cbf29ce484222325	ab4084f3e927f0c2	SELECT FROM t
+InvalidArgument	65a9a93fb6b45224	cbf29ce484222325	ab4084f3e927f0c2	SELECT a, FROM t
+InvalidArgument	a41e0c3299fb216c	cbf29ce484222325	d591805ceb2c9c23	SELECT a b FROM t
+InvalidArgument	4518328abb44759c	cbf29ce484222325	d591805ceb2c9c23	SELECT a., b FROM t
+InvalidArgument	ca77cd098eb35051	182b9abf546ab5c4	d591805ceb2c9c23	SELECT 42 FROM t
+InvalidArgument	d4d7ff16193af251	cbf29ce484222325	d591805ceb2c9c23	SELECT a, * FROM t
+InvalidArgument	5efeb056abe3ea93	cbf29ce484222325	d591805ceb2c9c23	SELECT *, a FROM t
 # A SET target names a column of the one relation UPDATE reads, so a
 # qualifier on it says nothing the statement does not already say.
-InvalidArgument	86430a5c1793ac6c	b5d414774c8002cc	UPDATE t SET t.a = 1
+InvalidArgument	86430a5c1793ac6c	b5d414774c8002cc	86430a5c1793ac6c	UPDATE t SET t.a = 1
 
 # ---- Predicate-position subqueries (V07) ------------------------------------
 # The four accepted forms, plus correlation and nesting.
-ok	17da6791a10fc738	cbf29ce484222325	SELECT * FROM t WHERE id != (SELECT id FROM u)
-ok	01f584b45df39b0d	cbf29ce484222325	SELECT * FROM t WHERE id NOT IN (SELECT t_id FROM u)
-ok	d93248f61bcdef44	cbf29ce484222325	SELECT * FROM t WHERE NOT EXISTS (SELECT * FROM u)
-ok	cf8afe3c02d3ddbc	b5d414774c8002cc	SELECT * FROM t WHERE EXISTS (SELECT * FROM u WHERE u.t_id = 1)
-ok	9bb9650d93cef8b5	2a44fca2241ecfc1	SELECT * FROM t WHERE id = 1 AND EXISTS (SELECT * FROM u) AND name = 'x'
-ok	c4aef8669030844b	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u) AND EXISTS (SELECT * FROM v)
-ok	efbc8ed4f64badef	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT a.id FROM u AS a JOIN v AS b ON a.id = b.id)
-ok	5094fc7111efa6ee	b5d414774c8002cc	UPDATE t SET a = 1 WHERE id IN (SELECT t_id FROM u)
-ok	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u);
+ok	17da6791a10fc738	cbf29ce484222325	2b518361d50098c5	SELECT * FROM t WHERE id != (SELECT id FROM u)
+ok	01f584b45df39b0d	cbf29ce484222325	cb46a0fe4f0261bc	SELECT * FROM t WHERE id NOT IN (SELECT t_id FROM u)
+ok	d93248f61bcdef44	cbf29ce484222325	bfddcd2e1f00d643	SELECT * FROM t WHERE NOT EXISTS (SELECT * FROM u)
+ok	cf8afe3c02d3ddbc	b5d414774c8002cc	e039d049a4e21953	SELECT * FROM t WHERE EXISTS (SELECT * FROM u WHERE u.t_id = 1)
+ok	9bb9650d93cef8b5	2a44fca2241ecfc1	a0a21c2048e25ffa	SELECT * FROM t WHERE id = 1 AND EXISTS (SELECT * FROM u) AND name = 'x'
+ok	c4aef8669030844b	cbf29ce484222325	c6592627345ca88c	SELECT * FROM t WHERE EXISTS (SELECT * FROM u) AND EXISTS (SELECT * FROM v)
+ok	efbc8ed4f64badef	cbf29ce484222325	1b1c2ea67cba4e4e	SELECT * FROM t WHERE id IN (SELECT a.id FROM u AS a JOIN v AS b ON a.id = b.id)
+ok	5094fc7111efa6ee	b5d414774c8002cc	5094fc7111efa6ee	UPDATE t SET a = 1 WHERE id IN (SELECT t_id FROM u)
+ok	e0208a3774f7afe5	cbf29ce484222325	adfb2afe9c63cdc2	SELECT * FROM t WHERE EXISTS (SELECT * FROM u);
 # At the depth cap (4 nested blocks) and one past it.
-ok	372af9a2b308c984	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t))))
-Unsupported	a6d47bc00b1c1048	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t)))))
+ok	372af9a2b308c984	cbf29ce484222325	04f275a7033ccb9b	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t))))
+Unsupported	a6d47bc00b1c1048	cbf29ce484222325	e0142405ae5d7287	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t)))))
 #
 # Nesting outside predicate position. Each is refused with a position,
 # never a bare syntax error: the relation-reference production must not
@@ -410,19 +418,19 @@ Unsupported	a6d47bc00b1c1048	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELE
 # than a pk, and `exec::InnerBuild` (join-inner-build.md) now buckets a
 # statement-scoped row set and probes it by a non-pk key. The shape is
 # unbuilt, not excluded.
-NotImplemented	8395ef7c84c6184e	b5d414774c8002cc	SELECT * FROM t WHERE NOT id = 1
-NotImplemented	6a572ac142c50425	cbf29ce484222325	SELECT * FROM t JOIN (SELECT * FROM u) ON t.id = u.id
-NotImplemented	ea325ba2b616a269	cbf29ce484222325	SELECT * FROM (SELECT * FROM u)
-NotImplemented	-	-	WITH x AS (SELECT * FROM u) SELECT * FROM x
+NotImplemented	8395ef7c84c6184e	b5d414774c8002cc	d7b4baef5aad1397	SELECT * FROM t WHERE NOT id = 1
+NotImplemented	6a572ac142c50425	cbf29ce484222325	70987933ea91bc56	SELECT * FROM t JOIN (SELECT * FROM u) ON t.id = u.id
+NotImplemented	ea325ba2b616a269	cbf29ce484222325	1aa9b65c676e6550	SELECT * FROM (SELECT * FROM u)
+NotImplemented	-	-	-	WITH x AS (SELECT * FROM u) SELECT * FROM x
 #
 # Malformed. `IN (1, 2)` is [V08]'s value list and stays rejected here.
-InvalidArgument	d7a6bdcced6fcc02	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u
-InvalidArgument	b1ee15b5a9bc7449	cbf29ce484222325	SELECT * FROM t WHERE EXISTS ()
-InvalidArgument	9660f26161090c96	cbf29ce484222325	SELECT * FROM t WHERE EXISTS
-InvalidArgument	ae06d22736a3755c	cbf29ce484222325	SELECT * FROM t WHERE id IN ()
-InvalidArgument	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u;)
-InvalidArgument	d91afc534d177df6	cbf29ce484222325	INSERT INTO t VALUES ((SELECT id FROM u))
-InvalidArgument	9964d7fce0f74496	cbf29ce484222325	UPDATE t SET a = (SELECT id FROM u)
+InvalidArgument	d7a6bdcced6fcc02	cbf29ce484222325	2729e7d89121c633	SELECT * FROM t WHERE EXISTS (SELECT * FROM u
+InvalidArgument	b1ee15b5a9bc7449	cbf29ce484222325	f6a61624ac9709a4	SELECT * FROM t WHERE EXISTS ()
+InvalidArgument	9660f26161090c96	cbf29ce484222325	5febed2ffc007497	SELECT * FROM t WHERE EXISTS
+InvalidArgument	ae06d22736a3755c	cbf29ce484222325	4d5631aa9f8b8127	SELECT * FROM t WHERE id IN ()
+InvalidArgument	e0208a3774f7afe5	cbf29ce484222325	adfb2afe9c63cdc2	SELECT * FROM t WHERE EXISTS (SELECT * FROM u;)
+InvalidArgument	d91afc534d177df6	cbf29ce484222325	d91afc534d177df6	INSERT INTO t VALUES ((SELECT id FROM u))
+InvalidArgument	9964d7fce0f74496	cbf29ce484222325	9964d7fce0f74496	UPDATE t SET a = (SELECT id FROM u)
 #
 # [AG01] Aggregates in a subquery. V07's done-condition asked for
 # Unsupported with a position on these and they used to give a bare syntax
@@ -430,31 +438,31 @@ InvalidArgument	9964d7fce0f74496	cbf29ce484222325	UPDATE t SET a = (SELECT id FR
 # the grammar or reserved-and-rejected. AG8 decides it: the forms parse and
 # are refused *as aggregation*, permanently for v1 — a fold inside a
 # sub-chain puts an aggregation boundary where the execution model has none.
-NotImplemented	009742650befee6a	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)
-NotImplemented	dd4d901ce6b336cc	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)
+NotImplemented	009742650befee6a	cbf29ce484222325	c89f3e3b90753dbf	SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)
+NotImplemented	dd4d901ce6b336cc	cbf29ce484222325	245d59b6fb5cfc25	SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)
 
 # ---- Top level — rejected --------------------------------------------------
-InvalidArgument	-	-	\n
-InvalidArgument	-	-	-- comment only
-InvalidArgument	-	-	42
-InvalidArgument	-	-	*
-InvalidArgument	-	-	?
-InvalidArgument	-	-	(SELECT * FROM t)
+InvalidArgument	-	-	-	\n
+InvalidArgument	-	-	-	-- comment only
+InvalidArgument	-	-	-	42
+InvalidArgument	-	-	-	*
+InvalidArgument	-	-	-	?
+InvalidArgument	-	-	-	(SELECT * FROM t)
 # [CREATE PATTERN] `DROP` became a statement head; [DT01] made TABLE one
 # of its objects (docs/spec/drop-table.md), so the verdict flipped with
 # its task - `DROP` is not a patternable head and the hashes stay "-".
-ok	-	-	DROP TABLE t
-ok	-	-	drop table t;
-InvalidArgument	-	-	SELECTX * FROM t
+ok	-	-	-	DROP TABLE t
+ok	-	-	-	drop table t;
+InvalidArgument	-	-	-	SELECTX * FROM t
 # [txn T10] DELETE became a statement head - the transaction work needed it
 # (docs/spec/txn.md section 10 tests it), so the flip is owned by that task
 # rather than by a parser one. It stays unfingerprinted: adding a
 # patternable leading word does **not** move any hash already stored, which
 # is the case fingerprint.hpp's bump rule names explicitly.
-ok	-	-	DELETE FROM t WHERE id = 1
+ok	-	-	-	DELETE FROM t WHERE id = 1
 # [V12] session and admin statements.
-InvalidArgument	-	-	SET DURABILITY STRICT
-InvalidArgument	-	-	SHOW TABLES
+InvalidArgument	-	-	-	SET DURABILITY STRICT
+InvalidArgument	-	-	-	SHOW TABLES
 
 # ---- CREATE PATTERN / DROP PATTERN: withdrawn 2026-08-31 ------------------
 #
@@ -474,32 +482,32 @@ InvalidArgument	-	-	SHOW TABLES
 # stored waystone is retired by this change.
 #
 # The verdicts below were `ok` until 2026-08-31 and pinned the grammar.
-InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f
-InvalidArgument	-	-	CREATE PATTERN p() OF SELECT * FROM t
-InvalidArgument	-	-	CREATE PATTERN p($a int64, $b varchar) OF SELECT id, name FROM t WHERE id = $a AND name = $b
-InvalidArgument	-	-	CREATE PATTERN p($f int64) WITH (pinned = on) OF SELECT id FROM t WHERE id = $f
-InvalidArgument	-	-	CREATE PATTERN p($f int64) WITH (pinned = off, expected_instances = 100000) OF SELECT id FROM t WHERE id = $f
-InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = $f
-NotImplemented	-	-	DROP PATTERN p
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f
+InvalidArgument	-	-	-	CREATE PATTERN p() OF SELECT * FROM t
+InvalidArgument	-	-	-	CREATE PATTERN p($a int64, $b varchar) OF SELECT id, name FROM t WHERE id = $a AND name = $b
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) WITH (pinned = on) OF SELECT id FROM t WHERE id = $f
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) WITH (pinned = off, expected_instances = 100000) OF SELECT id FROM t WHERE id = $f
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) OF SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = $f
+NotImplemented	-	-	-	DROP PATTERN p
 # A parameter used twice was legal - a readability device, not a constraint:
 # the fingerprint cannot enforce that two slots carry the same value (spec
 # section 3.3).
-InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f AND other = $f
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f AND other = $f
 
 # The type annotation was mandatory - inference from first use was
 # considered and rejected (spec section 2). These lines refused before the
 # withdrawal too, and still do; what changed is which layer refuses them.
-InvalidArgument	-	-	CREATE PATTERN p($f) OF SELECT * FROM t
-InvalidArgument	-	-	CREATE PATTERN p(f int64) OF SELECT * FROM t
+InvalidArgument	-	-	-	CREATE PATTERN p($f) OF SELECT * FROM t
+InvalidArgument	-	-	-	CREATE PATTERN p(f int64) OF SELECT * FROM t
 # WITH had to precede OF: the body ran to end of statement, which is what
 # meant the parser never had to find where a SELECT ends.
-InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT * FROM t WITH (pinned = on)
-InvalidArgument	-	-	CREATE PATTERN p($f int64) SELECT * FROM t
-InvalidArgument	-	-	CREATE PATTERN ($f int64) OF SELECT * FROM t
-NotImplemented	-	-	DROP PATTERN
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) OF SELECT * FROM t WITH (pinned = on)
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) SELECT * FROM t
+InvalidArgument	-	-	-	CREATE PATTERN ($f int64) OF SELECT * FROM t
+NotImplemented	-	-	-	DROP PATTERN
 # v1 declared SELECT-class bodies only; INSERT/UPDATE patterns were deferred
 # (spec section 9), gated by validation rather than by the fingerprint.
-InvalidArgument	-	-	CREATE PATTERN p($f int64) OF INSERT INTO t VALUES (1)
+InvalidArgument	-	-	-	CREATE PATTERN p($f int64) OF INSERT INTO t VALUES (1)
 
 # ---- $param outside a declaration -----------------------------------------
 #
@@ -515,8 +523,8 @@ InvalidArgument	-	-	CREATE PATTERN p($f int64) OF INSERT INTO t VALUES (1)
 # claim - a declared body and the live traffic it was meant to match reduce
 # to one pattern - and the line is kept because it is now what proves the
 # withdrawal moved no hash.
-Unsupported	0212b03badb413ad	cbf29ce484222325	SELECT * FROM t WHERE id = $x
-Unsupported	ae34f9ce9d472ac9	b5d414774c8002cc	UPDATE t SET c = $x WHERE id = 1
+Unsupported	0212b03badb413ad	cbf29ce484222325	41b5d4d450506580	SELECT * FROM t WHERE id = $x
+Unsupported	ae34f9ce9d472ac9	b5d414774c8002cc	ae34f9ce9d472ac9	UPDATE t SET c = $x WHERE id = 1
 
 # ---- Bare numeric literals (TY3 phase 2) -----------------------------------
 #
@@ -530,18 +538,18 @@ Unsupported	ae34f9ce9d472ac9	b5d414774c8002cc	UPDATE t SET c = $x WHERE id = 1
 # the corpus rule's second permitted transition, "a hash that could never be
 # stored may move", argued in fingerprint.cpp and pinned by
 # fingerprint_test.cpp's TheNumericTokenNeededNoFingerprintVersionBump.
-ok	ecba24c306c70be5	a3c68932ec2dc068	SELECT * FROM t WHERE amt = 12.34
-ok	ecba24c306c70be5	a3c68932ec2dc068	SELECT * FROM t WHERE amt = '12.34'
-ok	ecba24c306c70be5	100a442a17d84421	SELECT * FROM t WHERE amt = -0.5
-ok	d6bd36cbdaeee580	66f3ec47f0d82909	SELECT * FROM t WHERE amt BETWEEN 1.00 AND 2.50
-ok	c323a07930901e82	f7f9adb5d61121fd	INSERT INTO t VALUES (12.34, 'x')
-ok	ae34f9ce9d472ac9	46ac44ad760bc8f1	UPDATE t SET c = 12.34 WHERE id = 1
+ok	ecba24c306c70be5	a3c68932ec2dc068	c9a8516b139963ae	SELECT * FROM t WHERE amt = 12.34
+ok	ecba24c306c70be5	a3c68932ec2dc068	c9a8516b139963ae	SELECT * FROM t WHERE amt = '12.34'
+ok	ecba24c306c70be5	100a442a17d84421	c9a8516b139963ae	SELECT * FROM t WHERE amt = -0.5
+ok	d6bd36cbdaeee580	66f3ec47f0d82909	849ca6a7480c6ec3	SELECT * FROM t WHERE amt BETWEEN 1.00 AND 2.50
+ok	c323a07930901e82	f7f9adb5d61121fd	c323a07930901e82	INSERT INTO t VALUES (12.34, 'x')
+ok	ae34f9ce9d472ac9	46ac44ad760bc8f1	ae34f9ce9d472ac9	UPDATE t SET c = 12.34 WHERE id = 1
 # Digits are required on both sides of the point, so these stay the parse
 # errors they always were - and their hashes are the pre-fusion token
 # sequences, unchanged.
-InvalidArgument	0758626484394051	183c9cbf54792c5d	SELECT * FROM t WHERE amt = 12.
-InvalidArgument	0765f6648444c629	b5d410774c7ffc00	SELECT * FROM t WHERE amt = .5
-InvalidArgument	b46f83ccad484d09	ae5e91f4b62d26a6	SELECT * FROM t WHERE amt = 1.2.3
+InvalidArgument	0758626484394051	183c9cbf54792c5d	4265f8f24da448e0	SELECT * FROM t WHERE amt = 12.
+InvalidArgument	0765f6648444c629	b5d410774c7ffc00	42586cf24d98d0a0	SELECT * FROM t WHERE amt = .5
+InvalidArgument	b46f83ccad484d09	ae5e91f4b62d26a6	778ee5b9ee27d806	SELECT * FROM t WHERE amt = 1.2.3
 
 # ---- CREATE INDEX / DROP INDEX (docs/spec/index.md §10) --------------------
 #
@@ -550,24 +558,24 @@ InvalidArgument	b46f83ccad484d09	ae5e91f4b62d26a6	SELECT * FROM t WHERE amt = 1.
 # the aggregate function names did, so no token sequence changed meaning and
 # kFingerprintVersion did not move. A column may still be named any of them,
 # which the line below the refusals pins.
-ok	-	-	CREATE INDEX by_owner ON accounts (owner)
-ok	-	-	CREATE INDEX ix ON t (b, a, c)
-ok	-	-	CREATE INDEX ix ON t (a) COVERING (b, c)
-ok	-	-	CREATE INDEX ix ON t (a) covering (b)
-ok	-	-	CREATE INDEX ix ON t (a);
-ok	-	-	DROP INDEX by_owner
-ok	-	-	CREATE INDEX unique ON t (index) COVERING (covering)
-ok	98c09327562a9560	b5d414774c8002cc	SELECT index FROM t WHERE covering = 1
+ok	-	-	-	CREATE INDEX by_owner ON accounts (owner)
+ok	-	-	-	CREATE INDEX ix ON t (b, a, c)
+ok	-	-	-	CREATE INDEX ix ON t (a) COVERING (b, c)
+ok	-	-	-	CREATE INDEX ix ON t (a) covering (b)
+ok	-	-	-	CREATE INDEX ix ON t (a);
+ok	-	-	-	DROP INDEX by_owner
+ok	-	-	-	CREATE INDEX unique ON t (index) COVERING (covering)
+ok	98c09327562a9560	b5d414774c8002cc	8afda31d08156e72	SELECT index FROM t WHERE covering = 1
 # UNIQUE is refused at its own byte: enforcing uniqueness makes the index a
 # constraint, which would let an index failure abort a write (IX11).
-NotImplemented	-	-	CREATE UNIQUE INDEX ix ON t (a)
+NotImplemented	-	-	-	CREATE UNIQUE INDEX ix ON t (a)
 # A cap refuses and never truncates (spec §11), with the offending column's
 # position - which is the one thing only this layer knows.
-NotImplemented	-	-	CREATE INDEX ix ON t (a, b, c, d, e)
-NotImplemented	-	-	CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)
-InvalidArgument	-	-	CREATE INDEX ix (a)
-InvalidArgument	-	-	CREATE INDEX ix ON t
-InvalidArgument	-	-	DROP INDEX
+NotImplemented	-	-	-	CREATE INDEX ix ON t (a, b, c, d, e)
+NotImplemented	-	-	-	CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)
+InvalidArgument	-	-	-	CREATE INDEX ix (a)
+InvalidArgument	-	-	-	CREATE INDEX ix ON t
+InvalidArgument	-	-	-	DROP INDEX
 
 # ---- CREATE ASSERTION / DROP ASSERTION (docs/spec/assertion.md §3) ---------
 #
@@ -579,59 +587,59 @@ InvalidArgument	-	-	DROP INDEX
 # `assertion`, `check` and `group` are matched by text and are not keywords,
 # so they are still usable as names; the fourth line is that, and the DML
 # lines below it are the half that actually carries a hash.
-ok	-	-	CREATE ASSERTION lim ON purchases GROUP BY (user_id, product_id) CHECK COUNT(*) <= 5
-ok	-	-	CREATE ASSERTION credit ON orders GROUP BY (user_id) CHECK SUM(amount) < 1000
-ok	-	-	create assertion a on t group by (x) check count(*) <= 1;
-ok	-	-	CREATE ASSERTION assertion ON check GROUP BY (assertion, check) CHECK COUNT(*) <= 1
-ok	-	-	CREATE ASSERTION a ON t GROUP BY (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) CHECK COUNT(*) <= 1
-ok	-	-	DROP ASSERTION lim
+ok	-	-	-	CREATE ASSERTION lim ON purchases GROUP BY (user_id, product_id) CHECK COUNT(*) <= 5
+ok	-	-	-	CREATE ASSERTION credit ON orders GROUP BY (user_id) CHECK SUM(amount) < 1000
+ok	-	-	-	create assertion a on t group by (x) check count(*) <= 1;
+ok	-	-	-	CREATE ASSERTION assertion ON check GROUP BY (assertion, check) CHECK COUNT(*) <= 1
+ok	-	-	-	CREATE ASSERTION a ON t GROUP BY (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) CHECK COUNT(*) <= 1
+ok	-	-	-	DROP ASSERTION lim
 
 # Reserved and refused: a form this engine understands and declines, each at
 # its own byte. AS11 (a lower bound would have to be checked on DELETE),
 # AS3/AS7 (timing clauses), §10 (aggregates that are not incrementally
 # maintainable, or are not bounds at all).
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 DEFERRABLE
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT DEFERRABLE
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT VALID
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK MIN(v) <= 1
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5
+Unsupported	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 DEFERRABLE
+Unsupported	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT DEFERRABLE
+Unsupported	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT VALID
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK MIN(v) <= 1
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1
 
 # Wrong rather than reserved: no ceiling in any direction, a bound that is not
 # a non-negative integer literal, a predicate that could never admit a row
 # (§3.1 - a group holds at least one row, so COUNT(*) = 0 is unsatisfiable),
 # and a missing mandatory clause.
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= -1
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1.5
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 1
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK TOTAL(v) <= 1
-InvalidArgument	-	-	CREATE ASSERTION a ON t CHECK COUNT(*) <= 1
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x)
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY () CHECK COUNT(*) <= 1
-InvalidArgument	-	-	DROP ASSERTION
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= -1
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1.5
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 1
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK TOTAL(v) <= 1
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t CHECK COUNT(*) <= 1
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY (x)
+InvalidArgument	-	-	-	CREATE ASSERTION a ON t GROUP BY () CHECK COUNT(*) <= 1
+InvalidArgument	-	-	-	DROP ASSERTION
 
 # A SUM bound of zero is *not* degenerate: an int64 column may hold negative
 # values, so no non-negative bound is provably unsatisfiable.
-ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
+ok	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
 
 # [AS11 rev. 2026-08-08] `=` moved from ok to Unsupported. It parsed and was
 # documented as meaning `aggregate <= N`; that reinterpreted what the operator
 # wrote, and enforcing real equality needs the lower-bound half v1 excludes.
 # A verdict moving with the task that owns it, which is what this column is for.
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
-NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
+NotImplemented	-	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
 
 # ---- Physical optimizer surface (docs/spec/physical-optimizer.md, PX06) ----
 # SHOW is a dispatcher verb, not SQL - the verdict matches SHOW TABLES above -
 # and `relayout` stays an ordinary identifier: no keyword moved for the report
 # surface, which the two SELECTs pin by fingerprinting like any column/table.
-InvalidArgument	-	-	SHOW RELAYOUT
-InvalidArgument	-	-	SHOW RELAYOUT trades
-ok	4b08123e9d144ab4	b5d416774c800632	SELECT relayout FROM t WHERE relayout = 3
-ok	512d110d0175126f	b5d412774c7fff66	SELECT * FROM relayout WHERE id = 7
+InvalidArgument	-	-	-	SHOW RELAYOUT
+InvalidArgument	-	-	-	SHOW RELAYOUT trades
+ok	4b08123e9d144ab4	b5d416774c800632	d44fc972a29e66c4	SELECT relayout FROM t WHERE relayout = 3
+ok	512d110d0175126f	b5d412774c7fff66	561cad9287ef547c	SELECT * FROM relayout WHERE id = 7

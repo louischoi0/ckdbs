@@ -109,6 +109,16 @@ enum class ArgTag : std::uint8_t {
     kStr = 2,
 };
 
+// Whether `word` is `lower` case-insensitively. Folded as it compares, so
+// no caller needs a buffer.
+bool IsWord(std::string_view word, std::string_view lower) noexcept {
+    if (word.size() != lower.size()) return false;
+    for (std::size_t i = 0; i < word.size(); ++i) {
+        if (FoldAscii(word[i]) != lower[i]) return false;
+    }
+    return true;
+}
+
 // Whether a statement whose first word is `word` has a pattern at all.
 // Everything else - CREATE, SET, SHOW, DESCRIBE, SYNC, and any word this
 // grammar does not know - reduces to nullopt.
@@ -117,15 +127,7 @@ enum class ArgTag : std::uint8_t {
 // leading keyword is *not patternable*, and an allow-list is the only
 // shape that gets that right without being updated.
 bool IsPatternableLeadingWord(std::string_view word) noexcept {
-    // Folded as it compares, so the caller needs no buffer either.
-    auto is = [word](std::string_view lower) {
-        if (word.size() != lower.size()) return false;
-        for (std::size_t i = 0; i < word.size(); ++i) {
-            if (FoldAscii(word[i]) != lower[i]) return false;
-        }
-        return true;
-    };
-    return is("select") || is("insert") || is("update");
+    return IsWord(word, "select") || IsWord(word, "insert") || IsWord(word, "update");
 }
 
 bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
@@ -202,6 +204,7 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
 void FingerprintAccumulator::Reset() noexcept {
     shape_ = kFnvOffsetBasis;
     args_ = kFnvOffsetBasis;
+    fetch_ = kFnvOffsetBasis;
     literal_count_ = 0;
     param_count_ = 0;
     started_ = false;
@@ -209,6 +212,9 @@ void FingerprintAccumulator::Reset() noexcept {
     complete_ = false;
     insert_head_ = false;
     first_group_closed_ = false;
+    select_head_ = false;
+    select_list_open_ = false;
+    select_item_due_ = false;
     paren_depth_ = 0;
 }
 
@@ -234,18 +240,19 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
         }
         if (!IsPatternableLeadingWord(tok.text)) return;
 
-        // Remembered for BI5's suppression below. Folded compare, like the
-        // allow-list's own.
-        insert_head_ = tok.text.size() == 6 && FoldAscii(tok.text[0]) == 'i' &&
-                       FoldAscii(tok.text[1]) == 'n' && FoldAscii(tok.text[2]) == 's' &&
-                       FoldAscii(tok.text[3]) == 'e' && FoldAscii(tok.text[4]) == 'r' &&
-                       FoldAscii(tok.text[5]) == 't';
+        // Remembered for BI5's suppression and fetch_id's window below.
+        insert_head_ = IsWord(tok.text, "insert");
+        select_head_ = IsWord(tok.text, "select");
+        select_list_open_ = select_head_;
+        select_item_due_ = select_head_;
 
         valid_ = true;
         Fnv1a shape(shape_);
         shape.Byte(static_cast<std::uint8_t>(ShapeTag::kIdent));
         shape.FoldedField(tok.text);
         shape_ = shape.value();
+        // The leading SELECT is part of the fetch: the window opens after it.
+        fetch_ = shape_;
         return;
     }
 
@@ -309,24 +316,55 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
         }
     }
 
+    // ---- fetch_id's window: the leading SELECT's select list -------------
+    //
+    // Closed by the `from` that ends the list, which is itself folded: the
+    // window holds the select list and nothing else. `FROM` is unreserved,
+    // so it arrives as kIdent, and a column may carry its name. The list is
+    // `*` or items - a column, `rel.column`, or an aggregate over one - so
+    // a column-named `from` sits either inside a call's parens (the depth)
+    // or where an item begins: after the SELECT, a `,` or a `.`. The `from`
+    // that ends the list is at depth 0 and follows an item's end instead.
+    if (select_list_open_) {
+        if (tok.type == TokenType::kLParen) {
+            ++paren_depth_;
+        } else if (tok.type == TokenType::kRParen) {
+            if (paren_depth_ > 0) --paren_depth_;
+        } else if (paren_depth_ == 0 && !select_item_due_ && tok.type == TokenType::kIdent &&
+                   IsWord(tok.text, "from")) {
+            select_list_open_ = false;
+        }
+        select_item_due_ = paren_depth_ == 0 &&
+                           (tok.type == TokenType::kComma || tok.type == TokenType::kDot);
+    }
+
     ShapeTag tag;
     if (!ShapeTagOf(tok.type, tag)) {
         valid_ = false;
         return;
     }
 
-    Fnv1a shape(shape_);
-    shape.Byte(static_cast<std::uint8_t>(tag));
+    // The shape's bytes for this token, folded into `pattern_id`'s state
+    // and - outside the window of a SELECT - into `fetch_id`'s, so the two
+    // can only differ by the tokens the window leaves out.
+    //
+    // Identifiers and keywords hash their folded text after the shared
+    // kIdent tag - see ShapeTagOf(). A keyword left without its text would
+    // collapse `WHERE id IN (…)` and `WHERE id AS (…)` onto one shape, as
+    // well as moving both. Operators, punctuation, NULL and every value
+    // marker are fully described by their tag.
+    const bool named = tok.type == TokenType::kKeyword || tok.type == TokenType::kIdent;
+    auto fold = [&](std::uint64_t& state) {
+        Fnv1a h(state);
+        h.Byte(static_cast<std::uint8_t>(tag));
+        if (named) h.FoldedField(tok.text);
+        state = h.value();
+    };
+    fold(shape_);
+    if (select_head_ && !select_list_open_) fold(fetch_);
 
+    // The argument stream, for the tokens that carry one.
     switch (tok.type) {
-        // Both hash their folded text after the shared kIdent tag - see
-        // ShapeTagOf(). A keyword falling through to `default` here would
-        // drop its text and collapse `WHERE id IN (…)` and `WHERE id AS (…)`
-        // onto one shape, as well as moving both.
-        case TokenType::kKeyword:
-        case TokenType::kIdent:
-            shape.FoldedField(tok.text);
-            break;
         case TokenType::kIntLit: {
             Fnv1a args(args_);
             args.Byte(static_cast<std::uint8_t>(ArgTag::kInt));
@@ -359,11 +397,8 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
             ++param_count_;
             break;
         default:
-            // Operators, punctuation and NULL are fully described by their
-            // tag; there is nothing further to hash.
             break;
     }
-    shape_ = shape.value();
 }
 
 std::optional<Fingerprint> FingerprintAccumulator::Result() const noexcept {
@@ -378,6 +413,7 @@ std::optional<Fingerprint> FingerprintAccumulator::Result() const noexcept {
     out.arg_hash = args_;
     out.literal_count = literal_count_;
     out.param_count = param_count_;
+    out.fetch_id = select_head_ ? fetch_ : shape_;
     return out;
 }
 
