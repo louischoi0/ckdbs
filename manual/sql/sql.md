@@ -911,10 +911,18 @@ they were before the split.
   reference itself: materializing an inner result breaks pk-direct probing
   into the next step and puts a temp relation in the storage layer.
 - **No window functions, no expressions.** The grammar has no expression
-  tree at all — no arithmetic, no `OR`/`NOT` nesting, no function calls
-  outside the five aggregates. A smaller grammar every statement of which
-  executes predictably was chosen over a larger one with unpredictable
-  corners.
+  tree — no arithmetic, no `OR`/`NOT` nesting. Outside the five aggregates
+  there are two scalar functions, and they may appear only as one side of a
+  WHERE comparison: `DATE(timestamp)`, the UTC day an instant falls on, and
+  `NOW()`, the statement's instant (the same value for every call in one
+  statement). `WHERE DATE(ts) = '2026-10-02'` and `WHERE ts < NOW()` work;
+  a function in the select list, `ORDER BY`, `GROUP BY` or `HAVING`, a
+  nested call or a literal argument answers `NOT_IMPLEMENTED` with its
+  position, and an unknown name answers like an unknown column. A function
+  comparison filters rows the statement found some other way - it never
+  becomes a key, an index range or a Cabin probe. A smaller grammar every
+  statement of which executes predictably was chosen over a larger one with
+  unpredictable corners.
 - **No outer joins.** `LEFT`/`RIGHT`/`FULL`/`OUTER` are reserved keywords
   that answer `NOT_IMPLEMENTED` with their own position, so the grammar will
   not shift if they ever land.

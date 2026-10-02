@@ -5998,6 +5998,15 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                     "view is materialized, so there is no relation for a sub-chain to "
                     "correlate against", false};
         }
+        // Before anything reads `col`: a function conjunct has none on a
+        // call's side, and the view's evaluator compares `col op val` only.
+        if (cond.kind == parser::PredicateKind::kCompareFunction) {
+            const std::uint32_t at = cond.lhs_fn.has_value() ? cond.lhs_fn->byte_offset
+                                                             : cond.rhs_fn->byte_offset;
+            const Status refused = Status::NotImplemented(
+                "a function call over a catalog view (byte " + std::to_string(at) + ")");
+            return {ErrorReply(refused), false, 0, refused};
+        }
         if (cond.rhs_kind == parser::RhsKind::kColumn) {
             return {"ERR a column-to-column comparison over a catalog view is not "
                     "supported", false};
@@ -6493,6 +6502,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     const bool waystone_usable =
         (recorder_ != nullptr || replay_enabled_) && exec::HasReplayableStep(compiled);
 
+    // **A D2 statement neither records a trail nor reads one** (AR1 §3,
+    // D2): a row-volatile function makes its instance key name no stable
+    // set of rows. It keeps its identity, so the cabin optimizer still
+    // counts it; only the trail is withheld. D1 is D0 here until AQ folds
+    // its values into the key (AP-Q5).
+    const bool trailable = compiled.determinism != exec::DeterminismClass::kD2;
+
     std::optional<StatementIdentity> identity;
     // The optimizer's S1 widens this beyond Waystone's shape guard, and the
     // difference is the point: a *scan-only* statement is exactly the shape
@@ -6518,7 +6534,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // already had to be hoisted to avoid.
     replay_scratch_.Clear();
     const exec::TrailReplay* replay_ptr = nullptr;
-    if (replay_enabled_ && identity.has_value()) {
+    if (replay_enabled_ && trailable && identity.has_value()) {
         // Served from the catalog cache, so a pattern nobody has recorded
         // costs a hash lookup and stops here. `has_waystone_directory()` is
         // the authority on whether there is anything to walk (rows.hpp).
@@ -6544,7 +6560,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // regression on a point join before this was hoisted onto the
     // dispatcher. Clear() keeps the reservation.
     exec::TrailCollector* trail = nullptr;
-    if (recorder_ != nullptr && identity.has_value()) {
+    if (recorder_ != nullptr && trailable && identity.has_value()) {
         trail_scratch_.Clear();
         trail = &trail_scratch_;
     }

@@ -175,6 +175,23 @@ answer is at the argument column's declared scale, rounded half-even on
 the exact integer pair, and a column that declared no scale (the integer
 types) is refused at compile.
 
+### 3.2a Functions over time (AP-S4)
+
+Two scalar functions, in a WHERE comparison only (`parser-v2.md` I10;
+`include/kds/exec/functions.hpp`):
+
+- **`DATE(timestamp) -> date`**, `kImmutable`: the UTC day the instant
+  falls on, by **floor** division of TY4's microseconds by 86,400,000,000 -
+  `1969-12-31 23:00:00` is `1969-12-31`, not the epoch day. A NULL argument
+  is NULL. Its comparison literal is coerced as a `DATE` column's is
+  (`'YYYY-MM-DD'`, or an epoch day in range).
+- **`NOW() -> timestamp`**, `kStable`: the statement's instant, in TY4's
+  UTC microseconds, read once per statement - every call in a statement is
+  one value. There is no session time zone, so there is nothing to convert.
+
+Both sides of a comparison must be of one type: `v = NOW()` over an
+`int64` column is refused `InvalidArgument` at the call's byte.
+
 ### 3.3 Rendering happens at the boundary
 
 `FormatValue` takes the column's `type_val` (signature

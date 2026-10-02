@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -44,7 +45,28 @@ struct BoundRelation {
 struct Scope {
     std::vector<BoundRelation> relations;
     const Scope* parent = nullptr;
+
+    // The statement's constants (exec/functions.hpp). Set on the root
+    // scope, once per compile - and a statement is compiled once per
+    // execution - so every `NOW()` in it reads one instant. Not part of the
+    // chain's identity: it lands in a function conjunct's context, which
+    // no step, kind, residual or class reads.
+    StatementContext context;
 };
+
+const StatementContext& ContextOf(const Scope& scope) {
+    const Scope* s = &scope;
+    while (s->parent != nullptr) s = s->parent;
+    return s->context;
+}
+
+StatementContext TakeStatementContext() {
+    StatementContext out;
+    out.now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count();
+    return out;
+}
 
 std::string Position(std::uint32_t byte_offset) {
     return " at byte " + std::to_string(byte_offset);
@@ -174,6 +196,125 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t by
         }
     }
     return Status::OK();
+}
+
+// ---- Function conjuncts (AP-S4) ----------------------------------------
+//
+// A `kCompareFunction` condition lowered to a FunctionPredicate - never to
+// a StepPredicate, which is what keeps it from being a key (step_chain.hpp).
+// Called from both lowering sites, for CoercePredicate's reason.
+
+StatusOr<FunctionTerm> ResolveCall(const Scope& scope, const parser::FunctionCall& call) {
+    const FunctionEntry* fn = FindFunction(call.name);
+    if (fn == nullptr) {
+        // AP-Q3: InvalidArgument, as an unknown column is. The parser cannot
+        // tell a function this engine lacks from a misspelling.
+        return Status::InvalidArgument("unknown function '" + call.name + "'" +
+                                       Position(call.byte_offset));
+    }
+    if (call.args.size() != fn->arity) {
+        return Status::InvalidArgument(
+            "function '" + std::string(fn->name) + "' takes " + std::to_string(fn->arity) +
+            " argument(s), got " + std::to_string(call.args.size()) + Position(call.byte_offset));
+    }
+    FunctionTerm term;
+    term.fn = fn;
+    for (const parser::ColumnName& arg : call.args) {
+        auto ref = ResolveColumn(scope, arg);
+        if (!ref.ok()) return ref.status();
+        if (ColumnAt(scope, ref.value()).type_val != fn->arg_type_val) {
+            return Status::InvalidArgument("function '" + std::string(fn->name) +
+                                           "' does not take column '" + arg.name +
+                                           "': it is not of the argument's type" +
+                                           Position(arg.byte_offset));
+        }
+        term.args.push_back(ref.value());
+    }
+    return term;
+}
+
+StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
+                                                  const parser::Condition& cond) {
+    FunctionPredicate out;
+    out.op = cond.op;
+    out.context = ContextOf(scope);
+
+    // The left side fixes the type both sides compare as.
+    std::optional<ColumnRef> lhs_column;
+    std::uint32_t at = cond.col.byte_offset;
+    if (cond.lhs_fn.has_value()) {
+        auto term = ResolveCall(scope, *cond.lhs_fn);
+        if (!term.ok()) return term.status();
+        out.type_val = term.value().fn->result_type_val;
+        out.lhs.call = std::move(term.value());
+        at = cond.lhs_fn->byte_offset;
+    } else {
+        auto ref = ResolveColumn(scope, cond.col);
+        if (!ref.ok()) return ref.status();
+        lhs_column = ref.value();
+        out.type_val = ColumnAt(scope, ref.value()).type_val;
+        out.lhs.plain.kind = OperandKind::kColumn;
+        out.lhs.plain.column = ref.value();
+    }
+    if (cond.op == parser::CompareOp::kIsNull || cond.op == parser::CompareOp::kIsNotNull) {
+        return out;
+    }
+
+    const auto mismatch = [](std::uint32_t offset) {
+        return Status::InvalidArgument(
+            "the two sides of this comparison are of different types" + Position(offset));
+    };
+    if (cond.rhs_fn.has_value()) {
+        auto term = ResolveCall(scope, *cond.rhs_fn);
+        if (!term.ok()) return term.status();
+        if (term.value().fn->result_type_val != out.type_val) {
+            return mismatch(cond.rhs_fn->byte_offset);
+        }
+        out.rhs.call = std::move(term.value());
+        return out;
+    }
+    if (cond.rhs_kind == parser::RhsKind::kColumn) {
+        auto ref = ResolveColumn(scope, cond.rhs_col);
+        if (!ref.ok()) return ref.status();
+        if (ColumnAt(scope, ref.value()).type_val != out.type_val) {
+            return mismatch(cond.rhs_col.byte_offset);
+        }
+        out.rhs.plain.kind = OperandKind::kColumn;
+        out.rhs.plain.column = ref.value();
+        return out;
+    }
+
+    // A literal, coerced as a predicate's is: against the column itself
+    // where the left side is one (its width and scale included), against
+    // the call's result type where it is a call.
+    out.rhs.plain.kind = OperandKind::kLiteral;
+    out.rhs.plain.literal = cond.val;
+    catalog::SysColumnRow result_type{};
+    result_type.type_val = out.type_val;
+    const catalog::SysColumnRow& as =
+        lhs_column.has_value() ? ColumnAt(scope, *lhs_column) : result_type;
+    if (Status s = CoerceLiteralToColumn(as, out.rhs.plain.literal); !s.ok()) {
+        const std::uint32_t where = out.rhs.plain.literal.byte_offset != 0
+                                        ? out.rhs.plain.literal.byte_offset
+                                        : at;
+        return s.WithContext("a function comparison's literal" + Position(where));
+    }
+    return out;
+}
+
+// The statement's class: the most volatile purity any function conjunct
+// calls, through every sub-chain (AR1 §3).
+DeterminismClass DeterminismOf(const std::vector<Step>& steps) {
+    DeterminismClass out = DeterminismClass::kD0;
+    for (const Step& step : steps) {
+        for (const FunctionPredicate& pred : step.fn_residual) {
+            for (const FunctionSide* side : {&pred.lhs, &pred.rhs}) {
+                if (side->call.has_value()) out = std::max(out, ClassOf(side->call->fn->purity));
+            }
+        }
+        for (const SubChain& sub : step.sub_chains) out = std::max(out, DeterminismOf(sub.steps));
+    }
+    return out;
 }
 
 // AG3's arithmetic constraints, stated as product facts rather than
@@ -1031,6 +1172,7 @@ std::uint16_t DeepestReferenceIntoThisChain(const std::vector<Step>& steps,
             consider(pred.lhs);
             if (pred.rhs.kind == OperandKind::kColumn) consider(pred.rhs.column);
         }
+        for (const FunctionPredicate& pred : step.fn_residual) ForEachColumn(pred, consider);
         if (step.key.has_value() && step.key->kind == OperandKind::kColumn) {
             consider(step.key->column);
         }
@@ -1051,6 +1193,14 @@ bool ReferencesAnOuterChain(const std::vector<Step>& steps) {
             if (pred.lhs.up > 0) return true;
             if (OperandEscapes(pred.rhs)) return true;
         }
+        // A function argument reaching outward correlates the sub-chain as
+        // surely as a predicate's column does; missing it would hoist the
+        // sub-chain and run it once for every outer row.
+        bool escapes = false;
+        for (const FunctionPredicate& pred : step.fn_residual) {
+            ForEachColumn(pred, [&](const ColumnRef& ref) { escapes = escapes || ref.up > 0; });
+        }
+        if (escapes) return true;
         if (step.key.has_value() && OperandEscapes(*step.key)) return true;
         for (const SubChain& sub : step.sub_chains) {
             // A grandchild's reference to *this* level shows up as up==1
@@ -1103,6 +1253,7 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
             note(pred.lhs);
             if (pred.rhs.kind == OperandKind::kColumn) note(pred.rhs.column);
         }
+        for (const FunctionPredicate& pred : other.fn_residual) ForEachColumn(pred, note);
         if (other.key.has_value() && other.key->kind == OperandKind::kColumn) {
             note(other.key->column);
         }
@@ -1173,6 +1324,9 @@ std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
         note(pred.lhs);
         if (pred.rhs.kind == OperandKind::kColumn) note(pred.rhs.column);
     }
+    // A function conjunct is evaluated beside the residual, on the same
+    // decode, so its arguments are what this row must have read too.
+    for (const FunctionPredicate& pred : step.fn_residual) ForEachColumn(pred, note);
     return mask;
 }
 
@@ -1193,8 +1347,17 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view, PositionSink* declare) {
     std::uint32_t next_step_id = 0;
-    return CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
-                        view, /*inner_build=*/true, declare);
+    auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
+                              view, /*inner_build=*/true, declare);
+    if (!chain.ok()) return chain;
+    // The class folds over the whole statement - every step, every
+    // sub-chain, hoisted or placed - after compile, from what was lowered.
+    StepChain& out = chain.value();
+    out.determinism = DeterminismOf(out.steps);
+    for (const SubChain& sub : out.hoisted) {
+        out.determinism = std::max(out.determinism, DeterminismOf(sub.steps));
+    }
+    return chain;
 }
 
 Status CompileAssignments(const catalog::TableAccess& access,
@@ -1234,6 +1397,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                             const txn::ReadView* view, PositionSink* declare) {
     Scope scope;
     scope.relations.push_back(BoundRelation{std::string(binding), &access});
+    scope.context = TakeStatementContext();
 
     Step out;
     out.rel_oid = access.oid;
@@ -1277,6 +1441,13 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             // later reader needs to know why one is re-run per row.
             sub.correlated = SubChainEscapes(sub);
             out.sub_chains.push_back(std::move(sub));
+            continue;
+        }
+
+        if (cond.kind == parser::PredicateKind::kCompareFunction) {
+            auto fn = LowerFunctionConjunct(scope, cond);
+            if (!fn.ok()) return fn.status();
+            out.fn_residual.push_back(std::move(fn.value()));
             continue;
         }
 
@@ -1360,6 +1531,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 1. Bind every relation in written order --------------------------
     Scope scope;
     scope.parent = parent;
+    if (parent == nullptr) scope.context = TakeStatementContext();
     std::vector<const parser::RelationRef*> refs;
     refs.push_back(&stmt.from);
     for (const parser::JoinClause& j : stmt.joins) refs.push_back(&j.relation);
@@ -1434,6 +1606,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 
     // Sub-chains, kept beside the flat predicates until placement.
     std::vector<SubChain> sub_chains;
+    // Function conjuncts likewise (AP-S4), placed by the same rule.
+    std::vector<FunctionPredicate> fn_predicates;
 
     for (const parser::Condition& cond : stmt.where) {
         if (cond.has_subquery()) {
@@ -1484,6 +1658,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 
             sub.correlated = SubChainEscapes(sub);
             sub_chains.push_back(std::move(sub));
+            continue;
+        }
+
+        if (cond.kind == parser::PredicateKind::kCompareFunction) {
+            auto fn = LowerFunctionConjunct(scope, cond);
+            if (!fn.ok()) return fn.status();
+            fn_predicates.push_back(std::move(fn.value()));
             continue;
         }
 
@@ -1543,6 +1724,16 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 3. Attach each conjunct to the step that makes it evaluable -----
     for (const StepPredicate& pred : predicates) {
         chain.steps[PredicateReadyAt(pred)].residual.push_back(pred);
+    }
+    // A function conjunct goes to the latest step any of its columns
+    // reaches - the first step every argument exists at. One with no
+    // columns at all (`NOW() > '...'`) goes to the first step.
+    for (FunctionPredicate& pred : fn_predicates) {
+        std::uint16_t ready_at = 0;
+        ForEachColumn(pred, [&](const ColumnRef& ref) {
+            ready_at = std::max(ready_at, AvailableAt(ref));
+        });
+        chain.steps[ready_at].fn_residual.push_back(std::move(pred));
     }
 
     // Sub-chains are placed by the same rule. An uncorrelated one depends
@@ -1728,7 +1919,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // bounds what a walk visits, and v1 declines to also build
                 // for it.
                 step.kind = AccessKind::kFilterScan;
-            } else if (inner_build) {
+            } else if (inner_build && step.fn_residual.empty()) {
+                // A step carrying a function conjunct takes no build
+                // (AP-S4): the map holds the rows passing the
+                // *non-correlated* conjuncts, and a function conjunct is
+                // not split into the two - one reading an outer row's
+                // column would bucket the first outer row's answer.
+                //
                 // The last ladder arm (workplan JB1): every arm above
                 // declined, so a correlated equality still on the step is
                 // the walked join. An annotation, never a kind - `kind`

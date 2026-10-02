@@ -7,6 +7,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
+#include "kds/exec/functions.hpp"
 #include "kds/parser/ast.hpp"
 
 // The compiled form of a SELECT-class statement: an ordered list of steps,
@@ -360,6 +361,58 @@ struct StepPredicate {
     bool derived = false;
 };
 
+// ---- The function conjunct (AP-S4) ---------------------------------------
+//
+// A comparison with a function call on a side: `DATE(ts) = '2026-10-02'`,
+// `ts < NOW()` (workorder-ap-function-catalog-fetch-id.md AP-R4, §1.7).
+//
+// **A residual kind of its own, and the whole of its safety is that.** A
+// dozen compiler readers take a `StepPredicate` as `col op value` and turn
+// it into a pk bound, an index bound, a Cabin probe, a join key or a
+// `BuildKey` (step_compiler.cpp). Lowered as one, `DATE(ts) >= '...'` would
+// be read as `ts >= '...'` and return wrong rows with no error. So a function
+// conjunct is never a `StepPredicate`: it lives in `Step::fn_residual`, which
+// none of those readers walks, and is evaluated on a row the step already
+// located - after the residual, at the two places every accepted row passes
+// (`AcceptTupleAt` and `EvaluateConjuncts`). A step carrying one takes no
+// build annotation.
+struct FunctionTerm {
+    const FunctionEntry* fn = nullptr;
+    std::vector<ColumnRef> args;
+};
+
+// One side of a function conjunct: a call, or what a `StepPredicate`'s
+// right side can be - a literal or a column.
+struct FunctionSide {
+    std::optional<FunctionTerm> call;  // set: the side is this call
+    Operand plain;                     // otherwise
+};
+
+struct FunctionPredicate {
+    FunctionSide lhs;
+    parser::CompareOp op = parser::CompareOp::kEq;
+    FunctionSide rhs;  // unused for IS [NOT] NULL
+
+    // The catalog type both sides compare as - the call's result type, or
+    // the column's - which `CompareValues` reads.
+    std::uint32_t type_val = 0;
+
+    // The statement's constants, taken once per statement at compile.
+    StatementContext context;
+};
+
+// Every column reference a function conjunct reads, in no particular order.
+template <typename Fn>
+void ForEachColumn(const FunctionPredicate& pred, Fn&& fn) {
+    for (const FunctionSide* side : {&pred.lhs, &pred.rhs}) {
+        if (side->call.has_value()) {
+            for (const ColumnRef& ref : side->call->args) fn(ref);
+        } else if (side->plain.kind == OperandKind::kColumn) {
+            fn(side->plain.column);
+        }
+    }
+}
+
 struct Step;
 
 // A predicate-position subquery, lowered (V15). It is a chain in its own
@@ -558,6 +611,11 @@ struct Step {
     // state sits below the hot execution fields; JB3 adds its reader here,
     // not above.
     std::optional<BuildKey> build;
+
+    // The function conjuncts placed at this step (see FunctionPredicate).
+    // Below the hot fields with `build`, for `build`'s reason: most steps
+    // carry none, and the evaluation sites test for empty first.
+    std::vector<FunctionPredicate> fn_residual;
 };
 
 // Execution shape, dispatched on by a `switch` - there is no plan
@@ -665,6 +723,12 @@ struct SortKey {
 
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
+
+    // The most volatile purity among the functions this statement's
+    // predicates call, at any depth (AR1 §3; exec/functions.hpp). D2 is
+    // neither recorded as a trail nor read from one; D1 is D0 until AQ folds
+    // its values into the instance key (AP-Q5).
+    DeterminismClass determinism = DeterminismClass::kD0;
 
     // Uncorrelated sub-chains, executed once each before `steps` opens.
     // Hoisting is not an optimizer rewrite - an uncorrelated subquery's

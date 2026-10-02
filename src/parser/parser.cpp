@@ -313,6 +313,15 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
     if (!col.ok()) return col.status();
     cond.col = std::move(col.value());
 
+    // A call on the left (AP-S4): `DATE(ts) = '2026-10-02'`.
+    if (StartsFunctionCall(cond.col)) {
+        auto call = ParseFunctionCall(std::move(cond.col));
+        if (!call.ok()) return call.status();
+        cond.col = ColumnName{};
+        cond.lhs_fn = std::move(call.value());
+        return ParseFunctionComparison(std::move(cond));
+    }
+
     // `col IN (...)` / `col NOT IN (...)`.
     const Token& after_col = lexer_.Peek();
     if (after_col.type == TokenType::kKeyword &&
@@ -369,26 +378,10 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         return cond;
     }
 
-    // `col IS [NOT] NULL` (docs/spec/null.md; NU5). `IS` is contextual -
-    // an unreserved word like REFERENCES, so it still names a column
-    // everywhere else and the fingerprint hashes it as the identifier it
-    // lexes as. No right-hand side: the op is the whole predicate.
-    if (const Token& is_tok = lexer_.Peek();
-        is_tok.type == TokenType::kIdent && IEquals(is_tok.text, "IS")) {
-        lexer_.Next();
-        bool negated = false;
-        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kNot) {
-            lexer_.Next();
-            negated = true;
-        }
-        if (lexer_.Peek().type != TokenType::kNullLit) {
-            return Status::InvalidArgument("expected NULL after IS (byte " +
-                                            std::to_string(lexer_.Peek().byte_offset) + ")");
-        }
-        lexer_.Next();
-        cond.op = negated ? CompareOp::kIsNotNull : CompareOp::kIsNull;
-        return cond;
-    }
+    // `col IS [NOT] NULL` (docs/spec/null.md; NU5).
+    auto is_null = ParseIsNull(cond.op);
+    if (!is_null.ok()) return is_null.status();
+    if (is_null.value()) return cond;
 
     auto op = ParseCompareOp();
     if (!op.ok()) return op.status();
@@ -413,6 +406,14 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
     if (lexer_.Peek().type == TokenType::kIdent) {
         auto rhs = ParseColumnName();
         if (!rhs.ok()) return rhs.status();
+        // A call on the right (raft-marks-2026-10-02.md §5): `ts < NOW()`.
+        if (StartsFunctionCall(rhs.value())) {
+            auto call = ParseFunctionCall(std::move(rhs.value()));
+            if (!call.ok()) return call.status();
+            cond.kind = PredicateKind::kCompareFunction;
+            cond.rhs_fn = std::move(call.value());
+            return cond;
+        }
         cond.kind = PredicateKind::kCompareValue;
         cond.rhs_kind = RhsKind::kColumn;
         cond.rhs_col = std::move(rhs.value());
@@ -422,6 +423,119 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
     auto val = ParseValue();
     if (!val.ok()) return val.status();
     cond.kind = PredicateKind::kCompareValue;
+    cond.rhs_kind = RhsKind::kLiteral;
+    cond.val = std::move(val.value());
+    return cond;
+}
+
+// `IS` is contextual - an unreserved word like REFERENCES, so it still
+// names a column everywhere else and the fingerprint hashes it as the
+// identifier it lexes as. No right-hand side: the op is the whole
+// predicate.
+StatusOr<bool> Parser::ParseIsNull(CompareOp& op) {
+    const Token& is_tok = lexer_.Peek();
+    if (is_tok.type != TokenType::kIdent || !IEquals(is_tok.text, "IS")) return false;
+    lexer_.Next();
+    bool negated = false;
+    if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kNot) {
+        lexer_.Next();
+        negated = true;
+    }
+    if (lexer_.Peek().type != TokenType::kNullLit) {
+        return Status::InvalidArgument("expected NULL after IS (byte " +
+                                        std::to_string(lexer_.Peek().byte_offset) + ")");
+    }
+    lexer_.Next();
+    op = negated ? CompareOp::kIsNotNull : CompareOp::kIsNull;
+    return true;
+}
+
+bool Parser::StartsFunctionCall(const ColumnName& head) {
+    AggFunc ignored;
+    return lexer_.Peek().type == TokenType::kLParen && !head.qualified() &&
+           !AggFuncOf(head.name, ignored);
+}
+
+StatusOr<FunctionCall> Parser::ParseFunctionCall(ColumnName head) {
+    FunctionCall call;
+    call.name = std::move(head.name);
+    call.byte_offset = head.byte_offset;
+    lexer_.Next();  // consume '('
+
+    if (lexer_.Peek().type == TokenType::kRParen) {
+        lexer_.Next();
+        return call;
+    }
+    for (;;) {
+        // A column, and only a column: neither shipped function takes a
+        // literal, and a call inside a call is an expression tree this
+        // grammar does not have (manual/sql/sql.md).
+        const Token& arg_tok = lexer_.Peek();
+        if (arg_tok.type != TokenType::kIdent) {
+            return Status::NotImplemented(
+                "a function's argument is a column reference (byte " +
+                std::to_string(arg_tok.byte_offset) + ")");
+        }
+        auto arg = ParseColumnName();
+        if (!arg.ok()) return arg.status();
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            return Status::NotImplemented("a function call inside a function call (byte " +
+                                          std::to_string(arg.value().byte_offset) + ")");
+        }
+        call.args.push_back(std::move(arg.value()));
+        if (lexer_.Peek().type == TokenType::kComma) {
+            lexer_.Next();
+            continue;
+        }
+        if (Status s = ExpectToken(TokenType::kRParen, "')' closing a function's arguments");
+            !s.ok()) {
+            return s;
+        }
+        return call;
+    }
+}
+
+StatusOr<Condition> Parser::ParseFunctionComparison(Condition cond) {
+    cond.kind = PredicateKind::kCompareFunction;
+
+    // A comparison and nothing else. `IN`, `NOT IN` and `BETWEEN` against a
+    // call are understood and not built.
+    if (const Token& next = lexer_.Peek();
+        next.type == TokenType::kKeyword &&
+        (next.kw == Keyword::kIn || next.kw == Keyword::kNot || next.kw == Keyword::kBetween)) {
+        return Status::NotImplemented(
+            "a function call is compared with =, !=, <, <=, >, >= or IS [NOT] NULL (byte " +
+            std::to_string(next.byte_offset) + ")");
+    }
+
+    auto is_null = ParseIsNull(cond.op);
+    if (!is_null.ok()) return is_null.status();
+    if (is_null.value()) return cond;
+
+    auto op = ParseCompareOp();
+    if (!op.ok()) return op.status();
+    cond.op = op.value();
+
+    if (const Token& next = lexer_.Peek(); next.type == TokenType::kLParen) {
+        return Status::NotImplemented("a function call compared with a subquery (byte " +
+                                      std::to_string(next.byte_offset) + ")");
+    }
+    if (lexer_.Peek().type == TokenType::kIdent) {
+        auto rhs = ParseColumnName();
+        if (!rhs.ok()) return rhs.status();
+        if (StartsFunctionCall(rhs.value())) {
+            auto call = ParseFunctionCall(std::move(rhs.value()));
+            if (!call.ok()) return call.status();
+            cond.rhs_fn = std::move(call.value());
+            return cond;
+        }
+        cond.rhs_kind = RhsKind::kColumn;
+        cond.rhs_col = std::move(rhs.value());
+        return cond;
+    }
+
+    auto val = ParseValue();
+    if (!val.ok()) return val.status();
     cond.rhs_kind = RhsKind::kLiteral;
     cond.val = std::move(val.value());
     return cond;
@@ -1360,6 +1474,16 @@ StatusOr<SelectItem> Parser::ParseSelectItem() {
     if (!col.ok()) return col.status();
 
     AggFunc func = AggFunc::kCount;
+    // A scalar function call is a WHERE conjunct's alone (AP-S4, AP-R4
+    // item 4): here, in ORDER BY and in HAVING it is understood and not
+    // built. Refused by name, at its first byte, before `(` could be read
+    // as whatever follows a column.
+    if (!col.value().qualified() && lexer_.Peek().type == TokenType::kLParen &&
+        !AggFuncOf(col.value().name, func)) {
+        return Status::NotImplemented(
+            "a function call is supported in a WHERE comparison only (byte " +
+            std::to_string(col.value().byte_offset) + ")");
+    }
     if (col.value().qualified() || lexer_.Peek().type != TokenType::kLParen ||
         !AggFuncOf(col.value().name, func)) {
         item.column = std::move(col.value());

@@ -91,6 +91,7 @@ const char* PredicateKindName(parser::PredicateKind kind) noexcept {
         case parser::PredicateKind::kExists: return "EXISTS";
         case parser::PredicateKind::kNotExists: return "NOT EXISTS";
         case parser::PredicateKind::kBetween: return "BETWEEN";
+        case parser::PredicateKind::kCompareFunction: return "function";
     }
     return "?";
 }
@@ -129,6 +130,28 @@ std::string FormatPredicate(const StepPredicate& pred) {
         return head;
     }
     return head + " " + FormatOperand(pred.rhs);
+}
+
+std::string FormatFunctionSide(const FunctionSide& side) {
+    if (!side.call.has_value()) return FormatOperand(side.plain);
+    std::string out(side.call->fn->name);
+    out += '(';
+    for (std::size_t i = 0; i < side.call->args.size(); ++i) {
+        if (i > 0) out += ", ";
+        out += FormatColumnRef(side.call->args[i]);
+    }
+    out += ')';
+    return out;
+}
+
+// A function conjunct (AP-S4), printed under its own word so a plan never
+// shows one where a key or bound could be read off it.
+std::string FormatFunctionPredicate(const FunctionPredicate& pred) {
+    const std::string head = FormatFunctionSide(pred.lhs) + " " + CompareOpName(pred.op);
+    if (pred.op == parser::CompareOp::kIsNull || pred.op == parser::CompareOp::kIsNotNull) {
+        return head;
+    }
+    return head + " " + FormatFunctionSide(pred.rhs);
 }
 
 std::string Indent(int depth) { return std::string(static_cast<std::size_t>(depth) * 2, ' '); }
@@ -183,6 +206,9 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         // the reader cannot find in the statement they wrote.
         os << Indent(depth + 1) << "filter " << FormatPredicate(pred)
            << (pred.derived ? " derived" : "") << '\n';
+    }
+    for (const FunctionPredicate& pred : step.fn_residual) {
+        os << Indent(depth + 1) << "filter fn " << FormatFunctionPredicate(pred) << '\n';
     }
     // Correlated by placement: a sub-chain attached to a step runs once per
     // row that step accepts, which is the fact worth seeing next to it.
