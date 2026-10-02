@@ -64,3 +64,13 @@
 | **Reading** | Under the first mark `NOW()`, which takes no column, could be written only as `NOW() op literal`. That compares the clock with a constant and filters no row. The value side is what makes `NOW()` the D1 example AR1 §3 names. |
 | **Does not settle** | anything else in AP-Q1 - the first functions are still `DATE(timestamp)` and `NOW()`, and still WHERE only |
 | **Recorded at** | the order's AP-R4 and its AP-S4 row |
+
+## 6. BA's order on `main`, and BA-S1 started
+
+| | |
+|---|---|
+| **Word** | *"push 해줘"*, then *"BA-S1 진행해줘"*, then *"진행해줘"* |
+| **Mark** | BA's order lands on `main` at `e7617b2`: `workorder-ba-parallelism.md` with BA-S0 and its review, and the three bug entries. The first push passed the gate (3,091 tests) but was refused because `main` had moved during the run. The merge with AP-S4 passed the gate again (3,108 tests) and went in. **BA-S1 starts**: the fix for defect C, the peer-thread sync |
+| **Reading** | BA-S1 is one of the stages BA-Q1 exempts from the census. A defect's fix needs no other §4 item, so starting it marks none of them |
+| **Does not settle** | BA-Q0..Q14, the letter included; any other BA stage's start - each waits for its own word |
+| **Recorded at** | `workorder-ba-parallelism.md` §6 |
