@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "kds/base/common.hpp"
+#include "kds/exec/functions.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
@@ -236,6 +237,10 @@ public:
         // Which handler to re-enter. The statement text is the coroutine's
         // and is re-parsed on the resume, so this is only the fork.
         bool is_delete = false;
+        // The statement's constants, for the reason the snapshot is carried:
+        // `NOW()` is one instant for the whole statement, and the resume
+        // compiles it again (AP-S4).
+        exec::StatementContext context{};
     };
 
     const std::optional<ParkedWrite>& parked_write() const noexcept { return parked_write_; }

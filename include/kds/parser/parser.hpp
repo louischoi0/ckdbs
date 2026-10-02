@@ -233,6 +233,9 @@ private:
     StatusOr<Condition> ParseFunctionComparison(Condition cond);
     // `IS [NOT] NULL`, if it is next: true and `op` set, false if not.
     StatusOr<bool> ParseIsNull(CompareOp& op);
+    // A comparison's right side, after its operator: a column, a call (which
+    // makes the condition a kCompareFunction), or a value.
+    Status ParseComparisonRhs(Condition& cond);
     StatusOr<std::vector<Condition>> ParseOptionalWhere(std::uint32_t depth);
 
     StatusOr<std::string> ParseIdent();

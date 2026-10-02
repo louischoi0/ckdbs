@@ -6884,6 +6884,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     WriteScope scope;
     txn::Snapshot snap;
     WalkCursor resume_from;
+    exec::StatementContext context;  // NOW()'s instant, carried across a park (AP-S4)
 
     // **AO-S3b: a resume re-enters the scope and the view it already had.**
     // Not `BeginWrite` and not `SnapshotFor`: the rows this statement has
@@ -6900,11 +6901,13 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // same statement - so it is restored rather than re-taken, which
         // would say this statement had written nothing.
         statement_trail_mark_ = parked.trail_mark;
+        context = parked.context;
         session.clear_parked_write();
     } else {
         auto opened = BeginWrite(session);
         if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
         scope = opened.value();
+        context = exec::StatementContextNow();
 
         // The read view this UPDATE filters through. An UPDATE reads before
         // it writes, and it must not see a row a SELECT in the same
@@ -6920,7 +6923,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         snap = snapshot.value().snap;
     }
 
-    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from);
+    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from, context);
 
     // **AO-S3b: parked in the middle of the walk - the scope stays open.**
     // Every other pending arm below ends its scope, because the statement
@@ -6933,7 +6936,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     if (out.parked_mid_walk) {
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,
-                                                      /*is_delete=*/false});
+                                                      /*is_delete=*/false, context});
         return out;
     }
 
@@ -6948,7 +6951,8 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
 
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
                                                const txn::Snapshot& snapshot,
-                                               WalkCursor resume_from) {
+                                               WalkCursor resume_from,
+                                               const exec::StatementContext& context) {
     // AO-S3b: set by the row callback when it meets a row held by a writer
     // that has not decided and the wait is one this statement may make.
     // The callback cannot park - it runs under a page span, which AO-R2
@@ -7026,7 +7030,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // step carries, and is evaluated by the same evaluator (V16). UPDATE
     // reads one relation, so the frame has one step.
     auto predicates =
-        exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where, /*view=*/nullptr, &borrow);
+        exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where, /*view=*/nullptr, &borrow,
+                           &context);
     if (!predicates.ok()) {
         return {ErrorReply(predicates.status()), false, 0, predicates.status()};
     }
@@ -8619,6 +8624,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
     WriteScope scope;
     txn::Snapshot snap;
     WalkCursor resume_from;
+    exec::StatementContext context;  // NOW()'s instant, carried across a park (AP-S4)
 
     // AO-S3b's resume: `HandleUpdate`'s branch, for its reason.
     if (session.parked_write().has_value() && session.parked_write()->is_delete) {
@@ -8627,18 +8633,20 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
         snap = parked.snapshot;
         resume_from = parked.cursor;
         statement_trail_mark_ = parked.trail_mark;
+        context = parked.context;
         session.clear_parked_write();
     } else {
         auto opened = BeginWrite(session);
         if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
         scope = opened.value();
+        context = exec::StatementContextNow();
 
         auto snapshot = SnapshotFor(session);
         if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
         snap = snapshot.value().snap;
     }
 
-    DispatchOutcome out = DeleteInner(line, scope, snap, resume_from);
+    DispatchOutcome out = DeleteInner(line, scope, snap, resume_from, context);
 
     // AO-S3b's park: `HandleUpdate`'s arm, for its reason. Ahead of
     // `EndWrite` below because that *ends* the scope and this must not - a
@@ -8647,7 +8655,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
     if (out.parked_mid_walk) {
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,
-                                                      /*is_delete=*/true});
+                                                      /*is_delete=*/true, context});
         return out;
     }
 
@@ -8662,7 +8670,8 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
 DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope& scope,
                                                const txn::Snapshot& snapshot,
-                                               WalkCursor resume_from) {
+                                               WalkCursor resume_from,
+                                               const exec::StatementContext& context) {
     // AO-S3b, and `UpdateInner`'s site states the argument.
     bool parked_on_row = false;
     Status blocked_verdict;
@@ -8708,7 +8717,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The same WHERE compilation UPDATE uses, so a DELETE's predicate means
     // exactly what the SELECT that found the rows meant.
     auto predicates =
-        exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where, /*view=*/nullptr, &borrow);
+        exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where, /*view=*/nullptr, &borrow,
+                           &context);
     if (!predicates.ok()) return {ErrorReply(predicates.status()), false, 0, predicates.status()};
     const std::vector<const catalog::Schema*> schemas = {&ta.schema};
     exec::ChainFrame frame;

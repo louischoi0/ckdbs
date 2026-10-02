@@ -396,6 +396,8 @@ public:
                     // ordinary conjuncts at compile time (ast.hpp), so it
                     // reaches a step's residual and never a sub-chain.
                     case parser::PredicateKind::kBetween:
+                    // A function conjunct lowers to `fn_residual` (AP-S4).
+                    case parser::PredicateKind::kCompareFunction:
                         return Status::Corruption("a plain comparison is not a sub-chain");
                 }
                 return storage::VisitControl::kContinue;
@@ -466,6 +468,7 @@ public:
             // Lowered to two conjuncts at compile time, so it is never a
             // sub-chain kind - the same reason `kCompareValue` falls here.
             case parser::PredicateKind::kBetween:
+            case parser::PredicateKind::kCompareFunction:
                 break;
         }
         return Status::Corruption("unhandled sub-chain kind");

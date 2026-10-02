@@ -676,3 +676,107 @@ every claim the commit made about `src/`. It found no code defect. Applied:
   citation and the mutants it kills.
 
 **Rejected: none.**
+
+### AP-S4 — built 2026-10-02
+
+On `worktree-ap-s4-function-catalog` from `db5a5e6`, on *"main에 push하고
+AP-S4 시작해줘"*.
+
+**The mark taken on the way.** AP-Q1 as first marked put a call on the
+column side only, and `NOW()` takes no column, so it could filter no row.
+Asked, the operator answered with the value side too; that is
+`raft-marks-2026-10-02.md` §5, and AP-R4 is amended above.
+
+**Built.**
+
+- **The functions.** `DATE(timestamp)` (`kImmutable`, floor division) and
+  `NOW()` (`kStable`), on either side of a WHERE comparison, including
+  `IS [NOT] NULL`.
+- **The AST.** A call parses to `PredicateKind::kCompareFunction`, which
+  every raw-condition reader that acts on a `kCompareValue` passes by.
+- **The compiled form.** It lowers to `Step::fn_residual`, a residual kind
+  that none of §1.7's readers walks.
+  - It is evaluated at the two sites every accepted row passes.
+  - Its columns are in both decode masks and both correlation walkers.
+  - A step carrying one takes no build.
+- **The catalog** (`include/kds/exec/functions.hpp`).
+  - Purity is declared per entry, and `kVolatileRow` is the struct's
+    default.
+  - The determinism class is folded at compile over every sub-chain.
+  - A D2 statement keeps its statistics identity, and takes and reads no
+    trail. D1 is D0 (AP-Q5).
+  - The test seam is `ScopedTestFunction`, where AP-R4 named it
+    `RegisterFunctionForTest`. A statement clock pin,
+    `ScopedStatementClockForTest`, sits beside it.
+- **`NOW()`** is taken once per statement. A write parked mid-walk carries
+  its instant in `Session::ParkedWrite`, so the resume, which compiles
+  again, filters against the same one.
+- **Refusals.**
+  - An unknown name is `InvalidArgument` (AP-Q3).
+  - These are `NotImplemented`, each at its byte: a call outside a WHERE
+    comparison (select list, `ORDER BY`, `GROUP BY`, `HAVING`, a catalog
+    view, any value position), a nested call, a literal argument, and
+    `IN`/`BETWEEN` against a call.
+  - An aggregate's name keeps its old refusal.
+- **Unchanged.** The golden corpus did not move.
+
+**Cells: 19 in `tests/function_conjunct_test.cpp`, and one in
+`tests/lock_family_test.cpp`.**
+
+- **The reader group.** Through a test-only `plus_one(int64)`: the pk, an
+  indexed column, a Cabin that serves (`cabin_hits=`), a join and a walked
+  join, `BETWEEN`, a correlated sub-chain reached only through a function
+  argument, and a sub-chain placed at a later step only through one.
+- **Mutants, each killed.**
+  - Lowered as a plain `StepPredicate`: killed by every reader cell.
+  - The D2 gate removed.
+  - The default purity flipped.
+  - `ReferencesAnOuterChain` blind to function columns.
+  - `DeepestReferenceIntoThisChain` blind to them.
+  - The build decline removed.
+  - The resume taking a fresh `NOW()`: killed by
+    `MidWalkWaitTest.NowIsOneInstantAcrossAMidWalkPark`.
+
+**Suite.**
+
+- 3108/3108 at `010b8e0`. That commit went to `main` at the operator's
+  word before its review returned, through the pre-push hook.
+- After the review, 3111/3111.
+- Both runs used `ctest -LE heap-suspended -j8`, Debug.
+- Overhead is measured at AP-S5.
+
+**The review** (`critics-developer`, on `010b8e0`, read-only) confirmed by
+source read that a function conjunct is never a key and is evaluated on
+every accepted row, on every path it listed. Applied:
+
+- **B1 - `NOW()` re-taken when a parked write resumes.** This was a defect
+  of this stage: the resume compiles again. The instant is now carried in
+  the park, with the cell above, red before the fix.
+- **B2.** Two sub-chain switches lacked the new kind, and one fell through
+  to continue. Both arms were added.
+- **Simplifications.**
+  - The comparison's right side parses in one place.
+  - The literal arm of the lowering coerces against the call's result type
+    only, the one way it is reached. Its `len` limit is stated.
+  - Arguments are passed by pointer, so a filtered row copies no value.
+- **Test gaps.**
+  - The Cabin cell's fixture had no Cabin store, so the Cabin never served.
+    It does now, and the cell asserts the hit.
+  - Every function conjunct of a compile shares one instant.
+  - The placement walker has its cell.
+  - Two refusal positions are pinned.
+- **Docs.**
+  - I10 now names the value positions, and those positions now refuse a
+    call by name at its byte, not as a malformed value. The catch-all
+    "expected value" carries its byte as well, which it did not before.
+  - The `CompileWhere` header names `fn_residual`.
+
+**Recorded, not applied:**
+
+- **B3, a pre-existing defect.** A nested uncorrelated subquery is dropped
+  and the statement answers as if it were absent. Confirmed by running it.
+  It is `docs/inflight/bugs/a-nested-uncorrelated-subquery-is-dropped.md`
+  and is outside AP.
+- **The cabin optimizer's candidate pick.** `RecordOptimizerSignals` takes
+  the lowest filtered column as a step's Cabin candidate, and that can now
+  be a function's argument. This costs, and does not answer wrongly.

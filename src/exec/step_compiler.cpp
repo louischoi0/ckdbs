@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -46,11 +45,12 @@ struct Scope {
     std::vector<BoundRelation> relations;
     const Scope* parent = nullptr;
 
-    // The statement's constants (exec/functions.hpp). Set on the root
-    // scope, once per compile - and a statement is compiled once per
-    // execution - so every `NOW()` in it reads one instant. Not part of the
-    // chain's identity: it lands in a function conjunct's context, which
-    // no step, kind, residual or class reads.
+    // The statement's constants (exec/functions.hpp), set on the root scope.
+    // A SELECT is compiled once per execution, so taking them at compile is
+    // taking them once per statement; a parked write hands its own back
+    // (CompileWhere). Not part of the chain's identity: it lands in a
+    // function conjunct's context, which no step, kind, residual or class
+    // reads.
     StatementContext context;
 };
 
@@ -60,13 +60,6 @@ const StatementContext& ContextOf(const Scope& scope) {
     return s->context;
 }
 
-StatementContext TakeStatementContext() {
-    StatementContext out;
-    out.now_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                     std::chrono::system_clock::now().time_since_epoch())
-                     .count();
-    return out;
-}
 
 std::string Position(std::uint32_t byte_offset) {
     return " at byte " + std::to_string(byte_offset);
@@ -239,19 +232,20 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
     out.op = cond.op;
     out.context = ContextOf(scope);
 
-    // The left side fixes the type both sides compare as.
-    std::optional<ColumnRef> lhs_column;
-    std::uint32_t at = cond.col.byte_offset;
+    // The left side fixes the type both sides compare as. The parser makes a
+    // condition a function comparison only when a call stands on a side, so
+    // a plain column on the left has a call on the right.
     if (cond.lhs_fn.has_value()) {
         auto term = ResolveCall(scope, *cond.lhs_fn);
         if (!term.ok()) return term.status();
         out.type_val = term.value().fn->result_type_val;
         out.lhs.call = std::move(term.value());
-        at = cond.lhs_fn->byte_offset;
     } else {
+        if (!cond.rhs_fn.has_value()) {
+            return Status::Corruption("a function comparison with no call on either side");
+        }
         auto ref = ResolveColumn(scope, cond.col);
         if (!ref.ok()) return ref.status();
-        lhs_column = ref.value();
         out.type_val = ColumnAt(scope, ref.value()).type_val;
         out.lhs.plain.kind = OperandKind::kColumn;
         out.lhs.plain.column = ref.value();
@@ -284,20 +278,18 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
         return out;
     }
 
-    // A literal, coerced as a predicate's is: against the column itself
-    // where the left side is one (its width and scale included), against
-    // the call's result type where it is a call.
+    // A literal, so the call is on the left: coerced against the call's
+    // result type as a column of that type would coerce it. **Only
+    // `type_val` is set** - enough for DATE and TIMESTAMP, the two result
+    // types that exist; a result type that reads `len` (char, decimal)
+    // needs its width or scale here before an entry may return one.
     out.rhs.plain.kind = OperandKind::kLiteral;
     out.rhs.plain.literal = cond.val;
     catalog::SysColumnRow result_type{};
     result_type.type_val = out.type_val;
-    const catalog::SysColumnRow& as =
-        lhs_column.has_value() ? ColumnAt(scope, *lhs_column) : result_type;
-    if (Status s = CoerceLiteralToColumn(as, out.rhs.plain.literal); !s.ok()) {
-        const std::uint32_t where = out.rhs.plain.literal.byte_offset != 0
-                                        ? out.rhs.plain.literal.byte_offset
-                                        : at;
-        return s.WithContext("a function comparison's literal" + Position(where));
+    if (Status s = CoerceLiteralToColumn(result_type, out.rhs.plain.literal); !s.ok()) {
+        return s.WithContext("a function comparison's literal" +
+                             Position(out.rhs.plain.literal.byte_offset));
     }
     return out;
 }
@@ -1394,10 +1386,11 @@ Status CompileAssignments(const catalog::TableAccess& access,
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
                             const std::vector<parser::Condition>& where,
-                            const txn::ReadView* view, PositionSink* declare) {
+                            const txn::ReadView* view, PositionSink* declare,
+                            const StatementContext* context) {
     Scope scope;
     scope.relations.push_back(BoundRelation{std::string(binding), &access});
-    scope.context = TakeStatementContext();
+    scope.context = context != nullptr ? *context : StatementContextNow();
 
     Step out;
     out.rel_oid = access.oid;
@@ -1531,7 +1524,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 1. Bind every relation in written order --------------------------
     Scope scope;
     scope.parent = parent;
-    if (parent == nullptr) scope.context = TakeStatementContext();
+    if (parent == nullptr) scope.context = StatementContextNow();
     std::vector<const parser::RelationRef*> refs;
     refs.push_back(&stmt.from);
     for (const parser::JoinClause& j : stmt.joins) refs.push_back(&j.relation);

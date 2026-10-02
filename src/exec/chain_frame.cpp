@@ -140,10 +140,10 @@ StatusOr<parser::AstValue> SideValue(const FunctionSide& side, const StatementCo
         }
         return frame.Get(side.plain.column);
     }
-    // On the stack, not a vector: this runs per filtered row, and the
-    // compiler holds every call to kMaxFunctionArgs (functions.hpp).
+    // Pointers into the frame, on the stack: this runs per filtered row, and
+    // every entry's arity is held to kMaxFunctionArgs (functions.hpp).
     const FunctionTerm& call = *side.call;
-    std::array<parser::AstValue, kMaxFunctionArgs> args;
+    std::array<const parser::AstValue*, kMaxFunctionArgs> args{};
     for (std::size_t i = 0; i < call.args.size(); ++i) {
         if (!frame.CanResolve(call.args[i])) {
             return Status::Corruption("a function argument references a column the frame "
@@ -151,10 +151,10 @@ StatusOr<parser::AstValue> SideValue(const FunctionSide& side, const StatementCo
         }
         const parser::AstValue& arg = frame.Get(call.args[i]);
         if (arg.type == parser::ValueType::kNull) return parser::AstValue{};  // NULL in, NULL out
-        args[i] = arg;
+        args[i] = &arg;
     }
-    return call.fn->evaluate(std::span<const parser::AstValue>(args.data(), call.args.size()),
-                             context);
+    return call.fn->evaluate(
+        std::span<const parser::AstValue* const>(args.data(), call.args.size()), context);
 }
 
 }  // namespace
