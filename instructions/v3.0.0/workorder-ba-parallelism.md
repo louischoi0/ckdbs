@@ -793,13 +793,22 @@ first half lands.
   hold, record whether it needs the hold, and why: the Cabin witness, index
   maintenance, the assertion reservation and the undo append. AT-S21 already
   argued the append. A step that can run before the descent moves there.
-- **A structural refusal becomes a wait.** Past `kMaxDescentRestarts`, the
-  descent retries with nothing held until the lock family's fault net
-  (`lock_wait_fault_net_ms`, 1 s). Only then does it refuse, as today.
+- **A structural refusal becomes a wait, at the statement level.** It joins
+  the dispatcher's existing wait-and-re-run (`command_dispatcher.cpp:268-277`).
+  - A statement refused before it wrote anything parks its coroutine, which
+    yields the reactor, and then re-runs from the top.
+  - It stays under the statement's one deadline, the lock family's fault net
+    (`lock_wait_fault_net_ms`, 1 s).
+  - The retry is not done inside the descent, because a statement cannot
+    yield there (P10): a retry loop under the statement would hold its core
+    for up to the fault net.
+  - A statement that has already written rows keeps today's refusal, because
+    statement-level rollback is out of scope (`txn.md` §9).
 - **A root grown over re-descends.** `SecureParents` re-descends from the root
   instead of refusing.
-- **The result:** the client stops seeing `TXN_CONFLICT` for a race that it
-  did not cause and cannot avoid by retrying.
+- **The result:** an autocommit insert, the shape scenario 0's refusal hit,
+  stops seeing `TXN_CONFLICT` for a race that it did not cause and cannot
+  avoid by retrying.
 - **Not proposed: B-link move-right.** It needs a high key per node, which is
   a node-format change and a superblock bump that refuses every older volume
   (D14). This is BA-Q10.
