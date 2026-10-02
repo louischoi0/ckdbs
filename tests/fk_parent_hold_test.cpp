@@ -238,9 +238,9 @@ TEST_F(FkParentHoldTest, AChildMovedOffTheParentInABankedSetIsNotAClear) {
 // (`ForeignKeyCheckTest.ASelfReferencingForeignKeyCannotBeDeclared` pins
 // that, and fails if it changes).
 //
-// **Mutations**: the held-before answer removed (release whatever the
-// violation names), killed by the held-before cell; the `IS` released with
-// the `S`, killed by the intention cell.
+// **Mutations**: no release, killed by the release, held-before and
+// intention cells; the `IS` released with the `S`, killed by the intention
+// cell; the row's `X` released too, killed by the own-delete cell.
 
 TEST_F(FkParentHoldTest, AFailedCheckGivesBackTheAbsentParentsHold) {
     Session child;
@@ -254,10 +254,14 @@ TEST_F(FkParentHoldTest, AFailedCheckGivesBackTheAbsentParentsHold) {
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
 }
 
-TEST_F(FkParentHoldTest, AHoldTakenByAnEarlierStatementSurvivesTheViolation) {
+TEST_F(FkParentHoldTest, AHoldTakenByAnEarlierStatementGoesWithTheViolationToo) {
     // A zero-row `UPDATE` resolves its SET's parent and holds its `S`
     // (`UPDATED 0`, byte-identical by design) - an `S` on an absent key the
-    // transaction had before the failing statement asked.
+    // transaction had before the failing statement asked. Under AZ-R5 as
+    // first ruled it stayed to the rollback; since the operator's mark of
+    // 2026-10-02 (`raft-marks-2026-10-02.md` §2) it goes, since it protects
+    // no row - and the statement re-run after a park, whose first run's `S`
+    // reads the same way, is the same case.
     Session child;
     ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
     ASSERT_EQ(Run(child, "UPDATE c SET pid = 99 WHERE id = 12345").rfind("UPDATED 0", 0), 0u);
@@ -265,8 +269,31 @@ TEST_F(FkParentHoldTest, AHoldTakenByAnEarlierStatementSurvivesTheViolation) {
     ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
 
     const std::string parent = Other("INSERT INTO p VALUES (99, 0)");
-    EXPECT_EQ(parent.rfind("ERR TXN_CONFLICT", 0), 0u)
-        << "the violation gave back a hold an earlier statement took: " << parent;
+    EXPECT_EQ(parent.rfind("INSERTED", 0), 0u)
+        << "the violation kept a hold an earlier statement took: " << parent;
+    ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(FkParentHoldTest, AParentTheTransactionDeletedKeepsItsRowXPastTheViolation) {
+    // The one way a parent the check reads as absent can be held: this
+    // transaction deleted it, under its own `X`. The violation gives back
+    // the `S` only - there is none here - and the `X` keeps the row from
+    // another session until the decide.
+    ASSERT_EQ(Run("INSERT INTO p VALUES (7, 0)").rfind("INSERTED", 0), 0u);
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(Run(child, "DELETE FROM p WHERE id = 7").rfind("DELETED 1", 0), 0u);
+    const std::string failed = Run(child, "INSERT INTO c VALUES (7)");
+    ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
+
+    // Read off the transaction's own ledger: another session's write of
+    // the row would be refused by the undecided delete whether the `X` were
+    // held or not.
+    auto p = boot_->catalog.FindTableOidByName("p");
+    ASSERT_TRUE(p.ok()) << p.status().message();
+    ASSERT_NE(child.transaction(), nullptr);
+    EXPECT_TRUE(child.transaction()->borrows().Holds(txn::LockKey::Tuple(p.value(), 7)))
+        << "the violation gave back the deleting transaction's row X";
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
 }
 

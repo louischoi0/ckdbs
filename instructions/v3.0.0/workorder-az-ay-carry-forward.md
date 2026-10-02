@@ -807,3 +807,31 @@ runs are the rows' own results, recorded here rather than in those rows.
   failure prints its cause.
 
 It cuts no tag. Nothing is pushed until the operator's word.
+
+### AZ-R5 amended — 2026-10-02
+
+On `worktree-az-q3-release-any-failed-check` from `2e8d213`, on *"give back
+the S on any failed check, as the review proposed"*
+(`raft-marks-2026-10-02.md` §2).
+
+- **The release is unconditional.** On `FK_VIOLATION`, both arms give back
+  the parent row's `S` whoever took it.
+  - The relation's `IS` stays.
+  - A row `X` the transaction holds is not touched. `ReleaseOne` of an `S`
+    that is not held does nothing.
+- **What went with it.** The took-it test (`TookShare`, `BorrowCount`,
+  `LockHoldings::LastIs`) and the hoist's asked set
+  (`FkParentVerdicts::NoteAsked`/`Asked`). The parked-statement gap AZ-S5's
+  review found closes with them. Its `known-gaps.md` entry is deleted.
+- **The cells.**
+  - The held-before cell is flipped: a zero-row `UPDATE`'s `S` now goes
+    with the violation.
+  - A new cell pins that a parent the transaction deleted itself keeps its
+    row `X` past the violation.
+- **Mutants: three, all killed.** No release: the release, held-before and
+  intention cells. The `IS` given back too: the intention cell. The row `X`
+  given back too: the own-delete cell, which reads the transaction's own
+  ledger, since another session's write of the row is refused by the
+  undecided delete either way.
+- **Docs.** `foreign-keys.md` §2c and §5 restated, and the CLAUDE.md
+  Foreign keys row.

@@ -1329,14 +1329,6 @@ private:
     // statement's snapshot, because a check reads latest state.
     txn::ReadView CheckView(const WriteScope& scope);
 
-    // Whether a parent check's ask took the row's `S` itself - a new record,
-    // not a grant of one the transaction already held - so a failed check
-    // gives back only that (AZ-S5). `borrows_before` is `BorrowCount` taken
-    // before the ask.
-    std::size_t BorrowCount(const WriteScope& scope) const;
-    bool TookShare(const WriteScope& scope, std::size_t borrows_before, catalog::Oid rel,
-                   std::uint64_t pk) const;
-
     // A refused parent-row hold's status, restated as the foreign key's
     // (a conflict names the child and parent relations; any other code
     // stands).
@@ -1346,8 +1338,8 @@ private:
     // The forward check for one foreign key and one written value (§2),
     // **answered from what the extraction pass already resolved** (§2a,
     // AH-T1). OK when the value is not an id at all - the row codec has the
-    // better error for that. A violation gives back the parent's `S` when
-    // this statement's ask took it (AZ-S5).
+    // better error for that. A violation gives back the parent's `S`
+    // (AZ-S5, `foreign-keys.md` §2c).
     //
     // One arm descends here: a **self-referencing** foreign key, which
     // `ResolveForeignKeyParents` deliberately does not hoist. It holds the
