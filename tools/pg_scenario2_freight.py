@@ -56,8 +56,8 @@ from scenario2_freight import (
     CAPACITY_FLOOR_CBM, CAPACITY_SPREAD, DAY0, DECLARED_MAX, DECLARED_MIN,
     FAILED, FEES, HORIZON_DAYS, MANIFEST_PHASES, MILLI, ORG_TYPES, PORTS,
     RATE_JITTER, REJECTED_CAPACITY, REJECTED_CREDIT, RULE_WINDOW_DAYS,
-    SHIP_TYPES, BookingState, charge_lines, demand_of, fees_by_id,
-    print_bookings, route_code)
+    SHIP_TYPES, BookingState, VerifyResult, charge_lines, demand_of,
+    fees_by_id, print_bookings, route_code)
 
 # The same eight relations, in PostgreSQL's dialect. `bigserial` stands in
 # for the Keystone column and `integer`/`bigint` for the fixed-width types;
@@ -124,7 +124,7 @@ class Client:
             abort(f"could not connect to {args.host}:{args.port}/{args.database}: {e}\n"
                   f"  start one with: ./tools/pg_setup.sh init")
         self.errors = 0
-        self.first_error = None
+        self.first_error = self.last_error = None
         if args.synchronous_commit:
             reply = self(f"SET synchronous_commit = {args.synchronous_commit}")
             if reply.startswith("ERR"):
@@ -146,8 +146,9 @@ class Client:
 
     def _note(self, command, reply):
         self.errors += 1
+        self.last_error = f"{command}  ->  {reply}"
         if self.first_error is None:
-            self.first_error = f"{command}  ->  {reply}"
+            self.first_error = self.last_error
 
     def close(self):
         self._conn.close()
@@ -510,9 +511,10 @@ def run_bookings(client, tables, state, args, phases, rng, manifest=None):
 
 def verify(client, tables, state, sample, rng):
     """§4's invariants, PostgreSQL side. Same four questions, same
-    recomputation from returned rows."""
-    checks = failures = 0
-    first = None
+    recomputation from returned rows, and the same `VerifyResult` - a read
+    the server refused is counted `unanswered`, never skipped silently."""
+    checks = failures = unanswered = 0
+    first = first_unanswered = None
 
     def fail(message):
         nonlocal failures, first
@@ -520,13 +522,23 @@ def verify(client, tables, state, sample, rng):
         if first is None:
             first = message
 
+    def unanswerable(invariant, subject):
+        """One check the server would not let this pass evaluate."""
+        nonlocal unanswered, first_unanswered
+        unanswered += 1
+        if first_unanswered is None:
+            first_unanswered = f"{invariant} {subject}: {client.last_error}"
+
     booked = [op for op, total in state.booked_cbm.items() if total > 0]
     for op_id in rng.sample(booked, min(sample, len(booked))):
         ledger_rows = client.rows(f"SELECT SUM(cbm) FROM {tables['freights']} "
                                   f"WHERE operation_id = {op_id}")
         stored = client.rows(f"SELECT booked_cbm FROM {tables['operations']} "
                              f"WHERE id = {op_id}")
-        if ledger_rows is None or not stored:
+        if ledger_rows is None or stored is None:
+            unanswerable("I1/I2", f"operation {op_id}")
+            continue
+        if not stored:
             continue
         ledger, column = sum_value(ledger_rows), int(stored[0][0])
         checks += 1
@@ -548,14 +560,23 @@ def verify(client, tables, state, sample, rng):
             f"WHERE c.org_id = {org_id}")
         stored = client.rows(f"SELECT outstanding FROM {tables['organizations']} "
                              f"WHERE id = {org_id}")
-        if rows is None or not stored:
+        if rows is None or stored is None:
+            unanswerable("I3", f"organization {org_id}")
             continue
-        recomputed = 0
+        if not stored:
+            continue
+        recomputed, refused = 0, False
         for freight in rows:
             freight_id, cbm, rate = int(freight[0]), int(freight[1]), int(freight[2])
             charged = client.rows(f"SELECT SUM(amount) FROM {tables['charges']} "
                                   f"WHERE freight_id = {freight_id}")
+            if charged is None:
+                refused = True
+                break
             recomputed += (cbm // MILLI) * rate + sum_value(charged)
+        if refused:
+            unanswerable("I3", f"organization {org_id}")
+            continue
         checks += 1
         if recomputed != int(stored[0][0]):
             fail(f"I3 organization {org_id}: outstanding={stored[0][0]}, "
@@ -566,12 +587,13 @@ def verify(client, tables, state, sample, rng):
         rows = client.rows(f"SELECT id FROM {tables['charges']} "
                            f"WHERE freight_id = {freight_id}")
         if rows is None:
+            unanswerable("I4", f"freight {freight_id}")
             continue
         checks += 1
         if len(rows) != state.freight_charges[freight_id]:
             fail(f"I4 freight {freight_id}: {len(rows)} rows stored, "
                  f"{state.freight_charges[freight_id]} written")
-    return checks, failures, first
+    return VerifyResult(checks, failures, first, unanswered, first_unanswered)
 
 
 def main():
@@ -707,8 +729,10 @@ def main():
                 if result["elapsed"] > 0 else 0.0),
     }
     if "verify" in result:
-        checks, failures, first = result["verify"]
-        meta["verify"] = {"checks": checks, "failures": failures, "first": first}
+        v = result["verify"]
+        meta["verify"] = {"checks": v.checks, "failures": v.failures,
+                          "first": v.first, "unanswered": v.unanswered,
+                          "first_unanswered": v.first_unanswered}
     if result.get("manifest"):
         meta["manifest_passes"] = result["manifest"]["passes"]
         meta["manifest_rows_read"] = result["manifest"]["rows_read"]
