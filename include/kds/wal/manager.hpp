@@ -27,8 +27,10 @@
 // Concurrency: **one manager per core, over a stream that is either that
 // core's or the instance's** (AR0 M0, `instructions/v3.0.0/workorder-al-m0-single-wal.md`
 // AL-R1). Everything a manager holds itself - the statistics, the group
-// batch, the parked request, the D3 clock - is its core's and is touched
-// by no other thread. What crosses cores is below it: the shared stream's
+// batch, the D3 clock - is its core's and is touched by no other thread.
+// The page store keeps that by asking each core's own manager for its
+// writebacks (`SetCoreWalGate`, BA-S1), and `Sync()`'s owning arm checks
+// it in debug builds. What crosses cores is below it: the shared stream's
 // latch and watermark (stream.hpp) and the writer's atomics (writer.hpp).
 // Two ways to construct one:
 //

@@ -82,12 +82,23 @@
 //
 // A dirty page may reach the device only once the log records describing
 // its modifications are durable. That rule is enforced here rather than
-// asked of callers: SetWalGate() installs a WalDurability, and every write
-// path below (Flush, Sync, FlushPages) first calls EnsureDurable() on the
-// highest page_lsn among the pages it is about to write. With no gate
-// installed the store behaves exactly as it did before one existed, which
-// is what the WAL-free unit tests and the simulator rely on - and which is
-// sound only for a caller that logs nothing.
+// asked of callers: every write path below (Flush, Sync, FlushPages) first
+// calls EnsureDurable() on the highest page_lsn among the pages it is
+// about to write. With no gate installed the store behaves exactly as it
+// did before one existed, which is what the WAL-free unit tests rely on -
+// and which is sound only for a caller that logs nothing.
+//
+// **Which gate: the calling core's** (BA-S1). SetWalGate() installs the
+// default, and SetCoreWalGate() gives one core a gate of its own; a
+// writeback asks the gate of the core it runs as (CurrentCore()), the
+// default where that core has none, and asks the same one for the whole
+// writeback. Any core's manager would answer correctly for every page -
+// there is one log - but answering means syncing, and a manager's sync
+// writes that manager's own state, which is its core's alone
+// (wal/manager.hpp). With one gate for the instance, a peer's writeback ran
+// core 0's inline sync on the peer's thread. Each peer registers its
+// attached manager instead, which flushes through the stream latch and
+// waits on the writer; core 0 keeps the default, its owning manager.
 //
 // The gate is one call per flush batch, not per page: EnsureDurable() is a
 // no-op once the watermark has passed, so gating on the batch maximum
@@ -420,9 +431,18 @@ public:
     // hit anywhere - only the lifecycle differs.
     std::unique_ptr<ScanFetcher> OpenScanRing(std::size_t frames = kScanRingFrames) override;
 
-    // Installs the WAL-before-data gate described above. Null (the
-    // default) disables it. `gate` must outlive the store.
+    // Installs the default WAL-before-data gate described above - the one
+    // every core without a gate of its own asks. Null (the default)
+    // disables it for those cores. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
+
+    // Gives `core` a gate of its own (BA-S1), or with null takes it back so
+    // the core asks the default again. A slot is written before its core's
+    // first writeback and taken back before the gate is destroyed -
+    // `CoreRuntime::Open` and `~CoreRuntime` - and read only by threads
+    // running as that core. InvalidArgument past the page latch's core-id
+    // bound, which every core already lives under.
+    Status SetCoreWalGate(std::uint32_t core, wal::WalDurability* gate);
 
     // **`SetStreamCoreId` and `core_id()` are gone** (AM-S2 step 3). The
     // first existed for an ordering that no longer exists: recovery stamps
@@ -1061,10 +1081,14 @@ private:
     // to take the hold clears the flags, and the rest write nothing.
     StatusOr<std::size_t> FlushMaps();
 
-    // Waits for the log records of `page_ids` to be durable before any of
-    // them is written. A no-op with no gate installed or no logged page in
-    // the batch.
-    Status AwaitWalGate(std::span<const PageId> page_ids);
+    // Waits, through `gate`, for the log records of `page_ids` to be durable
+    // before any of them is written. A no-op with a null gate or no logged
+    // page in the batch.
+    Status AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate);
+
+    // The gate a writeback on this thread asks: the calling core's own
+    // (SetCoreWalGate), or the default.
+    wal::WalDurability* GateForCaller() const noexcept;
 
     // `mark_dirty` is false only for a read-only fetch: a frame faulted in
     // by a reader has not been modified, so it enters the map clean and
@@ -1231,6 +1255,10 @@ private:
     PageDevice& device_;
     Logger* log_ = nullptr;
     wal::WalDurability* wal_gate_ = nullptr;
+    // One slot per core id the page latch can name (SetCoreWalGate); null
+    // means "ask `wal_gate_`". Atomic so that each slot's one writer and its
+    // core's readers are ordered by a store and a load, not by a promise.
+    std::array<std::atomic<wal::WalDurability*>, kPageLatchMaxCoreId + 1> core_wal_gates_{};
 
     // The page latch's switch and gauge (SetLatchArmed). Off by default:
     // arming is the assembly's act, on the superblock's core count.

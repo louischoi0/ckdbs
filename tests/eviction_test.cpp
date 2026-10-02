@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <thread>
 #include <span>
@@ -340,6 +341,7 @@ public:
     }
     Status EnsureDurable(wal::Lsn lsn) override {
         asked_.store(true, std::memory_order_release);
+        if (asks_.fetch_add(1, std::memory_order_acq_rel) == 0 && on_first_ask) on_first_ask();
         wal::Lsn seen = durable_.load(std::memory_order_acquire);
         while (lsn >= seen && !durable_.compare_exchange_weak(seen, lsn + 1,
                                                              std::memory_order_acq_rel)) {
@@ -347,10 +349,17 @@ public:
         return Status::OK();
     }
     bool asked() const noexcept { return asked_.load(std::memory_order_acquire); }
+    int asks() const noexcept { return asks_.load(std::memory_order_acquire); }
+
+    // Runs inside the first `EnsureDurable` (BA-S1's run-gate cell). The
+    // store calls the gate holding no latch - `AwaitWalGate` drops the
+    // structure latch before it asks - so the hook may stamp a page.
+    std::function<void()> on_first_ask;
 
 private:
     std::atomic<wal::Lsn> durable_{1};  // a real record LSN is never 0
     std::atomic<bool> asked_{false};
+    std::atomic<int> asks_{0};
 };
 
 class ProbedDevice final : public PageDevice {
@@ -560,6 +569,104 @@ TEST(EvictionWritebackTest, FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage) {
     EXPECT_TRUE(gate.asked()) << "writeback never consulted the gate";
     EXPECT_EQ(probed.writes_past_durable(), 0u)
         << "a page reached the device while its own page_lsn was past the durable point";
+}
+
+// ---- BA-S1: each core asks its own gate -----------------------------------
+
+// **A writeback asks the gate of the core it runs as, and only that one**
+// (BA-S1). With one gate for the instance, a peer's writeback asked core
+// 0's owning manager, whose not-durable arm is an inline sync of core 0's
+// own state - run on the peer's thread
+// (`instructions/v3.0.0/workorder-ba-parallelism.md` §1.7, defect C). The
+// default stays what every core without a gate of its own asks, so a core
+// whose slot is taken back asks it again.
+TEST(EvictionWritebackTest, EachCoresWritebackAsksOnlyItsOwnGate) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    GateProbe core0_gate;
+    GateProbe core1_gate;
+    // Which gate was asked is this cell's question; whether a page went out
+    // ahead of its record is the next cell's, which can name one gate.
+    ProbedDevice probed(*device.value(), nullptr);
+    auto opened = DevicePageStore::Open(probed, /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    store.SetWalGate(&core0_gate);
+    ASSERT_TRUE(store.SetCoreWalGate(1, &core1_gate).ok());
+
+    const auto dirty_page = [&store](wal::Lsn lsn) {
+        auto created = store.CreateNew();
+        EXPECT_TRUE(created.ok());
+        FormatPage(created.value().second.bytes(), PageType::kHeap);
+        EXPECT_TRUE(store.StampPageLsn(created.value().first, lsn).ok());
+        return created.value().first;
+    };
+
+    {
+        const CurrentCoreGuard as_core_1(1);
+        const PageId page = dirty_page(77);
+        const PageId ids[] = {page};
+        ASSERT_TRUE(store.FlushPages(ids).ok());
+        EXPECT_EQ(core1_gate.asks(), 1) << "core 1's writeback did not ask core 1's gate";
+        EXPECT_EQ(core0_gate.asks(), 0) << "core 1's writeback asked core 0's gate";
+        EXPECT_TRUE(core1_gate.IsDurable(77));
+    }
+    {
+        const CurrentCoreGuard as_core_0(0);
+        const PageId page = dirty_page(88);
+        const PageId ids[] = {page};
+        ASSERT_TRUE(store.FlushPages(ids).ok());
+        EXPECT_EQ(core0_gate.asks(), 1) << "core 0's writeback did not ask the default";
+        EXPECT_EQ(core1_gate.asks(), 1) << "core 0's writeback asked core 1's gate";
+    }
+    // Taken back, core 1 asks the default again.
+    ASSERT_TRUE(store.SetCoreWalGate(1, nullptr).ok());
+    {
+        const CurrentCoreGuard as_core_1(1);
+        const PageId page = dirty_page(99);
+        const PageId ids[] = {page};
+        ASSERT_TRUE(store.FlushPages(ids).ok());
+        EXPECT_EQ(core0_gate.asks(), 2) << "a core with no gate of its own did not ask the default";
+        EXPECT_EQ(core1_gate.asks(), 1);
+    }
+    // Past the page latch's core-id bound there is no slot to give.
+    EXPECT_EQ(store.SetCoreWalGate(storage::kPageLatchMaxCoreId + 1, &core1_gate).code(),
+              StatusCode::kInvalidArgument);
+}
+
+// **The run's gate is the batch's gate** (BA-S1). `WriteBack` asks twice: once
+// for the batch maximum, and once more per run whose page_lsn moved past
+// the watermark after that first ask. Both must be the calling core's -
+// a run gate left on the default would put core 1's late record in front
+// of core 0's manager again. The first ask re-stamps the page, so the run
+// gate has something to ask about.
+TEST(EvictionWritebackTest, TheRunGateAsksTheCallingCoresGate) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    GateProbe core0_gate;
+    GateProbe core1_gate;
+    ProbedDevice probed(*device.value(), &core1_gate);
+    auto opened = DevicePageStore::Open(probed, /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    store.SetWalGate(&core0_gate);
+    ASSERT_TRUE(store.SetCoreWalGate(1, &core1_gate).ok());
+
+    const CurrentCoreGuard as_core_1(1);
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.Release();
+    ASSERT_TRUE(store.StampPageLsn(page, /*lsn=*/100).ok());
+    core1_gate.on_first_ask = [&store, page] { (void)store.StampPageLsn(page, /*lsn=*/200); };
+
+    const PageId ids[] = {page};
+    ASSERT_TRUE(store.FlushPages(ids).ok());
+    EXPECT_EQ(core1_gate.asks(), 2) << "the run's re-stamped page_lsn was not asked of core 1's gate";
+    EXPECT_EQ(core0_gate.asks(), 0) << "a writeback as core 1 asked core 0's gate";
+    EXPECT_EQ(probed.writes_past_durable(), 0u)
+        << "a page reached the device while its own page_lsn was past core 1's durable point";
 }
 
 TEST(EvictionWritebackTest, ContiguousRunsCoalesceIntoOneDeviceCall) {

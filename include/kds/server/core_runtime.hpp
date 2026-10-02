@@ -110,7 +110,9 @@ public:
         // detail.** The store's writeback gate is a `wal::WalDurability`,
         // which is a property of the *log*: under AR0 M0 every core's
         // manager attaches to core 0's stream, so any of them answers for
-        // all. A pre-M0 volume mounted per-core, and a shared store there
+        // all. Each core asks its own since BA-S1 - `Open` registers this
+        // peer's (`DevicePageStore::SetCoreWalGate`) - because answering is
+        // syncing, and a manager's sync is its own core's. A pre-M0 volume mounted per-core, and a shared store there
         // would check a page logged in core 1's stream against core 0's
         // watermark and could write it back ahead of the record describing
         // it. AM-S4(d) made `SuperBlock::Decode` refuse such a volume, so

@@ -1,8 +1,12 @@
 #include "kds/wal/manager.hpp"
 
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <utility>
+
+#include "kds/base/current_core.hpp"
 
 namespace kds::wal {
 namespace {
@@ -206,6 +210,24 @@ Status WalManager::Sync() {
         ResolveBatches();
         return Status::OK();
     }
+
+    // **The owner's arm runs as the owner's core** (BA-S1). What follows
+    // writes this manager's statistics, its batch and its D3 clock, which
+    // `manager.hpp` gives to its core alone; a writeback on another core
+    // asks that core's gate, never this one. Core identity rather than
+    // thread identity, because the startup thread mounts as core 0 and
+    // shutdown runs a peer's last sync from core 0's thread under that
+    // peer's guard - both legitimate, neither the reactor's thread.
+#ifndef NDEBUG
+    if (CurrentCore() != core_id_) {
+        std::fprintf(stderr,
+                     "WalManager: core %u ran core %u's owning sync. The owner's statistics, "
+                     "batch and D3 clock are its core's alone (manager.hpp); a writeback on "
+                     "another core must ask that core's gate (BA-S1).\n",
+                     CurrentCore(), static_cast<unsigned>(core_id_));
+        std::abort();
+    }
+#endif
 
     const bool had_staged_bytes = stream_->ring_used() > 0;
     if (Status s = stream_->Sync(); !s.ok()) {

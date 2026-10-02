@@ -1287,15 +1287,37 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
     return Status::OK();
 }
 
-Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
-    if (wal_gate_ == nullptr) return Status::OK();
+Status DevicePageStore::SetCoreWalGate(std::uint32_t core, wal::WalDurability* gate) {
+    if (core > kPageLatchMaxCoreId) {
+        return Status::InvalidArgument("DevicePageStore: core " + std::to_string(core) +
+                                       " is past the page latch's core-id bound " +
+                                       std::to_string(kPageLatchMaxCoreId) +
+                                       ", so there is no WAL gate slot for it");
+    }
+    core_wal_gates_[core].store(gate, std::memory_order_release);
+    return Status::OK();
+}
+
+wal::WalDurability* DevicePageStore::GateForCaller() const noexcept {
+    const std::uint32_t core = CurrentCore();
+    if (core <= kPageLatchMaxCoreId) {
+        if (wal::WalDurability* own = core_wal_gates_[core].load(std::memory_order_acquire)) {
+            return own;
+        }
+    }
+    return wal_gate_;
+}
+
+Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate) {
+    if (gate == nullptr) return Status::OK();
 
     // **The scan under the hold, the wait outside it** (AM-S2 step 3f), and
     // this one was owed rather than noticed: `device_page_store.hpp`'s
     // acquisition-order block already said "whatever latch that scan comes
     // to need must be dropped before `EnsureDurable`, or the wait acquires
     // exactly the 'latched across a durability wait' shape this bullet
-    // rules out". `EnsureDurable` waits on the writer thread's `fdatasync`.
+    // rules out". `EnsureDurable` waits on an `fdatasync`: the writer
+    // thread's for a peer, core 0's own inline one for core 0.
     //
     // One EnsureDurable for the batch maximum, not one per page: the call
     // is a no-op once the watermark is past, so the highest page_lsn in
@@ -1324,7 +1346,7 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
     }
     if (highest == wal::kNoLsn) return Status::OK();  // nothing logged in this batch
 
-    if (Status s = wal_gate_->EnsureDurable(highest); !s.ok()) {
+    if (Status s = gate->EnsureDurable(highest); !s.ok()) {
         // Refusing the flush is the whole point: writing the page anyway
         // would put data on disk ahead of the log that describes it.
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
@@ -1364,8 +1386,11 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     ordered.erase(std::unique(ordered.begin(), ordered.end()), ordered.end());
 
     // (1) durable: one gate call for the batch maximum, before any byte
-    // moves - the whole of flush-before-evict.
-    if (Status s = AwaitWalGate(ordered); !s.ok()) return s;
+    // moves - the whole of flush-before-evict. **One gate for the whole
+    // writeback** (BA-S1): the calling core's, chosen once, so the batch's
+    // call and every run's below ask the same manager.
+    wal::WalDurability* const gate = GateForCaller();
+    if (Status s = AwaitWalGate(ordered, gate); !s.ok()) return s;
 
     // **Three phases per run, and the device call is the one between the
     // holds** (AM-S2 step 3f). The run detection, the checksum stamp and the
@@ -1562,8 +1587,8 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // once the watermark is past and covers the ordinary case in one
         // round trip; this is the arm that catches a page whose record
         // arrived after it.
-        if (wal_gate_ != nullptr && run_lsn != wal::kNoLsn && !wal_gate_->IsDurable(run_lsn)) {
-            if (Status s = wal_gate_->EnsureDurable(run_lsn); !s.ok()) {
+        if (gate != nullptr && run_lsn != wal::kNoLsn && !gate->IsDurable(run_lsn)) {
+            if (Status s = gate->EnsureDurable(run_lsn); !s.ok()) {
                 if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                     log_->Error("pagestore", "WAL gate refused a writeback up to page_lsn " +
                                                  std::to_string(run_lsn) + ": " + s.message());

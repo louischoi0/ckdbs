@@ -821,7 +821,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     // WAL-before-data, enforced by the store rather than asked of its
     // callers (device_page_store.hpp): from here on no dirty page reaches
-    // the device ahead of the records describing it.
+    // the device ahead of the records describing it. This is the default
+    // gate, core 0's; each peer registers its own in `CoreRuntime::Open`
+    // (BA-S1), so no peer's writeback runs this manager's inline sync.
     expeditor->store_->SetWalGate(expeditor->wal_.get());
 
     // RV3: from here on every catalog mutation logs the ordinary record
@@ -1635,7 +1637,8 @@ Status Expeditor::Start() {
         // was the writeback path rather than the pool: the store's gate is
         // a `wal::WalDurability` - a property of the log, not of a core -
         // and under AR0 M0 every core's manager attaches to core 0's
-        // stream, so core 0's gate answers for all. A pre-M0 volume mounted
+        // stream, so any core's gate answers for all (and each core asks
+        // its own since BA-S1, `CoreRuntime::Open`). A pre-M0 volume mounted
         // per-core, where one gate would check a page logged in core 1's
         // stream against core 0's watermark and could write it out ahead of
         // the record that describes it. `SuperBlock::Decode` now refuses
