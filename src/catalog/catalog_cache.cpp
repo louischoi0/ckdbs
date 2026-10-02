@@ -84,8 +84,8 @@ const std::vector<SysObjectRow>* CatalogCache::PutTableList(std::vector<SysObjec
     return &*table_list_;
 }
 
-const PatternAccess* CatalogCache::FindPattern(std::uint64_t pattern_id) noexcept {
-    auto it = patterns_.find(pattern_id);
+const PatternAccess* CatalogCache::FindPattern(std::uint64_t fetch_id) noexcept {
+    auto it = patterns_.find(fetch_id);
     if (it == patterns_.end()) {
         ++stats_.misses;
         return nullptr;
@@ -95,15 +95,15 @@ const PatternAccess* CatalogCache::FindPattern(std::uint64_t pattern_id) noexcep
 }
 
 const PatternAccess* CatalogCache::PutPattern(PatternAccess access) {
-    const std::uint64_t key = access.pattern_id;
+    const std::uint64_t key = access.fetch_id;
     auto [it, inserted] = patterns_.try_emplace(key, std::move(access));
     if (inserted) ++stats_.fills;
     return &it->second;
 }
 
-void CatalogCache::UpdatePatternWaystone(std::uint64_t pattern_id, PageId root,
+void CatalogCache::UpdatePatternWaystone(std::uint64_t fetch_id, PageId root,
                                          std::uint8_t depth) noexcept {
-    auto it = patterns_.find(pattern_id);
+    auto it = patterns_.find(fetch_id);
     if (it == patterns_.end()) return;
     it->second.waystone_root = root;
     it->second.dir_depth = depth;

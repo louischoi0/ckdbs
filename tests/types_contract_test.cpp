@@ -347,7 +347,9 @@ TEST(TypesContract, Item6_TheVersionDidNotMove) {
     // is qualified by this number, so bumping it invalidates the corpus.
     // The types work did not need to, and this fails if someone assumes
     // otherwise.
-    EXPECT_EQ(parser::kFingerprintVersion, 1u);
+    // 2 since AP-S2, which re-keyed sys.patterns rows by fetch_id without
+    // moving any hash (fingerprint.hpp); this change moved nothing either.
+    EXPECT_EQ(parser::kFingerprintVersion, 2u);
 }
 
 // ---- Item 7: rendering --------------------------------------------------

@@ -47,13 +47,13 @@ protected:
     static InstanceKey KeyOf(const std::string& sql) {
         auto fp = parser::FingerprintOf(sql);
         EXPECT_TRUE(fp.has_value());
-        return InstanceKey{fp->pattern_id, fp->arg_hash};
+        return InstanceKey{fp->fetch_id, fp->arg_hash};
     }
 
     // The trail recorded for `sql`'s instance, or empty when there is none.
     std::vector<WaystoneEntry> TrailFor(const std::string& sql) {
         const InstanceKey key = KeyOf(sql);
-        auto pattern = boot_->catalog.FindPattern(key.pattern_id);
+        auto pattern = boot_->catalog.FindPattern(key.fetch_id);
         if (!pattern.ok() || !pattern.value()->has_waystone_directory()) return {};
         auto read = ReadTrail(store_, pattern.value()->waystone_root,
                               pattern.value()->dir_depth, key);
@@ -78,7 +78,7 @@ TEST_F(TrailRecorderTest, AnObservedInstanceRecordsOnItsSecondExecution) {
     // n=2 exists to avoid - and with no pattern row yet, a one-shot
     // statement leaves no catalog trace at all.
     EXPECT_TRUE(TrailFor(sql).empty());
-    EXPECT_FALSE(boot_->catalog.FindPattern(KeyOf(sql).pattern_id).ok())
+    EXPECT_FALSE(boot_->catalog.FindPattern(KeyOf(sql).fetch_id).ok())
         << "a shape seen once is not yet worth a sys.patterns row";
 
     Run(sql);
@@ -261,7 +261,7 @@ TEST_F(TrailRecorderTest, RecordingAdvancesTheHeatCountersSHOWPATTERNSReports) {
     Run(sql);
     Run(sql);
 
-    auto row = boot_->catalog.GetSysPatternRow(KeyOf(sql).pattern_id);
+    auto row = boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id);
     ASSERT_TRUE(row.ok());
     // Two recorded executions after the one that only counted. Before this
     // change nothing in the engine ever incremented this field, so

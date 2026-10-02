@@ -12,7 +12,7 @@ How KDS remembers where a repeated query found its rows. `[PROPOSED]` marks a de
 
 A **waystone is the recorded trail of one pattern instance.**
 
-A *pattern* is the shape of a query or procedure, identified when it is parsed and reduced to function form — `patternX(a, b)`. A *pattern instance* is that shape with its arguments bound: the pair `(pattern_id, arg_hash)`. Executing an instance touches some set of tuples, possibly across several relations. The waystone for that instance records their **Keystones**, with where each one was last seen.
+A *pattern* is the shape of a query or procedure, identified when it is parsed and reduced to function form — `patternX(a, b)`. A *pattern instance* is that shape with its arguments bound: the pair `(fetch_id, arg_hash)`, where `fetch_id` is the shape with the leading `SELECT`'s select list left out (§3). Executing an instance touches some set of tuples, possibly across several relations. The waystone for that instance records their **Keystones**, with where each one was last seen.
 
 Three properties follow, and they define the structure:
 
@@ -48,10 +48,12 @@ Nothing caches a set as complete. Doing so would require amending invariant 9 an
 
 `pattern_id` is a fingerprint of the statement's *shape*, computed **at parse time** and never per execution (`docs/spec/parser-v2.md` I1). Literals are parameterized as they are lexed: the shape stream hashes to `pattern_id`, and the ordered literal values hash to `arg_hash`. `WHERE id = 42` and `WHERE id = ?` therefore converge on one `pattern_id`, which is the property that makes the whole structure work — a client that inlines literals and one that binds parameters share a waystone.
 
+**The trail is keyed by `fetch_id`, not `pattern_id`, since AP-S2** (`instructions/v3.0.0/workorder-ap-function-catalog-fetch-id.md` AP-R2). `fetch_id` is `pattern_id`'s hash with the tokens between the leading `SELECT` and the `FROM` that ends its select list left out (`fingerprint.hpp`; for every other leading word the two are equal). Two statements differing only in what they project read the same tuples by the same path - the compiled chain does not read the projection, and an aggregated statement compiles to its unaggregated twin's chain (`aggregate.md` AG1) - and a trail records where tuples were, never what was projected, so they share one trail. `pattern_id` stays the statement's identity everywhere else: the cabin optimizer counts by it and `ANALYZE` prints it beside `fetch_id`. A shared trail can cost a miss and cannot produce a row: replay finds an entry only by `(step_id, derived key)` and rule 1 checks its `rel_oid` against the step (§2).
+
 Two obligations follow:
 
-- **Stability.** `pattern_id` is persisted in `sys.patterns` and is the key to stored waystones, so it must not depend on pointer values, hash-map iteration order, or anything else that varies between runs of the same binary.
-- **Versioning.** Every pattern row carries a `fingerprint_version`; a row whose version does not match the running build is ignored, and its waystones with it. This is the cheap alternative to a migration that would have to re-parse stored SQL the engine no longer keeps. `kFingerprintVersion` moves only per `fingerprint.hpp`'s bump rule: an additive shape that changes no existing hash does not move it, and the golden corpus is the witness.
+- **Stability.** `fetch_id` is persisted in `sys.patterns` and in every waystone header and is the key to stored waystones, and `pattern_id` is the cabin optimizer's key, so neither may depend on pointer values, hash-map iteration order, or anything else that varies between runs of the same binary.
+- **Versioning.** Every pattern row carries a `fingerprint_version`; a row whose version does not match the running build is ignored, and its waystones with it. This is the cheap alternative to a migration that would have to re-parse stored SQL the engine no longer keeps. `kFingerprintVersion` moves only per `fingerprint.hpp`'s bump rule: an additive shape that changes no existing hash does not move it, and the golden corpus is the witness. **It is 2 since AP-S2**, the one bump in which no hash moved: version-1 rows are keyed by `pattern_id`, version-2 rows by `fetch_id`, and the bump is what keeps a version-1 row from being read as a version-2 one (AP-Q2 (b)).
 
 ## 4. Catalog — `sys.patterns`
 
@@ -60,7 +62,7 @@ Patterns are catalog objects, in a relation named `patterns` in the `sys` namesp
 | Field | Type | Meaning |
 |---|---|---|
 | `oid` | `Oid` | the pattern object's oid |
-| `pattern_id` | `uint64` | the parse-time fingerprint; the lookup key |
+| `fetch_id` | `uint64` | the parse-time fetch fingerprint (§3); the lookup key. A `fingerprint_version` 1 row holds a `pattern_id` here |
 | `fingerprint_version` | `uint32` | §3; a mismatch retires the row's waystones |
 | `stmt_class` | `uint8` | the parser's execution-class tag (`docs/spec/parser-v2.md` I2; every step-chain statement carries `kJoinSelect`, per J3) |
 | `waystone_root` | `PageId` | root of this pattern's `arg_hash` directory, `kInvalidPageId` when none |
@@ -79,7 +81,7 @@ Why a catalog relation rather than an in-memory table: patterns are the durable,
 ## 5. Addressing — two levels
 
 ```
-pattern_id  --> sys.patterns row          (catalog lookup, cached)
+fetch_id    --> sys.patterns row          (catalog lookup, cached)
 arg_hash    --> waystone for that instance (directory walk under waystone_root)
 ```
 
@@ -101,7 +103,7 @@ Waystone header:
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | 8 | `pattern_id` — self-identifying, checked on read |
+| 0 | 8 | `fetch_id` — self-identifying, checked on read; a page written before AP-S2 holds a `pattern_id`, and a `SELECT`'s never equals its `fetch_id`, so it reads as a miss |
 | 8 | 8 | `arg_hash` — resolves directory collisions (§5) |
 | 16 | 2 | `entry_count` |
 | 18 | 2 | `flags` |

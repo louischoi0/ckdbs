@@ -165,8 +165,9 @@ namespace kds::parser {
 
 // ---- The version, and the one rule that governs it ------------------------
 //
-// Which revision of the fingerprinting algorithm produced a stored
-// `pattern_id`. Persisted on every `sys.patterns` row, and the reason the
+// Which revision of the fingerprinting algorithm produced a stored key -
+// the `fetch_id` a `sys.patterns` row is keyed by since AP-S2, and the
+// `pattern_id` it was keyed by before. Persisted on every `sys.patterns` row, and the reason the
 // blueprint parser (docs/parser.md I1) can replace this file without a
 // migration: it will not reproduce these hashes, and it does not have to.
 // It bumps this, and every pattern recorded under the old rules stops
@@ -178,7 +179,9 @@ namespace kds::parser {
 // Concretely, that is a change to any of - the token stream a statement
 // reduces to (a new token type appearing in a shape, a change to what is
 // skipped), the shape or argument tag values, the framing of a hashed
-// field, the case-folding rule, or the hash function itself.
+// field, the case-folding rule, or the hash function itself. And one more,
+// earned by AP-S2: a change to **which** hash a stored row is keyed by,
+// though neither hash moved.
 //
 // The distinction that is easy to get wrong: making a statement
 // fingerprintable that previously was not - adding `DELETE` to the
@@ -197,11 +200,20 @@ namespace kds::parser {
 // change like it must argue: the only token sequences whose hashing
 // changes appear in no statement any production accepts.
 //
+// **2 since AP-S2** (AP-Q2 (b), raft-marks-2026-10-02.md §4), for that
+// last case. No `pattern_id` or `arg_hash` moved; the golden corpus pins
+// both. What moved is the row's key: version-1 rows hold `pattern_id`s,
+// version-2 rows `fetch_id`s, and a reader that took a version-1 row by
+// its hash would be comparing a fetch_id with a pattern_id. The bump makes
+// those rows another version's, so `GetSysPatternRow` hides them and
+// `SHOW PATTERNS` labels them stale, rather than leaving them current and
+// mislabelled.
+//
 // Never 0. A `sys.patterns` row read out of a zeroed or never-written page
 // decodes to version 0, and that must not be mistaken for a current row -
 // which is exactly the mistake `IsCurrentFingerprintVersion()` exists to
 // make impossible.
-inline constexpr std::uint32_t kFingerprintVersion = 1;
+inline constexpr std::uint32_t kFingerprintVersion = 2;
 static_assert(kFingerprintVersion != 0, "0 is reserved for an unset/zeroed row");
 
 // Whether a stored pattern's `fingerprint_version` was produced by the

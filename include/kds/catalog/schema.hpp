@@ -428,7 +428,7 @@ struct TableAccess {
 // cacheable fact. A caller that wants heat reads the row from the page
 // through Catalog::GetSysPatternRow().
 //
-// What is here divides in three. The identity - `oid`, `pattern_id`,
+// What is here divides in three. The identity - `oid`, `fetch_id`,
 // `fingerprint_version`, `stmt_class` - is written once at registration
 // and never changes. The location - `waystone_root`, `dir_depth` - changes
 // only when the directory deepens, through the single writer
@@ -440,7 +440,7 @@ struct TableAccess {
 // nothing here moves without an explicit DDL-shaped call.
 struct PatternAccess {
     Oid oid = 0;
-    std::uint64_t pattern_id = 0;
+    std::uint64_t fetch_id = 0;
     std::uint32_t fingerprint_version = 0;
     PageId waystone_root = kInvalidPageId;
     std::uint8_t stmt_class = 0;

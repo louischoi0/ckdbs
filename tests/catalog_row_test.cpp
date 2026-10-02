@@ -25,7 +25,7 @@ namespace {
 SysPatternRow SampleRow() {
     SysPatternRow row{};
     row.oid = 0x0102030405060708ull;
-    row.pattern_id = 0x1122334455667788ull;
+    row.fetch_id = 0x1122334455667788ull;
     row.last_seen = 0x99aabbccddeeff00ull;
     row.fingerprint_version = 0xA1A2A3A4u;
     row.waystone_root = 0xB1B2B3B4u;
@@ -43,7 +43,7 @@ TEST(SysPatternRowTest, RoundTripsEveryField) {
     ASSERT_TRUE(out.ok()) << out.status().message();
 
     EXPECT_EQ(out.value().oid, in.oid);
-    EXPECT_EQ(out.value().pattern_id, in.pattern_id);
+    EXPECT_EQ(out.value().fetch_id, in.fetch_id);
     EXPECT_EQ(out.value().last_seen, in.last_seen);
     EXPECT_EQ(out.value().fingerprint_version, in.fingerprint_version);
     EXPECT_EQ(out.value().waystone_root, in.waystone_root);
@@ -68,8 +68,8 @@ TEST(SysPatternRowTest, EveryFieldOccupiesItsOwnBytes) {
         probes.push_back({"oid", r});
     }
     {
-        SysPatternRow r{}; r.pattern_id = sample.pattern_id;
-        probes.push_back({"pattern_id", r});
+        SysPatternRow r{}; r.fetch_id = sample.fetch_id;
+        probes.push_back({"fetch_id", r});
     }
     {
         SysPatternRow r{}; r.last_seen = sample.last_seen;
@@ -102,7 +102,7 @@ TEST(SysPatternRowTest, EveryFieldOccupiesItsOwnBytes) {
 
         int non_zero = 0;
         non_zero += out.value().oid != 0;
-        non_zero += out.value().pattern_id != 0;
+        non_zero += out.value().fetch_id != 0;
         non_zero += out.value().last_seen != 0;
         non_zero += out.value().fingerprint_version != 0;
         non_zero += out.value().waystone_root != 0;
@@ -125,15 +125,15 @@ TEST(SysPatternRowTest, OnDiskLayoutIsPinned) {
     // it, so removing it would move the layout this test exists to hold
     // still. Only kOriginAuto is written now; the codec round-trips both.
     SysPatternRow row{};
-    row.pattern_id = 0x1122334455667788ull;
+    row.fetch_id = 0x1122334455667788ull;
     row.dir_depth = 0x2A;
     row.flags = 0xBEEF;
     row.origin = kOriginUser;
     const auto bytes = row.Encode();
 
     ASSERT_EQ(bytes.size(), 41u);
-    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kPatternIdOffset]), 0x88);
-    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kPatternIdOffset + 7]), 0x11);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFetchIdOffset]), 0x88);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFetchIdOffset + 7]), 0x11);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kDirDepthOffset]), 0x2A);
 
     // The two appended fields, including the byte order of the u16 - the

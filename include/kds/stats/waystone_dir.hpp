@@ -12,7 +12,7 @@
 // second level of addressing, turning an `arg_hash` into the waystone page
 // holding that pattern instance's trail.
 //
-//   pattern_id --> sys.patterns row           (catalog lookup, cached)
+//   fetch_id   --> sys.patterns row           (catalog lookup, cached)
 //   arg_hash   --> waystone for that instance (this file)
 //
 // The shape is the inode block map: interior pages of 2048 child PageIds,
@@ -130,7 +130,7 @@ StatusOr<PageId> CreateDirPage(storage::PageStore& store);
 // levels from `root`.
 //
 // **Only `key.arg_hash` steers the walk** - the directory is a pattern's
-// own, so its `pattern_id` is already implied by `root`. The whole instance
+// own, so its `fetch_id` is already implied by `root`. The whole instance
 // travels anyway, because the returned page id is not usable without it:
 // every caller owes a WaystonePageHolds() check against the same pair, and
 // taking the pair here is what stops a caller from resolving with one

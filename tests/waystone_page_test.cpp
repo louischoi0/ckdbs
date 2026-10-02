@@ -69,7 +69,7 @@ TEST_F(WaystonePageTest, FormatWritesAHeaderedWaystonePage) {
     EXPECT_EQ(common.page_lsn, storage::kNoPageLsn);
 
     const WaystoneHeader h = ReadWaystoneHeader(const_page());
-    EXPECT_EQ(h.pattern_id, 0xAAAAu);
+    EXPECT_EQ(h.fetch_id, 0xAAAAu);
     EXPECT_EQ(h.arg_hash, 0xBBBBu);
     EXPECT_EQ(h.recorded_ts, 1234u);
     EXPECT_EQ(h.entry_count, 0u);
@@ -94,7 +94,7 @@ TEST_F(WaystonePageTest, HeaderRoundTripsEveryField) {
     FormatWaystonePage(page(), {0, 0}, 0);
 
     WaystoneHeader in{};
-    in.pattern_id = 0x1122334455667788ull;
+    in.fetch_id = 0x1122334455667788ull;
     in.arg_hash = 0x99AABBCCDDEEFF00ull;
     in.recorded_ts = 0x0102030405060708ull;
     in.next_page_id = 4096;
@@ -105,7 +105,7 @@ TEST_F(WaystonePageTest, HeaderRoundTripsEveryField) {
     ASSERT_TRUE(WriteWaystoneHeader(page(), in).ok());
 
     const WaystoneHeader out = ReadWaystoneHeader(const_page());
-    EXPECT_EQ(out.pattern_id, in.pattern_id);
+    EXPECT_EQ(out.fetch_id, in.fetch_id);
     EXPECT_EQ(out.arg_hash, in.arg_hash);
     EXPECT_EQ(out.recorded_ts, in.recorded_ts);
     EXPECT_EQ(out.next_page_id, in.next_page_id);
@@ -220,7 +220,7 @@ TEST_F(WaystonePageTest, WritingAnEntryDoesNotDisturbTheHeader) {
     ASSERT_TRUE(WriteWaystoneEntry(page(), 0, SampleEntry()).ok());
 
     const WaystoneHeader h = ReadWaystoneHeader(const_page());
-    EXPECT_EQ(h.pattern_id, 0xAAAAu);
+    EXPECT_EQ(h.fetch_id, 0xAAAAu);
     EXPECT_EQ(h.arg_hash, 0xBBBBu);
     EXPECT_EQ(h.recorded_ts, 77u);
 }
@@ -249,7 +249,7 @@ TEST_F(WaystonePageTest, APageOfAnotherTypeHoldsNothing) {
     // A heap page whose body bytes happen to look like a matching header.
     storage::FormatPage(page(), PageType::kHeap);
     WaystoneHeader h{};
-    h.pattern_id = 0xAAAA;
+    h.fetch_id = 0xAAAA;
     h.arg_hash = 0xBBBB;
     ASSERT_TRUE(WriteWaystoneHeader(page(), h).ok());
 

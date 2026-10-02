@@ -237,6 +237,34 @@ TEST(OptimizerSignalsTest, AScriptedWorkloadLandsInTheSnapshot) {
     EXPECT_NE(analyzed.find(" pages="), std::string::npos) << analyzed;
 }
 
+// AP-S2 moved the trail to fetch_id and left this model on pattern_id: a
+// `SUM(x)` and an `x` over one fetch are one trail and two plans, and the
+// cabin optimizer prices plans. Two select lists over one fetch are two
+// fingerprints here.
+TEST(OptimizerSignalsTest, TwoSelectListsOverOneFetchAreTwoFingerprints) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, qty int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO b VALUES (5)").substr(0, 8), "INSERTED");
+
+    const std::string plain = "SELECT qty FROM b WHERE id = 1";
+    const std::string folded = "SELECT SUM(qty) FROM b WHERE id = 1";
+    auto plain_fp = parser::FingerprintOf(plain);
+    auto folded_fp = parser::FingerprintOf(folded);
+    ASSERT_TRUE(plain_fp.has_value() && folded_fp.has_value());
+    ASSERT_EQ(plain_fp->fetch_id, folded_fp->fetch_id);
+    db.Run(plain);
+    db.Run(folded);
+    db.Run(folded);
+
+    std::uint64_t plain_q8 = 0, folded_q8 = 0;
+    for (const stats::SnapshotFingerprint& s : db.signals().Snapshot().fingerprints) {
+        if (s.pattern_id == plain_fp->pattern_id) plain_q8 = s.frequency_q8;
+        if (s.pattern_id == folded_fp->pattern_id) folded_q8 = s.frequency_q8;
+    }
+    EXPECT_EQ(plain_q8, 1 * stats::kDecayScoreScale);
+    EXPECT_EQ(folded_q8, 2 * stats::kDecayScoreScale);
+}
+
 // ---- PHY05: the runtime switch --------------------------------------------
 
 TEST(OptimizerSignalsTest, SetCabinOptimizerTogglesAndShowMetaReports) {

@@ -116,7 +116,7 @@ private:
     // The pattern's row, registering it if this is the first time the shape
     // has been seen. Returns nullopt when the row could not be obtained,
     // which is a reason not to record and never an error to report upward.
-    const catalog::PatternAccess* EnsurePattern(std::uint64_t pattern_id,
+    const catalog::PatternAccess* EnsurePattern(std::uint64_t fetch_id,
                                                 std::uint8_t stmt_class);
 
     // The pattern's directory pair, creating the directory on first use.

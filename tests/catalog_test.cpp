@@ -1126,14 +1126,14 @@ protected:
     // an older build wrote it and then the fingerprint version was bumped -
     // and there is deliberately no API that can produce one, since
     // RegisterPattern() stamps the current version itself.
-    void WriteRawPatternRow(std::uint64_t pattern_id, std::uint32_t version) {
+    void WriteRawPatternRow(std::uint64_t fetch_id, std::uint32_t version) {
         auto bytes = store_.Get(kCatalogPagePatterns);
         ASSERT_TRUE(bytes.ok());
         kds::heap::PageView page(bytes.value().bytes());
 
         SysPatternRow row{};
-        row.oid = 900000 + pattern_id;
-        row.pattern_id = pattern_id;
+        row.oid = 900000 + fetch_id;
+        row.fetch_id = fetch_id;
         row.fingerprint_version = version;
         row.waystone_root = kInvalidPageId;
         auto encoded = row.Encode();
@@ -1160,7 +1160,7 @@ TEST_F(PatternCatalogTest, BootstrapCreatesTheRelation) {
 TEST_F(PatternCatalogTest, RegisterThenFindRoundTrips) {
     auto registered = catalog_.RegisterPattern(0xABCDEF, kStmtClassUnclassified);
     ASSERT_TRUE(registered.ok()) << registered.status().message();
-    EXPECT_EQ(registered.value()->pattern_id, 0xABCDEFu);
+    EXPECT_EQ(registered.value()->fetch_id, 0xABCDEFu);
     EXPECT_EQ(registered.value()->fingerprint_version, kVersion);
     EXPECT_FALSE(registered.value()->has_waystone_directory());
 
@@ -1207,7 +1207,7 @@ TEST_F(PatternCatalogTest, AForeignVersionResolvesAsAbsentNotAsAnError) {
     WriteRawPatternRow(99, kForeignVersion);
 
     // The row is on the page, and the lookup still reports the pattern as
-    // never seen: its pattern_id was computed under rules this build does
+    // never seen: its fetch_id was computed under rules this build does
     // not implement, so it names a shape that is not the one it claims.
     // NotFound, not a failure - nothing about a stale row should fail a
     // statement.
@@ -1238,7 +1238,7 @@ TEST_F(PatternCatalogTest, APatternStaleAtOneVersionCanBeReRegisteredAtTheCurren
 TEST_F(PatternCatalogTest, AStaleRowDoesNotShadowTheCurrentOne) {
     // Both rows on the page at once, stale first - the state a version bump
     // leaves behind, since nothing rewrites the old rows. A lookup that
-    // took the first match by pattern_id would return the stale one, which
+    // took the first match by fetch_id would return the stale one, which
     // is the defect this ordering exists to catch.
     WriteRawPatternRow(77, kForeignVersion);
     ASSERT_TRUE(catalog_.RegisterPattern(77, kStmtClassUnclassified).ok());
