@@ -180,8 +180,8 @@ NULL is storable (`docs/spec/null.md`), and comparison is three-valued. The eval
 - **Replay** consults the instance's trail for entries with the step's `step_id` and applies `docs/spec/waystone-concpets.md` §2 per entry; any miss falls through to the authoritative path *for that step alone*. Search-class steps use the trail only as a prefetch batch.
 - **`Exists` replay is positive-only**, and the asymmetry is the whole point: a validated witness *proves* non-emptiness, because presence has a witness. A missing or invalid witness proves nothing and the probe runs. A trail can never conclude absence.
 
-**I17 — Rule 0: the probe key must be re-derived.**
-Before a trail entry for a `Probe` step may be trusted, the executor derives the probe key from the **current** producing row it has in hand and requires it to equal the entry's `pk`. A mismatch is a miss for that step alone.
+**I17 — Rule 0: the key must be re-derived, at every replayed step.**
+Before a trail entry for a `Probe` step may be trusted, the executor derives the probe key from the **current** producing row it has in hand and requires it to equal the entry's `pk`. A mismatch is a miss for that step alone. **The driving step is under the same rule** (AR1's rule 0′, AP-S3): a `Lookup`'s entry is found only by the key the step derives from this execution's own values, so a trail recorded under another driving key is never consulted, whatever the instance key that led to it.
 
 Without it, replay is a wrong-answer generator, and no other rule catches it. Suppose the producing row's join column was updated from 77 to 91 between recording and replay. The entry for pk 77 passes every other check in `waystone-concpets.md` §2 — `rel_oid` matches, the Keystone id at the recorded slot is 77, the epoch matches, MVCC says visible — because **every other rule validates the trail against storage and none of them looks at the query**. `UPDATE` overwrites in place and keeps `(page_id, slot)`, so nothing about the producing row looks stale. The join would emit row 77; the correct answer is row 91.
 

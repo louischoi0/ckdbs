@@ -230,6 +230,45 @@ TEST_F(WaystoneReplayTest, AnEntryForADifferentKeyIsNeverConsulted) {
     EXPECT_EQ(Run(sql), correct);
 }
 
+// Rule 0 at the **driving** step (waystone-concpets.md §2, parser-v2.md
+// I17; AR1's rule 0', AP-S3). The cell above leaves its entry at row 3's
+// slot. This one plants an entry for another real row *at that row's real
+// location* under this statement's instance key: the Keystone at the slot
+// is the entry's pk, the relation is the step's, the epoch is current. No
+// SQL can reach this today, since one instance key means one literal and so
+// one derived key; it is the case a row-volatile function would reach,
+// which is why the rule names the driving step.
+//
+// **Two mechanisms hold it, and this cell is the one that sees both go.**
+// The index finds an entry only by the key the step derived (3, and the
+// entry is filed under 5), and the verifier checks the tuple at the
+// location against that same derived key, not against the entry's pk
+// (step_vm.cpp's TryReplay). Either alone turns the entry away: `Find`
+// ignoring its key survives every cell here, and the verifier's pk check
+// removed is killed by AWrongKeystoneAtTheTargetIsAMissNotAWrongRow. With
+// both removed this cell fails and the one above does not.
+TEST_F(WaystoneReplayTest, ADrivingEntryForAnotherKeyIsNeverFoundEvenWhereItIsValid) {
+    const std::string sql = "SELECT * FROM t WHERE id = 3";
+    const std::string other = "SELECT * FROM t WHERE id = 5";
+    const std::string correct = RunUntilRecorded(sql);
+    RunUntilRecorded(other);
+
+    const exec::TouchedTuple entry = EntryOf(other);  // row 5, where row 5 is
+    ASSERT_EQ(entry.pk, 5u);
+    ASSERT_EQ(entry.step_id, EntryOf(sql).step_id) << "both are the driving step";
+    PoisonTrail(sql, entry);
+
+    // ANALYZE first: any execution that misses re-records the trail, so
+    // the second one would read a healed trail and prove nothing.
+    const std::string analyzed = Run("ANALYZE " + sql);
+    EXPECT_NE(analyzed.find("rows=1"), std::string::npos) << analyzed;
+    EXPECT_EQ(analyzed.find("replays="), std::string::npos)
+        << "the planted entry was found under a key the step did not derive: " << analyzed;
+
+    PoisonTrail(sql, entry);
+    EXPECT_EQ(Run(sql), correct);
+}
+
 // ---- Cross-relation replay (P13) -----------------------------------------
 
 TEST_F(WaystoneReplayTest, AJoinReplaysEveryKeyedStepAndReturnsTheSameRows) {
