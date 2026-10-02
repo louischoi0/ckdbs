@@ -328,7 +328,7 @@ TEST_F(FkParentHoldTest, AParentHeldAtBothSAndXLosesOnlyItsSToTheViolation) {
 TEST_F(FkParentHoldTest, AFailedStatementGivesBackEveryAbsentParentItResolved) {
     // The hoist resolves every row's parents before any row is written, so a
     // statement naming two absent parents holds `S` on both and fails at the
-    // first. Both go (`raft-marks-2026-10-02.md` §3): the second row is never
+    // first. Both go (`raft-marks-2026-10-02.md` §5): the second row is never
     // reached, and its parent's `S` protects no row either. A present
     // parent's `S` stays - the intention cell below pins it.
     Session child;

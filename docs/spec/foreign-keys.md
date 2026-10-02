@@ -306,7 +306,7 @@ D9(a) is built as ratified, and its costs are the engine's:
   stays**, since the statement's present parent rows stand under it. The
   self-referencing arm releases the same way, and is unreachable while no
   self-referencing key can be declared. **Every absent parent the statement
-  resolved goes with it** (`raft-marks-2026-10-02.md` §3): the hoist
+  resolved goes with it** (`raft-marks-2026-10-02.md` §5): the hoist
   resolves every row's parents before any row is written, so a statement
   naming two absent parents holds both and fails at the first; the second's
   row is never reached, and its `S` protects no row either. A present

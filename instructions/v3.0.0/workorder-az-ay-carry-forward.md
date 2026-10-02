@@ -862,7 +862,7 @@ the S on any failed check, as the review proposed"*
 ### AZ-R5 amended again — 2026-10-02
 
 On `worktree-az-q3b-release-every-absent-parent` from `ca473a4`, on *"give
-back the S on every absent parent too"* (`raft-marks-2026-10-02.md` §3).
+back the S on every absent parent too"* (`raft-marks-2026-10-02.md` §5).
 
 - **The reproduction** (`48f8191`) was red at `ca473a4`:
   `BEGIN; INSERT INTO c VALUES (99), (98)` with both parents absent left
