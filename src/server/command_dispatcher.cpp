@@ -3338,13 +3338,11 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // refused `S` is the wait - the statement has written nothing and
         // runs again at the release - and the cap refuses it past
         // `max_locks_per_txn` (AO-R10).
-        const std::size_t borrows_before = BorrowCount(scope);
         if (std::optional<Status> held =
                 BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, pk),
                              RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
             return ParentRowHeld(child, fk.rel_oid, pk, *held);
         }
-        if (TookShare(scope, borrows_before, fk.rel_oid, pk)) into.NoteAsked(fk.rel_oid, pk);
 
         // The view is minted **after** the grant, so a writer that decided
         // between the statement's start and the grant is visible to it
@@ -3374,23 +3372,6 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         into.Put(fk.rel_oid, pk, verdict.value());
     }
     return Status::OK();
-}
-
-std::size_t CommandDispatcher::BorrowCount(const WriteScope& scope) const {
-    return scope.txn != nullptr ? scope.txn->borrows().size() : 0;
-}
-
-bool CommandDispatcher::TookShare(const WriteScope& scope, std::size_t borrows_before,
-                                  catalog::Oid rel, std::uint64_t pk) const {
-    // O(1), deliberately: a held row is granted again without a new record,
-    // and a new `S` is the last record the ask appended (after the
-    // relation's `IS`, when that was new too). `Holds` asked before the ask
-    // walked the whole ledger, which in a transaction of K distinct parents
-    // cost O(K) a row - +11 us a row at K = 16,384 (AZ-S7's measurement).
-    if (scope.txn == nullptr) return false;
-    const txn::LockHoldings& borrows = scope.txn->borrows();
-    return borrows.size() > borrows_before &&
-           borrows.LastIs(txn::LockKey::Tuple(rel, pk), txn::LockMode::kShared);
 }
 
 Status CommandDispatcher::ParentRowHeld(const catalog::TableAccess& child,
@@ -3428,10 +3409,8 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     // call site is inside an open `WriteScope`, which is the place AH-R1
     // exists to keep free of anything that could need to wait.
     exec::FkVerdict resolved{};
-    bool asked_here = false;  // whether this statement's ask took the parent's `S`
     if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk); found != nullptr) {
         resolved = *found;
-        asked_here = held.Asked(fk.rel_oid, parent_pk);
     } else if (fk.rel_oid == child.oid) {
         // The self-referencing arm, the one case the extraction pass
         // deliberately skips (see there).
@@ -3444,13 +3423,11 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         // the insert's own tuple borrow records its (`BorrowOrWait`), and
         // the statement ends there to park. A parent this statement wrote
         // itself is its own `X`, which never conflicts with its own `S`.
-        const std::size_t borrows_before = BorrowCount(scope);
         if (std::optional<Status> row_held =
                 BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, parent_pk),
                              RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
             return ParentRowHeld(child, fk.rel_oid, parent_pk, *row_held);
         }
-        asked_here = TookShare(scope, borrows_before, fk.rel_oid, parent_pk);
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
         if (!parent.ok()) return parent.status();
         auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), parent_pk,
@@ -3503,15 +3480,14 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kViolation:
             break;
     }
-    // **The absent parent's `S` goes with the violation, if this statement
-    // took it** (AZ-S5, AZ-R5): the statement fails and poisons the
-    // transaction, which can write nothing that `S` protects, and kept it
-    // refused every insert of that parent until the client's `ROLLBACK`.
-    // One held before the statement stays - another statement stands on it.
-    // **The relation's `IS` stays too**: every other parent row of this
-    // statement stands under it, and without it a relation `X` - `DROP
-    // TABLE`, `CREATE INDEX` - could be granted over their `S`.
-    if (asked_here && locks_ != nullptr && scope.txn != nullptr) {
+    // **The absent parent's `S` goes with the violation, whoever took it**
+    // (AZ-S5, AZ-R5 as amended 2026-10-02): it protects no row, and kept it
+    // refused every insert of that parent until the client's `ROLLBACK`
+    // (`foreign-keys.md` §2c says why it is sound). A row `X` this
+    // transaction holds is untouched, and nothing held is a no-op.
+    // **The relation's `IS` stays**: the statement's other parent rows stand
+    // under it, and without it a relation `X` could be granted over them.
+    if (locks_ != nullptr && scope.txn != nullptr) {
         locks_->ReleaseOne(scope.txn->id(), txn::LockKey::Tuple(fk.rel_oid, parent_pk),
                            txn::LockMode::kShared, scope.txn->borrows());
     }

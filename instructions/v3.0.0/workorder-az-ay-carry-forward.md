@@ -807,3 +807,54 @@ runs are the rows' own results, recorded here rather than in those rows.
   failure prints its cause.
 
 It cuts no tag. Nothing is pushed until the operator's word.
+
+### AZ-R5 amended — 2026-10-02
+
+On `worktree-az-q3-release-any-failed-check` from `2e8d213`, on *"give back
+the S on any failed check, as the review proposed"*
+(`raft-marks-2026-10-02.md` §2).
+
+- **The release is unconditional.** On `FK_VIOLATION`, both arms give back
+  the parent row's `S` whoever took it.
+  - The relation's `IS` stays.
+  - A row `X` the transaction holds is not touched. `ReleaseOne` of an `S`
+    that is not held does nothing.
+- **What went with it.** The took-it test (`TookShare`, `BorrowCount`,
+  `LockHoldings::LastIs`) and the hoist's asked set
+  (`FkParentVerdicts::NoteAsked`/`Asked`). The parked-statement gap AZ-S5's
+  review found closes with them. Its `known-gaps.md` entry is deleted.
+- **The cells.**
+  - The held-before cell is flipped: a zero-row `UPDATE`'s `S` now goes
+    with the violation.
+  - A new cell pins that a parent the transaction deleted itself keeps its
+    row `X` past the violation.
+- **Mutants: three, all killed.** No release: the release, held-before and
+  intention cells. The `IS` given back too: the intention cell. The row `X`
+  given back too: the own-delete cell, which reads the transaction's own
+  ledger, since another session's write of the row is refused by the
+  undecided delete either way.
+- **Docs.** `foreign-keys.md` §2c and §5 restated, and the CLAUDE.md
+  Foreign keys row.
+- **The suite** at `7ce9718`: 3075/3075 under `-j8`. The change removes
+  work from the passing path, so it has no overhead of its own to measure.
+- **The review** (`critics-developer`, on `7ce9718`) found no correctness
+  bug. The soundness argument holds under both isolation levels, for a
+  parent inserted or deleted by the transaction itself, for the Cabin's
+  reliance on the `S`, and for `ReleaseOne` beside a held `X`.
+  - **Taken:**
+    - the argument's unstated premise - every check runs before its row is
+      placed, and a failure poisons the transaction - now in §2c;
+    - the stale test header, and the "since AZ-S5" attributions of the
+      amended behaviour;
+    - §2c's zero-row `UPDATE` sentence;
+    - the own-delete cell checks the lock table as well as the ledger, and
+      a new cell holds the parent at both `S` and `X` - the one shape where
+      the release removes something beside an `X`. Two mutants, both
+      killed: the row `X` given back too (both cells), and the table's
+      release ignoring the mode (the own-delete cell);
+    - the source comment trimmed to a pointer at §2c.
+  - **Recorded, the operator's** (`known-gaps.md`, Foreign keys): a failed
+    statement keeps the `S` on every *other* absent parent its hoist
+    resolved, whose rows it never reached - `INSERT INTO c VALUES (99),
+    (98)` with both absent keeps `S(98)`. The amendment's argument covers
+    it, but the mark named the failed check, and this goes further.

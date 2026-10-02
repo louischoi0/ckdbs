@@ -288,25 +288,25 @@ D9(a) is built as ratified, and its costs are the engine's:
   net, as AO-0 item 25 accepts for `DROP TABLE` (AY-Q4).
 - **An `UPDATE` that sets an fk column takes the `S` at the hoist**, before
   its walk, so one that matches no row still holds the parent it names
-  until its transaction decides.
-- **A check that fails gives back the `S` its own ask took** (AZ-S5,
-  AZ-Q3). An absent parent answers `FK_VIOLATION`, which poisons the
-  transaction: it can write nothing that `S` protects, and holding it would
-  refuse every insert of that parent key until the client's `ROLLBACK`.
-  PostgreSQL's `FOR KEY SHARE` locks nothing for a missing row either. An
-  `S` the transaction held before the statement - a zero-row `UPDATE`'s,
-  say - stays, since another statement stands on it; so does the
-  relation's `IS`, which the statement's other parent rows stand under.
-  The hoist records which rows its asks took (`FkParentVerdicts::Asked`) -
-  an ask took the row when it appended the ledger's newest record, an O(1)
-  test (AZ-S7 measured a ledger walk before each ask at +11 µs a row with
-  16,384 distinct parents); the self-referencing arm tests the same, and is
-  unreachable while no self-referencing key can be declared.
-  **A statement that parked after its hoist keeps the `S`**: it runs again
-  whole, and its first run's `S` is still in the transaction's ledger, so
-  the re-run's test reads it as held before. Inside `BEGIN` - a violation
-  after a wait on a child row another transaction held - the `S` then
-  stays until the rollback, as it did before AZ-S5
+  until its transaction decides, or a later check on that key fails.
+- **A check that fails gives back the parent row's `S`, whoever took it**
+  (AZ-S5; the operator's mark of 2026-10-02, `raft-marks-2026-10-02.md`
+  §2). An absent parent answers `FK_VIOLATION`, which poisons the
+  transaction, and holding the `S` would refuse every insert of that parent
+  key until the client's `ROLLBACK`. PostgreSQL's `FOR KEY SHARE` locks
+  nothing for a missing row either. **The `S` protects no row**: while any
+  `S` is held no other transaction can take the row's `X`, so a parent the
+  check reads as absent was absent at every grant - no child this
+  transaction wrote references it, since every check runs before its row is
+  placed and a failed one poisons the transaction - or was deleted by this
+  transaction under its own `X`, which the release leaves alone. So an `S` taken by an earlier
+  statement (a zero-row `UPDATE`'s) goes too, and so does one this
+  statement's run took before it parked and ran again. **The relation's `IS`
+  stays**, since the statement's other parent rows stand under it. The
+  self-referencing arm releases the same way, and is unreachable while no
+  self-referencing key can be declared. **Only the failing check's `S`
+  goes**: other absent parents the hoist resolved for the same statement,
+  whose rows are never reached, keep theirs to the rollback
   (`known-gaps.md`, Foreign keys).
 
 An existence-only unit that only a `DELETE` would take is not built; it is
@@ -493,7 +493,7 @@ implementation is the failure mode to refuse in review.
   foreign key's is the parent row's `S` (§2a), and an absent parent is
   held by the same `S` on its key, which a concurrent insert of that
   parent's `X` meets - for as long as the check stands; a failed one gives
-  back the `S` its own ask took (§2c).
+  back the `S` (§2c).
 - **Both checks wait, on the lock table** (AY-S5): the forward check on
   the parent row's `S`, the reverse check on the undecided child row's
   writer. A waiter records `waiter -> holder` in the wait-for graph and a

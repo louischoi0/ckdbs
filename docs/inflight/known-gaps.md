@@ -465,23 +465,18 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Foreign keys
 
-- **A child check that fails keeps a parent `S` its transaction held
-  before the statement, until the rollback.** Since AZ-S5
-  (`worktree-az-s5-failed-check-share` from `cd433ea`) a failed check gives
-  back the `S` its own ask took (`foreign-keys.md` §2c). Two shapes keep it:
-  - one taken by an earlier statement of the same transaction - a zero-row
-    `UPDATE` that named the absent key - which is AZ-R5's ruling;
-  - **one the same statement took before it parked** (AZ-S5's review, read
-    at `92e14c7`, not run): a statement that waits on a child row another
-    transaction holds runs again whole, and the re-run reads its first
-    run's `S` as held before. Inside `BEGIN` it stays.
-
-  In both, an `INSERT` of that parent waits for the rollback and is refused
-  `TxnConflict` at the 1 s fault net. **Cost: a refusal, bounded by the
-  client's rollback**, never a wrong answer. The review's proposal - give
-  back the `S` whatever held it, since an `S` on a key the check reads as
-  absent protects no row - is a change to AZ-R5's ruling, **the
-  operator's**. **Owner: none.**
+- **A failed statement keeps the `S` on every other absent parent it
+  resolved.** Found by the review of AZ-R5's amendment on
+  `worktree-az-q3-release-any-failed-check` at `7ce9718`; read, not run.
+  The hoist resolves every row's parents before any row is written, and a
+  violation gives back only the failing check's `S`
+  (`foreign-keys.md` §2c). In `BEGIN; INSERT INTO c VALUES (99), (98)`
+  with both absent, row 1 fails and `S(98)` stays to the rollback, so an
+  insert of 98 waits and is refused `TxnConflict` at the 1 s fault net.
+  **Cost: a refusal, bounded by the client's rollback**, never a wrong
+  answer. Giving back every `kViolation` verdict's `S` at the failure is
+  the same argument as the amendment's, and **the operator's** to mark.
+  **Owner: none.**
 - **The borrow ledger's `Holds` is a linear scan, and D9(a) asks it more.**
   Every parent `S` and the `IS` above it go through `BorrowChain`, whose
   intention test scans the transaction's holdings, beside the row `X`s the
