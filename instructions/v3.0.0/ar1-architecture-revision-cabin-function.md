@@ -1,6 +1,6 @@
 # AR1 — Architecture Revision: Cabin and Function
 
-Status: **RATIFIED 2026-09-29** as proposed, with AR1-V's corrections taken as the proposals (`raft-marks-2026-09-29.md` §5); AR1-V3's AL3 divergence is not settled by it. **AP's order is settled 2026-09-30: AP first**, on AR1-V2's remaining ground (AZ-Q5, `raft-marks-2026-09-30.md` §16). That opens no letter: AP, AQ and AR each still wait for a word
+Status: **RATIFIED 2026-09-29** as proposed, with AR1-V's corrections taken as the proposals (`raft-marks-2026-09-29.md` §5); AR1-V3's AL3 divergence is not settled by it. **AP's order is settled 2026-09-30: AP first**, on AR1-V2's remaining ground (AZ-Q5, `raft-marks-2026-09-30.md` §16). That opens no letter: AP, AQ and AR each still wait for a word. **AP's order is written 2026-10-02 and not opened** (`workorder-ap-function-catalog-fetch-id.md`; its AP-Q2 proposes amending D6)
 Author: CLA, 2026-09-03, against `6ead2a0`
 Scope: `docs/spec/cabin.md` (C3, §2, §10, §12), `parser/fingerprint.hpp`,
 `catalog/rows.hpp` (`SysCabinRow`, `SysPatternRow`), a function catalog
