@@ -105,9 +105,9 @@ void InstanceVisibility::EndCommit(std::uint32_t core) noexcept {
 
 void InstanceVisibility::EnterCeilingWait(std::uint32_t core) noexcept {
     if (core >= slots_.size()) return;
-    // No `NoteSlot`: a waiter's bound is a commit its own core made, whose
-    // `BeginCommit` already widened `slots_in_use_` past this slot, so every
-    // lift's walk reaches it.
+    // No `NoteSlot`: this core's manager noted its slot at construction
+    // (`PublishCoreBounds`), before any core's thread was spawned, so every
+    // lift's walk already reaches it.
     slots_[core].ceiling_waiters.fetch_add(1);
 }
 

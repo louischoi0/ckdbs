@@ -607,11 +607,12 @@ public:
         return visibility_->SnapshotCeiling() >= lsn;
     }
 
-    // A statement parked until `CeilingCovers`: counted into this core's
+    // A statement waiting until `CeilingCovers`: counted into this core's
     // waiters for its life, so a marker's lift kicks this core. Constructed
-    // before the wait's first `CeilingCovers`, which is the order the
-    // header's argument needs; scoped, so a frame destroyed mid-wait still
-    // counts itself out.
+    // before the wait's own reads of the ceiling - `WaitUntil::await_ready`
+    // and every poll after it - which is the order the header's argument
+    // needs (a read before it, as a fast path, needs nothing); scoped, so a
+    // frame destroyed mid-wait still counts itself out.
     class CeilingWait {
     public:
         explicit CeilingWait(const TransactionManager& manager) noexcept

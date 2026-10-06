@@ -686,16 +686,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // the markers below its bound lift; the last lift kicks this core
     // (`instance_visibility.hpp`'s "acknowledged-commit bound" note). Not a
     // mint at the bound instead: that covers a commit whose entry is not in.
-    if (txn_ != nullptr) {
-        const wal::Lsn bound =
-            (session != nullptr ? *session : autocommit_session_).acknowledged_commit_lsn();
-        if (!txn_->CeilingCovers(bound)) {
-            const txn::TransactionManager::CeilingWait waiting(*txn_);
-            const std::function<bool()> covered = [this, bound] {
-                return txn_->CeilingCovers(bound);
-            };
-            co_await sched::WaitUntil{&covered};
-        }
+    if (const wal::Lsn bound = UncoveredCommit(session); bound != wal::kNoLsn) {
+        const txn::TransactionManager::CeilingWait waiting(*txn_);
+        const std::function<bool()> covered = [this, bound] { return txn_->CeilingCovers(bound); };
+        co_await sched::WaitUntil{&covered};
     }
 
     // **The statement may park from here**, which is the whole difference
@@ -930,13 +924,25 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
 // statement itself is finished either way before this runs, so nothing is
 // held across the wait.
 
+wal::Lsn CommandDispatcher::UncoveredCommit(Session* session) {
+    Session& bound_session = session != nullptr ? *session : autocommit_session_;
+    const wal::Lsn bound = bound_session.acknowledged_commit_lsn();
+    if (bound == wal::kNoLsn || txn_->CeilingCovers(bound)) {
+        bound_session.set_acknowledged_commit_lsn(wal::kNoLsn);
+        return wal::kNoLsn;
+    }
+    return bound;
+}
+
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     // `DispatchAsync`'s BA-R1c wait, blocking, as this path's group commit
     // is below: no other task on this core can hold a marker meanwhile,
-    // because a commit holds one only inside its synchronous body.
-    if (txn_ != nullptr) {
-        const wal::Lsn bound =
-            (session != nullptr ? *session : autocommit_session_).acknowledged_commit_lsn();
+    // because a commit holds one only inside its synchronous body. **That
+    // premise ends with BA-Q3 (b)**, which holds a `strict` commit's marker
+    // across a park: this loop must become a park before it lands, or it
+    // spins on its own core's marker for good.
+    if (const wal::Lsn bound = UncoveredCommit(session); bound != wal::kNoLsn) {
+        const txn::TransactionManager::CeilingWait waiting(*txn_);
         while (!txn_->CeilingCovers(bound)) std::this_thread::yield();
     }
     DispatchOutcome outcome = DispatchAndStage(line, session);
@@ -7818,7 +7824,7 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     EndDdlScope(session);
     session.Finish();
     // The session's next statement mints no snapshot below this (BA-R1c).
-    session.NoteAcknowledgedCommit(committed.value());
+    session.set_acknowledged_commit_lsn(committed.value());
 
     // The durability wait the client is owed, for the same reason
     // LogInsert() takes it: kGroup staged the commit for the next drain,
@@ -8601,7 +8607,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         return AbortOwnedScope(scope, committed.status());
     }
     // The session's next statement mints no snapshot below this (BA-R1c).
-    session.NoteAcknowledgedCommit(committed.value());
+    session.set_acknowledged_commit_lsn(committed.value());
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
         !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();

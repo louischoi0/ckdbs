@@ -892,6 +892,12 @@ private:
     sched::Coro AwaitRelationLock(std::string_view line, Session* session, DispatchOutcome* out,
                                   sched::MonoTimeNs* statement_deadline_ns);
 
+    // **BA-R1c**: the session's last commit LSN while no snapshot minted now
+    // would cover it, else `wal::kNoLsn` - consuming a covered one, since
+    // the ceiling never falls back below it. What `DispatchAsync` parks on
+    // and `Dispatch` spins on before the statement runs.
+    wal::Lsn UncoveredCommit(Session* session);
+
     // Both waits, looped until neither is set, through one function so the
     // two cannot diverge (the AT-S5e review's C3): each wait's re-run is a
     // whole fresh statement and can meet what the other waits for.

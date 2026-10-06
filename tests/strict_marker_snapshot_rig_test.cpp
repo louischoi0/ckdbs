@@ -23,7 +23,6 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -121,10 +120,14 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
     rig->Start();
 
     // Core 0's `strict` commit is inside its sync: its marker is set, its
-    // reactor blocked in the device.
+    // reactor blocked in the device. Both, because another sync parked at
+    // the gate - a drain tick, the writer - would satisfy the first alone.
+    const txn::CoreVisibilitySlot& core0_slot = rig->visibility().slot(0);
     strict.go.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return rig->log_gate().parked() >= 1; }))
-        << "core 0's strict commit never reached its sync";
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] {
+        return rig->log_gate().parked() >= 1 &&
+               core0_slot.pending_commit_bound.load() != txn::kUnboundedBound;
+    })) << "core 0's strict commit never reached its sync";
 
     // Core 1 commits `relaxed` and is acknowledged.
     relaxed.go.store(true, std::memory_order_release);
@@ -133,18 +136,17 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
     for (std::size_t i = 0; i < select; ++i) {
         ASSERT_FALSE(StartsWith(Response(relaxed, i), "ERR")) << Response(relaxed, i);
     }
+    // The race this shape is about: the acknowledged commit sits above every
+    // snapshot a mint could take now. Ordered by `done`'s acquire.
+    ASSERT_LT(rig->visibility().SnapshotCeiling(), relaxed_session.acknowledged_commit_lsn());
 
-    // Its next statement waits for core 0's marker rather than read under it.
-    // A parked one counts itself into core 1's ceiling waiters; a synchronous
-    // one holds its reactor and counts nothing, so it is given a moment.
+    // Its next statement waits for core 0's marker rather than read under it,
+    // counted into core 1's ceiling waiters - parked, or holding its reactor
+    // on the synchronous path.
     const txn::CoreVisibilitySlot& peer_slot = rig->visibility().slot(1);
-    if (select_sync) {
-        std::this_thread::sleep_for(100ms);
-    } else {
-        ASSERT_TRUE(Within(2000ms, [&] {
-            return relaxed.done.load() > select || peer_slot.ceiling_waiters.load() >= 1;
-        }));
-    }
+    ASSERT_TRUE(Within(2000ms, [&] {
+        return relaxed.done.load() > select || peer_slot.ceiling_waiters.load() >= 1;
+    }));
     EXPECT_EQ(relaxed.done.load(), select)
         << "core 1's SELECT did not wait for the marker; it answered " << Response(relaxed, select);
 

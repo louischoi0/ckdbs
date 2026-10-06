@@ -114,7 +114,7 @@ class WakeRegistry;
 // own next statement included.
 //
 // **The session's own case is closed at the statement boundary.** A session
-// records its last commit's LSN (`Session::NoteAcknowledgedCommit`), and a
+// records its last commit's LSN (`Session::acknowledged_commit_lsn`), and a
 // statement whose bound sits above `SnapshotCeiling()` parks until it does
 // not (`CommandDispatcher::DispatchAsync`). It cannot mint at the bound
 // instead: that would cover a commit whose entry is not in yet, which is
@@ -122,7 +122,11 @@ class WakeRegistry;
 // bound's commit was published, a marker set after reads a ceiling at or
 // above it, and every marker lifts on every exit (`PendingCommit`). So the
 // wait is at most the longest commit in flight when the bound's was
-// published - one sync.
+// published - one `strict` commit's sync, which on a peer can queue behind
+// the one the writer is already running. And a covered bound stays
+// covered - the ceiling is monotone - so the session consumes it at its
+// first covered read, and only the first statement after a commit ever
+// waits: a `BEGIN` or an autocommit statement, holding nothing.
 //
 // **The lift kicks the waiter's core.** A parked statement counts itself
 // into its core's `ceiling_waiters`, then reads the ceiling; `EndCommit`
