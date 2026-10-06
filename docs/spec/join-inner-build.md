@@ -52,8 +52,8 @@ by name. Three facts keep the build inside that contract:
 3. **Emission order is untouched.** The map's buckets are appended in
    walk order, so a probe replays each key's matches in exactly the
    order the walk would have emitted them — for a named key and an
-   issued one alike, since build order *is* the walk's order whatever
-   the relation's `key_order` makes that order be. (This is stronger
+   issued one alike, since build order *is* the walk's order, whatever
+   that order is. (This is stronger
    than the pk-sort argument IX8a and the Cabin serve need, because the
    build captures order rather than reconstructing it.)
 

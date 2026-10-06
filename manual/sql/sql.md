@@ -127,11 +127,9 @@ CREATE TABLE [<namespace>.]<name>
   reads, writes and recovers them exactly as before, and nothing about them
   is deprecated.
 - `BTREE` gives the relation a clustered B+ tree on the primary key; only a
-  btree relation can carry a secondary index or be an FK parent — and only a
-  btree relation accepts a caller-named key that sorts *below* keys already
-  placed (see the Keystone contract below). With `HEAP` suspended those are
-  no longer distinctions between two choices you can make: they describe the
-  one storage form a new relation takes.
+  btree relation can carry a secondary index or be an FK parent. With `HEAP`
+  suspended those are no longer distinctions between two choices you can
+  make: they describe the one storage form a new relation takes.
 - **There is no key mode.** Every relation takes a caller-named primary key
   or issues one when `INSERT` omits it, so nothing about keys is declared
   here. `EXPLICIT` is still accepted and **does nothing** — it states what is
@@ -177,13 +175,22 @@ key:
   keeps a high-water mark, `DESCRIBE`'s `next_id`, which every named key
   advances past itself. So naming 500 and then omitting the key gives 501,
   never a collision.
-- **Naming a key that sorts backwards is `BTREE`-only.** On a `BTREE`
-  relation a named key may be anything unused — any order, any gaps. On a
-  `HEAP` relation it must be at or above the high-water mark, or it is
-  refused: `ERR primary key <k> is below relation <oid>'s high-water mark
-  <m>; a heap-clustered relation's ids must ascend, because its chain grows
-  only at its tail - use BTREE to name keys in any order`. Named keys on a
-  heap still need not be dense; they only have to go forward.
+- **A named key must sort above every key the relation has placed or
+  issued** — at or above the high-water mark — on every relation. Named
+  keys need not be dense; they only have to go forward. A key below the
+  mark is refused, and nothing is written:
+  - on a `BTREE` relation, a key that is present is `AlreadyExists`
+    (`ERR duplicate primary key <k> already present at page <p> slot
+    <s>`), and one that is absent is `OutOfRange`, naming the high-water
+    mark (`ERR primary key <k> is below ... high-water mark ...; a named
+    key must sort above every key the relation has placed or issued ...`;
+    the error table below gives both forms);
+  - on a `HEAP` relation, both are `OutOfRange`.
+  The mark never moves back: a key that a failed or rolled-back statement
+  named or was issued stays below it, and a key that another session's
+  insert passed first is refused, not reordered. This is what keeps every
+  `BTREE` page's rows in key order, so `ORDER BY <pk>` costs nothing (see
+  ORDER BY).
 - It cannot be `UPDATE`d: it is the tuple's identity, not a field of it.
   Naming a key at insert and changing one afterwards are unrelated
   permissions; only the first is granted.
@@ -473,9 +480,9 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 INSERT INTO accounts VALUES ('alice', 120.50);
 INSERT INTO accounts VALUES ('bob', 10), ('carol', 20), ('dave', 30);
 
--- Or name it: the pk comes first. On a BTREE relation it need not ascend
+-- Or name it: the pk comes first, above every key the relation already has
 INSERT INTO trades VALUES (5000, 'AAPL', 10);
-INSERT INTO trades VALUES (900, 'MSFT', 3), (4200, 'NVDA', 7);
+INSERT INTO trades VALUES (5100, 'MSFT', 3), (6200, 'NVDA', 7);
 
 -- And one statement may do both. Row 2's key is issued above 7000
 INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
@@ -496,19 +503,23 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
   value is refused with the offending token's byte; an unspellable one with
   the bound it missed. All of these are checked before anything is placed,
   so a refused row burns no id (BI9).
-- **A named pk that is already in use is refused**
-  (`ERR duplicate primary key <n> already present at page <p> slot <s>`). On
-  a `BTREE` relation uniqueness is proved by the clustered descent, which
-  lands on the only leaf that could hold the key. On a `HEAP` relation it is
-  proved by the high-water mark instead — which is why a heap relation
-  refuses a key below it (see the Keystone contract). A `DELETE`d row still
-  holds its key until its slot is reclaimed, and nothing reclaims today, so a
-  deleted pk cannot be re-supplied.
+- **A named pk must sort above every key the relation has placed or
+  issued**; a key already in use is below the high-water mark by
+  construction, so it is refused (see the Keystone contract). On a `BTREE`
+  relation the clustered descent lands on the only leaf that could hold the
+  key and names a used one a duplicate (`AlreadyExists`, `ERR duplicate
+  primary key <n> already present at page <p> slot <s>`); on a `HEAP`
+  relation the high-water mark answers, `OutOfRange`. A `DELETE`d row still holds its
+  key until its slot is reclaimed, and nothing reclaims today, so a deleted
+  pk cannot be re-supplied.
 - Replies: `INSERTED oid=<o> id=<n> page=<p> slot=<s>` for one row;
   `INSERTED oid=<o> rows=<n> first_id=<f> last_id=<l>` for several (no id
   contiguity promised). `first_id`/`last_id` are the **first and last rows
-  in statement order**, not a minimum and maximum — on a `BTREE` relation,
-  where named keys may descend, `last_id` can be below `first_id`.
+  in statement order**; since each row's key sorts above every key before
+  it, `last_id` is also the highest.
+- **A statement naming keys out of order is refused whole**: a row whose
+  named key is below a key an earlier row placed or issued is refused with
+  its ordinal, and the statement fails atomically (below).
 - **Every bulk row runs the full single-row pipeline, in order** (BI2):
   FK check, assertion admission (row k sees rows 1..k-1's reservations),
   id, encode, placement, Cabin witness, index maintenance, WAL. Bulk
@@ -699,14 +710,11 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   clause and the statement pays nothing. `ANALYZE` shows this as the
   absence of a `sort` line. Every other order — including `ORDER BY <pk>
   DESC` — is an output sort, which is not free; see the two notes below.
-- **`ORDER BY <pk>` costs slightly more once a relation has taken a key
-  below its high-water mark** — which only a `BTREE` relation admits, and
-  which `DESCRIBE` reports as `key_order=unordered`. Such a key lands in the
-  slot it was inserted into rather than the one it sorts to, so the engine
-  emits each page's rows in key order instead of slot order. Exact, not
-  approximate, and still not an output sort — the disorder is bounded by one
-  page. A relation whose keys have only ever gone forward, named or issued,
-  pays nothing.
+- **That order holds on every `BTREE` relation, at any number of cores.**
+  A row's key is fixed while the page it lands on is held, and a named key
+  must sort above every key already placed or issued (see the Keystone
+  contract), so every page's rows sit in key order and the clause has
+  nothing to do.
 - **A sorted statement's `LIMIT` bounds what you receive, not what the
   engine reads.** The sort must see every qualifying row before it knows
   which comes first, so unlike an unsorted or pk-ordered `LIMIT`, it
@@ -852,7 +860,7 @@ Dispatcher commands, not parser statements:
 | `SHOW FKEYS` | declared foreign keys |
 | `SHOW ASSERTIONS` | assertions with `enforcing=` and live counters (checks/violations/reserved/aborted) |
 | `SHOW RELAYOUT [<table>]` | the physical optimizer's shadow report (candidate moves, each blocked by a named gate) |
-| `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `key_order=ascending\|unordered`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A pk column reports `autoincrement=if-omitted`, every other column `no` |
+| `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A pk column reports `autoincrement=if-omitted`, every other column `no` |
 | `PING` | `PONG` |
 | `SYNC` | forces log + store durability: `OK synced` |
 | `STOP` | closes the connection: `OK bye` |
@@ -999,8 +1007,8 @@ in §7 below now carries and which both used to reach a client as a bare
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k>` |
 | A non-integer or negative supplied pk | `ERR primary-key column '<name>' needs an integer literal (byte <n>)` / `ERR primary key <n> is negative (byte <n>)` |
 | A supplied pk outside `[1, 2^40 - 1]` | `InvalidArgument` — names the bound it missed (`0 is reserved for "unset"`, or the 40-bit ceiling) |
-| A supplied pk already in use (including a `DELETE`d row's, whose slot is never reclaimed) | `AlreadyExists` — `ERR duplicate primary key <n> already present at page <p> slot <s>` |
-| A supplied pk below a **heap** relation's high-water mark | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a heap-clustered relation's ids must ascend ... - use BTREE to name keys in any order` |
+| A supplied pk already in use on a `BTREE` relation (including a `DELETE`d row's, whose slot is never reclaimed) | `AlreadyExists` — `ERR duplicate primary key <n> already present at page <p> slot <s>` |
+| A supplied pk below the relation's high-water mark: absent on a `BTREE` relation, present or absent on a `HEAP` one | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order`, or on a `BTREE` relation `ERR primary key <k> is below the relation's high-water mark: leaf <p>, where it sorts, has a right sibling holding a higher key already placed; a named key must sort above every key the relation has placed or issued` |
 | `ASSIGNED` in CREATE TABLE | `Unsupported` — `ERR UNSUPPORTED retryable=0 the ASSIGNED key mode no longer exists (byte <n>) - ...` (removed 2026-08-25 and not coming back, which is why it is the permanent half; `EXPLICIT` is accepted and does nothing) |
 | Assigning the pk in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |

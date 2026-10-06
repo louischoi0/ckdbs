@@ -249,10 +249,10 @@ SysTableRow SampleTableRow() {
     row.clustered_type = ClusteredType::kBtree;
     row.next_id = 0x2122232425262728ull;
     row.varheap_page_id = 0xB1B2B3B4u;
-    // kUnordered rather than the default, so a codec that dropped the field
-    // fails the round trip instead of passing on a zero that happens to be
-    // the right answer.
-    row.key_order = KeyOrder::kUnordered;
+    // The retired key-order byte set rather than 0, so a codec that dropped
+    // it fails the round trip instead of passing on a zero that happens to be
+    // the right answer - the mount reads this byte (BB-R11).
+    row.retired_key_order = kRetiredKeyOrderUnordered;
     return row;
 }
 
@@ -349,22 +349,22 @@ TEST(SysTableRowTest, RoundTripsEveryField) {
     EXPECT_EQ(out.value().clustered_type, in.clustered_type);
     EXPECT_EQ(out.value().next_id, in.next_id);
     EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
-    EXPECT_EQ(out.value().key_order, in.key_order);
+    EXPECT_EQ(out.value().retired_key_order, in.retired_key_order);
 }
 
-TEST(SysTableRowTest, TheKeyOrderOccupiesItsOwnByte) {
+TEST(SysTableRowTest, TheRetiredKeyOrderByteOccupiesItsOwnByte) {
     // Same check the retired word gets, for the same reason: a round trip
     // through one codec cannot catch an offset that overlaps a neighbour,
     // because both halves make the same mistake.
     SysTableRow row = SampleTableRow();
     const auto baseline = row.Encode();
 
-    row.key_order = KeyOrder::kAscending;
+    row.retired_key_order = 0;
     const auto zeroed = row.Encode();
 
     for (std::size_t i = 0; i < SysTableRow::kOnDiskSize; ++i) {
-        if (i == SysTableRow::kKeyOrderOffset) continue;
-        EXPECT_EQ(baseline[i], zeroed[i]) << "key_order disturbed byte " << i;
+        if (i == SysTableRow::kRetiredKeyOrderOffset) continue;
+        EXPECT_EQ(baseline[i], zeroed[i]) << "the retired key-order byte disturbed byte " << i;
     }
 }
 
@@ -381,7 +381,7 @@ TEST(SysTableRowTest, TheRetiredOwnerCoreWordIsWrittenZeroAndNeverRead) {
     auto out = SysTableRow::Decode(bytes);
     ASSERT_TRUE(out.ok()) << out.status().message();
     EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
-    EXPECT_EQ(out.value().key_order, in.key_order);
+    EXPECT_EQ(out.value().retired_key_order, in.retired_key_order);
     EXPECT_EQ(out.value().Encode(), in.Encode()) << "the old word leaked into the decoded row";
 }
 
@@ -394,10 +394,10 @@ TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
     // cannot do so quietly.
     EXPECT_EQ(SysTableRow::kReservedOffset,
               SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
-    EXPECT_EQ(SysTableRow::kKeyOrderOffset,
+    EXPECT_EQ(SysTableRow::kRetiredKeyOrderOffset,
               SysTableRow::kReservedOffset + sizeof(std::uint32_t));
     EXPECT_EQ(SysTableRow::kAnchorPageIdOffset,
-              SysTableRow::kKeyOrderOffset + sizeof(std::uint8_t));
+              SysTableRow::kRetiredKeyOrderOffset + sizeof(std::uint8_t));
     EXPECT_EQ(SysTableRow::kOnDiskSize,
               SysTableRow::kAnchorPageIdOffset + sizeof(PageId));
 }

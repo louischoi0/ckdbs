@@ -2040,16 +2040,18 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // The premise is that step 0 emits in pk order. A walk or range does
     // (page-wise `min_key`, which a division preserves); an index step does
     // because IX8a sorts its pks back into that order deliberately; a
-    // lookup or probe emits one row. A Cabin probe stays excluded by name:
-    // since 2026-08-19 a served set *is* sorted to the walk's order, but
-    // that order is pk only while a relation's keys have ascended - once one
-    // has landed below the mark it is page-and-slot (heap-and-tuple.md §4.1)
-    // - so the elision's premise holds for one key order and not the other,
-    // and an exclusion that depended on `key_order` would be a second copy
-    // of that rule. The
-    // exclusion is a fix, not a precaution: the discarding version of this
+    // lookup or probe emits one row. **Every page's slot order is its key
+    // order** on every relation (BB-R1, BB-R3 in
+    // `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`), which is
+    // the premise all of that rests on; until BB-S3b a relation that had
+    // taken a named key below its mark (`kUnordered`) was emitted page by
+    // page in key order instead, and two cores could leave a leaf out of
+    // order with no flag at all (defect A). A Cabin probe stays excluded by
+    // name: a served set is sorted by pk into the walk's order, but the
+    // exclusion is a fix, not a precaution - the discarding version of this
     // clause answered `ORDER BY <pk>` over a Cabin-probed relation with
-    // whatever order the entry set happened to hold.
+    // whatever order the entry set happened to hold - and lifting it is not
+    // BB's to decide.
     const bool one_ascending_pk =
         chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
         chain.sort_keys[0].ref.rel_slot == 0 && IsPrimaryKey(chain.sort_keys[0].ref);
@@ -2057,28 +2059,6 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         !chain.steps.empty() && chain.steps[0].kind != AccessKind::kCabinProbe;
     if (one_ascending_pk && driving_emits_pk_order) {
         chain.sort_keys.clear();
-
-        // ...and on a relation that has taken an out-of-order key, "the order
-        // the chain already emits" is not quite true (docs/spec/heap-and-tuple.md
-        // §4.1): a page's slots are in insertion order, which equals key
-        // order only while every id was appended above every id already
-        // there. An id admitted below the relation's high-water mark was not.
-        //
-        // Read off `key_order` rather than off the storage type, which is
-        // what makes this cost nothing on the relations that never took one -
-        // a btree relation fed only ascending keys is exactly as free here as
-        // an ASSIGNED relation used to be (well_known.hpp's KeyOrder). A heap
-        // relation can never be kUnordered.
-        //
-        // The divergence is **within a page only** - pages stay key-ordered
-        // by `min_key`, which a leaf division preserves - so the fix is a
-        // per-page emission order, not an output sort. Asked for here rather
-        // than always, because reading every live slot's Keystone word up
-        // front is a real cost on a walk that otherwise reads one per row.
-        if (!scope.relations.empty() && scope.relations[0].access != nullptr &&
-            scope.relations[0].access->key_order == catalog::KeyOrder::kUnordered) {
-            chain.steps[0].emit_in_key_order = true;
-        }
     }
     chain.limit = stmt.limit;
     chain.offset = stmt.offset;

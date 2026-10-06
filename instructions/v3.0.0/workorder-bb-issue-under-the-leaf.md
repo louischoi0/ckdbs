@@ -1075,3 +1075,50 @@ covered by `btree_test.cpp` through `BtreeInsert`.
   `AnIllegalKeyIsRefusedWithoutWaitingOnAFence`).
 
 Overhead not measured; measured at the milestone's close (BB-R8).
+
+### BB-S3b — `kUnordered` deleted, built 2026-10-06
+
+Built on `worktree-bb-issue-under-the-leaf` from `1b5d252e`, on BB-Q9 (a) and
+BB-Q11 (a).
+
+**Deleted** (BB-R10, everything §1.13 lists): `KeyOrder` and `KeyOrderName`;
+`TableAccess::key_order` and its fill; `CatalogCache::MarkKeysUnordered`; the
+compiler's `emit_in_key_order` and the walk's per-page key-order emission (its
+`ordered_page`/`by_key` state with it); the Cabin serve's `(page, slot)` branch,
+leaving the pk sort the only order; `DESCRIBE`'s `key_order=` field. The flip
+and its publication had gone at BB-S3 with the below-mark arm.
+
+**Kept**: the `sys.tables` byte at offset 101, renamed
+`SysTableRow::retired_key_order`, written 0 by every row
+(`kRetiredKeyOrderUnordered` names the old value); no format moves and no
+superblock bump.
+
+**The mount check** (BB-R11): `Catalog::RefuseRelationsHoldingKeysOutOfOrder`,
+asked by core 0 in `Expeditor::Open` after recovery and the delete-mark
+finalize, refuses a volume holding a relation whose byte still reads 1 -
+`Unsupported`, naming each such relation. Its cell,
+`ExpeditorTest.AVolumeHoldingARelationWithKeysOutOfOrderIsRefusedByName`,
+mounts the same volume clean first (the control), then forges the byte on the
+unmounted file and is refused naming `marked` and not `fine`.
+
+**Cells moved with the deletion**: `DESCRIBE` pinned to carry no `key_order=`
+(`DescribeCarriesNoKeyOrderField`); the S2 duplicate cell renamed
+`APresentKeyBelowTheMarkIsRefusedAsADuplicate` and both one-core refusal cells
+now assert the outcome's code (`AlreadyExists`, `OutOfRange`), which BB-S3
+made reachable; the codec cells round-trip and pin the retired byte; the
+catalog cells pin it written 0.
+
+**Found on the way**: `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
+failed 7 of 64 runs under eight parallel copies, never alone and never at the
+base (0 of 64). Not a regression: the cell asserted every retried statement
+burned an id, and since BB-R2 a descent refused at a root the other core grew
+a level over is refused **before** the issue, so it burns none (the failing run:
+one retry, ids 1..400 gapless). The assertion is now "at most one per retry";
+64 of 64 green after. Its timing is the base's, over two interleaved pairs
+(Debug, not a measurement of record): alone, median 954 and 750 ms at the base
+against 948 and 766 ms; eight parallel copies, median 6,370 and 3,879 ms at the
+base against 3,890 and 3,851 ms (the first base round ran while other work
+loaded the host).
+
+**Mutations, each killed on every run**: the mount check removed (3/3), the
+check reading the wrong value (3/3).

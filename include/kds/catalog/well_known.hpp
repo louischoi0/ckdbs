@@ -558,45 +558,17 @@ enum class ClusteredType : std::uint8_t {
     kBtree = 1,
 };
 
-// Whether a relation has ever taken a primary key that did not ascend
-// (docs/spec/heap-and-tuple.md section 4.1, rewritten 2026-08-25). An **observed
-// fact**, not a declaration: no DDL word sets it, `Catalog::CreateTable`
-// cannot choose it, and it moves exactly once - the first time
-// `Catalog::AdmitExplicitRowId` admits an id below `sys.tables.next_id`.
+// **The retired key-order byte** (`SysTableRow::retired_key_order`).
 //
-// It replaced the `KeyMode` enum in the same byte of `SysTableRow`, and the
-// two on-disk values were chosen to carry over unchanged, which is why the
-// removal of the key mode came with **no format bump**:
-//
-//   0 - was `kAssigned`, now "every id ever placed here ascended". True of
-//       an assigned relation by construction: the cursor never went back.
-//   1 - was `kExplicit`, now "an id has landed out of order". Conservative
-//       for a pre-existing explicit relation, which may or may not have
-//       taken one - and being wrong that way costs a sort, never an answer.
-//
-// One consumer, and it is a performance question rather than a correctness
-// one: with the flag clear, a page's slot order *is* its key order - an id
-// at or above the mark is appended above everything already on the page - so
-// `ORDER BY <pk>` needs no work and a Waystone replay may sort by pk. With it
-// set the two diverge, **within one page only** (page-wise `min_key` ordering
-// survives a leaf division), so the walk emits that page's live slots sorted
-// by Keystone id.
-//
-// A heap-clustered relation can never reach kUnordered: `AdmitExplicitRowId`
-// refuses a below-the-mark id there outright, because the semi-sorted chain's
-// tail append, its page-wise ordering and its tail-page-only duplicate check
-// all rest on the ascent (docs/spec/heap-and-tuple.md section 3.1b).
-enum class KeyOrder : std::uint8_t {
-    // Every id placed on this relation so far was above every id before it.
-    kAscending = 0,
-    // At least one id landed below the relation's high-water mark.
-    kUnordered = 1,
-};
-
-// The one spelling of each, so what `DESCRIBE` prints and what a test
-// asserts cannot drift apart.
-constexpr const char* KeyOrderName(KeyOrder order) noexcept {
-    return order == KeyOrder::kUnordered ? "unordered" : "ascending";
-}
+// `KeyOrder` lived here until BB-S3b (`instructions/v3.0.0/workorder-bb-
+// issue-under-the-leaf.md` BB-R10, on BB-Q8's mark): `kAscending` = 0, and
+// `kUnordered` = 1 once a btree had admitted a named key below its mark, which
+// told the compiler to emit each page in key order rather than discard
+// `ORDER BY <pk>`. BB makes every page's slot order its key order on every
+// relation (BB-R1, BB-R3), so the state, its flip and its readers are deleted.
+// The byte stays at its offset, so no format moves: every row writes it 0, and
+// its one reader is the mount check that refuses a volume holding a relation
+// whose byte is still this value (BB-R11, on BB-Q9's mark).
+inline constexpr std::uint8_t kRetiredKeyOrderUnordered = 1;
 
 }  // namespace kds::catalog

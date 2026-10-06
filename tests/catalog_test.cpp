@@ -1403,7 +1403,11 @@ protected:
     storage::InMemoryPageStore store_{128};
 };
 
-TEST_F(KeyOrderTest, EveryNewRelationStartsAscendingAndSurvivesAReopen) {
+TEST_F(KeyOrderTest, EveryNewRelationWritesTheRetiredKeyOrderByteZero) {
+    // BB-R10: the byte `KeyOrder` held stays at its offset, written 0 by
+    // every row, because the mount reads it for one thing - a relation still
+    // marked with the deleted `kUnordered` (BB-R11). Read back after a
+    // reopen, off the page.
     Oid heap_oid = 0;
     Oid btree_oid = 0;
     {
@@ -1427,11 +1431,11 @@ TEST_F(KeyOrderTest, EveryNewRelationStartsAscendingAndSurvivesAReopen) {
 
     auto h_row = reopened.GetSysTableRow(heap_oid);
     ASSERT_TRUE(h_row.ok()) << h_row.status().message();
-    EXPECT_EQ(h_row.value().key_order, KeyOrder::kAscending);
+    EXPECT_EQ(h_row.value().retired_key_order, 0u);
 
     auto b_row = reopened.GetSysTableRow(btree_oid);
     ASSERT_TRUE(b_row.ok()) << b_row.status().message();
-    EXPECT_EQ(b_row.value().key_order, KeyOrder::kAscending);
+    EXPECT_EQ(b_row.value().retired_key_order, 0u);
 }
 
 TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
@@ -1530,16 +1534,16 @@ TEST_F(KeyOrderTest, AnIssuedIdRisesAboveEverySuppliedOne) {
     EXPECT_EQ(next.value(), 903u);
 }
 
-TEST_F(KeyOrderTest, ACatalogRelationStartsAscending) {
+TEST_F(KeyOrderTest, ACatalogRelationWritesTheRetiredKeyOrderByteZero) {
     // Not a tautology worth skipping: sys.tables rows for the bootstrap
-    // relations go through InsertRelationRow, which sets the field rather
-    // than taking it, so this is the check that it sets what it claims.
+    // relations go through InsertRelationRow too, and a bootstrap row the
+    // mount found marked would refuse every volume.
     Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto row = catalog.GetSysTableRow(kSysTablesTable);
     ASSERT_TRUE(row.ok()) << row.status().message();
-    EXPECT_EQ(row.value().key_order, KeyOrder::kAscending);
+    EXPECT_EQ(row.value().retired_key_order, 0u);
 }
 
 // ---- The catalog relations chain (docs/rules/keystoneid-k0-findings.md) --------

@@ -737,9 +737,10 @@ level: **can the re-run answer differently once this holder decides?**
   not a function of the waiter's read view at all: a caller-named key's
   uniqueness is proved by a physical descent onto the one page that may
   hold it, and an issued key comes from the relation's own sequence. So the
-  wait ends in a row written, or in `AlreadyExists` for a key the holder
-  took - and `AlreadyExists` is not retryable, which is the honest answer
-  either way.
+  wait ends in a row written, in `AlreadyExists` for a key the holder took,
+  or - since BB-R3 refuses a named key below the relation's mark - in
+  `OutOfRange` for a key the mark passed during the wait; neither is
+  retryable, which is the honest answer either way.
 - **Yes, for the foreign-key forward check.** Its `check_view` is minted
   at the check rather than at `BEGIN` — a constraint reads latest state
   (`foreign-keys.md` §4, which is where that rule lives; §4.4 below is

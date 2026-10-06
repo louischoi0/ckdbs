@@ -907,6 +907,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!finalized.ok()) return finalized.status();
     expeditor->recovery_.catalog_marks_finalized = finalized.value();
 
+    // BB-R11 (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`, on
+    // BB-Q9's mark): a relation a btree took a named key below its mark into
+    // before BB-S3 holds keys out of order, and this engine reads every
+    // page's slot order as its key order. The volume is refused, naming each
+    // such relation, rather than served wrong. After the finalize above, so
+    // a dropped relation's row is retired and does not count; before the
+    // listener binds, so nothing has read one.
+    if (Status s = expeditor->database_->catalog.RefuseRelationsHoldingKeysOutOfOrder();
+        !s.ok()) {
+        return s;
+    }
+
     // CR6/CB8: discard `sys.access_stats` if it is damaged. **The same
     // window and for the same reasons as the two maintenance steps around
     // it**: after recovery, so this mount's own log has had its say, and

@@ -662,11 +662,12 @@ public:
     // flip the relation to `kUnordered`; that state is deleted (BB-R10).
     //
     // **Called under the hold of the page the row lands on** - a btree's
-    // rightmost leaf, a heap chain's tail (`storage::AdmitUnderHold`). That
-    // is what closes BB §1.3: the mark moves while no other core can issue or
-    // admit an id for the relation, because each of them needs that page
-    // first. The latch order is that page, then this one (BB-R4, `page.md`
-    // §6).
+    // rightmost leaf (`storage::AdmitUnderHold`). That is what closes BB
+    // §1.3: the mark moves while no other core can issue or admit an id for
+    // the relation, because each of them needs that page first. The latch
+    // order is that page, then this one (BB-R4, `page.md` §6). A heap
+    // relation's named key is admitted before `ChainInsert` takes the tail,
+    // outside any hold: the tail is not yet held as the tail (BB-R7).
     //
     // ---- Why the high-water mark moves ------------------------------------
     //
@@ -698,6 +699,19 @@ public:
     // rather than left waiting on a fence (AO-S6c-c's rule, kept under
     // BB-R3).
     StatusOr<std::uint64_t> RowIdMark(Oid table_oid);
+
+    // **The mount's refusal of a relation whose keys are out of order**
+    // (BB-R11, on BB-Q9's mark: backward compatibility given up for it).
+    // `Unsupported`, naming every relation whose `sys.tables` row still
+    // carries the deleted `kUnordered` value in its retired key-order byte -
+    // one a btree took a named key below its mark into before BB-S3. The
+    // engine reads every page's slot order as its key order, so serving such
+    // a relation would answer its `ORDER BY <pk>` wrong; there is no legacy
+    // per-page emission and no re-sort at mount. Core 0 asks it once, while
+    // it loads the catalog at mount, after recovery and the delete-mark
+    // finalize (a dropped relation's row is retired by then); no superblock
+    // version moves, so every volume without such a relation mounts.
+    Status RefuseRelationsHoldingKeysOutOfOrder();
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
@@ -1005,9 +1019,9 @@ public:
                             std::uint64_t trx_id = kBootstrapXid,
                             CatalogRowRef* where = nullptr);
     // There is no owner-core parameter since AT-S9 (the row's word is
-    // reserved and written 0), and no key-mode parameter: the row's `key_order`
-    // is an observation set to kAscending here and moved only by
-    // AdmitExplicitRowId, never passed in.
+    // reserved and written 0), and no key-mode parameter: the row's retired
+    // key-order byte is written 0 here as on every row (BB-R10), never passed
+    // in.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
     // rows.hpp owns the rule (a system relation carries no anchor).
     // The one anchor write path (the f5686f8 review's S1): validate the

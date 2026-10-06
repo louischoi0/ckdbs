@@ -1133,10 +1133,9 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
-    // Every relation starts ascending: it holds no ids at all, so no id has
-    // landed out of order. Nothing may pass this in - it is an observation,
-    // and the only writer is AdmitExplicitRowId.
-    row.key_order = KeyOrder::kAscending;
+    // `retired_key_order` stays 0, as every row writes it (BB-R10): the byte
+    // is read only by the mount check that refuses a relation still marked
+    // with the deleted `kUnordered`.
     row.anchor_page_id = anchor_page_id;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
@@ -1191,10 +1190,9 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
     // relation was required to be btree-clustered and this is where the
     // pairing was refused; the mode is gone, both storage types take a
-    // caller-supplied pk, and what the heap cannot do is now refused per
-    // *id* by AdmitExplicitRowId rather than per relation - a heap relation
-    // that only ever omits its pk was never in doubt and no longer has to be
-    // declared.
+    // caller-supplied pk, and what neither can take - a key below the mark,
+    // since BB-R3 on both - is refused per *id* by AdmitExplicitRowId rather
+    // than per relation.
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
@@ -2219,7 +2217,6 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;
-    access.key_order = table_row.value().key_order;
     access.anchor_page_id = table_row.value().anchor_page_id;
 
     // PW2-2 (workplan-peer-writer.md §7a): the durable truth for a user
@@ -2427,12 +2424,10 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             // because every relation's omitted-pk inserts draw from this same
             // mark. What a carve costs is stated at the call site and in
             // section 4.1 - the ids inside it are spent from the mark's point
-            // of view before they are placed, so a *supplied* id landing
-            // inside a live carve collides with whichever of the two lands
-            // second. On a heap relation that cannot happen (a supplied id
-            // must be at or above the mark, which the carve has already moved
-            // past its own block); on a btree one the descent reports it as
-            // the duplicate it is.
+            // of view before they are placed. A *supplied* id cannot land
+            // inside a live carve: it must be at or above the mark on every
+            // relation (BB-R3), and the carve has already moved the mark past
+            // its own block.
             //
             // Exhaustion checked against the range's *last* id: a range
             // that would cross the ceiling is refused whole, never split.
@@ -2469,9 +2464,11 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
-        // supplied id at or above it. A supplied id *below* the mark is a
-        // value this function has already issued, and the btree descent that
-        // admits it is what proves the row is not there twice.
+        // supplied id it admits. A supplied id *below* the mark - a value
+        // this function may already have issued - is refused on every
+        // relation (BB-R3), so the two sources never meet. On a btree
+        // relation this runs under the exclusive hold of the rightmost leaf
+        // the row lands on (BB-R1, `storage::IssueUnderHold`).
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
@@ -2591,6 +2588,25 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     // `next_id`'s advance is not cached and publishes nothing: no cached
     // field moved.
     return Status::OK();
+}
+
+Status Catalog::RefuseRelationsHoldingKeysOutOfOrder() {
+    auto rows = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
+    if (!rows.ok()) return rows.status();
+    std::string names;
+    std::size_t count = 0;
+    for (const SysTableRow& row : rows.value()) {
+        if (row.retired_key_order != kRetiredKeyOrderUnordered) continue;
+        if (count++ > 0) names += ", ";
+        names += "`" + std::string(NameView(row.name)) + "`";
+    }
+    if (count == 0) return Status::OK();
+    return Status::Unsupported(
+        std::string(count == 1 ? "relation " : "relations ") + names +
+        (count == 1 ? " holds" : " hold") +
+        " keys out of order, a shape this engine no longer serves: it reads every page's slot "
+        "order as its key order, and such a relation's pages are not. Its data is reached by an "
+        "engine before BB, or not at all");
 }
 
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,

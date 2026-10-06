@@ -422,19 +422,14 @@ TEST_F(SuppliedKeySqlTest, OrderByCostsNothingOnARelationThatNeverTookAnOutOfOrd
     auto d = Dispatcher();
     CreateHeap(d);
 
-    // The path that was always sound, and the reason `key_order` is a fact
-    // rather than a storage type: an id at or above the mark is appended
+    // The one path there is since BB: an id at or above the mark is appended
     // above every id on the page, so slot order *is* key order and the walk
-    // is left untouched. The regression guard is that the per-page sort must
-    // not have become the only correct path - which is what reading the
-    // storage type instead of the flag would have produced on every btree
-    // relation.
+    // is left untouched - the compiler discards the sort.
     for (int k = 1; k <= 50; ++k) {
         ASSERT_EQ(d.Dispatch("INSERT INTO a VALUES (" + std::to_string(k) + ")")
                       .response.substr(0, 8),
                   "INSERTED");
     }
-    EXPECT_NE(d.Dispatch("DESCRIBE a").response.find("key_order=ascending"), std::string::npos);
 
     auto ordered = d.Dispatch("SELECT * FROM a ORDER BY id");
     ASSERT_NE(ordered.response.substr(0, 3), "ERR") << ordered.response;
@@ -732,14 +727,19 @@ TEST_F(SuppliedKeySqlTest, ANamedKeyBelowTheMarkIsRefusedOnABtree) {
     auto below = d.Dispatch("INSERT INTO t VALUES (33, 2)");
     EXPECT_EQ(below.response.substr(0, 3), "ERR") << below.response;
     EXPECT_NE(below.response.find("high-water mark"), std::string::npos) << below.response;
+    // The code itself, which the outcome carries since BB-S3 (a KWP client
+    // reads it rather than the line).
+    EXPECT_EQ(below.status.code(), StatusCode::kOutOfRange) << below.status.message();
     EXPECT_EQ(EmittedIds(d.Dispatch("SELECT * FROM t").response),
               (std::vector<std::uint64_t>{77}));
 }
 
-TEST_F(SuppliedKeySqlTest, ADuplicateNamedKeyLeavesTheRelationAscending) {
+TEST_F(SuppliedKeySqlTest, APresentKeyBelowTheMarkIsRefusedAsADuplicate) {
     // BB §1.11: the key-order flip ran before the descent looked for the
     // key, so an ordinary duplicate - refused at the descent - left the
-    // relation unordered for good.
+    // relation unordered for good. The flip is gone with `kUnordered`
+    // (BB-S3b); what stays is BB-R12's order - presence is asked before the
+    // mark, so a present key is a duplicate, not a key below the mark.
     auto d = Dispatcher();
     CreateBtree(d);
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (1)").response.substr(0, 8), "INSERTED");
@@ -747,10 +747,7 @@ TEST_F(SuppliedKeySqlTest, ADuplicateNamedKeyLeavesTheRelationAscending) {
     EXPECT_EQ(dup.response.substr(0, 3), "ERR") << dup.response;
     EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos)
         << "a present key is refused AlreadyExists (BB-R12): " << dup.response;
-    // Positive, so the field's deletion at BB-S3b turns this line red and
-    // forces the rewrite rather than leaving an assertion nothing can fail.
-    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("key_order=ascending"), std::string::npos)
-        << "a refused duplicate left the relation unordered";
+    EXPECT_EQ(dup.status.code(), StatusCode::kAlreadyExists) << dup.status.message();
 }
 
 TEST_F(SuppliedKeySqlTest, AKeyOutsideTheIdSpaceIsRefused) {

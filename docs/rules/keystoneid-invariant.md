@@ -4,7 +4,7 @@ Status: **DECIDED** (K1–K5 below). `docs/rules/keystoneid-k0-findings.md`
 is the audit's findings record. `docs/spec/heap-and-tuple.md` §4.1 owns
 where an id comes from — the `INSERT` names it or omits it, per row, and
 there is no key mode — so every "at or above the mark" / "below the mark,
-btree-only" phrase here is that section's rule.
+refused" phrase here is that section's rule.
 Depends on: Keystone super-column contract (40-bit id + 8-bit flags +
 16-bit meta id), per-relation catalog metadata, WAL, core-ownership
 dispatch.
@@ -20,18 +20,17 @@ Decisions fixed here:
 - **K2 — Immutable.** A tuple's Keystone id never changes after
   insert. An UPDATE that targets the super column is **Unsupported**
   (hard rejection at compile, no slow path).
-- **K3 — No density promise, and no ordering promise.** Gaps are legal
-  and expected (bump-ahead recovery, aborted inserts, an aborted sorted
-  fill's carve); nothing may rely on ids being contiguous. Ids need not
-  ascend either: a caller may name a key below the mark on a btree
-  relation, and the relation records that it has (`sys.tables.key_order`).
-  Monotonicity is a **per-relation, per-history property, not an
-  engine-wide one** — code that needs it must read `key_order`, never
-  assume it, and never derive it from the storage type either: a btree
-  relation fed only ascending keys is as monotonic as any heap. What holds
-  regardless: the cursor never goes backward, and the semi-sorted heap
-  chain always sees a monotonic sequence, because a below-the-mark key is
-  refused on a heap relation (§2).
+- **K3 — No density promise, and order only within one relation.** Gaps
+  are legal and expected (bump-ahead recovery, aborted inserts, an aborted
+  sorted fill's carve); nothing may rely on ids being contiguous. Ids do
+  ascend, per relation and in issue order: the cursor never goes
+  backward, and a named key below the mark is refused on every relation
+  (BB-R3, on BB-Q8 (b); `heap-and-tuple.md` §4.1), so every id a
+  relation issues or admits is above every id before it, and no relation
+  records an exception (`kUnordered` is deleted, BB-R10). Monotonicity is
+  a **per-relation, per-history property, not an engine-wide one**: the
+  ids of two relations, or of one relation across a re-key (K5), are not
+  comparable.
 - **K4 — Lifetime budget is a documented product constraint.** 2^40
   ids per relation is the relation's lifetime insert budget, stated
   openly in product docs rather than engineered around.
@@ -76,26 +75,30 @@ What this buys, engine-wide:
    otherwise need epoch-style incarnation checks on ids reduces to
    existence + visibility checks.
 
-What it deliberately does **not** promise (K3): gap-freeness, ordering,
-and correlation between id order and insert order across crashes.
+What it deliberately does **not** promise (K3): gap-freeness, and any
+order between the ids of two relations or across a re-key.
 
-Four things rest on *ordering* rather than on uniqueness, and each is
-settled by something other than a promise from this document:
+Four things rest on *ordering* rather than on uniqueness:
 
 - the semi-sorted heap chain refuses an id below the tail page's
   `min_key` (`heap_chain.hpp`), which is invariant 3 enforced at the one
   place tuples enter — so it depends on *issuance* order, not only on
   values. It is fed a monotonic sequence whoever names the ids, because
-  `Catalog::AdmitExplicitRowId` refuses a below-the-mark key on a heap
+  `Catalog::AdmitExplicitRowId` refuses a below-the-mark key on every
   relation (§2), and that refusal sits above `heap_chain.cpp`'s own.
-- the clustered btree divides a full leaf (`SplitLeafAndInsert`,
-  `src/storage/btree/btree.cpp`) and a full internal node, and its leaf
-  slot search does not assume key order; it refuses nothing for an
-  out-of-order id.
-- uniqueness comes from the mark for an omitted key and for a named key
-  at or above it, and from the descent for a named key below it:
-  `BtreeInsert` scans the one leaf the descent lands on and answers
-  `AlreadyExists`.
+- the clustered btree's pages hold their slots in key order at every core
+  count, because a row's id is fixed under the exclusive hold of the leaf
+  it lands on and is above every id placed before it (BB-R1, BB-R3) —
+  the premise the `ORDER BY <pk>` elision, the Cabin serve's pk sort and
+  the index step's (`index.md` IX8a) read. The leaf divide
+  (`SplitLeafAndInsert`, `src/storage/btree/btree.cpp`) and the
+  internal-node divide stay in `BtreeInsert`'s storage contract, which
+  takes any id and whose leaf slot search assumes no order; SQL reaches
+  neither.
+- uniqueness comes from the mark, for an omitted key and for a named
+  key, which is admitted only at or above it. A named key below it is
+  refused, and on a btree the descent's scan of the one leaf it holds
+  names a present one `AlreadyExists` rather than `OutOfRange` (BB-R12).
 - `kRange`'s `min_key` tail pruning (`src/exec/step_vm.cpp`) rests on
   *page-wise* `min_key` ordering, which a leaf division preserves — the
   old leaf keeps its bound and the new one takes the split key. Value
@@ -110,16 +113,17 @@ arity of the `INSERT` (`heap-and-tuple.md` §4.1):
 - for an **omitted key** it is *the smallest id never yet issued*, and it
   is both the source of the id and the proof it is unique;
 - for a **named key** it is *a ceiling at or above every id placed so
-  far*. It issues nothing. On a **heap** relation it gates — `id <
-  next_id` is `OutOfRange`, and that comparison is the only uniqueness
-  proof a chain has. On a **btree** relation it gates nothing; the descent
-  does, and the mark exists only so K4's budget and the 40-bit exhaustion
-  check stay truthful about the id space consumed.
+  far*, and it gates on every relation (BB-R3): `id < next_id` is
+  refused. It issues nothing. On a **heap** relation that comparison is
+  the only uniqueness proof a chain has, and the refusal is `OutOfRange`
+  whether the key is present or not; on a **btree** relation the descent
+  that holds the key's leaf answers first, `AlreadyExists` for a present
+  key and `OutOfRange` for an absent one (BB-R12).
 
 The two readings share one monotone mark: an issued id clears every named
 one, and a named one at or above the mark clears every issued one. Only a
-*below-the-mark* named key can meet an issued id, which is why only a
-btree relation admits one and why the descent is what answers there.
+*below-the-mark* named key could meet an issued id, and every relation
+refuses one.
 
 Rules:
 
@@ -134,20 +138,24 @@ Rules:
 - **Every core issues, and none caches** (AT-S10b). The mark is a
   `sys.tables` row bumped in place under its catalog page's latch, so two
   cores issuing into one relation are serialised by the latch and the ids
-  stay one sequence in issue order (`heap-and-tuple.md` §4.1a). Until
-  AT-S10b a peer issued from a block core 0 carved and leased to it, which
-  made the ids a sequence per core only.
+  stay one sequence in issue order (`heap-and-tuple.md` §4.1a). On a
+  btree relation the bump runs under the exclusive hold of the rightmost
+  leaf the row lands on (BB-R1), so placement order is issue order there
+  too. Until AT-S10b a peer issued from a block core 0 carved and leased
+  to it, which made the ids a sequence per core only.
 - **Named keys — `Catalog::AdmitExplicitRowId(oid, id)`.** It first checks
   that the id is *spellable* — inside `[kFirstRowId, kMaxKeystoneId]`,
   else `InvalidArgument` — before the catalog page is touched. At or above
-  the mark: `next_id = id + 1`, persisted before the row is placed. Below
-  the mark on a **heap** relation: `OutOfRange`. Below the mark on a
-  **btree** relation: admitted on the strength of the descent that
-  follows, the mark does not move, and `key_order` flips to `kUnordered`
-  once, ever. Both writes outlive a rollback, deliberately
+  the mark: `next_id = id + 1`, persisted before the row is placed, and on
+  a btree relation under the exclusive hold of the rightmost leaf the key
+  lands on (BB-R1). Below the mark, on every relation: refused
+  (`RefuseRowIdBelowMark`, `OutOfRange`) with nothing written (BB-R3); a
+  btree's descent refuses a present key `AlreadyExists` before this is
+  asked (BB-R12). The mark's advance outlives a rollback, deliberately
   (`heap-and-tuple.md` §4.1). The mark issues nothing on this path, so a
-  too-low mark cannot reissue an id; persisting before placing keeps the
-  ceiling truthful for K4, never an admission decision sound.
+  too-low mark cannot reissue an id here; it would admit a named key
+  below one already placed, which is why persisting before placing keeps
+  the gate sound as well as the ceiling truthful for K4.
 
 ## 3. Lifetime budget (K4) — the honest math
 
@@ -296,7 +304,7 @@ conditions without specifying it.
 - Re-key implementation (K-M6).
 - Cross-relation or global id spaces; the id remains per-relation.
 - Any *density* guarantee: K3 forbids relying on gap-freeness. Ordering
-  is not promised either; §1 lists what rests on it and how each is
-  settled.
+  is promised within one relation's history only (K3); §1 lists what
+  rests on it.
 - The object-oid counter and the catalog's page ceiling — both the
   catalog's (`keystoneid-k0-findings.md` §5, §6).

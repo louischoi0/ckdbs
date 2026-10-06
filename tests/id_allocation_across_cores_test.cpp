@@ -86,7 +86,11 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
 
     // Every row, every id distinct - and **no gap but the burned ones**:
     // the mark is one sequence both cores bump, so the only ids missing are
-    // the ones a retried statement drew and never placed. A block cached on
+    // the ones a retried statement drew and never placed. **At most one per
+    // retry, and possibly none** since BB-S3: the id is issued under the
+    // rightmost leaf's hold (BB-R2), so a descent refused at a root the other
+    // core grew a level over is refused before it draws one; only a refusal
+    // after the issue - a split's parent walk - burns its id. A block cached on
     // either core would leave its unspent remainder - thousands of ids - as
     // a gap, and a block leased ahead of the mark would put one core's ids
     // above the other's later ones. The primary key refuses a duplicate, so
@@ -102,9 +106,11 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
     const std::uint64_t lo = std::stoull(row.substr(c1 + 1, c2 - c1 - 1));
     const std::uint64_t hi = std::stoull(row.substr(c2 + 1));
     EXPECT_EQ(count, static_cast<std::uint64_t>(2 * kRowsPerCore)) << reply;
-    const std::uint64_t burned = static_cast<std::uint64_t>(w0.retries + w1.retries);
-    EXPECT_EQ(hi - lo + 1, count + burned)
-        << "the ids are not one sequence less the " << burned << " burned: " << reply;
+    const std::uint64_t retries = static_cast<std::uint64_t>(w0.retries + w1.retries);
+    EXPECT_GE(hi - lo + 1, count) << reply;
+    EXPECT_LE(hi - lo + 1, count + retries)
+        << "the ids are not one sequence less at most the " << retries
+        << " retried statements' ids: " << reply;
 }
 
 }  // namespace

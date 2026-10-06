@@ -33,36 +33,38 @@
 // A clustered-btree relation is therefore not a second storage engine,
 // it is the heap with a directory over it.
 //
-// ---- Splits move nothing, and that is on purpose ------------------------
+// ---- Through SQL a split moves nothing; a divide is the storage contract's
 //
-// Invariant 10 makes every pk system-issued, monotonically increasing.
-// A descent for a new id therefore always ends at the **rightmost** leaf,
-// and when that leaf is full the split is:
+// Every row SQL places lands on the **rightmost** leaf (BB-R1, BB-R3 in
+// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`): an omitted pk
+// is issued under that leaf's hold, and a named key is admitted only at or
+// above the relation's mark, which only the rightmost leaf covers. So when
+// that leaf is full the split is an append:
 //
 //     new leaf, low key = the id that caused the split, tuple goes there;
 //     old leaf's next_page_id repointed at it; the same id copied up as
 //     the parent's separator.
 //
-// No key is ever moved between pages. That is the identical bargain
-// heap_chain.hpp strikes, and it is struck for the identical reason: **the
-// heap page split policy is an open decision in CLAUDE.md** (how a full
-// page's contents get divided, and where the new boundary goes), and a
-// tree that divides page contents would decide it as a side effect. So it
-// does not. A split of a leaf whose contents would have to be divided -
-// which requires an id below the leaf's existing maximum, i.e. a
-// non-monotonic sequence - is refused with OutOfSpace naming the open
-// decision, not silently guessed at.
+// No key is moved between pages, and every leaf's slot order is its key
+// order at every core count - the premise the `ORDER BY <pk>` elision reads.
+//
+// `BtreeInsert`, the storage contract, takes any id. One below a full
+// leaf's highest makes the leaf divide (`SplitLeafAndInsert`: the live
+// versions cut at their median key, the upper half moved to a new leaf, the
+// old leaf's `relayout_epoch` bumped), and a separator sorting inside a full
+// internal node divides that node. SQL reaches neither since BB-R3; the
+// storage tests drive both, and docs/spec/heap-and-tuple.md section 4.1
+// carries why a divide keeps invariants 2 and 3.
 //
 // Two consequences worth stating because they are easy to assume away:
 //
-//   1. **Nothing here moves a tuple**, so a leaf's `min_key` is immutable
-//      exactly as a heap page's is (invariant 2). That is a property of
-//      what is unimplemented - no relayout, no compaction - not a
-//      guarantee to design against.
-//   2. Leaves fill left-to-right and are never merged, so the tree's space
-//      utilisation matches the heap chain's - no 50% worst case, and no
-//      reuse of space freed by DELETE either, for the same missing page
-//      compaction.
+//   1. **Only a divide moves a tuple**, and a divide rewrites no page's
+//      `min_key`, so a leaf's `min_key` is immutable exactly as a heap
+//      page's is (invariant 2). There is no relayout and no compaction.
+//   2. Through SQL, leaves fill left-to-right and are never merged, so the
+//      tree's space utilisation matches the heap chain's - no 50% worst
+//      case, and no reuse of space freed by DELETE either, for the same
+//      missing page compaction.
 //
 // ---- Structural changes are reported, not logged here -------------------
 //
@@ -138,9 +140,9 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 // Fails with:
 //   AlreadyExists  a live tuple in the target leaf already carries `id`
 //   OutOfRange     `id` is below the target leaf's min_key (invariant 3)
-//   OutOfSpace     the leaf is full and `id` does not sort above its
-//                  contents, so making room would need the undecided split
-//                  policy; or a tuple no empty leaf could hold
+//   OutOfSpace     the leaf is full, `id` sorts inside it, and it holds
+//                  fewer than two live tuples, so no division makes room;
+//                  or a tuple no empty leaf could hold
 //   Corruption     the payload is too short for a Keystone word, its id
 //                  disagrees with `id`, or the descent exceeded
 //                  kMaxBtreeDepth / hit a page of the wrong type
@@ -211,8 +213,9 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
                                storage::PageAccess access = storage::PageAccess::kRead);
 
 // Calls `fn` once per slot of every leaf, left to right - which is pk
-// order page by page, tuples within a leaf staying unordered exactly as in
-// a heap page. Signature matches heap::ChainVisit deliberately, so a
+// order page by page, and within a leaf slot order: key order on every leaf
+// SQL fills (BB-R1, BB-R3), not necessarily on one `BtreeInsert`'s storage
+// contract has fed an id below its highest. Signature matches heap::ChainVisit deliberately, so a
 // caller can hand the same lambda to either - `access` and the
 // VisitControl contract included, with the same meaning and the same
 // consequence for getting either wrong. kStop ends the walk with

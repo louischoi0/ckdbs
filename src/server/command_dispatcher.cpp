@@ -2063,13 +2063,9 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     std::ostringstream os;
     os << "oid=" << oid.value() << " root_page_id=" << current_root
        << " clustered_type=" << clustered
-       // Where `key_mode=` used to print a declaration, this prints an
-       // observation (docs/spec/heap-and-tuple.md §4.1): whether any id has landed
-       // below the mark, which is what decides whether a page's slot order is
-       // still its key order. Kept on the line rather than dropped, because
-       // the question someone reads this line for - "can I trust the pk order
-       // of a walk here" - is the one it now answers.
-       << " key_order=" << catalog::KeyOrderName(table_row.value().key_order)
+       // `key_order=` stood here until BB-S3b (BB-Q11 (a)): every page's
+       // slot order is its key order on every relation (BB-R1, BB-R3), so a
+       // field that cannot vary reports nothing and went with the state.
        << " next_id=" << table_row.value().next_id
        << " columns=" << schema.columns.size();
 

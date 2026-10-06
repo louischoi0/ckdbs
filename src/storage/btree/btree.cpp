@@ -85,10 +85,12 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
 // `BtreeInsert` reports that in its own words. Answering it here would turn
 // a deterministic `OutOfRange` into a retryable conflict.
 //
-// **Free on the shape the engine actually inserts.** A monotonic pk lands
-// on the rightmost leaf, which has no right sibling and no fetch to make.
-// What pays is a caller-supplied key landing mid-chain (§4.1), one
-// resident-page read.
+// **Free on the shape the engine actually inserts.** Every row SQL places
+// lands on the rightmost leaf (BB-R1, BB-R3), which has no right sibling
+// and no fetch to make. What pays is a descent that lands mid-chain - a
+// named key below the mark, which `BtreeInsertNamed` then refuses, or an
+// id `BtreeInsert`'s storage contract places there - one resident-page
+// read.
 //
 // The caller holds this leaf; the sibling is taken shared and released
 // here. The order is always leaf-then-right-neighbour, which is the order a
@@ -256,18 +258,19 @@ StatusOr<std::uint64_t> MaxLiveId(heap::PageView& leaf) {
 //
 // Two passes, and the second is what makes the first safe to attempt.
 //
-// Slots in a leaf are in ascending key order whenever ids were issued
-// monotonically: a descent routes each new id to the one leaf whose range
-// covers it, appends land past every key already there, and dead slots keep
+// Slots in a leaf are in ascending key order on every leaf SQL fills: each
+// row's id is fixed under the exclusive hold of the leaf it lands on and is
+// above every id already there (BB-R1, BB-R3 - a named key below the mark is
+// refused), appends land past every key already there, and dead slots keep
 // their position so retirement does not disturb the order.
 //
-// **A caller-supplied id breaks that** (docs/spec/heap-and-tuple.md section 4.1):
-// a caller-supplied id may sort anywhere, so it can be appended into a slot
-// below its neighbours, and SplitLeafAndInsert redistributes by key rather
-// than by slot position. Which is why the fallback below is not decoration:
-// the binary search is an optimization for the ordered case, and the linear
-// pass is what makes the answer correct in every case. An unsorted leaf
-// costs a wasted log2(n) probes and still returns the right answer.
+// **`BtreeInsert`'s storage contract can break that** (docs/spec/heap-and-tuple.md
+// section 4.1): it takes any id, which can be appended into a slot below its
+// neighbours, and SplitLeafAndInsert redistributes by key rather than by
+// slot position. Which is why the fallback below is not decoration: the
+// binary search is the fast path for the ordered case, and the linear pass
+// is what makes the answer correct in every case. An unsorted leaf costs a
+// wasted log2(n) probes and still returns the right answer.
 //
 // Dead slots are the one wrinkle: they carry no key, so a probe can land
 // on a hole. Stepping to the nearest live slot inside the window keeps the
@@ -597,8 +600,10 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
         // append case a monotonic id sequence produces exclusively, and it
         // stays because it is correct and costs nothing.
         //
-        // Anything else has to divide the node's entries, which only a
-        // caller-supplied id can require (§4.1). Promoting an interior
+        // Anything else has to divide the node's entries, which only
+        // `BtreeInsert`'s storage contract can require since BB-R3 - SQL
+        // places every row on the rightmost leaf, above everything there
+        // (heap-and-tuple.md section 4.1). Promoting an interior
         // separator by the cheap path would strand every subtree above it -
         // silent data loss, not a wrong answer someone would notice - so the
         // two are told apart rather than assumed.
@@ -664,9 +669,10 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
 
 // ---- Dividing a full leaf (docs/spec/heap-and-tuple.md section 4.1) ------------
 //
-// Reached only when a caller-supplied id sorts *inside* a full leaf. A
-// monotonic sequence never gets here: it always appends past the leaf's
-// highest key, which BtreeInsert handles without moving a byte.
+// Reached only when an id sorts *inside* a full leaf, which since BB-R3 only
+// `BtreeInsert`'s storage contract passes: every row SQL places appends past
+// the rightmost leaf's highest key, which PlaceUnderHold handles without
+// moving a byte.
 //
 // **Why this does not violate invariant 2 or 3.** The old leaf keeps its
 // `min_key` untouched - the division moves the *upper* half out, and
@@ -700,8 +706,9 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     // written. Two reasons it is a copy and not a set of slot indices: a
     // Tuple's `payload` is a view into the page, and the page is about to be
     // reformatted under it; and the division chooses its boundary from the
-    // *keys*, since a leaf fed descending ids is not in slot order and
-    // splitting at slot n/2 would divide it at an arbitrary key.
+    // *keys*, since a leaf this path reaches has been fed an id below its
+    // highest, is not in slot order, and splitting at slot n/2 would divide
+    // it at an arbitrary key.
     struct Version {
         std::uint64_t key;
         std::uint64_t trx_id;
@@ -1033,10 +1040,12 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     //
     // Two shapes. When `id` sorts above everything in the leaf the growth is
     // an *append*: a fresh leaf, nothing moved, which is what a monotonic id
-    // sequence produces and is handled below. When `id` sorts inside the
-    // leaf - which only a caller-supplied, possibly descending id can do
+    // sequence produces and is handled below - and the only shape SQL
+    // reaches, every row it places landing on the rightmost leaf above
+    // everything there (BB-R1, BB-R3). When `id` sorts inside the leaf -
+    // which only `BtreeInsert`'s storage contract, taking any id, can do
     // (docs/spec/heap-and-tuple.md section 4.1) - the leaf must genuinely divide,
-    // which is SplitLeaf's job.
+    // which is SplitLeafAndInsert's job.
     //
     // Either shape writes a separator into the parents, so they are found
     // and held first (`SecureParents`, AT-S16): a refusal there leaves the
@@ -1063,14 +1072,14 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
 
     // The leaf this one is being spliced in *front of*, read before anything
     // is created because the descent's span is in hand here and the splice
-    // below has to hand it on. While ids were monotonic the leaf reached by
-    // an append-split was always the rightmost one, so this was always
-    // kInvalidPageId and CreateEmptyAs's default happened to be right. A
-    // caller-supplied id (docs/spec/heap-and-tuple.md section 4.1) reaches a full
-    // leaf in the *middle* of the chain - `id` above everything in it, still
-    // below the next leaf's min_key - and dropping the link there truncates
-    // the chain: every leaf past the splice vanishes from every sequential
-    // scan while still answering a descent.
+    // below has to hand it on. Through SQL the leaf reached by an append
+    // split is always the rightmost one (BB-R1, BB-R3), so this is
+    // kInvalidPageId and CreateEmptyAs's default would happen to be right.
+    // `BtreeInsert`'s storage contract (docs/spec/heap-and-tuple.md section 4.1)
+    // can reach a full leaf in the *middle* of the chain - `id` above
+    // everything in it, still below the next leaf's min_key - and dropping
+    // the link there truncates the chain: every leaf past the splice vanishes
+    // from every sequential scan while still answering a descent.
     const PageId right_sibling = leaf.next_page_id();
 
     auto created = store.CreateNew();
@@ -1098,9 +1107,10 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // **A PAGE_INIT describes this page only at the tail** (AT-S21's
     // survey). It formats an empty leaf whose right link is invalid, and the
     // HEAP_INSERT that follows fills the tuple - which is the whole page when
-    // the chain ends here. A caller-supplied id appends *mid-chain*, where
-    // the new leaf's link names the page to its right, and no record carried
-    // it: redo rebuilt the leaf with no link and every leaf past it fell off
+    // the chain ends here. An append *mid-chain* - `BtreeInsert`'s storage
+    // contract only since BB-R3, SQL appending at the rightmost leaf - gives
+    // the new leaf a link naming the page to its right, and no record
+    // carried it: redo rebuilt the leaf with no link and every leaf past it fell off
     // the chain after a crash - a scan answered short, a point lookup still
     // found the rows. A full image carries the link.
     out.Record(new_leaf_id, /*is_new_page=*/right_sibling == kInvalidPageId, /*min_key=*/id);

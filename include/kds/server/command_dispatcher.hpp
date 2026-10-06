@@ -132,8 +132,9 @@
 // That is wal.md section 8-1. It used to be justified the other way - one
 // cooperative thread, so no flush could observe the page between the
 // mutation and the stamp - and that stopped being true at AT-S5, when a
-// write began running on every core: another core could divide the leaf
-// the record names, write back a parent whose split was not yet logged, or
+// write began running on every core: another core could split the leaf the
+// record names (a divide until BB-R3 made SQL reach only the append split),
+// write back a parent whose split was not yet logged, or
 // shift the index entry the record was re-read from
 // (`insert_log_crash_rig_test.cpp`).
 
@@ -650,12 +651,13 @@ public:
     // it on each connection's session at accept.
     txn::IsolationLevel default_isolation() const noexcept { return default_isolation_; }
 
-    // **A test seam, and the only one on the insert path** (AT-S21): runs
+    // **A test seam on the insert path** (AT-S21): runs
     // once per `INSERT` row, after the row is placed and its indexes,
     // reservation and undo are written, immediately before the row's own
-    // record is appended. A two-core cell puts another core's divide, a
-    // forced writeback or another core's index insert there - the three
-    // windows the insert's logging bug entry named (AT-S21 closed it).
+    // record is appended. A two-core cell puts another core's split (a
+    // divide until BB-R3), a forced writeback or another core's index insert
+    // there - the three windows the insert's logging bug entry named (AT-S21
+    // closed it).
     // Unset in production, where it costs one empty-function test per row.
     void SetBeforeInsertLogForTest(std::function<void()> hook) {
         before_insert_log_for_test_ = std::move(hook);
