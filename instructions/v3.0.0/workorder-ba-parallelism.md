@@ -1022,7 +1022,7 @@ census.
 | BA-Q0 | **The letter and the scope**: one letter; twelve items and three defects; and the not-planned list of §0 | scope | Yes. BA is the next free letter: AQ and AR are held for AR1 (`raft-marks-2026-10-02.md` §4) |
 | BA-Q1 | **The premise gate**: no fix stage before the census, and only for an item BA-R0's materiality test marks. BA-S1, BA-S1b, BA-S1c (defects) and BA-S15 (a spec promise the code breaks) are exempt | process | Yes. It is `CLAUDE.md`'s *"re-measure a premise before building the fix"*, applied per item |
 | BA-Q2 | **The host and method**: this host, reactor k on CPU 2k and the clients on CPUs 4–7, so `cores = 2` is the largest clean cell; multi-process clients with the client-bound mark. Or a second host for the clients | method | This host, with its limit stated in every results file |
-| BA-Q3 | **`strict`'s shape** (BA-R4 part 2, BA-R1c): (a) publish then park, visible before durable like D2; (b) park before the publish, the marker held across the park, with BA-S1c first; (c) snapshots carry their in-flight set, as their own order | user-visible | (b) now: it keeps D1's meaning and takes D1 off the reactor. (c) as a later order if the census finds the marker's cap material |
+| BA-Q3 | **`strict`'s shape** (BA-R4 part 2, BA-R1c): (a) publish then park, visible before durable like D2; (b) park before the publish, the marker held across the park, with BA-S1c first - and the synchronous `Dispatch`'s BA-R1c wait made a park before it, or it spins on its own core's marker (BA-S1c's review, C2); (c) snapshots carry their in-flight set, as their own order | user-visible | (b) now: it keeps D1's meaning and takes D1 off the reactor. (c) as a later order if the census finds the marker's cap material |
 | BA-Q4 | **Statistics freshness**: another core's counts arrive up to one cadence (100 ms) late, and CC13's sentence is struck (BA-R2) | user-visible | Yes |
 | BA-Q5 | **AM-S2's pin decision re-opened**: a partitioned frame table with atomic pins (BA-R5) | architecture | Yes |
 | BA-Q6 | **The window's read side**: (a) per-core commit tables with a block-to-core range table, or (b) an open-addressed atomic array with the latched fallback (BA-R6) | architecture | (b): it needs no block table and no per-core reclaim |
@@ -1220,3 +1220,95 @@ themselves.
 **Overhead: not measured; it is measured at the milestone's close**
 (BA-S17). At `cores = 1` the change adds one thread-local read and one
 acquire load per `WriteBack`.
+
+### BA-S1c — built 2026-10-06
+
+Started on the operator's word (*"BA-S1c 진행해줘"*, 2026-10-06) and built
+on `worktree-ba-s1c-strict-marker-snapshot` from `dfabae1`. BA-R1c is
+built: a session's statement never misses that session's own acknowledged
+commit. **BA-Q3 is not marked by it**; the other-session remainder stays in
+the bug entry, restated rather than deleted (the row's "or deleted under
+BA-Q3 (c)" did not apply).
+
+**Red first, at `2ab1916`.** The new file
+`strict_marker_snapshot_rig_test.cpp` holds core 0's `strict` commit inside
+its `fdatasync`, through a `GatedLogDevice` the rig now offers
+(`gated_log_sync`). Core 1's session commits `relaxed`, is acknowledged,
+and selects its own row. On `dfabae1`'s engine the `SELECT` answered no row,
+10/10. The rig also needed core 1 warmed before the gate closes: its first
+transaction carves an id window and persists page 0, whose writeback waits
+on the log, and a held sync stalled it there instead of on the marker.
+
+**The fix, at `fb94070`.**
+
+- **The bound.** `Session::acknowledged_commit_lsn` takes the commit LSN on
+  both commit arms (`CommitLocal`, `EndWrite`'s autocommit).
+- **The wait.** `CommandDispatcher::UncoveredCommit` returns the bound while
+  `SnapshotCeiling()` sits below it. `DispatchAsync` parks on it before its
+  synchronous half; the synchronous `Dispatch` yields, as its group commit
+  blocks.
+- **The kick.** A waiter counts itself into its core's `ceiling_waiters`
+  (`TransactionManager::CeilingWait`, scoped). `EndCommit` clears its
+  marker, then kicks every core whose count is non-zero - `seq_cst` on both
+  sides, the store-buffer shape. `Expeditor` installs the registry at
+  `cores > 1`; the rig through its sim.
+- **Specs:** `txn.md` §4.1 and its level table, `rules.md` §3's visibility
+  row, `instance_visibility.hpp`'s new "acknowledged-commit bound" note.
+
+**Cells:** three - an autocommit write, an explicit `COMMIT`, a
+synchronous `SELECT` - each 20/20 green at `fb94070` and again at
+`7470977`.
+
+**The review**, of `fb94070` by `critics-developer`. No correctness defect.
+It confirmed the handshake between waiter and lift, that the two commit
+arms are every `TransactionManager::Commit` caller, that the wait holds
+nothing, that the synchronous loop cannot deadlock today, and the frame and
+visibility lifetimes. **Applied at `7470977`:**
+
+- **C1.** `EnterCeilingWait`'s no-`NoteSlot` comment named the wrong
+  guarantee; it is the manager's `PublishCoreBounds` at construction.
+- **C2.** The synchronous loop's premise - no marker held across a park -
+  ends with BA-Q3 (b). The loop now says it must become a park before (b)
+  lands. **Carried to BA-Q3's mark.**
+- **C3.** The cell's first barrier now requires core 0's marker set, not
+  only a parked sync, and the cell asserts the ceiling below the session's
+  bound before the `SELECT`.
+- **C4.** The synchronous wait counts itself in too, so its cell takes the
+  same barrier and a 100 ms sleep went.
+- **C5.** `CeilingWait`'s ordering comment names `await_ready`; "one sync"
+  now says a peer's can queue behind the writer's; `txn.md`'s level table
+  carries the other-session exception.
+- **Simplifications.** `UncoveredCommit` is the one lookup and consumes a
+  covered bound - the ceiling is monotone - so only the first statement
+  after a commit reads the ceiling; the setter is a plain store; the
+  session's comment is a pointer.
+
+**Rejected:** cutting the dispatcher's comment at the wait to a pointer
+(simplification 3's other half). It is the one place a reader of
+`DispatchAsync` learns why a statement parks before it has run.
+
+**Mutation: four mutants, each run 20 times, all killed.**
+
+- **the bound never recorded** - all three cells miss the row;
+- **`DispatchAsync`'s wait skipped** - the autocommit and `COMMIT` cells
+  miss it, the synchronous cell passes;
+- **`Dispatch`'s wait skipped** - the synchronous cell misses it, the two
+  parked cells pass;
+- **the lift kicking nobody** - the two parked cells wait out core 1's 5 s
+  idle block and fail the 1 s bound; the synchronous cell, which spins
+  rather than sleeps, passes.
+
+Run at `fb94070` and again at `7470977`, 20/20 each time.
+
+Each was restored from a byte copy, never from git.
+
+**Suite:** 3,126 / 3,126 at `fb94070` (`ctest -LE heap-suspended -j8`,
+Debug, 115 s), and again on the merge with `origin/main` at `b448d5c`
+(74 s), whose engine is `7470977`'s - the merge brought documents and
+bench archives only. 1 disabled test did not run. Not re-run at
+`7470977` alone.
+
+**Overhead: not measured; it is measured at the milestone's close**
+(BA-S17). At `cores = 1` a statement reads its session's bound and finds it
+consumed; the first statement after a commit reads `SnapshotCeiling()` once,
+three loads at one core. A commit adds one null test in `EndCommit`.

@@ -25,3 +25,13 @@ session.
 | **Amends** | AP-R4 item 2's "never ... a Cabin probe" for the one case AQ-R5 states. AR1 D7 is supplied with its mechanism, not changed |
 | **Does not settle** | any AQ stage's start - each waits for its own word; AR's letter; the v3.0.0 tag. The marks were given while AQ-S0's review was still running: a review finding that would change a marked ruling is put back to the operator, not applied |
 | **Recorded at** | the order's header and §6, AR1's status line, the index row |
+
+## 3. BA-S1c started
+
+| | |
+|---|---|
+| **Word** | *"BA-S1c 진행해줘"*, recorded on `worktree-ba-s1c-strict-marker-snapshot` from `dfabae1` |
+| **Mark** | **BA-S1c starts**: the fix for defect B's own-session case (BA-R1c), built per `workorder-ba-parallelism.md` §6 |
+| **Reading** | BA-S1c is one of the stages BA-Q1 exempts from the census, as BA-S1 was (`raft-marks-2026-10-02.md` §6). It builds BA-R1c and marks nothing in §4 |
+| **Does not settle** | BA-Q0..Q14 - BA-Q3 included, so the other-session remainder stays in the bug entry; any other BA stage's start; the push |
+| **Recorded at** | `workorder-ba-parallelism.md` §6, the index row |
