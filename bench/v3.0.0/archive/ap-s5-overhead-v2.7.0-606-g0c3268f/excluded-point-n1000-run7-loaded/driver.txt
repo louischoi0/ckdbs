@@ -1,0 +1,21 @@
+host before: 3.37 3.05 2.72 2/269 654367  competing: none
+host after : 3.18 3.01 2.71 1/276 654386  competing: none
+update replies other than 'UPDATED 1': 0
+== B  cell=point rows=1000
+  point-star           ops= 8000 p50=     86.9 p90=    117.7 p99=    138.7 qps=   10343 err=0
+  point-star-again     ops= 8000 p50=     82.1 p90=     95.7 p99=    116.3 qps=   11613 err=0
+  point-wide           ops= 8000 p50=     84.5 p90=    117.8 p99=    140.3 qps=    9733 err=0
+  update-pk            ops= 8000 p50=     53.3 p90=     63.0 p99=     81.0 qps=   17325 err=0
+  update-pk-again      ops= 8000 p50=     53.4 p90=     60.3 p99=     77.6 qps=   17462 err=0
+  update-walk          ops=  992 p50=    127.3 p90=    149.6 p99=    186.7 qps=    7066 err=0
+  ping                 ops= 8000 p50=     38.4 p90=     48.3 p99=     62.7 qps=   23882 err=0
+== A  cell=point rows=1000
+  point-star           ops= 8000 p50=     81.8 p90=     93.2 p99=    111.6 qps=   11700 err=0
+  point-star-again     ops= 8000 p50=    110.4 p90=    119.1 p99=    137.4 qps=    9821 err=0
+  point-wide           ops= 8000 p50=     85.3 p90=    114.7 p99=    134.8 qps=   10681 err=0
+  update-pk            ops= 8000 p50=     52.9 p90=     60.5 p99=     78.0 qps=   17425 err=0
+  update-pk-again      ops= 8000 p50=     53.1 p90=     60.8 p99=     77.6 qps=   17416 err=0
+  update-walk          ops=  992 p50=    153.0 p90=    168.4 p99=    187.4 qps=    6468 err=0
+  ping                 ops= 8000 p50=     61.3 p90=     65.2 p99=     81.8 qps=   18528 err=0
+raw: /home/cdkbs/bench-runs/ap-s5/point-n1000-run7/result.json
+driver exit 0

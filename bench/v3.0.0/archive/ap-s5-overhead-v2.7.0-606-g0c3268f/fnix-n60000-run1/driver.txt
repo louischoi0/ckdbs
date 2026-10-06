@@ -1,0 +1,11 @@
+host before: 0.27 0.72 1.22 1/253 669277  competing: none
+host after : 0.33 0.72 1.22 1/258 669285  competing: none
+update replies other than 'UPDATED 1': 0
+setup: {'days_with_different_rows': 0, 'rows_per_day_min': 600, 'rows_per_day_max': 600}
+== B  cell=fn rows=60000
+  fn-date              ops=  600 p50=   6219.4 p90=   6286.2 p99=   6427.8 qps=     158 err=0
+  between              ops=  600 p50=   1052.6 p90=   1066.9 p99=   1082.4 qps=     942 err=0
+  fn-date-again        ops=  600 p50=   6295.0 p90=   6350.3 p99=   6479.4 qps=     158 err=0
+  ping                 ops=  600 p50=     40.9 p90=     49.7 p99=     63.2 qps=   23196 err=0
+raw: /home/cdkbs/bench-runs/ap-s5/fnix-n60000-run1/result.json
+driver exit 0

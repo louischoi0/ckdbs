@@ -1,0 +1,27 @@
+# Ratification marks — 2026-10-06
+
+**The operator's words of 2026-10-06**, recorded by CLA on
+`worktree-aq-s0-order` from `3650e474` (`v2.7.0-616-g3650e474`; the v3.0.0
+tag is not cut). All of it is **verbatim**: the words as typed in the
+session.
+
+---
+
+## 1. AQ's order written
+
+| | |
+|---|---|
+| **Word** | *"먼저 AQ에 대한 작업지시서를 작성해줘"* |
+| **Mark** | `workorder-aq-expression-cabins.md` is written, as AQ-S0, on `worktree-aq-s0-order` from `740d954a` |
+| **Does not settle** | the letter's opening and its §4 items (§2 below) |
+| **Recorded at** | the order's §6 |
+
+## 2. AQ opened, and its seven items marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"CLA 제안대로 진행하고 main에 push해줘"* |
+| **Mark** | AQ-Q0..Q6 are marked as CLA proposed them (`workorder-aq-expression-cabins.md` §4). **AQ-Q0:** AQ opens. **AQ-Q1:** D7's mechanism is a v2 `SysCabinRow` recognised by its length - v1 rows read as column Cabins, with no rebuild and no superblock move - and `F`'s text lives in a new user-format `sys.cabin_exprs`. **AQ-Q2:** `expr_id` is computed over column positions, and `alter.md` states why that diverges from AL3. **AQ-Q3:** the predicate shape admits conjunctions of literal comparisons, plain or `kImmutable` function, matched conjunct for conjunct on the canonical lowered form, with no normalisation. **AQ-Q4:** cover serving is for `DATE` only, both-sided ranges, all or nothing, capped by `cabin_max_values`; monotone serving and D3's sortable directory go to a later letter. **AQ-Q5:** automatic creation of expression and predicate Cabins is not in AQ. **AQ-Q6:** D1's fold stays deferred |
+| **Amends** | AP-R4 item 2's "never ... a Cabin probe" for the one case AQ-R5 states. AR1 D7 is supplied with its mechanism, not changed |
+| **Does not settle** | any AQ stage's start - each waits for its own word; AR's letter; the v3.0.0 tag. The marks were given while AQ-S0's review was still running: a review finding that would change a marked ruling is put back to the operator, not applied |
+| **Recorded at** | the order's header and §6, AR1's status line, the index row |

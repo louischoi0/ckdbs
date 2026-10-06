@@ -780,3 +780,110 @@ every accepted row, on every path it listed. Applied:
 - **The cabin optimizer's candidate pick.** `RecordOptimizerSignals` takes
   the lowest filtered column as a step's Cabin candidate, and that can now
   be a function's argument. This costs, and does not answer wrongly.
+
+### AP-S5 — the close, 2026-10-02
+
+On `worktree-ap-s5-close`, which merged AP-S4's branch over `origin/main`
+at `e7617b2` (BA-S0, documents only), giving `0c3268f`.
+
+| stage | what landed | commits | suite |
+|---|---|---|---|
+| AP-S0 | the order; opened with AP-Q0..Q5 marked as proposed | `2905ec6`, `8a1c017`, `f992e7e` | not executed (documents) |
+| AP-S1 | `fetch_id` | `6f32eab`, `5971270`, `d3d90b5` | 3083/3083 at `6f32eab`; 3084/3084 at `5971270` |
+| AP-S2 | the trail and `sys.patterns` on `fetch_id`; version 1 → 2 | `749af9b`, `7fc2c57` | 3089/3089 at `749af9b`; at `7fc2c57` the first run failed `IdAllocationAcrossCores` at its `-j8` timeout, the rerun 3090/3090 |
+| AP-S3 | rule 0′ as wording, and the planted cell | `0fcdfcc`, `db5a5e6` | 3091/3091 at `0fcdfcc`; at `db5a5e6` the same first-run timeout, the rerun 3091/3091 |
+| AP-S4 | the function catalog, `DATE` and `NOW()`, the function conjunct | `010b8e0`, `c4b82e4` | 3108/3108 at `010b8e0`; 3111/3111 at `c4b82e4` |
+
+Every count is the stage row's own, run by CLA in this session with
+`ctest -LE heap-suspended -j8`, Debug; none was re-run at the close.
+
+**The overhead, measured once over the whole change** (`ck-tester`,
+`bench/v3.0.0/results-ap-s5-overhead-v2.7.0-606-g0c3268f.md`, committed at
+`795c9f0`). A = `4012617`, B = `c4b82e4`, Release built from `git archive`,
+`cores = 1`, `relaxed`, BTREE, interleaved.
+
+- **The range is not AP alone.** `4012617..c4b82e4` also carries AZ-R5's
+  engine commits `7ce9718`, `878f40a`, `e2340c4` and `9439497`. Their path
+  is foreign-key only, and no cell reaches it.
+- **No resolvable cost** in these cells: the point `SELECT` (narrow or
+  wide select list), the pk `UPDATE`, and the walking `UPDATE`.
+- **One per-row cost** on a filter scan that rejects nearly every row:
+  - +1.35 / +4.65 / +79.2 µs at 1K / 10K / 60K rows, which is +1.0 /
+    +0.6 / +1.9 %, about 0.5–1.4 ns per examined row;
+  - 9, 8 and 9 of 10 pinned runs are positive;
+  - these are the **pinned** series' numbers. The servers were pinned to one
+    CPU, a harness choice this order did not name. The default series
+    resolves the cost at 10,000 rows but not at 60,000, where its IQR crosses
+    zero;
+  - it is not linear in rows: 0.37 ns a row from 1K to 10K, and 1.5 ns from
+    10K to 60K;
+  - the walking `UPDATE`, which does the same walk, shows none (−3.7 µs);
+  - **no line AP added runs on a rejected row**. `AcceptTupleAt`'s
+    `fn_residual` test follows the residual's reject
+    (`src/exec/step_vm.cpp:2280` at `c4b82e4`), and the column masks are
+    compile-time. The cost is unattributed, and code layout is the reading
+    left.
+- **Using a function** (B only): `DATE(ts)` is about 18 ns per row dearer
+  than the same `BETWEEN`, and never uses an index on `ts`.
+- **Not measured:** `cores > 1`, `group` and `strict` durability, more than
+  one session, and the parked-write path.
+
+**What AP carries forward.**
+
+- **The scan's per-row cost.** Recorded here, unattributed. No line AP
+  added runs per rejected row, so `Step`'s larger size and code layout are
+  the reading left.
+- **B3**, a quiet wrong answer that predates AP:
+  `docs/inflight/bugs/a-nested-uncorrelated-subquery-is-dropped.md`.
+  Owner: none.
+- **D1's fold, cover and monotone serving.** These are AQ's (AP-Q5,
+  AR1 §9.2). AQ's order is unwritten.
+- **The cabin optimizer's candidate pick.** It can now be a function's
+  argument. This costs, and does not answer wrongly.
+- **The `-j8` timeout** of `IdAllocationAcrossCores`, recorded in
+  `known-gaps.md`, Testing.
+- **Pre-existing, cited and not taken:** the `MutatePatternRow`
+  version-filter cell, and `RecordTrail`'s unreachable guard.
+- **Recorded departures and leftovers of the stages.**
+  - **AP-S1's rejected review findings:** the uncalled
+    `FingerprintAccumulator::Reset()`, and `FingerprintOf`'s double hash.
+  - **AP-S3.** Rule 1's sentence goes beyond AP-R3's wording and is not
+    ratified text. "No `src/` change" holds for code only; two comments
+    changed.
+  - **AP-S4.** The test seam shipped as `ScopedTestFunction`, where AP-R4
+    named it `RegisterFunctionForTest`.
+- **Process.**
+  - `010b8e0` went to `main` at the operator's word before its review
+    returned. The review's fixes followed in `c4b82e4`.
+  - `0c3268f` was pushed with `--no-verify` at the operator's word, so the
+    hook would not load the host during the measurement. Its engine is
+    `c4b82e4`'s, whose suite passed.
+  - The results file is named for `0c3268f`, the HEAD it was written at,
+    as AZ-S7's was. It is committed at `795c9f0`, whose trailer names
+    Sonnet 5.5.
+
+**The review** (`critics-developer`, on `16ecf20a`, read-only) confirmed
+every commit id, every suite count and the headline numbers, which it
+re-derived from the archive's JSON. It also confirmed bench rules 1, 2, 3
+and 5, and the interleaving. Applied:
+
+- **The named cost candidate was wrong.** It cannot run on a rejected row.
+  Both files now say so.
+- **AZ-R5's four commits** in the range are disclosed.
+- **Three qualifiers** for the overhead summary: pinned, non-linear, and
+  the walking `UPDATE`.
+- **The departures list above.**
+- **Suite citations** now carry their commits and the two first-run
+  timeouts.
+- **In the results file:** the default series' 10K resolution, the
+  exclusion rule, and the excluded runs' values.
+
+Rejected:
+
+- **Regenerating a per-cell load table from `host.txt`.** Rule 4's evidence
+  is in the archive; the file now states the departure instead.
+- **The results file's bloat cuts:** the percentile table and the repeated
+  "what the run teaches". The file is `ck-tester`'s, and the cuts change no
+  fact.
+
+It cuts no tag.

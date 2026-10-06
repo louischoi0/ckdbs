@@ -1,0 +1,18 @@
+A after star x299 -> patterns=0
+A after star x598 -> patterns=1 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=299 last_seen=201841816668847 waystone=root=149,depth=1
+A after star x897 -> patterns=1 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841841261707 waystone=root=149,depth=1
+A after +10 two-col -> patterns=1 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841841261707 waystone=root=149,depth=1
+A after +20 two-col -> patterns=2 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841841261707 waystone=root=149,depth=1 || pattern_id=0x9276e1f34bb99835 oid=2 origin=auto pinned=no class=1 uses=10 last_seen=201841842823014 waystone=root=445,depth=1
+A after +40 two-col -> patterns=2 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841841261707 waystone=root=149,depth=1 || pattern_id=0x9276e1f34bb99835 oid=2 origin=auto pinned=no class=1 uses=30 last_seen=201841844929433 waystone=root=445,depth=1
+A after +80 two-col -> patterns=2 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841841261707 waystone=root=149,depth=1 || pattern_id=0x9276e1f34bb99835 oid=2 origin=auto pinned=no class=1 uses=70 last_seen=201841849013748 waystone=root=445,depth=1
+A after +160 two-col -> patterns=2 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841841261707 waystone=root=149,depth=1 || pattern_id=0x9276e1f34bb99835 oid=2 origin=auto pinned=no class=1 uses=150 last_seen=201841857232904 waystone=root=445,depth=1
+A after +299 two-col -> patterns=2 || pattern_id=0x9df341b2a4591e14 oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841841261707 waystone=root=149,depth=1 || pattern_id=0x9276e1f34bb99835 oid=2 origin=auto pinned=no class=1 uses=310 last_seen=201841873230280 waystone=root=445,depth=1
+B after star x299 -> patterns=0
+B after star x598 -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=299 last_seen=201841944738970 waystone=root=149,depth=1
+B after star x897 -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=598 last_seen=201841969536850 waystone=root=149,depth=1
+B after +10 two-col -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=608 last_seen=201841970292230 waystone=root=149,depth=1
+B after +20 two-col -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=628 last_seen=201841971635738 waystone=root=149,depth=1
+B after +40 two-col -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=668 last_seen=201841974318597 waystone=root=149,depth=1
+B after +80 two-col -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=748 last_seen=201841979542041 waystone=root=149,depth=1
+B after +160 two-col -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=908 last_seen=201841989947117 waystone=root=149,depth=1
+B after +299 two-col -> patterns=1 || fetch_id=0x60922a5d069642ff oid=1 origin=auto pinned=no class=1 uses=1207 last_seen=201842009351516 waystone=root=149,depth=1

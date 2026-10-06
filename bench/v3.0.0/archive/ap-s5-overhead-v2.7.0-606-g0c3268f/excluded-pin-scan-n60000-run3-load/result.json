@@ -1,0 +1,553 @@
+{
+  "driver": "ap_overhead_benchmark.py",
+  "args": {
+    "host": "127.0.0.1",
+    "cell": "scan",
+    "rows": 60000,
+    "port": 15610,
+    "label": "B",
+    "ab_port": 15611,
+    "ab_label": "A",
+    "ops": 1000,
+    "walk_ops": 1000,
+    "blocks": 10,
+    "json": "/home/cdkbs/bench-runs/ap-s5/pin-scan-n60000-run3/result.json"
+  },
+  "setup": {},
+  "update_replies_not_updated_1": 0,
+  "host_before": {
+    "loadavg": "1.05 1.73 1.82 4/289 664302",
+    "competing": [
+      "664256 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790918021678-f4hai2.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/insert_before_end.py tests/core_runtime_test.cpp /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/core_runtime_cell.cpp && cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error'\"'\"' | head; echo \"build_exit=${PIPESTATUS[0]}\"' < /dev/null && pwd -P >| /tmp/claude-23eb-cwd",
+      "664260 cmake --build build -j8",
+      "664261 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790918021678-f4hai2.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/insert_before_end.py tests/core_runtime_test.cpp /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/core_runtime_cell.cpp && cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error'\"'\"' | head; echo \"build_exit=${PIPESTATUS[0]}\"' < /dev/null && pwd -P >| /tmp/claude-23eb-cwd",
+      "664279 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/core_runtime.cpp.d -MF CMakeFiles/kds.dir/src/server/core_runtime.cpp.o.d -MT CMakeFiles/kds.dir/src/server/core_runtime.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/src/server/core_runtime.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase core_runtime.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccztQvnx.s",
+      "664280 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/expeditor.cpp.d -MF CMakeFiles/kds.dir/src/server/expeditor.cpp.o.d -MT CMakeFiles/kds.dir/src/server/expeditor.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/src/server/expeditor.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase expeditor.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccwsYFU0.s"
+    ]
+  },
+  "host_after": {
+    "loadavg": "3.23 2.19 1.97 2/282 664533",
+    "competing": [
+      "664256 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790918021678-f4hai2.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/insert_before_end.py tests/core_runtime_test.cpp /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/core_runtime_cell.cpp && cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error'\"'\"' | head; echo \"build_exit=${PIPESTATUS[0]}\"' < /dev/null && pwd -P >| /tmp/claude-23eb-cwd",
+      "664260 cmake --build build -j8",
+      "664261 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1790918021678-f4hai2.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/insert_before_end.py tests/core_runtime_test.cpp /tmp/claude-1000/-home-cdkbs-ckdbs/a0b29a7a-a7b6-42fb-b2a6-f68483831d11/scratchpad/core_runtime_cell.cpp && cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error'\"'\"' | head; echo \"build_exit=${PIPESTATUS[0]}\"' < /dev/null && pwd -P >| /tmp/claude-23eb-cwd",
+      "664505 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/include -I /home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/core_runtime_test.cpp.d -MF CMakeFiles/kds_tests.dir/core_runtime_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/core_runtime_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/ba-s1-peer-writeback-gate/tests/core_runtime_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase core_runtime_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc8uADQe.s"
+    ]
+  },
+  "arms": {
+    "B": {
+      "scan-reject": {
+        "phase": "scan-reject",
+        "detail": "",
+        "ops": 1000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 7.883915,
+        "qps": 126.8,
+        "mean_us": 7879.1,
+        "p0_us": 4047.4,
+        "p25_us": 4162.5,
+        "p50_us": 6647.4,
+        "p95_us": 7988.2,
+        "p99_us": 10004.8,
+        "max_us": 1855785.5,
+        "p90_us": 7220.8
+      },
+      "scan-reject-again": {
+        "phase": "scan-reject-again",
+        "detail": "",
+        "ops": 1000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 6.57775,
+        "qps": 152.0,
+        "mean_us": 6572.3,
+        "p0_us": 4030.2,
+        "p25_us": 6406.0,
+        "p50_us": 6764.4,
+        "p95_us": 7988.6,
+        "p99_us": 10009.0,
+        "max_us": 12138.9,
+        "p90_us": 7310.8
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "",
+        "ops": 1000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.041191,
+        "qps": 24277.0,
+        "mean_us": 40.8,
+        "p0_us": 34.6,
+        "p25_us": 37.2,
+        "p50_us": 37.6,
+        "p95_us": 54.7,
+        "p99_us": 61.4,
+        "max_us": 86.0,
+        "p90_us": 52.3
+      }
+    },
+    "A": {
+      "scan-reject": {
+        "phase": "scan-reject",
+        "detail": "",
+        "ops": 1000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 6.031105,
+        "qps": 165.8,
+        "mean_us": 6026.1,
+        "p0_us": 4072.1,
+        "p25_us": 4189.5,
+        "p50_us": 6828.7,
+        "p95_us": 8000.2,
+        "p99_us": 10004.0,
+        "max_us": 11023.6,
+        "p90_us": 7474.1
+      },
+      "scan-reject-again": {
+        "phase": "scan-reject-again",
+        "detail": "",
+        "ops": 1000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 6.925041,
+        "qps": 144.4,
+        "mean_us": 6919.3,
+        "p0_us": 4152.0,
+        "p25_us": 6674.2,
+        "p50_us": 6990.0,
+        "p95_us": 8017.4,
+        "p99_us": 10140.0,
+        "max_us": 22927.7,
+        "p90_us": 7980.9
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "",
+        "ops": 1000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.04054,
+        "qps": 24667.1,
+        "mean_us": 40.2,
+        "p0_us": 35.7,
+        "p25_us": 37.6,
+        "p50_us": 37.9,
+        "p95_us": 52.3,
+        "p99_us": 62.8,
+        "max_us": 194.7,
+        "p90_us": 46.4
+      }
+    }
+  },
+  "engine": {
+    "B": {
+      "scan-reject": {
+        "polls": 1010.0,
+        "us": 5576689.0
+      },
+      "scan-reject-again": {
+        "polls": 1010.0,
+        "us": 6275784.0
+      },
+      "ping": {
+        "polls": 1010.0,
+        "us": 12884.0
+      }
+    },
+    "A": {
+      "scan-reject": {
+        "polls": 1010.0,
+        "us": 5753705.0
+      },
+      "scan-reject-again": {
+        "polls": 1010.0,
+        "us": 6546231.0
+      },
+      "ping": {
+        "polls": 1010.0,
+        "us": 12318.0
+      }
+    }
+  },
+  "blocks": {
+    "B": {
+      "scan-reject": [
+        {
+          "block": 0,
+          "p50_us": 4194.081004243344,
+          "mean_us": 4233.521470450796,
+          "engine_us_per_op": 4105.58
+        },
+        {
+          "block": 1,
+          "p50_us": 4111.335991183296,
+          "mean_us": 4156.618269043975,
+          "engine_us_per_op": 4055.07
+        },
+        {
+          "block": 2,
+          "p50_us": 4147.920990362763,
+          "mean_us": 4161.6111699840985,
+          "engine_us_per_op": 4057.48
+        },
+        {
+          "block": 3,
+          "p50_us": 4123.154008993879,
+          "mean_us": 4171.318109147251,
+          "engine_us_per_op": 4080.95
+        },
+        {
+          "block": 4,
+          "p50_us": 6847.6560118142515,
+          "mean_us": 24998.165209544823,
+          "engine_us_per_op": 6263.83
+        },
+        {
+          "block": 5,
+          "p50_us": 6895.747996168211,
+          "mean_us": 6954.569361987524,
+          "engine_us_per_op": 6607.36
+        },
+        {
+          "block": 6,
+          "p50_us": 6998.033990385011,
+          "mean_us": 7308.652568026446,
+          "engine_us_per_op": 6778.19
+        },
+        {
+          "block": 7,
+          "p50_us": 6972.514995140955,
+          "mean_us": 6998.604039545171,
+          "engine_us_per_op": 6391.97
+        },
+        {
+          "block": 8,
+          "p50_us": 6989.581015659496,
+          "mean_us": 7147.956398839597,
+          "engine_us_per_op": 6618.83
+        },
+        {
+          "block": 9,
+          "p50_us": 6970.523012569174,
+          "mean_us": 8660.422760003712,
+          "engine_us_per_op": 6807.63
+        }
+      ],
+      "scan-reject-again": [
+        {
+          "block": 0,
+          "p50_us": 6821.677990956232,
+          "mean_us": 6954.268871340901,
+          "engine_us_per_op": 6697.96
+        },
+        {
+          "block": 1,
+          "p50_us": 6982.972001424059,
+          "mean_us": 7099.304260045756,
+          "engine_us_per_op": 6581.03
+        },
+        {
+          "block": 2,
+          "p50_us": 6604.159978451207,
+          "mean_us": 6743.204288359266,
+          "engine_us_per_op": 6479.48
+        },
+        {
+          "block": 3,
+          "p50_us": 6995.461008045822,
+          "mean_us": 7203.731959743891,
+          "engine_us_per_op": 6725.3
+        },
+        {
+          "block": 4,
+          "p50_us": 7128.381985239685,
+          "mean_us": 7397.575139184482,
+          "engine_us_per_op": 7004.9
+        },
+        {
+          "block": 5,
+          "p50_us": 6760.214018868282,
+          "mean_us": 6567.106778966263,
+          "engine_us_per_op": 6172.24
+        },
+        {
+          "block": 6,
+          "p50_us": 6838.752015028149,
+          "mean_us": 6284.943181090057,
+          "engine_us_per_op": 6098.47
+        },
+        {
+          "block": 7,
+          "p50_us": 6722.947990056127,
+          "mean_us": 6778.223690344021,
+          "engine_us_per_op": 6565.13
+        },
+        {
+          "block": 8,
+          "p50_us": 6320.270011201501,
+          "mean_us": 6410.446921363473,
+          "engine_us_per_op": 6233.88
+        },
+        {
+          "block": 9,
+          "p50_us": 4123.363993130624,
+          "mean_us": 4284.417228482198,
+          "engine_us_per_op": 4199.45
+        }
+      ],
+      "ping": [
+        {
+          "block": 0,
+          "p50_us": 38.22799772024155,
+          "mean_us": 40.39227991597727,
+          "engine_us_per_op": 12.56
+        },
+        {
+          "block": 1,
+          "p50_us": 52.97001916915178,
+          "mean_us": 52.61158075882122,
+          "engine_us_per_op": 17.87
+        },
+        {
+          "block": 2,
+          "p50_us": 37.48599556274712,
+          "mean_us": 38.629911141470075,
+          "engine_us_per_op": 11.9
+        },
+        {
+          "block": 3,
+          "p50_us": 37.617021007463336,
+          "mean_us": 39.069010817911476,
+          "engine_us_per_op": 12.2
+        },
+        {
+          "block": 4,
+          "p50_us": 37.28701267391443,
+          "mean_us": 38.28836925094947,
+          "engine_us_per_op": 11.8
+        },
+        {
+          "block": 5,
+          "p50_us": 37.58698585443199,
+          "mean_us": 40.494410204701126,
+          "engine_us_per_op": 12.88
+        },
+        {
+          "block": 6,
+          "p50_us": 37.15598722919822,
+          "mean_us": 38.15063973888755,
+          "engine_us_per_op": 11.78
+        },
+        {
+          "block": 7,
+          "p50_us": 37.34600613825023,
+          "mean_us": 38.75952184898779,
+          "engine_us_per_op": 11.73
+        },
+        {
+          "block": 8,
+          "p50_us": 37.94700023718178,
+          "mean_us": 42.786248377524316,
+          "engine_us_per_op": 13.86
+        },
+        {
+          "block": 9,
+          "p50_us": 37.475983845070004,
+          "mean_us": 38.923581305425614,
+          "engine_us_per_op": 12.26
+        }
+      ]
+    },
+    "A": {
+      "scan-reject": [
+        {
+          "block": 0,
+          "p50_us": 4185.648984275758,
+          "mean_us": 4203.211129060946,
+          "engine_us_per_op": 4076.94
+        },
+        {
+          "block": 1,
+          "p50_us": 4158.41699577868,
+          "mean_us": 4179.527801752556,
+          "engine_us_per_op": 4080.19
+        },
+        {
+          "block": 2,
+          "p50_us": 4161.823017057031,
+          "mean_us": 4184.321420325432,
+          "engine_us_per_op": 4097.26
+        },
+        {
+          "block": 3,
+          "p50_us": 4172.908986220136,
+          "mean_us": 4279.723381041549,
+          "engine_us_per_op": 4094.81
+        },
+        {
+          "block": 4,
+          "p50_us": 7006.075989920646,
+          "mean_us": 7093.424369813874,
+          "engine_us_per_op": 6849.6
+        },
+        {
+          "block": 5,
+          "p50_us": 6994.878989644349,
+          "mean_us": 7245.47938851174,
+          "engine_us_per_op": 6723.6
+        },
+        {
+          "block": 6,
+          "p50_us": 7083.222008077428,
+          "mean_us": 7382.2416382608935,
+          "engine_us_per_op": 6961.49
+        },
+        {
+          "block": 7,
+          "p50_us": 6667.864974588156,
+          "mean_us": 6926.954537048005,
+          "engine_us_per_op": 6555.33
+        },
+        {
+          "block": 8,
+          "p50_us": 7246.88998889178,
+          "mean_us": 7440.6065011862665,
+          "engine_us_per_op": 7083.34
+        },
+        {
+          "block": 9,
+          "p50_us": 7077.865011524409,
+          "mean_us": 7325.58182120556,
+          "engine_us_per_op": 7014.49
+        }
+      ],
+      "scan-reject-again": [
+        {
+          "block": 0,
+          "p50_us": 7002.290978562087,
+          "mean_us": 7242.474869126454,
+          "engine_us_per_op": 6857.58
+        },
+        {
+          "block": 1,
+          "p50_us": 7010.8239888213575,
+          "mean_us": 7121.631029294804,
+          "engine_us_per_op": 6820.38
+        },
+        {
+          "block": 2,
+          "p50_us": 6885.32498315908,
+          "mean_us": 6953.884118411224,
+          "engine_us_per_op": 6613.09
+        },
+        {
+          "block": 3,
+          "p50_us": 6997.553980909288,
+          "mean_us": 7476.019450696185,
+          "engine_us_per_op": 6627.01
+        },
+        {
+          "block": 4,
+          "p50_us": 7406.63000033237,
+          "mean_us": 7653.201148787048,
+          "engine_us_per_op": 7040.71
+        },
+        {
+          "block": 5,
+          "p50_us": 7245.476997923106,
+          "mean_us": 7375.589791627135,
+          "engine_us_per_op": 7070.95
+        },
+        {
+          "block": 6,
+          "p50_us": 4336.074984166771,
+          "mean_us": 4955.407328088768,
+          "engine_us_per_op": 4570.84
+        },
+        {
+          "block": 7,
+          "p50_us": 6877.26098112762,
+          "mean_us": 6721.558811259456,
+          "engine_us_per_op": 6547.17
+        },
+        {
+          "block": 8,
+          "p50_us": 6588.835996808484,
+          "mean_us": 6685.320389515255,
+          "engine_us_per_op": 6496.88
+        },
+        {
+          "block": 9,
+          "p50_us": 7057.683018501848,
+          "mean_us": 7008.14938172698,
+          "engine_us_per_op": 6817.7
+        }
+      ],
+      "ping": [
+        {
+          "block": 0,
+          "p50_us": 37.91702329181135,
+          "mean_us": 39.76822190452367,
+          "engine_us_per_op": 12.35
+        },
+        {
+          "block": 1,
+          "p50_us": 38.408004911616445,
+          "mean_us": 46.93953989772126,
+          "engine_us_per_op": 14.41
+        },
+        {
+          "block": 2,
+          "p50_us": 37.81699342653155,
+          "mean_us": 39.50696991523728,
+          "engine_us_per_op": 12.18
+        },
+        {
+          "block": 3,
+          "p50_us": 37.81699342653155,
+          "mean_us": 39.328207494691014,
+          "engine_us_per_op": 11.99
+        },
+        {
+          "block": 4,
+          "p50_us": 37.85701119340956,
+          "mean_us": 39.1300895716995,
+          "engine_us_per_op": 11.95
+        },
+        {
+          "block": 5,
+          "p50_us": 37.685997085645795,
+          "mean_us": 38.94628054695204,
+          "engine_us_per_op": 11.74
+        },
+        {
+          "block": 6,
+          "p50_us": 37.91702329181135,
+          "mean_us": 39.211209514178336,
+          "engine_us_per_op": 12.08
+        },
+        {
+          "block": 7,
+          "p50_us": 37.80698170885444,
+          "mean_us": 39.055228407960385,
+          "engine_us_per_op": 11.82
+        },
+        {
+          "block": 8,
+          "p50_us": 38.02799619734287,
+          "mean_us": 39.4293203135021,
+          "engine_us_per_op": 12.25
+        },
+        {
+          "block": 9,
+          "p50_us": 38.107013097032905,
+          "mean_us": 40.2493987348862,
+          "engine_us_per_op": 12.41
+        }
+      ]
+    }
+  }
+}
