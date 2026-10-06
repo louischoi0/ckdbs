@@ -1037,7 +1037,7 @@ census.
 | BA-Q11 | **A yield every 64 pages, and a `C_CANCEL` handler** (BA-R12) | user-visible | Yes, with 64 re-measured in the stage |
 | BA-Q12 | **Placement**: the least-loaded hand-off as the default above one core, only if material (BA-R13) | user-visible | As stated |
 | BA-Q13 | **Waits stay blocking**: no suspending latch primitive (§1.0); every fix holds less, less often | architecture | Yes |
-| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back  **Marked (b) by the operator, 2026-10-06** (`raft-marks-2026-10-06.md` §4), as its own sub-milestone BB |
+| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back. **Marked (b) by the operator, 2026-10-06** (`raft-marks-2026-10-06.md` §4), as its own sub-milestone BB |
 
 ## 5. Sequencing
 
@@ -1322,8 +1322,10 @@ three loads at one core. A commit adds one null test in `EndCommit`.
 BA-S1b was about to start on BA-Q14 (a): CLA had asked, and the operator
 answered (a) (`raft-marks-2026-10-06.md` §4). The operator then asked how
 wide (a)'s flag reaches, which is the whole relation, for good, and which
-paths produce the misorder: one, and it fires at every collision of
-concurrent omitted-pk inserts. On those answers the operator re-marked
+paths produce the misorder: one, CLA answered, and it fires at every
+collision of concurrent omitted-pk inserts (BB's survey then found a
+second, a named key at or above the mark, BB §1.3). On those answers the
+operator re-marked
 BA-Q14 **(b)** and paused BA for a sub-milestone,
 `workorder-bb-issue-under-the-leaf.md`. Nothing of BA-S1b was built: its
 worktree `ba-s1b-leaf-order-key-order` holds no change from `bddd450c`.

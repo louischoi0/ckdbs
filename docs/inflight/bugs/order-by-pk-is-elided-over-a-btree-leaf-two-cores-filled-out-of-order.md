@@ -74,9 +74,12 @@ run.
 under `LIMIT` it can return a different set of rows. No error is raised,
 and `DESCRIBE` still reports `key_order=ascending`.
 
-**Not checked:** whether any range walk stops at the first slot above its
-bound, on the assumption that slots are sorted. If one does, a range
-predicate would drop rows in the same way.
+**Answered by reading at `eeeff079`** (BB-S0's review, BB §1.10): no
+range walk stops at the first slot above its bound. Range pruning is per
+page (`src/exec/step_vm.cpp:1792`), and an index range stops on its own
+sorted entries (`:1314-1316`). Two more readers rest on the same premise
+and are wrong with it: the Cabin serve's pk sort (`:1595`) and the index
+step's pk sort (`:1359-1371`).
 
 **A heap relation** (creatable only before SUS-1) has the same window:
 
