@@ -468,6 +468,15 @@ today.
     takes.
 - A descent that cannot hold its leaf after `kMaxDescentRestarts` restarts
   is refused `TxnConflict`, as today.
+- **Nothing there begins a transaction, carves a transaction-id block, or
+  flushes the store** (added at BB-S1, from its census). A `kWait` flush
+  waits on another core's writeback claim, and that writeback can be waiting
+  on the leaf this insert holds; `HeldFrames::kWait`'s premise - no flush
+  caller holds a page latch - is what keeps the claim protocol sound, and
+  nothing enforces it. The reachable instance is a transaction-id carve:
+  `TransactionManager::Begin` and `MaybeBurnIdleBlock` persist the ceiling
+  through `store_->Sync()`, a `kWait` flush. Every such caller sits outside
+  any page hold today.
 
 **BB-R6 — the invariant is checked, not only argued.**
 
@@ -720,3 +729,166 @@ CLA의 제안에 따름, btree가 항상 정렬 되고 파괴적인 오버헤드
 The baseline: the full Debug suite green at `6dc792c9` on this worktree,
 `ctest -LE heap-suspended -j8`, 116.9 s, one cell disabled
 (`CommandDispatcherTest.HeapSuspensionIsLifted`, as on `main`).
+
+### BB-S1 — the latch-order census, built 2026-10-06
+
+Built on `worktree-bb-issue-under-the-leaf` from `c566a4a4`, whose `src/`
+and `include/` are `6dc792c9`'s; the census reads the tree at `6dc792c9`. No
+engine change.
+
+- **The census** is below: five read-only surveys (A-E, one per latch
+  family), each reverse candidate re-read adversarially, and a completeness
+  pass over every `Latch`, `std::mutex` and blocking wait in `src/` and
+  `include/`. Ten agents, nothing built or run.
+- **The verdict: no inversion.** Nothing holds a `sys.tables` chain page, a
+  partition latch, a var-heap page or the WAL stream latch and then asks a
+  user relation page, directly or through a third latch. BB-Q4's condition is
+  met and BB-R4 stands as proposed.
+- **The declaration**, in BB-R4's homes:
+  - the page pair, user relation page then `sys.tables` chain page, in
+    `page.md` §6 and in `device_page_store.hpp`'s page-latch section, with a
+    pointer from `catalog.md` CT7;
+  - AR2-R2 amended to its intent - a partition latch is taken with **no park
+    under a page latch** - in `txn.md` §5, `lock_table.hpp`'s order comment
+    and `sched.md` §9-2;
+  - `rules.md` §3's page-latch, catalog-pages and lock-table rows pointing at
+    those homes.
+- **Found on the way, and not BB's**: a write walk's `WHERE` sub-chain reads
+  leaves under the walk's exclusive leaf hold, so two `UPDATE`s or `DELETE`s
+  on two cores can hang both reactors. None of BB's edges takes part in it.
+  Settled by CLA's proposal under §7's word: **recorded, not fixed in BB** -
+  `docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`,
+  with its three fix candidates - and `rules.md` §3's page-latch row
+  corrected, since it stated the opposite. BB-S5 carries it.
+- **BB-R5 gains a bullet**: nothing between the descent and the placement
+  begins a transaction, carves a transaction-id block or flushes the store.
+  The census found the reachable instance - a transaction-id carve's
+  `kWait` flush - outside every page hold today, and nothing enforcing it.
+- **Stale text corrected with the declaration**: `device_page_store.hpp`'s
+  *"held across a durability wait only on the fault path"* (no path does;
+  the fault's sweep only queues) and the same clause in `rules.md` §3.
+
+- **Surveyed:** (A) every holder of a `sys.tables` chain page; (B) every taker of a lock-table partition latch or the wait-for latch; (C) every holder of a catalog page (pages 5-14, overflow, page 0) that then asks a user page; (D) cycles through a non-page latch; (E) var-heap, heap chain and index pages as holders, and btree page against page.
+- **Tree:** read, not run, on `worktree-bb-issue-under-the-leaf` at `6dc792c9`; every line number is at that commit. B, the verify passes and the critic read at `c566a4a4`, whose `src/`, `include/` and `sim/` are `6dc792c9`'s. In the working tree, another session's seam at command_dispatcher.cpp:5117 shifts that file's later lines by one.
+- **Verdict:** no path inverts BB-R4's order - (1) user page, (2) `sys.tables` chain page, (3) partition latch, (4) WAL stream latch. No holder of a level 2-4 latch, a var-heap page or an undo page asks a user page, directly or through a third latch. BB-R4 is declared as proposed; BB-Q4's condition is met.
+- **Critic:** a completeness pass re-grepped every page-7 touch, lock-table call site, latch and blocking wait, and found no reverse edge the five surveys missed. Its nine missing rows all agree or are not edges; they are folded in, marked (critic).
+- **One real cycle, not BB's:** a write walk's `WHERE` sub-chain reads leaves under the walk's exclusive leaf hold - a cross-core ABBA inside level (1) that predates BB and has no E1-E4 edge in it. It is recorded as a bug; BB-R4 orders no user page against another and points to page.md §6's owed order.
+- **Method:** five separate surveys; every reverse candidate re-read adversarially. A bare `:N` is in the last file named in the same cell, else in command_dispatcher.cpp.
+
+#### Every path that holds a `sys.tables` chain page
+
+| path | holds (file:line) | then asks (file:line) | through a third latch | verdict |
+|---|---|---|---|---|
+| AllocateRowId: omitted-pk INSERT (:5106); id issue for sys.indexes, cabins, fkeys, patterns, assertions (index_ddl.cpp:294, assertion_catalog.cpp:493, catalog.cpp:2800/:3067/:3183/:3405) | catalog.cpp:2456 -> ForFirstRow :176, X, one chain page at a time (:198-200) | OverwriteLogged :2484 -> WAL :242 (wal/manager.cpp:329); StampPageLsn catalog.cpp:244 | structure latch (device_page_store.cpp:1253, :2337); logger | agrees (2 -> 4). E1's asked half. No page is held at :5106 today. It scans every chain page X (catalog.cpp:154-156) |
+| AllocateRowIdRange (sorted fill, :4821) | catalog.cpp:2415 -> :176, X | :2443 -> WAL :242; StampPageLsn :244 | structure latch | agrees (2 -> 4). Heap only, SUS-1-gated. The range borrow (:4846) comes after the release |
+| AdmitExplicitRowId and its before_mark hook (named-key INSERT, :5087; the key_order flip) | catalog.cpp:2520 -> :176, X, on the row's page | hook :2558/:2594 -> command_dispatcher.cpp:5089-5096 -> :8360 -> :8129 -> TryAcquire :8187/:8238 -> lock_table.cpp:174; DropWake (command_dispatcher.cpp:8124); then catalog.cpp:2570/:2598 -> WAL | partition latch. NoteBlockingWriter :8405 and MemoIsCurrent :8209 are lock-free | agrees (2 -> 3, 2 -> 4). Never parks (catalog.hpp:691-699). BB-R3 deletes the hook |
+| GetSysTableRow (ScanAll), the only shared reader | catalog.cpp:1379 -> :91 -> heap_chain.cpp:311, S, one page at a time (:289-298) | nothing; IsInFlight (instance_visibility.cpp:249) is lock-free | none. The view is null, so no window latch | not an edge |
+| DELETE's reverse FK check, InitTableAccess miss (§1.6's precedent) | parent page X (:9009, :8986) -> :8888 -> :3590 -> catalog.cpp:2196 -> :1379, page 7 S | nothing. Released before catalog.cpp:2201 and the anchor (:2250) | partition latch before it (:8864, released); page 11 X after it (:3608) | agrees (1 -> 2) |
+| UPDATE's self-referencing FK arm; WHERE sub-chains in UPDATE, DELETE, SELECT | user page X (:7611, :9009) or S, then page 7 S on a miss: :7328 -> :3470 -> catalog.cpp:2196/:1379, or :7230/:8803 -> step_vm.cpp:2735 -> :424 -> :285 -> :296 | nothing | none | agrees (1 -> 2). The self-referencing arm is dead code |
+| SHOW CABIN_OPTIMIZER (critic) | view latch :3201, the latch expeditor.cpp:1903 takes | page 6 S (:3230 -> :3714); on a miss, page 7 S (:3235 -> catalog.cpp:2196 -> :1379), anchor S (:2250), pages 12/13/8 S; collector latch (optimizer_signals.cpp:97) | view latch, outermost | agrees: view latch before (2). Taken with no page or partition latch held |
+| Cabin controller tick -> CreateCabin | view latch, expeditor.cpp:1903 | cabin_optimizer_exec.cpp:267 -> catalog.cpp:3038 (page 7 S) -> AllocateRowId :3067 (page 7 X, WAL) -> page 12 X :3075; cabin_optimizer_exec.cpp:292 | view latch, outermost | agrees: view latch before (2) |
+| InsertRelationRow -> InsertRow (CreateTable catalog.cpp:1344; Bootstrap :633; BootstrapAssertions :797) | catalog.cpp:1135 -> :437, tail X (full pages released at :457) | undo hook :395 -> command_dispatcher.cpp:5605 -> :5627 -> manager.cpp:718 -> undo_log.cpp:154 (X :89, :104, :133, :173; WAL :66); catalog.cpp:404 -> WAL :242; on growth :463 -> CreateAt :359, :475, :501, FPI :504 | undo page (a sink); window latch on undo growth (undo_log.cpp:100 -> :73 -> manager.hpp:336-338 -> instance_visibility.cpp:325); structure and map latches (device_page_store.cpp:1094-1095) | agrees (2 -> 4). Nothing else is held at :1344: page 6 is scoped to catalog.cpp:1321-1341 |
+| DropTable's sys.tables sweep (:2662) | catalog.cpp:2063 -> :1998 -> :2003 -> :176, X, one page at a time | undo hook :2026 -> undo page -> WAL; :2033 or :2014 -> WAL | undo page; window latch | agrees (2 -> 4). The caller holds the relation's X unit, and no page |
+| RegisterPattern (trail_recorder.cpp:57 <- command_dispatcher.cpp:6763; C cites :6881) | page 9 X, catalog.cpp:2793 | :2796 (page 9, re-entrant); AllocateRowId :2800 -> page 7 X -> WAL; InsertRow :2823 | as AllocateRowId | BB-allowed catalog -> sys.tables. Page 9 ranks before page 7. Against CT7's text |
+| InsertAssertion | page 14 X, assertion_catalog.cpp:214 | :51 -> on a miss catalog.cpp:2196 (page 7 S), :2201, :2316/:2335/:2357 (pages 5/12/13/8 S); assertion_catalog.cpp:247, :250, WAL :257 | sys.assertions' own var-heap (catalog.cpp:790) | BB-allowed catalog -> sys.tables, on a miss only (the entry is filled at assertion_catalog.cpp:195). Page 14 ranks before page 7 |
+| Callers that hold nothing at page 7 | nothing | AllocateRowId: catalog.cpp:3067, :3183, :3405, index_ddl.cpp:294, assertion_catalog.cpp:493. GetSysTableRow: catalog.cpp:3453, catalog_view.cpp:60, command_dispatcher.cpp:1767, :2021, mount_recovery.cpp:166. InitTableAccess at bind: catalog.cpp:1739, :3156/:3158, :3312; command_dispatcher.cpp:5864 | none | not an edge |
+| Other CT7 root holds | page 6: catalog.cpp:1328, :1814, :1863, :1608; page 5: :1651; page 8: :3433; page 12: :3075; page 11: :2950 | own chain, WAL, CreateAt | structure latch; window latch (check views) | not an edge: none of them asks page 7 |
+| UpdateRelationDescPage, UpdateIndexRoot (:5260) | anchor X, catalog.cpp:1091 | WAL :1114 | none | not an edge: no sys.tables page is touched (catalog.cpp:2645-2657, :3567-3577) |
+| Abort's compensation of a sys.tables row | manager.cpp:438, X | in place (:495, :512, :532), with no WAL (:491). On a mismatch it releases (:462) before :463 | none | not an edge. It runs at the decide, with no page held |
+| Delete-mark purge and mount finalize (well_known.hpp:399-403) | catalog.cpp:940 -> heap_chain.cpp:302, X | catalog.cpp:958 -> manager.cpp:801; catalog.cpp:962; :970 -> WAL | window latch (instance_visibility.cpp:305), a leaf | agrees (2 -> 4). Callers: :5794 and expeditor.cpp:906 |
+| Checkpoint writeback of page 7 | checkpointer.cpp:214 -> device_page_store.cpp:1824: the claims (:1482-1518), then page 7 S at :1537, released at :1581 | structure latch :1549. The WAL gate (:1607) comes after the release | writeback claim | not an edge: no page-7 X holder waits on a claim |
+| Recovery, mount load, BootstrapAssertions, SHOW PAGE 7 | page 7 X (wal/redo.cpp) or S (mount_recovery.cpp:166, command_dispatcher.cpp:1856). BootstrapAssertions holds page 14 across catalog.cpp:790 and inserts into pages 6/7/5 | WAL, at mount | none | not an edge: the mount thread runs alone (device_page_store.hpp:166-170). BB-Q9's refusal is not built at 6dc792c9 |
+
+#### Every path that takes a lock-table partition latch
+
+| path | holds (file:line) | then asks (file:line) | through a third latch | verdict |
+|---|---|---|---|---|
+| AcquireInner's grant (TryAcquire, the engine's only ask) | the key's partition latch, lock_table.cpp:174 (null at cores=1, :68-:75) | No latch. Vector work :177-:314; atomics :190/:205/:221; RegisterWake :262 -> :642; slot store :281. Released at :315 | none. The old wait is withdrawn at :159, before :174 | not an edge |
+| Verify: FenceCoversKey, ConflictingOverlap; the unwind's ReleaseOne | lock_table.cpp:614, :654, one partition at a time; :357 | RegisterWake :628/:701. verify_hook_ (:328, :351) runs unlatched | none | not an edge. Cost: a fenced relation (:347) scans 64 x cores partitions |
+| ReleaseHeld -> WakeWaiters -> KickAll | lock_table.cpp:533 (dropped at :552), then :445 (dropped at :451) | erase and FlipSlot. KickAll :455 runs after release: waker_table.hpp:103-113, eventfd (waker.cpp:37) | the rig's SimWakerTable latch (sim_waker_table.cpp:27), outside any partition | not an edge |
+| DequeueWaiter, DropWake | lock_table.cpp:480, :509 | erase; FlipSlot :492. KickAll :503 after release | none | not an edge |
+| LockTable::Release | lock_table.cpp:588 -> :533, one partition at a time | DequeueWaiter :596; ClearWaitFor :599 -> wait_latch_ :421 (gated at :420), after the guards close | wait_latch_, never nested with a partition latch | not an edge |
+| Wait-for graph | wait_latch_, lock_table.cpp:375, :421, :430 | vector walk | none. Its callers (command_dispatcher.cpp:375, :383, :440, :611, :613, :626) hold no page | not an edge |
+| WaiterCount, EntryCount (critic) | lock_table.cpp:712, :722, one partition at a time | a vector scan | none | not an edge. Test callers only (lock_table.hpp:776/:782) |
+| ReleaseIf (FK give-back) | lock_table.hpp:650 -> lock_table.cpp:533 | nothing. The predicate (lock_table.hpp:649; command_dispatcher.cpp:3538-3547) runs unlatched | none | not an edge |
+| Write resolve, the read borrow's IS (:4622, :7036, :8745 -> read_borrow.hpp:75 -> :97 -> :139) | no page | lock_table.cpp:174 | none | not an edge |
+| Compile-time bind (:6477-6479, :7070, :8761 -> step_compiler.cpp:1540) | no page (step_compiler.cpp:1533 has returned) | partition latch | none | not an edge |
+| Step VM read walk (step_vm.cpp:1954, :2011 -> read_borrow.hpp:97/:125, :108/:127) | no page. :2011 runs after the leaf's PageRef dies (btree.cpp:1191-1192) | one partition at a time | none. Nested runners get no sink (step_vm.cpp:419, :2759) | not an edge |
+| ReadBorrow destructor (read_borrow.hpp:80) | no page. The point arms' leaf (:7574, :8986) dies first | partitions, then wait_latch_ | none | not an edge |
+| DDL relation X (:8096 from :2244, :2647, :2848) | no page. The CT7 hold comes later | partition latch, verify | none. Parks at :625 with no page | not an edge |
+| INSERT's relation IX (:4669 -> :8365 -> :8187) | no page | partition latch. MemoIsCurrent (catalog.hpp:245-248) is atomic | none | not an edge |
+| FK forward hoist (:3381, from :4714, :4785, :7128) | no page (:3361 has returned) | partition latch; CheckParentPresent (:3391) runs after the grant | none | not an edge |
+| FK self-referencing arm from INSERT (:3466, :3537, from :5009, :4808) | no page | partition latch | none | not an edge. Dead code |
+| FK self-referencing arm from UPDATE (:7328 -> :3466, :3537) | leaf X: btree.cpp:1191 via :7611-7612, btree.cpp:191 via :5891/:7574, or heap_chain.cpp:302 | lock_table.cpp:174 (:614 when fenced). Then a descent (:3472 -> fk_check.cpp:100) | none | agrees (1 -> 3). Dead code |
+| Sorted fill's range (:4852) | no page. Page 7 was released at :4821 | partition latch; lock_table.cpp:654 | none | not an edge. BB-R7 moves it under the start tail: agrees (1 -> 3) |
+| INSERT named key, today (:5087-5099 -> catalog.cpp:2558/:2594 -> :5091 -> :8187, :8238) | sys.tables page X (catalog.cpp:176) | partition latch (lock_table.cpp:174, even on the already-held exit at :188-194). On refusal: :8124, and :8400 -> manager.cpp:767 (lock-free) | none | agrees (2 -> 3). Never parks. BB-R3 deletes it |
+| INSERT omitted pk, today (:5112) | no page. :5106 released page 7 | partition latch | none | not an edge today. Under E2, leaf X -> page 7 X -> partition: agrees (1 -> 2 -> 3) |
+| UPDATE/DELETE declared unit (:7167, :8825) | no page | partition latch, then ConflictingOverlap | none | not an edge |
+| UPDATE's per-row tuple X (:7273) | leaf X: btree.cpp:1191 via :7611-7612, btree.cpp:191 via :7574 -> :5891, or heap_chain.cpp:302 | lock_table.cpp:174 (:614 when fenced); then :8413 -> IsInFlight (lock-free) | none | agrees (1 -> 3). §1.6's precedent. The park is at :403, after release |
+| DELETE's per-row tuple X (:8864) | leaf X: btree.cpp:1191 via :9009, or btree.cpp:191 via :8986 | lock_table.cpp:174 | none | agrees (1 -> 3). Never parks |
+| DELETE's child-row wake (AY-Q8: :8888 -> :3631 -> :3668, :3671, :8124) | the parent leaf X. The child pages (:3601) are released | lock_table.cpp:174, :533, :509 | none | agrees (1 -> 3). TryAcquire, never parks |
+| Statement-end waits and parks (:375-:440, :611-:632, :872, :8007, :8534) | no page. A mid-walk refusal has already stopped with kStop | a partition latch or wait_latch_, one at a time | none | not an edge. The only two parks are :403 and :625 |
+| Decide release (manager.cpp:381, :604; manager.hpp:369) | no page, WAL or window latch (manager.cpp:320, :351 have returned) | partitions, then wait_latch_ | none | not an edge (txn.md:867-871) |
+| Startup (expeditor.cpp:990, :1596) | nothing | nothing | none | not an edge |
+
+#### Third latches and the other holders
+
+| latch or holder | taken at (file:line) | held across, or asks (file:line) | asked under | closes a cycle with E1-E4? |
+|---|---|---|---|---|
+| Frame-table structure latch | device_page_store.cpp:1956, :2337-2338, :1253, :2427, :2351 | map latch :1095. It never waits for a page latch while held: it drops at :2075 before :2079, and at :2149 and :2195. :2008 releases it. The sweep only tests IsHeld (:2580, :827, :1805) | every page hold | No: innermost |
+| Free-map latch | device_page_store.cpp:1095 under :1094; :1344 -> :357 | nothing | a page, through CreateNew (splits, chain growth, varheap.cpp:289/:349, assertion_build.cpp:164) | No: a leaf, with its order debug-asserted |
+| Device grow lock | no line cited | nothing | page allocation | No: a leaf |
+| WAL stream latch | wal/manager.cpp:329 -> wal/stream.cpp:152; ring-full drain manager.cpp:343 | segments_mutex_ only (file_log_device.hpp:112) | page 7 X, var-heap X, leaf X, undo page | No. stream.cpp has no page store, and redo holds no stream latch |
+| WAL writer mutex, EnsureDurable | wal/writer.cpp:34 | nothing; the device Sync runs outside it (writer.cpp:76) | no page: device_page_store.cpp:1366, :1608 (after :1581); command_dispatcher.cpp:956/1245/4229 | No |
+| Writeback claim (kWait) | device_page_store.cpp:1515 | page S at :1537, released at :1581; EnsureDurable :1608 | Only kWait waits on a claim (:1378 via :1525). Every caller holds no page: checkpointer.cpp:214, superblock_checkpoint_anchor.cpp:126, expeditor.cpp:1175, core_runtime.cpp:595, command_dispatcher.cpp:1252, expeditor.cpp:2045 | Only if a kWait flush ran under BB's hold. BB-R5 forbids it |
+| Trx-id carve with a kWait Sync (critic) | trx_id.cpp:26 (superblock latch, closed before :49); Begin manager.cpp:155 (from command_dispatcher.cpp:2843, :7731, :7971); MaybeBurnIdleBlock manager.cpp:611/:630 | persist trx_id.cpp:49 -> expeditor.cpp:1173 -> :1161 -> page 0 X :1162 -> Sync :1175 -> device_page_store.cpp:1733 -> WriteBack(kWait): page S :1537, AwaitWritebackClaim :1525/:1378 | nothing: the callers hold no page latch | No: an outer waiter on the insert's frames. It is live every kTrxIdBlockSize begins and on idle burns |
+| Background drain (kSkip) | device_page_store.cpp:1665 (claims :1515) | TryAcquire S :1538, never waits; skips claimed frames (:1488-1493) | nothing (expeditor.cpp:1928; :1699 has no caller) | No |
+| CheckpointGate | checkpointer.cpp:323 | FlushPages :214, WAL, anchor publish :278 | nothing: a try-flag (checkpointer.hpp:244) | No |
+| Superblock latch | superblock_checkpoint_anchor.cpp:89, expeditor.cpp:1161, trx_id.cpp:26 | page 0 X (superblock_checkpoint_anchor.cpp:105, expeditor.cpp:1162). Sync after release | no page | No: outer to page 0, a sink |
+| Visibility window latch | instance_visibility.cpp:86/271/305/314/325 | memory; kicks after release (:99-103) | page latches: read_view.hpp:128; undo growth (undo_log.cpp:100 -> instance_visibility.cpp:325); the purge (catalog.cpp:958) | No: a leaf. It contradicts the declared "never nested" text |
+| In-flight tables | manager.cpp:767 -> instance_visibility.cpp:249 | atomics | pages | No: not a latch |
+| Partition latches, wait_latch_ | the table above | nothing | leaf X, page 7 X | No: leaves |
+| Assertion directory latch | assertion_check.cpp:172, :431, :480, :500, :538, :588, :648, :681, :703, :766, :796 | WAL only (checkpointer.cpp:122; AdoptLogged; :500). Commit and Abort release before store.Get (:766-:784, :796 -> :823) | user page X | No. Its scopes close before ReserveOne |
+| Assertion chain latch, Bound Cabin pages: UPDATE (AdmitAndReserveUpdate) | assertion_check.cpp:681, chain latch :464, under UPDATE's page X | cabin page X (assertion_build.cpp:90-113, :164) -> directory latch (assertion_check.cpp:500) -> WAL | the user page (assertion.md §6.1's order) | No: agrees |
+| Same, INSERT's ReserveInsert (critic) | :5194, under placed.held (leaf X and split parents, from :5134, cleared at :4319) | assertion_check.cpp:538 (closed before :563) -> :563 -> :464 -> :480 -> Place :491 (assertion_build.cpp:95/:101/:158, CreateNew :134) -> assertion_check.cpp:500 -> WAL -> :520 | the leaf | No: agrees. Census D had it outside the hold; LogInsert (:5241) clears the holds after it |
+| Same, DELETE's ReserveDelete (critic) | :8912, under the leaf X (:9009, :8986, or heap_chain.cpp:302) | assertion_check.cpp:675 -> :685 -> :464 -> :491 -> :500 -> WAL | the leaf | No: agrees |
+| Cabin store mutexes, collector latch: UPDATE | cabin_store.cpp:134/:138; optimizer_signals.cpp:70-109 | memory. Signals fire outside (cabin_store.cpp:141-144) | UPDATE's page X (:7502) | No: leaves |
+| Same, INSERT's Cabin witness (critic) | :5156 -> :6863 (re-entrant GetForRead on the held leaf) -> :6868 | cabin_store.cpp:134/:138 | placed.held | No: leaves |
+| Optimizer view latch | expeditor.cpp:1903; :3201 (critic) | page 7 S/X, page 12 X, pages 6/12/13/8 S, user leaf S, var-heap S (cabin_optimizer_exec.cpp:140, :267, :292) | nothing: both takers start with no page held | No: outermost |
+| Connection handoff inbox latch (critic) | connection_handoff.cpp:26, :42 | a queue push or drain | no page, partition or WAL latch | No |
+| Catalog memo, schema word, wake registry, ceiling marker | catalog_cache.hpp:47; catalog.cpp:904; waker.cpp:28-37; manager.cpp:311-363 | nothing | anything | No: not latches |
+| This core's undo pages | undo_log.cpp:89, :104, :133, :173; hook command_dispatcher.cpp:5605, fired at catalog.cpp:395/:1891/:1963/:2026/:3518 | WAL (undo_log.cpp:66/:179), structure and map latches, the window latch. Read copies and releases (:186-207) | catalog pages, var-heap pages, leaves | No: a sink, held X by its own core only (expeditor.hpp:817, core_runtime.hpp:586) |
+| Same, INSERT's own kInsert record (critic) | :5221 -> manager.cpp:718 -> undo_log.cpp:165 | :89, :100 -> instance_visibility.cpp:325, undo_log.cpp:104/:133, :173, WAL :66 | placed.held | No: a sink |
+| Page 11 under a user page: DELETE :3608; UPDATE's self-referencing arm :7328 -> :3475 (critic) | :3301 -> catalog.cpp:2950 (page 11 X) | :2957 own chain; InsertRow :3017, unlogged; CreateAt (catalog.cpp:357-360) | the walk's leaf X | No: page 11 asks no page 7, no user page and no partition latch |
+| Var-heap pages | varheap.cpp:324 (S, one hop at a time), :331 (tail X); Fetch :382 via row_codec.cpp:1074 | own new page, forward (:349, :367, link :369); undo (:4182/:4238); WAL (wal_row_log.cpp:37/:50/:63/:66) | leaves, heap pages. Readers go user -> var-heap | No: E3 agrees (UPDATE :7418). Side finding: :331 re-checks no link, so a peer's page can be orphaned (a leak only) |
+| ReleaseVarHeapSlot; mount sweep | varheap_release.cpp:15; varheap_sweep.cpp:30 -> :46 (the known self-upgrade bug) | WAL :44, :47 | nothing: Abort holds no page (manager.cpp:564), and the sweep runs only at mount (expeditor.cpp:938) | No |
+| Heap chain pages | heap_chain.cpp:38, :90, :210; walks :311, ring device_page_store.cpp:881-882 | forward only (heap_chain.cpp:139/:243, :168/:253) | the write walk (:5405) | No: BB-R7's tail edges agree. Side finding: ChainAppendBatch has the unchecked tail (:197-203, :210, :253), and ChainInsert returns the old tail's hold (:171-172) |
+| Secondary index pages | index_tree.cpp:164 -> :167 -> :81; divide :408 -> :247, bottom-up | index pages (:419/:494/:523), WAL (index_maintain.cpp:146-172; command_dispatcher.cpp:4150-4153, :4169, :4172) | the clustered leaf (:5174, :7509) | No. Probe (step_vm.cpp:1298, then :1390) and backfill (index_ddl.cpp:165, then :113-115) are two-phase |
+| Anchor page | catalog.cpp:2250 S to :2373; X at :1091 | pages 12/13/8 S; WAL :1114 | a split's leaf (catalog.cpp:2663; index_maintain.cpp:195); CreateIndex at catalog.cpp:3458, after :3441 | No: anchor -> catalog agrees |
+| Btree descent, parents, splits | btree.cpp:191 (leaf X); internal S per level (:176); SecureParents :953 -> :514 | right neighbour S (:203 -> :103; skipped at :102 only while the leaf has no right sibling); re-descent above the held levels (:504); CreateNew only (:392, :618, :639, :759, :985) | point UPDATE/DELETE (:1095), BtreeInsert (:891) | Not with E1-E4. The right-neighbour read is a level-1 member of the cycle below, and an insert whose leaf another core split before its X grant takes it. LogInsert's FPI of a split's new leaf (command_dispatcher.cpp:4283) is uncontended |
+| Write walk WHERE sub-chains | btree.cpp:1192 (via :5510; :7611/:9009); heap_chain.cpp:302 (via :5405); btree.cpp:191 (via :5891-5892) | :7230/:8803 -> step_vm.cpp:2747-2766: any relation's leaves, S, either side | another such walk, a descent, or the reverse-FK walk | It reverses inside level (1). It is real, but it is not an E1-E4 edge |
+| DELETE reverse FK under the parent | :8888 (parent X) | child walk (fk_check.cpp:407; the visitor body is :366-370); :218, :237; page 7 S :3590; partition :3640-3660; page 11 X :3608 | nothing asks the parent under a child | No. FK edges are acyclic; it closes a cycle only with a sub-chain |
+| Catalog -> catalog nestings | catalog.cpp:2793 (page 9 X); assertion_catalog.cpp:214 (page 14 X); BootstrapAssertions | page 7 X (catalog.cpp:2800); pages 7/5/12/13/8 S (assertion_catalog.cpp:51 -> catalog.cpp:2196-2357) | statement end, DDL, mount | No. Pages 9 and 14 rank before page 7 |
+| Other catalog holds (pages 5-14, 0) | catalog.cpp:1328, :1814, :1863, :1608, :1651, :1935/:2003, :2838, :2950, :3075, :3112, :3202, :3433, :3484, :940-941; assertion_catalog.cpp:285-286 | own chain, a created page, the undo page, WAL | nothing user-side | No (dimension C) |
+| DDL builds, fault eviction, rollback | index_ddl.cpp:294/:377/:379/:385; assertion_catalog.cpp:493, :502-553; cabin_optimizer_exec.cpp:267/:140/:292; device_page_store.cpp:691-695 -> :2536; manager.cpp:438 | No catalog page is held across a build. Eviction skips latched frames (device_page_store.cpp:2580), and CreateAt latches no existing id (:1042-1100). Compensate releases at manager.cpp:462 before :463 | any hold | No |
+
+#### Reverse candidates and how each was settled
+
+- **Fault-path writeback under BB's hold - refuted.** InsertFrame's sweep (device_page_store.cpp:693) only queues dirty frames (:2592-2596), and WriteBack's callers (:1665 kSkip via expeditor.cpp:1928, :1722, :1824) hold no page. Recorded: device_page_store.hpp:170-184's bullet corrected. EVT02 owes kSkip only, and must refuse a frame its own core holds: a shared TryAcquire re-enters an own-core X hold (page_latch.hpp:236) - a lost-write risk, not a lock edge.
+- **A kWait flush from Begin's carve - reachable today, never under a page hold.** Census D listed it as hypothetical; the critic found it live (the carve row above): every kTrxIdBlockSize begins and on idle burns, Sync -> WriteBack(kWait) waits on claims. Every Begin caller (:2843, :7731, :7971) runs before any page, and E1-E4 reach no flush (WalManager's ring-full Flush touches no PageStore). Nothing enforces it: a SharedHoldsHere assert would miss exclusive holds (device_page_store.cpp:2323); a check needs a thread-local count of holds in both modes. Recorded: this is why BB-R5 now forbids beginning a transaction, carving a transaction-id block or flushing the store between the descent and the placement.
+- **Page against page among user leaves - real, not a BB cycle.** A WHERE sub-chain runs per row, synchronously, under the walk's leaf X (:7230/:8803 -> step_vm.cpp:2763, :166-176; step_compiler.cpp:1418-1436). It takes no partition latch (step_vm.cpp:2759), IS is compatible with IX, and a page-latch wait spins forever (page_latch.hpp:160-170). Members: mirror UPDATEs over two relations; same-relation walkers; the DELETE reverse-FK walk (fk_check.cpp:407); the right-neighbour read of a point write or BtreeInsert (btree.cpp:891, :1095) against a leftward walker. Not BB's: every member holds and asks only level-1 pages, E1-E3 ask levels 2-4, and E4 re-descends only through internal nodes above its holds (btree.cpp:467-471), which no walker holds. Recorded: docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md, which must drop "the inserter asks no other user leaf (btree.cpp:102)" and say TryAcquirePageLatchShared (device_page_store.cpp:2407) is a private writeback helper, its only caller :1538; rules.md §3's page-latch row corrected. Smallest fix, outside BB: a non-blocking shared fetch for a sub-chain under a write hold, a busy page returning a retryable status through AO-S3b's WalkCursor (:5480-5503); statements without sub-chains pay nothing (step_vm.cpp:2747).
+- **A self-referencing FK under the leaf (:7328, :5009) - unreachable.** The key cannot be declared (:3987-3993; tests/foreign_key_test.cpp:464-471), so the arm (:3454-3472) is dead code.
+- **The window latch under a page - a real nesting, one-directional.** No window-latch holder asks a page (instance_visibility.cpp:271, :305, :325). Recorded as stale text below.
+- **The critic's three cycle candidates - no cycle.** The view latch: nothing holding page 7, a leaf or a partition latch asks it. The assertion chain: directory-latch scopes never nest the chain latch, and no chain, directory or Bound Cabin holder asks page 7, a user page or a partition latch. Begin's carve against BB's leaf and page 7: the flush waits on the insert, never the reverse, while Begin and MaybeBurnIdleBlock stay outside every page hold - BB-R5's new clause.
+- **Priced costs, for the close's no-destructive-overhead constraint:** ForFirstRow takes each chain page X up to the row (catalog.cpp:154-156), so under E1 two relations' id issues serialise there; a fenced relation's tuple ask scans 64 x cores partitions under the leaf (lock_table.cpp:347); the longer rightmost-leaf hold adds wait time, not a cycle.
+
+#### Stale declared text corrected with the declaration
+
+| text | where | what the tree does | what it should say |
+|---|---|---|---|
+| A partition latch is taken "with no page latch held" (AR2-R2) | txn.md §5 (:867); lock_table.hpp:136-141; sched.md §9-2 | it is taken under a page at :7273, :8864, and catalog.cpp:2558/:2594 -> :5090 | "Taken with no park under a page latch" - enforced only by structure and the debug-only suspend audit |
+| The page latch is held across a durability wait "only on the fault path" | device_page_store.hpp:170-184 (:176-178) | no path does; the fault sweep only queues | No path holds a page latch across a durability wait. A future fault-path writeback is kSkip only |
+| The page latch is "never nested with the visibility window latch" | device_page_store.hpp:193-198; page.md §6 (line 156) | Visible, undo growth and the purge take it under pages (instance_visibility.hpp:202-210 agrees) | The page latch is outer to the window latch, which is a leaf, as rules.md §3's window row says |
+| "Nothing holds a node and asks one to its left"; "parent before child, old before new" | rules.md:32; btree.cpp:95-96, :467-471; device_page_store.hpp:199/:225 | write-walk sub-chains read either side under a leaf X | True of the tree's own code, and false of a write walk's WHERE. BB-R4 orders no user page against another. index_tree.cpp:73 holds as written |
+| A CT7 hold asks "never another catalog relation's page" | catalog.md CT7; catalog.cpp:3065-3066 | page 9 -> 7; page 14 -> 7/5/12/13/8; the undo page under every transactional write | Pages 9 and 14 may nest page 7 and rank before it. The undo page is a sink below every catalog page |
+| The orphan bug names only ChainInsert | the orphan bug doc; BB-R7 | ChainAppendBatch (heap_chain.cpp:197-214, :253) orphans rows too; varheap::ChainAppend (varheap.cpp:319-331, :369) leaks only | BB-R7's re-check covers ChainAppendBatch, and says the held tail on a grow is the old one (heap_chain.cpp:171-172) |

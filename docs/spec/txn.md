@@ -864,11 +864,24 @@ declared in the spec that owns the subsystem, and this is that spec:
 > relation" without scanning. An entry's holders and waiters are vectors
 > and are read under the latch.
 >
-> **The order.** A partition latch is taken with no page latch held, with
-> no other partition latch held (one partition per operation), never under
-> the WAL latch or the window latch, and **released before any park** — a
-> statement parks on a decide, and a partition held across that park would
-> be held against the very core that would end it.
+> **The order.** A partition latch is taken with **no park under a page
+> latch** — AR2-R2's intent, *"a lock wait can never park a latched page"*,
+> to which BB-R4 amended this clause on 2026-10-06
+> (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`). It read
+> *"with no page latch held"*, and that was already false in the tree:
+> `UPDATE`'s and `DELETE`'s per-row tuple borrows run inside the walk's
+> write hold of the page, and since BB-S3 an insert borrows its issued id
+> under the exclusive hold of the leaf it lands on (BB-R2). What holds is
+> that nothing parks there: a refused borrow comes back as a refusal and
+> the park is `DispatchAsync`'s, once every hold is released. In the order
+> an insert takes - **a user relation page, a `sys.tables` chain page, a
+> partition latch, the WAL stream latch** (BB-R4) - nothing holding a
+> partition latch asks for any page latch; BB-S1's census (that order's
+> §6) is the proof. Also: with no other partition latch held (one
+> partition per operation), never under the WAL latch or the window latch,
+> and **released before any park** — a statement parks on a decide, and a
+> partition held across that park would be held against the very core
+> that would end it.
 >
 > **Stated, not enforced**, and the distinction is `rules.md` §3's own
 > ("a stated order that nothing checks is a comment"): `lock_table.hpp`

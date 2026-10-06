@@ -263,10 +263,23 @@ retires its row outside any transaction (`ddl-transactional.md` §5).
 
 **What nests under a hold** (`rules.md` §3): the relation's own chain
 growth, the allocator for it, the WAL, and for `sys.assertions` its own
-var-heap chain — never another catalog relation's page. That is why the
+var-heap chain — and another catalog relation's page in two places only,
+both found by BB-S1's census and neither ever reversed: `RegisterPattern`
+takes page 7 under page 9 (through `AllocateRowId`), and `InsertAssertion`
+reads pages 7, 5, 8, 12 and 13 shared under page 14 on a catalog-cache miss.
+Pages 9 and 14 therefore rank before page 7. A transactional write's undo
+page also goes under every hold here, as a sink that asks no catalog page.
+That is why the
 oids and ids above are issued before their holds: `GenerateUserOid`'s
 first use seeds from `sys.columns`, and `AllocateRowId` writes
 `sys.tables`.
+
+**And `sys.tables` is taken under a user relation's page** since BB-S3
+(`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` BB-R4,
+declared in `page.md` §6): an insert issues or admits its row's id while it
+holds the page the row lands on. So a `sys.tables` chain page is inner to
+every user relation page, and no catalog hold here may ask for one - none
+does (BB-S1's census).
 
 **What it does not cover.** The hold holds a name only until its latch
 drops; what keeps a later check from admitting a name an open transaction

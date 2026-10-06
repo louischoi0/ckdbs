@@ -136,9 +136,17 @@
 //
 // **Acquisition order.** A partition latch is taken
 //
-//   - with **no page latch** held - AR2-R2's "a lock is acquired before the
-//     page it protects is latched, and never under a page latch", so a lock
-//     wait (a park, from AO-S2) can never park a latched page;
+//   - with **no park under a page latch** - AR2-R2's intent, "a lock wait
+//     (a park, from AO-S2) can never park a latched page", to which BB-R4
+//     amended this bullet (`instructions/v3.0.0/workorder-bb-issue-under-
+//     the-leaf.md`). It read "with no page latch held", which the tree
+//     already broke: `UPDATE`'s and `DELETE`'s per-row tuple borrows run
+//     inside the walk's write hold, and since BB-S3 an insert borrows its
+//     issued id under the hold of the leaf it lands on. Nothing here parks -
+//     a refusal is returned and the statement parks once its holds are
+//     released - and nothing holding a partition latch asks for any page
+//     latch (BB-S1's census). The order an insert takes: a user relation
+//     page, a `sys.tables` chain page, a partition latch, the WAL;
 //   - with **no other partition latch** held. Every method here takes
 //     exactly one at a time, including the two that walk every partition:
 //     their guard is scoped to the loop body;

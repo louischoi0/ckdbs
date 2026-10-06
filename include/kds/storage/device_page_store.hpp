@@ -167,18 +167,20 @@
 //     latch held and no second thread alive. The cost accepted: a page
 //     latch can be held across an append's section, a segment roll
 //     included; a reader of that page elsewhere spins, then yields.
-//   - **Held across a durability wait only on the fault path.** WriteBack
-//     takes the WAL gate (EnsureDurable: a wait on the writer thread for a
-//     peer, an inline sync for core 0) before it writes any byte. It takes each page's latch shared for the
-//     copy since AT-S8 step 1b, one page at a time and released before the
-//     gate, so no frame of its own is latched across the wait - waiting for
-//     a foreign exclusive holder on a flush, trying once and skipping in the
-//     background drain (`WriteBack`'s `HeldFrames`); but the sweep that reached
-//     WriteBack runs inside a fault, and the faulting task may hold *other*
-//     frames latched while it waits. Sound, because neither the writer
-//     thread nor core 0's inline sync takes a page latch; a latency cost
-//     under a shared pool, and AM-S3's to
-//     measure. **AM-S2 inherits one obligation here**: AwaitWalGate reads
+//   - **Held across a durability wait by no path in the tree** (BB-S1's
+//     census corrected this bullet, which read "only on the fault path").
+//     WriteBack takes the WAL gate (EnsureDurable: a wait on the writer
+//     thread for a peer, an inline sync for core 0) before it writes any
+//     byte. It takes each page's latch shared for the copy since AT-S8 step
+//     1b, one page at a time and released before the gate, so no frame of
+//     its own is latched across the wait - waiting for a foreign exclusive
+//     holder on a flush, trying once and skipping in the background drain
+//     (`WriteBack`'s `HeldFrames`). A fault does not reach WriteBack: its
+//     sweep (`EvictColdFramesLocked`) only queues a dirty frame, and every
+//     WriteBack caller holds no page latch. Were a fault ever to write back
+//     while its task held other frames, it would be sound in `kSkip`,
+//     because neither the writer thread nor core 0's inline sync takes a
+//     page latch. **AM-S2 inherits one obligation here**: AwaitWalGate reads
 //     each frame's page_lsn *before* the gate call, so whatever latch that
 //     scan comes to need must be dropped before EnsureDurable, or the wait
 //     acquires exactly the "latched across a durability wait" shape this
@@ -190,9 +192,11 @@
 //     latch, so a claim's holder never waits on its waiter - provided no
 //     flush caller holds a page latch across the flush (`WriteBack`'s
 //     `kWait` note).
-//   - **Never nested with the visibility window latch** in either
-//     direction: that latch is taken holding nothing (AN-R9), and no path
-//     holds a PageRef at commit.
+//   - **Outer to the visibility window latch, which is a leaf** (BB-S1's
+//     census corrected this bullet, which read "never nested ... in either
+//     direction"): a visibility read takes it under a page latch, and undo
+//     growth's reclaim under a catalog page's hold; nothing holding it asks
+//     for a page latch, and no path holds a PageRef at commit.
 //   - **Never across a park**: the suspend audit's `live_pins() != 0`
 //     covers it in debug builds, recording rather than failing, because
 //     the pin and the latch share a handle; nothing covers it in release.
@@ -229,6 +233,18 @@
 //     leaf-for-write paths now do on a dropped read handle; and starvation
 //     - shared is granted whenever X is clear, with no writer preference,
 //     so a hot page's steady readers can starve an exclusive request.
+//   - **A user relation page, then a `sys.tables` chain page** (BB-R4,
+//     `page.md` §6) - the one pair across relations that is stated. An
+//     insert fixes its row's id under catalog page 7 while it holds the
+//     page the row lands on: a btree's rightmost leaf, with the parents a
+//     split secured, or a heap chain's tail (BB-R1). Nothing holds a
+//     `sys.tables` chain page and asks for a user relation page, directly
+//     or through a third latch: BB-S1's census
+//     (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` §6) is the
+//     proof, and the list a new path is checked against. The census also
+//     found a page-against-page cycle no BB edge takes part in - a write
+//     walk's `WHERE` sub-chain reading leaves under the walk's exclusive
+//     hold (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`).
 //
 // Waits spin with a pause hint, then yield; there is no queue and no
 // writer preference. A holder is in a critical section measured in
