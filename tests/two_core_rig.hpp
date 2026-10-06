@@ -76,6 +76,51 @@
 
 namespace kds::server {
 
+// **A log device whose `Sync` can be held** (BA-S1c), for a cell that needs
+// a commit paused inside its `fdatasync`. Everything else forwards. The
+// stream syncs its device outside its latch (`WalStream::Sync`), so a held
+// sync blocks only the thread that asked for it - a `strict` committer on
+// its own reactor, or the writer thread - and every other core still
+// appends.
+class GatedLogDevice final : public wal::LogDevice {
+public:
+    explicit GatedLogDevice(wal::LogDevice& inner) : inner_(inner) {}
+
+    // While held, every `Sync` waits; `parked()` counts the ones waiting.
+    void Hold() noexcept { held_.store(true, std::memory_order_release); }
+    void Release() noexcept { held_.store(false, std::memory_order_release); }
+    int parked() const noexcept { return parked_.load(std::memory_order_acquire); }
+
+    std::uint64_t segment_size() const noexcept override { return inner_.segment_size(); }
+    std::uint64_t segment_count() const noexcept override { return inner_.segment_count(); }
+    Status CreateSegment(std::uint64_t segment_no) override {
+        return inner_.CreateSegment(segment_no);
+    }
+    Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
+                   std::span<const std::byte> in) override {
+        return inner_.WriteAt(segment_no, offset, in);
+    }
+    Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,
+                  std::span<std::byte> out) override {
+        return inner_.ReadAt(segment_no, offset, out);
+    }
+    Status Sync() override {
+        if (held_.load(std::memory_order_acquire)) {
+            parked_.fetch_add(1, std::memory_order_acq_rel);
+            while (held_.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            parked_.fetch_sub(1, std::memory_order_acq_rel);
+        }
+        return inner_.Sync();
+    }
+
+private:
+    wal::LogDevice& inner_;
+    std::atomic<bool> held_{false};
+    std::atomic<int> parked_{0};
+};
+
 class TwoCoreRig {
 public:
     struct Options {
@@ -98,6 +143,9 @@ public:
         // a cell can bring the copy up through production's mount
         // (`Expeditor::Open`; `insert_log_crash_rig_test.cpp`'s `Mount`).
         bool file_backed = false;
+        // **The stream's syncs through a `GatedLogDevice`** (BA-S1c), which
+        // `log_gate()` then holds and releases.
+        bool gated_log_sync = false;
     };
 
     static StatusOr<std::unique_ptr<TwoCoreRig>> Open() { return Open(Options{}); }
@@ -164,6 +212,8 @@ public:
     // into, and what a mount's scan reads back.
     wal::WalManager& wal() noexcept { return *wal_; }
     wal::FileLogDevice& log_device() noexcept { return *log_device_; }
+    // Engaged only on a `gated_log_sync` rig.
+    GatedLogDevice& log_gate() noexcept { return *log_gate_; }
     sched::SimWakerTable& wake() noexcept { return *sim_; }
     // The real table under the sim: what was actually written, and the
     // registry a teardown kicks through.
@@ -248,9 +298,14 @@ private:
         auto log_device = wal::FileLogDevice::Open((dir_ / "wal").string(), /*core_id=*/0);
         if (!log_device.ok()) return log_device.status();
         log_device_ = std::move(log_device.value());
+        wal::LogDevice* stream_device = log_device_.get();
+        if (options_.gated_log_sync) {
+            log_gate_.emplace(*log_device_);
+            stream_device = &*log_gate_;
+        }
         wal::WalManagerConfig wal_config;
         wal_config.shared_stream = true;
-        auto wal = wal::WalManager::Open(log_device_.get(), clock_, /*core_id=*/0, wal_config);
+        auto wal = wal::WalManager::Open(stream_device, clock_, /*core_id=*/0, wal_config);
         if (!wal.ok()) return wal.status();
         wal_ = std::move(wal.value());
         wal_->StartWriter();
@@ -331,6 +386,7 @@ private:
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;
     std::unique_ptr<wal::FileLogDevice> log_device_;
+    std::optional<GatedLogDevice> log_gate_;
     std::unique_ptr<wal::WalManager> wal_;
     std::optional<txn::InstanceVisibility> visibility_;
     std::optional<sched::WakerTable> wakers_;
