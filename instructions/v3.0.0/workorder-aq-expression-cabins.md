@@ -7,8 +7,8 @@ Written 2026-10-06 on `worktree-aq-s0-order` from `740d954a`
 (`workorder-ap-function-catalog-fetch-id.md` §6, AP-S5), and AY-Q11 made AQ
 its own letter.
 
-**This order is written, not opened.** Its §4 items are unmarked, and every
-stage waits for its own word. It cuts no tag; the v3.0.0 tag waits on M4.
+**Opened as AQ on 2026-10-06, with every §4 item marked as proposed**
+(`raft-marks-2026-10-06.md` §2). Every stage waits for its own word. It cuts no tag; the v3.0.0 tag waits on M4.
 
 ## 0. What AQ is
 
@@ -147,7 +147,7 @@ for one.
 The monotone source needs D3's sortable directory, and the store's
 directory is a hash map today (`cabin_store.hpp`, `Partition`).
 
-## 2. Rulings — CLA's proposals, unmarked
+## 2. Rulings — CLA's proposals, marked as proposed 2026-10-06
 
 **AQ-R1 — the catalog: a v2 `SysCabinRow` recognised by its length, and
 `F`'s text in a relation of its own** (D7, AQ-Q1).
@@ -327,3 +327,17 @@ cells are the stages' exits. AQ-R6's form is AQ-Q3's.
 On `worktree-aq-s0-order` from `740d954a`, as this file and its index row.
 §1's survey was read against `740d954a`, not run. No code, spec or test is
 changed. The letter itself is AQ-Q0's.
+
+### AQ opened, and §4 marked - 2026-10-06
+
+On *"CLA 제안대로 진행하고 main에 push해줘"*, every §4 item was marked as
+proposed (`raft-marks-2026-10-06.md` §2), and the order landed on `main`.
+
+- **Open, each on its own word:** AQ-S1 to AQ-S5.
+- **Out of AQ:** monotone serving and D3's sortable directory (AQ-Q4),
+  automatic creation (AQ-Q5) and D1's fold (AQ-Q6).
+- **Given before the review.** The marks were given while AQ-S0's review
+  was running. A finding that would change a marked ruling goes back to
+  the operator.
+
+No stage has started.
