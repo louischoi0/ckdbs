@@ -660,6 +660,15 @@ public:
         before_insert_log_for_test_ = std::move(hook);
     }
 
+    // **A test seam between fixing a row's id and placing it** (BB-S2):
+    // runs once per `INSERT` row with the id, once that id is fixed - issued,
+    // or a named key admitted - and before the row is placed. A two-core
+    // cell stops one core here while another core inserts into the same
+    // relation, which is defect A's window. Unset in production.
+    void SetAfterRowIdFixedForTest(std::function<void(std::uint64_t)> hook) {
+        after_row_id_fixed_for_test_ = std::move(hook);
+    }
+
     // **A test seam on CREATE ASSERTION** (AZ-S2): runs once per create,
     // after the build's publish run is logged and immediately before the
     // `sys.assertions` row - where a checkpoint on another core, a writer
@@ -678,6 +687,7 @@ private:
     }
 
     std::function<void()> before_insert_log_for_test_;
+    std::function<void(std::uint64_t)> after_row_id_fixed_for_test_;
     std::function<void()> after_assertion_publish_run_for_test_;
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------

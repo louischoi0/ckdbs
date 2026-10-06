@@ -892,3 +892,32 @@ engine change.
 | "Nothing holds a node and asks one to its left"; "parent before child, old before new" | rules.md:32; btree.cpp:95-96, :467-471; device_page_store.hpp:199/:225 | write-walk sub-chains read either side under a leaf X | True of the tree's own code, and false of a write walk's WHERE. BB-R4 orders no user page against another. index_tree.cpp:73 holds as written |
 | A CT7 hold asks "never another catalog relation's page" | catalog.md CT7; catalog.cpp:3065-3066 | page 9 -> 7; page 14 -> 7/5/12/13/8; the undo page under every transactional write | Pages 9 and 14 may nest page 7 and rank before it. The undo page is a sink below every catalog page |
 | The orphan bug names only ChainInsert | the orphan bug doc; BB-R7 | ChainAppendBatch (heap_chain.cpp:197-214, :253) orphans rows too; varheap::ChainAppend (varheap.cpp:319-331, :369) leaks only | BB-R7's re-check covers ChainAppendBatch, and says the held tail on a grow is the old one (heap_chain.cpp:171-172) |
+
+### BB-S2 — red first, built 2026-10-06
+
+Built on `worktree-bb-issue-under-the-leaf` on `681fcd32` (BB-S1). Run on
+that engine, Debug:
+
+- **The seam**: `CommandDispatcher::SetAfterRowIdFixedForTest`, run once per
+  `INSERT` row with its id after the id is fixed and before the row is
+  placed. At this commit that point is outside every page hold.
+- **Red on the two-core rig**, `tests/issue_under_the_leaf_rig_test.cpp`,
+  **30/30 over ten repetitions**:
+  - `AnIdIssuedFirstIsPlacedBelowALaterOne`: omitted pk against omitted pk;
+    `ORDER BY id` answers `2, 1` and the bare walk `2, 1`;
+  - `ALimitOneOverThePkReturnsTheLowestId`: `ORDER BY id LIMIT 1` answers row
+    2 - a different row, not only a different order;
+  - `ANamedKeyAtTheMarkIsPlacedBelowALaterIssuedId` (§1.3): a named key at
+    the mark against an omitted pk; `5` lands after `6`.
+- **Red on one core**, `tests/supplied_key_test.cpp`:
+  `ANamedKeyBelowTheMarkIsRefusedOnABtree` (admitted today) and
+  `ADuplicateNamedKeyLeavesTheRelationAscending` (§1.11: `DESCRIBE` reads
+  `key_order=unordered` after a refused duplicate).
+- **The guards, green**, `tests/lock_family_test.cpp`:
+  `AnIssuedRowWithASpilledValueWaitsOnAFence` and
+  `ANamedRowWithASpilledValueWaitsOnAFence` - a spilled row waits on an open
+  declared-range `UPDATE` rather than being refused.
+- **No hang by construction**: each rig cell gives core 1 a bounded look,
+  releases core 0's seam whatever it saw, and only then waits for both.
+
+The suite at this commit is red on exactly the five cells above.

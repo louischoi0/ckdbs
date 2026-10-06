@@ -1184,6 +1184,58 @@ TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
     EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
 }
 
+// ---- BB-S2's guards: a spilled row still waits on a fence ----------------
+//
+// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` §1.4. A recorded
+// wait survives only while the statement's trail is unchanged, and a spill is
+// a trail entry - so a row whose borrow came after its encode would turn this
+// wait into a refusal. BB moves an omitted pk's issue, borrow and encode under
+// its leaf's hold (BB-R2) and a named key's admission after its descent
+// (BB-R3); both orders keep the borrow ahead of the encode, and these cells
+// are what says so. `varchar(16)` and a longer value make the encode spill.
+
+TEST_F(LockDeadlockTest, AnIssuedRowWithASpilledValueWaitsOnAFence) {
+    ASSERT_EQ(Local("CREATE TABLE sp (id int64, s varchar(16)) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO sp VALUES (5, 'five')").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE sp SET s = 'x' WHERE id > 4 AND s = 'zz'", &a).response,
+              "UPDATED 0");
+
+    // Issued 6, inside A's window, and the value spills.
+    Started wb = Start("INSERT INTO sp VALUES ('a value well past sixteen bytes long')", b);
+    Pump();
+    ASSERT_FALSE(*wb.done) << "the spilled insert did not wait on A's fence: " << wb.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the spilled insert never resumed after the fence was released";
+    EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
+}
+
+TEST_F(LockDeadlockTest, ANamedRowWithASpilledValueWaitsOnAFence) {
+    ASSERT_EQ(Local("CREATE TABLE sp (id int64, s varchar(16)) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO sp VALUES (5, 'five')").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE sp SET s = 'x' WHERE id > 4 AND s = 'zz'", &a).response,
+              "UPDATED 0");
+
+    // Above the mark, inside A's window, and the value spills.
+    Started wb = Start("INSERT INTO sp VALUES (100, 'a value well past sixteen bytes long')", b);
+    Pump();
+    ASSERT_FALSE(*wb.done) << "the spilled insert did not wait on A's fence: " << wb.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the spilled insert never resumed after the fence was released";
+    EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
+}
+
 TEST_F(LockDeadlockTest, ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds) {
     // AO-5's S4a cell. Without a detector this is the deadlock AO-S3's
     // guard exists to prevent; with one, the guard lifts and the cycle is

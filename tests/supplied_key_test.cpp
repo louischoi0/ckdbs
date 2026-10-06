@@ -598,6 +598,43 @@ TEST_F(SuppliedKeySqlTest, ADuplicateOfADescendingKeyIsAlsoRefused) {
     EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos) << dup.response;
 }
 
+// ---- BB-S2: red on one core at BB's start ----------------------------------
+//
+// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`, on BB-Q8's mark:
+// no relation is ever out of key order, so a named key below the mark is
+// refused on a btree as on a heap, and nothing a refused key does may leave
+// the relation unordered.
+
+TEST_F(SuppliedKeySqlTest, ANamedKeyBelowTheMarkIsRefusedOnABtree) {
+    auto d = Dispatcher();
+    CreateBtree(d);
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (77, 1)").response.substr(0, 8), "INSERTED");
+
+    // Absent and below the mark: OutOfRange (BB-R12).
+    auto below = d.Dispatch("INSERT INTO t VALUES (33, 2)");
+    EXPECT_EQ(below.response.substr(0, 3), "ERR") << below.response;
+    EXPECT_NE(below.response.find("high-water mark"), std::string::npos) << below.response;
+    EXPECT_EQ(EmittedIds(d.Dispatch("SELECT * FROM t").response),
+              (std::vector<std::uint64_t>{77}));
+}
+
+TEST_F(SuppliedKeySqlTest, ADuplicateNamedKeyLeavesTheRelationAscending) {
+    // BB §1.11: the key-order flip ran before the descent looked for the
+    // key, so an ordinary duplicate - refused at the descent - left the
+    // relation unordered for good.
+    auto d = Dispatcher();
+    CreateBtree(d);
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (1)").response.substr(0, 8), "INSERTED");
+    }
+    auto dup = d.Dispatch("INSERT INTO t VALUES (2, 9)");
+    EXPECT_EQ(dup.response.substr(0, 3), "ERR") << dup.response;
+    EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos)
+        << "a present key is refused AlreadyExists (BB-R12): " << dup.response;
+    EXPECT_EQ(d.Dispatch("DESCRIBE t").response.find("key_order=unordered"), std::string::npos)
+        << "a refused duplicate left the relation unordered";
+}
+
 TEST_F(SuppliedKeySqlTest, AKeyOutsideTheIdSpaceIsRefused) {
     auto d = Dispatcher();
     CreateBtree(d);

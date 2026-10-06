@@ -5114,6 +5114,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
             return ErrorReply(*held);
         }
     }
+    if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
 
     // With a manager, each spill is noted and logged at its append, under
     // its page's hold (`SpillLogFor`); `spills` then stays empty.
