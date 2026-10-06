@@ -624,14 +624,14 @@ TEST_F(SuppliedKeySqlTest, ADuplicateNamedKeyLeavesTheRelationAscending) {
     // relation unordered for good.
     auto d = Dispatcher();
     CreateBtree(d);
-    for (int i = 0; i < 3; ++i) {
-        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (1)").response.substr(0, 8), "INSERTED");
-    }
-    auto dup = d.Dispatch("INSERT INTO t VALUES (2, 9)");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (1)").response.substr(0, 8), "INSERTED");
+    auto dup = d.Dispatch("INSERT INTO t VALUES (1, 9)");
     EXPECT_EQ(dup.response.substr(0, 3), "ERR") << dup.response;
     EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos)
         << "a present key is refused AlreadyExists (BB-R12): " << dup.response;
-    EXPECT_EQ(d.Dispatch("DESCRIBE t").response.find("key_order=unordered"), std::string::npos)
+    // Positive, so the field's deletion at BB-S3b turns this line red and
+    // forces the rewrite rather than leaving an assertion nothing can fail.
+    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("key_order=ascending"), std::string::npos)
         << "a refused duplicate left the relation unordered";
 }
 

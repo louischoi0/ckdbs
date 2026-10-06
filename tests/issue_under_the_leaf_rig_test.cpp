@@ -5,7 +5,6 @@
 #include <functional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -14,17 +13,10 @@
 #include "kds/server/session.hpp"
 #include "kds/wal/durability.hpp"
 
-// BB-S2 (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`): defect
-// A on the two-core rig. A row's id is fixed in one span - issued from the
-// relation's mark, or a named key admitted at or above it - and the row is
-// placed in another, under its leaf. Between the two another core can fix a
-// higher id and place it first, and the leaf then holds the higher id in the
-// lower slot: the relation still claims every page's slot order is its key
-// order, so `ORDER BY <pk>` is discarded and the rows come back out of order.
-//
-// **The seam.** `SetAfterRowIdFixedForTest` runs once per `INSERT` row, after
-// the row's id is fixed and before the row is placed. Core 0's statement
-// stops there while core 1's runs.
+// Defect A on the two-core rig (`instructions/v3.0.0/workorder-bb-issue-under-
+// the-leaf.md` §0, BB-S2). Core 0 stops at the seam with its row's id fixed
+// (`SetAfterRowIdFixedForTest`); core 1 inserts into the same relation; core 0
+// is released. Placement order must be issue order.
 //
 // **The cells must not hang** (BB-S2's row). Once BB-R1 holds, the seam sits
 // inside the hold of the leaf the row lands on, so core 1's insert blocks on
@@ -59,15 +51,13 @@ sched::Coro Run(CommandDispatcher& d, OneStatement& s) {
     co_return Status::OK();
 }
 
-// Core 0's stop at the seam: the first row after `armed` is set records its
-// id and waits for `release`.
+// Core 0's stop at the seam: records the id and waits for `release`. The
+// hook is installed only for the race, and once released it returns at once.
 struct Seam {
-    std::atomic<bool> armed{false};
     std::atomic<std::uint64_t> stopped_at{0};
     std::atomic<bool> release{false};
 
     void operator()(std::uint64_t id) {
-        if (!armed.exchange(false, std::memory_order_acq_rel)) return;
         stopped_at.store(id, std::memory_order_release);
         while (!release.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(1ms);
@@ -76,16 +66,15 @@ struct Seam {
 };
 
 // **The race, run once.** Core 0 runs `first` and stops at the seam with its
-// id fixed; core 1 then runs `second`; core 0 is released. What comes back is
-// core 1's reply, with core 0's checked to be an insert.
+// id fixed; core 1 then runs `second`; core 0 is released. Returns the id core
+// 0 stopped at and core 1's reply, with core 0's checked to be an insert.
 struct Raced {
     std::uint64_t first_id = 0;
     std::string second_reply;
 };
 
-Raced RaceTwoInserts(TwoCoreRig& rig, Seam& seam, const std::string& first,
-                     const std::string& second) {
-    Raced raced;
+Raced RaceTwoInserts(TwoCoreRig& rig, const std::string& first, const std::string& second) {
+    Seam seam;
     OneStatement s0;
     OneStatement s1;
     s0.sql = first;
@@ -96,14 +85,14 @@ Raced RaceTwoInserts(TwoCoreRig& rig, Seam& seam, const std::string& first,
     s1.session.set_durability(wal::DurabilityClass::kRelaxed);
     CommandDispatcher& d0 = rig.core(0).dispatcher();
     CommandDispatcher& d1 = rig.core(1).dispatcher();
-    d0.SetAfterRowIdFixedForTest([&seam](std::uint64_t id) { seam(id); });
+    d0.SetAfterRowIdFixedForTest(std::ref(seam));
     rig.core(0).scheduler().Submit(
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, Run(d0, s0)));
     rig.core(1).scheduler().Submit(
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, Run(d1, s1)));
-    seam.armed.store(true, std::memory_order_release);
     rig.Start();
 
+    Raced raced;
     s0.go.store(true, std::memory_order_release);
     EXPECT_TRUE(KickUntil(rig, 0, [&] {
         return seam.stopped_at.load(std::memory_order_acquire) != 0;
@@ -141,42 +130,36 @@ std::unique_ptr<TwoCoreRig> OpenRigWithRelation() {
     EXPECT_TRUE(StartsWith(
         rig->core(0).dispatcher().Dispatch("CREATE TABLE t (id int64, v int64) BTREE").response,
         "CREATED"));
+    // Core 1 carves its transaction-id window here, not in the race: a carve
+    // persists page 0 through a full flush, which would put a durable sync in
+    // core 1's bounded look and, once the seam sits under the leaf, block
+    // core 1 on that leaf inside the flush instead of in its descent.
+    Session warm;
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    EXPECT_TRUE(StartsWith(d1.Dispatch("BEGIN", &warm).response, "BEGIN"));
+    EXPECT_TRUE(StartsWith(d1.Dispatch("ROLLBACK", &warm).response, "ROLLBACK"));
     return rig;
 }
 
 TEST(IssueUnderTheLeafRig, AnIdIssuedFirstIsPlacedBelowALaterOne) {
     // Omitted pk against omitted pk (BB §1.2): core 0 is issued the first
     // id and stops; core 1 is issued the next. Placement order must be issue
-    // order, so `ORDER BY id` - which the compiler discards on the premise
-    // that a walk already emits it - answers ascending.
+    // order, observed three ways: the bare walk (slot order), `ORDER BY id`
+    // (which the compiler discards on the premise that a walk already emits
+    // it), and `ORDER BY id LIMIT 1` - where a misordered leaf answers a
+    // different row, not only a different order.
     std::unique_ptr<TwoCoreRig> rig = OpenRigWithRelation();
     ASSERT_NE(rig, nullptr);
-    Seam seam;
-    const Raced raced = RaceTwoInserts(*rig, seam, "INSERT INTO t VALUES (10)",
-                                       "INSERT INTO t VALUES (20)");
+    const Raced raced =
+        RaceTwoInserts(*rig, "INSERT INTO t VALUES (10)", "INSERT INTO t VALUES (20)");
     ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
     ASSERT_EQ(raced.first_id, 1u);
 
     CommandDispatcher& d0 = rig->core(0).dispatcher();
-    EXPECT_EQ(d0.Dispatch("SELECT id FROM t ORDER BY id").response, "id\\n1\\n2")
+    EXPECT_EQ(d0.Dispatch("SELECT id, v FROM t").response, "id,v\\n1,10\\n2,20")
         << "the leaf holds the later id in the lower slot";
-    // The walk itself, no ORDER BY: slot order is key order.
-    EXPECT_EQ(d0.Dispatch("SELECT id, v FROM t").response, "id,v\\n1,10\\n2,20");
-}
-
-TEST(IssueUnderTheLeafRig, ALimitOneOverThePkReturnsTheLowestId) {
-    // The same race under `LIMIT 1`: with the sort discarded, the first
-    // slot is the answer, and a misordered leaf makes it a different row -
-    // a wrong set, not only a wrong order.
-    std::unique_ptr<TwoCoreRig> rig = OpenRigWithRelation();
-    ASSERT_NE(rig, nullptr);
-    Seam seam;
-    const Raced raced = RaceTwoInserts(*rig, seam, "INSERT INTO t VALUES (10)",
-                                       "INSERT INTO t VALUES (20)");
-    ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
-
-    EXPECT_EQ(rig->core(0).dispatcher().Dispatch("SELECT id, v FROM t ORDER BY id LIMIT 1").response,
-              "id,v\\n1,10");
+    EXPECT_EQ(d0.Dispatch("SELECT id FROM t ORDER BY id").response, "id\\n1\\n2");
+    EXPECT_EQ(d0.Dispatch("SELECT id, v FROM t ORDER BY id LIMIT 1").response, "id,v\\n1,10");
 }
 
 TEST(IssueUnderTheLeafRig, ANamedKeyAtTheMarkIsPlacedBelowALaterIssuedId) {
@@ -186,15 +169,16 @@ TEST(IssueUnderTheLeafRig, ANamedKeyAtTheMarkIsPlacedBelowALaterIssuedId) {
     // first.
     std::unique_ptr<TwoCoreRig> rig = OpenRigWithRelation();
     ASSERT_NE(rig, nullptr);
-    Seam seam;
-    const Raced raced = RaceTwoInserts(*rig, seam, "INSERT INTO t VALUES (5, 50)",
-                                       "INSERT INTO t VALUES (60)");
+    const Raced raced =
+        RaceTwoInserts(*rig, "INSERT INTO t VALUES (5, 50)", "INSERT INTO t VALUES (60)");
     ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
     ASSERT_EQ(raced.first_id, 5u);
-    EXPECT_NE(raced.second_reply.find("id=6"), std::string::npos) << raced.second_reply;
+    EXPECT_NE(raced.second_reply.find(" id=6 "), std::string::npos) << raced.second_reply;
 
-    EXPECT_EQ(rig->core(0).dispatcher().Dispatch("SELECT id, v FROM t ORDER BY id").response,
-              "id,v\\n5,50\\n6,60");
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    EXPECT_EQ(d0.Dispatch("SELECT id, v FROM t").response, "id,v\\n5,50\\n6,60")
+        << "the leaf holds the later id in the lower slot";
+    EXPECT_EQ(d0.Dispatch("SELECT id, v FROM t ORDER BY id").response, "id,v\\n5,50\\n6,60");
 }
 
 }  // namespace

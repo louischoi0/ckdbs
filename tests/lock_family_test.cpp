@@ -379,7 +379,11 @@ TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) 
 
 // The default cap; the name is the cells', kept from the file they came
 // from.
-class LockDeadlockTest : public LockFamilyTest {};
+class LockDeadlockTest : public LockFamilyTest {
+protected:
+    // BB-S2's guard, defined beside the cells that use it.
+    void SpilledInsertWaitsOnAFence(const std::string& insert);
+};
 
 // ---- AO-S6e-b: the read borrow, and the DDL that waits for one ---------
 
@@ -1194,18 +1198,20 @@ TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
 // (BB-R3); both orders keep the borrow ahead of the encode, and these cells
 // are what says so. `varchar(16)` and a longer value make the encode spill.
 
-TEST_F(LockDeadlockTest, AnIssuedRowWithASpilledValueWaitsOnAFence) {
+void LockDeadlockTest::SpilledInsertWaitsOnAFence(const std::string& insert) {
     ASSERT_EQ(Local("CREATE TABLE sp (id int64, s varchar(16)) BTREE").rfind("CREATED", 0), 0u);
+    // Load-bearing: it moves the mark to 6, inside the fence's window below,
+    // so an issued id lands there too.
     ASSERT_EQ(Local("INSERT INTO sp VALUES (5, 'five')").rfind("INSERTED", 0), 0u);
 
     Session a;
     Session b;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    // Declares `Range(sp, 5, end)` and writes no row.
     ASSERT_EQ(dispatcher_->Dispatch("UPDATE sp SET s = 'x' WHERE id > 4 AND s = 'zz'", &a).response,
               "UPDATED 0");
 
-    // Issued 6, inside A's window, and the value spills.
-    Started wb = Start("INSERT INTO sp VALUES ('a value well past sixteen bytes long')", b);
+    Started wb = Start(insert, b);
     Pump();
     ASSERT_FALSE(*wb.done) << "the spilled insert did not wait on A's fence: " << wb.out->response;
 
@@ -1215,25 +1221,12 @@ TEST_F(LockDeadlockTest, AnIssuedRowWithASpilledValueWaitsOnAFence) {
     EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
 }
 
+TEST_F(LockDeadlockTest, AnIssuedRowWithASpilledValueWaitsOnAFence) {
+    SpilledInsertWaitsOnAFence("INSERT INTO sp VALUES ('a value well past sixteen bytes long')");
+}
+
 TEST_F(LockDeadlockTest, ANamedRowWithASpilledValueWaitsOnAFence) {
-    ASSERT_EQ(Local("CREATE TABLE sp (id int64, s varchar(16)) BTREE").rfind("CREATED", 0), 0u);
-    ASSERT_EQ(Local("INSERT INTO sp VALUES (5, 'five')").rfind("INSERTED", 0), 0u);
-
-    Session a;
-    Session b;
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("UPDATE sp SET s = 'x' WHERE id > 4 AND s = 'zz'", &a).response,
-              "UPDATED 0");
-
-    // Above the mark, inside A's window, and the value spills.
-    Started wb = Start("INSERT INTO sp VALUES (100, 'a value well past sixteen bytes long')", b);
-    Pump();
-    ASSERT_FALSE(*wb.done) << "the spilled insert did not wait on A's fence: " << wb.out->response;
-
-    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
-    Pump();
-    ASSERT_TRUE(*wb.done) << "the spilled insert never resumed after the fence was released";
-    EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
+    SpilledInsertWaitsOnAFence("INSERT INTO sp VALUES (100, 'a value well past sixteen bytes long')");
 }
 
 TEST_F(LockDeadlockTest, ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds) {

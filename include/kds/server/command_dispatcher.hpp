@@ -660,11 +660,14 @@ public:
         before_insert_log_for_test_ = std::move(hook);
     }
 
-    // **A test seam between fixing a row's id and placing it** (BB-S2):
-    // runs once per `INSERT` row with the id, once that id is fixed - issued,
-    // or a named key admitted - and before the row is placed. A two-core
-    // cell stops one core here while another core inserts into the same
-    // relation, which is defect A's window. Unset in production.
+    // **A test seam at the instant a row's id is fixed** (BB-S2): runs once
+    // per row `InsertOneRow` places, immediately after the id is issued (and
+    // borrowed) or a named key admitted. The call stays adjacent to the fix
+    // wherever the fix sits - outside every page hold at BB-S2, under the
+    // leaf's hold from BB-S3 - and that adjacency is the rig cells' whole
+    // power: a mutant that fixes the id before the hold must move this call
+    // with it, and then stops core 0 outside the hold. The sorted fill does
+    // not call it. Unset in production.
     void SetAfterRowIdFixedForTest(std::function<void(std::uint64_t)> hook) {
         after_row_id_fixed_for_test_ = std::move(hook);
     }
