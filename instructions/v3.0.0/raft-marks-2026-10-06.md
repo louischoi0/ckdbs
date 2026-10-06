@@ -45,3 +45,13 @@ session.
 | **Reading** | "원천 차단" is read as BB-R1's rule - no placement out of key order while `key_order` is `kAscending`. Whether it also withdraws `kUnordered` - a named key below the mark, the btree's licence to take keys in any order - is not read into the words; it is put to the operator as BB-Q8. The pause covers BA's stages; BA-S1c, already pushed at `bddd450c`, stands |
 | **Does not settle** | BB-Q0..Q8 - BB's opening included; any BB stage's start; BA-Q0..Q13 |
 | **Recorded at** | BA's header, its BA-S1b and BA-Q14 rows and §6; BB's header; the index |
+
+## 5. BB opened: `kUnordered` deleted, the rest as proposed, and the push
+
+| | |
+|---|---|
+| **Word** | *"BB-Q8에서 kUnordered 자체를 삭제해야해. 이외에는 CLA 제안에 따름, main push"* |
+| **Mark** | **BB-Q8 is (b)**, against CLA's proposal (a): `kUnordered` is deleted, and a named key below the mark is refused on a btree as on a heap, so no relation is ever out of key order. **BB-Q0..Q7 are marked as CLA proposed them**: BB opens as BA's sub-milestone with BA paused until BB-S5 (Q0); named keys at or above the mark are in (Q1); the heap arm is (a), the rule under a re-checked tail's hold (Q2); an omitted pk encodes under the leaf's hold (Q3); the latch order and AR2-R2's amendment, conditional on BB-S1 (Q4); system relations out (Q5); the sim check (Q6); BB lands whatever it measures (Q7). **BB's order goes to `main`** |
+| **Reading** | "이외에는" is read as BB-Q0..Q7, the items on the table when the word was given. The mark opens three questions it does not answer - what a mounted volume that already holds a `kUnordered` relation does, the code a refused named key gets, and `DESCRIBE`'s field - and they are written as BB-Q9..Q11 with CLA's proposals, not marked |
+| **Does not settle** | BB-Q9..Q11; any BB stage's start; BA-Q0..Q13 |
+| **Recorded at** | BB's header, its §2 (BB-R3 rewritten, BB-R10..R12 added), §3 (BB-S3b added), §4 and §6; the index row; the bug entry |

@@ -96,5 +96,7 @@ under the exclusive hold of the page it lands on, so placement order is key
 order while `key_order` is `kAscending`. Its own sub-milestone carries it:
 `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` (BB), which also
 found a second path to the same misorder - a named key at or above the mark
-(its §1.3) - and proposes the same rule for heap relations (BB-Q2). Not
-built; BB is not opened.
+(its §1.3) - and takes the same rule for heap relations (BB-Q2 (a)).
+BB is opened, and BB-Q8 is marked (b): a named key below the mark is
+refused on a btree too and `kUnordered` is deleted, so no relation is ever
+out of key order. Not built.
