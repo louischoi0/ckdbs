@@ -168,6 +168,20 @@ public:
         return server_default;
     }
 
+    // ---- The acknowledged-commit bound (BA-R1c) ------------------------
+    //
+    // The commit LSN of this session's last committed transaction, or
+    // `wal::kNoLsn` before its first one and on the unlogged path. Its next
+    // statement does not mint a snapshot below it: `DispatchAsync` parks at
+    // the statement boundary until the instance's snapshot ceiling covers
+    // it, which another core's commit marker can hold below it for the
+    // length of a `strict` sync (`instance_visibility.hpp`). Survives
+    // `Finish()`, because the next transaction is what reads it.
+    wal::Lsn acknowledged_commit_lsn() const noexcept { return acknowledged_commit_lsn_; }
+    void NoteAcknowledgedCommit(wal::Lsn lsn) noexcept {
+        if (lsn > acknowledged_commit_lsn_) acknowledged_commit_lsn_ = lsn;
+    }
+
     // ---- Where this connection's result rows go (result_sink.hpp) ------
     //
     // Null - the default, and every caller that predates KWP - means the
@@ -313,6 +327,7 @@ private:
     ResultSink* result_sink_ = nullptr;
     std::optional<wal::DurabilityClass> durability_;      // SET DURABILITY
     std::optional<wal::DurabilityClass> txn_durability_;  // BEGIN ... DURABILITY
+    wal::Lsn acknowledged_commit_lsn_ = wal::kNoLsn;      // BA-R1c
     Role role_ = Role::kAdmin;
     txn::Transaction* txn_ = nullptr;
     // AO-S3b. Absent on every session that is not parked mid-walk, which

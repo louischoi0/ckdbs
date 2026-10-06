@@ -24,6 +24,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <variant>
 
 #include <vector>
@@ -675,6 +676,28 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
+
+    // ---- BA-R1c: the session's own last commit, before any mint ----------
+    //
+    // Another core's commit marker can hold the snapshot ceiling below a
+    // commit this session was already acknowledged - for a whole `strict`
+    // sync - and a statement minted under it misses its own session's row.
+    // So the statement waits here, at the boundary, holding nothing, until
+    // the markers below its bound lift; the last lift kicks this core
+    // (`instance_visibility.hpp`'s "acknowledged-commit bound" note). Not a
+    // mint at the bound instead: that covers a commit whose entry is not in.
+    if (txn_ != nullptr) {
+        const wal::Lsn bound =
+            (session != nullptr ? *session : autocommit_session_).acknowledged_commit_lsn();
+        if (!txn_->CeilingCovers(bound)) {
+            const txn::TransactionManager::CeilingWait waiting(*txn_);
+            const std::function<bool()> covered = [this, bound] {
+                return txn_->CeilingCovers(bound);
+            };
+            co_await sched::WaitUntil{&covered};
+        }
+    }
+
     // **The statement may park from here**, which is the whole difference
     // between this entry point and `Dispatch()` - and the condition every
     // wait below is admitted under. Set and cleared around
@@ -908,6 +931,14 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
 // held across the wait.
 
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
+    // `DispatchAsync`'s BA-R1c wait, blocking, as this path's group commit
+    // is below: no other task on this core can hold a marker meanwhile,
+    // because a commit holds one only inside its synchronous body.
+    if (txn_ != nullptr) {
+        const wal::Lsn bound =
+            (session != nullptr ? *session : autocommit_session_).acknowledged_commit_lsn();
+        while (!txn_->CeilingCovers(bound)) std::this_thread::yield();
+    }
     DispatchOutcome outcome = DispatchAndStage(line, session);
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
 
@@ -7786,6 +7817,8 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     // session's transaction pointer this reads.
     EndDdlScope(session);
     session.Finish();
+    // The session's next statement mints no snapshot below this (BA-R1c).
+    session.NoteAcknowledgedCommit(committed.value());
 
     // The durability wait the client is owed, for the same reason
     // LogInsert() takes it: kGroup staged the commit for the next drain,
@@ -8567,6 +8600,8 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     if (!committed.ok()) {
         return AbortOwnedScope(scope, committed.status());
     }
+    // The session's next statement mints no snapshot below this (BA-R1c).
+    session.NoteAcknowledgedCommit(committed.value());
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
         !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();

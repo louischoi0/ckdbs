@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "kds/sched/waker_table.hpp"
+
 namespace kds::txn {
 
 void InstanceVisibility::NoteSlot(std::uint32_t core) noexcept {
@@ -89,6 +91,29 @@ void InstanceVisibility::BeginCommit(std::uint32_t core) {
 void InstanceVisibility::EndCommit(std::uint32_t core) noexcept {
     if (core >= slots_.size()) return;
     slots_[core].pending_commit_bound.store(kUnboundedBound);
+    // **The lift, then the waiters** (BA-R1c): store-then-load against the
+    // waiter's count-then-ceiling, both `seq_cst`, so this sees the waiter or
+    // the waiter sees the lift (the header's "acknowledged-commit bound"
+    // note). A kick to a waiter whose bound another marker still caps costs
+    // it one re-test.
+    if (wake_ == nullptr) return;
+    const std::uint32_t in_use = slots_in_use_.load(std::memory_order_acquire);
+    for (std::uint32_t waiter = 0; waiter < in_use; ++waiter) {
+        if (slots_[waiter].ceiling_waiters.load() != 0) wake_->Kick(waiter);
+    }
+}
+
+void InstanceVisibility::EnterCeilingWait(std::uint32_t core) noexcept {
+    if (core >= slots_.size()) return;
+    // No `NoteSlot`: a waiter's bound is a commit its own core made, whose
+    // `BeginCommit` already widened `slots_in_use_` past this slot, so every
+    // lift's walk reaches it.
+    slots_[core].ceiling_waiters.fetch_add(1);
+}
+
+void InstanceVisibility::LeaveCeilingWait(std::uint32_t core) noexcept {
+    if (core >= slots_.size()) return;
+    slots_[core].ceiling_waiters.fetch_sub(1);
 }
 
 std::uint64_t InstanceVisibility::SnapshotCeiling() const noexcept {

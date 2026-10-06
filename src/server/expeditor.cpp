@@ -1594,6 +1594,9 @@ Status Expeditor::Start() {
         // on one core ends the block a waiter's reactor sits in on another
         // (AU-S2). The same registry a stop kicks through.
         locks_->SetWakeRegistry(&*wakers_);
+        // BA-R1c: and a commit marker's lift kicks a core whose statement
+        // parked until the snapshot ceiling covered its session's last commit.
+        visibility_->SetWakeRegistry(&*wakers_);
 
         // Arms core 0's wake path too (sched/waker.hpp): core 0 is a
         // destination like any other - a peer's STOP and a lock decide on

@@ -600,6 +600,33 @@ public:
     // the instance's floor candidate, whose comment carries the argument.
     std::uint64_t NoneInFlightBelow() const noexcept { return visibility_->FloorCandidate(); }
 
+    // **The acknowledged-commit bound** (BA-R1c, `instance_visibility.hpp`):
+    // whether a snapshot minted now covers commit LSN `lsn` - always, for
+    // `wal::kNoLsn`.
+    bool CeilingCovers(std::uint64_t lsn) const noexcept {
+        return visibility_->SnapshotCeiling() >= lsn;
+    }
+
+    // A statement parked until `CeilingCovers`: counted into this core's
+    // waiters for its life, so a marker's lift kicks this core. Constructed
+    // before the wait's first `CeilingCovers`, which is the order the
+    // header's argument needs; scoped, so a frame destroyed mid-wait still
+    // counts itself out.
+    class CeilingWait {
+    public:
+        explicit CeilingWait(const TransactionManager& manager) noexcept
+            : visibility_(*manager.visibility_), core_(manager.core_) {
+            visibility_.EnterCeilingWait(core_);
+        }
+        ~CeilingWait() { visibility_.LeaveCeilingWait(core_); }
+        CeilingWait(const CeilingWait&) = delete;
+        CeilingWait& operator=(const CeilingWait&) = delete;
+
+    private:
+        InstanceVisibility& visibility_;
+        std::uint32_t core_;
+    };
+
     // ---- Reader registration (docs/workplan-reader-registration.md) -----
     //
     // Records that `view` is alive until the returned lease dies, so

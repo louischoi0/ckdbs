@@ -221,6 +221,8 @@ public:
     // The instance's lock table (AO-S5), the one both runtimes' managers
     // release into, kicking through the sim.
     txn::LockTable& locks() noexcept { return *locks_; }
+    // The instance's visibility state, both cores' one.
+    txn::InstanceVisibility& visibility() noexcept { return *visibility_; }
 
     // Both reactors on their own threads, production's `Run()`.
     void Start() {
@@ -326,6 +328,9 @@ private:
         if (!locks.ok()) return locks.status();
         locks_ = std::move(locks.value());
         locks_->SetWakeRegistry(&*sim_);
+        // And a commit marker's lift kicks a statement parked on the ceiling
+        // (BA-R1c), through the same sim.
+        visibility_->SetWakeRegistry(&*sim_);
 
         for (std::uint32_t id = 0; id < 2; ++id) {
             CoreRuntime::Config config;

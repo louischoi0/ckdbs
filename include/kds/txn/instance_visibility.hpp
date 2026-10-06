@@ -11,6 +11,10 @@
 #include "kds/base/latch.hpp"
 #include "kds/server/superblock.hpp"
 
+namespace kds::sched {
+class WakeRegistry;
+}
+
 // The instance read view's shared half
 // (`instructions/v3.0.0/workorder-an-read-view.md` AN-R1, AN-R8, AN-R9,
 // AN-R12).
@@ -99,6 +103,41 @@
 // ceiling as it stood, at or above every snapshot minted before it, and
 // cleared only after its commit is published, so a later mint never reads
 // below an earlier one.
+//
+// ---- The acknowledged-commit bound (BA-R1c) -------------------------------
+//
+// **A marker caps commits that are already acknowledged.** A marker is held
+// from before its commit's append until after its publish, and under
+// `strict` that span includes the `fdatasync`. Another core's commit can
+// publish and be acknowledged inside it, and every snapshot minted until
+// the marker lifts is capped below that commit - the committing session's
+// own next statement included.
+//
+// **The session's own case is closed at the statement boundary.** A session
+// records its last commit's LSN (`Session::NoteAcknowledgedCommit`), and a
+// statement whose bound sits above `SnapshotCeiling()` parks until it does
+// not (`CommandDispatcher::DispatchAsync`). It cannot mint at the bound
+// instead: that would cover a commit whose entry is not in yet, which is
+// AN-Q3. The wait ends: every marker below the bound was set before the
+// bound's commit was published, a marker set after reads a ceiling at or
+// above it, and every marker lifts on every exit (`PendingCommit`). So the
+// wait is at most the longest commit in flight when the bound's was
+// published - one sync.
+//
+// **The lift kicks the waiter's core.** A parked statement counts itself
+// into its core's `ceiling_waiters`, then reads the ceiling; `EndCommit`
+// clears its marker, then reads every core's count and kicks each non-zero
+// one. Both sides are store-then-load on `seq_cst` atomics, the store-buffer
+// shape the Concurrency note below closes with one total order: the waiter
+// sees the lift, or the lift sees the waiter. The kick is the registry's
+// best-effort one (`sched/waker_table.hpp`), a skipped kick costing one idle
+// block.
+//
+// **Another session's commit is not covered.** A commit acknowledged to
+// another session before this statement began stays invisible to it for up
+// to one sync - the remainder BA-Q3 (c) names, snapshots that carry their
+// in-flight set, which is its own order
+// (`docs/inflight/bugs/a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md`).
 //
 // ---- Reclamation, and the two windows it must not outrun -----------------
 //
@@ -235,6 +274,11 @@ struct CoreVisibilitySlot {
     // LSN is above this, so a snapshot capped by it cannot cover the
     // commit (the header's "snapshot ceiling" note).
     std::atomic<std::uint64_t> pending_commit_bound{kUnboundedBound};
+
+    // Statements on this core parked until the ceiling covers their
+    // session's last commit (BA-R1c; the header's "acknowledged-commit
+    // bound" note). A marker's lift kicks this core while it is non-zero.
+    std::atomic<std::uint32_t> ceiling_waiters{0};
 };
 
 // **The in-flight cap, per core** (AX-R4; AX-Q1 marked as proposed by the
@@ -411,8 +455,19 @@ public:
     std::uint64_t PublishCommit(std::uint64_t trx_id, std::uint64_t commit_lsn);
 
     // After the publication - or after an append that failed - on `core`:
-    // lifts the cap `BeginCommit` put on the ceiling.
+    // lifts the cap `BeginCommit` put on the ceiling, then kicks every core
+    // with a statement parked on the ceiling (BA-R1c).
     void EndCommit(std::uint32_t core) noexcept;
+
+    // **A statement on `core` waits for the ceiling, or stops waiting**
+    // (BA-R1c; the header's "acknowledged-commit bound" note). Counted in,
+    // before the waiter's first read of the ceiling, and out once it is
+    // covered. The kick is through `wake`, installed once before any core
+    // runs; none at `cores = 1`, where a session's own commit is published
+    // before its next statement and no other core holds a marker.
+    void EnterCeilingWait(std::uint32_t core) noexcept;
+    void LeaveCeilingWait(std::uint32_t core) noexcept;
+    void SetWakeRegistry(const sched::WakeRegistry* wake) noexcept { wake_ = wake; }
 
     // **The window and the floor, answered together under one hold**
     // (AN-R12). `commit_lsn` is `kNoCommitLsn` when the window does not
@@ -574,6 +629,9 @@ private:
     // "assigned in order" and "published in order" are the two things
     // AN-Q3 says not to conflate. Written under the window latch only.
     std::atomic<std::uint64_t> commit_ceiling_{0};
+
+    // Borrowed; null at `cores = 1` and before `SetWakeRegistry`.
+    const sched::WakeRegistry* wake_ = nullptr;
 
     // Small enough that the window stays a few tens of KiB between passes,
     // large enough that the pass is amortised over many commits. Not
