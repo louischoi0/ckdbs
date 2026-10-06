@@ -378,9 +378,12 @@ child's row is written as well as after it. What stood here was the
 interval before the write, open across cores from AT-S5f, which removed the
 reference intent that had closed it: a `DELETE` on one core walked an honest
 empty child between another core's passing check and its row write, and
-both statements reported success over a child of a deleted parent.
-`FkCrossCoreRigTest.AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`
-reproduced it at `64b97e7`.
+both statements reported success over a child of a deleted parent. A
+two-core rig cell reproduced it at `64b97e7`; since BB-S3's review the
+window is pinned on one thread,
+`FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`, the
+rig cell having gone when BB-R3's refusal of the below-mark key it wrote
+behind the walk left it testing nothing.
 
 **A child writer that holds no `S` on the parent is met by the walk
 instead** (AY-Q8): a child `DELETE`, an `UPDATE` of other columns, or

@@ -4723,9 +4723,14 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
         // the wire rather than being re-read off the rendered line.
         if (std::optional<Status> err =
                 InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row)) {
-            std::string reply = ErrorReply(*err);
-            if (bulk) reply += " (row " + std::to_string(k + 1) + ")";
-            return {std::move(reply), false, 0, *err};
+            // The row's ordinal rides in the carried message too, so a KWP
+            // client - which reads the `Status`, not the line - is told which
+            // row (BB-S3's review).
+            const Status carried =
+                bulk ? Status::FromWire(static_cast<std::uint32_t>(err->code()),
+                                        err->message() + " (row " + std::to_string(k + 1) + ")")
+                     : *err;
+            return {ErrorReply(carried), false, 0, carried};
         }
         if (k == 0) first = row;
         last = row;
@@ -4992,6 +4997,13 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                                            std::to_string(key.byte_offset) + ")");
         }
         supplied_id = static_cast<std::uint64_t>(key.int_val);
+        // Spellability with the literal's other checks (BB-R3 step 1), so a
+        // key no relation can store is refused before the foreign-key and
+        // assertion steps, either of which can wait, and names its byte.
+        if (Status s = catalog::CheckNamedRowIdSpellable(supplied_id); !s.ok()) {
+            return Status::InvalidArgument(s.message() + " (byte " +
+                                           std::to_string(key.byte_offset) + ")");
+        }
         body_storage.assign(values.begin() + 1, values.end());
     }
     const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;
@@ -5102,24 +5114,26 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     Status fixed = Status::OK();
 
     const bool is_btree = ta.clustered_type == catalog::ClusteredType::kBtree;
-    StatusOr<storage::InsertPlacement> placed = Status::OK();
+    std::optional<StatusOr<storage::InsertPlacement>> attempt;
     if (explicit_key) {
-        // **BB-R3: spellability, the borrow and the encode, outside any
-        // latch; then the descent, which holds the leaf the key lands on and
-        // admits it there.** The borrow precedes the admission entirely, so
-        // a statement that parks on it and re-runs has advanced nothing and
-        // finds its key as admissible as before - which is why the
-        // `before_mark` hook that rode inside `AdmitExplicitRowId` is gone.
-        if (Status s = catalog::CheckNamedRowIdSpellable(supplied_id); !s.ok()) {
-            return s;
-        }
+        // **BB-R3: the borrow and the encode, outside any latch; then the
+        // descent, which holds the leaf the key lands on and admits it
+        // there.** (Spellability was step 1, above, with the literal.) The
+        // borrow precedes the admission entirely, so a statement that parks
+        // on it and re-runs has advanced nothing and finds its key as
+        // admissible as before - which is why the `before_mark` hook that
+        // rode inside `AdmitExplicitRowId` is gone.
+        const txn::LockKey key_unit = txn::LockKey::Tuple(ta.oid, supplied_id);
         // **An illegal key is refused, never left waiting** (AO-S6c-c's
         // rule). The borrow now comes before the admission, so a key below
         // the mark would wait out a fence it could never write past; the
         // judgement is asked only once a refusal is in hand, so a granted
         // borrow pays nothing for it. Below the mark is final - the mark
-        // only rises - and the answer names a present key `AlreadyExists`
-        // and an absent one `OutOfRange` (BB-R12).
+        // only rises. The answer names a present key `AlreadyExists` and an
+        // absent one `OutOfRange` (BB-R12) - **and a version an undecided
+        // writer placed `OutOfRange` too**: that writer's abort would retire
+        // it, so its presence is not yet a fact, while the key's being below
+        // the mark already is (BB-S3's review).
         const auto refuse_if_never_admissible = [&]() -> Status {
             auto mark = catalog_.RowIdMark(oid);
             if (!mark.ok()) return mark.status();
@@ -5127,32 +5141,52 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             if (is_btree) {
                 auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, supplied_id);
                 if (present.ok()) {
-                    return Status::AlreadyExists("duplicate primary key " +
-                                                 std::to_string(supplied_id) +
-                                                 " already present at page " +
-                                                 std::to_string(present.value().page_id) +
-                                                 " slot " + std::to_string(present.value().slot));
+                    auto version =
+                        heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
+                    const bool undecided = version.ok() && txn_ != nullptr &&
+                                           txn_->IsInFlight(version.value().trx_id);
+                    if (!undecided) {
+                        return Status::AlreadyExists(
+                            "duplicate primary key " + std::to_string(supplied_id) +
+                            " already present at page " + std::to_string(present.value().page_id) +
+                            " slot " + std::to_string(present.value().slot));
+                    }
                 }
-                if (present.status().code() != StatusCode::kNotFound) return present.status();
+                // A lookup that failed says nothing about presence; below the
+                // mark is the answer either way.
             }
             return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
         };
+        const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(key_unit);
         if (std::optional<Status> held =
-                BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, supplied_id),
-                             RepeatableReadWait::kCapable, txn::LockMode::kExclusive,
-                             refuse_if_never_admissible)) {
+                BorrowOrWait(scope, key_unit, RepeatableReadWait::kCapable,
+                             txn::LockMode::kExclusive, refuse_if_never_admissible)) {
             return *held;
         }
+        // **A refused statement gives back the key's borrow its own ask took**
+        // (BB-S3's review; AZ-S5's shape for a failed check's `S`). Nothing was
+        // written under it, so it protects no row - and kept to the decide it
+        // would stall an omitted-pk insert that drew the same id meanwhile,
+        // waiting on a holder that can no longer place it.
+        const auto give_back = [&]() {
+            if (held_before || locks_ == nullptr || scope.txn == nullptr) return;
+            locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
+                              [&](const txn::LockHoldings::Held& h) { return h.key == key_unit; });
+        };
         row_id = supplied_id;
-        if (Status s = encode(); !s.ok()) return s;
-        placed = InsertNamed(
+        if (Status s = encode(); !s.ok()) {
+            give_back();
+            return s;
+        }
+        attempt.emplace(InsertNamed(
             ta, row_id, encoded,
             [&](std::uint64_t id) -> Status {
                 fixed = catalog_.AdmitExplicitRowId(oid, id);
                 if (fixed.ok() && after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(id);
                 return fixed;
             },
-            /*trx_id=*/WriterId(scope));
+            /*trx_id=*/WriterId(scope)));
+        if (!attempt->ok()) give_back();
     } else {
         // **BB-R2: the descent first, then issue, borrow and encode under
         // the hold of the leaf it took** - the rightmost, the only leaf an
@@ -5160,7 +5194,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // the id burned (K3) and nothing on the trail, so the wait survives
         // and `DispatchAsync` re-runs the statement for a fresh id. The
         // encode's spills nest under the leaf as `UPDATE`'s do (BB-Q3).
-        placed = InsertIssued(
+        attempt.emplace(InsertIssued(
             ta,
             [&]() -> StatusOr<std::span<const std::byte>> {
                 auto issued = catalog_.AllocateRowId(oid);
@@ -5175,9 +5209,10 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
                 return std::span<const std::byte>(encoded);
             },
-            /*trx_id=*/WriterId(scope));
+            /*trx_id=*/WriterId(scope)));
     }
     if (!fixed.ok()) return fixed;
+    StatusOr<storage::InsertPlacement> placed = std::move(*attempt);
     if (!placed.ok()) {
         if (logging(LogLevel::kWarn)) {
             log_->Warn(is_btree ? "btree" : "heap",
@@ -8436,7 +8471,7 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
                                                       const txn::LockKey& unit,
                                                       RepeatableReadWait rerun,
                                                       txn::LockMode mode,
-                                                      const std::function<Status()>& before_wait) {
+                                                      FunctionRef<Status()> before_wait) {
     std::uint64_t blocker = 0;
     auto took = BorrowChain(scope, unit, &blocker, mode);
     if (!took.ok()) return took.status();
@@ -8457,21 +8492,16 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     const bool refused_at_relation = lock_wait_.has_value() &&
                                      lock_wait_->key.unit == txn::LockUnit::kRelation &&
                                      lock_wait_->key.rel_oid == unit.rel_oid;
-    // **A refusal that is not to become a wait** (BB-R3): the caller's
-    // judgement, asked before anything records this refusal as one. The
-    // relation wait this ask installed goes now; the unit's registration
-    // goes at the statement's end, which drops a wake no blocker carries.
-    if (before_wait) {
-        if (Status final_answer = before_wait(); !final_answer.ok()) {
-            if (refused_at_relation) {
-                locks_->DropWake(lock_wait_->key, lock_wait_->slot);
-                lock_wait_.reset();
-            }
-            return final_answer;
-        }
-    }
     if (refused_at_relation || unit.unit == txn::LockUnit::kRelation) {
         return RelationHeld(unit.rel_oid, blocker);
+    }
+    // **A refusal of a narrower unit that is not to become a wait** (BB-R3):
+    // the caller's judgement, asked before anything records it as one. The
+    // unit's registration goes at the statement's end, which drops a wake no
+    // blocker carries. A relation refusal above stays a wait: the relation's
+    // holder decides whether the statement can resolve at all.
+    if (before_wait) {
+        if (Status final_answer = before_wait(); !final_answer.ok()) return final_answer;
     }
 
     // **A refused borrow stops the write.** An insert has no conflict check

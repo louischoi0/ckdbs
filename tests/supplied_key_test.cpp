@@ -519,7 +519,7 @@ TEST_F(SuppliedKeyBulkTest, AFailedStatementThatSplitALeafRollsBackWhole) {
     CommandDispatcher& d = *d_;
     CreateBtree(d);
 
-    // A committed base, ascending: 400 rows over two leaves.
+    // A committed base, ascending: 400 rows over three leaves (198, 198, 4).
     std::string base = "INSERT INTO t VALUES ";
     for (int k = 1; k <= 400; ++k) {
         base += (k == 1 ? "" : ", ");

@@ -1013,16 +1013,16 @@ and checked by a second:
 | `strict_marker_snapshot_rig_test.cpp` | `AnAutocommitWriteIsSeenByTheSessionsNextStatement` | incidental: keys ascending | `AnAutocommitWriteIsSeenByTheSessionsNextStatement` | - |
 | `strict_marker_snapshot_rig_test.cpp` | `AnExplicitCommitIsSeenByTheSessionsNextStatement` | incidental: keys ascending | `AnExplicitCommitIsSeenByTheSessionsNextStatement` | - |
 | `strict_marker_snapshot_rig_test.cpp` | `ASynchronousDispatchWaitsForTheBoundToo` | incidental: keys ascending | `ASynchronousDispatchWaitsForTheBoundToo` | - |
-| `fk_cross_core_rig_test.cpp` | `AChildCommittedDuringTheControllersBuildIsInTheSetItBanks` | withdrawn: subject kept, ascending | `AChildMovedOntoASeedBehindTheControllersBuildIsInTheSetItBanks` | SQL can no longer place a NEW row on a leaf the walk has already read. So the cell no longer covers an insert's hook appending to an announced set behind the walk; it covers an update's hook on the same path (NoteCabinWrite to NoteWrite). A |
-| `catalog_test.cpp` | `AKeyOrderFlipBumpsTheWordAndKeepsTheWritersOwnEntry` | withdrawn: a refusal cell | `ARefusedBelowMarkKeyMovesNoWordAndDropsNoCache` | The flip bumping the word, the writer keeping its entry across that bump, and a reader re-reading the flag at its next boundary. All three are untestable now that the flip is gone (BB-R10). Coverage gained: no other cell pinned that AdmitEx |
-| `catalog_test.cpp` | `AHeapRelationTakesASuppliedKeyAtOrAboveTheMark` | incidental: keys ascending | `AHeapRelationTakesASuppliedKeyAtOrAboveTheMark` | - |
+| `fk_cross_core_rig_test.cpp` | `AChildCommittedDuringTheControllersBuildIsInTheSetItBanks` | withdrawn: subject kept, ascending | `AChildMovedOntoASeedBehindTheControllersBuildIsInTheSetItBanks` | SQL can no longer place a NEW row on a leaf the walk has already read. So the cell no longer covers an insert's hook appending to an announced set behind the walk; it covers an update's hook on the same path (NoteCabinWrite to NoteWrite). An insert that lands ahead of the walk takes the build's busy-defer path instead, and this cell does not pin that. The red-before-fix evidence (445e00d) is for the retired insert shape. A mutation that removes the announce in BuildSeededSets, repeated per the mutation-testing rule, is what would show the update shape is red without the fix; that mutation was not run. |
+| `catalog_test.cpp` | `AKeyOrderFlipBumpsTheWordAndKeepsTheWritersOwnEntry` | withdrawn: a refusal cell | `ARefusedBelowMarkKeyMovesNoWordAndDropsNoCache` | The flip bumping the word, the writer keeping its entry across that bump, and a reader re-reading the flag at its next boundary. All three are untestable now that the flip is gone (BB-R10). Coverage gained: no other cell pinned that AdmitExplicitRowId's refusal leaves the schema word and both caches alone. |
+| `catalog_test.cpp` | `AHeapRelationTakesASuppliedKeyAtOrAboveTheMark` | kept: the refusal message changed | `AHeapRelationTakesASuppliedKeyAtOrAboveTheMark` | - |
 | `catalog_test.cpp` | `ABtreeRelationTakesABelowMarkKeyAndTurnsUnordered` | withdrawn: a refusal cell | `ABtreeRelationIsRefusedABelowMarkKeyAsAHeapIs` | The admission of a below-mark key on a btree, the flip to kUnordered, and the flip guard against a second write. All of these are withdrawn capability. The "mark never walks backwards" assertion is kept. |
 | `catalog_test.cpp` | `ATableAccessCarriesTheOrderAndIsInvalidatedByTheFlip` | withdrawn: deleted | - | That TableAccess carries key_order and that the flip invalidates it. Both are gone with the flag. Nothing reachable is lost. |
-| `command_dispatcher_test.cpp` | `DescribeReportsUnorderedAfterABelowMarkKey` | withdrawn: deleted | - | No coverage that is still valid. What the cell covered was the below-mark admission and the unordered flip shown in DESCRIBE, both withdrawn, plus autoincrement=if-omitted, which is pinned elsewhere. One gap to flag that this cell never cov |
-| `cabin_contract_test.cpp` | `AnExplicitKeyRelationServesTheOrderItWalks` | withdrawn: a refusal cell | `ANamedKeyBelowTheMarkIsRefusedAndNoCabinSetWitnessesIt` | The suite no longer exercises the Cabin serve on a relation whose walk order differs from pk order: the `(page, slot)` serve branch for a `kUnordered` relation, and the check that a served set follows the walk rather than a pk sort. BB-R3 m |
-| `lock_family_test.cpp` | `ABtreeResumeSurvivesALeafSplitUnderThePark` | withdrawn: subject kept, ascending | `ABtreeResumeSurvivesAnAppendSplitUnderThePark` | At the dispatcher level, nothing now shows that the key-ordered btree resume survives a true leaf divide under a park, where rows the walk already wrote move into a sibling it has not yet visited. This was the one cell that told a key-order |
+| `command_dispatcher_test.cpp` | `DescribeReportsUnorderedAfterABelowMarkKey` | withdrawn: deleted | - | No coverage that is still valid. What the cell covered was the below-mark admission and the unordered flip shown in DESCRIBE, both withdrawn, plus autoincrement=if-omitted, which is pinned elsewhere. One gap to flag that this cell never covered either: after a refused below-mark key on a btree, nothing checks that the mark did not move (the next omitted insert's id). ANamedKeyBelowTheMarkIsRefusedOnABtree checks the refusal and the rows but not the mark. Only the heap cell AHeapRelationRefusesAKeyBelowItsMark checks the mark (id=601). Whoever owns supplied_key_test may want to add that check there. |
+| `cabin_contract_test.cpp` | `AnExplicitKeyRelationServesTheOrderItWalks` | withdrawn: a refusal cell | `ANamedKeyBelowTheMarkIsRefusedAndNoCabinSetWitnessesIt` | The suite no longer exercises the Cabin serve on a relation whose walk order differs from pk order: the `(page, slot)` serve branch for a `kUnordered` relation, and the check that a served set follows the walk rather than a pk sort. BB-R3 makes that shape unreachable from SQL, and BB-S3b deletes the branch (BB-R10). No new assertion reads `key_order`, `kUnordered` or DESCRIBE's `key_order=` field. |
+| `lock_family_test.cpp` | `ABtreeResumeSurvivesALeafSplitUnderThePark` | withdrawn: subject kept, ascending | `ABtreeResumeSurvivesAnAppendSplitUnderThePark` | At the dispatcher level, nothing now shows that the key-ordered btree resume survives a true leaf divide under a park, where rows the walk already wrote move into a sibling it has not yet visited. This was the one cell that told a key-ordered resume apart from a positional one. A positional cursor passes the append shape, because nothing moves. No SQL-reachable shape can produce the divide after BB-R3. The middle divide stays in the storage contract (BB-R10), but no cell in this file drives the resume against it. Getting that back would take a storage-level seam, which is out of this file's scope. The cell was not built or run, as instructed. |
 | `bulk_insert_test.cpp` | `ABelowMarkKeyIsRefusedWithItsOrdinal` | withdrawn: a refusal cell | `ABelowMarkKeyIsRefusedWithItsOrdinalOnEveryRelation` | - |
-| `insert_wal_test.cpp` | `ALeafDivisionLogsBothPagesAsImagesAndNoPageInit` | withdrawn: a refusal cell | `AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNoInsert` | Nothing now asserts the clustered divide's record set: both leaves reported with is_new_page=false (btree.cpp:855-856 in SplitLeafAndInsert), so a divide is logged as two images and never as a PAGE_INIT. btree_test.cpp's divide cells (AFull |
+| `insert_wal_test.cpp` | `ALeafDivisionLogsBothPagesAsImagesAndNoPageInit` | withdrawn: a refusal cell | `AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNoInsert` | Nothing now asserts the clustered divide's record set: both leaves reported with is_new_page=false (btree.cpp:855-856 in SplitLeafAndInsert), so a divide is logged as two images and never as a PAGE_INIT. btree_test.cpp's divide cells (AFullLeafDividesToMakeRoomForALowerId, ADivisionLeavesBothLeavesInsideInvariantsTwoAndThree, ADivisionBumpsTheRelayoutEpochOfThePageItRebuilt, ADividedLeafKeepsADeleteMarkOnTheVersionItMoved) check contents, invariants, epoch and delete marks, not changes(). ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo covers only the append split. The same holds for the mid-chain append's is_new_page=false arm (btree.cpp:1106, right_sibling != kInvalidPageId), which SQL also cannot reach now. To keep the divide's WAL contract pinned while it stays in the storage contract, btree_test.cpp needs a cell that asserts changes() after tree.Insert(placed.front() + 5): both leaves reported, neither as a new page. That file is outside this agent's list, so it was not added. insert_log_crash_rig_test.cpp's ARowWhoseLeafAnotherCoreDividedBeforeItWasLoggedRecoversOnce (also failing, another agent's file) reaches the divide's recovery path. |
 | `supplied_key_test.cpp` | `AHeapRelationRefusesAKeyBelowItsMark` | withdrawn: a refusal cell | `AHeapRelationRefusesAKeyBelowItsMarkPresentOrAbsent` | The 'must ascend' wording and the 'use BTREE' hint. Both are withdrawn and the message no longer carries them. |
 | `supplied_key_test.cpp` | `ADescendingKeyIsAccepted` | withdrawn: deleted | - | - |
 | `supplied_key_test.cpp` | `AFullyDescendingLoadStaysWholeAndFindable` | withdrawn: subject kept, ascending | `AnAscendingLoadStaysWholeAndFindableAcrossSplits` | SQL no longer reaches the middle divide (SplitLeafAndInsert). Storage-level cover stays in btree_test.cpp, e.g. ADescendingRunEndsUpFullyOrderedAndFullyReachable. |
@@ -1034,11 +1034,11 @@ and checked by a second:
 | `supplied_key_test.cpp` | `TheKeyOrderSurvivesAcrossDispatchers` | withdrawn: a refusal cell | `TheMarkThatRefusesAKeySurvivesAcrossDispatchers` | Persistence of the kUnordered flag across dispatchers. Nothing sets the flag now, and BB-S3b deletes it. |
 | `supplied_key_test.cpp` | `AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransaction` | withdrawn: subject kept, ascending | `AnAbortedUpdateDoesNotSurviveAnAppendSplitInItsOwnTransaction` | A trail (page, slot) entry made stale by a division that renumbers slots mid-transaction. SQL can no longer produce it, because an append split moves nothing. No SQL cell now exercises rollback against a renumbered slot. |
 | `supplied_key_test.cpp` | `ABulkStatementMayNameKeysInAnyOrder` | withdrawn: a refusal cell | `ABulkStatementNamingKeysOutOfOrderIsRefusedWhole` | Admission of a bulk statement whose keys come in any order. Withdrawn. |
-| `insert_log_crash_rig_test.cpp` | `ARowWhoseLeafAnotherCoreDividedBeforeItWasLoggedRecoversOnce` | withdrawn: subject kept, ascending | `ARowWhoseLeafAnotherCoreFilledAndSplitBeforeItWasLoggedRecoversOnce` | No SQL-reachable test now covers a middle divide that renumbers the slot of a placed but unlogged row (a divide's full image putting the row over another row's renumbered slot). The clustered middle divide stays in the storage contract only |
+| `insert_log_crash_rig_test.cpp` | `ARowWhoseLeafAnotherCoreDividedBeforeItWasLoggedRecoversOnce` | withdrawn: subject kept, ascending | `ARowWhoseLeafAnotherCoreFilledAndSplitBeforeItWasLoggedRecoversOnce` | No SQL-reachable test now covers a middle divide that renumbers the slot of a placed but unlogged row (a divide's full image putting the row over another row's renumbered slot). The clustered middle divide stays in the storage contract only, and no crash test exercises it. |
 | `insert_log_crash_rig_test.cpp` | `AParentWrittenBackBeforeItsSplitIsLoggedDoesNotRouteToNothing` | withdrawn: subject kept, ascending | `AParentWrittenBackBeforeItsSplitIsLoggedDoesNotRouteToNothing` | The divide variant is gone: a written-back parent routing to a new leaf that held rows the divide moved out of the old one. The root routing to a leaf that no record creates is still covered, through the append split. |
-| `insert_log_crash_rig_test.cpp` | `AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresInserts` | withdrawn: subject kept, ascending | `AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresUpdates` | Core 1's index entries in the window now come from UPDATEs, not INSERTs. A second core's INSERT can no longer reach the shared index leaf without passing through the clustered leaf core 0 holds. The index write itself goes through the same  |
-| `insert_log_crash_rig_test.cpp` | `AMidChainAppendSplitKeepsItsRightLinkAcrossACrash` | withdrawn: a refusal cell | `AKeyThatWouldAppendMidChainIsRefusedAndLeavesTheChainWhole` | No test now crashes and recovers a clustered mid-chain append split's right link: btree.cpp logs that new leaf as a full image instead of a PAGE_INIT when it has a right sibling. A mutation reverting that leaf to a PAGE_INIT is no longer ki |
-| `insert_log_crash_rig_test.cpp` | `TwoCoresSpillingIntoOneVarHeapPageRecoverInTheOrderTheyWrote` | withdrawn: subject kept, ascending | `TwoCoresSpillingIntoOneVarHeapPageRecoverInTheOrderTheyWrote` | Core 1's spills in the window come from UPDATEs, not INSERTs. A second core's insert-path spill no longer tells a spill logged at its append apart from one logged with its row, because the held clustered leaf orders it either way. UPDATE an |
+| `insert_log_crash_rig_test.cpp` | `AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresInserts` | withdrawn: subject kept, ascending | `AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresUpdates` | Core 1's index entries in the window now come from UPDATEs, not INSERTs. A second core's INSERT can no longer reach the shared index leaf without passing through the clustered leaf core 0 holds. The index write itself goes through the same AppendIndexEntry and IndexWriteLogFor path in both cases. The clustered first-leaf divides that core 1's below-mark inserts caused are gone. |
+| `insert_log_crash_rig_test.cpp` | `AMidChainAppendSplitKeepsItsRightLinkAcrossACrash` | withdrawn: a refusal cell | `AKeyThatWouldAppendMidChainIsRefusedAndLeavesTheChainWhole` | No test now crashes and recovers a clustered mid-chain append split's right link: btree.cpp logs that new leaf as a full image instead of a PAGE_INIT when it has a right sibling. A mutation reverting that leaf to a PAGE_INIT is no longer killed by any crash test. SQL can't reach the split any more, and btree_test checks only the live link, without a crash. |
+| `insert_log_crash_rig_test.cpp` | `TwoCoresSpillingIntoOneVarHeapPageRecoverInTheOrderTheyWrote` | withdrawn: subject kept, ascending | `TwoCoresSpillingIntoOneVarHeapPageRecoverInTheOrderTheyWrote` | Core 1's spills in the window come from UPDATEs, not INSERTs. A second core's insert-path spill no longer tells a spill logged at its append apart from one logged with its row, because the held clustered leaf orders it either way. UPDATE and INSERT share SpillLogFor. |
 
 Beyond the 30: **the golden WAL log** re-pinned (`0xdd14ffed` →
 `0xdf5ca199`): a named key's encode now precedes its admission, so row 6's
@@ -1122,3 +1122,85 @@ loaded the host).
 
 **Mutations, each killed on every run**: the mount check removed (3/3), the
 check reading the wrong value (3/3).
+
+### BB-S3's review - 2026-10-06
+
+`1b5d252e`, reviewed through three `critics-developer` lenses (concurrency and
+latch discipline; the dispatcher's flow and the wire; test honesty), each
+finding re-read by an adversarial skeptic: **22 findings, 21 held, 1
+refuted**. Applied on `be2bb128`'s successor (this section's commit),
+settled by CLA's proposal under §7's word where a finding offered a choice:
+
+- **The judgement before a wait read an undecided writer's row as present**
+  (medium). A named key below the mark, refused a borrow by a transaction
+  that had just inserted that key and not decided, was answered
+  `AlreadyExists` at once - and the writer's `ROLLBACK` then retired the row,
+  so the key never existed. **Taken**: a version whose writer is in flight
+  answers `OutOfRange`, true in both outcomes (the key is below the mark for
+  good); `AlreadyExists` only for a decided version. **Declined**: waiting
+  for the writer's decide to give the exact code - a statement with no future
+  waiting is what AO-S6c-c's rule forbids. A lookup that fails now falls
+  through to `OutOfRange` rather than being the answer.
+- **A named key's borrow outlived its refused statement** (medium). Taken
+  before the admission, it was kept to the transaction's decide - so an
+  omitted-pk insert that drew the same id meanwhile waited on a holder that
+  could never place it, up to the 1 s fault net. **Taken**: a named-key
+  statement refused after its own borrow (an encode, a storage refusal, the
+  admission) gives that borrow back - AZ-S5's shape; a borrow the transaction
+  held before the statement is kept. **Declined**: an issuer that skips a
+  held id and draws again (a new out-parameter on `BorrowChain` for one
+  caller).
+- **A bulk refusal's row number reached the line and not the `Status`**
+  (medium): it is carried in the message now, so a KWP client sees it.
+- **Spellability** moved up with the literal's own checks, before the
+  foreign-key and assertion steps that can wait, and the refusal names its
+  byte.
+- **Two `std::function` constructions per inserted row** (low, but the
+  close's `cores = 1` constraint): the two callables and `before_wait` are
+  `FunctionRef`s now (`base/function_ref.hpp`, no allocation); a lambda the
+  reference binds is named, or a temporary in the call's own expression.
+- **`before_wait` is asked for a narrower unit only**: its relation branch was
+  dead in its one caller (the relation's `IX` is held from the statement's
+  start), and a relation refusal stays a wait.
+- **Cells**: the btree arm of the judgement (`AnIllegalKeyIsRefusedWithoutWaitingOnAFenceOnABtree`),
+  its undecided arm, the give-back (`ANamedKeyRefusedAtItsEncodeGivesBackItsBorrow`),
+  a refusal after the value spilled, autocommit and inside a transaction
+  (`ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWhole`).
+- **Two cells BB-S3 left testing nothing, found by the review**:
+  `FkCrossCoreRigTest.AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`
+  (its second row is refused below the mark, so it never reached D9(a)'s
+  check-to-write window) is replaced by a one-thread cell,
+  `FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`,
+  whose child-leaf seam is armed inside the parent's - `foreign-keys.md` and
+  `known-gaps.md` cite it; and AY-S4's two `BtreeLookupStatementTest` cells,
+  whose divide was a SQL insert BB-R3 refuses, divide through the storage
+  contract (`BtreeInsert`) now.
+- **Text**: the count table's truncated column restored whole; four comments
+  corrected.
+- **Rejected**: `fixed`'s removal (it separates the caller's refusal from a
+  placement failure for the log; which refusals log is unchanged from before
+  BB); moving the presence test into the storage layer (one read-only lookup
+  on a refusal path).
+- **Refuted**: that deleting the `KeyOrderTest` `key_order` assertions at
+  BB-S3 weakened them - they could not fail there.
+
+**Mutations of the review's fixes, each killed on every run**: the
+judgement's undecided arm removed (3/3); a refused named key keeping its
+borrow (3/3, both cells); the judgement's btree arm letting an illegal key wait
+(3/3); the forward check's `S` given back once its descent read the parent,
+AY-S5 (c), against the new one-thread window cell (3/3); `BtreeLookup`
+re-fetching its leaf by id, AY-S4, against the reshaped cells (3/3, both).
+
+**The reshaped cells re-proven against the mutants they were red on**
+(AT-S21's row in `workorder-at-m3-uniformity.md`; AY-S6): a placement's holds
+dropped at the placement 3/3 (window 1); a split's parents not handed out 3/3
+(window 2); index writes collected and logged after the index hold drops 3/3
+(window 3); the spill logged with the row, not at its append 3/3; the
+controller's build not announcing its seeds 3/3 (AY-S6's cell, now an
+`UPDATE`). **One placement of window 1's mutant survives**: holds dropped
+*after* the before-log seam and before `LogInsert` (0/3) - the cell opens its
+window at the seam, so a release between the seam and the record is not what
+it can see. The placement the mutant was written for at AT-S21 is killed.
+
+Suite: 3,141 cells, 3,140 green; the one failure the port 25432 another
+process holds, as at BB-S3.

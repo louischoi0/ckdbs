@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "kds/base/function_ref.hpp"
 #include "kds/base/latch.hpp"
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
@@ -983,16 +984,17 @@ private:
     // **`before_wait`, when set, is asked once a refusal is in hand and
     // before it becomes a wait.** A non-OK answer is returned in the wait's
     // place and nothing of the refusal is kept: no blocker is recorded, so
-    // the wake `BorrowChain` registered is dropped at the statement's end,
-    // and a relation wait it installed is dropped here. A named-key insert
-    // borrows before it is admitted (BB-R3), and asks through this whether
-    // the key can ever be admitted - so a key below the mark is refused, not
-    // left waiting on a fence it could never write past (AO-S6c-c's rule).
-    // Asked only on a refusal, so a granted borrow pays nothing for it.
+    // the wake `BorrowChain` registered is dropped at the statement's end.
+    // Asked for a narrower unit only - a refusal at the relation stays a
+    // wait. A named-key insert borrows before it is admitted (BB-R3), and
+    // asks through this whether the key can ever be admitted - so a key below
+    // the mark is refused, not left waiting on a fence it could never write
+    // past (AO-S6c-c's rule). Asked only on a refusal, so a granted borrow
+    // pays nothing for it.
     std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit,
                                        RepeatableReadWait rerun,
                                        txn::LockMode mode = txn::LockMode::kExclusive,
-                                       const std::function<Status()>& before_wait = {});
+                                       FunctionRef<Status()> before_wait = {});
 
     // Is `cond` a non-negative integer literal compared against `access`'s
     // primary key, and if so which id? The shared half of the test

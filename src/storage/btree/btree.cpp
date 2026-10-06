@@ -958,8 +958,9 @@ StatusOr<storage::InsertPlacement> BtreeInsertIssued(storage::PageStore& store, 
     auto id = KeystoneIdOfPayload(payload.value());
     if (!id.ok()) return id.status();
     // Invariant 3 and the duplicate scan run on it as they run on any id
-    // (BB-R2 step 2): the issued id is above every placed one, so both pass
-    // unless the mark went backwards, which they report.
+    // (BB-R2 step 2): the issued id is above every placed one, so both pass.
+    // They catch a mark gone backwards only where it lands the id below this
+    // leaf's `min_key` or on an id the leaf holds - not every backwards mark.
     return PlaceUnderHold(store, descent.value(), id.value(), payload.value(), trx_id, owner_oid,
                           /*duplicate_scanned=*/false);
 }

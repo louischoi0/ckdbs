@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/row_codec.hpp"
+#include "kds/parser/ast.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -23,12 +25,17 @@
 // forward check (`fk_check`) - so a caller that went back to re-fetching the
 // page by id is caught by what a client sees, not only by the tree.
 //
-// The divide is another session's `INSERT`, run by a second dispatcher at
-// the leaf's **second** fetch (`ActOnFetchStore`): after the descent's, which
-// is where a re-fetch by id would meet it. With the leaf held there is no
-// second fetch and the cells pass without the divide running; the mutant -
-// `BtreeLookup` releasing the leaf and re-fetching it by id before it
-// returns - runs it every time, and both cells go red (the row, AY-S4).
+// The divide is another core's `BtreeInsert` of 15 into the full first leaf,
+// run at that leaf's **second** fetch (`ActOnFetchStore`): after the
+// descent's, which is where a re-fetch by id would meet it. **Through the
+// storage contract, not SQL**: since BB-R3 a SQL insert reaches no clustered
+// divide - 15 is below `p`'s mark and is refused `OutOfRange` before anything
+// is written - while `BtreeInsert` keeps the middle divide
+// (`SplitLeafAndInsert`). With the leaf held there is no second fetch and the
+// cells pass without the divide running; the mutant - `BtreeLookup`
+// releasing the leaf and re-fetching it by id before it returns - runs it
+// every time, and both cells go red on what the client sees (the row,
+// AY-S4), not on the hook.
 
 namespace kds::server {
 namespace {
@@ -42,12 +49,10 @@ protected:
         ids_.emplace(boot_->superblock);
         undo_.emplace(store_, /*wal=*/nullptr);
         mgr_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr);
-        for (auto* d : {&reader_, &divider_}) {
-            d->emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
-                       /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
-                       exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
-                       /*access_statistics=*/false, /*cabins=*/nullptr, &*mgr_);
-        }
+        reader_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                        /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
+                        exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                        /*access_statistics=*/false, /*cabins=*/nullptr, &*mgr_);
 
         // Rows of about 1 KiB, eight to a leaf, at ids 10, 20, ...: ascending
         // ids append, so the first leaf fills in key order and a second opens
@@ -79,13 +84,28 @@ protected:
 
     std::string Run(const std::string& sql) { return reader_->Dispatch(sql).response; }
 
-    // Another session's divide of the first leaf, at its second fetch: 15
-    // sorts inside it, and the leaf is full.
+    // Another core's divide of the first leaf, at its second fetch: 15 sorts
+    // inside it, and the leaf is full. The row is encoded and the root read
+    // here, before the seam is armed - the root from the catalog, which a
+    // level growth repoints, not `root_`, which the growth left a leaf.
     void DivideOnRefetch() {
-        store_.OnFetch(first_leaf_, 2, [this] {
-            const std::string reply = divider_->Dispatch("INSERT INTO p VALUES (15, 'x')").response;
-            EXPECT_EQ(reply.rfind("INSERTED", 0), 0u) << "the divide must land: " << reply;
-        });
+        auto oid = boot_->catalog.FindTableOidByName("p");
+        ASSERT_TRUE(oid.ok()) << oid.status().message();
+        auto access = boot_->catalog.InitTableAccess(oid.value());
+        ASSERT_TRUE(access.ok()) << access.status().message();
+        parser::AstValue pad;
+        pad.type = parser::ValueType::kStr;
+        pad.str_val = "x";
+        auto row = exec::EncodeRow(access.value()->schema, access.value()->layout, 15, {pad});
+        ASSERT_TRUE(row.ok()) << row.status().message();
+        store_.OnFetch(first_leaf_, 2,
+                       [this, root = access.value()->desc_page_id, owner = access.value()->oid,
+                        payload = std::move(row.value())] {
+                           auto placed = btree::BtreeInsert(store_, root, 15, payload,
+                                                            /*trx_id=*/1, owner);
+                           EXPECT_TRUE(placed.ok())
+                               << "the divide must land: " << placed.status().message();
+                       });
     }
 
     storage::InMemoryPageStore backing_{kFirstUserPageId};
@@ -95,7 +115,6 @@ protected:
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> mgr_;
     std::optional<CommandDispatcher> reader_;
-    std::optional<CommandDispatcher> divider_;
     PageId root_ = kInvalidPageId;
     PageId first_leaf_ = kInvalidPageId;
     std::uint64_t upper_ = 0;

@@ -23,14 +23,21 @@
 // and its hold in which a whole `DELETE` of the parent fits.
 //
 // That gap holds no page fetch, so no seam can put another core's `DELETE`
-// in it, and the two-core window cell
+// in it, and the check-to-write window cell below passes with the order
+// reversed - an `S` taken after the read still stands over the write. **What
+// the order changes deterministically is whether the parent is read at all
+// while its row is held**: with the `S` first, a writer's `X` refuses the ask
+// before the descent; reversed, the descent reads the parent's leaf and then
+// the ask is refused. The first cell watches that read (`ActOnFetchStore`),
+// on one dispatcher with a lock table and a synchronous dispatch, where a
+// refused hold is the refusal itself.
+//
+// **The check-to-write window is pinned here since BB-S3's review**, on one
+// thread. Its two-core cell
 // (`FkCrossCoreRigTest.AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`)
-// passes with the order reversed. **What the order changes deterministically
-// is whether the parent is read at all while its row is held**: with the
-// `S` first, a writer's `X` refuses the ask before the descent; reversed,
-// the descent reads the parent's leaf and then the ask is refused. This cell
-// watches that read (`ActOnFetchStore`), on one dispatcher with a lock table
-// and a synchronous dispatch, where a refused hold is the refusal itself.
+// put its second row behind the `DELETE`'s walk by naming a key below `c`'s
+// mark, which BB-R3 refuses before the row is written: it passed with nothing
+// tested, and went.
 
 namespace kds::server {
 namespace {
@@ -135,6 +142,42 @@ TEST_F(FkParentHoldTest, AParentRowHeldByAWriterIsNotReadBeforeTheChildHoldsIt) 
     store_.OnFetch(parent_leaf_, 1, [&] { read_while_held = true; });
     EXPECT_EQ(Run("INSERT INTO c VALUES (7)").rfind("INSERTED", 0), 0u);
     EXPECT_TRUE(read_while_held) << "the check passed without descending the parent";
+}
+
+// **The check-to-write window** (E3 (ii); D9(a), `foreign-keys.md` §3a): a
+// parent deleted after the child's check found it and before the child's
+// row is written. Only the `S` the check holds to the decide closes it - the
+// `DELETE` asks the row's `X` before it walks `c`, and is refused.
+//
+// The child-leaf seam is armed **from inside** the parent-leaf seam, so it
+// can fire only once the check has started reading the parent: its first
+// fetch of `c`'s leaf after that is the descent that places the row (an
+// omitted pk, issued under that leaf's hold, BB-R2). One thread, as the cells
+// above: the `DELETE` runs on the second dispatcher inside the fetch, and on
+// the synchronous path a refused hold is the refusal.
+//
+// **Mutations**: the `S` given back once the check's descent has read the
+// parent (AY-S5's (c)) - the `DELETE` walks an empty `c` and answers
+// `DELETED 1`, and the child is written over no parent; the `S` given back
+// and asked again under the row's leaf - the same, or the child refused.
+TEST_F(FkParentHoldTest, AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused) {
+    ASSERT_EQ(Run("INSERT INTO p VALUES (8, 0)").rfind("INSERTED", 0), 0u);
+
+    std::string deleted;
+    bool in_window = false;
+    store_.OnFetch(parent_leaf_, 1, [&] {
+        store_.OnFetch(child_leaf_, 1, [&] {
+            in_window = true;
+            deleted = Other("DELETE FROM p WHERE id = 8");
+        });
+    });
+    const std::string inserted = Run("INSERT INTO c VALUES (8)");
+    ASSERT_TRUE(in_window) << "the seam never ran; the cell tested nothing: " << inserted;
+    ASSERT_EQ(inserted.rfind("INSERTED", 0), 0u) << inserted;
+    EXPECT_EQ(deleted.rfind("ERR TXN_CONFLICT", 0), 0u)
+        << "the DELETE ran inside the child's check-to-write window: " << deleted;
+    EXPECT_EQ(Run("SELECT id FROM p WHERE id = 8"), "id\\n8")
+        << "the DELETE answered '" << deleted << "' and the child of 8 has no parent";
 }
 
 // **The reverse check reads under a view minted after the parent row is

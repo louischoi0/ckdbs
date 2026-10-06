@@ -2,11 +2,11 @@
 
 #include <array>
 #include <cstdint>
-#include <functional>
 #include <span>
 #include <vector>
 
 #include "kds/base/common.hpp"
+#include "kds/base/function_ref.hpp"
 #include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
 
@@ -138,17 +138,19 @@ struct InsertPlacement {
 // The storage layer has no catalog, so the two things only the caller can do
 // under that hold are handed in as callables. Both run **once**, under the
 // exclusive hold, and **must not park** (BB-R5): a refusal is returned, and
-// the insert returns it with every hold released and nothing placed.
+// the insert returns it with every hold released and nothing placed. Both are
+// `FunctionRef`s - a reference, no allocation per row - so a caller binds a
+// named callable, or a temporary in the call's own expression.
 
 // An omitted pk (BB-R2): issue the id, borrow its lock, encode the row, and
 // return the encoded payload - whose Keystone word carries the issued id and
 // whose bytes stay valid until the insert returns.
-using IssueUnderHold = std::function<StatusOr<std::span<const std::byte>>()>;
+using IssueUnderHold = FunctionRef<StatusOr<std::span<const std::byte>>()>;
 
 // A named key (BB-R3 step 7): admit `id` against the relation's mark,
 // moving it past `id`. Asked only once the structure has proved `id` absent
 // from the held page and the held page the last one - below it, a key is
 // refused without the mark being read.
-using AdmitUnderHold = std::function<Status(std::uint64_t id)>;
+using AdmitUnderHold = FunctionRef<Status(std::uint64_t id)>;
 
 }  // namespace kds::storage

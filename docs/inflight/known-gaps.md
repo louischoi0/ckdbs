@@ -516,9 +516,11 @@ statement about an engine that no longer exists; re-verify or strike it.
 `S` from before its descent to its decide (D9(a), `foreign-keys.md` §2a,
 §3a), so a parent `DELETE` on any core waits for it. The entry that stood
 here recorded the window from AT-S5f (verified at `f247c52`), and AY-S4
-reproduced it at `64b97e7`
-(`FkCrossCoreRigTest.AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan`,
-an orphan 5/5). A second orphaning shape AY-S4 found - a parent `DELETE`
+reproduced it at `64b97e7` (a two-core rig cell, an orphan 5/5). That cell
+went at BB-S3's review - BB-R3 refuses the below-mark key it wrote behind
+the walk, so it passed with nothing tested - and the window is pinned on one
+thread by `FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.
+A second orphaning shape AY-S4 found - a parent `DELETE`
 answered "no children" over a child an undecided `UPDATE` had moved off it,
 the rollback then restoring the reference - closed in the same stage, the
 reverse check reading such a row's earlier version (AY-Q8); its bug entry

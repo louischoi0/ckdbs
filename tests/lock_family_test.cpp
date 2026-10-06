@@ -1122,9 +1122,10 @@ TEST_F(LockDeadlockTest, AnInsertIntoAFencedWindowWaitsForItsHolder) {
         dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id > 4 AND v = 99", &a);
     ASSERT_EQ(fenced.response, "UPDATED 0") << fenced.response;
 
-    // Above the relation's high-water mark, because `t` is heap-clustered
-    // and its chain grows only at the tail - a key below the mark is a
-    // btree-only shape and would be refused before the borrow is reached.
+    // Above the relation's high-water mark: a key below it is refused on
+    // every relation since BB-S3. It still reaches the borrow, and under A's
+    // fence the borrow's `before_wait` judgement refuses it at once instead
+    // of letting it wait (the next cells), so it could not show the wait.
     Started wb = Start("INSERT INTO t VALUES (100, 1)", b);
     Pump();
     ASSERT_FALSE(*wb.done) << "the insert went through A's fence: " << wb.out->response;
@@ -1160,6 +1161,86 @@ TEST_F(LockDeadlockTest, AnIllegalKeyIsRefusedWithoutWaitingOnAFence) {
     Pump();
     ASSERT_TRUE(*wb.done) << "an illegal key waited on a fence it could never write past";
     EXPECT_NE(wb.out->response.find("high-water mark"), std::string::npos) << wb.out->response;
+}
+
+TEST_F(LockDeadlockTest, AnIllegalKeyIsRefusedWithoutWaitingOnAFenceOnABtree) {
+    // The same rule on the default storage since SUS-1, where the judgement
+    // has an arm of its own: it looks the key up, and names a present key
+    // `AlreadyExists` and an absent one `OutOfRange` (BB-R12) - at once, with
+    // the code on the outcome a KWP client reads, and with nothing of the
+    // refused ask left registered. The heap cell above reaches none of it.
+    //
+    // **Mutations**: the btree arm deleted (5 answered `OutOfRange`); the arm
+    // answering OK (both wait out the fence - AO-S6c-c's regression).
+    ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    // Declares `Range(tb, 2, end)` and writes no row: 3 and 5 are both in it.
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 2 WHERE id > 1 AND v = 99", &a).response,
+              "UPDATED 0");
+    const std::size_t held = locks_->EntryCount();
+
+    const struct {
+        const char* sql;
+        StatusCode code;
+        const char* text;
+    } cases[] = {{"INSERT INTO tb VALUES (5, 9)", StatusCode::kAlreadyExists, "duplicate primary key"},
+                 {"INSERT INTO tb VALUES (3, 9)", StatusCode::kOutOfRange, "high-water mark"}};
+    // Outside the loop: a mutant that parks leaves a coroutine pointing at
+    // its session.
+    Session b[2];
+    for (std::size_t i = 0; i < 2; ++i) {
+        Started wb = Start(cases[i].sql, b[i]);
+        Pump();
+        ASSERT_TRUE(*wb.done) << cases[i].sql << ": an illegal key waited on a fence";
+        EXPECT_EQ(wb.out->status.code(), cases[i].code) << wb.out->response;
+        EXPECT_NE(wb.out->response.find(cases[i].text), std::string::npos) << wb.out->response;
+        EXPECT_EQ(locks_->EntryCount(), held) << cases[i].sql << ": the refused ask left an entry";
+        EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << cases[i].sql << ": the refused ask left an edge";
+    }
+
+    // A wake left on the fence's own entry shows only once the fence goes.
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "a refused ask's registration outlived the fence";
+}
+
+TEST_F(LockDeadlockTest, AKeyAnUndecidedWriterPlacedIsRefusedBelowTheMarkWithoutWaiting) {
+    // The judgement's undecided arm (BB-S3's review). `c` placed 7 and has
+    // not decided; `b` names 7, and `c`'s row `X` refuses its borrow. That 7
+    // is below the mark `c`'s admission moved is final - the mark only rises
+    // and outlives `c`'s rollback - but that 7 is present is not: `c`'s
+    // rollback retires the version. So the answer is `OutOfRange`, the one
+    // true whatever `c` decides, and it is given at once.
+    //
+    // **Mutations**: the undecided test dropped (`AlreadyExists`, a duplicate
+    // the rollback below then un-makes); the judgement answering OK for an
+    // undecided version (`b` waits for `c`'s decide, to be refused anyway).
+    ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+
+    Session c;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO tb VALUES (7, 0)", &c).response.rfind("INSERTED", 0),
+              0u);  // at the mark: placed, the mark moved to 8, undecided
+
+    Session b;
+    Started wb = Start("INSERT INTO tb VALUES (7, 1)", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "a key below the mark waited on the writer that placed it";
+    EXPECT_EQ(wb.out->status.code(), StatusCode::kOutOfRange) << wb.out->response;
+    EXPECT_NE(wb.out->response.find("high-water mark"), std::string::npos) << wb.out->response;
+    EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "the refused ask left an edge";
+
+    // And the answer stands past the rollback, which is why it was the one
+    // to give: 7 is absent now and still below the mark.
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
+    const DispatchOutcome after = dispatcher_->Dispatch("INSERT INTO tb VALUES (7, 1)");
+    EXPECT_EQ(after.status.code(), StatusCode::kOutOfRange) << after.response;
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "a refused ask's registration outlived its statement";
 }
 
 TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
@@ -1227,6 +1308,103 @@ TEST_F(LockDeadlockTest, AnIssuedRowWithASpilledValueWaitsOnAFence) {
 
 TEST_F(LockDeadlockTest, ANamedRowWithASpilledValueWaitsOnAFence) {
     SpilledInsertWaitsOnAFence("INSERT INTO sp VALUES (100, 'a value well past sixteen bytes long')");
+}
+
+// ---- A named key refused after its borrow (BB-S3's review) ----------------
+//
+// BB-R3 takes a named key's borrow and then encodes the row - spilling it -
+// before the descent that admits it, so a statement can be refused with its
+// borrow granted and its spills on the trail: by the codec, by the duplicate
+// scan, or by the mark.
+
+TEST_F(LockDeadlockTest, ANamedKeyRefusedAtItsEncodeGivesBackItsBorrow) {
+    // The borrow goes back with the refusal. Nothing was written under it, so
+    // it protected no row; and it stood where the next issued id lands - the
+    // mark had not moved - so an omitted-pk insert drew that very id and,
+    // until this give-back, waited on a holder that could no longer place it:
+    // until the holder's `ROLLBACK`, or until the 1 s fault net refused it. A
+    // borrow the transaction held before the statement is kept (it can stand
+    // over a row an earlier statement wrote).
+    //
+    // **Mutation**: the give-back removed - `b` parks on `a`'s `X(6)`.
+    ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (5, 0)").rfind("INSERTED", 0), 0u);  // the mark: 6
+
+    // `a` names the key at the mark with a string for `v`. Nothing before
+    // the codec reads a body value on a relation with no foreign key and no
+    // assertion, so the refusal (`expects an integer`) comes after the borrow
+    // and before the admission: the mark stays 6, and the transaction is
+    // poisoned but open.
+    Session a;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    const DispatchOutcome refused = dispatcher_->Dispatch("INSERT INTO tb VALUES (6, 'six')", &a);
+    ASSERT_EQ(refused.response.rfind("ERR", 0), 0u) << refused.response;
+    ASSERT_NE(refused.response.find("expects an integer"), std::string::npos) << refused.response;
+    ASSERT_TRUE(a.failed()) << "the encode's refusal did not poison the transaction";
+
+    Session b;
+    Started wb = Start("INSERT INTO tb VALUES (1)", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the issued row waited on the borrow of a refused named key";
+    EXPECT_NE(wb.out->response.find(" id=6 "), std::string::npos) << wb.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &a).response.rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+TEST_F(LockDeadlockTest, ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWhole) {
+    // The duplicate scan and the mark refuse after the encode's spills are
+    // logged at their append and noted on the trail (`SpillLogFor`); every
+    // other refusal cell names values that fit inline. What a refused
+    // statement wrote to the var-heap is unwound with it - autocommit (BI4),
+    // and inside a transaction the refusal poisons and the client rolls back
+    // - leaving the rows as they were and the chain taking the next spill.
+    // Inside the transaction the refused key's borrow is gone before the
+    // `ROLLBACK`: the give-back's other two arms, the duplicate scan's and
+    // the admission's, beside the codec's in the cell above.
+    ASSERT_EQ(Local("CREATE TABLE sp (id int64, s varchar(16)) BTREE").rfind("CREATED", 0), 0u);
+    const auto spilling = [](char fill) { return std::string(40, fill); };  // past 13 inline bytes
+    const std::uint64_t oid = OidIn(Local("INSERT INTO sp VALUES (5, '" + spilling('f') + "')"));
+    ASSERT_NE(oid, 0u);
+
+    const struct {
+        std::uint64_t key;
+        StatusCode code;
+        const char* text;
+    } refusals[] = {{3, StatusCode::kOutOfRange, "high-water mark"},
+                    {5, StatusCode::kAlreadyExists, "duplicate primary key"}};
+    std::uint64_t next = 6;  // the mark: a refused key moves nothing
+    for (const bool in_txn : {false, true}) {
+        for (const auto& r : refusals) {
+            SCOPED_TRACE(std::string(in_txn ? "inside BEGIN" : "autocommit") + ", key " +
+                         std::to_string(r.key));
+            const std::string before = Local("SELECT * FROM sp");
+            Session s;
+            if (in_txn) {
+                ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &s).response.rfind("BEGIN", 0), 0u);
+            }
+            const DispatchOutcome refused = dispatcher_->Dispatch(
+                "INSERT INTO sp VALUES (" + std::to_string(r.key) + ", '" + spilling('r') + "')", &s);
+            EXPECT_EQ(refused.status.code(), r.code) << refused.response;
+            EXPECT_NE(refused.response.find(r.text), std::string::npos) << refused.response;
+            if (in_txn) {
+                ASSERT_NE(s.transaction(), nullptr) << "the refusal ended the transaction";
+                EXPECT_FALSE(s.transaction()->borrows().Holds(
+                    txn::LockKey::Tuple(static_cast<catalog::Oid>(oid), r.key)))
+                    << "the refused key's borrow outlived its statement";
+                ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &s).response.rfind("ROLLBACK", 0), 0u);
+            }
+            EXPECT_EQ(Local("SELECT * FROM sp"), before) << "the refused statement left a trace";
+
+            const std::string value = spilling(static_cast<char>('a' + next));
+            const std::string key = std::to_string(next++);
+            ASSERT_EQ(Local("INSERT INTO sp VALUES (" + key + ", '" + value + "')").rfind("INSERTED", 0),
+                      0u);
+            EXPECT_EQ(Local("SELECT s FROM sp WHERE id = " + key), "s\\n" + value)
+                << "the next spill did not read back whole";
+        }
+    }
+    EXPECT_EQ(locks_->EntryCount(), 0u);
 }
 
 TEST_F(LockDeadlockTest, ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds) {
