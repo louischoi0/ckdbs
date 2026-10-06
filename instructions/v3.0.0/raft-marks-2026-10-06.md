@@ -62,6 +62,6 @@ session.
 |---|---|
 | **Word** | *"BB-Q9: give up backward compatatibility, refuse it"* |
 | **Mark** | **BB-Q9 is (a)**: a mounted volume that holds a `kUnordered` relation is refused at mount, naming each such relation (`Unsupported`). There is no legacy per-page emission, no re-sort at mount, and the flag is never read as ascending |
-| **Reading** | "refuse it" is read as (a)'s refusal of a volume that holds such a relation, by a check at catalog load. "give up backward compatibility" is read as the reason (b) and (c) are declined, not as refusing **every** older volume through a superblock bump. That wider reading is a different mark, and it is put back to the operator rather than taken |
+| **Reading** | "refuse it" is read as (a)'s refusal of a volume that holds such a relation, by a check at catalog load. "give up backward compatibility" is read as the reason (b) and (c) are declined, not as refusing **every** older volume through a superblock bump. That wider reading is a different mark, and it was put back to the operator rather than taken. **Confirmed by the operator:** *"그래 a 맞아"* - the scoped refusal, no superblock bump |
 | **Does not settle** | BB-Q10, BB-Q11; any BB stage's start; the push of this record |
 | **Recorded at** | BB's header, BB-R11, its §4 row, §5 and §6; the index row |

@@ -684,4 +684,6 @@ On the operator's *"BB-Q9: give up backward compatatibility, refuse it"*
 (`raft-marks-2026-10-06.md` §6). A mounted volume that holds a `kUnordered`
 relation is refused, naming each such relation, and nothing reads that
 relation's leaves as ordered or re-sorts them. BB-R11 states it as marked.
+The scope - a check at catalog load, not a superblock bump refusing every
+older volume - was put back to the operator and confirmed: *"그래 a 맞아"*.
 BB-Q10 and BB-Q11 remain unmarked; BB-S3b waits on BB-Q11.
