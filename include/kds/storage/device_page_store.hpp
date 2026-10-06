@@ -177,10 +177,12 @@
 //     holder on a flush, trying once and skipping in the background drain
 //     (`WriteBack`'s `HeldFrames`). A fault does not reach WriteBack: its
 //     sweep (`EvictColdFramesLocked`) only queues a dirty frame, and every
-//     WriteBack caller holds no page latch. Were a fault ever to write back
-//     while its task held other frames, it would be sound in `kSkip`,
-//     because neither the writer thread nor core 0's inline sync takes a
-//     page latch. **AM-S2 inherits one obligation here**: AwaitWalGate reads
+//     WriteBack caller holds no page latch. One wired would be sound only
+//     in `kSkip`, and only if it skipped a frame its own core holds:
+//     neither the writer thread nor core 0's inline sync takes a page
+//     latch, but a shared try re-enters this core's own exclusive hold
+//     (`page_latch.hpp`'s `Next`), so the writeback could copy a page
+//     mid-write. **AM-S2 inherits one obligation here**: AwaitWalGate reads
 //     each frame's page_lsn *before* the gate call, so whatever latch that
 //     scan comes to need must be dropped before EnsureDurable, or the wait
 //     acquires exactly the "latched across a durability wait" shape this
@@ -194,9 +196,10 @@
 //     `kWait` note).
 //   - **Outer to the visibility window latch, which is a leaf** (BB-S1's
 //     census corrected this bullet, which read "never nested ... in either
-//     direction"): a visibility read takes it under a page latch, and undo
-//     growth's reclaim under a catalog page's hold; nothing holding it asks
-//     for a page latch, and no path holds a PageRef at commit.
+//     direction"): it is taken by a visibility read, by undo growth's
+//     reclaim under whatever page the write holds, and by the delete-mark
+//     purge under a catalog page; nothing holding it asks for a page
+//     latch, and no path holds a PageRef at commit.
 //   - **Never across a park**: the suspend audit's `live_pins() != 0`
 //     covers it in debug builds, recording rather than failing, because
 //     the pin and the latch share a handle; nothing covers it in release.
@@ -226,25 +229,23 @@
 //     iteration; through M1 one core
 //     owns its pool, so no two holders of different pages can ever wait on
 //     each other and no order is needed. The shared pool is where an ABBA
-//     becomes possible, and the tree's own shapes - parent before child,
-//     old before new - are what AM-S2 will state as the order. AM-S2 also
+//     becomes possible, and the tree's own shapes - a leaf then its
+//     parents, bottom-up (`SecureParents`, AT-S16), a leaf then its right
+//     neighbour, old before new - are what AM-S2 will state as the order.
+//     A write walk's `WHERE` sub-chain breaks them, reading leaves on
+//     either side under the walk's exclusive hold
+//     (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`,
+//     found by BB-S1's census). AM-S2 also
 //     inherits: the self-deadlock check's `pins` proxy (PinFrame); a
 //     re-validation after the re-fetch btree.cpp's and index_tree.cpp's
 //     leaf-for-write paths now do on a dropped read handle; and starvation
 //     - shared is granted whenever X is clear, with no writer preference,
 //     so a hot page's steady readers can starve an exclusive request.
-//   - **A user relation page, then a `sys.tables` chain page** (BB-R4,
-//     `page.md` §6) - the one pair across relations that is stated. An
-//     insert fixes its row's id under catalog page 7 while it holds the
-//     page the row lands on: a btree's rightmost leaf, with the parents a
-//     split secured, or a heap chain's tail (BB-R1). Nothing holds a
-//     `sys.tables` chain page and asks for a user relation page, directly
-//     or through a third latch: BB-S1's census
-//     (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` §6) is the
-//     proof, and the list a new path is checked against. The census also
-//     found a page-against-page cycle no BB edge takes part in - a write
-//     walk's `WHERE` sub-chain reading leaves under the walk's exclusive
-//     hold (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`).
+//   - **A user relation page, then a `sys.tables` chain page** (BB-R4),
+//     stated beside the two cross-relation pairs declared where they are
+//     taken (a relation page before a Bound Cabin page, `assertion.md`
+//     §6.1; page 9 before page 7, `rules.md` §3's catalog row). `page.md`
+//     §6 is its home: who takes it, BB-R4's four levels, and the census.
 //
 // Waits spin with a pause hint, then yield; there is no queue and no
 // writer preference. A holder is in a critical section measured in

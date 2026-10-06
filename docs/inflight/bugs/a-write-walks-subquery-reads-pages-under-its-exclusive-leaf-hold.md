@@ -34,14 +34,11 @@ Two such statements on two cores close a cycle:
   a `b` leaf `X` while it reads `a`.
 - **Within one relation.** Two `UPDATE a ... WHERE id IN (SELECT ... FROM a
   ...)` each walk `a` from its leftmost leaf under their own leaf's `X`, past
-  the other's. One such walker against a point `UPDATE`/`DELETE` on a leaf
-  with a right sibling closes the same cycle: `DescendTo` holds that leaf `X`
-  and reads its right neighbour `S` (`btree.cpp:191`, `:203`).
+  the other's.
 - **Through a foreign key.** A parent `DELETE` holds a parent leaf `X` and
   walks the child (`command_dispatcher.cpp:8888` → `fk_check.cpp:407`), while
   a child `UPDATE ... WHERE EXISTS (SELECT ... FROM parent ...)` holds a
-  child leaf `X` and reads the parent. The reverse walk is
-  `fk_check.cpp:407`.
+  child leaf `X` and reads the parent.
 - **Through any write descent.** `DescendTo` holds the leaf it reached `X`
   and reads its right neighbour `S` when it has one (`btree.cpp:191`, `:203`
   → `:103`, reached from `:891` and `:1095`), so a point `UPDATE`/`DELETE`
@@ -57,10 +54,13 @@ writes are distinct. A heap relation has the same shape
 **It contradicts a stated order.** `btree.cpp:95-96` and `:467-471` say
 *"nothing anywhere holds a page and asks for the one to its left"*,
 `device_page_store.hpp` (the page-latch section's page-against-page bullet)
-promises "parent before child, old before new" as the order AM-S2 owes, and
+gave "parent before child, old before new" as the order AM-S2 owes, and
 `rules.md` §3's page latch row said nothing holds a tree node and asks for
-one below it or to its left. All are true of the tree's own code and false
-of a write walk's `WHERE`; `rules.md` §3 now says so.
+one below it or to its left. The leftward rule is true of the tree's own
+code; "parent before child" has been false of it since AT-S16
+(`SecureParents` holds the leaf, then asks its parents). Both are false of
+a write walk's `WHERE`; `rules.md` §3 and `device_page_store.hpp` now say
+so.
 
 **Not reachable today through a self-referencing foreign key**: one cannot be
 declared (`REFERENCES` is resolved before the child exists,
@@ -97,7 +97,10 @@ Smallest first, from the census's verification:
   is a private writeback helper today (its one caller is the writeback's
   copy); the fix needs a fetch that tries.
 - **(c) Hoist uncorrelated sub-chains before the walk**, as `Execute` already
-  does for a `SELECT` (`step_vm.cpp:2806-2825`). Covers only the uncorrelated.
+  does for a `SELECT` (`step_vm.cpp:2806-2825`). Covers only the
+  uncorrelated, and only where the sub-chain reads a relation other than
+  the one written - over its own relation, hoisting hides the statement's
+  earlier rows from it.
 - **(a) Evaluate sub-chains with no page latch held**: stop the walk through
   AO-S3b's resume-by-pk, evaluate, re-descend and re-check before writing.
 

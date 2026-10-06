@@ -228,8 +228,9 @@ proved deadlock-free by acquisition order rather than by detection. The
 lock family is D2(a)'s partitioned table with D12 and D13. **Acquisition
 order:** a lock is acquired before the page it protects is latched, and
 never under a page latch — so a lock wait, which may park, can never
-park a latched page. The page latch's order against the WAL latch is
-AM-S1's; the window latch is taken with the WAL latch released
+park a latched page. **Amended 2026-10-06 (BB-R4):** taken with no park
+under a page latch; `txn.md` §5. The page latch's order against the WAL
+latch is AM-S1's; the window latch is taken with the WAL latch released
 (`instructions/v3.0.0/workorder-an-read-view.md:458` AN-R9). The order
 is stated in the lock manager's subsystem header per `rules.md` §3.
 
