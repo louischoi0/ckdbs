@@ -55,3 +55,13 @@ session.
 | **Reading** | "이외에는" is read as BB-Q0..Q7, the items on the table when the word was given. The mark opens three questions it does not answer - what a mounted volume that already holds a `kUnordered` relation does, the code a refused named key gets, and `DESCRIBE`'s field - and they are written as BB-Q9..Q11 with CLA's proposals, not marked |
 | **Does not settle** | BB-Q9..Q11; any BB stage's start; BA-Q0..Q13 |
 | **Recorded at** | BB's header, its §2 (BB-R3 rewritten, BB-R10..R12 added), §3 (BB-S3b added), §4 and §6; the index row; the bug entry |
+
+## 6. BB-Q9 marked (a): a volume holding a `kUnordered` relation is refused
+
+| | |
+|---|---|
+| **Word** | *"BB-Q9: give up backward compatatibility, refuse it"* |
+| **Mark** | **BB-Q9 is (a)**: a mounted volume that holds a `kUnordered` relation is refused at mount, naming each such relation (`Unsupported`). There is no legacy per-page emission, no re-sort at mount, and the flag is never read as ascending |
+| **Reading** | "refuse it" is read as (a)'s refusal of a volume that holds such a relation, by a check at catalog load. "give up backward compatibility" is read as the reason (b) and (c) are declined, not as refusing **every** older volume through a superblock bump. That wider reading is a different mark, and it is put back to the operator rather than taken |
+| **Does not settle** | BB-Q10, BB-Q11; any BB stage's start; the push of this record |
+| **Recorded at** | BB's header, BB-R11, its §4 row, §5 and §6; the index row |

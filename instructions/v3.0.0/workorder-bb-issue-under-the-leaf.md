@@ -16,7 +16,9 @@ remaining stages wait until BB closes, and BB-S5 is where BA resumes.
 - **BB-Q8 is marked (b): `kUnordered` is deleted.** No relation is ever out of
   key order, and a named key below the mark is refused on a btree as on a
   heap.
-- BB-Q9..Q11 follow from that mark and are unmarked.
+- BB-Q9..Q11 follow from that mark. **BB-Q9 is marked (a)** the same day
+  (`raft-marks-2026-10-06.md` §6): such a volume is refused. BB-Q10 and
+  BB-Q11 are unmarked.
 
 Each stage waits for its own word. BB cuts no tag.
 
@@ -538,9 +540,10 @@ them. The other system relations carry no Keystone word and need nothing.
   - The clustered tree's middle divide stays in the storage contract
     (§1.5). SQL cannot reach it.
 
-**BB-R11 — a mounted volume that holds a `kUnordered` relation (on BB-Q9).**
+**BB-R11 — a mounted volume that holds a `kUnordered` relation (BB-Q9,
+marked (a)).**
 
-- **Proposed: refuse the mount**, naming every such relation, with
+- **Refuse the mount**, naming every such relation, with
   `Unsupported`: *"relation `t` holds keys out of order, a shape this engine
   no longer serves"*.
 - **How.** Core 0 checks while it loads the catalog at mount. There is no
@@ -549,6 +552,9 @@ them. The other system relations carry no Keystone word and need nothing.
   way (AM-S4(d), superblock 18).
 - **Why this is a decision.** Reading the byte as ascending would serve
   those relations' `ORDER BY <pk>` wrong.
+- **No way back for such a volume.** The operator gave up backward
+  compatibility for it: no legacy path, no re-sort at mount. Its data is
+  reached by an engine before BB, or not at all.
 
 **BB-R12 — the code a refused named key gets (on BB-Q10).**
 
@@ -585,7 +591,7 @@ them. The other system relations carry no Keystone word and need nothing.
 | BB-Q6 | **The sim integrity check** (BB-R6) | test | Yes | **as proposed** |
 | BB-Q7 | **BB lands whatever BB-R8 measures.** A material cost moves BA-S11 to the front of BA's fix stages | process | Yes | **as proposed** |
 | BB-Q8 | **What "원천 차단" covers.**<br>(a) The misorder only: `kUnordered` stays, set only by a named key below the mark.<br>(b) Also refuse a named key below the mark on a btree, so no relation is ever `kUnordered` | user-visible | (a) | **(b)**, the operator's word: *"kUnordered 자체를 삭제해야해"* |
-| BB-Q9 | **A mounted volume holding a `kUnordered` relation** (BB-R11).<br>(a) Refuse the mount, naming each such relation.<br>(b) Keep a legacy per-page emission for those relations only.<br>(c) Re-sort them at mount.<br>(d) Read them as ascending | user-visible, **[quiet-wrong] for (d)** | (a). (b) keeps alive the machinery BB-Q8 deletes, and (c) rewrites leaves whose `(page, slot)` addresses undo records, indexes and Cabins hold | unmarked |
+| BB-Q9 | **A mounted volume holding a `kUnordered` relation** (BB-R11).<br>(a) Refuse the mount, naming each such relation.<br>(b) Keep a legacy per-page emission for those relations only.<br>(c) Re-sort them at mount.<br>(d) Read them as ascending | user-visible, **[quiet-wrong] for (d)** | (a). (b) keeps alive the machinery BB-Q8 deletes, and (c) rewrites leaves whose `(page, slot)` addresses undo records, indexes and Cabins hold | **(a)**, the operator's word: *"give up backward compatatibility, refuse it"* |
 | BB-Q10 | **The code a refused named key gets on a btree** (BB-R12).<br>(a) `AlreadyExists` when present, `OutOfRange` when absent.<br>(b) `OutOfRange` always, as a heap | user-visible | (a). It is free, and duplicate detection keeps working | unmarked |
 | BB-Q11 | **`DESCRIBE`'s `key_order=` and the byte** (BB-R10).<br>(a) The field is removed with the state it reported; the byte is reserved, written 0, and read only by BB-R11's check.<br>(b) The field is kept, always `ascending` | user-visible | (a). A field that cannot vary reports nothing | unmarked |
 
@@ -595,7 +601,7 @@ them. The other system relations carry no Keystone word and need nothing.
    code relies on. An inversion found there changes BB-R4, which is the
    operator's.
 2. **BB-S2, then BB-S3, then BB-S3b, then BB-S4.**
-   - S3b needs BB-Q9 and BB-Q11 marked, and deletes only what S3 has left
+   - S3b needs BB-Q11 marked (BB-Q9 is), and deletes only what S3 has left
      unreachable.
    - S4 reuses S3's seam and its cells.
 3. **BB-S5 closes BB, and BA resumes there.** BA-S2..S4's census then
@@ -671,3 +677,11 @@ On the operator's *"BB-Q8에서 kUnordered 자체를 삭제해야해. 이외에�
 
 **Three new items follow from the mark: BB-Q9..Q11, unmarked.** BB-Q9 is
 [quiet-wrong] for (d).
+
+### BB-Q9 marked (a) - 2026-10-06
+
+On the operator's *"BB-Q9: give up backward compatatibility, refuse it"*
+(`raft-marks-2026-10-06.md` §6). A mounted volume that holds a `kUnordered`
+relation is refused, naming each such relation, and nothing reads that
+relation's leaves as ordered or re-sorts them. BB-R11 states it as marked.
+BB-Q10 and BB-Q11 remain unmarked; BB-S3b waits on BB-Q11.
