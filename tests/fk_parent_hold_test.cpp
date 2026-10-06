@@ -333,12 +333,12 @@ TEST_F(FkParentHoldTest, AFailedStatementGivesBackEveryAbsentParentItResolved) {
     // parent's `S` stays - the intention cell below pins it.
     Session child;
     ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
-    const std::string failed = Run(child, "INSERT INTO c VALUES (99), (98)");
+    const std::string failed = Run(child, "INSERT INTO c VALUES (98), (99)");
     ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
 
-    const std::string reached = Other("INSERT INTO p VALUES (99, 0)");
+    const std::string reached = Other("INSERT INTO p VALUES (98, 0)");
     EXPECT_EQ(reached.rfind("INSERTED", 0), 0u) << reached;
-    const std::string unreached = Other("INSERT INTO p VALUES (98, 0)");
+    const std::string unreached = Other("INSERT INTO p VALUES (99, 0)");
     EXPECT_EQ(unreached.rfind("INSERTED", 0), 0u)
         << "the failed statement still holds the parent of a row it never reached: "
         << unreached;

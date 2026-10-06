@@ -281,24 +281,6 @@ TEST_F(CommandDispatcherTest, DescribeReportsANewRelationAsAscending) {
         << out.response;
 }
 
-TEST_F(CommandDispatcherTest, DescribeReportsUnorderedAfterABelowMarkKey) {
-    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto created = d.Dispatch("CREATE TABLE t (id int64, qty int64) BTREE");
-    ASSERT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
-
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 1)").response.substr(0, 8), "INSERTED");
-    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("key_order=ascending"), std::string::npos);
-
-    // Below the mark 100 left behind: admitted, and the line changes.
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (50, 2)").response.substr(0, 8), "INSERTED");
-    auto out = d.Dispatch("DESCRIBE t");
-    EXPECT_NE(out.response.find("clustered_type=BTREE key_order=unordered"), std::string::npos)
-        << out.response;
-    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted"),
-              std::string::npos)
-        << out.response;
-}
-
 TEST_F(CommandDispatcherTest, DescAbbreviationIsAccepted) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     EXPECT_EQ(d.Dispatch("DESC tables").response.substr(0, 4), "oid=");

@@ -339,6 +339,23 @@ TEST_F(SimIntegrityCorruption, AnIdBelowItsPageMinKeyIsAChainOrderFinding) {
     ExpectOnly(Check(), CheckKind::kChainOrder);
 }
 
+TEST_F(SimIntegrityCorruption, ALowerKeyInALaterSlotIsASlotOrderFinding) {
+    // BB-R6: a page's slot order is its key order. Two rows of one leaf
+    // trade Keystone words, so the leaf holds 3, 2, 1 in slots 0, 1, 2 -
+    // every id still inside the page's bounds, which is why kChainOrder
+    // cannot see it.
+    MakeTables();
+    const InsertedAt first = Insert("b", 1, "short");
+    Insert("b", 2, "short");
+    const InsertedAt third = Insert("b", 3, "short");
+    ASSERT_EQ(first.page, third.page);
+    const std::uint64_t id_first = first.id;
+    const std::uint64_t id_third = third.id;
+    std::memcpy(TupleBase(first) + heap::kTupleHeaderOnDiskSize, &id_third, sizeof id_third);
+    std::memcpy(TupleBase(third) + heap::kTupleHeaderOnDiskSize, &id_first, sizeof id_first);
+    ExpectOnly(Check(), CheckKind::kSlotOrder);
+}
+
 TEST_F(SimIntegrityCorruption, ASpilledCellPointingOffChainIsAVarHeapFinding) {
     MakeTables();
     const InsertedAt at = Insert("h", 7, std::string(200, 'y'));  // spills

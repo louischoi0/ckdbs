@@ -794,24 +794,34 @@ TEST(CabinContractTest, AWriteHookAppendServesInPkOrder) {
         << "heap: a served set emitted out of pk order";
 }
 
-TEST(CabinContractTest, AnExplicitKeyRelationServesTheOrderItWalks) {
-    // The other half of the ordering rule, and the half a pk sort gets
-    // wrong. Under `EXPLICIT` (heap-and-tuple.md §4.1) a caller-supplied id
-    // need not ascend, so a page's slots - always in *insertion* order -
-    // are not in key order, and the walk emits them as they lie. A serve
-    // that sorted by pk would answer one order on the recording execution
-    // and another on every execution after it, with the cabin-free
-    // baseline agreeing with neither.
+TEST(CabinContractTest, ANamedKeyBelowTheMarkIsRefusedAndNoCabinSetWitnessesIt) {
+    // **Withdrawn, and what stands in its place.** This cell pinned the
+    // other half of the ordering rule: caller-supplied ids named out of
+    // order left a page's slots in insertion order, not key order, and a
+    // serve had to emit them as the walk did rather than sort by pk. BB-Q8
+    // (b) withdrew the shape - BB-R3 refuses a named key below the mark on
+    // every relation, btree included - so every page's slot order is its
+    // key order, the walk's order and pk order are one order, and the
+    // serve's `(page, slot)` branch that existed for the difference goes
+    // with `kUnordered` (BB-R10).
     //
-    // Five rows, descending ids, one page: walk order is the reverse of pk
-    // order, which is what makes the two distinguishable at all.
+    // What a Cabin must still get right is the refusal itself. The witness
+    // (§5) runs only once a row is placed, so a refused key reaches no
+    // entry set. An entry for one would be surplus - a dangling pk for the
+    // absent key, a second entry for the present one - which the serve
+    // subtracts, so the reply alone cannot see it: the set's size is the
+    // witness. Both refusals BB-R12 names are driven against an observed
+    // value, each answering byte for byte as the cabin-free baseline does,
+    // and neither may move the rows, the set or the mark.
+    //
+    // Named keys with gaps, ascending: the shape a client that names its
+    // pks still has.
     Instance db(/*cabins=*/true);
     Instance base(/*cabins=*/false);
     for (Instance* d : {&db, &base}) {
-        ASSERT_EQ(d->Run("CREATE TABLE e (id int64, sym varchar, qty int64) BTREE EXPLICIT")
-                      .substr(0, 7),
+        ASSERT_EQ(d->Run("CREATE TABLE e (id int64, sym varchar, qty int64) BTREE").substr(0, 7),
                   "CREATED");
-        for (int id : {50, 40, 30, 20, 10}) {
+        for (int id : {10, 20, 30, 40, 50}) {
             const std::string n = std::to_string(id);
             ASSERT_EQ(d->Run("INSERT INTO e VALUES (" + n + ", 'aaa', " + n + ")").substr(0, 8),
                       "INSERTED")
@@ -820,14 +830,57 @@ TEST(CabinContractTest, AnExplicitKeyRelationServesTheOrderItWalks) {
     }
     ASSERT_EQ(db.Run("CREATE CABIN ON e(sym)").substr(0, 7), "CREATED");
 
-    const std::string sql = "SELECT id FROM e WHERE sym = 'aaa'";
+    const std::string sql = "SELECT * FROM e WHERE sym = 'aaa'";
     const std::string want = base.Run(sql);
     EXPECT_EQ(db.Run(sql), want) << "the recording walk";
-    EXPECT_EQ(db.Run(sql), want) << "the served execution reordered the reply";
-    EXPECT_EQ(db.Run(sql), want) << "the served execution reordered the reply";
+    EXPECT_EQ(db.Run(sql), want) << "the served execution";
 
-    // And the clause that *does* ask for pk order still gets it, from the
-    // sink rather than from the entry set.
+    auto oid = db.catalog().FindTableOidByName("e");
+    ASSERT_TRUE(oid.ok());
+    auto access = db.catalog().InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    parser::AstValue aaa;
+    aaa.type = parser::ValueType::kStr;
+    aaa.str_val = "aaa";
+    auto key = stats::MakeCabinKey(access.value()->CabinOn(/*col_pos=*/1).id, aaa);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(db.cabins().Find(*key).valid());
+    const std::size_t before = db.cabins().Find(*key).size();
+
+    // Absent and below the mark: `OutOfRange` (BB-R12).
+    const std::string absent = "INSERT INTO e VALUES (25, 'aaa', 25)";
+    const std::string refused_absent = base.Run(absent);
+    EXPECT_EQ(refused_absent.rfind("ERR", 0), 0u) << refused_absent;
+    EXPECT_NE(refused_absent.find("high-water mark"), std::string::npos) << refused_absent;
+    EXPECT_EQ(db.Run(absent), refused_absent);
+
+    // Present: `AlreadyExists`, so duplicate detection keeps working.
+    const std::string present = "INSERT INTO e VALUES (30, 'aaa', 99)";
+    const std::string refused_present = base.Run(present);
+    EXPECT_EQ(refused_present.rfind("ERR", 0), 0u) << refused_present;
+    EXPECT_NE(refused_present.find("duplicate primary key"), std::string::npos)
+        << refused_present;
+    EXPECT_EQ(db.Run(present), refused_present);
+
+    EXPECT_EQ(db.cabins().Find(*key).size(), before) << "a refused key reached the entry set";
+    EXPECT_EQ(base.Run(sql), want) << "a refused key landed";
+    EXPECT_EQ(db.Run(sql), want) << "a refused key changed the served reply";
+    // The served reply cannot show a row the witness missed, so the cabined
+    // instance's rows are read by the bare walk, which no Cabin serves.
+    const std::string walk = "SELECT * FROM e";
+    EXPECT_EQ(db.Run(walk), base.Run(walk)) << "a refused key landed on the cabined instance";
+
+    // The mark did not move: the next omitted pk is the one after 50.
+    const std::string next = "INSERT INTO e VALUES ('aaa', 60)";
+    const std::string issued = base.Run(next);
+    EXPECT_NE(issued.find(" id=51 "), std::string::npos) << issued;
+    EXPECT_EQ(db.Run(next), issued);
+    // A placed row does append, so the unchanged size above is the
+    // refusals' and not a witness that never fires.
+    EXPECT_EQ(db.cabins().Find(*key).size(), before + 1);
+    EXPECT_EQ(db.Run(sql), base.Run(sql)) << "the served execution after the append";
+
+    // And the clause that asks for pk order agrees with the baseline too.
     const std::string ordered = sql + " ORDER BY id";
     EXPECT_EQ(db.Run(ordered), base.Run(ordered));
 }

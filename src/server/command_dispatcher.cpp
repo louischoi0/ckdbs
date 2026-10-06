@@ -873,12 +873,13 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     }
     blocking_wake_.reset();
     // **The refusal, installed where the path that raised it could not
-    // carry one.** `InsertOneRow` answers a rendered string and leaves
-    // `status` OK, so without this the cap's category is recovered by
-    // parsing the line - and `kErrorSpellings` cannot recover
-    // `ResourceExhausted`, so it becomes `InvalidArgument` with the cap's
-    // detail attached to it. Only installed over an OK status: a path that
-    // carried its own has already said something more specific.
+    // carry one.** A path that renders its refusal and leaves `status` OK
+    // would otherwise have the cap's category recovered by parsing the line
+    // - and `kErrorSpellings` cannot recover `ResourceExhausted`, so it
+    // becomes `InvalidArgument` with the cap's detail attached to it.
+    // `InsertOneRow` carried its refusal as a rendered string until BB-S3
+    // and carries the `Status` now. Only installed over an OK status: a path
+    // that carried its own has already said something more specific.
     if (!last_refusal_.ok() && outcome.status.ok()) outcome.status = last_refusal_;
     outcome.resource_detail = std::exchange(last_refusal_detail_, wire::kNoDetail);
     last_refusal_ = Status::OK();
@@ -4721,10 +4722,14 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     InsertRowResult last{};
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         InsertRowResult row{};
-        if (auto err = InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row);
-            err.has_value()) {
-            if (bulk) *err += " (row " + std::to_string(k + 1) + ")";
-            return {std::move(*err), false};
+        // The refusal travels as its `Status`, so the code it carries - an
+        // `AlreadyExists` or an `OutOfRange` for a named key (BB-R12) - reaches
+        // the wire rather than being re-read off the rendered line.
+        if (std::optional<Status> err =
+                InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row)) {
+            std::string reply = ErrorReply(*err);
+            if (bulk) reply += " (row " + std::to_string(k + 1) + ")";
+            return {std::move(reply), false, 0, *err};
         }
         if (k == 0) first = row;
         last = row;
@@ -4920,7 +4925,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             false, stmt.rows.size()};
 }
 
-std::optional<std::string> CommandDispatcher::InsertOneRow(
+std::optional<Status> CommandDispatcher::InsertOneRow(
     catalog::Oid oid, const catalog::TableAccess*& ta_ptr,
     const std::vector<parser::AstValue>& values, WriteScope& scope,
     const exec::FkParentVerdicts& fk_held, InsertRowResult& out) {
@@ -4928,9 +4933,12 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
 
     // ---- How a refusal below reaches the wire -----------------------------
     //
-    // Every failure below renders through `ErrorReply`, never a bare "ERR ":
-    // it is the one spelling that puts `retryable=1` on the wire for a
-    // TxnConflict (status.hpp's IsRetryable). The spent-lease refusals that
+    // Every failure below is returned as its `Status` and rendered once, by
+    // the caller, through `ErrorReply` - the one spelling that puts
+    // `retryable=1` on the wire for a TxnConflict (status.hpp's
+    // IsRetryable) - with the `Status` itself on the outcome, so a client
+    // reads the code a refusal carries rather than the line (BB-R12's
+    // `AlreadyExists` and `OutOfRange` among them, since BB-S3). The spent-lease refusals that
     // were its reason on a peer went with the leases - the extent lease at
     // AW-S1b, the row-id lease at AT-S10b - and a lock wait's fault net is
     // what still refuses that way.
@@ -4962,10 +4970,10 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         // sits after the id is settled - and BI9's rule is that a refused row
         // burns nothing. Both accepted counts are named, because with two of
         // them a single number reads as an off-by-one against the wrong one.
-        return "ERR expected " + std::to_string(ncols) + " value(s) including primary-key column '" +
+        return Status::InvalidArgument(
+            "expected " + std::to_string(ncols) + " value(s) including primary-key column '" +
                std::string(catalog::NameView(ta.schema.columns.front().name)) + "', or " +
-               std::to_string(ncols - 1) + " to have it issued; got " +
-               std::to_string(values.size());
+            std::to_string(ncols - 1) + " to have it issued; got " + std::to_string(values.size()));
     }
 
     // When the row names its key, the pk is values[0] and the body is the
@@ -4978,13 +4986,14 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     if (explicit_key) {
         const parser::AstValue& key = values.front();
         if (key.type != parser::ValueType::kInt) {
-            return "ERR primary-key column '" +
-                   std::string(catalog::NameView(ta.schema.columns.front().name)) +
-                   "' needs an integer literal (byte " + std::to_string(key.byte_offset) + ")";
+            return Status::InvalidArgument(
+                "primary-key column '" + std::string(catalog::NameView(ta.schema.columns.front().name)) +
+                "' needs an integer literal (byte " + std::to_string(key.byte_offset) + ")");
         }
         if (key.int_val < 0) {
-            return "ERR primary key " + std::to_string(key.int_val) +
-                   " is negative (byte " + std::to_string(key.byte_offset) + ")";
+            return Status::InvalidArgument("primary key " + std::to_string(key.int_val) +
+                                           " is negative (byte " +
+                                           std::to_string(key.byte_offset) + ")");
         }
         supplied_id = static_cast<std::uint64_t>(key.int_val);
         body_storage.assign(values.begin() + 1, values.end());
@@ -5008,7 +5017,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
             if (fk.column_no == 0 || fk.column_no > body.size()) continue;
             if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1], fk_held, scope);
                 !s.ok()) {
-                return ErrorReply(s);
+                return s;
             }
         }
     }
@@ -5056,84 +5065,123 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         if (reserver != 0) {
             NoteBlockingWriter(scope.txn, reserver, /*pk=*/0, RepeatableReadWait::kCapable);
         }
-        return ErrorReply(s);
+        return s;
     }
 
-    // The id, from whichever source *this row* named. Both sit at exactly
-    // this point in the statement - after admission, before the encode - so a
-    // refused row still burns nothing either way, and the supplied path
-    // advances the relation's high-water mark rather than drawing from it.
+    // ---- The id, fixed under the hold of the page the row lands on --------
+    //
+    // **BB-R1** (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`).
+    // Until BB the id was fixed under catalog page 7 and the row placed
+    // later under its own page, and between the two another core could fix
+    // a higher id and place it first: the page then held the higher id in
+    // the lower slot, and `ORDER BY <pk>`, which the compiler discards on
+    // the premise that a page's slot order is its key order, came back out
+    // of order (defect A). Now the id is fixed while the page it lands on is
+    // held exclusive, so placement order is issue order on every core.
+    //
+    // Both sources still sit after admission and the foreign-key check, so
+    // a row they refuse burns nothing. What each does under the hold, and in
+    // which order, is the borrow's question (BB §1.4): a recorded wait
+    // survives only while the statement's trail is unchanged, and a spill is
+    // a trail entry, so **the borrow always precedes the encode**.
     std::uint64_t row_id = 0;
-    if (explicit_key) {
-        // PW1c-5's shape gate used to refuse the whole relation here
-        // (CheckWriteAffinity); the refusal is per row now, because that is
-        // what it was always about. Admitting a supplied id writes the
-        // relation's sys.tables row - the mark, or the key-order flip - and
-        // that page was the system core's. A row that omits its pk bumps
-        // the same row's mark in `AllocateRowId` below, on every core since
-        // AT-S10b.
-        // A peer refused a named key here until AT-S5 - admitting one
-        // writes the relation's `sys.tables` row, which was the system
-        // core's page. It is every core's now, under the page latch and
-        // the no-park rule `AdmitExplicitRowId`'s hook states.
-        // **The borrow rides inside the admit** (AO-S6c-c), which is the
-        // only place both orderings can hold at once: after the key has
-        // been judged legal - this call is the sole validation a named key
-        // ever gets - and before the mark moves, so a statement that parks
-        // here and re-runs still finds its own key admissible rather than
-        // `OutOfRange` below a mark its first attempt advanced. The hook's
-        // refusal comes back as this call's status, so a held row and an
-        // illegal key reach the client by the same path.
-        if (Status s = catalog_.AdmitExplicitRowId(
-                oid, supplied_id,
-                [&]() -> Status {
-                    if (std::optional<Status> held =
-                            BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, supplied_id),
-                                         RepeatableReadWait::kCapable)) {
-                        return *held;
-                    }
-                    return Status::OK();
-                });
-            !s.ok()) {
-            return ErrorReply(s);
-        }
-        row_id = supplied_id;
-    } else {
-        // An issued id cannot be borrowed any earlier - the borrow's key is
-        // the id - and needs no such care: a re-run draws a fresh one, and
-        // burning one is what `sys.tables.next_id` being a high-water mark
-        // on what has been *placed* allows.
-        auto issued = catalog_.AllocateRowId(oid);
-        if (!issued.ok()) {
-            return ErrorReply(issued.status());
-        }
-        row_id = issued.value();
-        if (std::optional<Status> held =
-                BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, row_id),
-                             RepeatableReadWait::kCapable)) {
-            return ErrorReply(*held);
-        }
-    }
-    if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
-
+    std::vector<std::byte> encoded;
     // With a manager, each spill is noted and logged at its append, under
     // its page's hold (`SpillLogFor`); `spills` then stays empty.
     std::vector<exec::AppendedSpill> spills;
-    const auto log_spill = SpillLogFor(scope, oid, row_id);
-    auto encoded = exec::EncodeRow(
-        ta.schema, ta.layout, row_id, body,
-        exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills, ta.oid,
-                          log_spill ? &log_spill : nullptr});
-    if (!encoded.ok()) {
-        return ErrorReply(encoded.status());
-    }
+    const auto encode = [&]() -> Status {
+        const auto log_spill = SpillLogFor(scope, oid, row_id);
+        auto row = exec::EncodeRow(
+            ta.schema, ta.layout, row_id, body,
+            exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills, ta.oid,
+                              log_spill ? &log_spill : nullptr});
+        if (!row.ok()) return row.status();
+        encoded = std::move(row.value());
+        return Status::OK();
+    };
+    // What the caller's own half refused under the hold - a borrow, an
+    // encode, an admission - as opposed to what the storage refused. The
+    // first is the statement's answer as it stands; the second is a
+    // placement failure and is logged as one.
+    Status fixed = Status::OK();
 
-    // Into whichever storage the relation uses - a chain of heap pages or
-    // a clustered B+ tree. Duplicate-key and min_key enforcement live in
-    // there, not here: they are storage invariants, not dispatcher policy.
     const bool is_btree = ta.clustered_type == catalog::ClusteredType::kBtree;
-    auto placed = InsertIntoRelation(ta, row_id, encoded.value(),
-                                     /*trx_id=*/WriterId(scope));
+    StatusOr<storage::InsertPlacement> placed = Status::OK();
+    if (explicit_key) {
+        // **BB-R3: spellability, the borrow and the encode, outside any
+        // latch; then the descent, which holds the leaf the key lands on and
+        // admits it there.** The borrow precedes the admission entirely, so
+        // a statement that parks on it and re-runs has advanced nothing and
+        // finds its key as admissible as before - which is why the
+        // `before_mark` hook that rode inside `AdmitExplicitRowId` is gone.
+        if (Status s = catalog::CheckNamedRowIdSpellable(supplied_id); !s.ok()) {
+            return s;
+        }
+        // **An illegal key is refused, never left waiting** (AO-S6c-c's
+        // rule). The borrow now comes before the admission, so a key below
+        // the mark would wait out a fence it could never write past; the
+        // judgement is asked only once a refusal is in hand, so a granted
+        // borrow pays nothing for it. Below the mark is final - the mark
+        // only rises - and the answer names a present key `AlreadyExists`
+        // and an absent one `OutOfRange` (BB-R12).
+        const auto refuse_if_never_admissible = [&]() -> Status {
+            auto mark = catalog_.RowIdMark(oid);
+            if (!mark.ok()) return mark.status();
+            if (supplied_id >= mark.value()) return Status::OK();
+            if (is_btree) {
+                auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, supplied_id);
+                if (present.ok()) {
+                    return Status::AlreadyExists("duplicate primary key " +
+                                                 std::to_string(supplied_id) +
+                                                 " already present at page " +
+                                                 std::to_string(present.value().page_id) +
+                                                 " slot " + std::to_string(present.value().slot));
+                }
+                if (present.status().code() != StatusCode::kNotFound) return present.status();
+            }
+            return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
+        };
+        if (std::optional<Status> held =
+                BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, supplied_id),
+                             RepeatableReadWait::kCapable, txn::LockMode::kExclusive,
+                             refuse_if_never_admissible)) {
+            return *held;
+        }
+        row_id = supplied_id;
+        if (Status s = encode(); !s.ok()) return s;
+        placed = InsertNamed(
+            ta, row_id, encoded,
+            [&](std::uint64_t id) -> Status {
+                fixed = catalog_.AdmitExplicitRowId(oid, id);
+                if (fixed.ok() && after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(id);
+                return fixed;
+            },
+            /*trx_id=*/WriterId(scope));
+    } else {
+        // **BB-R2: the descent first, then issue, borrow and encode under
+        // the hold of the leaf it took** - the rightmost, the only leaf an
+        // issued id can land on. A refused borrow releases everything with
+        // the id burned (K3) and nothing on the trail, so the wait survives
+        // and `DispatchAsync` re-runs the statement for a fresh id. The
+        // encode's spills nest under the leaf as `UPDATE`'s do (BB-Q3).
+        placed = InsertIssued(
+            ta,
+            [&]() -> StatusOr<std::span<const std::byte>> {
+                auto issued = catalog_.AllocateRowId(oid);
+                if (!issued.ok()) return fixed = issued.status();
+                row_id = issued.value();
+                if (std::optional<Status> held =
+                        BorrowOrWait(scope, txn::LockKey::Tuple(ta.oid, row_id),
+                                     RepeatableReadWait::kCapable)) {
+                    return fixed = *held;
+                }
+                if (fixed = encode(); !fixed.ok()) return fixed;
+                if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
+                return std::span<const std::byte>(encoded);
+            },
+            /*trx_id=*/WriterId(scope));
+    }
+    if (!fixed.ok()) return fixed;
     if (!placed.ok()) {
         if (logging(LogLevel::kWarn)) {
             log_->Warn(is_btree ? "btree" : "heap",
@@ -5141,7 +5189,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                            std::to_string(ta.desc_page_id) +
                            " failed: " + placed.status().message());
         }
-        return ErrorReply(placed.status());
+        return placed.status();
     }
 
     // ---- The Cabin witness (docs/spec/cabin.md §5) ----------------------
@@ -5173,7 +5221,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     std::vector<exec::IndexWrite> index_writes;
     const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
     if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, body,
-                                          /*first_col_pos=*/1, encoded.value(), row_id,
+                                          /*first_col_pos=*/1, encoded, row_id,
                                           /*previous=*/{}, log_index ? &log_index : nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
@@ -5181,7 +5229,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                                      std::to_string(oid) + " for id " +
                                      std::to_string(row_id) + " failed: " + s.message());
         }
-        return ErrorReply(s);
+        return s;
     }
 
     // ---- The reservation (docs/spec/assertion.md §6.2 step 3) -----------
@@ -5196,7 +5244,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                                             body, row_id, placed.value().page_id,
                                             placed.value().slot);
         !s.ok()) {
-        return ErrorReply(s);
+        return s;
     }
 
     // ---- The rollback trail, and the durable record beside it -----------
@@ -5220,7 +5268,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         rec.target_slot = placed.value().slot;
         rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
         auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
-        if (!ptr.ok()) return ErrorReply(ptr.status());
+        if (!ptr.ok()) return ptr.status();
 
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
@@ -5233,14 +5281,14 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // a rollback would not undo. `Abort` has no suspension point, so
     // reversing the trail's order relative to the two writes is
     // unobservable.
-    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return ErrorReply(s);
+    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return s;
 
     if (before_insert_log_for_test_) before_insert_log_for_test_();
 
     // Logged under the holds the placement handed out, and before the client
     // is answered - this class's header's ordering note (AT-S21).
     if (Status s = LogInsert(placed.value(),
-                             is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded.value(),
+                             is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded,
                              WriterId(scope), oid, spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
@@ -5248,7 +5296,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
             log_->Error("wal", "logging the insert of id " + std::to_string(row_id) +
                                    " failed: " + s.message());
         }
-        return ErrorReply(s);
+        return s;
     }
 
     // The tree grew a level, so the relation's root moved. Persisted only
@@ -5268,7 +5316,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                                          std::to_string(placed.value().new_root) + ": " +
                                          s.message());
             }
-            return ErrorReply(s);
+            return s;
         }
         if (logging(LogLevel::kInfo)) {
             log_->Info("btree", "table oid " + std::to_string(oid) +
@@ -5299,7 +5347,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         log_->Trace(is_btree ? "btree" : "heap", "insert page=" + std::to_string(placed.value().page_id) +
                                 " slot=" + std::to_string(placed.value().slot) +
                                 " id=" + std::to_string(row_id) +
-                                " bytes=" + std::to_string(encoded.value().size()));
+                                " bytes=" + std::to_string(encoded.size()));
     }
 
     // The page id rides the (single-row) reply because it is no longer
@@ -5311,11 +5359,34 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     return std::nullopt;
 }
 
-StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
-    const catalog::TableAccess& access, std::uint64_t id, std::span<const std::byte> payload,
-    std::uint64_t trx_id) {
-    storage::InsertPlacement out;
+namespace {
 
+// A heap chain's insert in the vocabulary both storages share. Chain growth
+// goes in the order redo applies it: the old tail's image (which already
+// carries the new link - ChainInsert sets it before returning), then the page
+// it points at, which the HEAP_INSERT fills.
+storage::InsertPlacement ChainPlacement(heap::ChainInsertResult&& placed, std::uint64_t id) {
+    storage::InsertPlacement out;
+    out.page_id = placed.page_id;
+    out.slot = placed.slot;
+    out.held.push_back(std::move(placed.held));
+    if (placed.grew_chain) {
+        out.Record(placed.linked_from, /*is_new_page=*/false, 0);
+        out.Record(placed.page_id, /*is_new_page=*/true, id);
+    }
+    return out;
+}
+
+Status UnknownClusteredType(const catalog::TableAccess& access) {
+    return Status::Corruption("relation oid " + std::to_string(access.oid) +
+                              " has an unknown clustered_type");
+}
+
+}  // namespace
+
+StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIssued(
+    const catalog::TableAccess& access, const storage::IssueUnderHold& issue,
+    std::uint64_t trx_id) {
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap: {
             // The relation is a chain of heap pages (heap_chain.hpp): the
@@ -5323,37 +5394,44 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // one page rather than failing. Duplicate-key and min_key
             // enforcement live in there - they are heap invariants, not
             // dispatcher policy.
+            auto payload = issue();
+            if (!payload.ok()) return payload.status();
+            auto id = KeystoneIdOfPayload(payload.value());
+            if (!id.ok()) return id.status();
+            auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id.value(),
+                                            payload.value(), trx_id, access.oid,
+                                            &access.heap_tail_hint);
+            if (!placed.ok()) return placed.status();
+            return ChainPlacement(std::move(placed.value()), id.value());
+        }
+        case catalog::ClusteredType::kBtree:
+            // The relation is a clustered B+ tree (btree.hpp) rooted at the
+            // same desc page: the descent for the top of the id space holds
+            // the rightmost leaf, and a full leaf splits right without moving
+            // a key. Reports its own structural set, and a new root when the
+            // tree grew a level.
+            return btree::BtreeInsertIssued(page_store_, access.desc_page_id, issue, trx_id,
+                                            access.oid);
+    }
+    return UnknownClusteredType(access);
+}
+
+StatusOr<storage::InsertPlacement> CommandDispatcher::InsertNamed(
+    const catalog::TableAccess& access, std::uint64_t id, std::span<const std::byte> payload,
+    const storage::AdmitUnderHold& admit, std::uint64_t trx_id) {
+    switch (access.clustered_type) {
+        case catalog::ClusteredType::kHeap: {
+            if (Status s = admit(id); !s.ok()) return s;
             auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id, payload, trx_id,
                                             access.oid, &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
-
-            out.page_id = placed.value().page_id;
-            out.slot = placed.value().slot;
-            out.held.push_back(std::move(placed.value().held));
-            if (placed.value().grew_chain) {
-                // Chain growth in the shared vocabulary, in the order redo
-                // applies it: the old tail's image (which already carries
-                // the new link - ChainInsert sets it before returning),
-                // then the page it points at, which the HEAP_INSERT fills.
-                out.Record(placed.value().linked_from, /*is_new_page=*/false, 0);
-                out.Record(placed.value().page_id, /*is_new_page=*/true, id);
-            }
-            return out;
+            return ChainPlacement(std::move(placed.value()), id);
         }
-        case catalog::ClusteredType::kBtree: {
-            // The relation is a clustered B+ tree (btree.hpp) rooted at the
-            // same desc page: the descent picks the leaf, and a full leaf
-            // splits right without moving a key. Reports its own structural
-            // set, and a new root when the tree gained a level.
-            auto placed = btree::BtreeInsert(page_store_, access.desc_page_id, id, payload,
-                                             trx_id, access.oid);
-            if (!placed.ok()) return placed.status();
-
-            return std::move(placed.value());
-        }
+        case catalog::ClusteredType::kBtree:
+            return btree::BtreeInsertNamed(page_store_, access.desc_page_id, id, payload, admit,
+                                           trx_id, access.oid);
     }
-    return Status::Corruption("relation oid " + std::to_string(access.oid) +
-                              " has an unknown clustered_type");
+    return UnknownClusteredType(access);
 }
 
 Status CommandDispatcher::WalkHeapChain(
@@ -8361,7 +8439,8 @@ Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
 std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
                                                       const txn::LockKey& unit,
                                                       RepeatableReadWait rerun,
-                                                      txn::LockMode mode) {
+                                                      txn::LockMode mode,
+                                                      const std::function<Status()>& before_wait) {
     std::uint64_t blocker = 0;
     auto took = BorrowChain(scope, unit, &blocker, mode);
     if (!took.ok()) return took.status();
@@ -8382,6 +8461,19 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     const bool refused_at_relation = lock_wait_.has_value() &&
                                      lock_wait_->key.unit == txn::LockUnit::kRelation &&
                                      lock_wait_->key.rel_oid == unit.rel_oid;
+    // **A refusal that is not to become a wait** (BB-R3): the caller's
+    // judgement, asked before anything records this refusal as one. The
+    // relation wait this ask installed goes now; the unit's registration
+    // goes at the statement's end, which drops a wake no blocker carries.
+    if (before_wait) {
+        if (Status final_answer = before_wait(); !final_answer.ok()) {
+            if (refused_at_relation) {
+                locks_->DropWake(lock_wait_->key, lock_wait_->slot);
+                lock_wait_.reset();
+            }
+            return final_answer;
+        }
+    }
     if (refused_at_relation || unit.unit == txn::LockUnit::kRelation) {
         return RelationHeld(unit.rel_oid, blocker);
     }

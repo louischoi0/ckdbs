@@ -741,13 +741,21 @@ TEST(FkCrossCoreRigTest, ASetBankedWhileAChildInsertIsOpenIsDeclinedAndTheWalkAn
 // The walk is driven from the cell's thread over the rig's one store, with
 // core 0's catalog, the instance's Cabin store and core 0's manager, and
 // its page-boundary switch (`enabled`) is the seam: at the third leaf,
-// core 1's dispatcher writes a child of 7 at id 5, which sorts into the
-// first. Not at the second: the walk's scan ring holds the leaf it last
-// fetched shared until its next fetch, so the first leaf is free only once
-// the second is fetched - which is when another core's writer, waiting on
-// that latch, would get it. **Red at `445e00d`**: the set banked empty and
-// `DELETED 1`.
-TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBanks) {
+// core 1's dispatcher moves child 10 - the first leaf's lowest key - from
+// parent 1 to 7. Not at the second: the walk's scan ring holds the leaf it
+// last fetched shared until its next fetch, so the first leaf is free only
+// once the second is fetched - which is when another core's writer,
+// waiting on that latch, would get it.
+//
+// **The write is an `UPDATE` since BB-S3; it was an `INSERT` of child 5.**
+// BB-R3, on BB-Q8 (b), refuses a named key below the relation's mark, and
+// an insert the mark admits lands on the rightmost leaf - ahead of the
+// walk, where the build's view finds it busy and defers - so no insert
+// reaches a leaf the walk has read. An update of the Cabin column writes
+// in place, behind the walk, through the same hook, which keeps the
+// subject. **Red at `445e00d`** in the insert shape: the set banked empty
+// and `DELETED 1`. The update shape has not been run against that commit.
+TEST(FkCrossCoreRigTest, AChildMovedOntoASeedBehindTheControllersBuildIsInTheSetItBanks) {
     FkRig r({});
     ASSERT_NE(r.rig, nullptr);
     if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
@@ -757,8 +765,8 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     for (const char* row : {"INSERT INTO p VALUES (1, 0)", "INSERT INTO p VALUES (7, 0)"}) {
         ASSERT_EQ(d0.Dispatch(row).response.rfind("INSERTED", 0), 0u) << row;
     }
-    // Children of 1 at ids 10..10000, so `c` spans several leaves and 5
-    // sorts into the first.
+    // Children of 1 at ids 10..10000, so `c` spans several leaves and 10
+    // is the first's lowest key.
     for (std::uint64_t id = 10; id <= 10000; id += 10) {
         const std::string sql = "INSERT INTO c VALUES (" + std::to_string(id) + ", 1)";
         ASSERT_EQ(d0.Dispatch(sql).response.rfind("INSERTED", 0), 0u) << sql;
@@ -787,7 +795,7 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     int boundaries = 0;
     // The action's boundary, then one per leaf: the fourth is the third leaf.
     const std::function<bool()> enabled = [&] {
-        if (++boundaries == 4) written = d1.Dispatch("INSERT INTO c VALUES (5, 7)").response;
+        if (++boundaries == 4) written = d1.Dispatch("UPDATE c SET pid = 7 WHERE id = 10").response;
         return true;
     };
     stats::CabinOptimizer controller;
@@ -795,7 +803,7 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
                                           &r.rig->core(0).transactions());
     ASSERT_TRUE(executor.Apply({extend}, enabled).ok());
     ASSERT_GE(boundaries, 4) << "the walk read under three leaves; the cell tested nothing";
-    ASSERT_EQ(written.rfind("INSERTED", 0), 0u) << written;
+    ASSERT_EQ(written, "UPDATED 1");
 
     parser::AstValue seven;
     seven.type = parser::ValueType::kInt;
@@ -804,7 +812,7 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     ASSERT_TRUE(key.has_value());
     const stats::CabinSet set = cabins.Find(*key);
     ASSERT_TRUE(set.valid()) << "the build banked nothing";
-    EXPECT_EQ(set.size(), 1u) << "the child written behind the walk is not in the set";
+    EXPECT_EQ(set.size(), 1u) << "the child moved behind the walk is not in the set";
 
     const std::string deleted = d0.Dispatch("DELETE FROM p WHERE id = 7").response;
     EXPECT_NE(deleted.find("FK_VIOLATION"), std::string::npos)

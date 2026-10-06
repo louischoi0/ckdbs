@@ -2293,34 +2293,31 @@ TEST_F(MidWalkWaitTest, ThePointLookupArmStillReportsTheConflictItCannotWriteThr
         << "a held row was answered as a delete of zero rows: " << point_delete.out->response;
 }
 
-TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
-    // The hazard the key-ordered resume exists for, made to happen: while
-    // the statement is parked, another session inserts enough keys to split
-    // the leaf it stopped in. A positional cursor would come back to a page
-    // whose upper half - including rows this statement already wrote - now
-    // lives in a new sibling it has yet to visit, and would write them
-    // twice. Descending by key cannot see that difference.
+TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesAnAppendSplitUnderThePark) {
+    // **The divide this cell used to make is withdrawn** (BB-Q8 (b), BB-R3).
+    // It parked a walk on a relation keyed 1000, 2000 .. 10000 and filled it
+    // with keys *below* the held one, so the leaf the walk stopped in
+    // divided between the rows it had written and the ones it had yet to
+    // reach - the hazard the key-ordered resume exists for, since a
+    // positional cursor would come back to a page whose upper half, written
+    // rows included, now lived in a sibling it had yet to visit, and would
+    // write them twice. A named key below the mark is now refused on every
+    // relation, so SQL can no longer divide a leaf: the divide stays in the
+    // storage contract (BB-R10), and no cell at this layer can make it
+    // happen under a park.
     //
-    // **The keys are sparse, and that is the whole setup.** A split divides
-    // a leaf at its middle key, so filling `tb` (ids 1..10) with ids above
-    // 100 divides it far above the resume key and leaves every row this
-    // walk wrote exactly where it was - a cell that meets a split and never
-    // meets the hazard, which a positional cursor passes. The relation here
-    // is keyed 1000, 2000 .. 10000 and the fillers are all *below* the held
-    // key, so the division falls between the rows the walk already wrote
-    // and the ones it has yet to reach. That is the case that tells the two
-    // resume shapes apart.
-    ASSERT_EQ(Local("CREATE TABLE ts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
-    for (int id = 1000; id <= 10000; id += 1000) {
-        ASSERT_EQ(Local("INSERT INTO ts VALUES (" + std::to_string(id) + ", 0)")
-                      .rfind("INSERTED", 0),
-                  0u)
-            << "id " << id;
-    }
-
+    // **What stays is the split SQL still reaches: the append at the
+    // rightmost leaf.** While the statement is parked, another session names
+    // enough keys at the mark to fill the leaf the walk stopped in and grow
+    // it a right sibling. Nothing moves, so a positional cursor passes this
+    // too - the cell no longer tells the two resume shapes apart. What
+    // it pins is that the resume survives its leaf growing under the park,
+    // and walks on into the new siblings without admitting a row committed
+    // after its snapshot. `tb` serves as it is: the sparse keys were there
+    // only to put the fillers below the held key.
     Session holder;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("UPDATE ts SET v = 9 WHERE id = 7000", &holder)
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
                   .response.rfind("UPDATED", 0),
               0u);
 
@@ -2328,21 +2325,21 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
     // `v >= 0` rather than no predicate: a `WHERE`-less write declares the
     // relation (item 14) and is borrowed before the walk, so it would wait
-    // having written nothing and there would be no parked cursor for a
-    // split to straddle. Every row of `ts` is inserted with `v = 0`.
-    Started walk = Start("UPDATE ts SET v = 1 WHERE v >= 0", w);
+    // having written nothing and there would be no parked walk for a split
+    // to happen under. Every row of `tb` is inserted with `v = 0`.
+    Started walk = Start("UPDATE tb SET v = 1 WHERE v >= 0", w);
     Pump();
     ASSERT_FALSE(*walk.done) << walk.out->response;
     ASSERT_EQ(w.transaction()->trail().size(), 6u)
-        << "the park must be at the seventh key for the split to straddle it";
+        << "the park must be at the seventh key, inside the leaf the append grows";
 
     // **The leaf count before and after, so the cell cannot pass
     // vacuously.** `DESCRIBE`'s whole line will not do: it carries
     // `ids_issued`, which moves with every insert whether or not a leaf
-    // ever divided, so comparing the lines would assert nothing about the
+    // ever split, so comparing the lines would assert nothing about the
     // tree. The assertion is on `leaves=` itself.
     const auto leaf_count = [&]() -> int {
-        const std::string shape = Local("DESCRIBE ts");
+        const std::string shape = Local("DESCRIBE tb");
         const std::size_t at = shape.find("leaves=");
         EXPECT_NE(at, std::string::npos) << shape;
         if (at == std::string::npos) return -1;
@@ -2350,20 +2347,23 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
     };
     const int leaves_before = leaf_count();
     ASSERT_EQ(leaves_before, 1)
-        << "the ten rows must start in one leaf for it to be the leaf the split divides";
+        << "the ten rows must start in one leaf for it to be the leaf the append splits";
 
-    // Enough keys *below* the held one to force the division there. They
-    // are all invisible to the parked walk's snapshot, so none of them may
-    // appear in its count.
-    for (int id = 1; id <= 400; ++id) {
-        ASSERT_EQ(Local("INSERT INTO ts VALUES (" + std::to_string(id) + ", 7)")
+    // Enough keys *at* the mark to fill that leaf and append past it: 11 is
+    // one past the last key the fixture placed, and each insert moves the
+    // mark to the next, so none is below it - where a named key is now
+    // refused (BB-R3). They carry `v = 7`, which `v >= 0` matches on the
+    // page's own bytes, so it is the parked walk's snapshot alone that must
+    // keep every one of them out of its count.
+    for (int id = 11; id <= 410; ++id) {
+        ASSERT_EQ(Local("INSERT INTO tb VALUES (" + std::to_string(id) + ", 7)")
                       .rfind("INSERTED", 0),
                   0u)
             << "id " << id;
     }
     EXPECT_GT(leaf_count(), leaves_before)
-        << "no leaf ever divided, so this cell would pass without exercising the hazard it is "
-           "named for";
+        << "no leaf ever split, so this cell would pass without exercising the split it is named "
+           "for";
 
     ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
     Pump();

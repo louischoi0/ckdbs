@@ -91,16 +91,18 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
     ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
     // Core 1 carves its transaction-id window now, while syncs land: the
     // carve persists page 0, whose writeback waits on the log, and a held
-    // sync would stall core 1's write on that instead of the marker.
+    // sync would stall core 1's write on that instead of the marker. Every
+    // key named after this row ascends above it: a named key below the
+    // relation's mark is refused (BB-R3).
     ASSERT_FALSE(StartsWith(d1.Dispatch("INSERT INTO t VALUES (100, 0)").response, "ERR"));
 
     Session strict_session;
     strict_session.set_durability(wal::DurabilityClass::kStrict);
-    Script strict{&strict_session, {"INSERT INTO t VALUES (1, 1)"}};
+    Script strict{&strict_session, {"INSERT INTO t VALUES (101, 1)"}};
     Session relaxed_session;
     relaxed_session.set_durability(wal::DurabilityClass::kRelaxed);
     Script relaxed{&relaxed_session, writes, select_sync};
-    relaxed.lines.push_back("SELECT id FROM t WHERE id = 2");
+    relaxed.lines.push_back("SELECT id FROM t WHERE id = 102");
     const std::size_t select = relaxed.lines.size() - 1;
     rig->core(0).scheduler().Submit(
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunScript(d0, strict)));
@@ -154,7 +156,7 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
     rig->log_gate().Release();
     ASSERT_TRUE(Within(1000ms, [&] { return relaxed.done.load() > select; }))
         << "core 1's SELECT did not proceed at the marker's lift";
-    EXPECT_EQ(Response(relaxed, select), "id\\n2")
+    EXPECT_EQ(Response(relaxed, select), "id\\n102")
         << "the session missed its own acknowledged commit";
     ASSERT_TRUE(Within(2000ms, [&] { return strict.done.load() >= 1; }));
     EXPECT_TRUE(StartsWith(Response(strict, 0), "INSERTED")) << Response(strict, 0);
@@ -172,18 +174,18 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
 TEST(StrictMarkerSnapshotRigTest, AnAutocommitWriteIsSeenByTheSessionsNextStatement) {
     // Red at `dfabae1`: core 1's SELECT ran at once, under a snapshot capped
     // by core 0's marker, and answered no row.
-    SeesItsOwnCommit({"INSERT INTO t VALUES (2, 2)"}, /*select_sync=*/false);
+    SeesItsOwnCommit({"INSERT INTO t VALUES (102, 2)"}, /*select_sync=*/false);
 }
 
 TEST(StrictMarkerSnapshotRigTest, AnExplicitCommitIsSeenByTheSessionsNextStatement) {
     // `COMMIT`'s arm records the bound, not the autocommit write's.
-    SeesItsOwnCommit({"BEGIN", "INSERT INTO t VALUES (2, 2)", "COMMIT"}, /*select_sync=*/false);
+    SeesItsOwnCommit({"BEGIN", "INSERT INTO t VALUES (102, 2)", "COMMIT"}, /*select_sync=*/false);
 }
 
 TEST(StrictMarkerSnapshotRigTest, ASynchronousDispatchWaitsForTheBoundToo) {
     // The synchronous path cannot park: it holds its reactor until the lift,
     // as its own group commit blocks.
-    SeesItsOwnCommit({"INSERT INTO t VALUES (2, 2)"}, /*select_sync=*/true);
+    SeesItsOwnCommit({"INSERT INTO t VALUES (102, 2)"}, /*select_sync=*/true);
 }
 
 }  // namespace

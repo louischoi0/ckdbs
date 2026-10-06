@@ -15,23 +15,31 @@
 
 // End-to-end cover for caller-supplied primary keys (docs/spec/heap-and-tuple.md
 // §4.1). The unit-level pieces are tested where they live - the admission
-// gate in catalog_test.cpp, the leaf division in btree_test.cpp, the grammar
-// in parser_test.cpp - and this file is the one place all of them run
-// together, through SQL, the way a caller meets them.
+// gate in catalog_test.cpp, the leaf division in btree_test.cpp (which SQL no
+// longer reaches), the grammar in parser_test.cpp - and this file is the one
+// place all of them run together, through SQL, the way a caller meets them.
 //
 // **The claim moved on 2026-08-25** and the file was renamed with it. It was
 // *a caller may name a relation's primary keys, those keys need not ascend,
 // and nothing else about the engine changes* - a per-relation mode, chosen at
-// CREATE TABLE, btree-only. It is now:
+// CREATE TABLE, btree-only. **It moved again on 2026-10-06** (BB-Q8 (b),
+// BB-R3, `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`): a btree
+// used to take a key sorting anywhere and flip the relation to `kUnordered`,
+// and that capability is withdrawn. It is now:
 //
 //   **Every relation takes a caller-supplied primary key or issues one when
-//   the INSERT omits it, per row. On a btree relation the key may sort
-//   anywhere; on a heap one it must not fall below the relation's high-water
-//   mark, because the chain's tail append is that ascent.**
+//   the INSERT omits it, per row. On every relation a named key must sort
+//   above every key the relation has placed or issued - at or above its
+//   high-water mark - because that ascent is what keeps every page's slot
+//   order its key order. Below the mark it is refused: a btree answers
+//   AlreadyExists when the key is present and OutOfRange when it is absent,
+//   a heap OutOfRange for both (BB-R12).**
 //
 // Everything here is a consequence of that sentence or a refusal protecting
-// it. The tests that survived the rewrite unchanged are the ones about what
-// a btree does with a descending key, which is the half that did not move.
+// it. The cells that pinned what a btree did with a descending key, or with
+// keys in any order, are refusal cells now - or name their keys ascending,
+// where their subject (a split, a range scan, ORDER BY, a rollback) is one
+// an ascending key still reaches.
 
 namespace kds::server {
 namespace {
@@ -48,9 +56,9 @@ protected:
         return CommandDispatcher(boot_->superblock, boot_->catalog, store_);
     }
 
-    // The relation most tests here use: two columns, btree-clustered, which
-    // is the storage that takes a key sorting anywhere. Nothing about keys
-    // is said at CREATE - there is nothing left to say.
+    // The relation most tests here use: two columns, btree-clustered, the
+    // storage every new relation gets since SUS-1. Nothing about keys is
+    // said at CREATE - there is nothing left to say.
     void CreateBtree(CommandDispatcher& d, const char* name = "t") {
         auto out =
             d.Dispatch(std::string("CREATE TABLE ") + name + " (id int64, qty int64) BTREE");
@@ -160,7 +168,12 @@ TEST_F(SuppliedKeySqlTest, AHeapRelationTakesNamedKeysThatAscend) {
               std::string::npos);
 }
 
-TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMark) {
+TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMarkPresentOrAbsent) {
+    // **The pointer to BTREE is withdrawn** (BB-Q8 (b), BB-R3). This refusal
+    // used to end "use BTREE", because a btree took the key and flipped
+    // itself to `kUnordered`. A btree now refuses the same key, so a reply
+    // that sent the caller there would name a storage that answers the same
+    // way. What the heap refuses, and its code, did not move (BB-R12).
     auto d = Dispatcher();
     CreateHeap(d, "h");
 
@@ -172,12 +185,27 @@ TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMark) {
     // stop meaning anything the moment a later page opened below it.
     auto backwards = d.Dispatch("INSERT INTO h VALUES (550, 2)");
     EXPECT_EQ(backwards.response.substr(0, 3), "ERR") << backwards.response;
-    EXPECT_NE(backwards.response.find("must ascend"), std::string::npos) << backwards.response;
-    EXPECT_NE(backwards.response.find("use BTREE"), std::string::npos)
-        << "the refusal has to say what does take the key: " << backwards.response;
+    EXPECT_NE(backwards.response.find("high-water mark"), std::string::npos)
+        << backwards.response;
+    EXPECT_EQ(backwards.response.find("use BTREE"), std::string::npos)
+        << "a btree refuses the same key; the refusal may not send the caller there: "
+        << backwards.response;
 
-    // The relation is unharmed and the mark did not move: the next omitted
-    // key is still 601.
+    // A present key gets the same answer. The heap's duplicate check reads
+    // the tail alone and cannot prove presence below it, so it answers
+    // OutOfRange for both, where a btree names a present key a duplicate.
+    auto again = d.Dispatch("INSERT INTO h VALUES (600, 3)");
+    EXPECT_EQ(again.response.substr(0, 3), "ERR") << again.response;
+    EXPECT_NE(again.response.find("high-water mark"), std::string::npos) << again.response;
+    EXPECT_EQ(again.response.find("duplicate primary key"), std::string::npos)
+        << "a heap answers OutOfRange for a present key too (BB-R12): " << again.response;
+
+    // The relation is unharmed and the mark did not move: 600 keeps its
+    // value, 550 never landed, and the next omitted key is still 601.
+    EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = 600").response.find("600,1"),
+              std::string::npos);
+    EXPECT_EQ(d.Dispatch("SELECT * FROM h WHERE id = 550").response.find("550,"),
+              std::string::npos);
     EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (3)").response.find("id=601"), std::string::npos);
 }
 
@@ -206,38 +234,33 @@ TEST_F(SuppliedKeySqlTest, ACallerNamesTheKeyAndItIsTheRowsIdentity) {
     EXPECT_NE(selected.response.find("11"), std::string::npos) << selected.response;
 }
 
-TEST_F(SuppliedKeySqlTest, ADescendingKeyIsAccepted) {
+// `ADescendingKeyIsAccepted` stood here: 500, then 100 below it, admitted.
+// Withdrawn on BB-Q8 (b) and BB-R3, it became the refusal
+// `ANamedKeyBelowTheMarkIsRefusedOnABtree` (BB-S2) already pins - one key
+// placed, a lower absent one refused on the one leaf - so it was deleted
+// rather than kept as a second copy. The mark that refusal must leave
+// alone is asserted by `TheMarkThatRefusesAKeySurvivesAcrossDispatchers`.
+
+TEST_F(SuppliedKeySqlTest, AnAscendingLoadStaysWholeAndFindableAcrossSplits) {
     auto d = Dispatcher();
     CreateBtree(d);
 
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (500, 1)").response.substr(0, 8), "INSERTED");
-
-    // The whole point of the amendment. Under the ascending-only rule this
-    // was an OutOfRange naming a sequence that had gone backwards.
-    auto backwards = d.Dispatch("INSERT INTO t VALUES (100, 2)");
-    EXPECT_EQ(backwards.response.substr(0, 8), "INSERTED") << backwards.response;
-
-    EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 100").response.find("2"),
-              std::string::npos);
-    EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 500").response.find("1"),
-              std::string::npos);
-}
-
-TEST_F(SuppliedKeySqlTest, AFullyDescendingLoadStaysWholeAndFindable) {
-    auto d = Dispatcher();
-    CreateBtree(d);
-
-    // Enough rows to fill leaves and force repeated divisions, arriving in
-    // the worst order there is. Each one lands in a leaf that already holds
-    // keys above it, which is the case a monotonic sequence never produces.
-    const int kRows = 300;
-    for (int id = kRows; id >= 1; --id) {
+    // **Withdrawn in its old shape** on BB-Q8 (b) and BB-R3. This loaded its
+    // keys descending, so each landed in a leaf already holding keys above
+    // it and the leaves divided in the middle. A named key below the mark
+    // is refused now, so SQL reaches no middle divide; the division keeps
+    // its cover in btree_test.cpp. What an ascending key still reaches is
+    // the tree growing under a load: enough named keys to split the
+    // rightmost leaf again and again, each split writing a separator every
+    // later descent has to follow.
+    const int kRows = 600;
+    for (int id = 1; id <= kRows; ++id) {
         auto out = d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
                               std::to_string(id * 2) + ")");
         ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << "id " << id << ": " << out.response;
     }
 
-    // Every row is still there, still paired with its own value. A division
+    // Every row is still there, still paired with its own value. A split
     // that dropped or duplicated a tuple, or that left a separator pointing
     // at the wrong subtree, shows up here and nowhere earlier.
     for (int id = 1; id <= kRows; ++id) {
@@ -257,34 +280,40 @@ TEST_F(SuppliedKeySqlTest, AFullyDescendingLoadStaysWholeAndFindable) {
     }
 }
 
-TEST_F(SuppliedKeySqlTest, ARangeScanIsCorrectAfterDescendingInserts) {
+TEST_F(SuppliedKeySqlTest, ARangeScanIsCorrectAcrossSplitLeaves) {
     auto d = Dispatcher();
     CreateBtree(d);
 
     // Range scans prune by page-wise `min_key` ordering (exec/step_vm.cpp):
     // the walk stops at the first page whose min_key passes the high bound,
-    // which is only sound if pages stay in ascending key order. A division
-    // preserves that - the new leaf's min_key is a key that was in the old
-    // leaf, so it sits strictly between the old leaf's low bound and the
-    // next page's - but the property is easy to break and silent when
-    // broken: a scan simply returns fewer rows.
-    const int kRows = 200;
-    for (int id = kRows; id >= 1; --id) {
+    // which is only sound if pages stay in ascending key order. The property
+    // is easy to break and silent when broken: a scan simply returns fewer
+    // rows.
+    //
+    // **Withdrawn in its old shape** on BB-Q8 (b) and BB-R3: the keys used
+    // to arrive descending, so the pages came from middle divides, which SQL
+    // no longer reaches. They arrive ascending now and the pages come from
+    // append splits - each new leaf's min_key the key that opened it - and
+    // the range is wide enough to cross from the first leaf into the next:
+    // a row of these two columns takes 41 bytes of a leaf (20 of header, 16
+    // of payload, 5 of slot), so the first leaf ends near id 198.
+    const int kRows = 400;
+    for (int id = 1; id <= kRows; ++id) {
         ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
                              std::to_string(id) + ")")
                       .response.substr(0, 8),
                   "INSERTED");
     }
 
-    auto ranged = d.Dispatch("SELECT * FROM t WHERE id > 50 AND id < 60");
-    for (int id = 51; id <= 59; ++id) {
+    auto ranged = d.Dispatch("SELECT * FROM t WHERE id > 150 AND id < 260");
+    for (int id = 151; id <= 259; ++id) {
         const std::string want = std::to_string(id) + "," + std::to_string(id);
         EXPECT_NE(ranged.response.find(want), std::string::npos)
             << "the range scan pruned away id " << id << ": " << ranged.response;
     }
     // And it did not over-return: the bounds are exclusive.
-    EXPECT_EQ(ranged.response.find("50,50"), std::string::npos) << ranged.response;
-    EXPECT_EQ(ranged.response.find("60,60"), std::string::npos) << ranged.response;
+    EXPECT_EQ(ranged.response.find("150,150"), std::string::npos) << ranged.response;
+    EXPECT_EQ(ranged.response.find("260,260"), std::string::npos) << ranged.response;
 }
 
 // The ids a reply's rows carry, in the order they were emitted. Rows are
@@ -307,42 +336,67 @@ std::vector<std::uint64_t> EmittedIds(const std::string& response) {
     return ids;
 }
 
-TEST_F(SuppliedKeySqlTest, OrderByEmitsKeyOrderAfterADescendingLoad) {
+TEST_F(SuppliedKeySqlTest, AKeyInAGapBelowTheMarkIsRefusedAndOrderByStaysKeyOrder) {
     auto d = Dispatcher();
     CreateBtree(d);
 
-    // Descending inserts put a page's slots deliberately out of key order:
-    // each id is appended *below* everything already on the page, which is
-    // the case an engine-issued sequence can never produce.
+    // **Withdrawn** on BB-Q8 (b) and BB-R3. Descending inserts used to put
+    // a page's slots deliberately out of key order - each id appended
+    // *below* everything already on the page - and this pinned the per-page
+    // sort ORDER BY then needed. Such a key is refused now, so no page's
+    // slots leave key order. What this pins is the refusal that keeps it so,
+    // where the key falls in a gap of a leaf with a right sibling, and the
+    // order ORDER BY emits over the relation it protected.
+    //
+    // The keys ascend with gaps (2, 4, ... 500) over more than one leaf; 3
+    // sorts into the first one.
     const int kRows = 250;
-    for (int id = kRows; id >= 1; --id) {
+    for (int k = 1; k <= kRows; ++k) {
+        const int id = 2 * k;
         ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
                              std::to_string(id) + ")")
                       .response.substr(0, 8),
                   "INSERTED");
     }
 
+    // Absent and below the mark: OutOfRange (BB-R12), answered by the held
+    // leaf, whose right sibling already holds a higher key (BB-R3 step 6).
+    auto gap = d.Dispatch("INSERT INTO t VALUES (3, 3)");
+    EXPECT_EQ(gap.response.substr(0, 3), "ERR") << gap.response;
+    EXPECT_NE(gap.response.find("high-water mark"), std::string::npos) << gap.response;
+    EXPECT_NE(gap.response.find("right sibling"), std::string::npos)
+        << "the key sorts into a leaf with a right sibling, which refuses it: " << gap.response;
+
     auto ordered = d.Dispatch("SELECT * FROM t ORDER BY id");
     ASSERT_NE(ordered.response.substr(0, 3), "ERR") << ordered.response;
 
     std::vector<std::uint64_t> ids = EmittedIds(ordered.response);
-    ASSERT_EQ(ids.size(), static_cast<std::size_t>(kRows)) << ordered.response;
+    ASSERT_EQ(ids.size(), static_cast<std::size_t>(kRows))
+        << "the refused key landed after all: " << ordered.response;
     EXPECT_TRUE(std::is_sorted(ids.begin(), ids.end()))
         << "ORDER BY returned the right rows in the wrong order";
-    EXPECT_EQ(ids.front(), 1u);
-    EXPECT_EQ(ids.back(), static_cast<std::uint64_t>(kRows));
+    EXPECT_EQ(ids.front(), 2u);
+    EXPECT_EQ(ids.back(), static_cast<std::uint64_t>(2 * kRows));
+
+    // And the mark did not move: the next omitted key is still 501.
+    EXPECT_NE(d.Dispatch("INSERT INTO t VALUES (7)").response.find("id=501"), std::string::npos);
 }
 
-TEST_F(SuppliedKeySqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
+TEST_F(SuppliedKeySqlTest, OrderByWithLimitTakesTheLowestKeysAcrossALeafBoundary) {
     auto d = Dispatcher();
     CreateBtree(d);
 
-    // The case a per-page sort has to get right and a naive one would not:
-    // LIMIT stops the walk part-way through a page, so the page's rows must
-    // already be in key order when the quota fills - not merely sorted after
-    // the fact.
+    // **Withdrawn in its old shape** on BB-Q8 (b) and BB-R3. A descending
+    // load used to put the lowest keys in a page's last slots, and this
+    // pinned that LIMIT took them rather than the first slots - the case a
+    // per-page sort had to get right. No key below the mark lands now, so a
+    // page's first slots are its lowest keys. What an ascending load still
+    // reaches is the subject's other half: LIMIT stops the walk part-way
+    // through a page, so the rows must already be in key order when the
+    // quota fills, and a window has to carry that order on into the next
+    // leaf.
     const int kRows = 250;
-    for (int id = kRows; id >= 1; --id) {
+    for (int id = 1; id <= kRows; ++id) {
         ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
                              std::to_string(id) + ")")
                       .response.substr(0, 8),
@@ -354,11 +408,14 @@ TEST_F(SuppliedKeySqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
     EXPECT_EQ(EmittedIds(page1.response), (std::vector<std::uint64_t>{1, 2, 3, 4, 5}))
         << page1.response;
 
-    // And OFFSET walks that same order rather than a slot order.
-    auto page2 = d.Dispatch("SELECT * FROM t ORDER BY id LIMIT 5 OFFSET 5");
+    // And OFFSET walks that same order across the first leaf's end: a row of
+    // these two columns takes 41 bytes of a leaf, so the first leaf ends
+    // near id 198, inside this window.
+    auto page2 = d.Dispatch("SELECT * FROM t ORDER BY id LIMIT 40 OFFSET 170");
     ASSERT_NE(page2.response.substr(0, 3), "ERR") << page2.response;
-    EXPECT_EQ(EmittedIds(page2.response), (std::vector<std::uint64_t>{6, 7, 8, 9, 10}))
-        << page2.response;
+    std::vector<std::uint64_t> window;
+    for (std::uint64_t id = 171; id <= 210; ++id) window.push_back(id);
+    EXPECT_EQ(EmittedIds(page2.response), window) << page2.response;
 }
 
 TEST_F(SuppliedKeySqlTest, OrderByCostsNothingOnARelationThatNeverTookAnOutOfOrderKey) {
@@ -386,26 +443,48 @@ TEST_F(SuppliedKeySqlTest, OrderByCostsNothingOnARelationThatNeverTookAnOutOfOrd
     EXPECT_TRUE(std::is_sorted(ids.begin(), ids.end()));
 }
 
-TEST_F(SuppliedKeySqlTest, InterleavedAscendingAndDescendingKeysAllLand) {
+TEST_F(SuppliedKeySqlTest, AnUnorderedBackfillLandsOnlyTheKeysAboveTheRunningMark) {
     auto d = Dispatcher();
     CreateBtree(d);
 
     // Neither ordered nor reverse-ordered: the shape a real backfill or a
-    // migration from another system produces.
+    // migration from another system produces. **It used to land whole;
+    // that is withdrawn** (BB-Q8 (b), BB-R3). Each key is judged alone,
+    // against the mark the keys before it left: one at or above it lands
+    // and raises it, one below it - 400 included, though it falls in a gap
+    // between two placed keys - is refused OutOfRange and moves nothing.
     const std::vector<int> ids = {50, 900, 10, 400, 25, 1000, 5, 700, 300, 1};
+    const std::vector<int> landed = {50, 900, 1000};
+    const auto lands = [&](int id) {
+        return std::find(landed.begin(), landed.end(), id) != landed.end();
+    };
     for (int id : ids) {
         auto out = d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
                               std::to_string(id) + ")");
-        ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << "id " << id << ": " << out.response;
+        if (lands(id)) {
+            ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << "id " << id << ": " << out.response;
+        } else {
+            EXPECT_EQ(out.response.substr(0, 3), "ERR") << "id " << id << ": " << out.response;
+            EXPECT_NE(out.response.find("high-water mark"), std::string::npos)
+                << "id " << id << ": " << out.response;
+        }
     }
 
     for (int id : ids) {
-        const std::string want = std::to_string(id) + "," + std::to_string(id);
-        EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = " + std::to_string(id)).response.find(
-                      want),
-                  std::string::npos)
-            << "lost id " << id;
+        auto out = d.Dispatch("SELECT * FROM t WHERE id = " + std::to_string(id));
+        if (lands(id)) {
+            const std::string want = std::to_string(id) + "," + std::to_string(id);
+            EXPECT_NE(out.response.find(want), std::string::npos) << "lost id " << id;
+        } else {
+            EXPECT_TRUE(EmittedIds(out.response).empty())
+                << "refused id " << id << " landed: " << out.response;
+        }
     }
+    EXPECT_EQ(EmittedIds(d.Dispatch("SELECT * FROM t ORDER BY id").response),
+              (std::vector<std::uint64_t>{50, 900, 1000}));
+
+    // The refused keys moved nothing: the mark is the last landed key's.
+    EXPECT_NE(d.Dispatch("INSERT INTO t VALUES (7)").response.find("id=1001"), std::string::npos);
 }
 
 // A multi-row INSERT needs the transaction manager - BI4's rollback of the
@@ -430,26 +509,22 @@ protected:
     std::optional<CommandDispatcher> d_;
 };
 
-// ---- Rollback across a division (BI4, docs/spec/txn.md §6) --------------------
+// ---- Rollback across a split (BI4, docs/spec/txn.md §6) -----------------------
 //
-// The trail records a row as `(page_id, slot)`, because for most of this
-// engine's life a row's address was stable for life. A leaf division breaks
-// that assumption *mid-transaction*: it moves half a leaf elsewhere and
-// renumbers the slots of the half that stays. Compensating an entry recorded
-// before the division then reaches whatever now occupies that slot - so the
-// failure is not a rollback that misses rows, it is a rollback that writes
-// over rows it never touched.
-//
-// Only a key named below the relation's high-water mark can trigger a
-// division mid-statement, which is why these live here rather than in the
-// transaction suite.
+// The trail records a row as `(page_id, slot)`, so a structural change between
+// a row's placement and its compensation is what a rollback has to survive.
+// Until BB-S3 a key named below the relation's high-water mark could divide a
+// leaf mid-statement - moving half of it and renumbering the half that stayed -
+// and a rollback compensating a pre-division entry wrote over a row it never
+// touched. SQL reaches no division since BB-R3 refuses that key; what it still
+// reaches mid-statement is the append split, which moves nothing, and these
+// cells pin rollback across it.
 
-TEST_F(SuppliedKeyBulkTest, AFailedStatementThatDividedALeafRollsBackWhole) {
+TEST_F(SuppliedKeyBulkTest, AFailedStatementThatSplitALeafRollsBackWhole) {
     CommandDispatcher& d = *d_;
     CreateBtree(d);
 
-    // A committed base, ascending and gapped so there is room to insert
-    // between the keys later.
+    // A committed base, ascending: 400 rows over two leaves.
     std::string base = "INSERT INTO t VALUES ";
     for (int k = 1; k <= 400; ++k) {
         base += (k == 1 ? "" : ", ");
@@ -458,28 +533,25 @@ TEST_F(SuppliedKeyBulkTest, AFailedStatementThatDividedALeafRollsBackWhole) {
     ASSERT_EQ(d.Dispatch(base).response.substr(0, 8), "INSERTED");
     const std::string committed = d.Dispatch("SELECT COUNT(*) FROM t").response;
 
-    // One statement that divides the first leaf several times over and then
-    // fails on its last row: id 10 is already there. BI4 says the whole
-    // statement unwinds.
-    // Dense and low: every one of these routes into the *first* leaf, so it
-    // fills, divides, refills and divides again inside one statement. One
-    // division alone would not be enough - the base arrived in ascending
-    // order, so its slots are already sorted and a first rebuild puts them
-    // back where they were. It takes a division of a leaf that has since
-    // been appended to out of order for slots to actually move.
+    // One statement that append-splits the rightmost leaf twice over - 400
+    // keys above the mark - and then fails on its last row: 1000 is already
+    // there, a duplicate far below the mark (`AlreadyExists`, BB-R12). BI4
+    // says the whole statement unwinds, across the leaves it opened.
     std::string doomed = "INSERT INTO t VALUES ";
     for (int k = 1; k <= 400; ++k) {
-        doomed += "(" + std::to_string(k) + ", " + std::to_string(k) + "), ";
+        doomed += "(" + std::to_string(400000 + k) + ", " + std::to_string(k) + "), ";
     }
     doomed += "(1000, 999)";
     auto failed = d.Dispatch(doomed);
     EXPECT_EQ(failed.response.substr(0, 3), "ERR") << failed.response;
+    EXPECT_NE(failed.response.find("duplicate primary key"), std::string::npos)
+        << failed.response;
+    EXPECT_NE(failed.response.find("(row 401)"), std::string::npos) << failed.response;
 
-    // Every row the statement placed before the duplicate must be gone -
-    // including the ones a division relocated after their trail entry was
-    // written.
+    // Every row the statement placed before the duplicate must be gone,
+    // including the ones on the leaves its splits created.
     EXPECT_EQ(d.Dispatch("SELECT COUNT(*) FROM t").response, committed)
-        << "a failed statement left rows behind after dividing a leaf";
+        << "a failed statement left rows behind after splitting a leaf";
 
     // **And the committed base has to be intact.** The count alone cannot
     // see the worse failure: compensating a stale `(page_id, slot)` retires
@@ -494,7 +566,17 @@ TEST_F(SuppliedKeyBulkTest, AFailedStatementThatDividedALeafRollsBackWhole) {
     }
 }
 
-TEST_F(SuppliedKeyBulkTest, AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransaction) {
+TEST_F(SuppliedKeyBulkTest, AnAbortedUpdateDoesNotSurviveAnAppendSplitInItsOwnTransaction) {
+    // **Withdrawn in its old shape** on BB-Q8 (b) and BB-R3. This divided
+    // the leaf an UPDATE had written, by naming keys below the mark inside
+    // the same transaction, so the UPDATE's trail entry pointed at a slot
+    // the division renumbered. A key below the mark is refused now, so SQL
+    // reaches no division. The structural change it still reaches
+    // mid-transaction is the append split, which moves nothing: this pins
+    // that a rollback across append splits of the very leaf the UPDATE
+    // wrote restores the UPDATE, retires every insert - from that leaf and
+    // from the leaves the transaction itself opened - and leaves the
+    // committed base whole.
     CommandDispatcher& d = *d_;
     CreateBtree(d);
 
@@ -509,16 +591,18 @@ TEST_F(SuppliedKeyBulkTest, AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransa
     Session session;
     ASSERT_EQ(d.Dispatch("BEGIN", &session).response.substr(0, 5), "BEGIN");
 
-    // The write whose address the division will invalidate. Its trail entry
-    // is recorded now, against a slot that is about to be renumbered.
-    ASSERT_EQ(d.Dispatch("UPDATE t SET qty = 555 WHERE id = 1000", &session).response.substr(0, 3),
-              "UPD");
+    // The write on the rightmost leaf - the base's highest key - so its
+    // trail entry is recorded against the leaf the inserts below will split.
+    ASSERT_EQ(
+        d.Dispatch("UPDATE t SET qty = 555 WHERE id = 300000", &session).response.substr(0, 3),
+        "UPD");
 
-    // Now divide the leaf that row sits on, repeatedly.
+    // Now split the leaf that row sits on, and the ones after it, by keys
+    // above the mark.
     for (int k = 1; k <= 400; ++k) {
-        auto out = d.Dispatch(
-            "INSERT INTO t VALUES (" + std::to_string(k) + ", " + std::to_string(k) + ")",
-            &session);
+        auto out = d.Dispatch("INSERT INTO t VALUES (" + std::to_string(300000 + k) + ", " +
+                                  std::to_string(k) + ")",
+                              &session);
         ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << out.response;
     }
 
@@ -529,8 +613,8 @@ TEST_F(SuppliedKeyBulkTest, AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransa
     // outlive its own transaction.
     EXPECT_EQ(d.Dispatch("SELECT COUNT(*) FROM t").response, committed)
         << "the aborted inserts survived";
-    auto row = d.Dispatch("SELECT * FROM t WHERE id = 1000");
-    EXPECT_NE(row.response.find("1000,1"), std::string::npos)
+    auto row = d.Dispatch("SELECT * FROM t WHERE id = 300000");
+    EXPECT_NE(row.response.find("300000,300"), std::string::npos)
         << "an aborted UPDATE survived its own ROLLBACK: " << row.response;
     EXPECT_EQ(row.response.find("555"), std::string::npos) << row.response;
 
@@ -545,23 +629,38 @@ TEST_F(SuppliedKeyBulkTest, AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransa
     }
 }
 
-TEST_F(SuppliedKeyBulkTest, ABulkStatementMayNameKeysInAnyOrder) {
+TEST_F(SuppliedKeyBulkTest, ABulkStatementNamingKeysOutOfOrderIsRefusedWhole) {
     CommandDispatcher& d = *d_;
     CreateBtree(d);
 
     // Each row gates individually and in statement order (BI2), so an
     // unordered set is not a special case - it is N single-row inserts that
-    // happen to share a statement.
+    // happen to share a statement. **Which is why it is refused now**
+    // (BB-Q8 (b), BB-R3, withdrawing "a bulk statement may name keys in any
+    // order"): row 1 raises the mark to 301, row 2 names 100 below it and is
+    // refused OutOfRange with its ordinal, and the statement fails whole
+    // (BI4).
     auto out = d.Dispatch("INSERT INTO t VALUES (300, 3), (100, 1), (200, 2)");
-    EXPECT_EQ(out.response.substr(0, 8), "INSERTED") << out.response;
+    EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
+    EXPECT_NE(out.response.find("high-water mark"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("(row 2)"), std::string::npos) << out.response;
 
+    // Nothing landed - not even row 1, which was placed before the refusal.
     for (int id : {100, 200, 300}) {
-        const std::string want = std::to_string(id) + "," + std::to_string(id / 100);
-        EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = " + std::to_string(id)).response.find(
-                      want),
-                  std::string::npos)
-            << "lost id " << id;
+        EXPECT_TRUE(
+            EmittedIds(d.Dispatch("SELECT * FROM t WHERE id = " + std::to_string(id)).response)
+                .empty())
+            << "id " << id << " outlived its refused statement";
     }
+
+    // The refused row moved no mark. Row 1's admission did, and like every
+    // id a failed statement's placed prefix took, it stays burned (BI9): the
+    // next omitted key is 301.
+    EXPECT_NE(d.Dispatch("INSERT INTO t VALUES (7)").response.find("id=301"), std::string::npos);
+    // And that issued row is the relation's only one: the probes above read
+    // an absence, which an erroring reply would also give.
+    EXPECT_EQ(EmittedIds(d.Dispatch("SELECT * FROM t ORDER BY id").response),
+              (std::vector<std::uint64_t>{301}));
 }
 
 // ---- The refusals that protect it ----------------------------------------
@@ -584,18 +683,37 @@ TEST_F(SuppliedKeySqlTest, ADuplicateKeyIsRefused) {
     EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 42").response.find("1"), std::string::npos);
 }
 
-TEST_F(SuppliedKeySqlTest, ADuplicateOfADescendingKeyIsAlsoRefused) {
+TEST_F(SuppliedKeySqlTest, ADuplicateFarBelowTheMarkIsStillNamedADuplicate) {
     auto d = Dispatcher();
     CreateBtree(d);
 
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (900, 1)").response.substr(0, 8), "INSERTED");
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 2)").response.substr(0, 8), "INSERTED");
+    // **Withdrawn in its old shape** on BB-Q8 (b) and BB-R3: the key used to
+    // be placed descending - 900, then 100 below it - which is refused now.
+    // The key is placed by an ascending load instead, long enough that it
+    // sits in a leaf with a right sibling, far below the mark.
+    const int kRows = 300;
+    for (int id = 1; id <= kRows; ++id) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
+                             std::to_string(id) + ")")
+                      .response.substr(0, 8),
+                  "INSERTED");
+    }
 
-    // The one a high-water-mark check would wave through: 100 is far below
-    // the mark, so only a real lookup can know it is taken.
+    // The one a high-water-mark check would answer as merely below the
+    // mark: 100 is far below 301, on a leaf with a right sibling, and only
+    // a real lookup can know it is taken. The held leaf is read for it
+    // first (BB-R3 step 5, before step 6), so the answer is AlreadyExists
+    // (BB-R12) and a client that detects duplicates by it keeps working.
     auto dup = d.Dispatch("INSERT INTO t VALUES (100, 3)");
     EXPECT_EQ(dup.response.substr(0, 3), "ERR") << dup.response;
     EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos) << dup.response;
+    EXPECT_EQ(dup.response.find("high-water mark"), std::string::npos)
+        << "a present key is AlreadyExists, not OutOfRange (BB-R12): " << dup.response;
+
+    // And the loser changed nothing: 100 keeps its value, the mark stays.
+    EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 100").response.find("100,100"),
+              std::string::npos);
+    EXPECT_NE(d.Dispatch("INSERT INTO t VALUES (7)").response.find("id=301"), std::string::npos);
 }
 
 // ---- BB-S2: red on one core at BB's start ----------------------------------
@@ -729,7 +847,7 @@ TEST_F(SuppliedKeySqlTest, TheKeyIsStillNotUpdatable) {
     EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
 }
 
-// ---- The mark and the flag are per relation ------------------------------
+// ---- The mark is per relation, and lives on its page ----------------------
 
 TEST_F(SuppliedKeySqlTest, OneRelationsMarkDoesNotTouchAnothers) {
     auto d = Dispatcher();
@@ -744,21 +862,29 @@ TEST_F(SuppliedKeySqlTest, OneRelationsMarkDoesNotTouchAnothers) {
         << engine.response;
 }
 
-TEST_F(SuppliedKeySqlTest, TheKeyOrderSurvivesAcrossDispatchers) {
+TEST_F(SuppliedKeySqlTest, TheMarkThatRefusesAKeySurvivesAcrossDispatchers) {
+    // **Withdrawn in its old shape** on BB-Q8 (b) and BB-R3: this pinned the
+    // `kUnordered` flag a key below the mark set, read off the page by a
+    // second dispatcher. That key is refused now and sets nothing, so there
+    // is no flag to carry; what the second dispatcher must still read off
+    // the page is the mark that refused it.
     {
         auto d = Dispatcher();
         CreateBtree(d);
         ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (77, 1)").response.substr(0, 8), "INSERTED");
-        // Below 77's mark: the relation is unordered from here on.
-        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (33, 2)").response.substr(0, 8), "INSERTED");
+        // Below 77's mark: refused, and nothing changes.
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (33, 2)").response.substr(0, 3), "ERR");
     }
-    // A second dispatcher over the same catalog reads the flag off the page
-    // rather than remembering it - and so must still answer ORDER BY <pk>
-    // with the per-page sort the first dispatcher's insert made necessary.
+    // A second dispatcher over the same catalog reads the mark off
+    // `sys.tables` rather than remembering it - so it refuses the same key,
+    // holds the one row, and issues above 77 rather than above 33.
     auto d2 = Dispatcher();
-    EXPECT_NE(d2.Dispatch("DESCRIBE t").response.find("key_order=unordered"), std::string::npos);
+    auto again = d2.Dispatch("INSERT INTO t VALUES (33, 2)");
+    EXPECT_EQ(again.response.substr(0, 3), "ERR") << again.response;
+    EXPECT_NE(again.response.find("high-water mark"), std::string::npos) << again.response;
     EXPECT_EQ(EmittedIds(d2.Dispatch("SELECT * FROM t ORDER BY id").response),
-              (std::vector<std::uint64_t>{33, 77}));
+              (std::vector<std::uint64_t>{77}));
+    EXPECT_NE(d2.Dispatch("INSERT INTO t VALUES (3)").response.find("id=78"), std::string::npos);
 }
 
 }  // namespace

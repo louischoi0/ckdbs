@@ -2,10 +2,12 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <vector>
 
 #include "kds/base/common.hpp"
+#include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
 
 // What one tuple insert did: where the tuple landed, and every page the
@@ -120,5 +122,31 @@ struct InsertPlacement {
         structural[n_structural++] = StructuralChange{page_id_in, is_new_page, min_key};
     }
 };
+
+// ---- The id fixed under the hold of the page it lands on (BB-R1) ---------
+//
+// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`. A user row's id
+// is fixed under the exclusive hold of the page the row lands on - a btree's
+// rightmost leaf, a heap chain's tail - so placement order is issue order and
+// every page's slot order is its key order, at every core count. Until BB the
+// id was fixed under catalog page 7 and the row placed later under its page,
+// and a second core could fix a higher id and place it first in between
+// (defect A).
+//
+// The storage layer has no catalog, so the two things only the caller can do
+// under that hold are handed in as callables. Both run **once**, under the
+// exclusive hold, and **must not park** (BB-R5): a refusal is returned, and
+// the insert returns it with every hold released and nothing placed.
+
+// An omitted pk (BB-R2): issue the id, borrow its lock, encode the row, and
+// return the encoded payload - whose Keystone word carries the issued id and
+// whose bytes stay valid until the insert returns.
+using IssueUnderHold = std::function<StatusOr<std::span<const std::byte>>()>;
+
+// A named key (BB-R3 step 7): admit `id` against the relation's mark,
+// moving it past `id`. Asked only once the structure has proved `id` absent
+// from the held page and the held page the last one - below it, a key is
+// refused without the mark being read.
+using AdmitUnderHold = std::function<Status(std::uint64_t id)>;
 
 }  // namespace kds::storage

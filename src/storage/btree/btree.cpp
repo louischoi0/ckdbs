@@ -872,14 +872,12 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
     return Status::OK();
 }
 
-StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
-                                                std::uint64_t id,
-                                                std::span<const std::byte> payload,
-                                                std::uint64_t trx_id,
-                                                std::uint64_t owner_oid) {
-    // Same cross-check ChainInsert makes, for the same reason: two
-    // disagreeing copies of a tuple's identity is the kind of defect that
-    // stays silent for months.
+namespace {
+
+// Same cross-check ChainInsert makes, for the same reason: two disagreeing
+// copies of a tuple's identity is the kind of defect that stays silent for
+// months.
+Status RequirePayloadCarries(std::span<const std::byte> payload, std::uint64_t id) {
     auto encoded_id = KeystoneIdOfPayload(payload);
     if (!encoded_id.ok()) return encoded_id.status();
     if (encoded_id.value() != id) {
@@ -887,11 +885,124 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
                                   " does not match the id being inserted (" + std::to_string(id) +
                                   ")");
     }
+    return Status::OK();
+}
 
+// Complete, unlike the heap chain's tail-only check: the descent is exact, so
+// the leaf it landed on is the only page that may hold `id`. Still a sanity
+// check on the id sequence rather than a uniqueness index - a delete-marked
+// tuple holds its key until the slot is physically retired.
+//
+// Linear rather than FindSlotForId(): this check expects to find nothing, and
+// a miss is exactly the case where the binary search pays its probes and then
+// falls through to this scan anyway.
+Status RefuseDuplicate(heap::PageView& leaf, PageId leaf_id, std::uint64_t id) {
+    const std::uint16_t n = leaf.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto existing = SlotKeystoneId(leaf, i, n);
+        if (existing.status().code() == StatusCode::kNotFound) continue;
+        if (!existing.ok()) return existing.status();
+        if (existing.value() == id) {
+            return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
+                                          " already present at page " + std::to_string(leaf_id) +
+                                          " slot " + std::to_string(i));
+        }
+    }
+    return Status::OK();
+}
+
+// Everything an insert does once its descent holds the leaf: invariant 3,
+// the duplicate scan unless the caller has run it, and the append or the
+// split. Every door below ends here, under the hold its descent took.
+StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Descent& descent,
+                                                  std::uint64_t id,
+                                                  std::span<const std::byte> payload,
+                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
+                                                  bool duplicate_scanned);
+
+}  // namespace
+
+StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
+                                                std::uint64_t id,
+                                                std::span<const std::byte> payload,
+                                                std::uint64_t trx_id,
+                                                std::uint64_t owner_oid) {
+    if (Status s = RequirePayloadCarries(payload, id); !s.ok()) return s;
+    auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
+    if (!descent.ok()) return descent.status();
+    return PlaceUnderHold(store, descent.value(), id, payload, trx_id, owner_oid,
+                          /*duplicate_scanned=*/false);
+}
+
+StatusOr<storage::InsertPlacement> BtreeInsertIssued(storage::PageStore& store, PageId root,
+                                                      const storage::IssueUnderHold& issue,
+                                                      std::uint64_t trx_id,
+                                                      std::uint64_t owner_oid) {
+    // The top of the id space routes to the rightmost leaf and nowhere else
+    // (BB §1.5): `DescendTo` hands a leaf back only once it covers the key
+    // under the exclusive hold, and only a leaf with no right sibling covers
+    // kMaxKeystoneId. No splice can pass it while it is held - every splice
+    // writes the leaf it splits - so it stays the rightmost until released.
+    auto descent = DescendTo(store, root, kMaxKeystoneId, /*leaf_for_write=*/true);
+    if (!descent.ok()) return descent.status();
+
+    auto payload = issue();
+    if (!payload.ok()) return payload.status();
+    auto id = KeystoneIdOfPayload(payload.value());
+    if (!id.ok()) return id.status();
+    // Invariant 3 and the duplicate scan run on it as they run on any id
+    // (BB-R2 step 2): the issued id is above every placed one, so both pass
+    // unless the mark went backwards, which they report.
+    return PlaceUnderHold(store, descent.value(), id.value(), payload.value(), trx_id, owner_oid,
+                          /*duplicate_scanned=*/false);
+}
+
+StatusOr<storage::InsertPlacement> BtreeInsertNamed(storage::PageStore& store, PageId root,
+                                                     std::uint64_t id,
+                                                     std::span<const std::byte> payload,
+                                                     const storage::AdmitUnderHold& admit,
+                                                     std::uint64_t trx_id,
+                                                     std::uint64_t owner_oid) {
+    if (Status s = RequirePayloadCarries(payload, id); !s.ok()) return s;
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
     heap::PageView leaf(descent.value().leaf.bytes());
+
+    // **Present first** (BB-R12): a client that detects duplicates by
+    // `AlreadyExists` keeps working, and the answer costs the scan the
+    // placement runs anyway.
+    if (Status s = RefuseDuplicate(leaf, leaf_id, id); !s.ok()) return s;
+
+    // **A right sibling means below the mark** (BB §1.5), with no read of
+    // page 7: the sibling's `min_key` is an id once placed, every placed id
+    // is below `next_id`, and `id` sorts below the sibling. Placing it would
+    // put a key below one already placed - the order BB-R3 refuses.
+    if (const PageId right = leaf.next_page_id(); right != kInvalidPageId) {
+        return Status::OutOfRange("primary key " + std::to_string(id) +
+                                  " is below the relation's high-water mark: leaf " +
+                                  std::to_string(leaf_id) + ", where it sorts, has a right "
+                                  "sibling holding a higher key already placed; a named key must "
+                                  "sort above every key the relation has placed or issued");
+    }
+
+    // The rightmost leaf, held: the mark moves under this hold or not at all
+    // (BB-R3 step 7), which is what closes BB §1.3's window - no other core
+    // can issue or admit an id for this relation while the leaf is held.
+    if (Status s = admit(id); !s.ok()) return s;
+    return PlaceUnderHold(store, descent.value(), id, payload, trx_id, owner_oid,
+                          /*duplicate_scanned=*/true);
+}
+
+namespace {
+
+StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Descent& descent,
+                                                  std::uint64_t id,
+                                                  std::span<const std::byte> payload,
+                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
+                                                  bool duplicate_scanned) {
+    const PageId leaf_id = descent.path[descent.depth];
+    heap::PageView leaf(descent.leaf.bytes());
 
     // Invariant 3, enforced at the one door tuples come through - and the
     // descent already guarantees no other leaf may hold this id, so being
@@ -903,28 +1014,8 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
                                   "; the relation's id sequence has gone backwards");
     }
 
-    // Complete, unlike the heap chain's tail-only check: the descent is
-    // exact, so the leaf it landed on is the only page that may hold `id`.
-    // Still a sanity check on the id sequence rather than a uniqueness
-    // index - a delete-marked tuple holds its key until the slot is
-    // physically retired.
-    //
-    // Linear rather than FindSlotForId(): this check expects to find
-    // nothing, and a miss is exactly the case where the binary search pays
-    // its probes and then falls through to this scan anyway.
-    {
-        const std::uint16_t n = leaf.slot_count();
-        for (std::uint16_t i = 0; i < n; ++i) {
-            auto existing = SlotKeystoneId(leaf, i, n);
-            if (existing.status().code() == StatusCode::kNotFound) continue;
-            if (!existing.ok()) return existing.status();
-            if (existing.value() == id) {
-                return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
-                                              " already present at page " +
-                                              std::to_string(leaf_id) + " slot " +
-                                              std::to_string(i));
-            }
-        }
+    if (!duplicate_scanned) {
+        if (Status s = RefuseDuplicate(leaf, leaf_id, id); !s.ok()) return s;
     }
 
     storage::InsertPlacement out;
@@ -932,7 +1023,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     if (auto slot = leaf.InsertTuple(payload, trx_id); slot.ok()) {
         out.page_id = leaf_id;
         out.slot = slot.value();
-        out.held.push_back(std::move(descent.value().leaf));
+        out.held.push_back(std::move(descent.leaf));
         return out;  // the common case: no structural change at all
     } else if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();  // a real failure, not a full leaf
@@ -950,12 +1041,12 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // Either shape writes a separator into the parents, so they are found
     // and held first (`SecureParents`, AT-S16): a refusal there leaves the
     // tree as it was, with the tuple not inserted.
-    auto parents = SecureParents(store, descent.value(), id);
+    auto parents = SecureParents(store, descent, id);
     if (!parents.ok()) return parents.status();
     // What the caller logs under (AT-S21): the leaf and every parent the
     // split writes, handed out still held once the split is done.
     auto hand_out = [&](storage::InsertPlacement& placed) {
-        placed.held.push_back(std::move(descent.value().leaf));
+        placed.held.push_back(std::move(descent.leaf));
         for (std::uint16_t i = 0; i < parents.value().count; ++i) {
             placed.held.push_back(std::move(parents.value().held[i]));
         }
@@ -964,7 +1055,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     auto max_id = MaxLiveId(leaf);
     if (!max_id.ok()) return max_id.status();
     if (id < max_id.value()) {
-        auto divided = SplitLeafAndInsert(store, descent.value(), parents.value(), leaf_id, id,
+        auto divided = SplitLeafAndInsert(store, descent, parents.value(), leaf_id, id,
                                           payload, trx_id, owner_oid);
         if (divided.ok()) hand_out(divided.value());
         return divided;
@@ -1040,7 +1131,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // (btree_page.hpp's routing rule). The new leaf's pin goes first, as
     // SplitLeafAndInsert's does, rather than stacking under every level.
     new_leaf_bytes_ref.Release();
-    auto promoted = PromoteSeparator(store, descent.value(), parents.value(), /*sep=*/id,
+    auto promoted = PromoteSeparator(store, descent, parents.value(), /*sep=*/id,
                                      /*child=*/new_leaf_id, std::move(out), owner_oid);
     if (!promoted.ok()) return promoted.status();
 
@@ -1066,6 +1157,8 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     hand_out(promoted.value());
     return promoted;
 }
+
+}  // namespace
 
 // **A miss has to prove it is a miss** (AT-S5c).
 //

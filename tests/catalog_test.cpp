@@ -891,13 +891,15 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
         << "the reader's own bump adopted a word it had never revalidated against";
 }
 
-TEST_F(CatalogTest, AKeyOrderFlipBumpsTheWordAndKeepsTheWritersOwnEntry) {
-    // The one DDL-frequency write that keeps its local entry across a bump:
-    // a named key below the mark flips `key_order` in place, because the
-    // INSERT doing it holds the relation's `TableAccess*`. The word still
-    // moves, so a reader re-reads the flag at its next boundary - a stale
-    // `kAscending` there would elide an `ORDER BY <pk>` the relation now
-    // needs, and answer out of order rather than refuse.
+TEST_F(CatalogTest, ARefusedBelowMarkKeyMovesNoWordAndDropsNoCache) {
+    // Withdrawn by BB-Q8 (b) and BB-R3: a named key below the mark used to be
+    // admitted on a btree and flip the relation's key order in place - the
+    // one DDL-frequency write that bumped the word and kept the writer's
+    // entry. The key is refused now, on every relation, before the row is
+    // written, so there is no flip left to publish. What stays to pin is
+    // that the refusal publishes nothing: a below-mark key - and since BB-R3
+    // a named key another core's issue raced past - must cost neither the
+    // writer its entry nor every reader a refill.
     catalog_.SetSchemaWord(&word);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto oid = catalog_.CreateTable(kNamespacePublic, "f", MinimalPkSchema(), ClusteredType::kBtree);
@@ -913,18 +915,25 @@ TEST_F(CatalogTest, AKeyOrderFlipBumpsTheWordAndKeepsTheWritersOwnEntry) {
     const auto writer_before = catalog_.cache_stats();
     const std::uint64_t word_before = word.load();
 
-    ASSERT_TRUE(catalog_.AdmitExplicitRowId(oid.value(), /*below the mark*/ 1).ok());
-    EXPECT_EQ(word.load(), word_before + 1) << "the flip did not bump the word";
+    // 1 was issued above and never placed, so absent: BB-R12's `OutOfRange`.
+    auto refused = catalog_.AdmitExplicitRowId(oid.value(), /*below the mark*/ 1);
+    ASSERT_EQ(refused.code(), StatusCode::kOutOfRange) << refused.message();
+    EXPECT_NE(refused.message().find("high-water mark"), std::string::npos) << refused.message();
+    EXPECT_EQ(word.load(), word_before) << "the refusal bumped the word";
     ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
     EXPECT_EQ(catalog_.cache_stats().fills, writer_before.fills)
-        << "the writer dropped the entry the flip site exists to keep";
+        << "the refusal dropped the writer's entry";
 
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
-    EXPECT_EQ(reader.cache_stats().fills, reader_before.fills + 1) << "the reader kept its stale memo";
-    auto row = reader.GetSysTableRow(oid.value());
-    ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().key_order, KeyOrder::kUnordered);
+    EXPECT_EQ(reader.cache_stats().invalidations, reader_before.invalidations)
+        << "the refusal dropped a reader's memo at its boundary";
+    EXPECT_EQ(reader.cache_stats().fills, reader_before.fills);
+
+    // And it moved no mark: the next omitted insert gets the id it would have.
+    auto next = catalog_.AllocateRowId(oid.value());
+    ASSERT_TRUE(next.ok()) << next.status().message();
+    EXPECT_EQ(next.value(), 4u) << "the refusal moved the mark";
 }
 
 TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
@@ -1372,10 +1381,10 @@ TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
 //
 // There is no key *mode* to test any more - `CreateTable` takes no such
 // parameter and refuses no storage pairing for one. What replaced it is an
-// **observation**: every relation starts ascending and stays there until an
-// id is admitted below its high-water mark, which only a btree relation can
-// do. So these tests are about what `AdmitExplicitRowId` admits, what it
-// refuses, and what the flag says afterwards.
+// **observation**: every relation starts ascending, and since BB-R3 (on
+// BB-Q8 (b)) stays there - an id below its high-water mark is refused on
+// every relation, where a btree used to admit one and flip. So these tests
+// are about what `AdmitExplicitRowId` admits and what it refuses.
 
 class KeyOrderTest : public ::testing::Test {
 protected:
@@ -1430,7 +1439,8 @@ TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
     // told its keys. What it may not be told is a key that goes backwards -
     // its chain's tail append, its page-wise ordering and its tail-page-only
     // duplicate check are all the ascent (§3.1b), and the mark is the ascent
-    // written as one number.
+    // written as one number. Since BB-R3 a btree is refused the same key
+    // with the same refusal (the next cell).
     Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
@@ -1444,23 +1454,28 @@ TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
     auto row = catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().next_id, 601u);
-    // Never unordered, whatever it was told: the refusal below is what keeps
-    // that true, so the flag is a consequence rather than a second rule.
-    EXPECT_EQ(row.value().key_order, KeyOrder::kAscending);
 
     auto refused = catalog.AdmitExplicitRowId(oid.value(), 550);
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.code(), StatusCode::kOutOfRange);
-    EXPECT_NE(refused.message().find("must ascend"), std::string::npos) << refused.message();
+    EXPECT_NE(refused.message().find("high-water mark"), std::string::npos) << refused.message();
 
     // And the refusal wrote nothing: a refused id burns no mark.
     auto after = catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(after.ok());
     EXPECT_EQ(after.value().next_id, 601u);
-    EXPECT_EQ(after.value().key_order, KeyOrder::kAscending);
 }
 
-TEST_F(KeyOrderTest, ABtreeRelationTakesABelowMarkKeyAndTurnsUnordered) {
+TEST_F(KeyOrderTest, ABtreeRelationIsRefusedABelowMarkKeyAsAHeapIs) {
+    // Withdrawn by BB-Q8 (b) and BB-R3: a btree used to admit a key below its
+    // mark - the descent proved it unused - and flip the relation unordered.
+    // It is refused now, as a heap's always was: the mark is the ascent
+    // written as one number, and a named key at or above it sorts above every
+    // key the relation has placed or issued, which is what keeps every page's
+    // slot order its key order. `AdmitExplicitRowId` answers `OutOfRange`,
+    // BB-R12's absent arm; a key that is present is refused `AlreadyExists`
+    // by the descent before it gets here (`BtreeInsertNamed`), which a catalog
+    // alone cannot reach.
     Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
@@ -1469,53 +1484,26 @@ TEST_F(KeyOrderTest, ABtreeRelationTakesABelowMarkKeyAndTurnsUnordered) {
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 600).ok());
-    {
-        auto row = catalog.GetSysTableRow(oid.value());
-        ASSERT_TRUE(row.ok());
-        EXPECT_EQ(row.value().key_order, KeyOrder::kAscending) << "600 was above the mark";
-    }
 
-    // Below the mark: admitted, because the descent - not this function -
-    // proves the key unused. The mark does not move; the flag does.
-    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 550).ok());
+    // Below the mark, in a gap nothing was ever placed or issued in: refused
+    // all the same - the mark is judged, not the gap.
+    auto refused = catalog.AdmitExplicitRowId(oid.value(), 550);
+    EXPECT_EQ(refused.code(), StatusCode::kOutOfRange) << refused.message();
+    EXPECT_NE(refused.message().find("high-water mark"), std::string::npos) << refused.message();
+
+    // A backfill of old ids is refused key by key: one refusal opens nothing
+    // for the next.
+    auto again = catalog.AdmitExplicitRowId(oid.value(), 549);
+    EXPECT_EQ(again.code(), StatusCode::kOutOfRange) << again.message();
+
+    // And neither refusal moved the mark: the next omitted insert still gets
+    // the id after the last one admitted.
     auto row = catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().next_id, 601u) << "a below-mark id must not walk the mark backwards";
-    EXPECT_EQ(row.value().key_order, KeyOrder::kUnordered);
-
-    // A second below-mark id changes nothing - the flip is guarded, so a
-    // backfill of old ids does not write the catalog page once per row.
-    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 549).ok());
-    auto again = catalog.GetSysTableRow(oid.value());
-    ASSERT_TRUE(again.ok());
-    EXPECT_EQ(again.value().key_order, KeyOrder::kUnordered);
-    EXPECT_EQ(again.value().next_id, 601u);
-}
-
-TEST_F(KeyOrderTest, ATableAccessCarriesTheOrderAndIsInvalidatedByTheFlip) {
-    // The compiler reads it from here and never from sys.tables. A cache
-    // left saying kAscending after the flip would let an ORDER BY <pk> be
-    // discarded on a relation whose pages are no longer in key order - a
-    // wrong answer, which is why the flip bumps the catalog version.
-    Catalog catalog(store_, storage::kDefaultInlineCellWidth);
-    ASSERT_TRUE(catalog.Bootstrap().ok());
-
-    auto oid = catalog.CreateTable(kNamespacePublic, "clustered", OneColumnSchema(),
-                                    ClusteredType::kBtree);
-    ASSERT_TRUE(oid.ok()) << oid.status().message();
-
-    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 600).ok());
-    {
-        auto access = catalog.InitTableAccess(oid.value());
-        ASSERT_TRUE(access.ok()) << access.status().message();
-        EXPECT_EQ(access.value()->key_order, KeyOrder::kAscending);
-    }
-
-    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 550).ok());
-    auto access = catalog.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok()) << access.status().message();
-    EXPECT_EQ(access.value()->key_order, KeyOrder::kUnordered)
-        << "the cached access outlived the flip that made it wrong";
+    auto issued = catalog.AllocateRowId(oid.value());
+    ASSERT_TRUE(issued.ok()) << issued.status().message();
+    EXPECT_EQ(issued.value(), 601u) << "a refusal moved the mark";
 }
 
 TEST_F(KeyOrderTest, AnIssuedIdRisesAboveEverySuppliedOne) {

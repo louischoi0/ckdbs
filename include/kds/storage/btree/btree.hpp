@@ -156,6 +156,43 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
                                                 std::uint64_t trx_id,
                                                 std::uint64_t owner_oid);
 
+// **The two doors a user row comes through** (BB-R1, insert_placement.hpp's
+// `IssueUnderHold`). `BtreeInsert` above is the storage contract - any id,
+// the middle divide included, which the storage tests drive and SQL no longer
+// reaches - and these are what the statement layer calls, so that a row's id
+// is fixed under the exclusive hold of the leaf it lands on.
+//
+// `BtreeInsertIssued` - an omitted pk (BB-R2). Descends for kMaxKeystoneId,
+// which can only end on the **rightmost** leaf (`DescendTo` checks coverage
+// under the exclusive hold, and only a leaf with no right sibling covers the
+// top of the id space), and asks `issue` for the row under that hold. The id
+// it issues is above every placed id, so the leaf takes it - by append, or by
+// an append split whose new leaf's `min_key` is that id. Fails as
+// `BtreeInsert` does, and with whatever `issue` refused, in which case nothing
+// is placed and the leaf is released.
+StatusOr<storage::InsertPlacement> BtreeInsertIssued(storage::PageStore& store, PageId root,
+                                                      const storage::IssueUnderHold& issue,
+                                                      std::uint64_t trx_id,
+                                                      std::uint64_t owner_oid);
+
+// `BtreeInsertNamed` - a named key (BB-R3 steps 4-8). Descends for `id` and
+// holds the leaf it lands on; then, in order:
+//
+//   AlreadyExists  `id` is in that leaf - the descent is exact, so it is
+//                  nowhere else;
+//   OutOfRange     the leaf has a right sibling - whose `min_key` is an id
+//                  already placed, so `id` is below the relation's mark and
+//                  `admit` is never asked;
+//   ...            whatever `admit` refuses, the mark read under page 7;
+//
+// and otherwise places `id` there. Nothing is placed on any refusal.
+StatusOr<storage::InsertPlacement> BtreeInsertNamed(storage::PageStore& store, PageId root,
+                                                     std::uint64_t id,
+                                                     std::span<const std::byte> payload,
+                                                     const storage::AdmitUnderHold& admit,
+                                                     std::uint64_t trx_id,
+                                                     std::uint64_t owner_oid);
+
 // Descends to the leaf that owns `id` and finds its live slot. This is the
 // point-lookup the whole structure exists for: O(depth) page fetches plus
 // one leaf scan, against the heap chain's O(pages).
