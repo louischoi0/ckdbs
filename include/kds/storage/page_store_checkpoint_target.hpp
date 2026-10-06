@@ -14,7 +14,8 @@
 // ---- What this target promises ------------------------------------------
 //
 // The gate and the dirty table are both the store's (since
-// INSERT started logging): DevicePageStore::SetWalGate() orders every one
+// INSERT started logging): DevicePageStore's WAL gates (SetWalGate(), and
+// SetCoreWalGate() since BA-S1) order every one
 // of its write paths against the log, and DirtyPagesWithRecLsn() carries a
 // real per-frame recLSN, so this adapter is a straight projection of both
 // and holds no policy of its own.

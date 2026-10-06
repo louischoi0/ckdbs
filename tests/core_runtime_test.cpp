@@ -33,6 +33,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "kds/storage/page_header.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/wal/log_scanner.hpp"
 #include "kds/wal/payload.hpp"
@@ -2456,6 +2457,70 @@ TEST_F(CoreRuntimeTest, AnalyzeOfARelationAnotherCoreCreatedIsPlannedHere) {
 // `AStatementWhoseSubqueryNamesASecondCoresRelationIsNotShipped` stood here until AT-S5: it pinned a write shipped to its relation's owner, and a write runs where the session is now (AT-R5).
 
 // `AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbort` stood here until AT-S5e: it pinned the owner's build-request endings over raw payloads; `CREATE INDEX` takes the relation `X` and builds where its session is since AT-S5e, and the owner-built ship and its window are struck.
+
+// **A peer's WAL gate goes back with the peer** (BA-S1). `Open` gives the
+// shared store this core's attached manager as the core's own gate, and
+// `~CoreRuntime` takes it back before `wal_` is destroyed - the store
+// outlives every peer, so a slot left set would hand the next writeback
+// that runs as this core a destroyed manager. A probe as the default is how
+// the cell tells the two apart: while the peer lives, a writeback as core 1
+// asks the peer's manager and never the probe; once it is gone, the probe.
+TEST_F(CoreRuntimeTest, APeersWalGateIsTakenBackWhenItCloses) {
+    class CountingGate final : public wal::WalDurability {
+    public:
+        wal::Lsn durable_lsn() const noexcept override { return durable_; }
+        Status EnsureDurable(wal::Lsn lsn) override {
+            ++asks_;
+            if (lsn >= durable_) durable_ = lsn + 1;
+            return Status::OK();
+        }
+        int asks() const noexcept { return asks_; }
+
+    private:
+        wal::Lsn durable_ = 1;  // a real record LSN is never 0
+        int asks_ = 0;
+    } probe;
+    // The fixture's store outlives this cell and the probe does not.
+    struct UngateOnExit {
+        storage::DevicePageStore& store;
+        ~UngateOnExit() { store.SetWalGate(nullptr); }
+    } ungate{*core0_store_};
+    core0_store_->SetWalGate(&probe);
+
+    // A dirty page whose record, appended through `wal`, is not durable yet.
+    const auto dirty_page = [this](wal::WalManager& wal) -> PageId {
+        auto created = core0_store_->CreateNew();
+        EXPECT_TRUE(created.ok()) << created.status().message();
+        if (!created.ok()) return kInvalidPageId;
+        const PageId page = created.value().first;
+        storage::FormatPage(created.value().second.bytes(), PageType::kHeap);
+        auto lsn = wal.Append(wal::RecordSpec{wal::RecordType::kHeapInsert, 1, page, 0});
+        EXPECT_TRUE(lsn.ok()) << lsn.status().message();
+        if (!lsn.ok()) return kInvalidPageId;
+        EXPECT_TRUE(core0_store_->StampPageLsn(page, lsn.value()).ok());
+        return page;
+    };
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    {
+        const CurrentCoreGuard as_core_1(1);
+        const PageId ids[] = {dirty_page(peer.value()->wal())};
+        ASSERT_NE(ids[0], kInvalidPageId);
+        ASSERT_TRUE(core0_store_->FlushPages(ids).ok());
+        EXPECT_EQ(probe.asks(), 0) << "a live peer's writeback asked the default, not its own gate";
+    }
+
+    peer.value().reset();
+    {
+        const CurrentCoreGuard as_core_1(1);
+        const PageId ids[] = {dirty_page(*core0_wal_)};
+        ASSERT_NE(ids[0], kInvalidPageId);
+        ASSERT_TRUE(core0_store_->FlushPages(ids).ok());
+        EXPECT_EQ(probe.asks(), 1)
+            << "after the peer closed, a writeback as its core did not fall back to the default";
+    }
+}
 
 }  // namespace
 }  // namespace kds::server

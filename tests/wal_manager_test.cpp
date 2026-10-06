@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/current_core.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/record.hpp"
@@ -269,6 +270,24 @@ TEST_F(WalManagerTest, DrainingAnIdleManagerCostsNothing) {
 }
 
 // ---- The WalDurability seam ---------------------------------------------
+
+// **The owner's arm runs as the owner's core** (BA-S1). `Sync()`'s owning arm
+// writes the manager's own statistics and batch, which `manager.hpp` gives
+// to its core alone, and in debug builds it aborts when run as another core:
+// the tripwire for a store that hands a peer's writeback to core 0's manager
+// again. A release build compiles the check out, and `EXPECT_DEBUG_DEATH`
+// runs the statement there as an ordinary call.
+TEST_F(WalManagerTest, AnOwningSyncRunAsAnotherCoreAbortsInDebugBuilds) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    auto lsn = wal->Append(HeapInsert(1, 42), Pattern(kPayloadSize, 3));
+    ASSERT_TRUE(lsn.ok());
+    // `EnsureDurable` is the store gate's call, and its not-durable arm is
+    // `Sync()`.
+    const CurrentCoreGuard as_core_1(1);
+    EXPECT_DEBUG_DEATH((void)wal->EnsureDurable(lsn.value()), "core 1 ran core 0's owning sync");
+}
 
 TEST_F(WalManagerTest, EnsureDurableSyncsUpToARecordAndIsThenFree) {
     auto wal = OpenManager();

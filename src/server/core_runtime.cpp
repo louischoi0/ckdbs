@@ -42,6 +42,11 @@ CoreRuntime::~CoreRuntime() {
     // one.
     const CurrentCoreGuard as_this_core(core_id());
     listener_.reset();
+    // **The WAL gate slot goes back before `wal_` does** (BA-S1): the shared
+    // store outlives this runtime. Only this runtime's own gate is cleared.
+    if (owned_store_ == nullptr && store_ != nullptr && wal_ != nullptr) {
+        store_->ClearCoreWalGate(core_id(), wal_.get());
+    }
     // R6-2's rollback of the cross-owner transactions this core was a
     // participant in stood here until AT-S6, which retired the participant:
     // a transaction is one core's, whole, and ends with its session.
@@ -152,13 +157,25 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // armed by `Expeditor` - core 0 did all of it before any peer existed -
     // so a peer that borrows one applies none of those again. Applying them
     // would not be redundant, it would be wrong: `SetWalGate` would swap the
-    // instance's gate for this core's manager, and `SetFrameBudget` would
-    // hand one pool a per-core share of itself.
+    // default gate every core without its own asks, and `SetFrameBudget`
+    // would hand one pool a per-core share of itself.
+    //
+    // **A peer does set its own WAL gate** (BA-S1, `device_page_store.hpp`'s
+    // "Which gate"), before its first writeback - the completion checkpoint
+    // below - and `~CoreRuntime` takes it back. Core 0 keeps the store's
+    // default, which a core-0 runtime (the rig's, the fixtures') leaves as
+    // production has it.
     //
     // The unshared arm is a fixture's: its own store over the device,
     // allocating from the free map above the system range.
     if (config.shared_store != nullptr) {
         runtime->store_ = config.shared_store;
+        if (config.core_id != 0) {
+            if (Status s = runtime->store_->SetCoreWalGate(config.core_id, runtime->wal_.get());
+                !s.ok()) {
+                return s;
+            }
+        }
     } else {
         auto store = storage::DevicePageStore::Open(device, kFirstUserPageId);
         if (!store.ok()) return store.status();

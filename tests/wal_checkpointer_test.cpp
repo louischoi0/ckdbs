@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/current_core.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
@@ -103,6 +104,10 @@ protected:
         return records;
     }
 
+    // **The cells run as core 3, the core `wal_` serves** (BA-S1): an
+    // owning manager's `Sync()` aborts in debug builds when it runs as
+    // another core. A cell over another manager declares that manager's core.
+    CurrentCoreGuard as_core_3_{3};
     sched::ManualClock clock_;
     std::unique_ptr<MemoryLogDevice> device_;
     std::unique_ptr<WalManager> wal_;
@@ -393,6 +398,7 @@ bool IsCheckpointRecord(const RecordHeaderFields& header) {
 // checkpoint is this" and the record must. Opening a per-core stream at
 // core 5 would exercise the one configuration where the byte is redundant.
 TEST_F(CheckpointerTest, APeersCheckpointOnASharedStreamNamesItsOwnCore) {
+    const CurrentCoreGuard as_peer(5);
     WalManagerConfig shared;
     shared.ring_capacity = kMinRingCapacity;
     shared.shared_stream = true;
@@ -425,6 +431,7 @@ TEST_F(CheckpointerTest, APeersCheckpointOnASharedStreamNamesItsOwnCore) {
 // no format event. The golden log pins the same fact by CRC over a whole
 // log; this one names the cause when it breaks.
 TEST_F(CheckpointerTest, CoreZerosRecordsStillCarryAZeroFlagsByte) {
+    const CurrentCoreGuard as_core_0(0);
     auto zero_device = MemoryLogDevice::Create(kSegmentSize);
     ASSERT_TRUE(zero_device.ok());
     auto zero_wal = WalManager::Open(zero_device.value().get(), clock_, /*core_id=*/0);
