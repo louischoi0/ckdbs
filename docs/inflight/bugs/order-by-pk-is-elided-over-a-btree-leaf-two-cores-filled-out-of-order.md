@@ -87,13 +87,11 @@ predicate would drop rows in the same way.
 
 ## The fix
 
-Not decided. `instructions/v3.0.0/workorder-ba-parallelism.md` BA-R1b and
-BA-S1b carry it, with the choice in BA-Q14:
-
-- **(a)** A placement that lands below its leaf's highest live id flips
-  `key_order` to `kUnordered` once, as a below-mark named key does.
-- **(b)** The id is issued under the hold of the leaf it lands on, so issue
-  order and placement order are one.
-
-A heap relation needs (a)'s per-page key-order emission whenever pk order
-is asked for.
+**Chosen: BA-Q14 (b)**, marked by the operator on 2026-10-06
+(`instructions/v3.0.0/raft-marks-2026-10-06.md` §4). A row's id is fixed
+under the exclusive hold of the page it lands on, so placement order is key
+order while `key_order` is `kAscending`. Its own sub-milestone carries it:
+`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` (BB), which also
+found a second path to the same misorder - a named key at or above the mark
+(its §1.3) - and proposes the same rule for heap relations (BB-Q2). Not
+built; BB is not opened.

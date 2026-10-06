@@ -35,3 +35,13 @@ session.
 | **Reading** | BA-S1c is one of the stages BA-Q1 exempts from the census, as BA-S1 was (`raft-marks-2026-10-02.md` §6). It builds BA-R1c and marks nothing in §4 |
 | **Does not settle** | BA-Q0..Q14 - BA-Q3 included, so the other-session remainder stays in the bug entry; any other BA stage's start; the push |
 | **Recorded at** | `workorder-ba-parallelism.md` §6, the index row |
+
+## 4. BA-Q14 marked (b), BA paused, and BB's order written
+
+| | |
+|---|---|
+| **Word** | *"BA-S1b 진행해줘"*; then, to CLA's question on BA-Q14, the answer **"(a) key_order 뒤집기 (Recommended)"**; then *"일단 여기서 두 코어가 올바르지 않은 순서로 삽입을 하는것을 원천 차단 하는 방식으로 해야 하지 않을까? unordered된 btree라면 존재 이유가 없잖아"*, *"그러면 뒤집힌 unordered단위는 btree전체이니? 아니면 leaf tree에 국한되는것이니?"*, *"그러면 이러한 케이스가 발생하는 경로를 설명해줘"*, and *"(b)로 원천 차단하는 방식으로 진행하려고 해 일단 지금까지 마일스톤 작업은 잠시 중지하고 이 오류를 해결하기 위한 서브 마일스톤 작업  계획 & 지시서를 작성해줘"* |
+| **Mark** | **BA-Q14 is (b)**: the id is issued under the hold of the leaf it lands on. The earlier answer (a) is superseded by the last word. **BA is paused**; a sub-milestone takes defect A, and its order is written: `workorder-bb-issue-under-the-leaf.md` (BB) |
+| **Reading** | "원천 차단" is read as BB-R1's rule - no placement out of key order while `key_order` is `kAscending` - not as removing `kUnordered`, which a below-mark named key still sets by design (BB §0). The pause covers BA's stages; BA-S1c, already pushed at `bddd450c`, stands |
+| **Does not settle** | BB-Q0..Q7 - BB's opening included; any BB stage's start; BA-Q0..Q13 |
+| **Recorded at** | BA's header, its BA-S1b and BA-Q14 rows and §6; BB's header; the index |

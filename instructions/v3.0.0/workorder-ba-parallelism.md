@@ -10,6 +10,10 @@ operator's mark, and each stage then waits for its own word. It cuts no
 tag. Like AS and AZ it sits outside AR0 §8's chain: it depends on no open
 order and gates none.
 
+**Paused 2026-10-06 for its sub-milestone BB** (`raft-marks-2026-10-06.md`
+§4): BA-Q14 is marked (b), and `workorder-bb-issue-under-the-leaf.md` takes
+defect A in BA-S1b's place. BA resumes at BB's close (BB-S5).
+
 **Where the items came from.** The starting point was
 `bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`, plus a
 spec-level reading of what serialises. §1 re-reads every claim in the code
@@ -996,7 +1000,7 @@ census.
 |---|---|---|---|
 | BA-S0 | This order, its index row and the three bug entries | the files at the commit | S |
 | BA-S1 | **Defect C, the peer-thread sync** (BA-R1) | **Red first**, on the two-core rig (`workorder-av-two-core-rig.md`): an owning-thread assertion in `WalManager::Sync()` fails today. **Green**: all four peer paths wait on the writer. **Mutation**: the per-core gate replaced by core 0's, killed. The bug entry deleted | S |
-| BA-S1b | **Defect A, the leaf's order** (BA-R1b, on BA-Q14) | **Red first**: on the two-core rig, core A is paused between issue and placement while core B issues and places. `ORDER BY <pk>` then returns 101 before 100 today. **Green**: the chosen fix; the `LIMIT` shape of the same cell. `heap-and-tuple.md:250-258` and `btree.cpp:943-945` restated. The bug entry deleted | M |
+| BA-S1b | **Defect A, the leaf's order** (BA-R1b, on BA-Q14). **Superseded by BB** (`workorder-bb-issue-under-the-leaf.md`), BA-Q14 being marked (b) | **Red first**: on the two-core rig, core A is paused between issue and placement while core B issues and places. `ORDER BY <pk>` then returns 101 before 100 today. **Green**: the chosen fix; the `LIMIT` shape of the same cell. `heap-and-tuple.md:250-258` and `btree.cpp:943-945` restated. The bug entry deleted | M |
 | BA-S1c | **Defect B, the snapshot that misses its own commit** (BA-R1c) | **Red first**: on the two-core rig, core 0's `strict` sync is paused while core 1's session commits `relaxed`, is acknowledged and reads its row. The row is missing today. **Green**: the read waits and finds it. **Mutation**: the bound ignored, killed. The bug entry restated to the other-session remainder, or deleted under BA-Q3 (c) | M |
 | BA-S2 | **The counters** (BA-R0) | each counter proved by a cell on the two-core rig that forces its contention. `cores = 1` unchanged in behaviour. The reactor-to-CPU map. The new `SHOW META` fields in `manual/` | M |
 | BA-S3 | **The driver and its PostgreSQL twin** (BA-R0), a tools stage | `--help` documents the shapes, the pinning and the client-bound mark. A dry run at `cores = 1`, with no number claimed | M |
@@ -1033,7 +1037,7 @@ census.
 | BA-Q11 | **A yield every 64 pages, and a `C_CANCEL` handler** (BA-R12) | user-visible | Yes, with 64 re-measured in the stage |
 | BA-Q12 | **Placement**: the least-loaded hand-off as the default above one core, only if material (BA-R13) | user-visible | As stated |
 | BA-Q13 | **Waits stay blocking**: no suspending latch primitive (§1.0); every fix holds less, less often | architecture | Yes |
-| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back |
+| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back  **Marked (b) by the operator, 2026-10-06** (`raft-marks-2026-10-06.md` §4), as its own sub-milestone BB |
 
 ## 5. Sequencing
 
@@ -1312,3 +1316,16 @@ bench archives only. 1 disabled test did not run. Not re-run at
 (BA-S17). At `cores = 1` a statement reads its session's bound and finds it
 consumed; the first statement after a commit reads `SnapshotCeiling()` once,
 three loads at one core. A commit adds one null test in `EndCommit`.
+
+### BA paused for BB — 2026-10-06
+
+BA-S1b was about to start on BA-Q14 (a): CLA had asked, and the operator
+answered (a) (`raft-marks-2026-10-06.md` §4). The operator then asked how
+wide (a)'s flag reaches, which is the whole relation, for good, and which
+paths produce the misorder: one, and it fires at every collision of
+concurrent omitted-pk inserts. On those answers the operator re-marked
+BA-Q14 **(b)** and paused BA for a sub-milestone,
+`workorder-bb-issue-under-the-leaf.md`. Nothing of BA-S1b was built: its
+worktree `ba-s1b-leaf-order-key-order` holds no change from `bddd450c`.
+
+BA resumes at BB-S5, with BA-S1b struck and BA-S11's row rebased on BB-R1.
