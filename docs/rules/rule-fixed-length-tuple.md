@@ -117,10 +117,11 @@ A value too long to inline spills, and storage is invisible above the codec.
 | The fetch path | `varheap::Fetch` via `exec::ResolveSpills` |
 | Tests §8.3 | `tests/varheap_test.cpp`, `tests/fixed_length_tuple_test.cpp` |
 
-Four rules the implementation carries:
+Five rules the implementation carries:
 
 - **Per-relation chain, root fixed at `CREATE TABLE`.** `varheap_page_id` is allocated eagerly for any schema that can spill and is `kInvalidPageId` otherwise, so a relation of plain integers costs no var-heap page. Eager because a lazily allocated root would be a fact changing *without DDL*, which `catalog_cache.hpp`'s rule says may not be cached — and this one is cached on every `TableAccess`. Chain growth edits the tail's link, never the root, so the root stays DDL-immutable. A per-relation chain rather than one instance-wide chain: per-relation locality, and `DROP TABLE` reclaims one chain rather than sweeping a shared one.
 - **Decode does not resolve; it reports.** `DecodeRowInto` records a spilled cell as a *pending* spill and the caller fetches afterwards through `ResolveSpills` — `parser-v2.md` I15's rule R1, no page-frame span live across a nested fetch, which the step VM's `PageSpanGuard` exists to catch. A row with nothing spilled pays nothing for the split.
+- **The tail is held as the tail.** `varheap::ChainAppend` walks the chain shared, takes the page whose link it read invalid exclusive, and reads that link again under the hold: a page another core grew the chain past in between is not the tail, and the walk continues from its link. Only the page whose link is still invalid under the exclusive hold is appended into or linked from, so two cores growing one chain at once never write two links on one page - a second link would leak the first grower's page, reachable from no walk and never appended into or freed again. The heap chain's rule, BB-R7 (`docs/spec/heap-and-tuple.md`), on the var-heap.
 - **`VARHEAP_APPEND` precedes the `HEAP_INSERT` that points at it.** A replay must never reach a cell whose pointer resolves to nothing, whereas a value with no tuple is merely unreferenced. No var-heap-specific recovery logic exists (§5).
 - **Max value is one page, 8144 bytes**, refused `Unsupported` by `varheap::ChainAppend`. This is *not* the §9 cap being decided: a larger value needs a multi-page representation, and a future cap can be lower (a policy check above the layer) or higher (chaining behind the same `Append`/`Fetch` pair).
 

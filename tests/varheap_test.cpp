@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include "act_on_fetch_store.hpp"
+
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 
@@ -402,6 +404,38 @@ TEST_F(VarHeapChainTest, TheRootNeverMovesWhenTheChainGrows) {
     auto page = store_.GetForRead(root.value());
     ASSERT_TRUE(page.ok());
     EXPECT_TRUE(storage::ValidatePageHeader(page.value().bytes(), PageType::kVarHeap).ok());
+}
+
+TEST_F(VarHeapChainTest, ATailLinkedOnBetweenTheWalkAndItsHoldIsWalkedOn) {
+    // The walk reads the tail's link shared, then takes the tail exclusive.
+    // "Another core" grows the chain in between - as the append's exclusive
+    // fetch of the root is made - so the page the append holds already links
+    // on. Until the re-check the append grew a second page off the root and
+    // linked over the first, which then no walk reached.
+    testing_race::ActOnFetchStore store(store_);
+    auto root = CreateChain(store_, /*owner_oid=*/0);
+    ASSERT_TRUE(root.ok());
+    // One value per page, so every append after the first grows the chain.
+    ASSERT_TRUE(ChainAppend(store_, root.value(), Bytes(std::string(5000, 'v')), 0).ok());
+
+    VarHeapPtr theirs{};
+    store.OnFetch(root.value(), 2, [&] {
+        auto other = ChainAppend(store_, root.value(), Bytes(std::string(5000, 'o')), 0);
+        ASSERT_TRUE(other.ok()) << other.status().message();
+        ASSERT_NE(other.value().created_page_id, kInvalidPageId);
+        theirs = other.value().ptr;
+    });
+    {
+        auto mine = ChainAppend(store, root.value(), Bytes(std::string(5000, 'm')), 0);
+        ASSERT_TRUE(mine.ok()) << mine.status().message();
+        ASSERT_TRUE(store.fired()) << "the window was never opened";
+        EXPECT_EQ(mine.value().linked_page_id, theirs.page_id)
+            << "the append linked from a page that was no longer the tail";
+    }  // the append's holds end here
+
+    auto length = ChainLength(store_, root.value());
+    ASSERT_TRUE(length.ok());
+    EXPECT_EQ(length.value(), 3u) << "a grown page is unreachable from the root";
 }
 
 TEST_F(VarHeapChainTest, FetchingThroughAPointerAtANonVarHeapPageIsRefused) {
