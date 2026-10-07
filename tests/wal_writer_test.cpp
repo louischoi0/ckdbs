@@ -136,7 +136,9 @@ public:
     std::uint64_t segment_size() const noexcept override { return kSegment; }
     std::uint64_t first_segment() const noexcept override { return 0; }
     std::uint64_t end_segment() const noexcept override { return 1; }
-    Status CreateSegment(std::uint64_t) override { return Status::OK(); }
+    Status CreateSegment(std::uint64_t, std::span<const std::byte>) override {
+        return Status::OK();
+    }
     Status WriteAt(std::uint64_t, std::uint64_t, std::span<const std::byte>) override {
         return Status::OK();
     }

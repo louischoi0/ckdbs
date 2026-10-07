@@ -300,8 +300,12 @@ statement about an engine that no longer exists; re-verify or strike it.
   - `WalStream::Append` takes the stream latch and calls `Roll` under it
     when the record does not fit (`src/wal/stream.cpp:210-219`).
   - `Roll` reaches `CreateSegment` (`:142-148`, `:63-64`). That runs
-    `posix_fallocate`, zero-fills 64 MiB, `fsync`s the file and then
-    `fsync`s the directory (`src/wal/file_log_device.cpp:96-124`, `:287`).
+    `posix_fallocate`, zero-fills 64 MiB, writes the header, `fsync`s the
+    file and then `fsync`s the directory (`src/wal/file_log_device.cpp`).
+  - **Since the unheadered-tail fix (2026-10-07, `worktree-fix-roll-header`)
+    the roll first syncs the device** through the stream's sync gate, so the
+    segment it leaves is sealed durably before the next one exists - one
+    more `fdatasync` per roll, and a wait for any sync already in flight.
   - **The behaviour is deliberate.** The authority for it as built is
     `include/kds/wal/stream.hpp:35-43`, which makes the latch a mutex for
     exactly this wait.
@@ -313,7 +317,8 @@ statement about an engine that no longer exists; re-verify or strike it.
     the roll.
 
   Cost: once per 64 MiB of log, every core's append waits through a
-  latched `posix_fallocate`, a 64 MiB prewrite and two `fsync`s. What that
+  latched device sync, a `posix_fallocate`, a 64 MiB prewrite and two
+  `fsync`s. What that
   means for a device is CN-9 §4 C4's. Owner: `docs/spec/wal.md` §6 for the contradiction, and
   `wal/stream.hpp`'s latch protocol for the cost. Price it first: the
   CLAUDE.md rule is to re-measure the premise before building the fix.

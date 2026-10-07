@@ -82,7 +82,8 @@ namespace kds::server {
 // stream syncs its device outside its latch (`WalStream::Sync`), so a held
 // sync blocks only the thread that asked for it - a `strict` committer on
 // its own reactor, or the writer thread - and every other core still
-// appends.
+// appends, until one rolls a segment: the roll syncs through the same gate
+// under the stream latch, so a held sync then blocks every appender.
 class GatedLogDevice final : public wal::LogDevice {
 public:
     explicit GatedLogDevice(wal::LogDevice& inner) : inner_(inner) {}
@@ -95,8 +96,9 @@ public:
     std::uint64_t segment_size() const noexcept override { return inner_.segment_size(); }
     std::uint64_t first_segment() const noexcept override { return inner_.first_segment(); }
     std::uint64_t end_segment() const noexcept override { return inner_.end_segment(); }
-    Status CreateSegment(std::uint64_t segment_no) override {
-        return inner_.CreateSegment(segment_no);
+    Status CreateSegment(std::uint64_t segment_no,
+                         std::span<const std::byte> header = {}) override {
+        return inner_.CreateSegment(segment_no, header);
     }
     Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                    std::span<const std::byte> in) override {

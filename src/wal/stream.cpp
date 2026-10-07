@@ -81,8 +81,17 @@ Status WalStream::StoppedStatus() {
 }
 
 Status WalStream::StartSegment(std::uint64_t segment_no) {
-    if (Status s = device_->CreateSegment(segment_no); !s.ok()) {
-        return FailStop(s);
+    // **A roll makes the segment it leaves durable first** - its records and
+    // the seal marker the roll just flushed - through the sync gate, which
+    // stops the log on a failure. A segment then never exists ahead of an
+    // unsealed predecessor on the device. Without it a power loss could keep
+    // the new segment and drop the old one's seal marker; the stream would
+    // resume in the new segment while every scan stops at the old one's end,
+    // and every record written after the restart would be invisible to
+    // recovery. The fresh stream's first segment has no predecessor.
+    if (device_->end_segment() != 0) {
+        if (Status s = SyncDevice(); !s.ok()) return s;
+        PublishDurable(flushed_lsn());
     }
 
     SegmentHeaderFields fields{};
@@ -94,9 +103,10 @@ Status WalStream::StartSegment(std::uint64_t segment_no) {
     if (Status s = EncodeSegmentHeader(header_block_, fields); !s.ok()) {
         return s;
     }
-    // Straight to the device, not through the ring: the header block is not
-    // a record, and the first record's LSN is defined to sit after it.
-    if (Status s = device_->WriteAt(segment_no, 0, header_block_); !s.ok()) {
+    // The header goes in with the creation, not through the ring and not
+    // after it: the device makes the segment and its header durable
+    // together, so a crash never leaves a segment whose header is zeroes.
+    if (Status s = device_->CreateSegment(segment_no, header_block_); !s.ok()) {
         return FailStop(s);
     }
 

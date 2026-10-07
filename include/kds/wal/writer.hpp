@@ -42,8 +42,10 @@
 //                is the one call whose whole purpose is to block.
 //   sync_        the stream's `SyncDevice`, which holds the stream's
 //                `sync_mutex_` across the fsync - the one lock this thread
-//                and the reactor's own sync share, taken with no other held
-//                (`wal/stream.hpp`).
+//                and the reactor's own sync share. This thread takes it with
+//                no other held; a segment roll takes it under the stream
+//                latch, so a roll waits out this thread's fsync with every
+//                appender behind it (`wal/stream.hpp`).
 //
 // The reactor's hot path - `Append` into the ring, `Flush` into the page
 // cache - touches none of it. Those stay `WalStream`'s. **This class touches

@@ -13,17 +13,28 @@ StatusOr<std::unique_ptr<MemoryLogDevice>> MemoryLogDevice::Create(std::uint64_t
     return std::unique_ptr<MemoryLogDevice>(new MemoryLogDevice(segment_size));
 }
 
-Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no) {
+Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const std::byte> header) {
     std::lock_guard<std::mutex> guard(mutex_);
     if (segment_no != base_.size()) {
         return Status::InvalidArgument("MemoryLogDevice: segments are created in order (expected " +
                                        std::to_string(base_.size()) + ", got " +
                                        std::to_string(segment_no) + ")");
     }
+    if (!header.empty() && fail_next_write_.has_value()) {
+        Status failure = *fail_next_write_;
+        fail_next_write_.reset();
+        ++stats_.injections_fired;
+        return failure;
+    }
     base_.emplace_back();
     pending_.emplace_back();
+    if (!header.empty()) {
+        // Into the durable base, and the segment's existence with it.
+        for (std::size_t i = 0; i < header.size(); ++i) base_.back()[i] = header[i];
+        durable_end_ = base_.size();
+    }
     ++stats_.segments_created;
-    trace_.push_back({OpKind::kCreate, segment_no, 0, 0});
+    trace_.push_back({OpKind::kCreate, segment_no, 0, header.size()});
     return Status::OK();
 }
 

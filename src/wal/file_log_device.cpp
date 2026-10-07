@@ -1,6 +1,7 @@
 #include "kds/wal/file_log_device.hpp"
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -44,6 +45,8 @@ constexpr bool FallocateUnsupported(int err) {
 // stream order; every scan below parses the number instead of trusting the
 // order readdir hands back.
 constexpr const char* kNameSuffix = ".log";
+// A segment under construction (`CreateSegment`): not a name `Open` adopts.
+constexpr const char* kTempSuffix = ".tmp";
 
 std::string NamePrefix(std::uint32_t core_id) {
     return "wal-" + std::to_string(core_id) + "-";
@@ -93,7 +96,7 @@ std::optional<std::uint64_t> ParseSegmentNo(const std::string& name, const std::
 // (bench/results-scenario2-freight.md). Paying the whole conversion here,
 // once per segment and off every commit path, is what PostgreSQL's
 // wal_init_zero does and for the same reason.
-Status Prewrite(int fd, std::uint64_t size) {
+Status Prewrite(int fd, std::uint64_t size, std::span<const std::byte> header) {
     // 1 MiB per write: large enough that a 64 MiB segment is 64 syscalls,
     // small enough not to be a resident buffer anyone notices.
     static constexpr std::size_t kChunk = std::size_t{1} << 20;
@@ -110,6 +113,20 @@ Status Prewrite(int fd, std::uint64_t size) {
             return ErrnoStatus("FileLogDevice: prewrite at offset " + std::to_string(at), errno);
         }
         at += static_cast<std::uint64_t>(n);
+    }
+    // The header over the zeroes, before the fsync that follows: one sync
+    // makes the segment and its header durable together, so a power loss
+    // can never leave a full-size segment with a zeroed header.
+    for (std::size_t done = 0; done < header.size();) {
+        const ::ssize_t n = ::pwrite(fd, header.data() + done, header.size() - done,
+                                     static_cast<::off_t>(done));
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return ErrnoStatus("FileLogDevice: header write", errno);
+        }
+        done += static_cast<std::size_t>(n);
     }
     // fsync, not fdatasync: this is the one sync that must also persist the
     // file's metadata (its size, its now-written extents), so that every
@@ -266,18 +283,38 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
     return device;
 }
 
-Status FileLogDevice::CreateSegment(std::uint64_t segment_no) {
+Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const std::byte> header) {
     if (segment_no != end_segment()) {
         return Status::InvalidArgument("FileLogDevice: segments are created in order (expected " +
                                        std::to_string(end_segment()) + ", got " +
                                        std::to_string(segment_no) + ")");
     }
 
+    // **Built under a name `Open` never adopts, and renamed when whole.** A
+    // power cut inside a creation - during the prewrite, before its fsync -
+    // can still make the new file's name and size durable through any other
+    // journal commit, and a full-size segment with a zeroed header under the
+    // final name is one the mount refuses. Under the temporary name it is
+    // nothing: `Open` adopts only `<prefix><n>.log`, and the next creation
+    // of the same number removes the leftover first. The rename happens only
+    // after the fsync that made the body and the header durable, and it
+    // never replaces a file already there.
     const std::string path = SegmentPath(segment_no);
-    auto fd = OpenSegmentFile(path, /*create_exclusive=*/true);
+    const std::string temp = path + kTempSuffix;
+    const std::string temp_name = std::filesystem::path(temp).filename().string();
+    const std::string final_name = std::filesystem::path(path).filename().string();
+    if (::unlink(temp.c_str()) != 0 && errno != ENOENT) {
+        return ErrnoStatus("FileLogDevice: remove leftover " + temp, errno);
+    }
+    auto fd = OpenSegmentFile(temp, /*create_exclusive=*/true);
     if (!fd.ok()) {
         return fd.status();
     }
+    const auto abandon = [&temp](Status s) {
+        std::error_code remove_ec;
+        std::filesystem::remove(temp, remove_ec);
+        return s;
+    };
 
     // Full-size reservation up front: an append issued after its record was
     // already accepted into the ring must not be able to fail for space
@@ -285,26 +322,38 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no) {
     const int rc = ::posix_fallocate(fd.value().get(), 0, static_cast<::off_t>(segment_size_));
     if (rc != 0) {
         if (!FallocateUnsupported(rc)) {
-            std::error_code remove_ec;
-            std::filesystem::remove(path, remove_ec);
-            return ErrnoStatus("FileLogDevice: posix_fallocate on " + path, rc);
+            return abandon(ErrnoStatus("FileLogDevice: posix_fallocate on " + temp, rc));
         }
         // Filesystems that cannot preallocate still get a correctly sized
         // sparse file; the prewrite below then allocates the blocks for
         // real, which restores the no-ENOSPC-at-append promise by another
         // route.
         if (::ftruncate(fd.value().get(), static_cast<::off_t>(segment_size_)) != 0) {
-            const int err = errno;
-            std::error_code remove_ec;
-            std::filesystem::remove(path, remove_ec);
-            return ErrnoStatus("FileLogDevice: ftruncate on " + path, err);
+            return abandon(ErrnoStatus("FileLogDevice: ftruncate on " + temp, errno));
         }
     }
 
-    if (Status s = Prewrite(fd.value().get(), segment_size_); !s.ok()) {
-        std::error_code remove_ec;
-        std::filesystem::remove(path, remove_ec);
-        return s;
+    if (Status s = Prewrite(fd.value().get(), segment_size_, header); !s.ok()) {
+        return abandon(s);
+    }
+
+    // The final name, refused if a file already holds it: segments are
+    // created once. A filesystem that refuses `RENAME_NOREPLACE` (`EINVAL`:
+    // some NFS and FUSE mounts) gets the same no-replace move as a hard link
+    // to the final name and the temporary name's removal.
+    int moved = ::renameat2(dir_fd_.get(), temp_name.c_str(), dir_fd_.get(), final_name.c_str(),
+                            RENAME_NOREPLACE);
+    if (moved != 0 && errno == EINVAL) {
+        moved = ::linkat(dir_fd_.get(), temp_name.c_str(), dir_fd_.get(), final_name.c_str(), 0);
+        if (moved == 0) (void)::unlinkat(dir_fd_.get(), temp_name.c_str(), 0);
+    }
+    if (moved != 0) {
+        const int err = errno;
+        if (err == EEXIST) {
+            return abandon(Status::AlreadyExists("FileLogDevice: segment file " + path +
+                                                 " already exists but was not adopted at open"));
+        }
+        return abandon(ErrnoStatus("FileLogDevice: rename " + temp + " to " + path, err));
     }
 
     // Directory metadata is synced here, not in Sync(): a crash right after

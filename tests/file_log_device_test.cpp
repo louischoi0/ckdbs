@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -535,6 +536,48 @@ TEST_F(FileLogDeviceTest, ARollAtTheDescriptorLimitStrandsNoFile) {
         << "the failed roll left a file the device does not hold: " << failed.message();
     EXPECT_TRUE(device->CreateSegment(device->end_segment()).ok())
         << "the next roll, with descriptors free again, is not blocked by a stranded name";
+}
+
+
+// The header goes in with the creation, under the prewrite's fsync: the
+// file holds it the moment `CreateSegment` returns, with no write and no
+// sync after it.
+TEST_F(FileLogDeviceTest, ASegmentIsCreatedWithItsHeaderInPlace) {
+    auto device = OpenDevice();
+    ASSERT_NE(device, nullptr);
+    const std::vector<std::byte> header = Pattern(kSegmentHeaderSize, 21);
+    ASSERT_TRUE(device->CreateSegment(0, header).ok());
+
+    std::ifstream in(device->SegmentPath(0), std::ios::binary);
+    std::vector<char> raw(kSegmentHeaderSize);
+    in.read(raw.data(), static_cast<std::streamsize>(raw.size()));
+    ASSERT_TRUE(in.good());
+    EXPECT_EQ(std::memcmp(raw.data(), header.data(), header.size()), 0);
+}
+
+
+// A creation a crash interrupted leaves its temporary file, never a segment:
+// `Open` does not adopt `wal-0-<n>.log.tmp`, and the next creation of the
+// same number replaces it and renames the finished segment into place.
+TEST_F(FileLogDeviceTest, AnInterruptedCreationLeavesNoSegmentAndIsReplaced) {
+    std::filesystem::create_directories(dir_);
+    {
+        // What a power cut inside a creation leaves: full size, zeroes.
+        std::ofstream out(dir_ + "/wal-0-0.log.tmp", std::ios::binary);
+        const std::vector<char> zeros(kSmallSegment, 0);
+        out.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+    }
+    auto device = OpenDevice();
+    ASSERT_NE(device, nullptr);
+    EXPECT_EQ(device->end_segment(), 0u) << "the temporary file was adopted as a segment";
+
+    const std::vector<std::byte> header = Pattern(kSegmentHeaderSize, 22);
+    ASSERT_TRUE(device->CreateSegment(0, header).ok());
+    EXPECT_FALSE(std::filesystem::exists(dir_ + "/wal-0-0.log.tmp"));
+    EXPECT_EQ(SegmentsOnDisk(dir_), (std::vector<std::uint64_t>{0}));
+    std::vector<std::byte> back(kSegmentHeaderSize);
+    ASSERT_TRUE(device->ReadAt(0, 0, back).ok());
+    EXPECT_EQ(back, header);
 }
 
 }  // namespace
