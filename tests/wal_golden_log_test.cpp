@@ -93,7 +93,12 @@ std::uint32_t LogCrc(wal::MemoryLogDevice& device) {
 }
 
 std::uint32_t RunScript() {
-    auto created = SimInstance::Create();
+    // Its own segment size, pinned with the bytes: the golden is a statement
+    // about the record format, and the simulator's default segment moved to
+    // 64 KiB for recycling (BC-S4) without the format moving at all.
+    SimInstanceOptions options;
+    options.wal_segment_bytes = 1ull << 20;
+    auto created = SimInstance::Create(options);
     EXPECT_TRUE(created.ok()) << created.status().message();
     if (!created.ok()) return 0;
     SimInstance& db = *created.value();

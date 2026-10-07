@@ -87,6 +87,20 @@
 // backend lands (the [OPEN] I/O decision), this becomes a real ring; the
 // interface above it does not change.
 //
+// **Fail-stop** (operator, 2026-10-07): a device write this stream issues
+// that fails - a flush of the staged bytes, or a roll's segment creation or
+// header - stops the stream for good. Every later `Append`, `Flush`, `Seal`
+// and `Sync`, on every core, is refused with the stopped status, and only a
+// restart, whose recovery replays the durable prefix, brings writes back.
+// The reason is the write path's order: a page is mutated under its hold and
+// its record appended after, so an append that fails leaves a mutation no
+// record describes, and a rollback's compensation logged after it would
+// describe a change redo never saw (`workorder-bc-wal-recycling.md` §6,
+// BC-S4). Stopping refuses that compensation with every other record; the
+// next mount's undo retires the placement from its durable undo record, the
+// case recovery already serves. A full ring is not a device write and does
+// not stop the stream.
+//
 // Backpressure is a Status, not a suspension: a full ring fails the append
 // with OutOfSpace and the caller drains it. wal.md section 6-4 wants the
 // appending task suspended instead, which needs the reactor - when that
@@ -165,6 +179,16 @@ public:
     Lsn durable_lsn() const noexcept { return durable_lsn_.load(std::memory_order_acquire); }
 
     bool sealed() const noexcept { return sealed_.load(std::memory_order_relaxed); }
+
+    // Fail-stop (above): true once a device write this stream issued failed.
+    bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
+
+    // Stops the stream (above) and returns the refusal naming `cause`. The
+    // stream's own failed writes call it, and so does the manager's ring-full
+    // refusal once its bounded drains are spent (`WalManager::Append`): that
+    // record was refused all the same, after a mutation it may describe.
+    // Any thread; the flag is the only state, and it is atomic.
+    Status FailStop(const Status& cause);
     std::size_t ring_used() const noexcept { return ring_used_.load(std::memory_order_relaxed); }
     std::size_t ring_capacity() const noexcept { return ring_.size(); }
     std::size_t ring_free() const noexcept { return ring_.size() - ring_used(); }
@@ -246,6 +270,8 @@ private:
     // Moves the durable watermark forward to `lsn`, never back: a plain
     // store unshared, a compare-exchange maximum shared.
     void PublishDurable(Lsn lsn) noexcept;
+    // What every call after the stop is refused with.
+    static Status StoppedStatus();
 
     LogDevice* device_;
     std::uint32_t core_id_;
@@ -258,6 +284,7 @@ private:
     std::atomic<Lsn> flushed_lsn_{0};
     std::atomic<Lsn> durable_lsn_{0};
     std::atomic<bool> sealed_{false};
+    std::atomic<bool> stopped_{false};
 
     // `latch_` points at `latch_storage_` when shared and is null when not
     // (spin_latch.hpp: a null guard costs one branch and no atomic).

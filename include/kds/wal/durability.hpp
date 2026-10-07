@@ -37,6 +37,13 @@ public:
     // flush path pay nothing in the common case where the log ran ahead.
     virtual Status EnsureDurable(Lsn lsn) = 0;
 
+    // The log fail-stopped (`wal/stream.hpp`): a record was refused after
+    // the page mutation it describes, so a dirty page may hold a change no
+    // record covers while its page_lsn still reads durable. The pool then
+    // writes nothing back, and the restart's recovery rebuilds every page
+    // from the durable prefix alone.
+    virtual bool stopped() const noexcept { return false; }
+
     // durable_lsn() > lsn, spelled out so callers never write the
     // comparison themselves and get the strictness wrong.
     bool IsDurable(Lsn lsn) const noexcept { return durable_lsn() > lsn; }

@@ -1407,6 +1407,15 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // writeback** (BA-S1): the calling core's, chosen once, so the batch's
     // call and every run's below ask the same manager.
     wal::WalDurability* const gate = GateForCaller();
+    // **Nothing at all once the log fail-stopped** (`wal/durability.hpp`).
+    // The page_lsn gate cannot catch it: a page whose record was refused
+    // keeps its old, durable page_lsn - a split's leaf, a new page at
+    // kNoLsn, a var-heap body - and writing it would put a change on the
+    // device that no record lets recovery redo or undo.
+    if (gate != nullptr && gate->stopped()) {
+        return Status::IoError("pagestore: no page is written back after the log fail-stopped; "
+                               "restart the instance to recover");
+    }
     if (Status s = AwaitWalGate(ordered, gate); !s.ok()) return s;
 
     // **Three phases per run, and the device call is the one between the

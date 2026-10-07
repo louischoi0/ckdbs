@@ -144,6 +144,12 @@ struct SimConfig {
     // can be shown to fail, which since recovery landed is the only way to
     // show it at all — no seed loses an acknowledged row any more.
     bool skip_recovery = false;
+
+    // **A checkpoint every this many ops** (BC-S4), the server's cadence
+    // tick, so the log is recycled mid-run and the crash is recovered from a
+    // log whose head is gone. By op index, never drawn from the seed: a
+    // committed seed's plan stays the plan it was. 0 turns it off.
+    std::size_t checkpoint_every = 97;
 };
 
 struct SimVerdict {
@@ -175,6 +181,18 @@ struct SimVerdict {
     // Documented-gap bookkeeping — reported, not failed (see above).
     std::size_t gated_missing_rows = 0;
     std::size_t unlogged_ddl_lost_tables = 0;
+
+    // Recycling (BC-S4): mid-run checkpoints, advances the recycler was
+    // handed, and segments removed. A run where these stay 0 recovered from
+    // a whole log, whatever it printed.
+    std::size_t checkpoints = 0;
+    std::size_t recycles = 0;
+    std::size_t segments_recycled = 0;
+    std::size_t crashes_reviving_segments = 0;
+    // Iterations the log fail-stopped in (`wal/stream.hpp`): each ended its
+    // ops there and was crashed and restarted, as an operator would, so the
+    // recovery after a failed log write is what it checked.
+    std::size_t fail_stops = 0;
 
     std::string Summary(const SimConfig& config) const;
 

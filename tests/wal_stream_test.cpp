@@ -268,22 +268,46 @@ TEST_F(WalStreamTest, FailedSyncDoesNotAdvanceTheDurablePoint) {
     EXPECT_EQ(stream->durable_lsn(), stream->flushed_lsn());
 }
 
-TEST_F(WalStreamTest, FailedFlushKeepsTheBytesStagedForARetry) {
+// **Fail-stop** (stream.hpp): a failed device write stops the stream for
+// every later call, on every core. It used to leave the bytes staged for a
+// retry, which let a record appended after it - a rollback's compensation -
+// describe a change the log never recorded (BC-S4).
+TEST_F(WalStreamTest, AFailedFlushStopsTheStreamForEveryLaterCall) {
     auto stream = OpenStream();
     ASSERT_NE(stream, nullptr);
     const std::vector<std::byte> payload = Pattern(kPayloadSize, 7);
-    auto lsn = stream->Append(HeapInsert(3, 3), payload);
-    ASSERT_TRUE(lsn.ok());
+    ASSERT_TRUE(stream->Append(HeapInsert(3, 3), payload).ok());
 
     device_->FailNextWrite(Status::IoError("injected"));
     EXPECT_EQ(stream->Flush().code(), StatusCode::kIoError);
-    // Still staged, still unflushed - a retry writes the same range again.
-    EXPECT_EQ(stream->ring_used(), EncodedRecordSize(payload.size()));
-    EXPECT_EQ(stream->flushed_lsn(), kSegmentHeaderSize);
+    EXPECT_TRUE(stream->stopped());
 
-    ASSERT_TRUE(stream->Flush().ok());
-    const auto read_back = ReadRecordAt(lsn.value(), RecordType::kHeapInsert);
-    EXPECT_TRUE(std::equal(payload.begin(), payload.end(), read_back.begin()));
+    // The fault was one-shot; the stream does not try again.
+    EXPECT_EQ(stream->Flush().code(), StatusCode::kIoError);
+    EXPECT_EQ(stream->Append(HeapInsert(4, 4), payload).status().code(), StatusCode::kIoError);
+    EXPECT_EQ(stream->Sync().code(), StatusCode::kIoError);
+    EXPECT_EQ(stream->Seal().code(), StatusCode::kIoError);
+    EXPECT_EQ(stream->flushed_lsn(), kSegmentHeaderSize) << "nothing was written after the failure";
+}
+
+// A roll writes too - the seal's flush, the new segment, its header - and a
+// failure there stops the stream the same way. This is the shape BC-S4's
+// simulator found: the append that rolled failed, and the rollback logged
+// after it retired a slot no record had placed.
+TEST_F(WalStreamTest, AFailedRollStopsTheStream) {
+    auto stream = OpenStream();
+    ASSERT_NE(stream, nullptr);
+    const std::vector<std::byte> payload = Pattern(kPayloadSize, 9);
+    const std::uint64_t total = EncodedRecordSize(payload.size());
+    // Fill segment 0 until the next append has to roll.
+    while (kSegmentSize - stream->append_lsn() % kSegmentSize >= total) {
+        ASSERT_TRUE(stream->Append(HeapInsert(1, 1), payload).ok());
+    }
+    device_->FailNextWrite(Status::IoError("injected"));
+    EXPECT_EQ(stream->Append(HeapInsert(2, 2), payload).status().code(), StatusCode::kIoError);
+    EXPECT_TRUE(stream->stopped());
+    EXPECT_EQ(stream->Append(HeapInsert(2, 2), payload).status().code(), StatusCode::kIoError);
+    EXPECT_EQ(stream->device()->end_segment(), 1u) << "the roll did not happen";
 }
 
 TEST_F(WalStreamTest, CrashKeepsSyncedRecordsAndDropsTheRest) {

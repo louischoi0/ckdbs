@@ -617,8 +617,11 @@ On `worktree-wal-recycling` from `44e730ed`.
   - redo's floor dropped.
 - **Survived: the detach without the stream latch, 5 of 5.** The race is a
   few instructions wide (`WriteAt`'s table index against `DetachBelow`'s
-  `pop_front`), and a stress cell does not reach it. ThreadSanitizer is the
-  tool; its run is recorded below when it lands.
+  `pop_front`), and a stress cell does not reach it. **Under
+  ThreadSanitizer it is killed, 3 of 3**: the shared-stream cell reports a
+  data race on the mutant and none on the tree. The TSan build runs only
+  under `setarch -R` on this host, whose address-space randomization TSan
+  refuses.
 
 **The review** (`critics-developer`):
 - **Taken:**
@@ -643,4 +646,74 @@ On `worktree-wal-recycling` from `44e730ed`.
 **The suite:** the full Debug suite was 3176 of 3177 green before the
 review's edits. The one failure is the environmental `TcpServerListenTest`.
 The touched suites were run after the edits, 85 of 85 green.
+
+### BC-S4 - green, 2026-10-07, after a defect it found was fixed
+
+On `worktree-wal-recycling` from `19e1dc1f`.
+
+**Built (the row):**
+- **The simulator recycles.** `SimInstance` recycles through the inline
+  path, on 64 KiB segments. Three advances in four detach without reclaiming,
+  so a crash can land between a detach and its reclaim and bring the
+  segments back.
+- **It checkpoints mid-run,** every 97 ops by op index (`--checkpoint-every`,
+  kept in case files).
+- **The verdict counts it:** `checkpoints`, `recycles`, `segments_recycled`,
+  `crashes_reviving_segments` and `fail_stops`.
+- **The golden-log cell** pins its own 1 MiB segment.
+
+**The defect it found, outside BC's rules, and the operator's fix.** Seed
+20260826003 (crash mode, I/O faults) refused its reboot: `redo of
+SLOT_RETIRE at lsn 135168 on page 133: slot index out of range`.
+- **What happened.** Transaction 205's `HEAP_INSERT` needed a roll, and the
+  roll's write met an injected fault. Its rollback then logged a
+  `SLOT_RETIRE` for a slot no record had placed.
+- **Bisection.** The failure stands with recycling, redo's floor and the fold
+  floor all off. Small segments make rolls frequent enough to reach it.
+- **The fix: fail-stop**, on the operator's mark (*"(a)로 진행해줘"*, then
+  *"Fail-stop"*; `docs/spec/wal.md` §6-5):
+  - a failed stream write, or a ring-full refusal once its drains are spent,
+    stops the log, and every later write is refused until a restart;
+  - after the stop no page is written back, and a parked group commit is
+    answered;
+  - the simulator ends an iteration's ops at a stop and restarts.
+
+**The review** (`critics-developer`):
+- **Fixed by the reviewer:**
+  - pages could still be written back after a stop - the soundness hole;
+  - a group commit parked forever after a stop;
+  - case files dropped `checkpoint_every`;
+  - a stop raised by the last checkpoint was missed in clean mode.
+- **Taken:**
+  - **the checkpointer wedged for good after one failed run** (finding 3).
+    It predates BC, but recycling depends on it; `RunToCompletion` now
+    resumes a run in progress, with a cell, and its mutant was killed;
+  - the stop's message made truthful, and its three entry points folded into
+    one;
+  - the drain tick skipped once stopped, ending a log flood;
+  - the simulator's simplifications, and a refused detach counted and failed
+    when no fault is armed.
+- **Not taken:**
+  - **A failed sync does not stop the log** (finding 1). The operator's
+    mark named a failed append, so it is recorded as a gap
+    (`known-gaps.md`, WAL) and the decision is the operator's.
+  - **A header write failure now leads to an instance that does not mount**
+    (finding 2), a second route to
+    `bugs/a-power-loss-after-a-segment-roll-leaves-an-unheadered-tail.md`.
+    The entry is restated.
+  - **A commit refused after the stop is reported `IoError`**, not
+    `UnknownOutcome` (finding 4). It is on the wire, so it is the operator's
+    call; the synchronous path already answers `IoError`.
+  - **The simulator restarting and continuing the plan after a stop** is not
+    built. Coverage in fault runs dropped from ~371k ops to ~214k, because
+    every fault-run iteration stops at its first log-write fault.
+
+**Results:**
+- **The corpus matrix:** 6 committed and 4 fresh seeds, 3 modes, 2 fault
+  profiles and 3 value profiles, 1500 ops and 2 iterations, plus pairs:
+  190 of 190 ok, with 1,051 segments recycled, 56 crashes inside the
+  detach-reclaim window and 180 fail-stops.
+- **A mutant** that removes the anchor's own segment is caught by the
+  simulator (seed 2).
+- **The touched suites:** 320 of 320.
 

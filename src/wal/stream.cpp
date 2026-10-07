@@ -61,9 +61,20 @@ StatusOr<std::unique_ptr<WalStream>> WalStream::Open(LogDevice* device, std::uin
     return stream;
 }
 
+Status WalStream::FailStop(const Status& cause) {
+    stopped_.store(true, std::memory_order_release);
+    return Status::IoError("WalStream: the log stopped accepting records after a refused record (" +
+                           cause.message() + "); restart the instance to recover");
+}
+
+Status WalStream::StoppedStatus() {
+    return Status::IoError(
+        "WalStream: the log is stopped after a refused record; restart the instance to recover");
+}
+
 Status WalStream::StartSegment(std::uint64_t segment_no) {
     if (Status s = device_->CreateSegment(segment_no); !s.ok()) {
-        return s;
+        return FailStop(s);
     }
 
     SegmentHeaderFields fields{};
@@ -78,7 +89,7 @@ Status WalStream::StartSegment(std::uint64_t segment_no) {
     // Straight to the device, not through the ring: the header block is not
     // a record, and the first record's LSN is defined to sit after it.
     if (Status s = device_->WriteAt(segment_no, 0, header_block_); !s.ok()) {
-        return s;
+        return FailStop(s);
     }
 
     const Lsn first = fields.start_lsn + kSegmentHeaderSize;
@@ -151,6 +162,7 @@ Status WalStream::Roll() {
 
 Status WalStream::Seal() {
     LatchGuard guard(latch_);
+    if (stopped()) return StoppedStatus();
     return SealLocked();
 }
 
@@ -220,6 +232,7 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
     }
 
     LatchGuard guard(latch_);
+    if (stopped()) return StoppedStatus();
 
     if (sealed() || SegmentRemaining() < total) {
         if (Status s = SealLocked(); !s.ok()) {
@@ -250,6 +263,7 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
 
 Status WalStream::Flush() {
     LatchGuard guard(latch_);
+    if (stopped()) return StoppedStatus();
     return FlushLocked();
 }
 
@@ -265,9 +279,10 @@ Status WalStream::FlushLocked() {
     const Status status =
         device_->WriteAt(SegmentOf(from), OffsetOf(from), std::span(ring_).first(used));
     if (!status.ok()) {
-        // The bytes stay staged: a failed write has not moved the flush
-        // point, and a retry must write the same range again.
-        return status;
+        // Fail-stop (stream.hpp): the staged records may describe pages
+        // already mutated, and nothing may be logged after them that redo
+        // could meet without them.
+        return FailStop(status);
     }
     ring_used_.store(0, std::memory_order_relaxed);
     flushed_lsn_.store(append_lsn(), std::memory_order_relaxed);
@@ -282,6 +297,7 @@ Status WalStream::Sync() {
     Lsn flushed = 0;
     {
         LatchGuard guard(latch_);
+        if (stopped()) return StoppedStatus();
         if (Status s = FlushLocked(); !s.ok()) {
             return s;
         }

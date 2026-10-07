@@ -265,6 +265,9 @@ public:
         return by_stream > by_writer ? by_stream : by_writer;
     }
 
+    // The instance's stream, so every core's gate reads one answer.
+    bool stopped() const noexcept override { return stream_->stopped(); }
+
     // Starts the WAL writer thread, which from then on performs the syncs
     // **nobody is waiting on** - D3's loss-window tick in DrainOnce(), and
     // nothing else. Every waited-on sync stays on the reactor, by the

@@ -127,9 +127,24 @@ Status SimInstance::Boot() {
     return Status::OK();
 }
 
+void SimInstance::Recycle(wal::Lsn durable_redo_start) {
+    ++recycles_;
+    if (recycles_ % 4 != 0) {
+        // The detach alone: the removal's directory sync is still to come.
+        // A refused detach is counted, so a run that never recycles says so
+        // rather than passing on a log it never shortened.
+        if (!wal_->stream()->DetachBelow(durable_redo_start).ok()) ++detach_refusals_;
+        return;
+    }
+    // The production path, which reclaims this advance's segments and every
+    // one an earlier advance left detached.
+    wal_->RecycleBelow(durable_redo_start);
+}
+
 Status SimInstance::RunCheckpoint() {
     storage::PageStoreCheckpointTarget target(*store_);
     server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
+    anchor.SetRecycler([this](wal::Lsn d) { Recycle(d); });
     return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
                                            /*log=*/nullptr, /*clock=*/nullptr,
                                            /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
@@ -156,7 +171,11 @@ void SimInstance::Crash() {
     // cannot write (no component has a flushing destructor — that property
     // is what makes this two-liner a crash rather than a shutdown).
     page_device_->Crash();
+    const std::uint64_t first_before = log_device_->first_segment();
     log_device_->Crash();
+    // A crash between a detach and its reclaim brings the detached segments
+    // back (BC-S4): counted, so a run can say it reached that window.
+    if (log_device_->first_segment() < first_before) ++crashes_reviving_segments_;
     TearDown();
 }
 

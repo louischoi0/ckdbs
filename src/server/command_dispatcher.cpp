@@ -758,9 +758,17 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // is held across this - the statement finished above, its page
         // spans with it.
         const wal::Lsn lsn = out->pending_lsn;
-        const std::function<bool()> durable = [this, lsn] { return wal_->IsDurable(lsn); };
+        // A fail-stopped log (`wal/stream.hpp`) never syncs again, so the
+        // wait ends there too and the commit is answered with the refusal
+        // rather than parked until the restart.
+        const std::function<bool()> durable = [this, lsn] {
+            return wal_->IsDurable(lsn) || wal_->stopped();
+        };
         co_await sched::WaitUntil{&durable};
         out->pending_lsn = wal::kNoLsn;
+        if (Status refused = wal_->EnsureDurable(lsn); !refused.ok()) {
+            *out = {ErrorReply(refused), out->should_stop, 0, refused};
+        }
     }
     co_return Status::OK();
 }

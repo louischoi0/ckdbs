@@ -50,9 +50,10 @@ namespace kds::sim {
 // initializers are not usable in the enclosing class's own default arguments
 // (the complete-class-context rule), and Create() wants `= {}`.
 struct SimInstanceOptions {
-    // 1 MiB segments: big enough that a short run never rolls over, small
-    // enough that one that does is still exercised.
-    std::uint64_t wal_segment_bytes = 1ull << 20;
+    // 64 KiB segments (BC-S4): small enough that every run rolls the log
+    // many times and its checkpoints recycle what lies below their anchor,
+    // and still eight times the largest record (a FULL_PAGE_IMAGE).
+    std::uint64_t wal_segment_bytes = 64ull * 1024;
     std::uint32_t extent_pages = 64;
     std::uint32_t initial_pages = 64;
     wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
@@ -120,6 +121,29 @@ public:
     // *next* mount re-reads every record this run wrote and redoes none of them.
     Status CleanShutdown();
 
+    // One checkpoint to completion, publishing the superblock anchor. Three
+    // callers, the server's three: the tail of a mount (RC08), a clean
+    // shutdown, and the cadence tick mid-run (BC-S4), after which the log is
+    // recycled below the anchor and the crash that follows is recovered from
+    // a log whose head is gone.
+    Status RunCheckpoint();
+
+    // Recycling's counts over the instance's life (BC-S4): advances of the
+    // durable redo start the recycler was handed, and segments the log
+    // device removed. Both survive a reboot; the device does.
+    std::uint64_t recycles() const noexcept { return recycles_; }
+    std::uint64_t segments_recycled() const noexcept { return log_device_->segments_removed(); }
+    // Detaches the recycler's detach-only arm had refused.
+    std::uint64_t detach_refusals() const noexcept { return detach_refusals_; }
+
+    // The log stopped after a failed device write (`wal/stream.hpp`'s
+    // fail-stop): the instance refuses every write until it is restarted.
+    bool log_stopped() const noexcept { return wal_ != nullptr && wal_->stream()->stopped(); }
+
+    // Crashes that landed between a detach and its reclaim, and so brought
+    // detached segments back for the next mount to skip.
+    std::uint64_t crashes_reviving_segments() const noexcept { return crashes_reviving_segments_; }
+
     // Brings the engine back up over whatever the devices hold. Legal after
     // Crash() or CleanShutdown(); a defect if the engine is still up.
     Status Reboot();
@@ -156,16 +180,23 @@ private:
     // shape): encode the superblock into page 0 and sync the store.
     Status PersistSuperBlock();
 
-    // One checkpoint to completion, publishing the superblock anchor. Two
-    // callers, the same two the server has: the tail of a mount (RC08) and a
-    // clean shutdown.
-    Status RunCheckpoint();
 
     // Reverse construction order, no I/O.
     void TearDown();
 
+    // The recycler `RunCheckpoint`'s anchor is handed (BC-R5's inline arm:
+    // the harness runs no writer thread). **Three advances in four detach
+    // without reclaiming**, so the detached segments are still on the
+    // device - their directory sync has not run - and a crash before the
+    // next advance brings them back (`MemoryLogDevice::Crash`), which is the
+    // window between an unlink and its directory sync.
+    void Recycle(wal::Lsn durable_redo_start);
+
     Options options_{};
     sched::ManualClock clock_;
+    std::uint64_t recycles_ = 0;
+    std::uint64_t crashes_reviving_segments_ = 0;
+    std::uint64_t detach_refusals_ = 0;
 
     // Device layer — survives crash and reboot.
     std::unique_ptr<storage::MemoryPageDevice> page_device_;

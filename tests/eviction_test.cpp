@@ -493,6 +493,38 @@ TEST(EvictionWritebackTest, NoPageWritePrecedesItsWalDurabilityPoint) {
         << "a page write reached the device before its WAL durability point";
 }
 
+// **A fail-stopped log writes nothing back** (`wal/durability.hpp`, BC-S4).
+// The page below is the shape the page_lsn gate passes: a mutation whose
+// record was refused leaves the page dirty at an old, durable page_lsn.
+TEST(EvictionWritebackTest, AFailStoppedLogWritesNoPageBack) {
+    class StoppedGate final : public wal::WalDurability {
+    public:
+        wal::Lsn durable_lsn() const noexcept override { return 1000; }
+        Status EnsureDurable(wal::Lsn) override { return Status::OK(); }
+        bool stopped() const noexcept override { return true; }
+    };
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    ProbedDevice probed(*device.value(), /*gate=*/nullptr);
+    auto opened = DevicePageStore::Open(probed, /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    StoppedGate gate;
+    store.SetWalGate(&gate);
+
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    ASSERT_TRUE(store.StampPageLsn(page, /*lsn=*/77).ok());  // durable: 77 < 1000
+    created.value().second.Release();
+
+    EXPECT_EQ(store.Flush().code(), StatusCode::kIoError);
+    const PageId named[] = {page};
+    EXPECT_EQ(store.FlushPages(named).code(), StatusCode::kIoError);
+    EXPECT_EQ(probed.page_writes() + probed.run_writes(), 0u);
+}
+
 // **Flush-before-evict with two cores dirtying one page** (AM-S3). The rule
 // is EV02's and it is the one the shared pool puts most at risk: a page's
 // bytes may not reach the device before the log record describing them is

@@ -856,6 +856,7 @@ TEST(SimCase, ACaseFileRoundTripsAndReplays) {
     config.mode = SimMode::kCrash;
     config.profile = Profile::kColliding;
     config.faults = FaultProfile::kIo;
+    config.checkpoint_every = 31;  // not the default, so the round trip shows
 
     const SimPlan plan = BuildPlan(config, 0);
     const std::string path = std::string(KDS_BINARY_DIR) + "/roundtrip.sim";
@@ -879,13 +880,18 @@ TEST(SimCase, ACaseFileRoundTripsAndReplays) {
         EXPECT_EQ(got.faults, want.faults);
     }
     EXPECT_EQ(loaded.value().config.seed, config.seed);
+    EXPECT_EQ(loaded.value().config.checkpoint_every, config.checkpoint_every);
     EXPECT_EQ(loaded.value().plan.toggles.Describe(), plan.toggles.Describe());
 
     // And the reloaded case runs, which is the property that makes it a
     // case rather than a log.
     const SimVerdict replayed = RunPlan(loaded.value().config, loaded.value().plan);
     EXPECT_TRUE(replayed.ok) << replayed.Summary(loaded.value().config);
-    EXPECT_EQ(replayed.ops_run, plan.entries.size());
+    // Not the whole plan: this case's injections fail a log write, the log
+    // fail-stops, and the iteration ends its ops there and restarts
+    // (`wal/stream.hpp`). Pinned, because the case is deterministic.
+    EXPECT_EQ(replayed.fail_stops, 1u);
+    EXPECT_EQ(replayed.ops_run, 114u);
 }
 
 TEST(SimCase, AMalformedCaseFileIsRefusedRatherThanGuessedAt) {

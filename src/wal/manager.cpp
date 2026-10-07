@@ -369,6 +369,9 @@ StatusOr<Lsn> WalManager::Append(const RecordSpec& spec, std::span<const std::by
         // those here would make the refusal counter unreadable.
         if (lsn.status().code() == StatusCode::kOutOfSpace) {
             ++stats_.ring_full_refusals;
+            // A refused record after a mutation is the case fail-stop exists
+            // for, whatever refused it (`wal/stream.hpp`).
+            return stream_->FailStop(lsn.status());
         }
         return lsn.status();
     }
@@ -424,6 +427,10 @@ StatusOr<Lsn> WalManager::Abort(std::uint64_t txn_id) {
 }
 
 Status WalManager::DrainOnce() {
+    // A stopped log takes no drain: every sync would be refused and logged
+    // as a failure on every tick, for the life of the process
+    // (`wal/stream.hpp`'s fail-stop).
+    if (stream_->stopped()) return Status::OK();
     // **First, close what somebody else's sync already made durable.**
     // Under a shared stream this core's commit records can reach the
     // platter on another core's sync or the writer's, and the batch

@@ -245,6 +245,26 @@ TEST_F(CheckpointerTest, AFailedFlushLeavesTheCheckpointRunningAndRetryable) {
     EXPECT_EQ(target_.flushed().size(), 2u);
 }
 
+// The cadence's path, `RunToCompletion`: a run whose flush failed is the
+// next run's to finish. It used to call `Start` again and be refused
+// `AlreadyExists` on every later tick, so no checkpoint ever completed.
+TEST_F(CheckpointerTest, ARunAfterAFailedRunResumesItRatherThanRefusing) {
+    target_.SetDirty({{1, 100}, {2, 200}});
+    auto checkpointer = MakeCheckpointer();
+
+    target_.FailNextFlush();
+    EXPECT_EQ(checkpointer->RunToCompletion().code(), StatusCode::kIoError);
+    EXPECT_TRUE(checkpointer->in_progress());
+
+    ASSERT_TRUE(checkpointer->RunToCompletion().ok());
+    EXPECT_FALSE(checkpointer->in_progress());
+    EXPECT_EQ(checkpointer->stats().completed, 1u);
+    EXPECT_EQ(target_.flushed().size(), 2u);
+    // And the next run is a new checkpoint again.
+    ASSERT_TRUE(checkpointer->RunToCompletion().ok());
+    EXPECT_EQ(checkpointer->stats().completed, 2u);
+}
+
 TEST_F(CheckpointerTest, CheckpointsDoNotNest) {
     auto checkpointer = MakeCheckpointer();
     ASSERT_TRUE(checkpointer->Start().ok());

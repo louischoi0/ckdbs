@@ -303,8 +303,18 @@ Status Checkpointer::Complete() {
 }
 
 Status Checkpointer::RunToCompletion() {
-    if (Status s = Start(); !s.ok()) {
-        return s;
+    // **A checkpoint a failed step or completion left running is resumed, not
+    // refused** (BC-S4's review). `Start` refuses a nested one, so calling it
+    // unconditionally wedged the checkpointer for good after one transient
+    // writeback error: no later run completed, the anchor stopped moving, and
+    // nothing was recycled again. The resumed run keeps its snapshot, whose
+    // redo start was valid when taken and stays so; a `Complete` that failed
+    // after appending its `CHECKPOINT_END` appends a second one, which no
+    // reader consumes.
+    if (!in_progress_) {
+        if (Status s = Start(); !s.ok()) {
+            return s;
+        }
     }
     while (true) {
         auto done = Step();

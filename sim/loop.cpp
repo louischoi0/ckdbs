@@ -60,6 +60,14 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
             out += " ops_on_lost_relation=" + std::to_string(ops_on_lost_relation);
         }
     }
+    if (checkpoints != 0) {
+        out += " checkpoints=" + std::to_string(checkpoints) + " recycles=" +
+               std::to_string(recycles) + " segments_recycled=" + std::to_string(segments_recycled) +
+               " crashes_reviving_segments=" + std::to_string(crashes_reviving_segments);
+    }
+    if (fail_stops != 0) {
+        out += " fail_stops=" + std::to_string(fail_stops);
+    }
     if (gated_missing_rows != 0) {
         out += " gated_missing_rows=" + std::to_string(gated_missing_rows) + " [GATED: recovery]";
     }
@@ -467,9 +475,14 @@ void CloseOpenTransaction(Iteration& it) {
 // must answer every relation cleanly and agree with the oracle. An engine
 // that survives a fault run by refusing everything afterwards passes every
 // other check in this file, and fails this one.
-bool ProbeQuiesced(Iteration& it) {
+// Every armed injection off, on both devices: the schedule is spent.
+void DisarmInjections(Iteration& it) {
     it.instance.page_device().ClearInjections();
     it.instance.log_device().ClearInjections();
+}
+
+bool ProbeQuiesced(Iteration& it) {
+    DisarmInjections(it);
     std::string why;
     if (!ScanAgreesWithOracle(it.instance, it.oracle, why)) {
         Fail(it, "with the fault schedule exhausted and every injection disarmed, the "
@@ -611,6 +624,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     it.trace.Note("toggles " + plan.toggles.Describe());
 
     std::uint64_t fired_before = 0;
+    bool fail_stopped = false;
     for (std::size_t i = 0; i < plan.entries.size(); ++i) {
         const SimPlan::Entry& entry = plan.entries[i];
         for (const FaultKind kind : entry.faults) {
@@ -635,50 +649,101 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             }
         }
         if (!op_ok) return false;
-    }
-    if (it.faults_on()) {
-        // An iteration whose every CREATE TABLE died verified *nothing* —
-        // no read compared, no count checked, no relation reconciled — and
-        // "SIM ok" would be a false report of it. The retry above makes
-        // this rare; saying so when it happens is what keeps the counter
-        // beside it honest rather than decorative.
-        if (it.oracle.tables().empty()) {
-            Fail(it, "every CREATE TABLE was lost to an injected error, so this iteration "
-                     "checked nothing");
-            return false;
-        }
-        CloseOpenTransaction(it);
-        if (!ProbeQuiesced(it)) return false;
-    }
 
-    switch (config.mode) {
-        case SimMode::kClean:
+        if (config.checkpoint_every != 0 && (i + 1) % config.checkpoint_every == 0 &&
+            !it.instance.log_stopped()) {
+            const Status checkpointed = it.instance.RunCheckpoint();
+            // An injected device error may fail one; the next retries it,
+            // as the server's cadence does. Without faults it is a failure.
+            if (!checkpointed.ok() && !it.faults_on()) {
+                Fail(it, "checkpoint after op " + std::to_string(i) + ": " +
+                             checkpointed.message());
+                return false;
+            }
+            if (checkpointed.ok()) ++verdict.checkpoints;
+            it.trace.Note("checkpoint after op " + std::to_string(i) + ": " +
+                          (checkpointed.ok() ? std::string("ok") : checkpointed.message()));
+        }
+
+        // **Fail-stop** (`wal/stream.hpp`): after a failed log write the
+        // instance refuses every write until it restarts, so the rest of the
+        // plan would check nothing but refusals. The iteration ends its ops
+        // here and goes to the crash and the restart, whatever its mode.
+        // Asked after the checkpoint, whose own records can be what stopped
+        // it - after a plan's last op, a stop missed here reached the clean
+        // shutdown and failed it.
+        if (it.instance.log_stopped()) {
+            it.trace.Note("log fail-stopped after op " + std::to_string(i));
+            ++verdict.fail_stops;
+            fail_stopped = true;
+            break;
+        }
+    }
+    if (fail_stopped) {
+        // No quiescence probe and no clean shutdown: a stopped instance is
+        // unhealthy by design and cannot shut down. The crash is what the
+        // operator's restart starts from, with every injection disarmed as
+        // the probe would have: the faults were the run's, not the restart's.
+        DisarmInjections(it);
+        it.instance.Crash();
+    } else {
+        if (it.faults_on()) {
+            // An iteration whose every CREATE TABLE died verified *nothing* —
+            // no read compared, no count checked, no relation reconciled — and
+            // "SIM ok" would be a false report of it. The retry above makes
+            // this rare; saying so when it happens is what keeps the counter
+            // beside it honest rather than decorative.
+            if (it.oracle.tables().empty()) {
+                Fail(it, "every CREATE TABLE was lost to an injected error, so this iteration "
+                         "checked nothing");
+                return false;
+            }
             CloseOpenTransaction(it);
-            if (Status s = it.instance.CleanShutdown(); !s.ok()) {
-                Fail(it, s.message());
-                return false;
-            }
-            break;
-        case SimMode::kSyncCrash: {
-            // Deliberately *not* closing an open transaction: a crash with
-            // one in flight is what undo exists for, and the SYNC below
-            // makes its pages durable first. The oracle's committed state
-            // never held it, so its removal is recovery's to owe.
-            const std::string reply = it.instance.Execute("SYNC");
-            if (reply == "OK synced") {
-                oracle.MarkSynced();
-            } else if (!it.faults_on()) {
-                Fail(it, "pre-crash SYNC: " + reply);
-                return false;
-            }
-            it.instance.Crash();
-            break;
+            if (!ProbeQuiesced(it)) return false;
         }
-        case SimMode::kCrash:
-            it.instance.Crash();
-            break;
+
+        switch (config.mode) {
+            case SimMode::kClean:
+                CloseOpenTransaction(it);
+                if (Status s = it.instance.CleanShutdown(); !s.ok()) {
+                    Fail(it, s.message());
+                    return false;
+                }
+                break;
+            case SimMode::kSyncCrash: {
+                // Deliberately *not* closing an open transaction: a crash with
+                // one in flight is what undo exists for, and the SYNC below
+                // makes its pages durable first. The oracle's committed state
+                // never held it, so its removal is recovery's to owe.
+                const std::string reply = it.instance.Execute("SYNC");
+                if (reply == "OK synced") {
+                    oracle.MarkSynced();
+                } else if (!it.faults_on()) {
+                    Fail(it, "pre-crash SYNC: " + reply);
+                    return false;
+                }
+                it.instance.Crash();
+                break;
+            }
+            case SimMode::kCrash:
+                it.instance.Crash();
+                break;
+        }
     }
 
+    // Recorded before the reboot as well as after it: a run whose reboot
+    // fails is the one whose counts are wanted.
+    const auto record_recycling = [&] {
+        verdict.recycles = it.instance.recycles();
+        verdict.segments_recycled = it.instance.segments_recycled();
+        verdict.crashes_reviving_segments = it.instance.crashes_reviving_segments();
+    };
+    record_recycling();
+    if (!it.faults_on() && it.instance.detach_refusals() != 0) {
+        Fail(it, std::to_string(it.instance.detach_refusals()) +
+                     " recycling detach(es) refused with no fault armed");
+        return false;
+    }
     if (Status s = it.instance.Reboot(); !s.ok()) {
         Fail(it, "reboot failed: " + s.message());
         return false;
@@ -692,6 +757,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     }
 
     Reconcile(it);
+    record_recycling();
     return verdict.ok;
 }
 
@@ -709,6 +775,11 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     counts_skipped += other.counts_skipped;
     ops_on_lost_relation += other.ops_on_lost_relation;
     gated_missing_rows += other.gated_missing_rows;
+    checkpoints += other.checkpoints;
+    recycles += other.recycles;
+    segments_recycled += other.segments_recycled;
+    crashes_reviving_segments += other.crashes_reviving_segments;
+    fail_stops += other.fail_stops;
     unlogged_ddl_lost_tables += other.unlogged_ddl_lost_tables;
     if (ok && !other.ok) {
         ok = false;

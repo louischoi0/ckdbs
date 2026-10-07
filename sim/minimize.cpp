@@ -194,7 +194,10 @@ Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan
         // primary artifact of SIM07 would be a file that says it fails and
         // does not.
         << "\tskip-recovery=" << (config.skip_recovery ? 1 : 0)
-        << "\tassert-recovery=" << (config.assert_recovery ? 1 : 0) << "\n";
+        << "\tassert-recovery=" << (config.assert_recovery ? 1 : 0)
+        // Run-level too (BC-S4): the checkpoints land by op index, so a case
+        // replayed at another cadence is another run.
+        << "\tcheckpoint-every=" << config.checkpoint_every << "\n";
 
     for (const SimPlan::Entry& entry : plan.entries) {
         for (const FaultKind kind : entry.faults) {
@@ -254,6 +257,13 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
                     loaded.config.skip_recovery = v == "1";
                 } else if (Field(f[i], "assert-recovery=", v)) {
                     loaded.config.assert_recovery = v == "1";
+                } else if (Field(f[i], "checkpoint-every=", v)) {
+                    std::uint64_t every = 0;
+                    if (!ParseUnsigned(v, every)) {
+                        return Status::InvalidArgument(
+                            "case file: checkpoint-every is not a number");
+                    }
+                    loaded.config.checkpoint_every = static_cast<std::size_t>(every);
                 } else if (Field(f[i], "toggles=", v)) {
                     if (v.size() != 3) {
                         return Status::InvalidArgument("case file: toggles is not three digits");
