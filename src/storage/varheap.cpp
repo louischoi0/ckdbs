@@ -295,9 +295,10 @@ StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid)
     return page_id;
 }
 
-// Peak pins (MG03): 2 - the walk holds one page at a time (the GetForRead
-// ref is reassigned per hop), and growth holds the old tail and the new
-// page together for the link write.
+// Peak pins (MG03): 2 - the walk holds one page at a time (each hop's
+// shared ref is dropped before the next fetch, and before the tail is
+// taken exclusive), and growth holds the old tail and the new page together
+// for the link write.
 StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
                                         std::span<const std::byte> value,
                                         std::uint64_t owner_oid) {
@@ -312,32 +313,47 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
                                     "(docs/rules/rule-fixed-length-tuple.md section 9)");
     }
 
-    // Walk to the tail. Cheap in the shape that matters - a chain grows
-    // only when a page fills - and bounded so a cycle fails rather than
-    // hangs.
+    // Walk to the tail and hold it exclusive **as** the tail. The walk reads
+    // shared; the page whose link it finds invalid is then taken exclusive
+    // and its link read again under that hold, because another core may
+    // have grown the chain past it between the two (the latch has no
+    // upgrade, so the shared hold is dropped first). A tail that links on
+    // is not the tail: the walk continues from the link. Until this
+    // re-check a second grower overwrote the first one's link and leaked
+    // its page - the heap chain's BB-R7 gap, in the var-heap. Bounded so a
+    // cycle fails rather than hangs.
     PageId tail_id = root;
+    storage::PageRef tail;
     for (std::uint32_t steps = 0;; ++steps) {
         if (steps >= kMaxChainPages) {
             return Status::Corruption("var-heap chain from page " + std::to_string(root) +
                                        " exceeds the maximum length; the links may form a cycle");
         }
-        auto bytes = store.GetForRead(tail_id);
-        if (!bytes.ok()) return bytes.status();
-        const PageId next = PageNextPageId(bytes.value().bytes());
-        if (next == kInvalidPageId) break;
+        PageId next = kInvalidPageId;
+        {
+            auto bytes = store.GetForRead(tail_id);
+            if (!bytes.ok()) return bytes.status();
+            next = PageNextPageId(bytes.value().bytes());
+        }
+        if (next == kInvalidPageId) {
+            auto held = store.Get(tail_id);
+            if (!held.ok()) return held.status();
+            next = PageNextPageId(held.value().bytes());
+            if (next == kInvalidPageId) {
+                tail = std::move(held.value());
+                break;
+            }
+        }
         tail_id = next;
     }
 
-    auto tail = store.Get(tail_id);
-    if (!tail.ok()) return tail.status();
-
-    auto slot = PageAppend(Fixed(tail.value().bytes()), value);
+    auto slot = PageAppend(Fixed(tail.bytes()), value);
     if (slot.ok()) {
         // The common case, and the one that needs no structural record: an
         // existing page took the value, and the append record describes it
         // completely.
         return ChainAppendResult{VarHeapPtr{tail_id, slot.value()}, kInvalidPageId,
-                                 kInvalidPageId, std::move(tail.value()), {}};
+                                 kInvalidPageId, std::move(tail), {}};
     }
     if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();  // a real failure, not a full page
@@ -362,16 +378,14 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
 
     // Linked last, after the value is in the new page: the link is what
     // makes the page reachable, so publishing it earlier would expose an
-    // empty page as the tail. Re-fetched because CreateNew() may have
-    // handed out a new frame.
-    auto tail_again = store.Get(tail_id);
-    if (!tail_again.ok()) return tail_again.status();
-    std::memcpy(tail_again.value().bytes().data() + kNextPageIdOffset, &new_id, sizeof(new_id));
+    // empty page as the tail. Written through the tail's own hold: the
+    // frame is pinned, and a pinned frame is never moved or evicted.
+    std::memcpy(tail.bytes().data() + kNextPageIdOffset, &new_id, sizeof(new_id));
 
     // Both halves of the growth reported, because neither is described by the
     // append record the caller is about to write (ChainAppendResult).
     return ChainAppendResult{VarHeapPtr{new_id, new_slot.value()}, new_id, tail_id,
-                             std::move(new_bytes_ref), std::move(tail.value())};
+                             std::move(new_bytes_ref), std::move(tail)};
 }
 
 StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr ptr,
