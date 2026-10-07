@@ -888,19 +888,19 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
                                                       FetchHeat heat);
 
-    // **A slot** (BE-R1): one entry of a chunk's frame array, beside the
-    // chunk's page bytes. A slot never moves while the store lives, so a
-    // `Frame*` or a span into `*bytes` is good for as long as the slot holds
-    // its page - the property `std::unordered_map`'s node stability used to
-    // give, now given by the chunk.
+    // **A resident page's frame**, held in the page table's node (BE-R1, as
+    // restated at BE's close): the lookup that finds a page has its frame in
+    // the same allocation, so a hit costs one hash probe and no second
+    // cache line - the cost a frame held in its slot added (`workorder-be-
+    // bounded-pool.md` §6, BE-S6). Node references survive the table's
+    // rehashing, so a `Frame*` is good for as long as the page is resident;
+    // the bytes it points at sit in a slot that never moves.
     struct Frame {
-        // This slot's page bytes, in its chunk's slab. Set once, when the
-        // chunk is added, and never re-pointed.
+        // The page's bytes, in its slot. Set at publish and never re-pointed.
         Page* bytes = nullptr;
-        // The page this slot holds, or `kInvalidPageId` while the slot is
-        // free or reserved by a fault or a creation that has not yet
-        // published it. The hand skips every slot whose id is invalid.
         PageId page_id = kInvalidPageId;
+        // The slot `bytes` sits in, which the erasers give back.
+        std::uint32_t slot = 0;
         bool dirty = false;
         // On the dirty eviction queue already (BE-R1): the sweep's test,
         // which was a `std::find` over the queue per dirty victim.
@@ -978,8 +978,8 @@ private:
     // not, and grew the frame 32 -> 40 bytes at AT-S8 step 1b - 8 bytes per
     // 8 KiB page. A 16-bit generation would have fitted the padding and can
     // wrap inside one device write on a hot page, which is the one failure
-    // the field exists to rule out. `page_id` and `queued` (BE-R1) took
-    // padding and four bytes: 40 -> 48, still under 0.6% of the page.
+    // the field exists to rule out. `page_id`, `queued` and `slot` (BE-R1)
+    // took padding and four bytes: 40 -> 48, still under 0.6% of the page.
     static_assert(sizeof(Frame) == 48, "Frame grew; say why beside this assert");
     static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(Frame),
                   "std::atomic_ref needs the word aligned inside the frame");
@@ -1347,42 +1347,58 @@ private:
     // window's fill spends its share as it goes, so `in use + promised`
     // never exceeds the capacity and a window with share left always finds
     // a slot.
-    StatusOr<Frame*> ReserveFrame();
+    StatusOr<std::uint32_t> ReserveFrame();
     // Logs and aborts: a fill inside a window that the pool cannot serve.
     [[noreturn]] void FailStop() const;
-    // Gives back a reserved slot that was never published (a failed read, a
-    // lost race). Latch held.
-    void ReturnFrameLocked(Frame& slot) noexcept;
-    // **The erasers' one tail**: unmaps a published, unpinned frame, poisons
-    // its bytes in debug builds, resets its state and frees the slot. Latch
-    // held, and the frame's refusals already asked by the caller.
+    // Gives a slot back to the free list - a reserved slot never published
+    // (a failed read, a lost race) or a released frame's - poisoning its
+    // bytes in debug builds. Latch held.
+    void ReturnSlotLocked(std::uint32_t slot) noexcept;
+    // **The erasers' one tail**: unmaps a published, unpinned frame and frees
+    // its slot. Latch held, and the frame's refusals already asked by the
+    // caller.
     void ReleaseFrameLocked(Frame& frame) noexcept;
-    Frame& SlotAt(std::size_t index) noexcept {
-        return chunks_[index / kFrameChunk].frames[index % kFrameChunk];
+    // A slot's page bytes, and the page it holds (`kInvalidPageId` while free
+    // or reserved: the hand skips those).
+    Page& SlotPage(std::size_t index) noexcept {
+        return *reinterpret_cast<Page*>(chunks_[index / kFrameChunk].pages.get() +
+                                        (index % kFrameChunk) * kSlotStride);
     }
+    // **A slot is a page and one cache line** (BE's close): pages laid at an
+    // exact 8 KiB stride map their headers and slot directories - what every
+    // walk reads first - onto the same few cache sets, and evict each other.
+    // Measured on a resident 64k-page pool: 33.5 ns a hit at 8 KiB stride
+    // against 23 ns for pages `malloc`ed one at a time, whose allocator
+    // header broke the stride by accident. One line of padding breaks it on
+    // purpose, for 0.8% of the pool's memory.
+    static constexpr std::size_t kSlotStride = kPageSize + 64;
+    PageId& SlotOwner(std::size_t index) noexcept {
+        return chunks_[index / kFrameChunk].owners[index % kFrameChunk];
+    }
+    static constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;
     // Returns a reserved slot to the free list unless `InsertFrame` took
     // it, so every early return between a reservation and its publish -
     // a failed read, a checksum refusal, a throw - gives it back.
     class ReservedFrame {
     public:
-        ReservedFrame(DevicePageStore& store, Frame* slot) noexcept
+        ReservedFrame(DevicePageStore& store, std::uint32_t slot) noexcept
             : store_(store), slot_(slot) {}
         ~ReservedFrame() {
-            if (slot_ == nullptr) return;
+            if (slot_ == kNoSlot) return;
             LatchGuard structure(store_.structure_latch());
-            store_.ReturnFrameLocked(*slot_);
+            store_.ReturnSlotLocked(slot_);
         }
         ReservedFrame(const ReservedFrame&) = delete;
         ReservedFrame& operator=(const ReservedFrame&) = delete;
 
         std::span<std::byte, kPageSize> bytes() const noexcept {
-            return std::span<std::byte, kPageSize>(*slot_->bytes);
+            return std::span<std::byte, kPageSize>(store_.SlotPage(slot_));
         }
 
     private:
         friend class DevicePageStore;
         DevicePageStore& store_;
-        Frame* slot_;
+        std::uint32_t slot_;
     };
 
     // `IsPinnedClass` for a frame the caller already holds, so the sweep
@@ -1405,7 +1421,7 @@ private:
     SweepResult InlineBatchLocked();
     std::size_t SlotCountLocked() const noexcept { return slot_count_; }
     std::size_t SlotsInUseLocked() const noexcept {
-        return SlotCountLocked() - free_frames_.size();
+        return SlotCountLocked() - free_slots_.size();
     }
     // **What bounds a reclaim loop that drops the latch between batches**
     // (BE-R2), shared by the reservation and `MaintainFreeReserve`. It stops
@@ -1423,7 +1439,7 @@ private:
         }
     };
     // Pops a free slot, adding a chunk when there is none.
-    Frame* TakeSlotLocked();
+    std::uint32_t TakeSlotLocked();
     Status EnsureAddressable(PageId page_id);
 
     // The two bitmaps covering `page_id`, read-only, answering as an empty
@@ -1674,15 +1690,15 @@ private:
     // ---- The slot array (BE-R1) -----------------------------------------
     //
     // Chunks of `kFrameChunk` slots, each with one allocation of page bytes
-    // that never moves while the store lives. The chunk vector itself may
-    // reallocate; a chunk's two arrays do not, so `Frame*` and every span
-    // survive growth. Allocated with `make_unique_for_overwrite`: a slot's
-    // bytes cost the process nothing until a page is read or built into it.
-    // Slots are kept once allocated - the capacity bounds them, and what is
-    // resident within them.
+    // that never moves while the store lives, and the id each slot holds -
+    // what the hand walks. The chunk vector itself may reallocate; a chunk's
+    // arrays do not, so every span survives growth. Allocated with
+    // `make_unique_for_overwrite`: a slot's bytes cost the process nothing
+    // until a page is read or built into it. Slots are kept once allocated -
+    // the capacity bounds them, and what is resident within them.
     struct FrameChunk {
-        std::unique_ptr<Page[]> pages;
-        std::unique_ptr<Frame[]> frames;
+        std::unique_ptr<std::byte[]> pages;  // `kSlotStride` apart
+        std::unique_ptr<PageId[]> owners;
     };
     std::vector<FrameChunk> chunks_;
     // Slots that exist: whole chunks, and a last one cut at the configured
@@ -1690,13 +1706,13 @@ private:
     std::size_t slot_count_ = 0;
     // Free slots, popped from the back. A reserved slot is on neither this
     // list nor the table.
-    std::vector<Frame*> free_frames_;
-    // The page table: each resident page's slot. Every structural change -
+    std::vector<std::uint32_t> free_slots_;
+    // The page table: each resident page's frame. Every structural change -
     // publish, unmap - is under the structure latch.
-    std::unordered_map<PageId, Frame*> frames_;
+    std::unordered_map<PageId, Frame> frames_;
 
 public:
-    // Slots per chunk: 1,024 frames, 8 MiB of pages (BE-R1, BE-Q5). The
+    // Slots per chunk: 1,024, about 8 MiB of padded pages (BE-R1, BE-Q5). The
     // unit the array grows by and nothing else.
     static constexpr std::size_t kFrameChunk = 1024;
 
@@ -1709,7 +1725,7 @@ public:
     };
     FrameSlots frame_slots() const {
         LatchGuard structure(structure_latch());
-        return FrameSlots{SlotCountLocked(), free_frames_.size()};
+        return FrameSlots{SlotCountLocked(), free_slots_.size()};
     }
 
     PoolCounters pool_counters() const override;
