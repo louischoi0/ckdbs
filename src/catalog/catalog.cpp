@@ -160,7 +160,8 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
 // (workplan-ddl-transactional.md DT5).
 template <typename RowT, typename Fn>
 StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
-                            PageId* acted_page = nullptr) {
+                            PageId* acted_page = nullptr,
+                            storage::PageAccess access = storage::PageAccess::kWrite) {
     // **Its own page walk, not `heap::ChainVisit`.** The walk is four lines
     // and the difference is measurable: ChainVisit takes a `std::function`,
     // so every slot costs an indirect call plus a `StatusOr<VisitControl>`
@@ -171,9 +172,14 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
     //
     // `fn` is a template parameter here, so it inlines. That is the whole of
     // the difference; the walk itself is the same next_page_id chain.
+    //
+    // `access` is the walk's hold: exclusive for a writer, shared for a
+    // reader that must neither queue behind nor block the writers of the
+    // pages it passes (`Catalog::RowIdMark`).
     PageId current = root;
     for (std::uint32_t steps = 0; steps < kCatalogOverflowLimit; ++steps) {
-        auto bytes = store.Get(current);
+        auto bytes = access == storage::PageAccess::kRead ? store.GetForRead(current)
+                                                          : store.Get(current);
         if (!bytes.ok()) return bytes.status();
 
         heap::PageView page(bytes.value().bytes());
@@ -903,7 +909,8 @@ void Catalog::BumpWord() {
     if (schema_word_ == nullptr) return;
     const std::uint64_t prev = schema_word_->fetch_add(1, std::memory_order_acq_rel);
     // Adopt the bump only if this cache was current. A writer whose cache
-    // `BumpVersion()` just dropped, or the flip site keeping its entry, has
+    // `BumpVersion()` just dropped, or a root move keeping its entry in
+    // place (`UpdateRelationDescPage`, `UpdateIndexRoot`), has
     // `cache_built_at_ == prev` and moves with the word. A bump from
     // another core this cache has not yet revalidated against leaves it
     // behind, so the next boundary still drops - otherwise this write would
@@ -1127,10 +1134,6 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
-    // Every relation starts ascending: it holds no ids at all, so no id has
-    // landed out of order. Nothing may pass this in - it is an observation,
-    // and the only writer is AdmitExplicitRowId.
-    row.key_order = KeyOrder::kAscending;
     row.anchor_page_id = anchor_page_id;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
@@ -1185,10 +1188,9 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
     // relation was required to be btree-clustered and this is where the
     // pairing was refused; the mode is gone, both storage types take a
-    // caller-supplied pk, and what the heap cannot do is now refused per
-    // *id* by AdmitExplicitRowId rather than per relation - a heap relation
-    // that only ever omits its pk was never in doubt and no longer has to be
-    // declared.
+    // caller-supplied pk, and what neither can take - a key below the mark,
+    // since BB-R3 on both - is refused per *id* by AdmitExplicitRowId rather
+    // than per relation.
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
@@ -2213,7 +2215,6 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;
-    access.key_order = table_row.value().key_order;
     access.anchor_page_id = table_row.value().anchor_page_id;
 
     // PW2-2 (workplan-peer-writer.md §7a): the durable truth for a user
@@ -2421,12 +2422,10 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             // because every relation's omitted-pk inserts draw from this same
             // mark. What a carve costs is stated at the call site and in
             // section 4.1 - the ids inside it are spent from the mark's point
-            // of view before they are placed, so a *supplied* id landing
-            // inside a live carve collides with whichever of the two lands
-            // second. On a heap relation that cannot happen (a supplied id
-            // must be at or above the mark, which the carve has already moved
-            // past its own block); on a btree one the descent reports it as
-            // the duplicate it is.
+            // of view before they are placed. A *supplied* id cannot land
+            // inside a live carve: it must be at or above the mark on every
+            // relation (BB-R3), and the carve has already moved the mark past
+            // its own block.
             //
             // Exhaustion checked against the range's *last* id: a range
             // that would cross the ceiling is refused whole, never split.
@@ -2463,9 +2462,12 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
-        // supplied id at or above it. A supplied id *below* the mark is a
-        // value this function has already issued, and the btree descent that
-        // admits it is what proves the row is not there twice.
+        // supplied id it admits. A supplied id *below* the mark - a value
+        // this function may already have issued - is refused on every
+        // relation (BB-R3), so the two sources never meet. For a user row
+        // this runs under the exclusive hold of the page the row lands on -
+        // a btree's rightmost leaf (BB-R1, `storage::IssueUnderHold`) or a
+        // heap chain's tail held as the tail (BB-R7).
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
@@ -2499,11 +2501,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
     return issued;
 }
 
-Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
-                                   const std::function<Status()>& before_mark) {
-    // Spellability first, before the catalog page is touched at all: an id
-    // outside the Keystone field cannot be stored by any path, so there is
-    // nothing to check a relation for.
+Status CheckNamedRowIdSpellable(std::uint64_t id) {
     if (id < kFirstRowId) {
         return Status::InvalidArgument("primary key " + std::to_string(id) +
                                        " is below the first issuable id (" +
@@ -2515,73 +2513,55 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
                                        " does not fit the 40-bit Keystone id space (max " +
                                        std::to_string(kMaxKeystoneId) + ")");
     }
+    return Status::OK();
+}
 
-    bool flipped_order = false;
+Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark) {
+    return Status::OutOfRange(
+        "primary key " + std::to_string(id) + " is below relation " + std::to_string(table_oid) +
+        "'s high-water mark " + std::to_string(mark) +
+        "; a named key must sort above every key the relation has placed or issued, which is "
+        "what keeps every page's slot order its key order");
+}
+
+StatusOr<std::uint64_t> Catalog::RowIdMark(Oid table_oid) {
+    std::uint64_t mark = 0;
+    auto found = ForFirstRow<SysTableRow>(
+        store_, kCatalogPageTables,
+        [&](SysTableRow& row, heap::PageView&, PageId, std::uint16_t,
+            const heap::PageView::Tuple&) -> StatusOr<bool> {
+            if (row.oid != table_oid) return false;
+            mark = row.next_id;
+            return true;
+        },
+        /*acted_page=*/nullptr, storage::PageAccess::kRead);
+    if (!found.ok()) return found.status();
+    if (!found.value()) return Status::NotFound("no sys.tables row for this oid");
+    return mark;
+}
+
+Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
+    // Spellability first, before the catalog page is touched at all: an id
+    // outside the Keystone field cannot be stored by any path, so there is
+    // nothing to check a relation for. The caller asked the same question
+    // before its borrow (`CheckNamedRowIdSpellable`); this keeps the call's
+    // contract whole for any other caller.
+    if (Status s = CheckNamedRowIdSpellable(id); !s.ok()) return s;
+
     auto acted = ForFirstRow<SysTableRow>(
         store_, kCatalogPageTables,
         [&](SysTableRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
 
-            if (id < row.next_id) {
-                // ---- Below the mark ------------------------------------
-                //
-                // A heap relation cannot take it. Its chain grows at the
-                // tail, so an id below the tail page's min_key has no legal
-                // page (invariant 3) - and worse than the placement, its
-                // duplicate check reads the tail page alone, which is sound
-                // only while every earlier page's ids sit below the tail's
-                // bound. Both are the ascent. The mark is exactly the ascent
-                // expressed as one number, so refusing here is what keeps
-                // section 3.1b true rather than a second rule that could
-                // drift from it (heap-and-tuple.md section 3.1b, 4.1).
-                if (row.clustered_type != ClusteredType::kBtree) {
-                    return Status::OutOfRange(
-                        "primary key " + std::to_string(id) + " is below relation " +
-                        std::to_string(table_oid) + "'s high-water mark " +
-                        std::to_string(row.next_id) +
-                        "; a heap-clustered relation's ids must ascend, because its chain "
-                        "grows only at its tail - use BTREE to name keys in any order");
-                }
-
-                // A btree relation takes it: the descent that follows lands
-                // on the one leaf that may hold the key and proves it unused,
-                // so the mark is asked nothing. The mark itself does not
-                // move - it is a ceiling on what has been placed, and this id
-                // is under it.
-                //
-                // **The caller's hook, at the first point the key is known
-                // to be admissible and before any of the three writes
-                // below.** The declaration says why it is here rather than
-                // on either side of the call.
-                if (before_mark) {
-                    if (Status s = before_mark(); !s.ok()) return s;
-                }
-
-                // What *does* move, once per relation ever, is the order
-                // flag: from here on a page's slot order is not its key
-                // order, so ORDER BY <pk> can no longer be discarded
-                // (well_known.hpp's KeyOrder). Guarded on the current value
-                // so a backfill of old ids writes the catalog page once, not
-                // once per row.
-                if (row.key_order == KeyOrder::kUnordered) return true;
-                row.key_order = KeyOrder::kUnordered;
-                auto reordered = row.Encode();
-                if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, reordered,
-                                               wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
-                    !s.ok()) {
-                    return s;
-                }
-                flipped_order = true;
-                if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
-                    log_->Trace("catalog", "table oid " + std::to_string(table_oid) +
-                                               " took primary key " + std::to_string(id) +
-                                               " below its high-water mark " +
-                                               std::to_string(row.next_id) +
-                                               "; key order is now unordered");
-                }
-                return true;
-            }
+            // **Below the mark, on every relation** (BB-R3, on BB-Q8's mark).
+            // The mark is the ascent expressed as one number: at or above it,
+            // the key sorts above every key the relation has placed or
+            // issued, so placing it under the hold of the last page keeps
+            // that page's slot order its key order. Below it there is no such
+            // page. A btree used to take the key anyway and flip the relation
+            // to `kUnordered`; that state is gone with the flag (BB-R10).
+            if (id < row.next_id) return RefuseRowIdBelowMark(table_oid, id, row.next_id);
 
             // At or above: the mark moves past it, persisted before the
             // caller places anything. Same ordering as AllocateRowId and the
@@ -2590,9 +2570,6 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
             // where the reverse would leave one too low, and a too-low mark
             // is how the engine later issues an id that is already a tuple's
             // identity.
-            if (before_mark) {
-                if (Status s = before_mark(); !s.ok()) return s;
-            }
             row.next_id = id + 1;
             auto encoded = row.Encode();
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
@@ -2607,37 +2584,40 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
         });
     if (!acted.ok()) return acted.status();
     if (!acted.value()) return Status::NotFound("no sys.tables row for this oid");
-    // Publishing the flip: **in place here, invalidation everywhere else.**
-    // Neither half is optional and they are optional for opposite reasons.
-    //
-    // In place locally, because this runs inside an ordinary INSERT and
-    // `BumpVersion`'s `cache_.Invalidate()` would destroy the
-    // `const TableAccess*` that statement is holding - the collateral damage
-    // catalog_cache.hpp's four other in-place updates were each written to
-    // avoid. The first form of this flip did bump, and the dangling access
-    // re-read the pk out of a freed vector: a second insert on one relation
-    // answered "tuple's Keystone id N does not match the id being inserted".
-    //
-    // But **another core reads this field** - as it reads the index root and
-    // the desc page, which bump the word at their repoint since AT-S5c for
-    // the same reason. `key_order` is read by `CompileStepChain` on the
-    // *session's* core, which need not be the core that wrote it, and a
-    // stale kAscending there discards an `ORDER BY <pk>` this relation now
-    // needs - an answer out of order rather than a refusal. Hence the
-    // version bump and the schema word's, without the
-    // local drop: every other core drops at its next boundary and re-reads
-    // the flag, and this core keeps the entry the running INSERT holds -
-    // `BumpWord` adopts the bump precisely so that entry is not dropped by
-    // its own doing.
-    //
-    // Affordable because it happens **once per relation, ever**. `next_id`'s
-    // advance - once per ascending key - is not cached and publishes nothing.
-    if (flipped_order) {
-        cache_.MarkKeysUnordered(table_oid);
-        ++catalog_version_;
-        BumpWord();  // every other core re-reads; this one keeps its entry
-    }
+    // `next_id`'s advance is not cached and publishes nothing: no cached
+    // field moved.
     return Status::OK();
+}
+
+Status Catalog::RefuseRelationsHoldingKeysOutOfOrder() {
+    auto rows = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
+    if (!rows.ok()) return rows.status();
+    std::vector<Oid> marked;
+    for (const SysTableRow& row : rows.value()) {
+        if (row.retired_key_order == kRetiredKeyOrderUnordered) marked.push_back(row.oid);
+    }
+    if (marked.empty()) return Status::OK();
+    // Named from `sys.objects`: `RenameTable` rewrites that row alone, so
+    // `SysTableRow::name` is the name the relation was created under.
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    if (!objects.ok()) return objects.status();
+    std::string names;
+    std::size_t count = 0;
+    for (const SysObjectRow& row : objects.value()) {
+        if (row.type_oid != kTypeTable ||
+            std::find(marked.begin(), marked.end(), row.oid) == marked.end()) {
+            continue;
+        }
+        if (count++ > 0) names += ", ";
+        names += "`" + std::string(NameView(row.name)) + "`";
+    }
+    if (count == 0) return Status::OK();
+    return Status::Unsupported(
+        std::string(count == 1 ? "relation " : "relations ") + names +
+        (count == 1 ? " holds" : " hold") +
+        " keys out of order, a shape this engine no longer serves: it reads every page's slot "
+        "order as its key order, and such a relation's pages need not be. Its data is reached "
+        "by an engine older than 1b5d252e, or not at all");
 }
 
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,

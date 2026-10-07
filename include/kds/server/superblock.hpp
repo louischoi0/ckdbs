@@ -173,12 +173,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // list is where a missed one would be found. The key mode was removed
 // (docs/spec/heap-and-tuple.md section 4.1), and the byte the 13 -> 14 entry
 // above bought was **repurposed in place** rather than dropped: same offset,
-// same width, and `SysTableRow::key_order` reads the two old values as the
+// same width, and `SysTableRow::key_order` read the two old values as the
 // facts they already implied - kAssigned's 0 as "every id here ascended",
 // kExplicit's 1 as "an id landed out of order". `kOnDiskSize` did not move,
 // so `Decode` accepts a version-15 file and every row in it means what it
 // meant. Dropping the byte instead would have been the seventh break on
-// this list, and it would have bought nothing: the flag has a live reader.
+// this list, and it would have bought nothing: the flag had a live reader.
+// **And no bump when the flag went either** (BB-S3b, 2026-10-06): the byte
+// stays, written 0, and a relation still carrying the old 1 is refused by
+// name rather than by version (`heap-and-tuple.md` §4.1, BB-R11).
 // 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges`, the range
 // directory (docs/spec/crosscore.md CC9, workplan-range-directory.md RD1),
 // on fixed page 15 - the sixth repeat of the 5 -> 6 shape, and the second

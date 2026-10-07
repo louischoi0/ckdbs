@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "kds/base/function_ref.hpp"
 #include "kds/base/latch.hpp"
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
@@ -102,7 +103,8 @@
 // A relation is either a chain of heap pages (`ClusteredType::kHeap`,
 // heap_chain.hpp) or a clustered B+ tree (`kBtree`, btree.hpp), and every
 // statement handler below branches on `TableAccess::clustered_type` in
-// exactly one place - `InsertIntoRelation`, `VisitRelation`, `LocateByPk`.
+// exactly one place each - `InsertIssued` and `InsertNamed`, `VisitRelation`,
+// `LocateByPk`.
 // Everything else in this file is storage-agnostic, which is possible
 // because a btree **leaf is a heap page**: the row codec, `PageView`
 // reads/overwrites, `HEAP_INSERT` and the `SHOW PAGE` dump all work on
@@ -131,8 +133,9 @@
 // That is wal.md section 8-1. It used to be justified the other way - one
 // cooperative thread, so no flush could observe the page between the
 // mutation and the stamp - and that stopped being true at AT-S5, when a
-// write began running on every core: another core could divide the leaf
-// the record names, write back a parent whose split was not yet logged, or
+// write began running on every core: another core could split the leaf the
+// record names (a divide until BB-R3 made SQL reach only the append split),
+// write back a parent whose split was not yet logged, or
 // shift the index entry the record was re-read from
 // (`insert_log_crash_rig_test.cpp`).
 
@@ -649,15 +652,31 @@ public:
     // it on each connection's session at accept.
     txn::IsolationLevel default_isolation() const noexcept { return default_isolation_; }
 
-    // **A test seam, and the only one on the insert path** (AT-S21): runs
+    // **A test seam on the insert path** (AT-S21): runs
     // once per `INSERT` row, after the row is placed and its indexes,
     // reservation and undo are written, immediately before the row's own
-    // record is appended. A two-core cell puts another core's divide, a
-    // forced writeback or another core's index insert there - the three
-    // windows the insert's logging bug entry named (AT-S21 closed it).
+    // record is appended. A two-core cell puts another core's split (a
+    // divide until BB-R3), a forced writeback or another core's index insert
+    // there - the three windows the insert's logging bug entry named (AT-S21
+    // closed it).
     // Unset in production, where it costs one empty-function test per row.
     void SetBeforeInsertLogForTest(std::function<void()> hook) {
         before_insert_log_for_test_ = std::move(hook);
+    }
+
+    // **A test seam at the instant a row's id is fixed** (BB-S2): runs once
+    // per row `InsertOneRow` places, immediately after the id is issued,
+    // borrowed and its row encoded, or a named key admitted. The call stays
+    // adjacent to the fix wherever the fix sits - under the exclusive hold of
+    // the page the row lands on - a btree's rightmost leaf since BB-S3, a
+    // heap chain's tail since BB-S4 (BB-R1, BB-R7) - so a cell that stops
+    // here holds that page and another core's insert into the relation blocks
+    // on its latch until the cell lets go. That adjacency is the rig cells'
+    // whole power: a mutant that fixes the id before the hold must move this
+    // call with it, and then stops outside the hold. The sorted fill calls it
+    // once, with its block's first id, after its carve. Unset in production.
+    void SetAfterRowIdFixedForTest(std::function<void(std::uint64_t)> hook) {
+        after_row_id_fixed_for_test_ = std::move(hook);
     }
 
     // **A test seam on CREATE ASSERTION** (AZ-S2): runs once per create,
@@ -678,6 +697,7 @@ private:
     }
 
     std::function<void()> before_insert_log_for_test_;
+    std::function<void(std::uint64_t)> after_row_id_fixed_for_test_;
     std::function<void()> after_assertion_publish_run_for_test_;
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
@@ -961,9 +981,21 @@ private:
     // answer, because the unit asked for does not settle it: an `INSERT`
     // asks for a tuple and may be refused by a fence, and a declared range
     // may be refused by a tuple holder that wrote the row.
+    //
+    // **`before_wait`, when set, is asked once a refusal is in hand and
+    // before it becomes a wait.** A non-OK answer is returned in the wait's
+    // place and nothing of the refusal is kept: no blocker is recorded, so
+    // the wake `BorrowChain` registered is dropped at the statement's end.
+    // Asked for a narrower unit only - a refusal at the relation stays a
+    // wait. A named-key insert borrows before it is admitted (BB-R3), and
+    // asks through this whether the key can ever be admitted - so a key below
+    // the mark is refused, not left waiting on a fence it could never write
+    // past (AO-S6c-c's rule). Asked only on a refusal, so a granted borrow
+    // pays nothing for it.
     std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit,
                                        RepeatableReadWait rerun,
-                                       txn::LockMode mode = txn::LockMode::kExclusive);
+                                       txn::LockMode mode = txn::LockMode::kExclusive,
+                                       FunctionRef<Status()> before_wait = {});
 
     // Is `cond` a non-negative integer literal compared against `access`'s
     // primary key, and if so which id? The shared half of the test
@@ -1473,11 +1505,13 @@ private:
     // row of the statement (§2a): this function answers from it and starts
     // no descent of its own, which is what makes a bulk insert against one
     // parent cost one.
-    std::optional<std::string> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
-                                            const std::vector<parser::AstValue>& values,
-                                            WriteScope& scope,
-                                            const exec::FkParentVerdicts& fk_held,
-                                            InsertRowResult& out);
+    //
+    // A refusal comes back as its `Status`, rendered by the caller (BB-S3):
+    // the code it carries reaches the wire, not only its line.
+    std::optional<Status> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
+                                       const std::vector<parser::AstValue>& values,
+                                       WriteScope& scope, const exec::FkParentVerdicts& fk_held,
+                                       InsertRowResult& out);
 
     // T3, the sorted heap fill (docs/inflight/in-progress/workplan-t3.md). The gate is T3-2's,
     // conservative and only able to widen: heap-clustered, nothing that
@@ -1862,13 +1896,23 @@ private:
                                 const exec::StatementContext& context);
     DispatchOutcome HandleSync();
 
-    // Runs the insert against whichever storage the relation uses, and
-    // reports the result in the vocabulary both share
-    // (storage/insert_placement.hpp).
-    StatusOr<storage::InsertPlacement> InsertIntoRelation(const catalog::TableAccess& access,
-                                                          std::uint64_t id,
-                                                          std::span<const std::byte> payload,
-                                                          std::uint64_t trx_id);
+    // Places a user row in whichever storage the relation uses, its id fixed
+    // under the hold of the page it lands on (BB-R1,
+    // `storage/insert_placement.hpp`), and reports the result in the
+    // vocabulary both share.
+    //
+    // `InsertIssued` - an omitted pk: `issue` issues the id, borrows it and
+    // encodes the row under the hold (BB-R2). `InsertNamed` - a named key,
+    // already borrowed and encoded: `admit` moves the mark under the hold
+    // (BB-R3).
+    StatusOr<storage::InsertPlacement> InsertIssued(const catalog::TableAccess& access,
+                                                    const storage::IssueUnderHold& issue,
+                                                    std::uint64_t trx_id);
+    StatusOr<storage::InsertPlacement> InsertNamed(const catalog::TableAccess& access,
+                                                   std::uint64_t id,
+                                                   std::span<const std::byte> payload,
+                                                   const storage::AdmitUnderHold& admit,
+                                                   std::uint64_t trx_id);
 
 
     // A full ordered scan of the relation, whichever storage it uses. Both
@@ -2288,8 +2332,8 @@ private:
     // between them wide enough to hold it.
     //
     // **The `Status` and not only the detail**, which is what the first
-    // draft carried and was a defect: `InsertOneRow` answers a rendered
-    // string with no status, so the outcome reached `KwpSession` status-less
+    // draft carried and was a defect: `InsertOneRow` answered a rendered
+    // string with no status until BB-S3, so the outcome reached `KwpSession` status-less
     // and `StatusFromErrorReply` folded the cap's line into
     // `InvalidArgument` - `kErrorSpellings` has no `ResourceExhausted`
     // entry. The detail rode out beside it, and `protocol.md` §11's details

@@ -49,10 +49,11 @@
 // So recovery takes the **no-locator branch** the live path already ships:
 // check the pk at the address, and on a mismatch **fail the mount** rather
 // than compensate a row this transaction never wrote. Narrow in practice -
-// only a key named below a relation's high-water mark can divide a leaf
-// mid-statement, and a heap relation refuses such a key
-// (`docs/spec/heap-and-tuple.md` §4.1) - and it fails loudly rather than
-// corrupting. Lifting it means putting `rel_oid` in the undo record, which
+// SQL divides no leaf since BB-R3: a key named below a relation's
+// high-water mark is refused on every relation, so every row lands on the
+// rightmost leaf and a full leaf only appends; only `BtreeInsert`'s storage
+// contract still divides (`docs/spec/heap-and-tuple.md` §4.1) - and it
+// fails loudly rather than corrupting. Lifting it means putting `rel_oid` in the undo record, which
 // is a format-version event and its own decision (§4a).
 //
 // ---- Crash-restartable, with no CLR --------------------------------------

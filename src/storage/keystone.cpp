@@ -42,4 +42,15 @@ StatusOr<std::uint64_t> KeystoneIdOfPayload(std::span<const std::byte> payload) 
     return Keystone::Decode(LoadLe64(payload.data())).id;
 }
 
+Status RequirePayloadCarries(std::span<const std::byte> payload, std::uint64_t id) {
+    auto encoded_id = KeystoneIdOfPayload(payload);
+    if (!encoded_id.ok()) return encoded_id.status();
+    if (encoded_id.value() != id) {
+        return Status::Corruption("tuple's Keystone id " + std::to_string(encoded_id.value()) +
+                                  " does not match the id being inserted (" + std::to_string(id) +
+                                  ")");
+    }
+    return Status::OK();
+}
+
 }  // namespace kds

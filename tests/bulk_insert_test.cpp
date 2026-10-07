@@ -180,16 +180,32 @@ TEST_F(BulkInsertTest, RowsMayNameTheirOwnKeysOrNotWithinOneStatement) {
     EXPECT_EQ(Run("SELECT n FROM t"), "n\\n1\\n99\\n3") << out;
 }
 
-TEST_F(BulkInsertTest, ABelowMarkKeyIsRefusedWithItsOrdinal) {
-    // What is still refused on a heap relation, and what BI4 does with it:
-    // the offending row is named and the whole statement inserts nothing.
-    Ok("CREATE TABLE t (id int64, n int64) HEAP");
-    Ok("INSERT INTO t VALUES (500, 1)");
-    const std::string out = Run("INSERT INTO t VALUES (600, 2), (550, 3)");
-    EXPECT_EQ(out.rfind("ERR", 0), 0u) << out;
-    EXPECT_NE(out.find("must ascend"), std::string::npos) << out;
-    EXPECT_NE(out.find("(row 2)"), std::string::npos) << out;
-    EXPECT_EQ(Run("SELECT n FROM t"), "n\\n1") << out;
+TEST_F(BulkInsertTest, ABelowMarkKeyIsRefusedWithItsOrdinalOnEveryRelation) {
+    // A named key below the mark is refused on every relation (BB-R3, on
+    // BB-Q8's mark (b)). This cell used to pin the heap's refusal alone,
+    // whose message sent the client to a btree to name keys in any order -
+    // the capability BB-Q8 withdrew with `kUnordered`. Both relation types
+    // now give the one answer, `OutOfRange` naming the high-water mark
+    // (BB-R12: an absent key, on either), and BI4 does with it what it does
+    // with any refused row: the offending row is named and the whole
+    // statement inserts nothing.
+    const auto refused_on = [&](const std::string& t, const std::string& storage) {
+        Ok("CREATE TABLE " + t + " (id int64, n int64) " + storage);
+        Ok("INSERT INTO " + t + " VALUES (500, 1)");
+        // Row 1 names 600, above the mark, and is admitted and placed; row 2
+        // names 550, below the 601 row 1 moved the mark to.
+        const std::string out = Run("INSERT INTO " + t + " VALUES (600, 2), (550, 3)");
+        EXPECT_EQ(out.rfind("ERR", 0), 0u) << storage << ": " << out;
+        EXPECT_NE(out.find("high-water mark"), std::string::npos) << storage << ": " << out;
+        EXPECT_NE(out.find("(row 2)"), std::string::npos) << storage << ": " << out;
+        EXPECT_EQ(Run("SELECT n FROM " + t), "n\\n1") << storage << ": " << out;
+        // The mark: the refused row moved nothing, and row 1's 600 burned
+        // with its unwind (BI9), so the next issued id is 601.
+        const std::string next = Run("INSERT INTO " + t + " VALUES (4)");
+        EXPECT_NE(next.find(" id=601 "), std::string::npos) << storage << ": " << next;
+    };
+    refused_on("h", "HEAP");
+    refused_on("b", "BTREE");
 }
 
 // BI9: a refused row burns no id (admission precedes allocation), and an

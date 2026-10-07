@@ -44,7 +44,15 @@ namespace {
 // longer creates `sys.ranges`, so its `sys.objects` and `sys.tables` rows -
 // both logged through `InsertRow` - leave the stream, and every later
 // record's LSN moves with them.
-constexpr std::uint32_t kGoldenLogCrc = 0xdd14ffedu;
+// **Re-pinned at BB-S3** (on `bb-issue-under-the-leaf`,
+// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` BB-R3): a named
+// key's encode now precedes its admission, so its `sys.tables` mark record
+// follows its spill records where it used to precede them. Row 6 is the
+// script's one spill - a heap row, admitted just before `ChainInsert` as the
+// heap arm was at BB-S3 - so its UNDO_WRITE and VARHEAP_APPEND move ahead of
+// its mark record; no record's bytes change, and every other row's records
+// keep their order.
+constexpr std::uint32_t kGoldenLogCrc = 0xdf5ca199u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

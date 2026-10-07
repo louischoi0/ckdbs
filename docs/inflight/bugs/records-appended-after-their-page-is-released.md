@@ -20,7 +20,7 @@ write to the same page lands out of order, which redo refuses
 
 | Path | Page | Record | Severity |
 |---|---|---|---|
-| `SortedFillInner` (`command_dispatcher.cpp`) over `heap::ChainAppendBatch` | heap tail, new chain pages, link edits | `FULL_PAGE_IMAGE` per page, after the batch | **Heap-only**, so SUS-1 limits it to relations created before the suspension; another core's per-row `HEAP_INSERT` into the same tail can be logged against a page without the batch's rows |
+| `SortedFillInner` (`command_dispatcher.cpp`) over `heap::ChainAppendCarved` | heap tail, new chain pages, link edits | `FULL_PAGE_IMAGE` per page, after the batch | **Heap-only**, so SUS-1 limits it to relations created before the suspension; another core's per-row `HEAP_INSERT` into the same tail can be logged against a page without the batch's rows |
 | `InsertAssertion` → `heap::ChainInsert` → `exec::LogChainInsert` (`assertion_catalog.cpp`, `wal_row_log.cpp`) | `sys.assertions` tail, new page, link; spills | `PAGE_INIT`, `FULL_PAGE_IMAGE`, `VARHEAP_APPEND`, `HEAP_INSERT` | Two cores' `CREATE ASSERTION` at once: out-of-order dense slots refuse the mount |
 | `BuildIndexTree` / `Backfill` → `LogBuiltTree` (`index_ddl.cpp`) | every page of a new index tree | `FULL_PAGE_IMAGE` | The tree is unpublished, so no other writer; only a flush-before-log of `page_lsn` 0 pages |
 | `CreateTable`'s var-heap root, `varheap::CreateChain` → `LogCatPageInit` (`catalog.cpp`) | the new var-heap root | `PAGE_INIT` | Unpublished; flush-before-log only |

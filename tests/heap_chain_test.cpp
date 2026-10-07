@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,8 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
+
+#include "act_on_fetch_store.hpp"
 
 // The heap as a chain of pages: growth at the tail, the invariants that
 // make tail-append correct, and the walk that reads it back.
@@ -570,11 +573,22 @@ TEST(HeapChainTest, ADamagedHintFallsBackToTheHeadAndHeals) {
     EXPECT_EQ(hint, tail.value());
 }
 
-// ---- ChainAppendBatch (docs/inflight/in-progress/workplan-t3.md TS02) --------------------------
+// ---- ChainAppendCarved: the sorted fill ----------------------------------
+
+// The carve a fill of fixed payloads makes: hands them back, and counts.
+struct FixedCarve {
+    std::span<const std::vector<std::byte>> payloads;
+    int asked = 0;
+    StatusOr<std::span<const std::vector<std::byte>>> operator()() {
+        ++asked;
+        return payloads;
+    }
+};
 
 // The strongest claim available: the batch fill and the sequential row
 // loop produce byte-identical pages. Same payloads, two fresh stores,
-// every touched page compared whole.
+// every touched page compared whole. The carve is asked once, under the
+// tail's hold (BB-R7).
 TEST(HeapChainTest, ABatchFillEqualsTheSequentialChainByteForByte) {
     storage::InMemoryPageStore batch_store(128);
     storage::InMemoryPageStore seq_store(128);
@@ -588,10 +602,12 @@ TEST(HeapChainTest, ABatchFillEqualsTheSequentialChainByteForByte) {
         payloads.push_back(MakeTuple(id, 1016));
     }
 
-    auto batched = ChainAppendBatch(batch_store, batch_head, /*first_id=*/1, payloads,
-                                    /*trx_id=*/1, /*owner_oid=*/0);
+    FixedCarve carve{payloads};
+    auto batched = ChainAppendCarved(batch_store, batch_head, carve, /*trx_id=*/1,
+                                     /*owner_oid=*/0);
     ASSERT_TRUE(batched.ok()) << batched.status().message();
     ASSERT_EQ(batched.value().rows.size(), kRows);
+    EXPECT_EQ(carve.asked, 1);
 
     for (std::uint64_t id = 1; id <= kRows; ++id) {
         auto r = ChainInsert(seq_store, seq_head, id, payloads[id - 1], /*trx_id=*/1, /*owner_oid=*/0);
@@ -619,9 +635,211 @@ TEST(HeapChainTest, ABatchWhosePayloadIdsDisagreeIsCorruption) {
     std::vector<std::vector<std::byte>> payloads;
     payloads.push_back(MakeTuple(1, 56));
     payloads.push_back(MakeTuple(9, 56));  // expected 2
-    auto r = ChainAppendBatch(store, head, /*first_id=*/1, payloads, /*trx_id=*/1, /*owner_oid=*/0);
+    FixedCarve carve{payloads};
+    auto r = ChainAppendCarved(store, head, carve, /*trx_id=*/1, /*owner_oid=*/0);
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption);
+    auto head_page = store.Get(head);
+    ASSERT_TRUE(head_page.ok());
+    EXPECT_EQ(PageView(head_page.value().bytes()).slot_count(), 0u)
+        << "nothing is placed before the ids are checked";
+}
+
+// The link is written under the predecessor's hold, never after it ends
+// (BB-R7): a link written once the hold is gone lets another core take the
+// predecessor as the tail and link over it, which is the orphaned page back.
+// The store records each page's link as the hold on it ends; every page's
+// link at its last release must already be the link it ends with.
+class LinkAtReleaseStore final : public storage::PageStore {
+public:
+    explicit LinkAtReleaseStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
+
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
+    }
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        return inner_.CreateNewUnpinned();
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        return inner_.GetUnpinned(page_id);
+    }
+    void UnpinFrame(PageId page_id) noexcept override {
+        auto bytes = inner_.GetUnpinned(page_id);
+        if (bytes.ok()) link_at_release[page_id] = PageView(bytes.value()).next_page_id();
+    }
+
+    std::map<PageId, PageId> link_at_release;
+
+private:
+    storage::InMemoryPageStore& inner_;
+};
+
+TEST(HeapChainTest, ACarvedFillLinksEachPageBeforeItsHoldEnds) {
+    storage::InMemoryPageStore inner(128);
+    LinkAtReleaseStore store(inner);
+    const PageId head = MakeHead(inner);
+    std::vector<std::vector<std::byte>> payloads;
+    for (std::uint64_t id = 1; id <= 25; ++id) payloads.push_back(MakeTuple(id, 1016));
+
+    FixedCarve carve{payloads};
+    auto filled = ChainAppendCarved(store, head, carve, 1, 0);
+    ASSERT_TRUE(filled.ok()) << filled.status().message();
+    ASSERT_GT(filled.value().pages.size(), 2u) << "the fixture must grow the chain";
+    const std::map<PageId, PageId> seen = store.link_at_release;
+    for (const BatchTouchedPage& page : filled.value().pages) {
+        if (!page.is_new) continue;
+        ASSERT_EQ(seen.count(page.linked_from), 1u) << "page " << page.linked_from;
+        EXPECT_EQ(seen.at(page.linked_from), page.page_id)
+            << "page " << page.linked_from << " was released before its link to "
+            << page.page_id << " was written";
+    }
+}
+
+
+// ---- BB-R7: the tail held as the tail, and the id fixed under it ---------
+//
+// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`. `ChainInsert`
+// walked to the tail holding nothing and then took that page exclusive
+// without asking whether it was still the tail - so a page another core had
+// linked on in between was overwritten by a second link and its rows
+// orphaned (the bug entry BB-S4 closed). The
+// window is driven here through `ActOnFetchStore`: the action runs as the
+// insert's own fetch of the tail is made, which is where the other core's
+// growth lands.
+
+std::vector<std::uint64_t> WalkedIds(storage::PageStore& store, PageId head) {
+    std::vector<std::uint64_t> ids;
+    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
+                          [&](PageId, PageView& page, std::uint16_t slot)
+                              -> StatusOr<storage::VisitControl> {
+                              auto tuple = page.ReadTuple(slot);
+                              if (tuple.ok()) ids.push_back(IdOf(tuple.value().payload));
+                              return storage::VisitControl::kContinue;
+                          });
+    EXPECT_TRUE(s.ok()) << s.message();
+    return ids;
+}
+
+TEST(HeapChainTest, TheWalkFetchesTheTailOnceSoNoGrowthLandsBetweenItsReadAndItsHold) {
+    storage::InMemoryPageStore inner(128);
+    testing_race::ActOnFetchStore store(inner);
+    const PageId head = MakeHead(inner);
+    // One tuple per page, so every insert after the first grows the chain.
+    constexpr std::size_t kFiller = 5000;
+    ASSERT_TRUE(ChainInsert(inner, head, 1, MakeTuple(1, kFiller), 1, 0).ok());
+
+    // Until BB-S4 the insert of 3 walked to the tail (the head, fetch 1) and
+    // then took it exclusive (fetch 2), and "another core" placing 2 between
+    // the two grew the chain past the head and was linked over. The walk now
+    // holds each page it reads the link of, so it fetches the head once and
+    // that window has no second fetch to open at. The walk-on, where a page
+    // is linked on before the walk holds it, is the next cell's.
+    store.OnFetch(head, 2, [&] {
+        auto other = ChainInsert(inner, head, 2, MakeTuple(2, kFiller), 1, 0);
+        ASSERT_TRUE(other.ok()) << other.status().message();
+        ASSERT_TRUE(other.value().grew_chain);
+    });
+    auto mine = ChainInsert(store, head, 3, MakeTuple(3, kFiller), 1, 0);
+    ASSERT_TRUE(mine.ok()) << mine.status().message();
+    mine.value().held.Release();
+    EXPECT_FALSE(store.fired()) << "the walk fetched the tail a second time";
+    EXPECT_EQ(WalkedIds(inner, head), (std::vector<std::uint64_t>{1, 3}));
+}
+
+TEST(HeapChainTest, ATailLinkedOnBeforeTheWalkHoldsItIsWalkedOn) {
+    // The walk-on itself: "another core" grows the chain past the head as
+    // the insert's walk fetches it, so the page the walk holds already links
+    // on, and the insert must carry on to the real tail.
+    storage::InMemoryPageStore inner(128);
+    testing_race::ActOnFetchStore store(inner);
+    const PageId head = MakeHead(inner);
+    constexpr std::size_t kFiller = 5000;
+    ASSERT_TRUE(ChainInsert(inner, head, 1, MakeTuple(1, kFiller), 1, 0).ok());
+    store.OnFetch(head, 1, [&] {
+        auto other = ChainInsert(inner, head, 2, MakeTuple(2, kFiller), 1, 0);
+        ASSERT_TRUE(other.ok()) << other.status().message();
+        ASSERT_TRUE(other.value().grew_chain);
+    });
+    auto mine = ChainInsert(store, head, 3, MakeTuple(3, kFiller), 1, 0);
+    ASSERT_TRUE(mine.ok()) << mine.status().message();
+    ASSERT_TRUE(store.fired());
+    mine.value().held.Release();
+    EXPECT_EQ(WalkedIds(inner, head), (std::vector<std::uint64_t>{1, 2, 3}));
+}
+
+TEST(HeapChainTest, AnIssuedRowIsAskedForOnceAndAppended) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 5, 1016);
+
+    int asked = 0;
+    std::vector<std::byte> row;
+    auto placed = ChainInsertIssued(
+        store, head,
+        [&]() -> StatusOr<std::span<const std::byte>> {
+            ++asked;
+            row = MakeTuple(6, 1016);
+            return std::span<const std::byte>(row);
+        },
+        /*trx_id=*/1, /*owner_oid=*/0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    placed.value().held.Release();
+    EXPECT_EQ(asked, 1);
+    EXPECT_EQ(WalkedIds(store, head), (std::vector<std::uint64_t>{1, 2, 3, 4, 5, 6}));
+}
+
+TEST(HeapChainTest, AnIssueThatRefusesPlacesNothing) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 3, 56);
+    auto placed = ChainInsertIssued(
+        store, head,
+        []() -> StatusOr<std::span<const std::byte>> {
+            return Status::TxnConflict("row id=4 is held by transaction 9");
+        },
+        1, 0);
+    ASSERT_FALSE(placed.ok());
+    EXPECT_EQ(placed.status().code(), StatusCode::kTxnConflict);
+    EXPECT_EQ(WalkedIds(store, head).size(), 3u);
+}
+
+TEST(HeapChainTest, ANamedKeyBelowTheTailsMinKeyIsRefusedWithoutAskingTheMark) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 5, 5000);  // one per page: the tail's min_key is 5
+
+    int asked = 0;
+    const std::vector<std::byte> row = MakeTuple(3, 56);
+    auto refused = ChainInsertNamed(
+        store, head, 3, row,
+        [&](std::uint64_t) {
+            ++asked;
+            return Status::OK();
+        },
+        1, 0);
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kOutOfRange);
+    EXPECT_EQ(asked, 0);
+}
+
+TEST(HeapChainTest, ANamedKeyIsAdmittedUnderTheTailThenPlaced) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 3, 56);
+
+    std::uint64_t asked_for = 0;
+    const std::vector<std::byte> row = MakeTuple(50, 56);
+    auto placed = ChainInsertNamed(
+        store, head, 50, row,
+        [&](std::uint64_t id) {
+            asked_for = id;
+            return Status::OK();
+        },
+        1, 0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    placed.value().held.Release();
+    EXPECT_EQ(asked_for, 50u);
+    EXPECT_EQ(WalkedIds(store, head), (std::vector<std::uint64_t>{1, 2, 3, 50}));
 }
 
 }  // namespace

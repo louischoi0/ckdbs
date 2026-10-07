@@ -737,9 +737,10 @@ level: **can the re-run answer differently once this holder decides?**
   not a function of the waiter's read view at all: a caller-named key's
   uniqueness is proved by a physical descent onto the one page that may
   hold it, and an issued key comes from the relation's own sequence. So the
-  wait ends in a row written, or in `AlreadyExists` for a key the holder
-  took - and `AlreadyExists` is not retryable, which is the honest answer
-  either way.
+  wait ends in a row written, in `AlreadyExists` for a key the holder took,
+  or - since BB-R3 refuses a named key below the relation's mark - in
+  `OutOfRange` for a key the mark passed during the wait; neither is
+  retryable, which is the honest answer either way.
 - **Yes, for the foreign-key forward check.** Its `check_view` is minted
   at the check rather than at `BEGIN` — a constraint reads latest state
   (`foreign-keys.md` §4, which is where that rule lives; §4.4 below is
@@ -864,11 +865,26 @@ declared in the spec that owns the subsystem, and this is that spec:
 > relation" without scanning. An entry's holders and waiters are vectors
 > and are read under the latch.
 >
-> **The order.** A partition latch is taken with no page latch held, with
-> no other partition latch held (one partition per operation), never under
-> the WAL latch or the window latch, and **released before any park** — a
-> statement parks on a decide, and a partition held across that park would
-> be held against the very core that would end it.
+> **The order.** A partition latch is taken with **no park under a page
+> latch** — AR2-R2's intent, *"so a lock wait, which may park, can never
+> park a latched page"*, to which BB-R4 amended this clause on 2026-10-06
+> (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`). It read
+> *"with no page latch held"*, and that was already false in the tree at
+> `6dc792c9`: `UPDATE`'s and `DELETE`'s per-row tuple borrows run inside
+> the walk's write hold of the page, and a named-key `INSERT`'s
+> `before_mark` hook borrows under page 7 exclusive (`catalog.cpp:2558`,
+> `:2594`), which BB-S3 removes. From BB-S3 an insert borrows its issued
+> id under the exclusive hold of the leaf it lands on (BB-R2). What holds
+> is that nothing parks there: a refused borrow comes back as a refusal
+> and the park is `DispatchAsync`'s, once every hold is released. In
+> BB-R4's order - **a user relation page, a `sys.tables` chain page, a
+> partition latch, the WAL stream latch** (`page.md` §6) - nothing holding
+> a partition latch asks for any page latch; BB-S1's census (the work
+> order's §6) is the proof. Also: with no other partition latch held (one
+> partition per operation), never under the WAL latch or the window latch,
+> and **released before any park** — a statement parks on a decide, and a
+> partition held across that park would be held against the very core
+> that would end it.
 >
 > **Stated, not enforced**, and the distinction is `rules.md` §3's own
 > ("a stated order that nothing checks is a comment"): `lock_table.hpp`

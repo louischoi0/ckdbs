@@ -136,9 +136,8 @@
 //
 // **Acquisition order.** A partition latch is taken
 //
-//   - with **no page latch** held - AR2-R2's "a lock is acquired before the
-//     page it protects is latched, and never under a page latch", so a lock
-//     wait (a park, from AO-S2) can never park a latched page;
+//   - with **no park under a page latch** (BB-R4's amendment of AR2-R2;
+//     `txn.md` §5 says why): taken under a page latch, never the reverse;
 //   - with **no other partition latch** held. Every method here takes
 //     exactly one at a time, including the two that walk every partition:
 //     their guard is scoped to the loop body;

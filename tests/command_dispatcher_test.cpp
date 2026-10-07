@@ -259,41 +259,24 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
     EXPECT_EQ(out.response.find('\n'), std::string::npos);
 }
 
-// ---- The key order in DESCRIBE (heap-and-tuple.md §4.1) -----------------
+// ---- The pk in DESCRIBE (heap-and-tuple.md §4.1) --------------------------
 //
-// `key_mode=` was a declaration and is gone with the mode. `key_order=` is
-// an observation in the same position, and the pk column's `autoincrement=`
-// is now `if-omitted` on every relation - the sequence runs when the INSERT
-// omits the key and does not when the INSERT names one, and both are legal
+// `key_mode=` was a declaration and is gone with the mode, and `key_order=`
+// with `kUnordered` (BB-Q11 (a)). The pk column's `autoincrement=` is
+// `if-omitted` on every relation - the sequence runs when the INSERT omits
+// the key and does not when the INSERT names one, and both are legal
 // everywhere, so neither `yes` nor `no` would be true.
 
-TEST_F(CommandDispatcherTest, DescribeReportsANewRelationAsAscending) {
+TEST_F(CommandDispatcherTest, DescribeCarriesNoKeyOrderField) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, qty int64)").response.substr(0, 7),
               "CREATED");
 
     auto out = d.Dispatch("DESCRIBE acct");
     // Beside the storage, which is the DDL-only fact on the line.
-    EXPECT_NE(out.response.find("clustered_type=BTREE key_order=ascending"), std::string::npos)
+    EXPECT_NE(out.response.find("clustered_type=BTREE next_id="), std::string::npos)
         << out.response;
-    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted"),
-              std::string::npos)
-        << out.response;
-}
-
-TEST_F(CommandDispatcherTest, DescribeReportsUnorderedAfterABelowMarkKey) {
-    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto created = d.Dispatch("CREATE TABLE t (id int64, qty int64) BTREE");
-    ASSERT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
-
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 1)").response.substr(0, 8), "INSERTED");
-    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("key_order=ascending"), std::string::npos);
-
-    // Below the mark 100 left behind: admitted, and the line changes.
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (50, 2)").response.substr(0, 8), "INSERTED");
-    auto out = d.Dispatch("DESCRIBE t");
-    EXPECT_NE(out.response.find("clustered_type=BTREE key_order=unordered"), std::string::npos)
-        << out.response;
+    EXPECT_EQ(out.response.find("key_order="), std::string::npos) << out.response;
     EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted"),
               std::string::npos)
         << out.response;

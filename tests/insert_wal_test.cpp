@@ -236,21 +236,27 @@ std::string WideInsert() {
     return sql + ")";
 }
 
-TEST_F(InsertWalTest, ALeafDivisionLogsBothPagesAsImagesAndNoPageInit) {
-    // A caller-supplied key that sorts inside a full leaf divides it
-    // (docs/spec/heap-and-tuple.md §4.1), which moves versions onto a page no
-    // other record describes.
+TEST_F(InsertWalTest, AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNoInsert) {
+    // This cell used to divide a leaf through SQL: a named key sorting
+    // inside a full leaf split it (`SplitLeafAndInsert`), and the cell
+    // pinned the record set a division needs - both halves as images and no
+    // PAGE_INIT, because a divided leaf is not one init plus the insert
+    // after it.
     //
-    // `is_new_page` means "a PAGE_INIT is enough, because the HEAP_INSERT
-    // after it describes the only tuple on this page" - not "this page is
-    // new". A division satisfies neither half: the new leaf receives the
-    // moved upper half, and the incoming tuple may land in the *rebuilt old*
-    // leaf instead. Logging the new leaf as an init would replay it empty
-    // and lose every version the division moved.
+    // **Withdrawn by BB-Q8 (b), as BB-R3**
+    // (instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md): a named
+    // key below the relation's mark is refused on every relation. A divide
+    // needs a key below its leaf's highest, every placed key is below the
+    // mark, so no SQL statement reaches a clustered leaf's divide any more.
+    // The divide stays in the storage contract (BB §1.5, BB-R10), which
+    // btree_test.cpp drives through `BtreeInsert` directly; a secondary
+    // index still divides from SQL (`ASplitTakesFullPageImagesAndNoIndexInsert`).
     //
-    // This test exists because nothing reads the log back yet
-    // (docs/inflight/known-gaps.md), so a wrong record set is otherwise invisible
-    // until recovery is built and the data is already gone.
+    // What stands here now is the refusal's record set. BB-R3 refuses at the
+    // held leaf - a right sibling proves the key below the mark - before
+    // `SecureParents` or any split runs, so the refused statement logs no
+    // image, no init and no insert, the rows are what they were, and the
+    // mark has not moved.
     CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
     std::string sql = "CREATE TABLE t (id int64";
     for (int i = 0; i < kWideColumns; ++i) sql += ", v" + std::to_string(i) + " varchar";
@@ -262,7 +268,8 @@ TEST_F(InsertWalTest, ALeafDivisionLogsBothPagesAsImagesAndNoPageInit) {
         return d.Dispatch(s + ")").response;
     };
 
-    // Ascending with gaps until the tree grows, so a leaf is known full.
+    // Ascending with gaps until the tree grows, so the first leaf is known
+    // full and, past the append split, known to have a right sibling.
     int last = 0;
     for (int k = 1; k <= 60; ++k) {
         const std::string reply = insert(k * 10);
@@ -272,22 +279,43 @@ TEST_F(InsertWalTest, ALeafDivisionLogsBothPagesAsImagesAndNoPageInit) {
     }
     ASSERT_GT(last, 0);
 
-    // Deltas, not totals: the stream already holds the inits and images of
-    // every append-split above, and only this statement's records are the
-    // subject.
+    // Totals before, compared whole after: the stream already holds the
+    // inits and images of the append split above, and the refused statement
+    // may add none of the three. Flushed on both sides, so a record already
+    // in the ring is counted in the baseline and never charged to the refusal.
+    const std::string rows_before = d.Dispatch("SELECT * FROM t").response;
+    ASSERT_TRUE(wal_->Flush().ok());
     std::vector<wal::RecordType> before = RecordTypes();
     const std::size_t inits_before = CountOf(before, wal::RecordType::kPageInit);
     const std::size_t images_before = CountOf(before, wal::RecordType::kFullPageImage);
+    const std::size_t inserts_before = CountOf(before, wal::RecordType::kHeapInsert);
+    // The premise the name rests on: an append split ran, so the first leaf
+    // filled and 15 sorts inside a full leaf - the old cell's divide.
+    ASSERT_GT(images_before, 0u) << "the first leaf never filled, so 15 would divide nothing";
 
-    // Now land in the first gap, which routes back into a full leaf.
-    const std::string divided = insert(15);
-    ASSERT_EQ(divided.substr(0, 8), "INSERTED") << divided;
+    // The first gap, which routes back into the full first leaf: absent and
+    // below the mark, so `OutOfRange` (BB-R12).
+    const std::string refused = insert(15);
+    EXPECT_EQ(refused.substr(0, 3), "ERR") << refused;
+    EXPECT_NE(refused.find("high-water mark"), std::string::npos) << refused;
 
+    // Flushed again before it is read, so a record the refusal left in the
+    // ring is counted rather than missed.
+    ASSERT_TRUE(wal_->Flush().ok());
     std::vector<wal::RecordType> after = RecordTypes();
-    EXPECT_EQ(CountOf(after, wal::RecordType::kPageInit) - inits_before, 0u)
-        << "a divided leaf's contents are not describable by a PAGE_INIT plus one insert";
-    EXPECT_GE(CountOf(after, wal::RecordType::kFullPageImage) - images_before, 2u)
-        << "both halves of a division have to be logged whole";
+    EXPECT_EQ(CountOf(after, wal::RecordType::kPageInit), inits_before)
+        << "a refused key creates no page";
+    EXPECT_EQ(CountOf(after, wal::RecordType::kFullPageImage), images_before)
+        << "the refusal comes before any split, so no leaf owes redo an image";
+    EXPECT_EQ(CountOf(after, wal::RecordType::kHeapInsert), inserts_before)
+        << "nothing landed, so nothing is described";
+
+    EXPECT_EQ(d.Dispatch("SELECT * FROM t").response, rows_before)
+        << "the refused key left the rows as they were";
+    // The mark did not move: the next omitted key is the one after the last
+    // key placed.
+    const std::string next = d.Dispatch(WideInsert()).response;
+    EXPECT_NE(next.find(" id=" + std::to_string(last + 1) + " "), std::string::npos) << next;
 }
 
 TEST_F(InsertWalTest, ChainGrowthLogsTheNewPageAndTheLinkThatReachesIt) {

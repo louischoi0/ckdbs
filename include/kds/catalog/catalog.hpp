@@ -76,6 +76,18 @@ class WalManager;
 
 namespace kds::catalog {
 
+// **Can this caller-named key be stored at all?** Within [kFirstRowId,
+// kMaxKeystoneId], since 0 means "unset" and the Keystone field is 40 bits
+// wide; `InvalidArgument` otherwise - a value outside the id space is simply
+// wrong, not a declined feature. Asked before anything else about the key,
+// the borrow included (BB-R3 step 1).
+Status CheckNamedRowIdSpellable(std::uint64_t id);
+
+// The one spelling of "a named key below the relation's mark" (BB-R3,
+// BB-R12's `OutOfRange`), shared by the admission and by the insert path's
+// judgement before a wait.
+Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark);
+
 // Where a catalog row landed (workplan-ddl-transactional.md DT3a). A DDL
 // running inside a transaction hands these to
 // `TransactionManager::NoteInsert` so a rollback can retire the slots:
@@ -639,66 +651,60 @@ public:
     //
     // ---- What this checks -------------------------------------------------
     //
-    // **Spellability, always.** Within [kFirstRowId, kMaxKeystoneId], since 0
-    // means "unset" and the Keystone field is 40 bits wide. `InvalidArgument`
-    // otherwise - a value outside the id space is simply wrong, not a
-    // declined feature. Checked before the catalog page is touched at all.
+    // **Spellability, always** (`CheckNamedRowIdSpellable`, below).
     //
-    // **Then the ordering rule, and it is the storage type that decides it:**
+    // **Then the mark, on every relation** (BB-R3, on BB-Q8's mark): an id
+    // below `next_id` is refused `OutOfRange` (`RefuseRowIdBelowMark`), and
+    // one at or above it moves the mark to `id + 1`. At or above the mark, the
+    // id sorts above every id the relation has placed or issued, so placed on
+    // the relation's last page it keeps that page's slot order its key order
+    // - BB-R1's invariant. A btree used to take a key below the mark too and
+    // flip the relation to `kUnordered`; that state is deleted (BB-R10).
     //
-    //   - **Btree-clustered: any id.** Uniqueness is proved completely by the
-    //     descent, which lands on the one leaf that may hold the key and
-    //     finds the duplicate or does not, so `next_id` is asked nothing. An
-    //     id below the mark leaves it untouched, writes no catalog page for
-    //     the mark, and flips `key_order` to kUnordered if it was not already
-    //     - once per relation, ever.
-    //   - **Heap-clustered: at or above the mark only**, `OutOfRange`
-    //     otherwise. The semi-sorted chain grows at its tail, so an id below
-    //     the tail page's `min_key` has no legal page (invariant 3); and its
-    //     duplicate check reads the tail page alone, which is sound only
-    //     while every earlier page's ids sit below the tail's bound. Both
-    //     properties are the ascent, and the mark is what preserves it: at or
-    //     above it, the id is above every id the relation has ever placed, so
-    //     uniqueness follows from the mark without a page being read. A heap
-    //     relation therefore never reaches kUnordered.
+    // **Called under the hold of the page the row lands on** - a btree's
+    // rightmost leaf, a heap chain's tail held as the tail
+    // (`storage::AdmitUnderHold`, BB-R7). That is what closes BB §1.3: the
+    // mark moves while no other core can issue or admit an id for the
+    // relation, because each of them needs that page first. The latch order
+    // is that page, then this one (BB-R4, `page.md` §6).
     //
     // ---- Why the high-water mark moves ------------------------------------
     //
     // `next_id` is a ceiling on what has been *placed*, which is what makes
-    // it the uniqueness proof on a heap relation and what keeps K4's lifetime
-    // budget and the 40-bit exhaustion refusal truthful on a btree one -
-    // DESCRIBE and SHOW BUDGET both read it. Advanced with max(), never
-    // assigned, and persisted before the caller places anything: a crash
-    // between here and the insert leaves a ceiling that is too high (K3 calls
-    // a burned id free) rather than one too low, and a too-low mark is how
-    // the engine later issues an id that is already a tuple's identity.
+    // it the uniqueness proof for an id at or above it and what keeps K4's
+    // lifetime budget and the 40-bit exhaustion refusal truthful - DESCRIBE
+    // and SHOW BUDGET both read it. Advanced, never lowered, and persisted
+    // before the caller places anything: a crash between here and the insert
+    // leaves a ceiling that is too high (K3 calls a burned id free) rather
+    // than one too low, and a too-low mark is how the engine later issues an
+    // id that is already a tuple's identity.
     //
     // Fails with NotFound if no sys.tables row names `table_oid`.
     //
-    // **`before_mark` runs after every refusal above has been decided and
-    // before anything is written**, and its non-OK return aborts the admit
-    // with nothing changed. It exists because this call is the *only*
-    // validation a caller-named key ever gets - `TableAccess` deliberately
-    // carries no `next_id`, so no caller can ask "is this key legal" without
-    // asking here - while the caller that takes the row's lock needs to take
-    // it before the mark moves, or a statement that parks and re-runs finds
-    // the mark advanced past the very key it waited for and is refused
-    // `OutOfRange` on a heap relation. Doing it outside, on either side,
-    // buys one at the price of the other: borrow first and an illegal key
-    // waits on a lock before being told it was never legal; admit first and
-    // the wait cannot be re-run.
-    //
-    // **And it runs inside the page span, so it must not park.** The mark's
-    // read-modify-write is atomic within a core only because nothing
-    // suspends between the read and the write - the page latch is
-    // re-entrant for the owning core and serialises cores, not tasks
-    // (`page.md` §6). A hook that parked would let a second admission read
-    // the old mark and the first write it back lower: an id that is already
-    // a tuple's identity is then issued (invariant 11). `BorrowOrWait`
-    // records a blocker and returns; the park is `DispatchAsync`'s, outside
-    // this span - which is the shape every hook passed here must keep.
-    Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id,
-                              const std::function<Status()>& before_mark = {});
+    // **No hook any more.** `before_mark` took the row's lock between the
+    // judgement and the mark's move, because a statement that parked and
+    // re-ran found its own key below a mark its first attempt advanced. Under
+    // BB-R3 the borrow precedes the admission entirely - a refused borrow
+    // advanced nothing - so the hook's reason is gone, and with it the
+    // partition latch taken under page 7 (BA-R8's last bullet).
+    Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id);
+
+    // The relation's mark, `sys.tables.next_id`, read under shared holds
+    // (`ForFirstRow`'s read walk). **A judgement, not a reservation**: the
+    // mark only rises, so a key below what this returns is below the mark
+    // for good, while one at or above it may be passed before it is
+    // admitted. The insert path asks it for one thing - whether a named key
+    // refused a borrow can ever be admitted, so an illegal key is refused
+    // rather than left waiting on a fence (AO-S6c-c's rule, kept under
+    // BB-R3).
+    StatusOr<std::uint64_t> RowIdMark(Oid table_oid);
+
+    // **The mount's refusal of a relation whose keys are out of order**
+    // (BB-R11): `Unsupported`, naming every relation whose retired key-order
+    // byte still reads `kRetiredKeyOrderUnordered`, by its current name.
+    // Core 0's, once, after recovery and the delete-mark finalize
+    // (`heap-and-tuple.md` §4.1 carries the rule and what it cannot see).
+    Status RefuseRelationsHoldingKeysOutOfOrder();
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
@@ -1006,9 +1012,9 @@ public:
                             std::uint64_t trx_id = kBootstrapXid,
                             CatalogRowRef* where = nullptr);
     // There is no owner-core parameter since AT-S9 (the row's word is
-    // reserved and written 0), and no key-mode parameter: the row's `key_order`
-    // is an observation set to kAscending here and moved only by
-    // AdmitExplicitRowId, never passed in.
+    // reserved and written 0), and no key-mode parameter: the row's retired
+    // key-order byte is written 0 here as on every row (BB-R10), never passed
+    // in.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
     // rows.hpp owns the rule (a system relation carries no anchor).
     // The one anchor write path (the f5686f8 review's S1): validate the

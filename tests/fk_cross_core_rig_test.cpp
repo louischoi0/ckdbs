@@ -301,6 +301,16 @@ TEST(FkCrossCoreRigTest, AChildWaitingOnAParentThatRollsBackAcrossCoresIsAViolat
 // mid-walk rather than being refused (AY-Q8). AR2 E3 retires when the
 // parent-`DELETE`-against-child-write cells pass (`raft-marks-2026-09-29.md`
 // §4).
+//
+// **E3 (ii), the check-to-write window, left this file at BB-S3's review.**
+// Its cell put a second row behind the `DELETE`'s walk by naming a key below
+// `c`'s mark - the leftmost leaf, while the insert seam held row 1's
+// rightmost - and BB-R3 refuses such a key before the row is written, so the
+// cell passed with nothing tested. Every SQL insert lands on the rightmost
+// leaf since BB-R3, which that seam holds, so no seam here can put a row
+// behind the walk: a two-core cell needs one between the hoist and the first
+// row's descent, which the engine does not have. The window is pinned on one
+// thread, `FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.
 
 // One session's statements on one core, each run only once the cell allows
 // it: `allowed` is how many may have started, `done` how many have ended.
@@ -404,8 +414,8 @@ struct ScriptRig {
 // row**, which the child's `S` holds until it decides. Without the `S` the
 // delete reaches its reverse check and waits on the child's row instead -
 // the interval after the child's write, which was always covered. The cell
-// pins the unit because the interval before the write (the window cell
-// below) is covered by nothing else.
+// pins the unit because the interval before the write is covered by nothing
+// else across cores (the window's cell is one thread's, `fk_parent_hold_test.cpp`).
 TEST(FkCrossCoreRigTest, AChildsOpenReferenceParksAParentDeleteOnTheParentRow) {
     ScriptRig f({"DELETE FROM p WHERE id = 7"}, {"BEGIN", "INSERT INTO c VALUES (7)", "COMMIT"});
     ASSERT_TRUE(f.ok);
@@ -522,78 +532,6 @@ TEST(FkCrossCoreRigTest, TwoChildWritersThatThenUpdateTheirParentDeadlock) {
     ASSERT_TRUE(KickUntil(*f.r.rig, 0, [&] { return f.core0.Done(3); }, 4000ms));
     EXPECT_EQ(f.core0.Reply(2), "UPDATED 1");
     ASSERT_TRUE(f.RunTo(0, f.core0, 4)) << f.core0.Reply(3);
-}
-
-// E3 (ii), the window itself: a parent deleted **between the child's
-// check and its write**, which only the `S` held from the hoist closes
-// (`foreign-keys.md` §3a). The window is the insert path's one seam
-// (`SetBeforeInsertLogForTest`) on a two-row `INSERT`: both parents are
-// resolved before any row, row 1 is placed, and core 1 deletes row 2's
-// parent before row 2 exists.
-//
-// **Where the rows land is what makes it deterministic.** The seam runs
-// under the hold that placed row 1 (AT-S21), so the delete's reverse walk
-// of `c` stops at row 1's leaf until core 0 goes on. Row 1 is therefore the
-// rightmost leaf's and row 2 the leftmost's: the walk has passed row 2's
-// leaf before row 2 is written, whatever order the two cores then run in.
-//
-// The reactors are not started; both dispatchers run on threads of the
-// cell's own, `insert_log_crash_rig_test.cpp`'s shape.
-TEST(FkCrossCoreRigTest, AParentDeletedBetweenAChildsCheckAndItsWriteLeavesNoOrphan) {
-    FkRig r({});
-    ASSERT_NE(r.rig, nullptr);
-    if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
-    CommandDispatcher& d0 = r.rig->core(0).dispatcher();
-    CommandDispatcher& d1 = r.rig->core(1).dispatcher();
-
-    for (const char* row : {"INSERT INTO p VALUES (1, 0)", "INSERT INTO p VALUES (8, 0)"}) {
-        ASSERT_EQ(d0.Dispatch(row).response.rfind("INSERTED", 0), 0u) << row;
-    }
-    // Committed children of 1 at ids 20..10000, so `c` spans several leaves
-    // and 10 is free at the far left.
-    for (std::uint64_t id = 20; id <= 10000; id += 10) {
-        const std::string sql = "INSERT INTO c VALUES (" + std::to_string(id) + ", 1)";
-        ASSERT_EQ(d0.Dispatch(sql).response.rfind("INSERTED", 0), 0u) << sql;
-    }
-    // Core 1's first transaction carves its id window through `Sync()`,
-    // which waits out every held dirty frame - core 0's leaf, inside the
-    // seam. Carved now, it is not the thing the seam waits on.
-    ASSERT_EQ(d1.Dispatch("INSERT INTO p VALUES (9, 0)").response.rfind("INSERTED", 0), 0u);
-
-    std::string deleted;
-    std::atomic<bool> delete_done{false};
-    std::thread other;
-    // One-shot by `other`: resetting the hook from inside it would destroy
-    // the function while it runs.
-    d0.SetBeforeInsertLogForTest([&] {
-        if (other.joinable()) return;
-        other = std::thread([&] {
-            deleted = d1.Dispatch("DELETE FROM p WHERE id = 8").response;
-            delete_done.store(true, std::memory_order_release);
-        });
-        // Long enough for the walk to pass the leftmost leaf; the delete
-        // then waits on row 1's leaf, or on the parent row, or is done.
-        const auto until = std::chrono::steady_clock::now() + 500ms;
-        while (!delete_done.load(std::memory_order_acquire) &&
-               std::chrono::steady_clock::now() < until) {
-            std::this_thread::sleep_for(2ms);
-        }
-    });
-    const std::string inserted = d0.Dispatch("INSERT INTO c VALUES (100000, 1), (10, 8)").response;
-    d0.SetBeforeInsertLogForTest(nullptr);
-    ASSERT_TRUE(other.joinable()) << "the seam never ran; the cell tested nothing";
-    other.join();
-
-    // At most one of the two may have succeeded: both is a child of 8
-    // with no 8.
-    const bool child_written = inserted.rfind("INSERTED", 0) == 0;
-    const bool parent_gone = deleted.rfind("DELETED 1", 0) == 0;
-    EXPECT_FALSE(child_written && parent_gone)
-        << "insert: " << inserted << "; delete: " << deleted;
-    const std::string orphans = d0.Dispatch("SELECT id FROM c WHERE pid = 8").response;
-    const std::string parent = d0.Dispatch("SELECT id FROM p WHERE id = 8").response;
-    EXPECT_TRUE(orphans == "id" || parent == "id\\n8")
-        << "children of 8: " << orphans << "; parent: " << parent;
 }
 
 // AY-Q8. A child `DELETE` holds no `S` on the parent it stops referencing.
@@ -741,13 +679,21 @@ TEST(FkCrossCoreRigTest, ASetBankedWhileAChildInsertIsOpenIsDeclinedAndTheWalkAn
 // The walk is driven from the cell's thread over the rig's one store, with
 // core 0's catalog, the instance's Cabin store and core 0's manager, and
 // its page-boundary switch (`enabled`) is the seam: at the third leaf,
-// core 1's dispatcher writes a child of 7 at id 5, which sorts into the
-// first. Not at the second: the walk's scan ring holds the leaf it last
-// fetched shared until its next fetch, so the first leaf is free only once
-// the second is fetched - which is when another core's writer, waiting on
-// that latch, would get it. **Red at `445e00d`**: the set banked empty and
-// `DELETED 1`.
-TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBanks) {
+// core 1's dispatcher moves child 10 - the first leaf's lowest key - from
+// parent 1 to 7. Not at the second: the walk's scan ring holds the leaf it
+// last fetched shared until its next fetch, so the first leaf is free only
+// once the second is fetched - which is when another core's writer,
+// waiting on that latch, would get it.
+//
+// **The write is an `UPDATE` since BB-S3; it was an `INSERT` of child 5.**
+// BB-R3, on BB-Q8 (b), refuses a named key below the relation's mark, and
+// an insert the mark admits lands on the rightmost leaf - ahead of the
+// walk, where the build's view finds it busy and defers - so no insert
+// reaches a leaf the walk has read. An update of the Cabin column writes
+// in place, behind the walk, through the same hook, which keeps the
+// subject. **Red at `445e00d`** in the insert shape: the set banked empty
+// and `DELETED 1`. The update shape has not been run against that commit.
+TEST(FkCrossCoreRigTest, AChildMovedOntoASeedBehindTheControllersBuildIsInTheSetItBanks) {
     FkRig r({});
     ASSERT_NE(r.rig, nullptr);
     if (Status seeded = r.Seed(); !seeded.ok()) FAIL() << seeded.message();
@@ -757,8 +703,8 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     for (const char* row : {"INSERT INTO p VALUES (1, 0)", "INSERT INTO p VALUES (7, 0)"}) {
         ASSERT_EQ(d0.Dispatch(row).response.rfind("INSERTED", 0), 0u) << row;
     }
-    // Children of 1 at ids 10..10000, so `c` spans several leaves and 5
-    // sorts into the first.
+    // Children of 1 at ids 10..10000, so `c` spans several leaves and 10
+    // is the first's lowest key.
     for (std::uint64_t id = 10; id <= 10000; id += 10) {
         const std::string sql = "INSERT INTO c VALUES (" + std::to_string(id) + ", 1)";
         ASSERT_EQ(d0.Dispatch(sql).response.rfind("INSERTED", 0), 0u) << sql;
@@ -787,7 +733,7 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     int boundaries = 0;
     // The action's boundary, then one per leaf: the fourth is the third leaf.
     const std::function<bool()> enabled = [&] {
-        if (++boundaries == 4) written = d1.Dispatch("INSERT INTO c VALUES (5, 7)").response;
+        if (++boundaries == 4) written = d1.Dispatch("UPDATE c SET pid = 7 WHERE id = 10").response;
         return true;
     };
     stats::CabinOptimizer controller;
@@ -795,7 +741,7 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
                                           &r.rig->core(0).transactions());
     ASSERT_TRUE(executor.Apply({extend}, enabled).ok());
     ASSERT_GE(boundaries, 4) << "the walk read under three leaves; the cell tested nothing";
-    ASSERT_EQ(written.rfind("INSERTED", 0), 0u) << written;
+    ASSERT_EQ(written, "UPDATED 1");
 
     parser::AstValue seven;
     seven.type = parser::ValueType::kInt;
@@ -804,7 +750,7 @@ TEST(FkCrossCoreRigTest, AChildCommittedDuringTheControllersBuildIsInTheSetItBan
     ASSERT_TRUE(key.has_value());
     const stats::CabinSet set = cabins.Find(*key);
     ASSERT_TRUE(set.valid()) << "the build banked nothing";
-    EXPECT_EQ(set.size(), 1u) << "the child written behind the walk is not in the set";
+    EXPECT_EQ(set.size(), 1u) << "the child moved behind the walk is not in the set";
 
     const std::string deleted = d0.Dispatch("DELETE FROM p WHERE id = 7").response;
     EXPECT_NE(deleted.find("FK_VIOLATION"), std::string::npos)

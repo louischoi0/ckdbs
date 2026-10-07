@@ -35,6 +35,7 @@ const char* CheckKindName(CheckKind kind) {
         case CheckKind::kTrxId: return "trx-id";
         case CheckKind::kUndoPtr: return "undo-ptr";
         case CheckKind::kVarHeap: return "var-heap";
+        case CheckKind::kSlotOrder: return "slot-order";
     }
     return "unknown";
 }
@@ -196,6 +197,10 @@ private:
         bool have_prev_pages = false;
         std::uint64_t current_max_id = 0;
         bool current_has_tuples = false;
+        // The last live id this page's walk emitted: slots are visited in
+        // slot order, so a live id at or below it is a slot holding a lower
+        // key than one before it (kSlotOrder, BB-R1).
+        std::uint64_t current_last_id = 0;
 
         auto on_new_page = [&](PageId page_id, heap::PageView& page) {
             if (current_page != kInvalidPageId && current_has_tuples) {
@@ -231,6 +236,7 @@ private:
                 return storage::VisitControl::kContinue;
             }
             ++report_.tuples_swept;
+            const bool first_on_page = !current_has_tuples;
             current_has_tuples = true;
 
             const std::span<const std::byte> payload = tuple.value().payload;
@@ -251,6 +257,13 @@ private:
             }
             const std::uint64_t id = id_or.value();
             current_max_id = std::max(current_max_id, id);
+            if (!first_on_page && id <= current_last_id) {
+                Add(CheckKind::kSlotOrder, page_id,
+                    "relation '" + name + "' slot " + std::to_string(slot) + ": id " +
+                        std::to_string(id) + " follows id " + std::to_string(current_last_id) +
+                        " on the same page; a page's slot order is its key order");
+            }
+            current_last_id = id;
 
             std::uint64_t word = 0;
             std::memcpy(&word, payload.data(), sizeof word);

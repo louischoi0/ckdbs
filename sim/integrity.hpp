@@ -33,6 +33,12 @@
 //   kVarHeap        the per-relation var-heap chain is walkable and typed
 //                   kVarHeap; every kSpilled cell resolves to bytes of the
 //                   recorded length on a page of this relation's own chain.
+//   kSlotOrder      BB-R1 (`instructions/v3.0.0/workorder-bb-issue-under-
+//                   the-leaf.md`, BB-R6): every page's slot order is its key
+//                   order - a page's live slots ascend by Keystone id, on
+//                   every relation. The sim drives one session on core 0, so
+//                   this guards the single-core and recovery paths; a
+//                   cross-core window is the two-core rig's to reach.
 //
 // Deliberately out of scope for v1, stated rather than implied: catalog
 // relations (`sys.*`) are checked at the catalog level only — their rows
@@ -70,6 +76,7 @@ enum class CheckKind : std::uint8_t {
     kTrxId = 6,
     kUndoPtr = 7,
     kVarHeap = 8,
+    kSlotOrder = 9,
 };
 
 const char* CheckKindName(CheckKind kind);

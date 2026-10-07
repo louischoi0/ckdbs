@@ -183,13 +183,11 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
 // resume from. That is this mark - a page, and how many of that page's
 // rows the walk covered in the page's own emission order.
 //
-// **Rows, not slots.** The emission order is the page's, and it is not
-// always slot order (`Step::emit_in_key_order` sorts a page by Keystone id
-// first), so the ordinal counts accepted rows in whatever order the walk
-// emits them. Within one statement that sequence is fixed - nothing writes
-// to the relation between the outer rows of a SELECT (spec §4, the same
-// argument JB4's location hints rest on) - so an ordinal taken by one walk
-// names the same row to the next.
+// **The ordinal** counts the rows the walk handed its visitor on that page,
+// in the order it emits them - slot order. Within one statement that
+// sequence is fixed - nothing writes to the relation between the outer rows
+// of a SELECT (spec §4, the same argument JB4's location hints rest on) - so
+// an ordinal taken by one walk names the same row to the next.
 //
 // `page == kInvalidPageId` is "from the head", which is where a first walk
 // starts and what an unset mark means.
@@ -1578,28 +1576,14 @@ private:
         // where the original list's one exposed value was always filtered
         // down to a single row.
         //
-        // **Which order that is depends on whether this relation has taken
-        // an out-of-order key**, and getting it from the pk alone is wrong
-        // for one of the two (heap-and-tuple.md §4.1). While `key_order` is
-        // kAscending, ids ascend with insertion, so pk order *is* the walk's
-        // order - across pages by `min_key`, within a page because slots are
-        // appended - and sorting by pk is exact even after a leaf division
-        // has given a later page a lower id. Once an id has been admitted
-        // below the relation's high-water mark, it can sit in a page below
-        // the ids already there, so the walk emits that page out of key
-        // order and a pk sort here would make a *served* execution disagree
-        // with the recording one that preceded it. There the entry's own
-        // (page, slot) is what the walk gives, which is the order
-        // WalkAndRecord committed - so an unordered relation keeps it and
-        // gains only the repositioning of an appended entry.
-        if (access.key_order == catalog::KeyOrder::kUnordered) {
-            std::sort(located.begin(), located.end(), [](const Located& a, const Located& b) {
-                return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
-            });
-        } else {
-            std::sort(located.begin(), located.end(),
-                      [](const Located& a, const Located& b) { return a.pk < b.pk; });
-        }
+        // **That order is pk order**: every page's slot order is its key
+        // order on every relation (BB-R1, BB-R3), so the walk emits ids
+        // ascending - across pages by `min_key`, within a page because a row
+        // is placed under its page's hold in issue order - and sorting by pk
+        // is exact even after a leaf division has given a later page a lower
+        // id.
+        std::sort(located.begin(), located.end(),
+                  [](const Located& a, const Located& b) { return a.pk < b.pk; });
 
         // Phase 2. The page is fetched per entry rather than carried out of
         // phase 1: `AcceptTupleAt` descends into the next step, and anything
@@ -1730,10 +1714,6 @@ private:
         // the safe direction, since the borrow is a lower bound on where
         // the walk has reached.
         std::uint64_t walk_page_min_key = 0;
-        // The page whose rows have already been emitted whole, in key order.
-        // Only used when `emit_in_key_order` is set - see below.
-        PageId ordered_page = kInvalidPageId;
-        std::vector<std::pair<std::uint64_t, std::uint16_t>> by_key;
 
         // The access the visitor reads, through a pointer rather than the
         // parameter: a park at the page boundary can cross a catalog
@@ -1829,46 +1809,6 @@ private:
                 prefix->mark = WalkMark{page_id, visited_on_page};
                 return s;
             };
-
-            // ---- Emitting a page in key order (step_chain.hpp) -----------
-            //
-            // The walk has no per-page hook, so the first slot of a page
-            // stands in for one: it emits every live slot of that page in key
-            // order and marks the page done, and the remaining slots of the
-            // same page are then no-ops. Across pages nothing changes -
-            // they are already visited in ascending `min_key`.
-            if (step.emit_in_key_order) {
-                if (page_id == ordered_page) return storage::VisitControl::kContinue;
-
-                by_key.clear();
-                const std::uint16_t n = page.slot_count();
-                by_key.reserve(n);
-                for (std::uint16_t i = 0; i < n; ++i) {
-                    auto payload = page.PayloadAt(i, n);
-                    if (!payload.ok()) continue;  // retired or out-of-range slot
-                    auto id = KeystoneIdOfPayload(payload.value());
-                    if (!id.ok()) {
-                        inner = id.status();
-                        return id.status();
-                    }
-                    by_key.emplace_back(id.value(), i);
-                }
-                std::sort(by_key.begin(), by_key.end());
-
-                // Marked before emitting, not after: AcceptTupleAt can stop
-                // the walk mid-page (a LIMIT filling up), and a page left
-                // unmarked would be re-emitted from its next slot.
-                ordered_page = page_id;
-                for (const auto& [key, ordered_slot] : by_key) {
-                    auto ok = accept(ordered_slot);
-                    if (!ok.ok()) {
-                        inner = ok;
-                        return ok;
-                    }
-                    if (walk_ends_on_stop()) return stop_here();
-                }
-                return storage::VisitControl::kContinue;
-            }
 
             auto accepted = accept(slot);
             if (!accepted.ok()) {

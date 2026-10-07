@@ -1,0 +1,78 @@
+{
+ "label": "B",
+ "run": 5,
+ "shape": "eight",
+ "cores": 8,
+ "clients": 8,
+ "count": 2000,
+ "durability": "relaxed",
+ "server_cpus": null,
+ "client_cpus": null,
+ "wait_s": 120.0,
+ "host_before": {
+  "loadavg": "4.15 3.22 2.12 3/315 1173637",
+  "competing": [
+   "1172003 ctest --test-dir /home/cdkbs/ckdbs/.claude/worktrees/aq-s1-catalog/build --output-on-failure -LE heap-suspended"
+  ]
+ },
+ "host_after": {
+  "loadavg": "3.98 3.20 2.12 2/316 1173668",
+  "competing": [
+   "1172003 ctest --test-dir /home/cdkbs/ckdbs/.claude/worktrees/aq-s1-catalog/build --output-on-failure -LE heap-suspended"
+  ]
+ },
+ "pid": 1173639,
+ "mount": {
+  "recovery_checkpoint_us": 8362.0
+ },
+ "rows": 16000,
+ "span_s": 0.4544,
+ "rows_per_s": 35214.8,
+ "p0_us": 41.0,
+ "p25_us": 73.2,
+ "p50_us": 90.3,
+ "p95_us": 186.6,
+ "p99_us": 292.1,
+ "max_us": 211678.7,
+ "refusals": 0,
+ "errors": 0,
+ "first_error": null,
+ "client_cpu_share": [
+  0.3,
+  0.33,
+  0.32,
+  0.32,
+  0.32,
+  0.33,
+  0.31,
+  0.31
+ ],
+ "client_cores": [
+  0.0,
+  0.0,
+  1.0,
+  5.0,
+  4.0,
+  7.0,
+  6.0,
+  6.0
+ ],
+ "counts": [
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000"
+ ],
+ "meta_delta": {
+  "wal_syncs": 0.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "sched_foreground_polled_us": 267133.0,
+  "sched_foreground_polls": 2002.0,
+  "sched_foreground_consumed_us": 267133.0
+ }
+}

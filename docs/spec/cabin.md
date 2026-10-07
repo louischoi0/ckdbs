@@ -247,10 +247,9 @@ set on a top-level runner.
 moves an earlier pk into an observed value appends that pk at the set's
 end, and serving entry-order would reorder a reply against I12's
 within-step contract — reachable by a plain single-relation probe, not
-only by a join. The serve sorts to the walk's order before emission — pk
-while a relation's keys have only ascended, page and slot once one has
-been admitted below its high-water mark — IX8a's rule applied with
-`heap-and-tuple.md` §4.1's `key_order` respected.
+only by a join. The serve sorts to the walk's order before emission, which is
+pk order — a page's slot order is its key order (`heap-and-tuple.md`
+§4.1, BB-R1 and BB-R3) — IX8a's rule.
 
 ### 4b. What a set speaks for, and what a step may answer from it
 
