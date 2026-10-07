@@ -178,8 +178,7 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
     // pages it passes (`Catalog::RowIdMark`).
     PageId current = root;
     for (std::uint32_t steps = 0; steps < kCatalogOverflowLimit; ++steps) {
-        auto bytes = access == storage::PageAccess::kRead ? store.GetForRead(current)
-                                                          : store.Get(current);
+        auto bytes = store.Fetch(current, access);
         if (!bytes.ok()) return bytes.status();
 
         heap::PageView page(bytes.value().bytes());

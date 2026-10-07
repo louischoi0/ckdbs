@@ -319,7 +319,7 @@ StatusOr<PageId> ChainVisitOnePage(
     // dirty protocol. The visitor's per-page discipline is what makes
     // the ring's stricter lifetime safe: each page is finished before
     // the next fetch can rotate its frame away.
-    // Peak pins held by this call: 1. On the two `store` branches it is
+    // Peak pins held by this call: 1. On the `store` branch it is
     // dropped on return, which is the between-pages suspension property the
     // header promises. **On the ring branch the pin is the fetcher's and
     // outlives this call** (AM-R8): a ScanFetcher holds one pin, and
@@ -331,17 +331,12 @@ StatusOr<PageId> ChainVisitOnePage(
     // forms only.
     storage::PageRef page_ref;
     std::byte* page_data = nullptr;
-    if (access == storage::PageAccess::kWrite) {
-        auto fetched = store.Get(page_id);
-        if (!fetched.ok()) return fetched.status();
-        page_ref = std::move(fetched.value());
-        page_data = page_ref.bytes().data();
-    } else if (fetcher != nullptr) {
+    if (access != storage::PageAccess::kWrite && fetcher != nullptr) {
         auto fetched = fetcher->Fetch(page_id);
         if (!fetched.ok()) return fetched.status();
         page_data = fetched.value().data();
     } else {
-        auto fetched = store.GetForRead(page_id);
+        auto fetched = store.Fetch(page_id, access);
         if (!fetched.ok()) return fetched.status();
         page_ref = std::move(fetched.value());
         page_data = page_ref.bytes().data();

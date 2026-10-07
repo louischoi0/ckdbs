@@ -654,9 +654,10 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
     // writeback copied must not match the generation that copy recorded.
     slot->dirty_gen = ++dirty_gens_;
     // An ordinary miss starts warm (usage 1), not cold: one usage point is
-    // one sweep rotation of grace, the same a hit's bump buys. A *ring*
-    // fetch starts cold, because a scan's touch is not heat (§5) and the
-    // ring's own slot release depends on usage staying zero.
+    // one sweep rotation of grace, the same a hit's bump buys. A ring fetch
+    // and a `kScan` fault start cold (`FetchHeat`): a scan's first touch is
+    // not heat, and the ring's own slot release depends on usage staying
+    // zero.
     slot->usage = warm ? std::uint8_t{1} : std::uint8_t{0};
     return std::span<std::byte, kPageSize>(*slot->bytes);
 }
@@ -920,7 +921,7 @@ void DevicePageStore::ReleaseFrameLocked(Frame& frame) noexcept {
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
                                                                          bool mark_dirty,
-                                                                         bool bump_usage) {
+                                                                         FetchHeat heat) {
     // **PW1c-7's stamp claim went with the fault grants** (AW-S1b). It
     // restored a core's write rights after a restart by reading the page's
     // own stream stamp, and its *read* trigger was "this core may not fault
@@ -949,7 +950,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         // §3.1-2: a saturating bump on every hit, including a read -
         // "recently used" is about access, not about mutation. A *ring*
         // fetch is the one exception (§5): a scan's touch is not heat.
-        if (bump_usage && it->second->usage < kClockUsageCap) ++it->second->usage;
+        if (heat != FetchHeat::kRing && it->second->usage < kClockUsageCap) ++it->second->usage;
         return std::span<std::byte, kPageSize>(*it->second->bytes);
     }
 
@@ -1016,7 +1017,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("pagestore", "read page=" + std::to_string(page_id) + " from device");
     }
-    return InsertFrame(page_id, std::move(slot), mark_dirty, bump_usage);
+    return InsertFrame(page_id, std::move(slot), mark_dirty, /*warm=*/heat == FetchHeat::kWarm);
 }
 
 void DevicePageStore::ReleaseScanSlot(PageId page_id) noexcept {
@@ -1122,7 +1123,7 @@ public:
         // the scan waits for rather than reads through (AM-R8c).
         bool faulted = false;
         auto bytes = store_.FetchAndPin(page_id, PinMode::kShared, /*for_read=*/true,
-                                        /*bump_usage=*/false, &faulted);
+                                        FetchHeat::kRing, &faulted);
         if (!bytes.ok()) return bytes.status();
         held_ = page_id;
         if (faulted) {
@@ -1427,21 +1428,21 @@ Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetUnpinned(PageId page_id) {
-    return Resolve(page_id, /*mark_dirty=*/true, /*bump_usage=*/true);
+    return Resolve(page_id, /*mark_dirty=*/true, FetchHeat::kWarm);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForReadUnpinned(PageId page_id) {
-    return Resolve(page_id, /*mark_dirty=*/false, /*bump_usage=*/true);
+    return Resolve(page_id, /*mark_dirty=*/false, FetchHeat::kWarm);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
                                                                   bool mark_dirty,
-                                                                  bool bump_usage) {
+                                                                  FetchHeat heat) {
     // **The device-map adoption went with the lease** (AW-S1b): it existed
     // because a peer's private copy of the free map was taken at its mount
     // and went stale from that moment, and there is one copy now.
     if (!IsAllocated(page_id)) return NotAllocated(page_id);
-    return ResidentBytes(page_id, mark_dirty, bump_usage);
+    return ResidentBytes(page_id, mark_dirty, heat);
 }
 
 Status DevicePageStore::NotAllocated(PageId page_id) const {
@@ -2114,13 +2115,13 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 // would put it in every store that never faults anything.
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId page_id, PinMode mode,
                                                                       bool for_read,
-                                                                      bool bump_usage) {
-    return FetchAndPin(page_id, mode, for_read, bump_usage, /*faulted=*/nullptr);
+                                                                      FetchHeat heat) {
+    return FetchAndPin(page_id, mode, for_read, heat, /*faulted=*/nullptr);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId page_id, PinMode mode,
                                                                       bool for_read,
-                                                                      bool bump_usage,
+                                                                      FetchHeat heat,
                                                                       bool* faulted) {
     if (faulted != nullptr) *faulted = false;
     // **AM-S2: the pair the shared pool must not let anything between.**
@@ -2148,7 +2149,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         // caller that passes a non-null `faulted`.
         const bool was_resident =
             faulted != nullptr && frames_.find(page_id) != frames_.end();
-        auto bytes = Resolve(page_id, /*mark_dirty=*/!for_read, bump_usage);
+        auto bytes = Resolve(page_id, /*mark_dirty=*/!for_read, heat);
         if (!bytes.ok()) return bytes.status();
         PinFrame(page_id, mode);
         if (faulted != nullptr) *faulted = !was_resident;
@@ -2207,7 +2208,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             // usage bump, and returns the span. Calling it here rather than
             // reproducing those two side effects is what keeps `Get` and
             // `GetForRead` meaning exactly what they meant.
-            auto bytes = Resolve(page_id, /*mark_dirty=*/!for_read, bump_usage);
+            auto bytes = Resolve(page_id, /*mark_dirty=*/!for_read, heat);
             if (!bytes.ok()) return bytes.status();
             // The `nullopt` arm is **unreachable as the code stands**: the
             // latch is held continuously from the `resident` test above
@@ -2245,7 +2246,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             hold.unlock();
             // The reservation (and its sweep, under holds of its own), the
             // device read and the checksum verify, all outside this hold.
-            auto loaded = Resolve(page_id, /*mark_dirty=*/!for_read, bump_usage);
+            auto loaded = Resolve(page_id, /*mark_dirty=*/!for_read, heat);
             if (!loaded.ok()) return loaded.status();
         }
 
@@ -2269,7 +2270,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         // `InsertFrame`. One inexactness, in the safe direction: if another
         // core loaded the page while this call was outside the latch, the
         // `Resolve` above found it resident and inserted nothing, and this
-        // still says faulted. The ring then takes a slot for a frame that
+        // still says faulted - unless that core's fault was a `kScan` one,
+        // whose cold frame the ring then drops at rotation, harmlessly: it
+        // is clean, unpinned and cold either way. The ring then takes a slot for a frame that
         // core faulted - which its own `InsertFrame` left warm at usage 1,
         // so `ReleaseScanSlot` abandons rather than drops it.
         if (faulted != nullptr) *faulted = true;
@@ -2379,7 +2382,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // both correct and the only thing left; the id is already allocated, so
     // this cannot re-enter the create path.
     auto refetched = FetchPinned(id, PinMode::kExclusive, /*for_read=*/false,
-                                 /*bump_usage=*/true);
+                                 FetchHeat::kWarm);
     if (!refetched.ok()) return refetched.status();
     return std::pair<PageId, std::span<std::byte, kPageSize>>(id, refetched.value());
 }

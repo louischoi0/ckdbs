@@ -39,6 +39,19 @@ namespace kds::storage {
 enum class PageAccess {
     kRead,   // the visitor will not write through the page
     kWrite,  // the visitor may modify tuples in place
+    // A read, for the outermost read walk of a SELECT (BE-R5): a page it
+    // faults in enters cold, so a scan larger than the pool does not
+    // displace the working set; a page it finds resident warms as any hit.
+    kScan,
+};
+
+// How a fetch counts toward its frame's CLOCK usage (`eviction.md` §3.1).
+// Two answers, where a flag gave one: whether a fault enters warm, and
+// whether a hit bumps.
+enum class FetchHeat : std::uint8_t {
+    kWarm,  // a fault enters at usage 1, a hit bumps: every ordinary fetch
+    kScan,  // a fault enters at usage 0, a hit bumps: `PageAccess::kScan` (BE-R5)
+    kRing,  // a fault enters at usage 0, a hit never bumps: the scan ring (§5)
 };
 
 // How a bulk sequential reader fetches pages (docs/spec/eviction.md §5,
@@ -175,13 +188,11 @@ public:
     // directly above three accessors that still did create-then-pin
     // inline - which is worse than not claiming it, because a reader
     // checking the seam would have stopped here.
-    // `bump_usage` is the scan ring's (AM-R8a): the ring pins the page it
-    // hands out and must still not register as heat
-    // (`docs/spec/eviction.md` section 5). Every other caller passes true,
-    // and a store with no reclaim has no counter to bump.
+    // `heat` says how the fetch counts toward the frame's usage
+    // (`FetchHeat`); a store with no reclaim has no counter to bump.
     virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
                                                                  bool for_read,
-                                                                 bool /*bump_usage*/) {
+                                                                 FetchHeat /*heat*/) {
         auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
         PinFrame(page_id, mode);
@@ -192,7 +203,19 @@ public:
     // mutation. Fails with NotFound if page_id was never created.
     StatusOr<PageRef> Get(PageId page_id) {
         auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false,
-                                 /*bump_usage=*/true);
+                                 FetchHeat::kWarm);
+        if (!bytes.ok()) return bytes.status();
+        return PageRef(this, page_id, bytes.value());
+    }
+
+    // The accessor a page walk's `PageAccess` names, so a visitor does not
+    // spell the mapping itself: `kWrite` is `Get`, `kRead` is `GetForRead`,
+    // and `kScan` is `GetForRead` with a fault entering cold (BE-R5).
+    StatusOr<PageRef> Fetch(PageId page_id, PageAccess access) {
+        if (access == PageAccess::kWrite) return Get(page_id);
+        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
+                                 access == PageAccess::kScan ? FetchHeat::kScan
+                                                             : FetchHeat::kWarm);
         if (!bytes.ok()) return bytes.status();
         return PageRef(this, page_id, bytes.value());
     }
@@ -201,12 +224,7 @@ public:
     // are still mutable and the promise is by contract, not by type
     // (GetForReadUnpinned's note); a read fetch that turns out to write
     // calls MarkDirty() on the handle.
-    StatusOr<PageRef> GetForRead(PageId page_id) {
-        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
-                                 /*bump_usage=*/true);
-        if (!bytes.ok()) return bytes.status();
-        return PageRef(this, page_id, bytes.value());
-    }
+    StatusOr<PageRef> GetForRead(PageId page_id) { return Fetch(page_id, PageAccess::kRead); }
 
     // **The create half of the fetch-and-pin pair** (AM-S2). Same obligation
     // as `FetchPinned` and the same default - create, then pin - so a store

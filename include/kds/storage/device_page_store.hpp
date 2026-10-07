@@ -67,10 +67,13 @@
 // falls through to the authoritative path. A database with no waystone
 // directory pays one reserved page for the bitmap and nothing else.
 //
+// **A bounded pool** (eviction.md, BE): frames are slots in chunks that
+// never move, at most `buffer_pool_frames` of them, reclaimed by a CLOCK hand
+// in bounded batches; a full pool refuses a fill `ResourceExhausted`, only
+// outside a mutation's no-refuse window (page_store.hpp). The sections below
+// say what each lock protects.
+//
 // Not here, deliberately:
-//   - No eviction. Everything touched stays resident, as InMemoryPageStore
-//     already did. Clock eviction needs PageRef (page.md section 3) and
-//     the frame-reclamation policy is an open decision in CLAUDE.md.
 //   - Dirty tracking is by which accessor the caller chose, not by what it
 //     actually wrote: Get() marks the frame dirty, GetForRead() leaves it
 //     alone, and both hand out the same raw mutable span. A reader that
@@ -177,10 +180,14 @@
 //     1b, one page at a time and released before the gate, so no frame of
 //     its own is latched across the wait - waiting for a foreign exclusive
 //     holder on a flush, trying once and skipping in the background drain
-//     (`WriteBack`'s `HeldFrames`). A fault does not reach WriteBack: its
-//     sweep (`SweepLocked`, at a fill's reservation) only queues a dirty frame, and every
-//     WriteBack caller holds no page latch. One wired would be sound only
-//     in `kSkip`, and only if it skipped a frame its own core holds:
+//     (`WriteBack`'s `HeldFrames`). An ordinary fault does not reach
+//     WriteBack: its sweep (`SweepLocked`, at a fill's reservation) only
+//     queues a dirty frame, and every WriteBack caller holds no page latch.
+//     **Drain mode is the one fault path that does** (BE-Q11: recovery, a
+//     rollback, the assertion loops), and only on a thread holding no pin,
+//     in `kSkip` - the one shape that is sound, because a writeback is sound
+//     from the fault path only in `kSkip`, and only if it skips a frame its
+//     own core holds:
 //     neither the writer thread nor core 0's inline sync takes a page
 //     latch, but a shared try re-enters this core's own exclusive hold
 //     (`page_latch.hpp`'s `Next`), so the writeback could copy a page
@@ -879,7 +886,7 @@ private:
     // the frame. `mark_dirty` is the only thing Get and GetForRead differ
     // in.
     StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
-                                                      bool bump_usage);
+                                                      FetchHeat heat);
 
     // **A slot** (BE-R1): one entry of a chunk's frame array, beside the
     // chunk's page bytes. A slot never moves while the store lives, so a
@@ -1190,10 +1197,10 @@ private:
 
     // `mark_dirty` is false only for a read-only fetch: a frame faulted in
     // by a reader has not been modified, so it enters the map clean and
-    // nothing writes it back. `bump_usage` is false only for a ring fetch
-    // (§5: a scan's touch must not look like heat).
+    // nothing writes it back. `heat` is how the fetch counts (`FetchHeat`):
+    // `kScan` and `kRing` fault cold, and `kRing` alone never bumps a hit.
     StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
-                                                            bool bump_usage = true);
+                                                            FetchHeat heat = FetchHeat::kWarm);
 
     // Whether the device holds nothing for `page_id` - not addressable, or
     // every byte zero: a page allocated in the map and never written. What
@@ -1236,7 +1243,7 @@ private:
     // recorded obligation). See the definition for what this does and does
     // not yet close.
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                         bool for_read, bool bump_usage) override;
+                                                         bool for_read, FetchHeat heat) override;
 
     // `FetchPinned`'s whole body, plus the one answer the scan ring needs
     // and no other caller does: **did this call fault the page in, or find
@@ -1255,7 +1262,7 @@ private:
     // arm inserted nothing and this still says faulted, because the
     // question it answers is "did this call take the branch that loads".
     StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
-                                                          bool for_read, bool bump_usage,
+                                                          bool for_read, FetchHeat heat,
                                                           bool* faulted);
 
     // The create half of the same pair. See the definition for why its

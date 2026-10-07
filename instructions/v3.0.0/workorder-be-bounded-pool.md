@@ -1000,3 +1000,64 @@ is their subject. Every other cell runs at the floor.
   rewritten. `eviction.md`'s and `known-gaps.md`'s are BE-S6's.
 
 **Suite after the review:** 3203/3203 plain, at the floor, and armed.
+
+### BE-S5 — cold scans, 2026-10-07
+
+Built on `worktree-pool-budget-required` from `52c1a8fa`.
+
+**Code:**
+- `PageAccess::kScan` is added.
+- `FetchHeat` (`kWarm`, `kScan`, `kRing`) replaces `FetchPinned`'s
+  `bool bump_usage` all the way down to `InsertFrame`. That splits the
+  flag's two answers, warm on a fault and bump on a hit, as BE-R5 asks.
+  `kScan` faults cold and bumps a hit; the ring is unchanged (cold, never
+  bumped).
+- `PageStore::Fetch(id, access)` names the accessor each `PageAccess`
+  means. It replaces the four visitors' own spellings of the choice (the
+  btree leaf, the heap chain page, the index leaf, the catalog chain), and
+  `GetForRead` is now `Fetch(id, kRead)`.
+- `RunWalkStep` passes `kScan` for the outermost walk only
+  (`index == 0 && parent_ == nullptr`, named `outermost`). Nested inner
+  walks, `UPDATE`/`DELETE` sub-chains (their runner has a parent), the
+  reverse foreign-key walk and the assertion builds stay `kRead`.
+
+**Cells:**
+- `ColdScanTest.AHotWorkingSetSurvivesAScanFourTimesThePool`: a 32-page hot
+  set, read five times, stays entirely resident under a scan four times a
+  256-frame pool. With `kScan` entering warm, 0 of 32 stay.
+- `ColdScanTest.AScannedPageIsTheFirstVictimAndAReadPageIsNot`: one reclaim
+  takes the cold page, not the warm one. This is the shape a nested walk
+  keeps.
+- `ColdScanTest.AScannedPageItTouchesAgainWarmsLikeAnyHit`: added by the
+  review. It kills the mutant "a `kScan` hit does not bump".
+- `ColdScanTest.ARepeatedRangeUnderThePoolHitsOnItsSecondPass`: a range
+  scanned twice reads the device 0 times the second time. This is xrock's
+  per-day probe shape, which the declined ring would have re-faulted.
+- `BoundedPoolTest.ASelectLargerThanThePoolLeavesTheWorkingSetResident`:
+  added by the review, through the sim. After a clean restart, a small
+  table is read five times, then a `COUNT(*)` scans a table about twice the
+  512-frame pool, then the small table is read again with 0 device reads.
+  **With the walk passing `kRead` it reads 9 pages back.** A first version
+  scanned right after the load and failed unmutated: the load's own warm
+  frames had the hand lapping the hot set down before any cold frame was
+  reclaimable. That is CLOCK's answer to a pool warmed by writes, whatever
+  the scan's heat, so the cell now restarts first and the row says so.
+
+**The review found no defect.** Applied from it:
+- the two cells above;
+- `GetForRead` folded into `Fetch`;
+- the predicate named `outermost`;
+- six stale comments: the ring's "left warm at usage 1" race note,
+  `InsertFrame`'s "a ring fetch starts cold", `ResidentBytes`' heat line,
+  and `heap_chain`'s two branch notes.
+
+Not applied: a `kScan` loser of `InsertFrame`'s lost race does not bump.
+That path is effectively unreachable outside the ring (AM-S2-P F-1), and
+the fault did happen.
+
+**The waystone, index, cabin and inner-build contract suites** are part of
+the suite, which is 3208/3208 plain, at the floor and armed. Their
+results are byte-identical, since they compare configurations and none of
+them failed. Heat changes residency, never a result.
+
+**Not measured; measured at the milestone's close.**

@@ -1894,6 +1894,14 @@ private:
             position_->Position(access.oid, 0, kIdSpaceEnd);
         }
 
+        // **The outermost walk faults cold** (BE-R5): a page it reads once is
+        // the hand's first victim, so a scan larger than the pool does not
+        // displace the working set, and a page it finds resident - or reads
+        // again - warms as any hit. Nested inner walks stay `kRead`: a join's
+        // inner relation is read once per outer row, which is heat.
+        const bool outermost = index == 0 && parent_ == nullptr;
+        const storage::PageAccess walk_access =
+            outermost ? storage::PageAccess::kScan : storage::PageAccess::kRead;
         const PageId walk_origin = cur;
         for (std::uint32_t pages = 0;; ++pages) {
             if (Status s = storage::CheckPageWalkBudget(pages, walk_origin, "relation walk");
@@ -1903,10 +1911,8 @@ private:
             // Per page, not once per walk: the VM makes these fetches
             // itself now, so R1's guard gets to see each one.
             NoteFetch();
-            auto next = is_btree ? btree::BtreeVisitLeafPage(store_, cur,
-                                                             storage::PageAccess::kRead, visit_fn)
-                                 : heap::ChainVisitOnePage(store_, cur,
-                                                           storage::PageAccess::kRead, visit_fn);
+            auto next = is_btree ? btree::BtreeVisitLeafPage(store_, cur, walk_access, visit_fn)
+                                 : heap::ChainVisitOnePage(store_, cur, walk_access, visit_fn);
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) {
@@ -1947,7 +1953,7 @@ private:
             // its own runner and would otherwise re-take a slice per outer
             // row, over-declaring a position the relation `IS` above
             // already covers. The M2 rule: a nested walk declares no slice.
-            if (position_ != nullptr && index == 0 && parent_ == nullptr && is_btree) {
+            if (position_ != nullptr && outermost && is_btree) {
                 position_->Position(live_access->oid, walk_page_min_key, kIdSpaceEnd);
             }
         }
