@@ -170,6 +170,8 @@ option(KDS_BUILD_BENCH "Build the ckdbs microbenchmarks" OFF)
 if(KDS_BUILD_BENCH)
     add_executable(kds_read_view_bench bench/read_view_bench.cpp)
     target_link_libraries(kds_read_view_bench PRIVATE kds)
+    add_executable(kds_pool_sweep_bench bench/pool_sweep_bench.cpp)
+    target_link_libraries(kds_pool_sweep_bench PRIVATE kds)
 endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the

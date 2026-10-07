@@ -527,3 +527,137 @@ read.
   site;
 - the EV6 gap is restated rather than deleted;
 - BA-R5's partitions are named in BE-R1 and BE-Q9.
+
+### BE-S1 — the census and the premise, 2026-10-07
+
+Run on `worktree-pool-budget-required` at `e4b107af`
+(`v2.7.0-659-ge4b107af`). No engine file moved. The stage adds
+`bench/pool_sweep_bench.cpp` (`kds_pool_sweep_bench`, under
+`KDS_BUILD_BENCH`) and one `docs/inflight/bugs/` entry.
+
+**Premise: it holds, so BE goes on.** `kds_pool_sweep_bench` reads the
+pages of a `2 × budget` file in order through `GetForRead` on one unarmed
+`DevicePageStore`, `build-release`. It samples the first 2,000 misses past
+the budget. "Below" means a fault into a pool with room; "past" means a
+fault that pays the inline sweep.
+
+| budget | below p50 / p99 | past p0 / p25 / p50 / p90 / p99 / max | the whole half, extrapolated |
+|---|---|---|---|
+| 16,384 | 5.4 / 10.0 µs | 162 / 225 / 266 / 291 / 332 / 1,237 µs | 4.2 s |
+| 65,536 | 5.6 / 10.9 µs | 792 / 890 / 980 / 1,062 / 1,371 / 4,619 µs | 64 s |
+| 131,072 | 5.6 / 9.8 µs | 1,960 / 2,156 / 2,222 / 2,353 / 3,119 / 9,241 µs | 294 s |
+
+- At 131,072 frames the engine pays 2.2 ms per miss. That is 30% of §1.2's
+  standalone 7.5 ms, against the stop line of 10%.
+- The cost grows about linearly with the resident count over this range
+  (×3.7 for ×4 frames, ×2.3 for ×2): every miss copies, sorts and re-finds
+  the table.
+- A miss past the budget costs about 400 times one below it.
+- RSS after the 131,072 run was 1,042 MiB, the budget's 1,024 MiB plus the
+  process.
+- **The 786,432 cell was not run.** It needs about 6 GiB for the pool. The
+  host had about 4 GiB available because xrock's `kds_server` (restarted at
+  11:48 UTC with `buffer_pool_frames = 1450000`) and its loader held the
+  rest. The loader also used about one of the eight CPUs throughout, so
+  every figure above was taken next to it. The order of magnitude is what
+  the gate asks, and the loader cannot move it.
+
+**Census A: every `frames_` site at `e4b107af`.** The slot form is what
+BE-S2 changes it to: the table maps `PageId → Frame*` into chunked slots,
+so every lookup gains one pointer hop and keeps its shape.
+
+| kind | sites (`device_page_store.cpp` unless named) | slot form |
+|---|---|---|
+| insert | `InsertFrame` `:620` (lost race), `:662` (`try_emplace`) | publish a reserved slot; a lost race returns it to the free list |
+| erase | `ReleaseScanSlot` `:808/:828`, `EvictClean` `:1794/:1822`, sweep `:2573/:2617` | one tail: unmap, poison, reset, push free |
+| walk | `Flush` `:1727`, `DirtyPageIds` `:1763`, `DirtyPagesWithRecLsn` `:1775`, `pinned_frames` `:2529`, the sweep's sorted copy `:2556-2558` | the map for the first four (O(resident), per checkpoint); the sweep walks slots from the hand and the sort is deleted |
+| lookup | `ResidentBytes` `:722`, `ClaimNamedIdLocked` `:1021`, `StampPageLsn` `:1254`, `AwaitWalGate` `:1346`, `AwaitWritebackClaim` `:1386`, `WriteBack` `:1492/:1510/:1522`, `FetchAndPin` `:1923/:1987`, `PinResidentAndRelease` `:2069`, `CreatePinned` `:2128/:2140`, `PinFrame` `:2197`, `UnpinFrame` `:2362`, `MarkFrameDirty` `:2438`, the three test hooks `:2443/:2457/:2467`, `IsPinnedClass` `:2498` | `it->second->` for `it->second.`; `WriteBack`'s `Frame*` across its phases stays valid, because a slot never moves |
+| field | the sweep trigger `:690/:693`, the sweep's empty test `:2547`, `MaintainFreeReserve` `:1697`, the log line `:2625`, the header's `resident_pages()` `:766` | `frames_.size()` is the resident count, unchanged |
+
+`pinned_frames` walks the table unlatched, a gap that predates BE. It is
+read only by cells, and BE-S2 latches it when it touches the line.
+
+**Census B: refusals after a write. This is what BE-S4 has to answer.**
+A read-only census found 27 sites where a fetch or a creation follows a
+page write in one mutation. Twenty are safe: their error leaves nothing
+that rollback or recovery cannot undo. Seven groups are not, and each one
+is reachable **today** on a device error, before any cap.
+`docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`
+lists them, worst first:
+- an `INSERT` refused between placing its row and writing its undo. This
+  leaves an orphan row that becomes visible past the floor, missing some or
+  all of its index entries;
+- a refused rollback compensation;
+- an index split torn after the leaf divides;
+- a root re-publish refused after the new root is built;
+- the bulk fill's three sites;
+- var-heap growth before its undo;
+- the assertion commit and abort loops.
+
+Census B also found two things that are not a crash and not a refusal
+after a write:
+- recovery redo reads any non-`Corruption` fetch error as "page absent"
+  on a `PAGE_INIT` or full-image record and re-creates the page; on any
+  other record it refuses the mount (`redo.cpp:335-368`);
+- `command_dispatcher.cpp:7933`'s comment says the pending set is untouched,
+  and that is false.
+
+**What this does to BE-R4, and CLA's proposal (BE-Q11).** BE-Q4 (a)'s
+refusal is safe only where no write of the mutation precedes it. Census B
+shows that "the fault refuses" reaches seven unsafe groups. So BE-S4 gates
+the refusal:
+- **A no-refuse window, per row and explicit.** An RAII guard opens at the
+  first page write of each Census B group, for example the row's placement.
+  It closes when the trail covers that write (`NoteInsert`,
+  `NoteOverwrite`), because from there `Abort` can undo it. Outside every
+  window, a fault or creation may be refused (BE-R4). Inside one, it may
+  not.
+- **The window is per task, and no window holds a suspension point.** The
+  guard is a thread-local depth, which is sound only because a task cannot
+  interleave with another on its reactor without suspending. The suspend
+  audit (`exec::InstallSuspendAudit`) records a park inside a window, as it
+  records one under a pin. BE-S4 confirms this for each window it opens.
+- **The reserve is carved inside the cap**, so the pool never exceeds it.
+  Only a fault inside a window draws on it. Ordinary reservations stop at
+  `cap - reserve`. The reserve is `kWindowReserveFrames` (proposed 64,
+  eight times `kPinCeiling`) multiplied by the instance's core count,
+  because every core can be inside a window at once.
+- **An exhausted reserve fail-stops the store.** Returning an error into a
+  half-done mutation is exactly what the window exists to prevent, so the
+  answer is the one `wal.md` gives a write it cannot complete. The cost:
+  one row's mutation that needs more than 64 frames that cannot be
+  reclaimed, beyond the cap, stops the instance.
+- **Recovery is not a mutation.** A mount pass (redo and undo) holds no
+  page latch between records, and the log it replays is durable. So a
+  reservation on the mount thread that finds nothing reclaimable drains
+  the dirty queue through `WriteBack` and retries, and the cap holds at
+  mount too.
+- **Writers outside a statement need their own census in BE-S4:** access
+  statistics and Waystone trails written by reads, the delete-mark purge,
+  Cabin and assertion builds, and DDL page creation. Each one is either
+  shown to refuse before its first write or given a window.
+
+BE-S1's review replaced the first draft of this rule. That draft keyed the
+window to "the thread has dirtied a page since its statement began".
+That made the window a whole statement where the danger lasts one row, so
+one large `UPDATE` under pressure could fail-stop the instance. It also
+used a thread-local flag that coroutines interleave across, and a single
+reserve shared by every core.
+
+The alternative, fixing each of the seven groups to undo what it wrote, is
+the order of a milestone, and it does not close the device-error half any
+better. W1 marked BE-Q0..Q10 as proposed and told CLA to follow its
+proposals where a decision is needed. BE-Q11 is taken on that word and
+recorded as such, not as a mark.
+
+**The suite at `e4b107af`, Debug, `-j8`:**
+- plain: 3191/3192;
+- under `KDS_TEST_FRAME_BUDGET=64`: 3191/3192.
+
+The one failure is the same cell both times:
+`TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`
+binds port 25432, which xrock's running `kds_server` holds (`ss -ltnp`).
+That is the environment, not the tree. So a 64-frame budget breaks nothing
+**while it is soft**. What a hard cap breaks is BE-S4's to find.
+
+**Not measured; measured at the milestone's close.**
