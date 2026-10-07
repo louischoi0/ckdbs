@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§13) and `worktree-pool-budget-required` (§14-§15) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§13) and `worktree-pool-budget-required` (§14-§16) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -142,3 +142,12 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | `workorder-be-bounded-pool.md` is written as BE-S0 on `worktree-pool-budget-required` from `e352eac0`, reviewed, and not opened. No engine file moves |
 | **Does not settle** | BE-Q0..Q10 |
 | **Recorded at** | the order's header and §6 |
+
+## 16. BE opened, BE-Q0..Q10 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"push it, and mark BE-Q0..Q10 as proposed"* |
+| **Mark** | **BE-Q0:** BE opens with BE-S0..S6 and BE-R1..R5 as written. **BE-Q1 (a):** a chunked slot array with a free list and a hand over slots. **BE-Q2 (b):** the store's unbounded mode is deleted everywhere, its `Open` taking a required capacity at all 51 sites. **BE-Q3:** a missing key, `0` and a cap below the floor are refused `InvalidArgument`. **BE-Q4 (a):** at the cap, the bounded sweep retries and then `ResourceExhausted`; nothing writes back on the fault path, so one statement dirtying more than the cap is refused. **BE-Q5:** no new keys. **BE-Q6:** a mount floor of resident-class pages plus 256 frames. **BE-Q7 (a):** the outermost read walk faults cold; the scan ring is declined. **BE-Q8:** measured once at BE's close. **BE-Q9:** BE before BA-S8; BD runs in parallel. **BE-Q10:** `txn.md` governs a refused statement's scope |
+| **Does not settle** | BE-S1's premise gate: if the in-engine sweep costs under a tenth of the standalone figure, BE stops at BE-S1 and the operator rules again |
+| **Recorded at** | the order's header (W1), §2's heading and §4; `index.md`'s BE row |

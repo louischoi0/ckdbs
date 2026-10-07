@@ -7,10 +7,12 @@ Written 2026-10-07 on `worktree-pool-budget-required` from `e352eac0`
 - for the missing key, *"부팅 거부 (필수 키)"*
 - *"결정만 기록"*, which `e352eac0` did
 - *"작업 지시서를 작성하고 handoff를 준비해줘"*
+- **W1:** *"push it, and mark BE-Q0..Q10 as proposed"*
 
-**Not opened.** BE-Q0..Q10 are unmarked. The ruling itself is marked
-(`raft-marks-2026-10-07.md` §14) and recorded in `eviction.md` §6 as not
-built.
+**Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §16): BE-Q0..Q10
+are marked as proposed, so BE-R1..R5 are rulings and BE-S1 is the next
+stage. The ruling itself is marked (`raft-marks-2026-10-07.md` §14) and
+recorded in `eviction.md` §6 as not built.
 
 **BE is not part of AR0 §8's chain.** It answers an incident outside the
 engine. On 2026-10-07 an xrock bulk load ran against an 11.3 GB volume
@@ -267,7 +269,7 @@ per transaction:
 - inside `BEGIN`, a failed statement leaves the session `failed-txn`;
 - in autocommit, the abort is automatic.
 
-## 2. Rulings — CLA's proposals, unmarked
+## 2. Rulings — CLA's proposals, marked as proposed (W1)
 
 ### BE-R1 — Slots, a free list, and a hand that walks slots
 
@@ -428,17 +430,17 @@ The effect:
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BE-Q0 | **Open BE**, with BE-S0..S6 and BE-R1..R5 as written | process | Yes | |
-| BE-Q1 | **How frames are stored.**<br>(a) A slot array in chunks to the cap, a free list, and a hand over slots (BE-R1; `eviction.md` §3.1-§3.2 as written).<br>(b) Keep the map and add a separate ring of ids for the hand | design | (a). (b) keeps the per-frame allocation and the RSS ratchet, and adds a second structure that has to agree with the map | |
-| BE-Q2 | **Where unbounded dies.**<br>(a) At the server's doors only; the store keeps `0 = unbounded` for unit tests and the sim.<br>(b) Everywhere: the store's `Open` takes a required capacity at its 51 sites | scope | (b). An unbounded store reachable only from tests is a mode no server test exercises, and a sim choosing a capacity per seed runs eviction on every seed | |
-| BE-Q3 | **The refusal's code**, for a missing key, `0`, and a cap below the floor | user-visible | `InvalidArgument`: each is "simply wrong" configuration, not an unbuilt feature or an architectural limit (`status.hpp`'s test) | |
-| BE-Q4 | **At the cap with nothing reclaimable.**<br>(a) Retry the bounded sweep, then `ResourceExhausted`; nothing writes back on the fault path (BE-R4).<br>(b) Also drain inline, which needs a per-core "holds no page latch" test that does not exist (§1.5) and **waits on an fsync**, against EV8's "no waiting, ever".<br>(c) Block until a frame frees | user-visible, **[quiet-wrong] if Census B is skipped**; (b) **[quiet-wrong]** if its per-core test is wrong (lost update, §1.5) | (a). (b) can lose a committed update if its test is wrong, and (c) can deadlock a statement against its own pins. The cost of (a) is stated in BE-R4: a single statement dirtying more than the cap is refused | |
-| BE-Q5 | **No new keys.** The chunk (1,024), the batch (64), the step bound (`8 * batch`), `low` (`cap/16`), `high` (`cap/8`), the retry bound (8) and the working minimum are named `constexpr`; §6's `free_watermark` and `evict_retry_budget` rows become constants | user-visible | Yes. Each is a function of the one quantity the operator sets, so a key for any of them would be a second name for the cap | |
-| BE-Q6 | **The mount floor**: resident-class pages at mount plus a working minimum (proposed 256 frames), refused at mount; the debug override clamped up to it | user-visible | Yes. A cap the volume's own pinned pages exhaust would refuse every statement. Refusing at mount names the number while the operator is still at the config | |
-| BE-Q7 | **Scan resistance.**<br>(a) Cold on fault for the outermost read walk (BE-R5).<br>(b) The scan ring for it (EV6 in full).<br>(c) Neither, in BE | design | (a), for §1.6's reasons. (b) becomes its own order if BE-S6 measures displacement anyway | |
-| BE-Q8 | **The measurement** (§5), at BE's close, per `CLAUDE.md`'s Session Workflow step 3 | process | As written | |
-| BE-Q9 | **Order against BA and BD.** BE-S2 rebuilds the frame table that BA-R5 partitions (BA-S8) | sequencing | BE first, with BE-R1's per-partition-safe shape. BA-S8 then partitions slots rather than a map, and BA's P1 census would otherwise measure a structure BE replaces. BD touches no store code and runs in parallel | |
-| BE-Q10 | **`eviction.md` §3.3 against `txn.md`** on a refused statement's scope | spec conflict | `txn.md` governs: per-transaction failure atomicity is a transaction rule, and §3.3 restates to it | |
+| BE-Q0 | **Open BE**, with BE-S0..S6 and BE-R1..R5 as written | process | Yes | **as proposed**, W1 |
+| BE-Q1 | **How frames are stored.**<br>(a) A slot array in chunks to the cap, a free list, and a hand over slots (BE-R1; `eviction.md` §3.1-§3.2 as written).<br>(b) Keep the map and add a separate ring of ids for the hand | design | (a). (b) keeps the per-frame allocation and the RSS ratchet, and adds a second structure that has to agree with the map | **as proposed: (a)**, W1 |
+| BE-Q2 | **Where unbounded dies.**<br>(a) At the server's doors only; the store keeps `0 = unbounded` for unit tests and the sim.<br>(b) Everywhere: the store's `Open` takes a required capacity at its 51 sites | scope | (b). An unbounded store reachable only from tests is a mode no server test exercises, and a sim choosing a capacity per seed runs eviction on every seed | **as proposed: (b)**, W1 |
+| BE-Q3 | **The refusal's code**, for a missing key, `0`, and a cap below the floor | user-visible | `InvalidArgument`: each is "simply wrong" configuration, not an unbuilt feature or an architectural limit (`status.hpp`'s test) | **as proposed**, W1 |
+| BE-Q4 | **At the cap with nothing reclaimable.**<br>(a) Retry the bounded sweep, then `ResourceExhausted`; nothing writes back on the fault path (BE-R4).<br>(b) Also drain inline, which needs a per-core "holds no page latch" test that does not exist (§1.5) and **waits on an fsync**, against EV8's "no waiting, ever".<br>(c) Block until a frame frees | user-visible, **[quiet-wrong] if Census B is skipped**; (b) **[quiet-wrong]** if its per-core test is wrong (lost update, §1.5) | (a). (b) can lose a committed update if its test is wrong, and (c) can deadlock a statement against its own pins. The cost of (a) is stated in BE-R4: a single statement dirtying more than the cap is refused | **as proposed: (a)**, W1 |
+| BE-Q5 | **No new keys.** The chunk (1,024), the batch (64), the step bound (`8 * batch`), `low` (`cap/16`), `high` (`cap/8`), the retry bound (8) and the working minimum are named `constexpr`; §6's `free_watermark` and `evict_retry_budget` rows become constants | user-visible | Yes. Each is a function of the one quantity the operator sets, so a key for any of them would be a second name for the cap | **as proposed**, W1 |
+| BE-Q6 | **The mount floor**: resident-class pages at mount plus a working minimum (proposed 256 frames), refused at mount; the debug override clamped up to it | user-visible | Yes. A cap the volume's own pinned pages exhaust would refuse every statement. Refusing at mount names the number while the operator is still at the config | **as proposed**, W1 |
+| BE-Q7 | **Scan resistance.**<br>(a) Cold on fault for the outermost read walk (BE-R5).<br>(b) The scan ring for it (EV6 in full).<br>(c) Neither, in BE | design | (a), for §1.6's reasons. (b) becomes its own order if BE-S6 measures displacement anyway | **as proposed: (a)**, W1 |
+| BE-Q8 | **The measurement** (§5), at BE's close, per `CLAUDE.md`'s Session Workflow step 3 | process | As written | **as proposed**, W1 |
+| BE-Q9 | **Order against BA and BD.** BE-S2 rebuilds the frame table that BA-R5 partitions (BA-S8) | sequencing | BE first, with BE-R1's per-partition-safe shape. BA-S8 then partitions slots rather than a map, and BA's P1 census would otherwise measure a structure BE replaces. BD touches no store code and runs in parallel | **as proposed**, W1 |
+| BE-Q10 | **`eviction.md` §3.3 against `txn.md`** on a refused statement's scope | spec conflict | `txn.md` governs: per-transaction failure atomicity is a transaction rule, and §3.3 restates to it | **as proposed**, W1 |
 
 ## 5. Measurement
 
