@@ -4,9 +4,12 @@ Written 2026-10-07 on `worktree-wal-recycling` from `6dc792c9`
 (`v2.7.0-627-g6dc792c9`), on the operator's
 *"main을 동기화하고 먼저 wal 회수 기능에 대한 작업 지시서를 작성해줘"*.
 
-**Not opened.** BC-Q0..Q6 (§4) are unmarked. No stage starts until the
-operator marks BC-Q0, and each stage then waits for its own word. BC cuts no
-tag.
+**Opened 2026-10-07** (`raft-marks-2026-10-07.md` §2): BC-Q0..Q6 are
+marked as CLA proposed them, BC-Q2 on its condition, which BC-S1 decides.
+**BC-S1 started the same day and closed green** (§6): the premise holds and
+BC-Q2's condition is met. **BC-S2 started on the operator's word**
+(`raft-marks-2026-10-07.md` §4). Each later stage waits for its own word.
+**The close-out measurement is waived** (§3 there). BC cuts no tag.
 
 **BC is not part of AR0 §8's chain.** It closes a gap AR0 never addressed:
 `known-gaps.md`'s *"The log is never recycled"* (CN-9 §4 C1). It neither
@@ -255,6 +258,14 @@ is still to come is not established here. BC-S1 writes the cell. A red cell
 becomes a bug entry under its own letter. It is outside BC because BC
 neither causes it nor depends on it.
 
+**BC-S1: red, and filed** as
+`docs/inflight/bugs/a-page-a-checkpoint-lists-at-reclsn-0-hides-its-next-record-from-redo.md`.
+The engine reaches the precondition at every mount: the completion
+checkpoint lists every page recovery redid at recLSN 0, and the first
+insert after the mount had its `sys.tables` bump skipped by the next
+recovery's redo. No client-visible wrong answer was reproduced; the bug
+entry says what was and was not established.
+
 ## 2. Rulings — CLA's proposals, unmarked
 
 ### BC-R1 — The bound is the durable anchor, and it never decreases
@@ -352,25 +363,30 @@ neither causes it nor depends on it.
 | stage | what | done when | size |
 |---|---|---|---|
 | BC-S0 | **The order** | this file, its review, the marks recorded | S |
-| BC-S1 | **The premise, tested before anything is built** (§1.4, §1.11) | <ul><li>**The comparison cell, on the two-core rig.** Build §1.4's sequence, crash, and recover twice from copies of one image: once from analysis's start and once from `max(start, D)`. Every page must be byte-identical. Assert that the sequence actually drove the start below `D`, so the cell cannot pass vacuously.</li><li>**The same comparison in a randomized loop** on the rig, at least 3 checkpoints and 2 segment rolls per run (small segments), with the run count stated in §6.</li><li>**§1.11's cell.** Red becomes a bug entry, not a BC stage.</li><li>**A page that differs stops BC at this row**, and the operator rules.</li></ul> | M |
+| BC-S1 | **The premise, tested before anything is built** (§1.4, §1.11) | <ul><li>**The comparison cell, on the two-core rig.** Build §1.4's sequence, crash, and recover twice from copies of one image: once from analysis's start and once from `max(start, D)`. Every page must be byte-identical. Assert that the sequence actually drove the start below `D`, so the cell cannot pass vacuously.</li><li>~~**The same comparison in a randomized loop**~~ - **cut at BC-S1's review** (§6): vacuous by construction.</li><li>**§1.11's cell.** Red becomes a bug entry, not a BC stage.</li><li>**A page that differs stops BC at this row**, and the operator rules.</li></ul> | M |
 | BC-S2 | **The device** (BC-R3, BC-R4) | <ul><li>**Code.** `first_segment`/`end_segment`/`RemoveBelow` in both devices, `Open`'s new rule, the kept directory descriptor, `Sync`'s shared descriptors, and `ScanLog` and `WalStream` moved to the pair.</li><li>**Cells.**<ul><li>The `Open` matrix: a revived subset below `first_needed`, a gap above it, nothing present, and the highest below `first_needed`.</li><li>A `RemoveBelow` racing a `Sync` and a `WriteAt` on separate threads, repeated with a barrier. The assertion is that no descriptor is closed while a `Sync` holds it, checked by the device's own count.</li><li>The descriptor-limit roll strands no file.</li></ul></li><li>**Mutations, each repeated:** `Sync` copying raw ints again; the table changed outside the stream latch; `Open` deleting below `first_needed`; `RemoveBelow` reaching past the append segment.</li><li>**The suite green.**</li></ul> | M |
 | BC-S3 | **The trigger and the floors** (BC-R1, BC-R2, BC-R5) | <ul><li>**Code.** `D` and `max(fold, D)` in `Publish`, the queued removal, redo's floor, the `SHOW META` fields.</li><li>**Cells.**<ul><li>A failed anchor sync leaves every segment in place.</li><li>A successful publish removes exactly the segments wholly below `D`.</li><li>A fold lower than `D` is encoded as `D`.</li><li>On the rig, §1.4's sequence followed by recycling mounts, with the floor reported.</li><li>The leftovers below `first_needed` are removed by the completion checkpoint, not by `Open`.</li></ul></li><li>**Mutations, each repeated:** the bound read from the in-memory superblock, killed by the failed-sync cell; the whole-segment test dropped; the `max(fold, D)` dropped; redo's floor dropped, killed by the rig cell.</li><li>**The suite green.**</li></ul> | M |
 | BC-S4 | **The sim** | <ul><li>`sim/` drives long runs over small segments with recycling armed, on BC-R5's inline path. It crashes at seed-chosen operations, including **between an unlink and its directory sync**, and reconciles against the oracle.</li><li>The corpus green, with the run counts stated in §6.</li></ul> | M |
-| BC-S5 | **The close** | <ul><li>**The measurement** (§5).</li><li>**Text restated:**<ul><li>`wal.md`: §2; §4.1 (*"named by (core_id, segment_no)"*); §9 and §12, for redo's floor; §11-4, on BC-Q1's mark; §13, where *"retention"* is listed as configuration and BC-Q4 says there is none; and §1.9's three cases.</li><li>The contracts in `log_device.hpp` and `file_log_device.hpp`.</li><li>`manual/`, if `SHOW META` is documented there.</li></ul></li><li>**`docs/inflight/`:**<ul><li>C1's entry is deleted.</li><li>C2's entry is restated: the cost is bounded by the live run, no longer by the instance's age.</li><li>C3's bug file is deleted: its cause and its stranding are both closed.</li><li>CN-9 §9 O4 records the mark.</li></ul></li><li>**`CLAUDE.md`'s WAL row** flipped.</li></ul> | S |
+| BC-S5 | **The close** | <ul><li>**The measurement** (§5) - **waived** (`raft-marks-2026-10-07.md` §3); the close reports it as not executed.</li><li>**Text restated:**<ul><li>`wal.md`: §2; §4.1 (*"named by (core_id, segment_no)"*); §9 and §12, for redo's floor; §11-4, on BC-Q1's mark; §13, where *"retention"* is listed as configuration and BC-Q4 says there is none; and §1.9's three cases.</li><li>The contracts in `log_device.hpp` and `file_log_device.hpp`.</li><li>`manual/`, if `SHOW META` is documented there.</li></ul></li><li>**`docs/inflight/`:**<ul><li>C1's entry is deleted.</li><li>C2's entry is restated: the cost is bounded by the live run, no longer by the instance's age.</li><li>C3's bug file is deleted: its cause and its stranding are both closed.</li><li>CN-9 §9 O4 records the mark.</li></ul></li><li>**`CLAUDE.md`'s WAL row** flipped.</li></ul> | S |
 
 ## 4. Items for the operator
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BC-Q0 | **Open BC**, with BC-S0..S5 and BC-R1..R6 as written | process | Yes | unmarked |
-| BC-Q1 | **Does recycling wait for archiving?** (CN-9 §9 O4).<br>(a) Recycle below the durable anchor now. Archiving, when built, adds its floor at BC-R1's one computation.<br>(b) Recycling waits for `wal.md` §13's archive hook, and BC waits for that work order.<br>(c) Recycle now behind a per-instance switch, off by default | durability | (a). PITR does not exist, so (a) gives up nothing the engine offers. (b) leaves C1-C3 standing for as long as no one orders archiving. (c) adds a configuration key for a choice that has one right answer today | unmarked |
-| BC-Q2 | **Redo is floored at the anchor** (BC-R2). Recovery changes behaviour: it no longer reads records below the anchor, which §1.4 shows it reads today and changes nothing with | recovery semantics, **[quiet-wrong] if BC-S1's comparison is skipped** | Yes, conditional on BC-S1's comparison being green | unmarked |
-| BC-Q3 | **Segment reuse** (rename a removed segment into a spare, so a roll skips the prewrite).<br>(a) Out of BC; C4 priced first, under its own order.<br>(b) In BC as a stage after BC-S4, taking C5's fix with it | scope | (a). C4 was never priced, and `CLAUDE.md` says re-measure the premise before building the fix | unmarked |
-| BC-Q4 | **No retention knob.** Every segment wholly below the bound is removed, and no extra is kept | user-visible | Yes. A retention count would be a second name for what the checkpoint cadence already expresses, as an RTO trade | unmarked |
-| BC-Q5 | **Which thread does the unlink** (BC-R5, §1.7).<br>(a) Core 0's WAL writer thread, between syncs.<br>(b) A thread of its own, under `rules.md` §3's partition-boundary justification | design, user-visible as peer commit latency | (a), measured at the close at `cores > 1`. If the stall is material, (b) follows, with no other change to BC. (a) adds no thread, and its cost falls only on peer commits that arrive during an unlink | unmarked |
-| BC-Q6 | **`SHOW META`'s three fields** (BC-R6) | user-visible | Yes | unmarked |
+| BC-Q0 | **Open BC**, with BC-S0..S5 and BC-R1..R6 as written | process | Yes | **as proposed**, 2026-10-07 |
+| BC-Q1 | **Does recycling wait for archiving?** (CN-9 §9 O4).<br>(a) Recycle below the durable anchor now. Archiving, when built, adds its floor at BC-R1's one computation.<br>(b) Recycling waits for `wal.md` §13's archive hook, and BC waits for that work order.<br>(c) Recycle now behind a per-instance switch, off by default | durability | (a). PITR does not exist, so (a) gives up nothing the engine offers. (b) leaves C1-C3 standing for as long as no one orders archiving. (c) adds a configuration key for a choice that has one right answer today | **(a)**, as proposed |
+| BC-Q2 | **Redo is floored at the anchor** (BC-R2). Recovery changes behaviour: it no longer reads records below the anchor, which §1.4 shows it reads today and changes nothing with | recovery semantics, **[quiet-wrong] if BC-S1's comparison is skipped** | Yes, conditional on BC-S1's comparison being green | **as proposed**, with its condition |
+| BC-Q3 | **Segment reuse** (rename a removed segment into a spare, so a roll skips the prewrite).<br>(a) Out of BC; C4 priced first, under its own order.<br>(b) In BC as a stage after BC-S4, taking C5's fix with it | scope | (a). C4 was never priced, and `CLAUDE.md` says re-measure the premise before building the fix | **(a)**, as proposed |
+| BC-Q4 | **No retention knob.** Every segment wholly below the bound is removed, and no extra is kept | user-visible | Yes. A retention count would be a second name for what the checkpoint cadence already expresses, as an RTO trade | **as proposed** |
+| BC-Q5 | **Which thread does the unlink** (BC-R5, §1.7).<br>(a) Core 0's WAL writer thread, between syncs.<br>(b) A thread of its own, under `rules.md` §3's partition-boundary justification | design, user-visible as peer commit latency | (a), measured at the close at `cores > 1`. If the stall is material, (b) follows, with no other change to BC. (a) adds no thread, and its cost falls only on peer commits that arrive during an unlink | **(a)**, as proposed |
+| BC-Q6 | **`SHOW META`'s three fields** (BC-R6) | user-visible | Yes | **as proposed** |
 
 ## 5. Measurement
+
+**Waived for BC by the operator on 2026-10-07** (`raft-marks-2026-10-07.md`
+§3): BC closes without it, and its report states it as not executed. What
+follows is the measurement as planned, kept because a later order may run
+it.
 
 Once, at BC's close, per `CLAUDE.md`'s Session Workflow step 3:
 
@@ -431,3 +447,58 @@ review read the draft against `6dc792c9`.
 - **§1.11's reading** was recorded, outside BC's rules.
 
 **Not taken:** none.
+
+### BC opened, and §4 marked - 2026-10-07
+
+`raft-marks-2026-10-07.md` §2: BC-Q0..Q6 as proposed, BC-Q2 conditional on
+BC-S1's comparison. CN-9 §9 O4 is answered by BC-Q1 (a).
+
+### BC-S1 - green, 2026-10-07
+
+On `worktree-wal-recycling` from `7dc36da8` (`origin/main` at `dbeb876c`
+merged in). Cells in `tests/wal_recycle_premise_test.cpp`:
+
+- **The scripted cell** reproduces §1.4 in a log. The recomputed start is
+  below `D`, and floored and unfloored redo give identical pages that match
+  the live state.
+- **The placed rig cell** reproduces §1.4 on two real cores. Both cores
+  checkpoint into the production fold (`TwoCoreRig::Options::fold_anchor`).
+  A write lands between Q's writeback copy and its clean, through a new
+  test seam, `DevicePageStore::SetAfterWritebackCopyForTest`, which costs
+  one empty-function test per page written back. The start is below the
+  fold, and the two recoveries give identical data files, 20 of 20 repeats.
+  A floor mutated to `end_lsn` fails it (the review's mutant).
+- **§1.11's cell** is red and disabled, and filed as a bug (§1.11 above). A
+  green end-to-end guard runs beside it, across two crashes and a mount.
+
+**A finding the order did not have.** A record a raced writeback leaves
+dirty is written back again by the anchor's publish, which syncs the whole
+store (`superblock_checkpoint_anchor.cpp`). So §1.4's sequence needs the
+write to race the publish's sync as well. The placed cell races every copy
+of Q for that reason. It is why a randomized loop over threads never
+reached the case: 0 of 112 images, over three shapes. On this evidence the
+case is rarer in production than BC-S0's review read it. The floor is still
+needed, because the case is reachable.
+
+**Cut: the randomized loop** (the row's second bullet). Where the recomputed
+start is not below `D`, `max(start, D)` is the start, and the two recoveries
+are one run. So the loop's images tested nothing, and it cost ~11 s of
+suite time. This changes the row's done-when, and is reported as such.
+
+**The review** (`critics-developer`) confirmed the comparison is live by
+mutation. Taken:
+- three test bugs fixed by the reviewer: an anchor of 0 read before core 0
+  published, a pause handshake race, and a reused pid's leftover image;
+- the seam's comment, which now states that its hook must not flush;
+- `TwoCoreRig::peer_anchor()` deleted, unused;
+- the randomized cell cut;
+- §1.11's cell written, and red.
+
+**Not taken:** reading the anchor from the image's page 0 rather than from
+the rig's memory. The two agree after a successful publish, and the cell
+asserts what BC-Q2 needs.
+
+**The suite:** the full Debug suite green but for
+`TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`,
+which fails on this host because another session's `kds_server` holds port
+25432. That is environmental, and recorded rather than reported as a pass.

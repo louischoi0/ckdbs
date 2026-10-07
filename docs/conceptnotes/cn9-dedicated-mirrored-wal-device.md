@@ -295,6 +295,10 @@ Engine-side:
   The alternative is to recycle below the redo start with no archive, which
   gives up PITR for those segments. This is a durability decision, not a
   device one.
+  - **Answered 2026-10-07** `[operator]`: BC-Q1 marked (a)
+    (`instructions/v3.0.0/raft-marks-2026-10-07.md` §2). Recycling does not
+    wait for archiving; when archiving is built, it adds its floor to the
+    recycling bound (`workorder-bc-wal-recycling.md` BC-R1).
 
 Device-side:
 

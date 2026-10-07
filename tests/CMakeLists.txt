@@ -184,6 +184,7 @@ add_executable(kds_tests
     sim_loop_test.cpp
     wal_golden_log_test.cpp
     wal_shared_stream_test.cpp
+    wal_recycle_premise_test.cpp
 )
 target_link_libraries(kds_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main Threads::Threads)
 

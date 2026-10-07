@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <condition_variable>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -692,6 +693,22 @@ public:
     Status UnlatchFrameForTest(PageId page_id, std::uint32_t core);
     StatusOr<std::uint32_t> latch_word_for_test(PageId page_id) const;
 
+    // **A test seam between a writeback's copy and its clean** (BC-S1):
+    // runs once per page a writeback copies, after the copy and the page
+    // latch are given back and before the page goes out or is cleaned,
+    // holding no latch. A write there is the write that races the copy -
+    // the frame stays dirty with its first recLSN (`wal.md` §11-2) - placed
+    // where a two-core cell wants it rather than where the threads put it.
+    // **It still holds the run's writeback claims**, so the hook must not
+    // flush (`Sync`, `FlushPages`, a carve's sync): a `kWait` writeback
+    // meeting its own claim waits in `AwaitWritebackClaim` forever. Set and
+    // cleared while no writeback runs - the hook is read unsynchronised.
+    // Unset in production, where it costs one empty-function test per page
+    // written back.
+    void SetAfterWritebackCopyForTest(std::function<void(PageId)> hook) {
+        after_writeback_copy_for_test_ = std::move(hook);
+    }
+
     // Pin accounting (MG04). Live pins across all frames, and the highest
     // that count has ever been - the number the per-operation ceiling
     // decision needs measured rather than assumed.
@@ -1292,6 +1309,8 @@ private:
     // Set by Open()'s debug census override and never cleared: SetLatchArmed
     // keeps the store armed once this is true.
     bool latch_forced_ = false;
+    // SetAfterWritebackCopyForTest's hook; empty outside a test.
+    std::function<void(PageId)> after_writeback_copy_for_test_;
 
     // ---- AM-S2's structure latch --------------------------------------
     //

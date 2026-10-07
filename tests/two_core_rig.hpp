@@ -66,6 +66,7 @@
 #include "kds/server/core_runtime.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/file_page_device.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -146,6 +147,14 @@ public:
         // **The stream's syncs through a `GatedLogDevice`** (BA-S1c), which
         // `log_gate()` then holds and releases.
         bool gated_log_sync = false;
+        // The log's segment size (BC-S1): small, so a run crosses rolls.
+        std::uint64_t wal_segment_bytes = wal::kDefaultSegmentSize;
+        // **Both cores checkpoint into page 0's fold** (BC-S1): core 0 is
+        // handed a checkpointer as `Expeditor` holds one, and both publish
+        // into one `SuperBlockCheckpointAnchor` under the superblock latch -
+        // production's anchor, where the default rig's peer publishes into
+        // an in-memory stand-in and core 0 publishes nothing.
+        bool fold_anchor = false;
     };
 
     static StatusOr<std::unique_ptr<TwoCoreRig>> Open() { return Open(Options{}); }
@@ -212,6 +221,12 @@ public:
     // into, and what a mount's scan reads back.
     wal::WalManager& wal() noexcept { return *wal_; }
     wal::FileLogDevice& log_device() noexcept { return *log_device_; }
+    // The fold page 0 holds, on a `fold_anchor` rig: what a mount of a
+    // crash image taken now would start its recovery from.
+    WalAnchorFields folded_anchor() {
+        LatchGuard hold(&superblock_latch_);
+        return boot_->superblock.wal_anchor(0);
+    }
     // Engaged only on a `gated_log_sync` rig.
     GatedLogDevice& log_gate() noexcept { return *log_gate_; }
     sched::SimWakerTable& wake() noexcept { return *sim_; }
@@ -297,7 +312,8 @@ private:
 
         // The instance's one stream, its writer, and the gate (AR0 M0).
         std::filesystem::create_directories(dir_ / "wal");
-        auto log_device = wal::FileLogDevice::Open((dir_ / "wal").string(), /*core_id=*/0);
+        auto log_device = wal::FileLogDevice::Open((dir_ / "wal").string(), /*core_id=*/0,
+                                                   options_.wal_segment_bytes);
         if (!log_device.ok()) return log_device.status();
         log_device_ = std::move(log_device.value());
         wal::LogDevice* stream_device = log_device_.get();
@@ -332,6 +348,11 @@ private:
         // (BA-R1c), through the same sim.
         visibility_->SetWakeRegistry(&*sim_);
 
+        if (options_.fold_anchor) {
+            fold_anchor_.emplace(boot_->superblock, *store_);
+            fold_anchor_->SetLatch(&superblock_latch_);
+        }
+
         for (std::uint32_t id = 0; id < 2; ++id) {
             CoreRuntime::Config config;
             config.core_id = id;
@@ -357,7 +378,10 @@ private:
             // `Expeditor`'s peers do (AT-S8); a rig never remounts, so an
             // in-memory one stands in for page 0. Core 0's is `Expeditor`'s
             // in production and a rig has none.
-            if (id != 0) {
+            if (options_.fold_anchor) {
+                config.checkpoint_anchor = &*fold_anchor_;
+                config.checkpoint_gate = &checkpoint_gate_;
+            } else if (id != 0) {
                 config.checkpoint_anchor = &peer_anchor_;
                 config.checkpoint_gate = &checkpoint_gate_;
             }
@@ -402,6 +426,7 @@ private:
     std::atomic<catalog::Oid> oid_sequence_{0};  // AT-S5b: one for both cores
     std::atomic<std::uint64_t> pending_marks_{0};  // AT-S5b: one for both cores
     wal::InMemoryCheckpointAnchor peer_anchor_;    // AT-S8: page 0's stand-in
+    std::optional<SuperBlockCheckpointAnchor> fold_anchor_;  // BC-S1: page 0's own
     wal::CheckpointGate checkpoint_gate_;          // AT-S8: one for both cores
     exec::AssertionEnforcer assertions_{/*shared=*/true};  // AT-S5d: one for both cores
     Latch superblock_latch_;  // AT-S10b: the one ceiling both cores carve from

@@ -1579,6 +1579,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 std::memcpy(scratch.data() + k * kPageSize, page.frame->bytes->data(), kPageSize);
             }
             UnpinFrame(page_id);  // the share and the pin, one page at a time
+            if (after_writeback_copy_for_test_) after_writeback_copy_for_test_(page_id);
 
             // **Skipped for a headerless page**, for the reason
             // `AwaitWalGate` and the stamping loop skip it: there is no
