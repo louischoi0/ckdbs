@@ -2,7 +2,7 @@
 
 Written 2026-10-07 on `worktree-bd-sorted-leaf-named-keys` from `bf8ea937`
 (`v2.7.0-652-gbf8ea937`), on the operator's words below. All are verbatim,
-from one session, and recorded in `raft-marks-2026-10-07.md` §7-§14.
+from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 
 **The operator's words**, numbered so the rest of this order can cite them:
 
@@ -29,14 +29,13 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§14.
 - **W13:** *"BD-Q4, Q8, Q9 제안대로 마킹해줘"*
 - **W14:** *"리뷰 끝나면 반영해서 push해"*
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
+- **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: written, reviewed, and not yet opened.**
+**Status: open (W16), BD-S1 started.**
 
-- §4's mark column says which items the words settle.
-- BD-Q0, BD's opening, is the one item left for the operator.
-- No stage has started.
-- W11 asked for this order alone, so nothing under `src/`, `include/` or
-  `tests/` moves with it.
+- §4's mark column says which items the words settle; every item is marked.
+- BD-S1 runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
+- BD-S0 itself moved no file under `src/`, `include/` or `tests/` (W11).
 
 **What BD withdraws** (`workorder-bb-issue-under-the-leaf.md`). On a btree:
 
@@ -802,7 +801,7 @@ KWP `position` field stays as it is (§1.4).
 
 | item | what | class | CLA's proposal | mark |
 |---|---|---|---|---|
-| BD-Q0 | **Open BD** with BD-S0..S6 and BD-R1..R12 as written | process | Yes | — |
+| BD-Q0 | **Open BD** with BD-S0..S6 and BD-R1..R12 as written | process | Yes | **yes**, W16 |
 | BD-Q1 | **How a leaf stays in key order** (BD-R2).<br>(a) Shift the directory and change what addresses a slot.<br>(b) Fixed slot numbers, plus a key-order array | invariant | (a) | **(a)**, W4 |
 | BD-Q2 | **What keeps an id issued once** (BD-R4) | invariant, user-visible | **First offered:** a keyed tombstone for every slot that ever held a tuple. **Revised for W12:** an id is consumed when its tuple commits, the delete-marked row is today's tombstone, a rolled-back key is free, and a purge owes a keyed tombstone | **as proposed** (W6), **revised by W12** |
 | BD-Q3 | **The reading of W5's two reasons** (BD-R5).<br>(a) Duplicate is a slot keyed `k` (`AlreadyExists`); exhausted is outside `[1, 2^40 − 1]` (`OutOfRange`), with `InvalidArgument` folded in.<br>(b) Present-now against used-before, with out-of-space values left `InvalidArgument` | user-visible | (a) | **(a)**, W7 |
@@ -914,3 +913,9 @@ On W15 (`raft-marks-2026-10-07.md` §14):
   once (§5).
 
 BD-Q0, BD's opening, is the one item left. No stage has started.
+
+### BD opened - 2026-10-07
+
+On W16 (`raft-marks-2026-10-07.md` §15), BD-Q0 is marked yes, and BD is
+open with BD-S0..S6 and BD-R1..R12 as written at `50d35916`. BD-S1 starts
+on `worktree-keep-btree-leaf-slots`, branched from `50d35916`.

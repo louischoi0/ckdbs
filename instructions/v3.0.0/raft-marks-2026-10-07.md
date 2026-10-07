@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§14) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§14) and `worktree-keep-btree-leaf-slots` (§15) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -133,3 +133,12 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BD-Q10 (a):** a split is logged as one `BTREE_SPLIT` record carrying every image it writes, which redo applies whole (BD-R12). **BD-Q11 (a):** a full rightmost leaf splits at the insertion point rather than at the median (BD-R2). **BD-Q12 (b):** BB closes on the measurement it has, without rebasing BA, and BD-S6 rebases BA once, against BD (§5) |
 | **Does not settle** | BD-Q0, BD's opening; writing BB's close entry, which waits for its own word; the push |
 | **Recorded at** | the order's header (W15), BD-R2, BD-R12, §4, §5 and §6 |
+
+## 15. BD opened
+
+| | |
+|---|---|
+| **Word** | *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"* |
+| **Mark** | **BD-Q0: yes.** BD is open with BD-S0..S6 and BD-R1..R12 as written at `50d35916`. BD-S1, red first, starts on `worktree-keep-btree-leaf-slots`, branched from `50d35916` |
+| **Does not settle** | writing BB's close entry, which waits for its own word; the push |
+| **Recorded at** | the order's header (W16), §4 and §6, and the index row |
