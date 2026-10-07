@@ -31,10 +31,10 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
 - **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: open (W16), BD-S1 started.**
+**Status: open (W16), BD-S1 built, BD-S2 started.**
 
 - §4's mark column says which items the words settle; every item is marked.
-- BD-S1 runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
+- BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
 - BD-S0 itself moved no file under `src/`, `include/` or `tests/` (W11).
 
 **What BD withdraws** (`workorder-bb-issue-under-the-leaf.md`). On a btree:
@@ -221,8 +221,12 @@ A mid-leaf insert would therefore replay as an overwrite of its neighbour
 - The row sits on its leaf with no trail entry and no record. Its own
   comment calls it *"a row a rollback would not undo"*
   (`command_dispatcher.cpp:5354-5360`).
-- Today its writer has aborted, so no reader sees it, and it is harmless
-  but for `RefuseDuplicate` counting it. Under BD it breaks two things
+- Its writer has aborted, so no reader sees it. **It is not harmless
+  today**, as this paragraph first said: BD-S1's cell
+  `SortedLeafCrashTest.ARowPlacedAndNeverLoggedLeavesNoHoleForTheNextRecordsRedo`
+  places an unlogged row by ascending keys, logs the next insert on the
+  same leaf at the slot after it, and the mount is refused (*"redo names
+  slot 4 on a page holding 3"*). Under BD it breaks two more things
   [inferred]:
   - **W12.** A second slot can carry the same key, which makes the search,
     E1's re-find and a divide's cut ambiguous.
@@ -791,7 +795,7 @@ KWP `position` field stays as it is (§1.4).
 |---|---|---|---|
 | BD-S0 | **The order** | this file, its review, and the marks recorded | S |
 | BD-S1 | **Red first** | <ul><li>**Red at BD-S0's commit, through SQL:**<ul><li>`pk = 100`, then `pk = 99`, placed, and `ORDER BY id` elided and ascending (W8);</li><li>a descending multi-row `VALUES` placed;</li><li>a rolled-back key named again and placed (W12);</li><li>a named insert waiting on an undecided inserter, both arms;</li><li>a committed key under an undecided update, `AlreadyExists` at once (L2 answers `OutOfRange` today);</li><li>`0`, `-1`, `2^40` and `2^64 + 5`, each `OutOfRange` with the token's byte;</li><li>the census cell: every pk-caused refusal is `AlreadyExists` or `OutOfRange`.</li></ul></li><li>**Red through the storage contract and the crash rig:**<ul><li>the divide's incoming row out of order;</li><li>§1.2's silent recovery case;</li><li>E5's misaligned redo;</li><li>a mid-leaf `HEAP_INSERT` replayed as an overwrite;</li><li>a log cut inside a divide's records.</li></ul></li><li>**Decided here:**<ul><li>the append split's and the index split's cut-off cells (§1.8), with a bug entry filed for each that reproduces.</li></ul></li><li>**Guard, green and kept green:**<ul><li>a deleted key named again is `AlreadyExists`.</li></ul></li></ul> | M |
-| BD-S2 | **Sorted placement, the shift-safe holders, the whole split** (BD-R2, BD-R3, BD-R8, BD-R12) | <ul><li>**Code:**<ul><li>insert-at-slot, and the one `lower_bound`;</li><li>the merged divide;</li><li>`BtreeInsert` sorted, with the fallback and its cell gone;</li><li>`BTREE_INSERT`, with its strict redo and no record after a split's image;</li><li>`BTREE_SPLIT`, and the rightmost leaf's insertion-point split;</li><li>recovery undo's re-find;</li><li>E5's take-back;</li><li>`ProbeBuild`'s verify, and JB6's key mark;</li><li>superblock 20, and BB-R11's check deleted.</li></ul></li><li>**Still refused:** SQL refuses below the mark until S3, so S1's storage and crash cells are what turn green here.</li><li>**Green:**<ul><li>the golden log, re-pinned;</li><li>the suite;</li><li>the contract suites, byte-for-byte.</li></ul></li></ul> | L |
+| BD-S2 | **Sorted placement, the shift-safe holders, the whole split** (BD-R2, BD-R3, BD-R8, BD-R12) | <ul><li>**Code:**<ul><li>insert-at-slot, and the one `lower_bound`;</li><li>the merged divide;</li><li>`BtreeInsert` sorted, with the fallback and its cell gone;</li><li>`BTREE_INSERT`, with its strict redo and no record after a split's image;</li><li>`BTREE_SPLIT`, and the rightmost leaf's insertion-point split;</li><li>recovery undo's re-find;</li><li>E5's take-back;</li><li>`ProbeBuild`'s verify, and JB6's key mark;</li><li>superblock 20, and BB-R11's check deleted.</li></ul></li><li>**Still refused:** SQL refuses below the mark until S3, so S1's storage and crash cells are what turn green here - except the E2 and divide-cut crash cells, which reach their key through SQL and turn green at S3 (BD-S1's review, finding 2). S2's own proof for those two is a redo-level `BTREE_INSERT` neighbour-check cell and a `BTREE_SPLIT` whole-or-nothing cell.</li><li>**Green:**<ul><li>the golden log, re-pinned;</li><li>the suite;</li><li>the contract suites, byte-for-byte.</li></ul></li></ul> | L |
 | BD-S3 | **The gate opened, and BB-R1 deleted** (BD-R4..R7) | <ul><li>**Deleted on a btree:**<ul><li>L2, S3 and S5;</li><li>the two doors;</li><li>the issue and the admission under the hold.</li></ul></li><li>**Changed:**<ul><li>admit is advance-or-nothing;</li><li>`before_wait` as BD-R5 states it;</li><li>exhausted on the literal, with the byte;</li><li>the two texts.</li></ul></li><li>**The heap's protocol untouched.**</li><li>**Cells:**<ul><li>S1's SQL cells green;</li><li>§1.6's pinning cells flipped;</li><li>BB-S3's reshaped cells restored.</li></ul></li><li>**Green:** the suite.</li></ul> | L |
 | BD-S4 | **The sim and the rigs** (BD-R9) | <ul><li>the workload and the oracle;</li><li>the rigs and the crash cells;</li><li>the mutations, each killed on every run.</li></ul> | M |
 | BD-S5 | **The text** (BD-R11) | every row of BD-R11, the grep included, and `known-gaps.md:493-510` closed | M |
@@ -919,3 +923,67 @@ BD-Q0, BD's opening, is the one item left. No stage has started.
 On W16 (`raft-marks-2026-10-07.md` §15), BD-Q0 is marked yes, and BD is
 open with BD-S0..S6 and BD-R1..R12 as written at `50d35916`. BD-S1 starts
 on `worktree-keep-btree-leaf-slots`, branched from `50d35916`.
+
+### BD-S1 - red first, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `ec3acda5` (BD opened). Run on
+that engine, Debug. Every cell below is red for the reason it names, and
+the full suite is red on exactly these cells (and on
+`TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`,
+whose port an outside `kds_server` process held; it fails alone at
+`ec3acda5` too).
+
+- **Through SQL**, `tests/sorted_leaf_named_keys_test.cpp`:
+  - `AKeyBelowAnEarlierOneIsPlacedAndOrderByStaysElided` (W8);
+  - `ADescendingMultiRowValuesIsPlacedInKeyOrder`;
+  - `ARolledBackKeyIsNamedAgainAndPlaced` (W12);
+  - `EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhausted` - the census:
+    each case's exact code and the token's byte, §1.4's S3 row, and a key
+    named twice in one statement. It shows `2^64 + 5` placed as id 5 today,
+    which §1.4 had only inferred.
+- **Two sessions**, `tests/lock_family_test.cpp` (`NamedKeyWaitTest`): a
+  named key waiting on an undecided inserter, both arms; a committed key
+  under an undecided update or delete, `AlreadyExists` at once.
+- **The storage contract**, `tests/btree_test.cpp`:
+  `ALeafTakesEachIdAtTheSlotItSortsTo`,
+  `ADescendingRunAcrossManyDividesLeavesEveryLeafInKeyOrder`, and
+  `AFullLeafDividesToMakeRoomForALowerId` flipped to compare unsorted (one
+  of §1.6's pinning cells).
+- **Recovery undo**, `tests/recovery_undo_test.cpp`
+  (`RecoveryUndoLeafTest`): §1.2's silent case, and a loser's row a divide
+  moved to the right sibling.
+- **The crash rig**, `tests/sorted_leaf_crash_test.cpp` (helpers shared with
+  `insert_log_crash_rig_test.cpp` in `tests/file_rig_crash.hpp`):
+  - E5's misaligned redo, through a new seam
+    (`CommandDispatcher::SetAfterPlacementForTest`, which fails the
+    index-maintenance exit). **Red with ascending keys at `ec3acda5`**: the
+    mount is refused, so §1.2's "harmless today" is corrected above. No bug
+    entry, because BD-S2 fixes it in this session.
+  - E2's mid-leaf replay, and a log cut everywhere inside a divide - **both
+    reach their key through SQL, so they turn green at S3**, not S2.
+- **Decided**:
+  - the append split's cut **reproduces** - after record 5 of 8, the parent's
+    image, rows inserted after the restart are off the walk - and is
+    `docs/inflight/bugs/a-log-cut-inside-an-append-split-leaves-its-leaf-off-the-walk.md`,
+    which BD-R12 fixes;
+  - the index split's cut (the root leaf's split) **does not reproduce**, and
+    stays as a guard.
+- **Guard, green**: `ADeletedKeyNamedAgainIsAlreadyExists`.
+
+**The review** (one `critics-developer` pass, 8 correctness findings, 3
+missing cells, 6 simplifications). **Applied**: the seam routed through the
+index-maintenance exit; the E2 and divide-cut cells' stage corrected; the
+cut mounts the whole log too, pairs the before snapshot's data file with the
+cut log, and names the record kind it cut after; the bug entry's record
+list; the census's exact codes; the smaller items; the S3 row, a key named
+twice, and the undecided-delete arm; the shared crash helpers; the divide
+cell flipped rather than copied; the out-of-range cell merged into the
+census; one helper for the two inserter arms; sampled descents on each cut.
+**Declined**: E5's bug entry (BD-S2 fixes it in this session, and a defect
+fixed in the session that found it gets none); dropping `Walk()` for
+`Ordered()` alone (the bare walk is the leaf's own order, which an elided
+`ORDER BY` reports only while the elision holds); one parser for the SQL and
+crash files' replies (different reply shapes, `id,qty` against `id`).
+
+**Overhead not measured** (BD-R10, waived).
+

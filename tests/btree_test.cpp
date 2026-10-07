@@ -829,12 +829,11 @@ TEST(BtreeTest, AFullLeafDividesToMakeRoomForALowerId) {
     std::vector<std::uint64_t> got;
     got.reserve(rows.size());
     for (const ScannedRow& row : rows) got.push_back(row.id);
-    // Sorted before comparing, deliberately: **within** a page tuples are
-    // unordered (invariant 4), and a division appends the incoming tuple
-    // after the half it wrote back, so it lands at the end of its page's
-    // slots. What must hold is that nothing was lost or duplicated.
-    std::sort(got.begin(), got.end());
-    EXPECT_EQ(got, want) << "a division must lose nothing and duplicate nothing";
+    // **Not sorted before comparing** (BD-R1, BD-S1): a leaf's keyed slots
+    // ascend, so the walk is already key order - the incoming tuple lands
+    // where it sorts in whichever half took it, not after the half the
+    // division wrote back. Red at BD-S0, which appended it last.
+    EXPECT_EQ(got, want) << "a division must lose nothing, duplicate nothing, and keep key order";
 
     std::set<PageId> pages;
     for (const ScannedRow& row : rows) pages.insert(row.page_id);
@@ -1926,6 +1925,52 @@ TEST(BtreeTest, AnAdmittedNamedKeyIsPlacedOnTheLeafItWasAdmittedUnder) {
     ASSERT_EQ(rows.size(), 6u);
     EXPECT_EQ(rows.back().id, 90u);
     EXPECT_EQ(rows.back().page_id, placed.value().page_id);
+}
+
+
+// ---- BD-S1: a leaf in key order whatever order ids arrive in (BD-R1, BD-R2) -
+//
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`. A row takes
+// the slot its key sorts to, so a walk yields every leaf's ids ascending -
+// live, delete-marked, on a leaf that divided. Red at BD-S0, where a leaf
+// places at its slot count and the divide appends its incoming row last.
+
+std::vector<std::uint64_t> WalkIds(storage::PageStore& store, PageId root) {
+    std::vector<std::uint64_t> ids;
+    for (const ScannedRow& row : ScanAll(store, root)) ids.push_back(row.id);
+    return ids;
+}
+
+TEST(BtreeTest, ALeafTakesEachIdAtTheSlotItSortsTo) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    for (std::uint64_t id : {30, 10, 50, 20, 40}) {
+        ASSERT_TRUE(tree.Insert(id, kSmallFiller).ok()) << id;
+    }
+    EXPECT_EQ(WalkIds(store, tree.root), (std::vector<std::uint64_t>{10, 20, 30, 40, 50}));
+
+    // And the lookup finds each at the slot the walk saw it in.
+    for (std::uint64_t id : {10, 20, 30, 40, 50}) {
+        auto at = BtreeLookup(store, tree.root, id);
+        ASSERT_TRUE(at.ok()) << id << ": " << at.status().message();
+        heap::PageView leaf(at.value().leaf.bytes());
+        auto tuple = leaf.ReadTuple(at.value().slot);
+        ASSERT_TRUE(tuple.ok());
+        EXPECT_EQ(IdOf(tuple.value().payload), id);
+    }
+}
+
+TEST(BtreeTest, ADescendingRunAcrossManyDividesLeavesEveryLeafInKeyOrder) {
+    storage::InMemoryPageStore store(256);
+    Tree tree(store);
+    const std::uint64_t kRows = 600;
+    for (std::uint64_t id = kRows; id >= 1; --id) {
+        auto r = tree.Insert(id, kSmallFiller);
+        ASSERT_TRUE(r.ok()) << id << ": " << r.status().message();
+    }
+    std::vector<std::uint64_t> want;
+    for (std::uint64_t id = 1; id <= kRows; ++id) want.push_back(id);
+    EXPECT_EQ(WalkIds(store, tree.root), want);
 }
 
 }  // namespace

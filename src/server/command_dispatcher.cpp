@@ -5297,10 +5297,15 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // stays the code it always was.
     std::vector<exec::IndexWrite> index_writes;
     const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
-    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, body,
-                                          /*first_col_pos=*/1, encoded, row_id,
-                                          /*previous=*/{}, log_index ? &log_index : nullptr);
-        !s.ok()) {
+    // The seam fails this exit, not one of its own (BD-S1, E5).
+    Status maintained =
+        after_placement_for_test_ ? after_placement_for_test_() : Status::OK();
+    if (maintained.ok()) {
+        maintained = exec::MaintainIndexes(catalog_, page_store_, ta, body,
+                                           /*first_col_pos=*/1, encoded, row_id,
+                                           /*previous=*/{}, log_index ? &log_index : nullptr);
+    }
+    if (Status s = maintained; !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("index", "maintaining the indexes of table oid " +
                                      std::to_string(oid) + " for id " +

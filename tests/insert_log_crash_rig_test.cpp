@@ -1,3 +1,4 @@
+#include "file_rig_crash.hpp"
 #include "two_core_rig.hpp"
 
 #include <array>
@@ -66,44 +67,11 @@ namespace fs = std::filesystem;
 
 constexpr auto kGive = std::chrono::milliseconds(500);
 
-bool StartsWith(const std::string& s, std::string_view prefix) {
-    return s.rfind(prefix, 0) == 0;
-}
-
-struct TempDir {
-    fs::path path;
-    TempDir() {
-        static std::atomic<int> counter{0};
-        path = fs::temp_directory_path() /
-               ("kds_insert_log_crash_" + std::to_string(::getpid()) + "_" +
-                std::to_string(counter.fetch_add(1)));
-        fs::create_directories(path);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
-
-std::unique_ptr<TwoCoreRig> OpenFileRig() {
-    TwoCoreRig::Options options;
-    options.file_backed = true;
-    auto opened = TwoCoreRig::Open(options);
-    EXPECT_TRUE(opened.ok()) << opened.status().message();
-    return opened.ok() ? std::move(opened.value()) : nullptr;
-}
-
-// Production's mount over a snapshot: the recovery that runs is the one a
-// restart runs.
-StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& snapshot) {
-    Expeditor::Config config;
-    config.data_file = (snapshot / "kds.db").string();
-    config.wal_dir = (snapshot / "wal").string();
-    config.log_file = {};
-    config.cores = 2;
-    config.debug_text_port = 0;
-    return Expeditor::Open(config, /*now_unix_seconds=*/2000);
-}
+using crash_rig::Mount;
+using crash_rig::Ok;
+using crash_rig::OpenFileRig;
+using crash_rig::StartsWith;
+using crash_rig::TempDir;
 
 // The ids a `SELECT` answers, one per line after the header.
 std::multiset<std::uint64_t> Ids(CommandDispatcher& d, const std::string& sql) {
@@ -142,11 +110,6 @@ std::uint64_t ReplyField(const std::string& reply, const std::string& name) {
     const std::size_t at = reply.find(" " + name + "=");
     EXPECT_NE(at, std::string::npos) << name << " in " << reply;
     return at == std::string::npos ? 0 : std::stoull(reply.substr(at + name.size() + 2));
-}
-
-void Ok(CommandDispatcher& d, const std::string& sql) {
-    const std::string reply = d.Dispatch(sql).response;
-    ASSERT_FALSE(StartsWith(reply, "ERR")) << sql << " -> " << reply;
 }
 
 // `t`'s tree, as the mounted catalog names its root.

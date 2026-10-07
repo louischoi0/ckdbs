@@ -679,6 +679,16 @@ public:
         after_row_id_fixed_for_test_ = std::move(hook);
     }
 
+    // **A test seam between a row's placement and its first record** (BD-S1,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` E5): runs
+    // once per `INSERT` row, after the row is placed and before its index
+    // maintenance. A non-OK status fails the row exactly as a failed index
+    // maintenance does - the placement left with no trail entry and no
+    // record, the case E5 names. Unset in production.
+    void SetAfterPlacementForTest(std::function<Status()> hook) {
+        after_placement_for_test_ = std::move(hook);
+    }
+
     // **A test seam on CREATE ASSERTION** (AZ-S2): runs once per create,
     // after the build's publish run is logged and immediately before the
     // `sys.assertions` row - where a checkpoint on another core, a writer
@@ -698,6 +708,7 @@ private:
 
     std::function<void()> before_insert_log_for_test_;
     std::function<void(std::uint64_t)> after_row_id_fixed_for_test_;
+    std::function<Status()> after_placement_for_test_;
     std::function<void()> after_assertion_publish_run_for_test_;
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------

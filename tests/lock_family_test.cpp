@@ -2717,5 +2717,76 @@ TEST_F(MidWalkWaitTest, WithoutADetectorTheMidWalkParkIsNotOffered) {
 }
 
 
+// ---- BD-S1: a named key meeting an undecided writer (BD-R5, BD-Q9) ---------
+//
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`. An undecided
+// **insert** of the key is not yet a duplicate - its rollback frees the key
+// (W12) - so a named insert of the same key waits for its decide and answers
+// by the outcome. A committed row under an undecided update or delete is a
+// duplicate at once. Red at BD-S0, where all of them are `OutOfRange` (L2).
+class NamedKeyWaitTest : public LockDeadlockTest {
+protected:
+    void SetUp() override {
+        LockDeadlockTest::SetUp();
+        ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    }
+
+    // `c` inserts 7 and holds it undecided; `b` names 7, waits, and is
+    // answered once `c` runs `decide`.
+    DispatchOutcome AfterAnUndecidedInsert(const std::string& decide) {
+        Session c;
+        EXPECT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+        EXPECT_EQ(
+            dispatcher_->Dispatch("INSERT INTO tb VALUES (7, 0)", &c).response.rfind("INSERTED", 0),
+            0u);
+        Session b;
+        Started wb = Start("INSERT INTO tb VALUES (7, 1)", b);
+        Pump();
+        EXPECT_FALSE(*wb.done) << "a key an undecided insert placed was answered before its "
+                                  "decide: "
+                               << wb.out->response;
+        EXPECT_EQ(dispatcher_->Dispatch(decide, &c).response.rfind(decide, 0), 0u);
+        Pump();
+        EXPECT_TRUE(*wb.done) << "the named insert never resumed after the inserter's " << decide;
+        return *wb.out;
+    }
+};
+
+TEST_F(NamedKeyWaitTest, ANamedKeyWaitsOnAnUndecidedInserterAndIsADuplicateWhenItCommits) {
+    const DispatchOutcome out = AfterAnUndecidedInsert("COMMIT");
+    EXPECT_EQ(out.status.code(), StatusCode::kAlreadyExists) << out.response;
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "a refused ask's registration outlived its statement";
+}
+
+TEST_F(NamedKeyWaitTest, ANamedKeyWaitsOnAnUndecidedInserterAndIsPlacedWhenItRollsBack) {
+    const DispatchOutcome out = AfterAnUndecidedInsert("ROLLBACK");
+    EXPECT_EQ(out.response.rfind("INSERTED", 0), 0u) << out.response;
+    EXPECT_NE(Local("SELECT * FROM tb WHERE id = 7").find("7,1"), std::string::npos);
+}
+
+TEST_F(NamedKeyWaitTest, ACommittedKeyUnderAnUndecidedUpdateOrDeleteIsADuplicateAtOnce) {
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (5, 0)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO tb VALUES (6, 0)").rfind("INSERTED", 0), 0u);
+
+    const std::pair<const char*, const char*> writes[] = {
+        {"UPDATE tb SET v = 9 WHERE id = 5", "UPDATED 1"},
+        {"DELETE FROM tb WHERE id = 5", "DELETED 1"},
+    };
+    for (const auto& [write, reply] : writes) {
+        Session c;
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(dispatcher_->Dispatch(write, &c).response, reply);
+
+        Session b;
+        Started wb = Start("INSERT INTO tb VALUES (5, 1)", b);
+        Pump();
+        ASSERT_TRUE(*wb.done) << "a committed key waited on its writer: " << write;
+        EXPECT_EQ(wb.out->status.code(), StatusCode::kAlreadyExists)
+            << write << " -> " << wb.out->response;
+        EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "the refused ask left an edge";
+        ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
+    }
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -126,6 +126,8 @@ add_executable(kds_tests
     page_mgr_test.cpp
     command_dispatcher_test.cpp
     supplied_key_test.cpp
+    sorted_leaf_named_keys_test.cpp
+    sorted_leaf_crash_test.cpp
     tcp_server_test.cpp
     lexer_test.cpp
     fingerprint_test.cpp
