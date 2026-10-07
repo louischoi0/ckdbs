@@ -12,6 +12,40 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Eviction
 
+- **`buffer_pool_frames` is optional and `0` means unbounded; the operator
+  ruled both out on 2026-10-07** (`eviction.md` §6): the key is required,
+  `0` is an error, and the value is the pool's maximum. Verified at
+  `0b9f7aa9`: `expeditor.cpp:190-199` reads the key only `if
+  (file.Has(...))`, both `Config` structs default it to `0`
+  (`expeditor.hpp:130`, `core_runtime.hpp:134`), `expeditor.cpp:724`,
+  `:1680` and `core_runtime.cpp:191` apply a budget only when it is
+  nonzero, and `kds.conf.sample:85` documents `0` as unbounded. Unset, a
+  read-only scan grows the pool to the volume's size, which OOM-killed an
+  xrock load on an 11.3 GB volume on 2026-10-07. The sample's comment and
+  `expeditor.cpp:690`/`:725` still carry EV4's struck `total / cores`
+  share, which `:1681` overwrites with the total. Owned by
+  `docs/spec/eviction.md` (§6).
+
+- **EV5 is not built, and the one sweep production reaches sorts the
+  whole frame table per miss.** Verified at `0b9f7aa9`: the frame table is
+  a `std::unordered_map<PageId, Frame>` (`device_page_store.hpp:1529`) with
+  no free list. `EvictColdFramesLocked` copies every resident id into a
+  vector and `std::sort`s it to find the clock hand, under the structure
+  latch; in production it is reached only from `InsertFrame`'s `sweep`
+  arm, for the excess - one frame past the budget. `MaintainFreeReserve`
+  (`device_page_store.cpp:1684`), the watermark sweep, has no caller
+  outside tests (`expeditor.cpp:1945` defers it), and the 50 ms writeback
+  tick (`:1947-1948`) drains dirty frames but reclaims none. A
+  standalone `-O2` copy of the sort loop measured 7.5 ms at 131,072 frames
+  and 89.9 ms at 786,432 (not measured in the engine), so a scan larger
+  than the pool pays one such sort per page. Owned by
+  `docs/spec/eviction.md` (EV5, §3.1, §3.2).
+
+- **EV6's ring is not used by the executor.** Verified at `0b9f7aa9`:
+  `OpenScanRing`'s only callers are `relayout_planner.cpp:255` and
+  `cabin_optimizer_exec.cpp:140`; range and aggregate scans fault through
+  the ordinary pool, warm. Owned by `docs/spec/eviction.md` (EV6, §5).
+
 - **EV8's exhaustion protocol is not built, and `eviction.md` describes it
   as though it were.** Verified at `dd0bfe9` and re-verified at `a140e8d`:
   nothing in the tree reads `kds.evict_retry_budget`, and no path returns
