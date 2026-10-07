@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§14) and `worktree-keep-btree-leaf-slots` (§15-§16) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16) and `worktree-keep-btree-leaf-slots` (§18-§19) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -125,7 +125,34 @@ is **verbatim**: the words as typed in the session.
 | **Does not settle** | BD-Q0, BD-Q10, BD-Q11 and BD-Q12 |
 | **Recorded at** | the order's header (W13) and §4 |
 
-## 14. BD-Q10, BD-Q11 and BD-Q12 marked as proposed
+## 14. `buffer_pool_frames` is required, `0` is an error, and the value is a ceiling
+
+| | |
+|---|---|
+| **Word** | *"buffer_pool_frames=0은 오류. 이 값이 최대 값이 됨"*; asked what a missing key does, *"부팅 거부 (필수 키)"*; asked whether to build it, *"결정만 기록"* |
+| **Mark** | The key is required: a config without it is refused at boot, and `0` is an error. The value is the pool's maximum, not a soft target. Recorded as not built in `eviction.md` §6 and `known-gaps.md` (Eviction) at `e352eac0`; nothing in the engine moved |
+| **Does not settle** | the refusal's status code; whether the store's unbounded mode dies with the key's; what a fault at the ceiling does - each is a BE item (BE-Q2..Q4) |
+| **Recorded at** | `eviction.md` §6, `known-gaps.md` (Eviction), and `workorder-be-bounded-pool.md`'s header |
+
+## 15. BE's order written
+
+| | |
+|---|---|
+| **Word** | *"작업 지시서를 작성하고 handoff를 준비해줘 그리고 다음 세션을 열 key도 알려줘"* |
+| **Mark** | `workorder-be-bounded-pool.md` is written as BE-S0 on `worktree-pool-budget-required` from `e352eac0`, reviewed, and not opened. No engine file moves |
+| **Does not settle** | BE-Q0..Q10 |
+| **Recorded at** | the order's header and §6 |
+
+## 16. BE opened, BE-Q0..Q10 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"push it, and mark BE-Q0..Q10 as proposed"* |
+| **Mark** | **BE-Q0:** BE opens with BE-S0..S6 and BE-R1..R5 as written. **BE-Q1 (a):** a chunked slot array with a free list and a hand over slots. **BE-Q2 (b):** the store's unbounded mode is deleted everywhere, its `Open` taking a required capacity at all 51 sites. **BE-Q3:** a missing key, `0` and a cap below the floor are refused `InvalidArgument`. **BE-Q4 (a):** at the cap, the bounded sweep retries and then `ResourceExhausted`; nothing writes back on the fault path, so one statement dirtying more than the cap is refused. **BE-Q5:** no new keys. **BE-Q6:** a mount floor of resident-class pages plus 256 frames. **BE-Q7 (a):** the outermost read walk faults cold; the scan ring is declined. **BE-Q8:** measured once at BE's close. **BE-Q9:** BE before BA-S8; BD runs in parallel. **BE-Q10:** `txn.md` governs a refused statement's scope |
+| **Does not settle** | BE-S1's premise gate: if the in-engine sweep costs under a tenth of the standalone figure, BE stops at BE-S1 and the operator rules again |
+| **Recorded at** | the order's header (W1), §2's heading and §4; `index.md`'s BE row |
+
+## 17. BD-Q10, BD-Q11 and BD-Q12 marked as proposed
 
 | | |
 |---|---|
@@ -134,7 +161,7 @@ is **verbatim**: the words as typed in the session.
 | **Does not settle** | BD-Q0, BD's opening; writing BB's close entry, which waits for its own word; the push |
 | **Recorded at** | the order's header (W15), BD-R2, BD-R12, §4, §5 and §6 |
 
-## 15. BD opened
+## 18. BD opened
 
 | | |
 |---|---|
@@ -143,7 +170,7 @@ is **verbatim**: the words as typed in the session.
 | **Does not settle** | writing BB's close entry, which waits for its own word; the push |
 | **Recorded at** | the order's header (W16), §4 and §6, and the index row |
 
-## 16. BD run to its close
+## 19. BD run to its close
 
 | | |
 |---|---|

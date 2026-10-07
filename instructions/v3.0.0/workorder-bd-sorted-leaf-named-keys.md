@@ -2,7 +2,7 @@
 
 Written 2026-10-07 on `worktree-bd-sorted-leaf-named-keys` from `bf8ea937`
 (`v2.7.0-652-gbf8ea937`), on the operator's words below. All are verbatim,
-from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
+from one session, and recorded in `raft-marks-2026-10-07.md` §7-§13, §17 and §18.
 
 **The operator's words**, numbered so the rest of this order can cite them:
 
@@ -31,7 +31,7 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
 - **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: closed 2026-10-07 at BD-S6 (W16, §16 of `raft-marks-2026-10-07.md`); not pushed.**
+**Status: closed 2026-10-07 at BD-S6 (W16, §19 of `raft-marks-2026-10-07.md`); not pushed.**
 
 - §4's mark column says which items the words settle; every item is marked.
 - BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
@@ -907,7 +907,7 @@ simplifications**, and corrected four line numbers in §1.6 and BD-R8 itself.
 
 ### BD-Q10, BD-Q11 and BD-Q12 marked as proposed - 2026-10-07
 
-On W15 (`raft-marks-2026-10-07.md` §14):
+On W15 (`raft-marks-2026-10-07.md` §17):
 
 - **BD-Q10 (a):** a split is logged as one `BTREE_SPLIT` record carrying
   every image it writes (BD-R12).
@@ -920,7 +920,7 @@ BD-Q0, BD's opening, is the one item left. No stage has started.
 
 ### BD opened - 2026-10-07
 
-On W16 (`raft-marks-2026-10-07.md` §15), BD-Q0 is marked yes, and BD is
+On W16 (`raft-marks-2026-10-07.md` §18), BD-Q0 is marked yes, and BD is
 open with BD-S0..S6 and BD-R1..R12 as written at `50d35916`. BD-S1 starts
 on `worktree-keep-btree-leaf-slots`, branched from `50d35916`.
 
@@ -1303,5 +1303,5 @@ operator's word.
 the known-gaps entry said the issue holds no page (it holds page 7; no
 leaf); BA-S11's rebase said a `fetch_add` is the whole of an issue and kept
 *"a named key inside [cursor, ceiling) is never issued"*, both of which
-BD's bounded re-draw contradicts; §16's "Recorded at"; and BB's order now
+BD's bounded re-draw contradicts; §19's "Recorded at"; and BB's order now
 says its BB-S5 does not rebase BA. **Declined**: none.

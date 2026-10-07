@@ -1334,7 +1334,7 @@ BA resumes once BB closes, with BA-S1b struck; its rows are rebased on BD (below
 
 ### BA rebased on BD - 2026-10-07
 
-BD-Q12 (b) (`raft-marks-2026-10-07.md` §14,
+BD-Q12 (b) (`raft-marks-2026-10-07.md` §17,
 `workorder-bd-sorted-leaf-named-keys.md` §5): BB closes on the measurement it
 has, without rebasing BA, and BD-S6 rebases these rows once, against BD.
 BB's drafted rebase (its BB-S5 row) is dropped. BA stays paused until BB's
