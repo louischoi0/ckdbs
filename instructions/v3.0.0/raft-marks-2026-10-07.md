@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16) and `worktree-keep-btree-leaf-slots` (§18-§19) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20) and `worktree-drop-table-page-reclaim` (§21-§22) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -178,3 +178,31 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | BD-S1 to BD-S6 run in order on `worktree-keep-btree-leaf-slots`, each through its review and the suite; every choice a stage raised taken as CLA proposed it |
 | **Does not settle** | the push; BB's close entry, which waits for its own word; BA's resumption |
 | **Recorded at** | the order's status line, and the index row |
+
+## 20. BD pushed
+
+| | |
+|---|---|
+| **Word** | *"push it"* |
+| **Mark** | `worktree-keep-btree-leaf-slots` at `bc144dbf` - BD-S4 to BD-S6 and the merge of `origin/main` - pushed to `main` (`e4b107af..bc144dbf`), the pre-push hook run and green (3223 of 3223) |
+| **Does not settle** | BB's close entry, which waits for its own word; BA's resumption |
+| **Recorded at** | here |
+
+## 21. BF's order written
+
+| | |
+|---|---|
+| **Word** | *"다음으로 drop table 페이지 회수 기능에 대한 작업 지시서"* |
+| **Mark** | `workorder-bf-drop-table-page-reclaim.md` is written as BF-S0 on `worktree-drop-table-page-reclaim` from `bc144dbf`, reviewed, and not opened. No engine file moves |
+| **Does not settle** | BF-Q0..Q18 |
+| **Recorded at** | the order's header and §6, and `index.md`'s BF row |
+
+## 22. BF opened, BF-Q0..Q18 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"BF-Q0..Q 제안대로 마킹해줘"* |
+| **Reading** | "BF-Q0..Q" read as every item §4 holds once BF-S0's review was applied: BF-Q0..Q18 |
+| **Mark** | **BF-Q0: yes** - BF opens with BF-S0..S6 and BF-R1..R13 as written. **BF-Q1 (b):** the mount first, then within the run (BF-S5). **BF-Q2 (a):** a free is crash-safe once `D` is past the drop; no WAL record added. **BF-Q3 (a):** the roots wait in the tombstone's word. **BF-Q4:** superblock 21, version 20 refused (§11). **BF-Q5 (c):** the walk reclaims; the owner census is the sim's oracle. **BF-Q6 (i):** an in-memory free list ahead of the cursor. **BF-Q7 (a):** a freed page's frame is discarded, `EvictClean` deleted. **BF-Q8 (a):** what the walk reaches. **BF-Q9 (b):** the statement epoch, published before the schema word is read. **BF-Q10 (a):** all three defence checks. **BF-Q11 (a):** the RESTRICT window fixed in BF-S5. **BF-Q12 (a):** the code governs; the autocommit specs are restated. **BF-Q13:** the counters, no key, `kReclaimBatchPages` a constant. **BF-Q14 (a):** BF-S2 after BE-S2, and against the map-keyed table if BE stops at BE-S1. **BF-Q15:** measured once at BF's close. **BF-Q16 (a):** core 0's system tick. **BF-Q17 (a):** BF answers DT1's gate 3 and horizon preconditions for a dropped relation. **BF-Q18 (c):** a chain freed tail-first. Five of these are `[quiet-wrong]`: BF-Q1, Q2, Q9, Q11 and Q17 |
+| **Does not settle** | BF-S1's start; BF-S1's premise gate on BF-R4's `cores > 1` arm, where BF stops and the operator rules; the push |
+| **Recorded at** | the order's header (W1), §2's heading, §4 and §6; `index.md`'s BF row |
