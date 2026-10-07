@@ -279,8 +279,8 @@ TEST(SortedLeafCrashTest, ALogCutInsideAnAppendSplitLeavesEveryLaterRowOnTheWalk
     // parent's image, then the old leaf's image carrying the link. A cut
     // after the parent's image routes ids to a leaf no walk reaches, and
     // the rows inserted after the restart land there. Decided at BD-S1: it
-    // reproduces (`docs/inflight/bugs/a-log-cut-inside-an-append-split-
-    // leaves-its-leaf-off-the-walk.md`), and BD-R12 fixes it at BD-S2.
+    // reproduced, after record 5 of 8 (the parent's image), and BD-R12's
+    // one BTREE_SPLIT record fixed it at BD-S2.
     constexpr std::uint64_t kSplitter = 10 * (198 * 2 + 1);
     TempDir before;
     TempDir after;
@@ -378,6 +378,38 @@ TEST(SortedLeafCrashTest, ALogCutInsideAnIndexSplitLeavesEveryRowOnItsIndex) {
                               << where << ": the index does not find " << id;
                       }
                   });
+}
+
+TEST(SortedLeafCrashTest, ATakenBackRowWhoseSplitGrewTheRootLeavesTheRootPublished) {
+    // E5 on a split that grew a level (BD-S2's review, C1): the root leaf is
+    // full, the next row splits it and grows a root over it, and its index
+    // maintenance fails. The take-back retires the row and logs the split -
+    // and must publish the new root, or every later descent starts at a
+    // grown-over leaf that no longer covers the keys above the separator.
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        ids = Fill(d0, 198);  // the root leaf, full
+
+        d0.SetAfterPlacementForTest([] { return Status::IoError("index maintenance failed"); });
+        const std::string failed = d0.Dispatch("INSERT INTO t VALUES (1990, 0)").response;
+        d0.SetAfterPlacementForTest(nullptr);
+        ASSERT_TRUE(StartsWith(failed, "ERR")) << failed;
+
+        for (std::uint64_t id = 2000; id < 2010; ++id) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id) + ", 0)");
+            ids.insert(id);
+        }
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    ExpectRelation(*mounted.value(), ids, "after the crash");
 }
 
 }  // namespace

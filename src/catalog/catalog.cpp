@@ -2592,37 +2592,6 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     return Status::OK();
 }
 
-Status Catalog::RefuseRelationsHoldingKeysOutOfOrder() {
-    auto rows = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
-    if (!rows.ok()) return rows.status();
-    std::vector<Oid> marked;
-    for (const SysTableRow& row : rows.value()) {
-        if (row.retired_key_order == kRetiredKeyOrderUnordered) marked.push_back(row.oid);
-    }
-    if (marked.empty()) return Status::OK();
-    // Named from `sys.objects`: `RenameTable` rewrites that row alone, so
-    // `SysTableRow::name` is the name the relation was created under.
-    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
-    if (!objects.ok()) return objects.status();
-    std::string names;
-    std::size_t count = 0;
-    for (const SysObjectRow& row : objects.value()) {
-        if (row.type_oid != kTypeTable ||
-            std::find(marked.begin(), marked.end(), row.oid) == marked.end()) {
-            continue;
-        }
-        if (count++ > 0) names += ", ";
-        names += "`" + std::string(NameView(row.name)) + "`";
-    }
-    if (count == 0) return Status::OK();
-    return Status::Unsupported(
-        std::string(count == 1 ? "relation " : "relations ") + names +
-        (count == 1 ? " holds" : " hold") +
-        " keys out of order, a shape this engine no longer serves: it reads every page's slot "
-        "order as its key order, and such a relation's pages need not be. Its data is reached "
-        "by an engine older than 1b5d252e, or not at all");
-}
-
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
                                        PageId anchor_page_id) {
     // PW2-3/PW2-4: a root move writes the **anchor alone** - the

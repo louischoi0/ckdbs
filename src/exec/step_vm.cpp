@@ -180,20 +180,30 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
 // A stopping sub-chain's walk is cut short by its own sink, so the map it
 // filled covers a *prefix* of the relation. Making that partiality safe
 // needs one thing the executor did not have: a position a later walk can
-// resume from. That is this mark - a page, and how many of that page's
-// rows the walk covered in the page's own emission order.
+// resume from. That is this mark - on a heap, a page and how many of that
+// page's rows the walk covered in the page's own emission order.
 //
-// **The ordinal** counts the rows the walk handed its visitor on that page,
-// in the order it emits them - slot order. Within one statement that
-// sequence is fixed - nothing writes to the relation between the outer rows
-// of a SELECT (spec §4, the same argument JB4's location hints rest on) - so
-// an ordinal taken by one walk names the same row to the next.
+// **The ordinal** (a heap's) counts the rows the walk handed its visitor on
+// that page, in the order it emits them - slot order. A heap page appends
+// and never shifts, so an ordinal taken by one walk names the same row to
+// the next.
+//
+// **On a btree the mark is a key** (BD-R3 E4,
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): `last_pk`,
+// the last row the walk covered, and a resume skips every row at or below
+// it. The statement writes nothing between its walks, but another core may:
+// a leaf places a row where its key sorts, so an insert on the marked leaf
+// shifts the rows after it, and an ordinal would then skip a row it never
+// covered or cover one twice. Keys only move right, so every key above
+// `last_pk` is on the marked leaf or to its right, and the resume still
+// starts there. A heap page never shifts and keeps the ordinal.
 //
 // `page == kInvalidPageId` is "from the head", which is where a first walk
 // starts and what an unset mark means.
 struct WalkMark {
     PageId page = kInvalidPageId;
     std::uint32_t visited = 0;
+    std::uint64_t last_pk = 0;  // a btree's mark; 0 is below every id (kFirstRowId)
 };
 
 // What a resumable walk reads and writes: where to start, how far it got,
@@ -1098,32 +1108,20 @@ private:
     //    load-bearing property, inner_build.hpp), which is exactly what
     //    the per-row walk emitted for this key - sorting is what would
     //    change a reply.
-    //  - **No dedup, no hint verification.** One entry per walked row by
-    //    construction, and no location moves between the build and the
-    //    probe. That second half is a fact about *this statement*, not
-    //    about the engine: a btree leaf division does move tuples -
-    //    SplitLeafAndInsert (storage/btree/btree.cpp) calls itself a
-    //    relayout in everything but name and bumps `relayout_epoch` for
-    //    exactly that reason, which is what `VerifyTupleAt` checks on the
-    //    Cabin's behalf. It cannot reach a probe because nothing can write
-    //    to the inner relation in between: the statement is a SELECT (spec
-    //    §8 excludes a DML `WHERE` sub-chain at *compile* - `inner_build`
-    //    is false from `CompileWhere` down, JB1 - so no such step is ever
-    //    annotated; the runtime gate that used to say so a second time is
-    //    JB6's prefix arm now), and an annotated step has no park at all -
-    //    nothing in the executor parks since AT-S10 retired the remote
-    //    producer's resume gate, the one suspension point it had. **JB6's
-    //    resumed walk does not change that**: the walk it resumes has no
-    //    more suspension point than the walk it continues - which is also
-    //    what lets a physical mark name the same row twice.
-    //    **Give a built step a park and this arm owes VerifyTupleAt with a
-    //    pk fallback**, because the in-place-update and
-    //    slots-never-compact cases are not the only way a location dies.
-    //    What stands in for both checks meanwhile: every entry goes through
-    //    `AcceptTupleAt`, which re-applies MVCC under the statement's
-    //    fixed snapshot and re-evaluates the **full** residual - the
-    //    superset-plus-recheck idiom, so correctness never rests on build
-    //    bookkeeping, only cost does (spec §4).
+    //  - **No dedup; a btree entry verified.** One entry per walked row by
+    //    construction. Its location does not stay true: nothing in *this
+    //    statement* writes the inner relation (it is a SELECT - spec §8
+    //    excludes a DML `WHERE` sub-chain at compile, JB1), but another
+    //    core's insert does, and since BD-R2 a leaf places a row where its
+    //    key sorts, so an insert below a bucketed row shifts it (BD-R3 E3,
+    //    `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`). So a
+    //    btree entry goes through `VerifyTupleAt` and a miss through a pk
+    //    lookup, the Cabin serve's shape; a heap page never shifts and is
+    //    read bare. Every entry then goes through `AcceptTupleAt`, which
+    //    re-applies MVCC under the statement's fixed snapshot and
+    //    re-evaluates the **full** residual - the superset-plus-recheck
+    //    idiom, so correctness never rests on build bookkeeping, only cost
+    //    does (spec §4).
     //  - **A missing bucket concludes nothing here.** Whether it means
     //    "the relation holds no such row" belongs to the caller and to
     //    the map's phase: WalkAndBuild probes only a published map, which
@@ -1161,6 +1159,15 @@ private:
         // replaced counted them - bucket order is walk order, so
         // consecutive same-page entries are the common case, and a
         // per-entry count would price the probe above the walk it beat.
+        //
+        // **A btree entry is verified, and a miss resolved by its pk** (BD-R3
+        // E3). The walk released each leaf it bucketed from, and since a
+        // leaf places a row where its key sorts, another core's insert below
+        // a bucketed row shifts it - the statement's own writes are not the
+        // only ones any more. `VerifyTupleAt` reads the slot's pk against
+        // the entry's; a miss descends for the pk, as the Cabin serve does.
+        // A heap page never shifts and keeps the bare read.
+        const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
         PageId last_page = kInvalidPageId;
         for (const stats::CabinEntry& entry : bucket) {
             if (stopped_) break;
@@ -1168,6 +1175,33 @@ private:
             if (entry.page_id != last_page) {
                 ++step_stats.pages_fetched;
                 last_page = entry.page_id;
+            }
+            if (is_btree) {
+                VerifiedTuple verified =
+                    VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch);
+                if (verified.ok()) {
+                    if (Status s = AcceptTupleAt(steps, index, step, access, entry.page_id,
+                                                 *verified.page, entry.slot);
+                        !s.ok()) {
+                        co_return s;
+                    }
+                    continue;
+                }
+                verified = {};
+                auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.pk);
+                if (!found.ok()) {
+                    // Absent: the row the walk bucketed is gone from the
+                    // relation, which the walk would not emit either.
+                    if (found.status().code() == StatusCode::kNotFound) continue;
+                    co_return found.status();
+                }
+                heap::PageView leaf(found.value().leaf.bytes());
+                if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id,
+                                             leaf, found.value().slot);
+                    !s.ok()) {
+                    co_return s;
+                }
+                continue;
             }
             auto bytes = store_.GetForRead(entry.page_id);
             if (!bytes.ok()) co_return bytes.status();
@@ -1663,6 +1697,8 @@ private:
         const bool prefixed = prefix != nullptr;
         const PageId resume_page = prefixed ? prefix->resume.page : kInvalidPageId;
         const std::uint32_t resume_visited = prefixed ? prefix->resume.visited : 0;
+        const std::uint64_t resume_pk = prefixed ? prefix->resume.last_pk : 0;
+        const bool keyed_mark = access.clustered_type == catalog::ClusteredType::kBtree;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -1789,12 +1825,25 @@ private:
                     return AcceptTupleAt(steps, index, step, *live_access, page_id, page, at);
                 }
                 const std::uint32_t ordinal = visited_on_page++;
-                if (page_id == resume_page && ordinal < resume_visited) {
-                    // Covered by an earlier walk of this step: the map holds
-                    // whatever it qualified for, and re-examining it is the
-                    // double visit spec §6's economics forbids.
-                    return Status::OK();
+                // A btree row's key, for the key mark. A retired slot has
+                // none and is no row: it is handed on unmarked, and
+                // `AcceptTupleAt` declines it.
+                std::uint64_t pk = 0;
+                if (keyed_mark) {
+                    auto payload = page.PayloadAt(at, page.slot_count());
+                    if (payload.ok()) {
+                        auto id = KeystoneIdOfPayload(payload.value());
+                        if (!id.ok()) return id.status();
+                        pk = id.value();
+                    }
                 }
+                // Covered by an earlier walk of this step: the map holds
+                // whatever it qualified for, and re-examining it is the
+                // double visit spec §6's economics forbids.
+                const bool covered =
+                    keyed_mark ? resume_page != kInvalidPageId && pk != 0 && pk <= resume_pk
+                               : page_id == resume_page && ordinal < resume_visited;
+                if (covered) return Status::OK();
                 Status s = AcceptTupleAt(steps, index, step, *live_access, page_id, page, at);
                 if (!s.ok() || mark_frozen) return s;
                 if (extending && building_->over_cap) {
@@ -1806,7 +1855,11 @@ private:
                     mark_frozen = true;
                     return s;
                 }
-                prefix->mark = WalkMark{page_id, visited_on_page};
+                if (!keyed_mark) {
+                    prefix->mark = WalkMark{page_id, visited_on_page, 0};
+                } else if (pk != 0) {
+                    prefix->mark = WalkMark{page_id, 0, pk};
+                }
                 return s;
             };
 

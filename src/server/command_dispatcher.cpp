@@ -4284,13 +4284,19 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
         }
     }
 
-    // Every page the insert restructured, in the order the storage layer
+    // **A B+ tree leaf logs one record for the row** (BD-R3 E2, BD-R12):
+    // a BTREE_SPLIT carrying every page the split wrote, the row already in
+    // whichever leaf took it, or a BTREE_INSERT naming the slot the row was
+    // placed at. Either comes after the row's spills and index entries, the
+    // order the heap's HEAP_INSERT keeps below.
+    const bool btree = leaf_type == PageType::kBtreeLeaf;
+
+    // Every page a heap insert restructured, in the order the storage layer
     // says redo has to apply it, and all of it before the tuple's own
     // record. A brand-new tuple page is a PAGE_INIT that the HEAP_INSERT
-    // below then fills; everything else - a link edit, a B+ tree internal
-    // node created or amended, a new root - is a full page image, because
-    // no record type describes those (insert_placement.hpp).
-    for (const storage::StructuralChange& change : placed.changes()) {
+    // below then fills; a link edit is a full page image (insert_placement.hpp).
+    for (const storage::StructuralChange& change :
+         btree ? std::span<const storage::StructuralChange>{} : placed.changes()) {
         if (change.is_new_page) {
             if (auto rec = wal::LogPageInit(wal_, txn_id, change.page_id, leaf_type,
                                             change.min_key, owner_oid);
@@ -4320,17 +4326,28 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     // by verification, a row with no entry is lost.
     if (Status s = LogIndexWrites(index_writes, txn_id); !s.ok()) return s;
 
-    // undo_ptr 0: an insert supersedes no version, so its undo chain ends
-    // at itself (wal.md section 5.1).
-    std::vector<std::byte> payload(wal::kHeapWriteFixedSize + tuple.size());
-    const wal::HeapWritePayload fields{trx_id, /*undo_ptr=*/0, placed.slot,
-                                       static_cast<std::uint16_t>(tuple.size())};
-    if (auto n = wal::EncodeHeapWrite(payload, fields, tuple); !n.ok()) return n.status();
+    if (btree && placed.restructured()) {
+        // The split's one record, which carries the row: no insert record
+        // follows it, as an index split logs no INDEX_INSERT.
+        if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, placed.changes());
+            !s.ok()) {
+            return s;
+        }
+    } else {
+        // undo_ptr 0: an insert supersedes no version, so its undo chain
+        // ends at itself (wal.md section 5.1).
+        std::vector<std::byte> payload(wal::kHeapWriteFixedSize + tuple.size());
+        const wal::HeapWritePayload fields{trx_id, /*undo_ptr=*/0, placed.slot,
+                                           static_cast<std::uint16_t>(tuple.size())};
+        if (auto n = wal::EncodeHeapWrite(payload, fields, tuple); !n.ok()) return n.status();
 
-    auto rec = wal_->Append(
-        wal::RecordSpec{wal::RecordType::kHeapInsert, txn_id, placed.page_id}, payload);
-    if (!rec.ok()) return rec.status();
-    if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
+        auto rec = wal_->Append(
+            wal::RecordSpec{btree ? wal::RecordType::kBtreeInsert : wal::RecordType::kHeapInsert,
+                            txn_id, placed.page_id},
+            payload);
+        if (!rec.ok()) return rec.status();
+        if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
+    }
 
     // Every record naming a page this insert holds is appended and stamped,
     // so the holds go - here, and not at the caller's return: an own
@@ -5269,6 +5286,73 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         return placed.status();
     }
 
+    // The tree grew a level, so the relation's root moved. Published only
+    // once the new root's contents are logged: a root published before the
+    // pages under it are described is a root recovery cannot follow. Since
+    // PW2-4 the move writes the anchor and updates the cached entry **in
+    // place** - `ta` stays valid, no invalidation broadcast, no catalog
+    // write. Both the success path below and E5's take-back of a split run
+    // it, after the holds the placement handed out are gone.
+    const auto publish_root = [&]() -> Status {
+        if (placed.value().new_root == kInvalidPageId) return Status::OK();
+        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root,
+                                                       ta.anchor_page_id);
+            !s.ok()) {
+            if (logging(LogLevel::kError)) {
+                log_->Error("btree", "table oid " + std::to_string(oid) +
+                                         " grew a level but its root could not be repointed at "
+                                         "page " +
+                                         std::to_string(placed.value().new_root) + ": " +
+                                         s.message());
+            }
+            return s;
+        }
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("btree", "table oid " + std::to_string(oid) +
+                                    " grew a level; root is now page " +
+                                    std::to_string(placed.value().new_root));
+        }
+        return Status::OK();
+    };
+
+    // ---- E5: a placement no record will describe is taken back ----------
+    //
+    // BD-R3 E5 (`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`).
+    // From here to the row's trail entry, a failure leaves a row on its leaf
+    // with no trail entry and no record, and the leaf is still held
+    // (AT-S21). Left there it would shift neighbours redo never sees shift,
+    // and its slot would make the next logged insert's slot name a row redo
+    // never placed - the mount refuses it (BD-S1's cell). So a btree leaf
+    // gives it back under the hold: the slot and its bytes go, the last the
+    // leaf allocated. A split cannot give back a rebuilt page, so there the
+    // row's slot is retired, keyless, the split is logged without a live row
+    // (`kNoTxnId`: no transaction owns a structural change), and a root it
+    // grew is published as the success path would. A heap relation is
+    // untouched (BD-Q4).
+    const auto take_back = [&](Status failed) -> Status {
+        if (!is_btree) return failed;
+        Status undone = [&]() -> Status {
+            auto page = page_store_.Get(placed.value().page_id);
+            if (!page.ok()) return page.status();
+            heap::PageView leaf(page.value().bytes());
+            if (!placed.value().restructured()) return leaf.UnInsertTuple(placed.value().slot);
+            if (Status s = leaf.RetireSlot(placed.value().slot); !s.ok()) return s;
+            page.value().Release();
+            if (Status s = storage::LogBtreeSplit(wal_, page_store_, wal::kNoTxnId,
+                                                  placed.value().changes());
+                !s.ok()) {
+                return s;
+            }
+            placed.value().held.clear();
+            return publish_root();
+        }();
+        if (!undone.ok() && logging(LogLevel::kError)) {
+            log_->Error("btree", "taking back the unlogged placement of id " +
+                                     std::to_string(row_id) + " failed: " + undone.message());
+        }
+        return failed;
+    };
+
     // ---- The Cabin witness (docs/spec/cabin.md §5) ----------------------
     //
     // **Before the log, deliberately.** A WAL failure below reports an error
@@ -5311,7 +5395,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                                      std::to_string(oid) + " for id " +
                                      std::to_string(row_id) + " failed: " + s.message());
         }
-        return s;
+        return take_back(s);
     }
 
     // ---- The reservation (docs/spec/assertion.md §6.2 step 3) -----------
@@ -5326,7 +5410,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                                             body, row_id, placed.value().page_id,
                                             placed.value().slot);
         !s.ok()) {
-        return s;
+        return take_back(s);
     }
 
     // ---- The rollback trail, and the durable record beside it -----------
@@ -5342,6 +5426,14 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // means "inserted" to every reader; the record is reachable only
     // through the transaction chain, which is what keeps §3.6's visibility
     // rule intact.
+    //
+    // **The spills are noted before the row's trail entry** (BD-S2's review,
+    // C2): noting one appends an undo record and can fail, and a failure
+    // after `NoteInsert` would leave the trail naming a row no record
+    // describes - whose live rollback logs a `SLOT_RETIRE` that redo, never
+    // having placed the row, applies to the neighbour the shift moved up.
+    // Before `NoteInsert` the failure is E5's, and the row is taken back. An
+    // insert undo record with no row behind it is work recovery counts done.
     if (scope.txn != nullptr) {
         txn::UndoRecordFields rec{};
         rec.prior_trx_id = txn::kNoTrxId;
@@ -5350,20 +5442,13 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         rec.target_slot = placed.value().slot;
         rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
         auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
-        if (!ptr.ok()) return ptr.status();
-
+        if (!ptr.ok()) return take_back(ptr.status());
+    }
+    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return take_back(s);
+    if (scope.txn != nullptr) {
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
     }
-
-    // The spills, **after** the row's own record and not before it. The
-    // only ordering this owes is "before `LogInsert` writes the
-    // VARHEAP_APPENDs"; putting it here shortens the window in which the
-    // tuple sits in the page with no trail entry naming it, which is a row
-    // a rollback would not undo. `Abort` has no suspension point, so
-    // reversing the trail's order relative to the two writes is
-    // unobservable.
-    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return s;
 
     if (before_insert_log_for_test_) before_insert_log_for_test_();
 
@@ -5381,34 +5466,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         return s;
     }
 
-    // The tree grew a level, so the relation's root moved. Persisted only
-    // now: the new root's contents are logged above, and a root published
-    // before the pages under it are described is a root recovery cannot
-    // follow. Since PW2-4 the move writes the anchor and updates the
-    // cached entry **in place** - `ta` stays valid, no invalidation
-    // broadcast, no catalog write.
-    if (placed.value().new_root != kInvalidPageId) {
-        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root,
-                                                       ta.anchor_page_id);
-            !s.ok()) {
-            if (logging(LogLevel::kError)) {
-                log_->Error("btree", "table oid " + std::to_string(oid) +
-                                         " grew a level but its root could not be repointed at "
-                                         "page " +
-                                         std::to_string(placed.value().new_root) + ": " +
-                                         s.message());
-            }
-            return s;
-        }
-        if (logging(LogLevel::kInfo)) {
-            log_->Info("btree", "table oid " + std::to_string(oid) +
-                                    " grew a level; root is now page " +
-                                    std::to_string(placed.value().new_root));
-        }
-        // The in-place update (PW2-4) keeps `ta` valid, so the refresh the
-        // pre-anchor invalidation forced is gone - the pointer reference
-        // stays for the day a move ever invalidates again.
-    }
+    if (Status s = publish_root(); !s.ok()) return s;
 
     // A relation growing a page is rare and structural - the closest thing
     // this engine has to a file extending - so it is Debug, above the

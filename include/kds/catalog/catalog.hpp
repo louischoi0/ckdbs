@@ -699,13 +699,6 @@ public:
     // BB-R3).
     StatusOr<std::uint64_t> RowIdMark(Oid table_oid);
 
-    // **The mount's refusal of a relation whose keys are out of order**
-    // (BB-R11): `Unsupported`, naming every relation whose retired key-order
-    // byte still reads `kRetiredKeyOrderUnordered`, by its current name.
-    // Core 0's, once, after recovery and the delete-mark finalize
-    // (`heap-and-tuple.md` §4.1 carries the rule and what it cannot see).
-    Status RefuseRelationsHoldingKeysOutOfOrder();
-
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
     // The pattern `fetch_id` names, served from the cache after the first

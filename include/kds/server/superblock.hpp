@@ -242,7 +242,17 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // §13). The WAL segment's own format version does not move: a log is read
 // only with its own volume, so the volume's word is the one that decides, and
 // a count-less record that reaches a reader anyway is Corruption.
-inline constexpr std::uint32_t kSuperBlockVersion = 19;
+// 19 -> 20 (2026-10-07, BD-R8): **a B+ tree leaf is in key order by
+// placement** (`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`).
+// A leaf places a row where its key sorts, the lookup is one binary search
+// with no linear fallback, and a split is one BTREE_SPLIT record. A
+// version-19 volume an engine before `1b5d252e` wrote at `cores > 1` can hold
+// a leaf out of key order, which that search would read wrong, and its log
+// has no BTREE_INSERT/BTREE_SPLIT to replay. Refused with no migration (the
+// operator's standing order of 2026-10-07, `raft-marks-2026-10-07.md` §11),
+// which retires BB-R11's mount check: no version-20 volume carries the
+// `sys.tables` byte it read set.
+inline constexpr std::uint32_t kSuperBlockVersion = 20;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

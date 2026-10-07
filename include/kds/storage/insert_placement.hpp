@@ -34,17 +34,15 @@ namespace kds::storage {
 struct StructuralChange {
     PageId page_id = kInvalidPageId;
 
-    // A brand-new tuple page, which `PAGE_INIT` describes completely (page
-    // type + min_key) and which the following `HEAP_INSERT` then fills.
+    // A brand-new heap chain page, which `PAGE_INIT` describes completely
+    // (page type + min_key) and which the following `HEAP_INSERT` then fills.
     //
-    // Every other change - a new B+ tree internal node, a modified one, an
-    // old page whose forward link was repointed - is false and needs a
-    // `FULL_PAGE_IMAGE`, because no record type describes an internal
-    // node's entry array or a link edit on its own (record.hpp's enum is
-    // frozen and append-only; BTREE_INSERT/BTREE_SPLIT are deliberately
-    // left unassigned there). Structural changes happen once per 8 KB of
-    // tuples, so the FPI volume is paid per page of relation, never per
-    // tuple.
+    // Every other heap change - an old tail whose forward link was
+    // repointed - is false and needs a `FULL_PAGE_IMAGE`. **A B+ tree never
+    // sets it**: every page a split writes is an image in the split's one
+    // `BTREE_SPLIT` record, which carries the row too (BD-R12). Structural
+    // changes happen once per 8 KB of tuples, so the image volume is paid
+    // per page of relation, never per tuple.
     bool is_new_page = false;
 
     // The new page's low key (`min_key`). Meaningless unless `is_new_page`.
@@ -106,9 +104,10 @@ struct InsertPlacement {
     // Empty on a placement that holds nothing.
     std::vector<PageRef> held;
 
-    // In the order redo has to apply them, and always before the
-    // `HEAP_INSERT` that describes the tuple itself. Empty for the
-    // overwhelmingly common insert that just filled a slot.
+    // A heap chain's in the order redo has to apply them, before the
+    // `HEAP_INSERT` that describes the tuple itself; a B+ tree's, the pages
+    // of its one `BTREE_SPLIT`. Empty for the overwhelmingly common insert
+    // that just filled a slot.
     std::span<const StructuralChange> changes() const {
         return std::span<const StructuralChange>(structural.data(), n_structural);
     }

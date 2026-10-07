@@ -534,6 +534,45 @@ StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::by
     return in.first(kFullPageImagePayloadSize);
 }
 
+// ---- BTREE_SPLIT ---------------------------------------------------------
+
+StatusOr<std::size_t> EncodeBtreeSplit(std::span<std::byte> out,
+                                       std::span<const BtreeSplitImage> images) {
+    if (images.empty()) {
+        return Status::InvalidArgument("wal payload: a BTREE_SPLIT names at least one page");
+    }
+    const std::size_t size = BtreeSplitSize(images.size());
+    if (Status s = CheckOutputSize(out, size, "BTREE_SPLIT"); !s.ok()) return s;
+    Store<std::uint32_t>(out, 0, static_cast<std::uint32_t>(images.size()));
+    Store<std::uint32_t>(out, 4, 0);
+    std::size_t at = kBtreeSplitFixedSize;
+    for (const BtreeSplitImage& image : images) {
+        if (image.image.size() != kPageSize) {
+            return Status::InvalidArgument("wal payload: a BTREE_SPLIT image is not one page");
+        }
+        Store<PageId>(out, at, image.page_id);
+        Store<std::uint32_t>(out, at + 4, 0);
+        std::memcpy(out.data() + at + 8, image.image.data(), kPageSize);
+        at += kBtreeSplitEntrySize;
+    }
+    return size;
+}
+
+StatusOr<std::vector<BtreeSplitImage>> DecodeBtreeSplit(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kBtreeSplitFixedSize, "BTREE_SPLIT"); !s.ok()) return s;
+    const std::uint32_t count = Load<std::uint32_t>(in, 0);
+    if (count == 0 || in.size() != BtreeSplitSize(count)) {
+        return Status::Corruption("wal payload: BTREE_SPLIT names " + std::to_string(count) +
+                                  " pages in " + std::to_string(in.size()) + " bytes");
+    }
+    std::vector<BtreeSplitImage> images;
+    images.reserve(count);
+    for (std::size_t at = kBtreeSplitFixedSize; at < in.size(); at += kBtreeSplitEntrySize) {
+        images.push_back({Load<PageId>(in, at), in.subspan(at + 8, kPageSize)});
+    }
+    return images;
+}
+
 // ---- CHECKPOINT_BEGIN ----------------------------------------------------
 
 std::size_t CheckpointBeginSize(std::size_t txn_count, std::size_t dirty_count) noexcept {

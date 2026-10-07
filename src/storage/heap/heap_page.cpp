@@ -143,6 +143,12 @@ void PageView::MarkGrownOver() {
 
 StatusOr<std::uint16_t> PageView::InsertTuple(std::span<const std::byte> payload,
                                                std::uint64_t trx_id, std::uint64_t undo_ptr) {
+    return InsertTupleAt(slot_count(), payload, trx_id, undo_ptr);
+}
+
+StatusOr<std::uint16_t> PageView::InsertTupleAt(std::uint16_t at,
+                                                 std::span<const std::byte> payload,
+                                                 std::uint64_t trx_id, std::uint64_t undo_ptr) {
     if (payload.size() > kPageSize) {
         return Status::InvalidArgument("payload larger than a page");
     }
@@ -154,13 +160,23 @@ StatusOr<std::uint16_t> PageView::InsertTuple(std::span<const std::byte> payload
     std::size_t needed = kSlotOnDiskSize + kTupleHeaderOnDiskSize + payload_len;
 
     HeapPageHeaderFields h = ReadHeader();
+    if (at > h.nr_slots) {
+        return Status::InvalidArgument("insert at slot " + std::to_string(at) +
+                                       " on a page holding " + std::to_string(h.nr_slots) +
+                                       "; slots are dense");
+    }
     std::size_t avail = h.upper > h.lower ? (h.upper - h.lower) : 0;
     if (avail < needed) {
         return Status::OutOfSpace("heap page has no room for this tuple");
     }
 
     auto new_upper = static_cast<std::uint16_t>(h.upper - (kTupleHeaderOnDiskSize + payload_len));
-    std::uint16_t new_slot_idx = h.nr_slots;
+    const std::uint16_t new_slot_idx = at;
+    // The directory entries at and after `at` move up one; no tuple byte
+    // moves (BD-R2). At `nr_slots` this moves nothing - the append.
+    std::memmove(page_.data() + SlotOffset(static_cast<std::uint16_t>(at + 1)),
+                 page_.data() + SlotOffset(at),
+                 static_cast<std::size_t>(h.nr_slots - at) * kSlotOnDiskSize);
 
     std::byte* tuple_base = page_.data() + new_upper;
     std::memcpy(tuple_base + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
@@ -190,17 +206,21 @@ StatusOr<std::uint16_t> PageView::InsertTuple(std::span<const std::byte> payload
 
 Status PageView::UnInsertTuple(std::uint16_t slot_idx) {
     HeapPageHeaderFields h = ReadHeader();
-    if (h.nr_slots == 0 || slot_idx != h.nr_slots - 1) {
+    if (slot_idx >= h.nr_slots) {
         return Status::InvalidArgument("UnInsertTuple: slot " + std::to_string(slot_idx) +
-                                       " is not the page's last");
+                                       " is past the page's last");
     }
     const HeapSlotFields slot = ReadSlot(slot_idx);
-    // InsertTuple's arithmetic in reverse: its tuple is the lowest on the
+    // InsertTupleAt's arithmetic in reverse: its tuple is the lowest on the
     // page, at `upper`, and nothing dead or retired sits there.
     if (slot.offset != h.upper || slot.flags != 0 || slot.length == 0) {
         return Status::InvalidArgument("UnInsertTuple: slot " + std::to_string(slot_idx) +
-                                       " is not a tuple InsertTuple just placed");
+                                       " is not a tuple InsertTupleAt just placed");
     }
+    // The entries after it move back down - the shift InsertTupleAt made.
+    std::memmove(page_.data() + SlotOffset(slot_idx),
+                 page_.data() + SlotOffset(static_cast<std::uint16_t>(slot_idx + 1)),
+                 static_cast<std::size_t>(h.nr_slots - slot_idx - 1) * kSlotOnDiskSize);
     h.nr_slots = static_cast<std::uint16_t>(h.nr_slots - 1);
     h.lower = static_cast<std::uint16_t>(h.lower - kSlotOnDiskSize);
     h.upper = static_cast<std::uint16_t>(h.upper + slot.length);

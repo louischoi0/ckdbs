@@ -52,7 +52,13 @@ namespace {
 // heap arm was at BB-S3 - so its UNDO_WRITE and VARHEAP_APPEND move ahead of
 // its mark record; no record's bytes change, and every other row's records
 // keep their order.
-constexpr std::uint32_t kGoldenLogCrc = 0xdf5ca199u;
+// **Re-pinned at BD-S2** (on `keep-btree-leaf-slots`,
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` BD-R3 E2): a
+// row placed in a B+ tree leaf logs `BTREE_INSERT` (type 29), where it
+// logged `HEAP_INSERT` (type 5). `golden_tree`'s two rows are the script's
+// two such records; their payloads are byte-identical, so the stream moves
+// by the two type bytes and their CRCs, and every heap record is unchanged.
+constexpr std::uint32_t kGoldenLogCrc = 0xd4d0579au;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

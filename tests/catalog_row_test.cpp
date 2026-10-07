@@ -251,8 +251,9 @@ SysTableRow SampleTableRow() {
     row.varheap_page_id = 0xB1B2B3B4u;
     // The retired key-order byte set rather than 0, so a codec that dropped
     // it fails the round trip instead of passing on a zero that happens to be
-    // the right answer - the mount reads this byte (BB-R11).
-    row.retired_key_order = kRetiredKeyOrderUnordered;
+    // the right answer. Nothing reads it since BD-R8 retired BB-R11's check;
+    // it stays a reserved byte of the row.
+    row.retired_key_order = 1;
     return row;
 }
 

@@ -304,7 +304,8 @@ protected:
         log_device_ = std::move(log_device.value());
     }
 
-    // Keystone ids named by durable HEAP_INSERT records, in stream order.
+    // Keystone ids named by durable row-insert records, in stream order:
+    // HEAP_INSERT for a heap page, BTREE_INSERT for a B+ tree leaf (BD-R3 E2).
     std::vector<std::uint64_t> LoggedIds() {
         std::vector<std::uint64_t> ids;
         for (std::uint64_t seg = 0; seg < log_device_->end_segment(); ++seg) {
@@ -313,7 +314,10 @@ protected:
             wal::RecordReader reader(body, seg * kSegmentSize + wal::kSegmentHeaderSize);
             while (std::optional<wal::DecodedRecord> record = reader.Next()) {
                 if (record->type() == wal::RecordType::kPad) break;
-                if (record->type() != wal::RecordType::kHeapInsert) continue;
+                if (record->type() != wal::RecordType::kHeapInsert &&
+                    record->type() != wal::RecordType::kBtreeInsert) {
+                    continue;
+                }
                 auto decoded = wal::DecodeHeapWrite(record->payload);
                 if (!decoded.ok()) continue;
                 auto id = exec::RowKeystoneId(decoded.value().tuple);

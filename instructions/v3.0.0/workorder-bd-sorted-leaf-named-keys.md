@@ -31,7 +31,7 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
 - **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: open (W16), BD-S1 built, BD-S2 started.**
+**Status: open (W16), BD-S1 and BD-S2 built, BD-S3 started.**
 
 - §4's mark column says which items the words settle; every item is marked.
 - BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
@@ -987,3 +987,72 @@ crash files' replies (different reply shapes, `id,qty` against `id`).
 
 **Overhead not measured** (BD-R10, waived).
 
+
+### BD-S2 - sorted placement, the shift-safe holders, the whole split, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `4debe8d9` (BD-S1). Run on that
+engine, Debug.
+
+- **Placement** (BD-R2): `heap::PageView::InsertTupleAt` moves the
+  directory entries at and after the slot up one; `btree::SearchLeaf`, one
+  binary search over the keyed slots, replaces `RefuseDuplicate`,
+  `MaxLiveId` and `FindSlotForId` with its fallback, and is public for redo
+  and recovery undo. The divide merges the incoming row into the sorted
+  versions and cuts once: the rightmost leaf at the insertion point
+  (BD-Q11 (a)), falling back to the median for an id below every key or a
+  moving half no empty leaf holds; any other leaf at the median. The append
+  split keeps its shape. `BtreeTest.ALookupFindsAnIdInALeafWhoseSlotsAreOutOfOrder`
+  is deleted with the fallback.
+- **The log** (BD-R3 E2, BD-R12): `BTREE_INSERT` (29) carries HEAP_INSERT's
+  payload, and its redo places the row only at the slot `SearchLeaf`
+  answers, refusing anything else `Corruption`. `BTREE_SPLIT` (30) carries
+  every page a split writes as an image; analysis dirties each, redo applies
+  each through its own `page_lsn` gate. A btree insert logs one of the two,
+  after its spills and index entries, and a HEAP_INSERT naming a B+ tree
+  leaf is refused at redo. The record fits the default ring for the deepest
+  split (`static_assert`).
+- **E1**: recovery undo re-finds a `kBtreeLeaf` row by its key, in the
+  recorded leaf and rightward while `min_key <= pk`, and compensates only a
+  version the loser wrote.
+- **E3**: `ProbeBuild` verifies a btree entry and resolves a miss by pk.
+- **E4**: JB6's mark is the last pk covered on a btree.
+- **E5**: a btree placement is taken back at the index-maintenance,
+  reservation, undo-append and spill-noting exits; a split's row is retired
+  and the split logged under `kNoTxnId`, with a root it grew published.
+- **BD-R8**: superblock 20; BB-R11's mount check, its cell and
+  `kRetiredKeyOrderUnordered` deleted, the byte reserved.
+- **Re-pinned**: the golden log (`0xd4d0579a`: the two `golden_tree` rows'
+  record type), `insert_wal_test`'s record kinds, the appended-type cell,
+  `BtreeTest.ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo` (the new
+  leaf is an image now), `keystone_id_test`'s logged-id reader.
+- **New cells**: three redo cells (`BTREE_INSERT` shifts; one out of key
+  order is `Corruption`; `BTREE_SPLIT` replays and dirties every page) and
+  `SortedLeafCrashTest.ATakenBackRowWhoseSplitGrewTheRootLeavesTheRootPublished`,
+  red with the take-back's root publish removed.
+- **Green here from BD-S1**: the storage contract's three cells, recovery
+  undo's two, E5's crash cell, and the append split's log cut - so
+  `docs/inflight/bugs/a-log-cut-inside-an-append-split-leaves-its-leaf-off-the-walk.md`
+  is deleted. **Still red, as §3 says**: the SQL and two-session cells, and
+  the E2 and divide-cut crash cells, all gated by SQL's below-mark refusal
+  until BD-S3.
+
+**The review** (one `critics-developer` pass): 2 high, 2 low, 8
+simplifications, 9 stale comments. **Applied**: C1, a take-back of a split
+that grew the root now publishes it (the cell above); C2, the spills are
+noted before the row's trail entry and their failure is a take-back; C4's
+first half, a HEAP_INSERT on a leaf refused; redo's dispatch as one applier
+table over `FunctionRef`; `LogBtreeSplit` takes the placement's changes,
+with no dedupe; `SearchLeaf` shared by redo and undo; `take_back` moved
+above the Cabin comment; the `fits_one_leaf` comment; every stale comment
+named. **Declined**: C3, raising `kMinRingCapacity` past the deepest split
+(a 64 KiB ring or segment refuses a split of 8 or more pages, which takes
+three full internal levels) - it moves the premise of the cells that open
+at the minimum ring and the sim's segment rolls, and is recorded in
+`known-gaps.md` at BD-S5 instead; C4's second half, which noted a stricter
+behaviour and asked for nothing; one helper for E3 and the Cabin serve (the
+serve's miss heals the entry and counts it, a helper would carry both
+concerns); `LogInsert`'s span ternary as an `if` (one expression against a
+re-indented loop); `Record`'s `min_key` on a btree change (a cell reads it
+as the new leaf's low key).
+
+**Overhead not measured** (BD-R10, waived).

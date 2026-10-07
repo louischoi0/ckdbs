@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "kds/base/status.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/undo_log.hpp"
 #include "kds/wal/manager.hpp"
@@ -101,6 +102,13 @@ public:
 private:
     Status RollBackOne(storage::PageStore& store, std::uint64_t txn_id, std::uint64_t head);
     Status Compensate(storage::PageStore& store, std::uint64_t txn_id, const UndoVersion& rec);
+    // A record whose page is a B+ tree leaf: the row re-found by its key
+    // (BD-R3 E1, BD-Q8 (a); recovery_undo.cpp states the walk).
+    Status CompensateOnLeaf(storage::PageStore& store, std::uint64_t txn_id,
+                            const UndoVersion& rec);
+    // The compensation itself, at the row's page and slot as found.
+    Status Apply(storage::PageStore& store, std::uint64_t txn_id, const UndoVersion& rec,
+                 PageId page_id, heap::PageView& view, std::uint16_t slot);
 
     UndoLog& undo_;
     wal::WalManager* wal_;

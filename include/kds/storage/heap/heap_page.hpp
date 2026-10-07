@@ -271,11 +271,24 @@ public:
     StatusOr<std::uint16_t> InsertTuple(std::span<const std::byte> payload, std::uint64_t trx_id,
                                          std::uint64_t undo_ptr = 0);
 
-    // Takes back the tuple InsertTuple() just placed at `slot`, leaving the
+    // InsertTuple() at slot index `at`, `at <= slot_count()`: the directory
+    // entries at and after `at` move up one (5 bytes each) and no tuple byte
+    // moves. A B+ tree leaf places a row where its key sorts this way (BD-R2,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`); a heap
+    // page appends, which is `at == slot_count()` and moves nothing. **The
+    // rows after `at` change slot**, so a caller holding a `(page, slot)` on
+    // this page past the hold that placed the row reads another row - every
+    // such holder verifies its pk (btree.hpp `Location`). InvalidArgument
+    // for `at` past the directory's end, otherwise InsertTuple()'s failures.
+    StatusOr<std::uint16_t> InsertTupleAt(std::uint16_t at, std::span<const std::byte> payload,
+                                           std::uint64_t trx_id, std::uint64_t undo_ptr = 0);
+
+    // Takes back the tuple InsertTupleAt() just placed at `slot`, leaving the
     // slot directory and free space as they were before it: for a writer
     // that placed a row, has logged nothing of it, and must not leave it
-    // behind. Only the last slot, and only while nothing was placed after
-    // it - the caller's exclusive hold on the page is what makes that true.
+    // behind (BD-R3 E5). The entries after `slot` move back down. Only while
+    // its bytes are the last the page allocated - nothing was placed after
+    // it, which the caller's exclusive hold on the page is what makes true.
     // Fails with InvalidArgument otherwise, and changes nothing.
     Status UnInsertTuple(std::uint16_t slot);
 

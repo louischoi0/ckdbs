@@ -539,9 +539,11 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAnchorUpdate), 26);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kTxnPrepare), 27);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kVarHeapRelease), 28);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBtreeInsert), 29);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBtreeSplit), 30);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 28);
+    EXPECT_EQ(kMaxAssignedRecordType, 30);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));
@@ -551,6 +553,8 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAnchorUpdate)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kTxnPrepare)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kVarHeapRelease)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kBtreeInsert)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kBtreeSplit)));
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
     EXPECT_STREQ(RecordTypeName(RecordType::kUndoWrite), "UNDO_WRITE");
     EXPECT_STREQ(RecordTypeName(RecordType::kFree), "FREE");
@@ -558,6 +562,8 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_STREQ(RecordTypeName(RecordType::kIndexInsert), "INDEX_INSERT");
     EXPECT_STREQ(RecordTypeName(RecordType::kPageHandoff), "PAGE_HANDOFF");
     EXPECT_STREQ(RecordTypeName(RecordType::kAnchorUpdate), "ANCHOR_UPDATE");
+    EXPECT_STREQ(RecordTypeName(RecordType::kBtreeInsert), "BTREE_INSERT");
+    EXPECT_STREQ(RecordTypeName(RecordType::kBtreeSplit), "BTREE_SPLIT");
     EXPECT_STREQ(RecordTypeName(RecordType::kTxnPrepare), "TXN_PREPARE");
     EXPECT_STREQ(RecordTypeName(RecordType::kVarHeapRelease), "VARHEAP_RELEASE");
 }

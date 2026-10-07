@@ -240,79 +240,10 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
                                "a level");
 }
 
-// Highest live Keystone id in a leaf, or 0 if it holds none. Used to
-// establish that a splitting insert appends rather than divides.
-StatusOr<std::uint64_t> MaxLiveId(heap::PageView& leaf) {
-    std::uint64_t max_id = 0;
-    const std::uint16_t n = leaf.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto id = SlotKeystoneId(leaf, i, n);
-        if (id.status().code() == StatusCode::kNotFound) continue;  // retired slot
-        if (!id.ok()) return id.status();
-        if (id.value() > max_id) max_id = id.value();
-    }
-    return max_id;
-}
-
-// Where `id` sits among a leaf's slots, or NotFound.
-//
-// Two passes, and the second is what makes the first safe to attempt.
-//
-// Slots in a leaf are in ascending key order on every leaf SQL fills: each
-// row's id is fixed under the exclusive hold of the leaf it lands on and is
-// above every id already there (BB-R1, BB-R3 - a named key below the mark is
-// refused), appends land past every key already there, and dead slots keep
-// their position so retirement does not disturb the order.
-//
-// **`BtreeInsert`'s storage contract can break that** (docs/spec/heap-and-tuple.md
-// section 4.1): it takes any id, which can be appended into a slot below its
-// neighbours, and SplitLeafAndInsert redistributes by key rather than by
-// slot position. Which is why the fallback below is not decoration: the
-// binary search is the fast path for the ordered case, and the linear pass
-// is what makes the answer correct in every case. An unsorted leaf costs a
-// wasted log2(n) probes and still returns the right answer.
-//
-// Dead slots are the one wrinkle: they carry no key, so a probe can land
-// on a hole. Stepping to the nearest live slot inside the window keeps the
-// search going; a window with no live slot at all is a miss, which the
-// linear pass then confirms or corrects.
-StatusOr<std::uint16_t> FindSlotForId(heap::PageView& leaf, std::uint64_t id,
-                                       std::uint16_t nr_slots) {
-    std::uint16_t lo = 0;
-    std::uint16_t hi = nr_slots;  // exclusive
-    while (lo < hi) {
-        const std::uint16_t mid = static_cast<std::uint16_t>(lo + (hi - lo) / 2);
-
-        // Nearest live slot at or after mid, within the window.
-        std::uint16_t probe = mid;
-        StatusOr<std::uint64_t> key = Status::NotFound("");
-        for (; probe < hi; ++probe) {
-            key = SlotKeystoneId(leaf, probe, nr_slots);
-            if (key.ok()) break;
-            if (key.status().code() != StatusCode::kNotFound) return key.status();
-        }
-        if (probe >= hi) {
-            // Every slot in [mid, hi) is dead; the live ones, if any, are
-            // below mid.
-            hi = mid;
-            continue;
-        }
-
-        if (key.value() == id) return probe;
-        if (key.value() < id) {
-            lo = static_cast<std::uint16_t>(probe + 1);
-        } else {
-            hi = mid;
-        }
-    }
-
-    for (std::uint16_t i = 0; i < nr_slots; ++i) {
-        auto key = SlotKeystoneId(leaf, i, nr_slots);
-        if (key.status().code() == StatusCode::kNotFound) continue;
-        if (!key.ok()) return key.status();
-        if (key.value() == id) return i;
-    }
-    return Status::NotFound("no such key in leaf");
+Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot) {
+    return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
+                                 " already present at page " + std::to_string(leaf_id) + " slot " +
+                                 std::to_string(slot));
 }
 
 // Which of the two ways a full internal node can grow applies: true when
@@ -669,32 +600,38 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
 
 // ---- Dividing a full leaf (docs/spec/heap-and-tuple.md section 4.1) ------------
 //
-// Reached only when an id sorts *inside* a full leaf, which since BB-R3 only
-// `BtreeInsert`'s storage contract passes: every row SQL places appends past
-// the rightmost leaf's highest key, which PlaceUnderHold handles without
-// moving a byte.
+// Reached when an id sorts *inside* a full leaf - below one of its keys
+// (BD-R2, `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`). An
+// id above every key the leaf holds takes the append split in
+// `PlaceUnderHold`, which moves nothing.
+//
+// **Where it cuts** (BD-Q11 (a)). A leaf with a right sibling divides at the
+// median key. The **rightmost** leaf divides at the insertion point instead:
+// the incoming id opens the new leaf, the keys above it move there with it,
+// and every key below it stays - so ids that arrive slightly out of issue
+// order at `cores > 1` leave the left leaf full rather than half-empty for
+// good, where nothing would refill it. The median takes over where the
+// insertion point cannot serve: an id below every key (the new leaf would
+// share the old one's low key) or a moving half no empty leaf holds.
 //
 // **Why this does not violate invariant 2 or 3.** The old leaf keeps its
-// `min_key` untouched - the division moves the *upper* half out, and
+// `min_key` untouched - the division moves the *upper* part out, and
 // everything that stays is still at or above the low bound it was created
 // with. The new leaf's `min_key` is the split key, which is by construction
 // the smallest id moved into it. So both pages satisfy "no tuple below this
-// page's min_key" and neither page's min_key is ever rewritten. Dividing a
-// page's contents was refused before this existed because nothing needed
-// it, not because it could not be done inside the invariants.
+// page's min_key" and neither page's min_key is ever rewritten.
 //
-// **What moving a tuple costs.** Its (page_id, slot) changes, which is a
-// relayout in everything but name, so the old leaf's `relayout_epoch` is
-// bumped: every Waystone trail entry and Cabin hint pointing into it
-// becomes untrusted at once (section 3.1a's pairing rule). Secondary
-// indexes need nothing - an index entry's sort key is `key || pk`
-// (index_page.hpp), never a location - and the undo chain is likewise
-// addressed by `undo_ptr`, not by where the version sits.
+// **What moving a tuple costs.** Its (page_id, slot) changes, so the old
+// leaf's `relayout_epoch` is bumped: every Waystone trail entry and Cabin
+// hint pointing into it becomes untrusted at once (section 3.1a's pairing
+// rule). Secondary indexes need nothing - an index entry's sort key is
+// `key || pk` (index_page.hpp), never a location - and the undo chain is
+// likewise addressed by `undo_ptr`, not by where the version sits.
 //
 // The delete mark travels with the tuple. A delete-marked version carries
 // its deleter's `trx_id` and must arrive still marked; re-inserting the
 // payload alone would resurrect a row some snapshot has already been told
-// is gone.
+// is gone. A retired slot carries no key and is dropped.
 StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
                                                        const Descent& descent, Parents& parents,
                                                        PageId leaf_id,
@@ -702,21 +639,20 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
                                                        std::span<const std::byte> payload,
                                                        std::uint64_t trx_id,
                                                        std::uint64_t owner_oid) {
-    // Every live version on the page, copied out whole before anything is
-    // written. Two reasons it is a copy and not a set of slot indices: a
-    // Tuple's `payload` is a view into the page, and the page is about to be
-    // reformatted under it; and the division chooses its boundary from the
-    // *keys*, since a leaf this path reaches has been fed an id below its
-    // highest, is not in slot order, and splitting at slot n/2 would divide
-    // it at an arbitrary key.
+    // Every keyed version on the page, copied out whole before anything is
+    // written: a Tuple's `payload` is a view into the page, and the page is
+    // about to be reformatted under it. Slot order is key order (BD-R1), so
+    // the incoming row is merged in where it sorts and the vector stays
+    // sorted - no sort, and one cut.
     struct Version {
         std::uint64_t key;
         std::uint64_t trx_id;
         std::uint64_t undo_ptr;
         bool deleted;
+        bool incoming;
         std::vector<std::byte> bytes;
     };
-    std::vector<Version> live;
+    std::vector<Version> merged;
     std::uint64_t old_min_key = 0;
     PageId old_next = kInvalidPageId;
     std::uint64_t old_epoch = 0;
@@ -730,38 +666,60 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
         old_grown_over = leaf.grown_over();
 
         const std::uint16_t n = leaf.slot_count();
-        live.reserve(n);
+        merged.reserve(static_cast<std::size_t>(n) + 1);
         for (std::uint16_t i = 0; i < n; ++i) {
             auto key = SlotKeystoneId(leaf, i, n);
             if (key.status().code() == StatusCode::kNotFound) continue;  // retired slot
             if (!key.ok()) return key.status();
+            if (!merged.empty() && merged.back().key >= key.value()) {
+                return Status::Corruption("leaf " + std::to_string(leaf_id) + " holds key " +
+                                          std::to_string(key.value()) + " after key " +
+                                          std::to_string(merged.back().key) +
+                                          "; a leaf's keyed slots ascend (BD-R1)");
+            }
             auto tuple = leaf.ReadTuple(i);
             if (!tuple.ok()) return tuple.status();
-            live.push_back({key.value(), tuple.value().trx_id, tuple.value().undo_ptr,
-                            tuple.value().deleted,
-                            std::vector<std::byte>(tuple.value().payload.begin(),
-                                                   tuple.value().payload.end())});
+            merged.push_back({key.value(), tuple.value().trx_id, tuple.value().undo_ptr,
+                              tuple.value().deleted, /*incoming=*/false,
+                              std::vector<std::byte>(tuple.value().payload.begin(),
+                                                     tuple.value().payload.end())});
         }
     }
+    const std::size_t keyed = merged.size();
+    const auto pos = std::lower_bound(merged.begin(), merged.end(), id,
+                                      [](const Version& v, std::uint64_t k) { return v.key < k; });
+    const std::size_t incoming_at = static_cast<std::size_t>(pos - merged.begin());
+    merged.insert(pos, Version{id, trx_id, /*undo_ptr=*/0, /*deleted=*/false, /*incoming=*/true,
+                               std::vector<std::byte>(payload.begin(), payload.end())});
 
-    if (live.size() < 2) {
-        // Nothing to divide: a single live tuple filling a whole page means
-        // the row is near page-sized, and no boundary makes room for a
-        // second. Reported as the space failure it is rather than producing
-        // an empty leaf the descent can route to and never satisfy.
-        return Status::OutOfSpace("leaf " + std::to_string(leaf_id) +
-                                  " is full with fewer than two live tuples; the row is too "
-                                  "large for a leaf to hold two of");
+    // Whether a run of versions fits an empty leaf. Always so for SQL's rows,
+    // which are one size per relation (invariant 13) - the run is at most the
+    // leaf's own keyed rows - and a guard for the storage contract, whose
+    // callers may mix sizes.
+    const auto fits_one_leaf = [&](std::size_t from) {
+        std::size_t need = 0;
+        for (std::size_t k = from; k < merged.size(); ++k) {
+            need += merged[k].bytes.size() + heap::kTupleHeaderOnDiskSize + heap::kSlotOnDiskSize;
+        }
+        return need <= heap::kNextPageIdOffset - (heap::kHeapHeaderOffset + heap::kHeaderSize);
+    };
+    std::size_t cut = 0;
+    if (old_next == kInvalidPageId && incoming_at > 0 && fits_one_leaf(incoming_at)) {
+        cut = incoming_at;  // the rightmost leaf, at the insertion point
+    } else {
+        if (keyed < 2) {
+            // Nothing to divide: a single keyed tuple filling a whole page
+            // means the row is near page-sized, and no boundary makes room
+            // for a second. Reported as the space failure it is rather than
+            // producing an empty leaf the descent can route to and never
+            // satisfy.
+            return Status::OutOfSpace("leaf " + std::to_string(leaf_id) +
+                                      " is full with fewer than two live tuples; the row is too "
+                                      "large for a leaf to hold two of");
+        }
+        cut = merged.size() / 2;  // the median; both halves are non-empty
     }
-
-    std::sort(live.begin(), live.end(),
-              [](const Version& a, const Version& b) { return a.key < b.key; });
-
-    // The median key opens the new leaf: everything from `split_at` on moves,
-    // everything before it stays. Both halves are non-empty because
-    // `live.size() >= 2`.
-    const std::size_t split_at = live.size() / 2;
-    const std::uint64_t split_key = live[split_at].key;
+    const std::uint64_t split_key = merged[cut].key;
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
@@ -771,19 +729,6 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     auto new_leaf = heap::PageView::CreateEmptyAs(new_leaf_bytes, /*min_key=*/split_key,
                                                    PageType::kBtreeLeaf, owner_oid);
     if (!new_leaf.ok()) return new_leaf.status();
-
-    for (std::size_t k = split_at; k < live.size(); ++k) {
-        auto slot = new_leaf.value().InsertTuple(live[k].bytes, live[k].trx_id, live[k].undo_ptr);
-        if (!slot.ok()) return slot.status();
-        // The delete mark travels with the version. Re-inserting the payload
-        // alone would resurrect a row some snapshot has already been told is
-        // gone.
-        if (live[k].deleted) {
-            if (Status s = new_leaf.value().DeleteMark(slot.value(), live[k].trx_id); !s.ok()) {
-                return s;
-            }
-        }
-    }
 
     // ---- The old leaf is rebuilt, not edited in place ---------------------
     //
@@ -810,13 +755,21 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     if (!rebuilt.ok()) return rebuilt.status();
     if (old_grown_over) rebuilt.value().MarkGrownOver();  // DivideInternalNode's reason
 
-    for (std::size_t k = 0; k < split_at; ++k) {
-        auto slot = rebuilt.value().InsertTuple(live[k].bytes, live[k].trx_id, live[k].undo_ptr);
+    storage::InsertPlacement out;
+
+    // Each half in key order, appended - which is the order BD-R1 asks of
+    // its slots.
+    for (std::size_t k = 0; k < merged.size(); ++k) {
+        const bool to_new = k >= cut;
+        heap::PageView& half = to_new ? new_leaf.value() : rebuilt.value();
+        auto slot = half.InsertTuple(merged[k].bytes, merged[k].trx_id, merged[k].undo_ptr);
         if (!slot.ok()) return slot.status();
-        if (live[k].deleted) {
-            if (Status s = rebuilt.value().DeleteMark(slot.value(), live[k].trx_id); !s.ok()) {
-                return s;
-            }
+        if (merged[k].deleted) {
+            if (Status s = half.DeleteMark(slot.value(), merged[k].trx_id); !s.ok()) return s;
+        }
+        if (merged[k].incoming) {
+            out.page_id = to_new ? new_leaf_id : leaf_id;
+            out.slot = slot.value();
         }
     }
 
@@ -826,39 +779,16 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     new_leaf.value().set_next_page_id(old_next);
     rebuilt.value().set_next_page_id(new_leaf_id);
 
-    // Every tuple on this page changed slot, and half of them changed page
-    // (section 3.1a). Reformatting zeroed the counter, so it is restored to
-    // one *past* what it was rather than bumped from zero - an epoch that
-    // went backwards would let a trail entry recorded at the old value
-    // compare equal again, which is the one thing this field exists to stop.
+    // Every tuple on this page changed slot, and some changed page (section
+    // 3.1a). Reformatting zeroed the counter, so it is restored to one *past*
+    // what it was rather than bumped from zero - an epoch that went backwards
+    // would let a trail entry recorded at the old value compare equal again,
+    // which is the one thing this field exists to stop.
     storage::SetRelayoutEpoch(old_bytes, old_epoch + 1);
 
-    storage::InsertPlacement out;
-
-    // The incoming tuple goes to whichever half now covers it - the routing a
-    // fresh descent would make, decided here because both pages are in hand.
-    const bool to_new = id >= split_key;
-    auto slot = to_new ? new_leaf.value().InsertTuple(payload, trx_id)
-                       : rebuilt.value().InsertTuple(payload, trx_id);
-    if (!slot.ok()) return slot.status();
-    out.page_id = to_new ? new_leaf_id : leaf_id;
-    out.slot = slot.value();
-
-    // ---- Both pages are logged as full images, neither as "new" ----------
-    //
-    // `is_new_page` is not "this page did not exist"; it means "a PAGE_INIT
-    // is enough, because the HEAP_INSERT that follows describes the only
-    // tuple on it" (command_dispatcher.cpp's LogInsert). Neither page here
-    // satisfies that. The new leaf receives the *moved* half, which no
-    // record describes; and the incoming tuple may land in the rebuilt old
-    // leaf instead, so the new leaf is not even guaranteed to be the page
-    // the HEAP_INSERT names. Redo would reconstruct an empty new leaf and
-    // lose every version this division moved.
-    //
-    // A full page image is self-contained - header, min_key, page type and
-    // all - so it reconstructs a page that never existed just as well as one
-    // that changed, which is exactly why a newly created *internal* node
-    // takes this arm too.
+    // Both pages are logged as images, in the split's one record
+    // (`BTREE_SPLIT`, BD-R12), with the incoming row already in whichever
+    // half took it - so no insert record follows (BD-R3 E2).
     out.Record(new_leaf_id, /*is_new_page=*/false, 0);
     out.Record(leaf_id, /*is_new_page=*/false, 0);
 
@@ -872,6 +802,40 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
 
 }  // namespace
 
+// The one search (btree.hpp states the contract). A probe that lands on a
+// retired slot steps to the nearest keyed slot inside the window; a window
+// with none is empty of keys, which narrows it from above.
+StatusOr<LeafPosition> SearchLeaf(heap::PageView& leaf, std::uint64_t id) {
+    const std::uint16_t n = leaf.slot_count();
+    // Invariant: every keyed slot below `lo` holds a key below `id`, and
+    // every keyed slot at or above `hi` a key at or above it.
+    std::uint16_t lo = 0;
+    std::uint16_t hi = n;
+    while (lo < hi) {
+        const std::uint16_t mid = static_cast<std::uint16_t>(lo + (hi - lo) / 2);
+        std::uint16_t probe = mid;
+        StatusOr<std::uint64_t> key = Status::NotFound("");
+        for (; probe < hi; ++probe) {
+            key = SlotKeystoneId(leaf, probe, n);
+            if (key.ok()) break;
+            if (key.status().code() != StatusCode::kNotFound) return key.status();
+        }
+        if (probe >= hi || key.value() >= id) {
+            hi = mid;  // [mid, hi) holds no key, or its first key is at or above `id`
+        } else {
+            lo = static_cast<std::uint16_t>(probe + 1);
+        }
+    }
+    // The first keyed slot at or after `lo`.
+    for (std::uint16_t i = lo; i < n; ++i) {
+        auto key = SlotKeystoneId(leaf, i, n);
+        if (key.status().code() == StatusCode::kNotFound) continue;
+        if (!key.ok()) return key.status();
+        return LeafPosition{i, key.value() == id};
+    }
+    return LeafPosition{n, false};
+}
+
 Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid) {
     auto leaf = heap::PageView::CreateEmptyAs(page, /*min_key=*/0, PageType::kBtreeLeaf,
                                               owner_oid);
@@ -881,32 +845,9 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 
 namespace {
 
-// Complete, unlike the heap chain's tail-only check: the descent is exact, so
-// the leaf it landed on is the only page that may hold `id`. Still a sanity
-// check on the id sequence rather than a uniqueness index - a delete-marked
-// tuple holds its key until the slot is physically retired.
-//
-// Linear rather than FindSlotForId(): this check expects to find nothing, and
-// a miss is exactly the case where the binary search pays its probes and then
-// falls through to this scan anyway.
-Status RefuseDuplicate(heap::PageView& leaf, PageId leaf_id, std::uint64_t id) {
-    const std::uint16_t n = leaf.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto existing = SlotKeystoneId(leaf, i, n);
-        if (existing.status().code() == StatusCode::kNotFound) continue;
-        if (!existing.ok()) return existing.status();
-        if (existing.value() == id) {
-            return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
-                                          " already present at page " + std::to_string(leaf_id) +
-                                          " slot " + std::to_string(i));
-        }
-    }
-    return Status::OK();
-}
-
 // Everything an insert does once its descent holds the leaf: invariant 3,
-// the duplicate scan unless the caller has run it, and the append or the
-// split. Every door below ends here, under the hold its descent took.
+// the duplicate check unless the caller has run it, and the placement or
+// the split. Every door below ends here, under the hold its descent took.
 StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Descent& descent,
                                                   std::uint64_t id,
                                                   std::span<const std::byte> payload,
@@ -943,7 +884,7 @@ StatusOr<storage::InsertPlacement> BtreeInsertIssued(storage::PageStore& store, 
     if (!payload.ok()) return payload.status();
     auto id = KeystoneIdOfPayload(payload.value());
     if (!id.ok()) return id.status();
-    // Invariant 3 and the duplicate scan run on it as they run on any id
+    // Invariant 3 and the duplicate check run on it as they run on any id
     // (BB-R2 step 2): the issued id is above every placed one, so both pass.
     // They catch a mark gone backwards only where it lands the id below this
     // leaf's `min_key` or on an id the leaf holds - not every backwards mark.
@@ -964,9 +905,11 @@ StatusOr<storage::InsertPlacement> BtreeInsertNamed(storage::PageStore& store, P
     heap::PageView leaf(descent.value().leaf.bytes());
 
     // **Present first** (BB-R12): a client that detects duplicates by
-    // `AlreadyExists` keeps working, and the answer costs the scan the
+    // `AlreadyExists` keeps working, and the answer costs the search the
     // placement runs anyway.
-    if (Status s = RefuseDuplicate(leaf, leaf_id, id); !s.ok()) return s;
+    auto at = SearchLeaf(leaf, id);
+    if (!at.ok()) return at.status();
+    if (at.value().present) return DuplicateKey(id, leaf_id, at.value().at);
 
     // **A right sibling means below the mark** (BB §1.5), with no read of
     // page 7: the sibling's `min_key` is an id once placed, every placed id
@@ -1008,13 +951,21 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
                                   "; the relation's id sequence has gone backwards");
     }
 
-    if (!duplicate_scanned) {
-        if (Status s = RefuseDuplicate(leaf, leaf_id, id); !s.ok()) return s;
+    // The one search (BD-R2): presence, the slot the key sorts to, and
+    // whether that is past every key here. Complete, unlike the heap chain's
+    // tail-only check: the descent is exact, so the leaf it landed on is the
+    // only page that may hold `id`, and a delete-marked tuple holds its key
+    // for the life of the relation (BD-R4).
+    auto at = SearchLeaf(leaf, id);
+    if (!at.ok()) return at.status();
+    if (at.value().present && !duplicate_scanned) {
+        return DuplicateKey(id, leaf_id, at.value().at);
     }
+    const bool appends = at.value().at == leaf.slot_count();
 
     storage::InsertPlacement out;
 
-    if (auto slot = leaf.InsertTuple(payload, trx_id); slot.ok()) {
+    if (auto slot = leaf.InsertTupleAt(at.value().at, payload, trx_id); slot.ok()) {
         out.page_id = leaf_id;
         out.slot = slot.value();
         out.held.push_back(std::move(descent.leaf));
@@ -1025,14 +976,10 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
 
     // ---- The leaf is full ------------------------------------------------
     //
-    // Two shapes. When `id` sorts above everything in the leaf the growth is
+    // Two shapes. When `id` sorts above every key in the leaf the growth is
     // an *append*: a fresh leaf, nothing moved, which is what a monotonic id
-    // sequence produces and is handled below - and the only shape SQL
-    // reaches, every row it places landing on the rightmost leaf above
-    // everything there (BB-R1, BB-R3). When `id` sorts inside the leaf -
-    // which only `BtreeInsert`'s storage contract, taking any id, can do
-    // (docs/spec/heap-and-tuple.md section 4.1) - the leaf must genuinely divide,
-    // which is SplitLeafAndInsert's job.
+    // sequence produces and is handled below. When `id` sorts below one of
+    // its keys the leaf must divide, which is SplitLeafAndInsert's job.
     //
     // Either shape writes a separator into the parents, so they are found
     // and held first (`SecureParents`, AT-S16): a refusal there leaves the
@@ -1048,9 +995,7 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
         }
     };
 
-    auto max_id = MaxLiveId(leaf);
-    if (!max_id.ok()) return max_id.status();
-    if (id < max_id.value()) {
+    if (!appends) {
         auto divided = SplitLeafAndInsert(store, descent, parents.value(), leaf_id, id,
                                           payload, trx_id, owner_oid);
         if (divided.ok()) hand_out(divided.value());
@@ -1059,14 +1004,13 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
 
     // The leaf this one is being spliced in *front of*, read before anything
     // is created because the descent's span is in hand here and the splice
-    // below has to hand it on. Through SQL the leaf reached by an append
-    // split is always the rightmost one (BB-R1, BB-R3), so this is
-    // kInvalidPageId and CreateEmptyAs's default would happen to be right.
-    // `BtreeInsert`'s storage contract (docs/spec/heap-and-tuple.md section 4.1)
-    // can reach a full leaf in the *middle* of the chain - `id` above
-    // everything in it, still below the next leaf's min_key - and dropping
-    // the link there truncates the chain: every leaf past the splice vanishes
-    // from every sequential scan while still answering a descent.
+    // below has to hand it on. An append split of the rightmost leaf has
+    // none, and CreateEmptyAs's default would happen to be right; one of a
+    // leaf in the *middle* of the chain - `id` above every key in it, still
+    // below the next leaf's min_key - has one, and dropping the link there
+    // truncates the chain: every leaf past the splice vanishes from every
+    // sequential scan while still answering a descent.
+
     const PageId right_sibling = leaf.next_page_id();
 
     auto created = store.CreateNew();
@@ -1091,16 +1035,11 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     }
     out.page_id = new_leaf_id;
     out.slot = new_slot.value();
-    // **A PAGE_INIT describes this page only at the tail** (AT-S21's
-    // survey). It formats an empty leaf whose right link is invalid, and the
-    // HEAP_INSERT that follows fills the tuple - which is the whole page when
-    // the chain ends here. An append *mid-chain* - `BtreeInsert`'s storage
-    // contract only since BB-R3, SQL appending at the rightmost leaf - gives
-    // the new leaf a link naming the page to its right, and no record
-    // carried it: redo rebuilt the leaf with no link and every leaf past it fell off
-    // the chain after a crash - a scan answered short, a point lookup still
-    // found the rows. A full image carries the link.
-    out.Record(new_leaf_id, /*is_new_page=*/right_sibling == kInvalidPageId, /*min_key=*/id);
+    // Logged as an image in the split's one record (BTREE_SPLIT, BD-R12),
+    // which carries the link mid-chain and the row in it: a PAGE_INIT plus
+    // the row's insert could not carry the link (AT-S21's survey), and two
+    // records could be cut apart.
+    out.Record(new_leaf_id, /*is_new_page=*/false, /*min_key=*/id);
 
     // ---- The separator first, the sibling link last (H9) -----------------
     //
@@ -1145,11 +1084,11 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // reached the state this ordering exists to prevent.
     leaf.set_next_page_id(new_leaf_id);
 
-    // Redo order: the new leaf's record (a PAGE_INIT the HEAP_INSERT then
-    // fills at the tail, its image mid-chain), then the ancestors, then the
-    // old leaf's image carrying the link that reaches it. The images are self-contained, so the order
-    // among them is not load-bearing; what matters is that all of them
-    // precede the HEAP_INSERT the caller emits for the tuple.
+    // The new leaf, the ancestors, then the old leaf carrying the link - all
+    // images in one BTREE_SPLIT, which redo applies whole or not at all. The
+    // order among them was "not load-bearing" only while nothing could end
+    // the log between them, which a run of separate records allowed
+    // (BD-S1's `SortedLeafCrashTest.ALogCutInsideAnAppendSplit...`).
     promoted.value().Record(leaf_id, /*is_new_page=*/false, 0);
     hand_out(promoted.value());
     return promoted;
@@ -1187,9 +1126,11 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
         const PageId leaf_id = descent.value().path[descent.value().depth];
         heap::PageView leaf(descent.value().leaf.bytes());
 
-        auto slot = FindSlotForId(leaf, id, leaf.slot_count());
-        if (slot.ok()) return Location{leaf_id, slot.value(), std::move(descent.value().leaf)};
-        if (slot.status().code() != StatusCode::kNotFound) return slot.status();
+        auto at = SearchLeaf(leaf, id);
+        if (!at.ok()) return at.status();
+        if (at.value().present) {
+            return Location{leaf_id, at.value().at, std::move(descent.value().leaf)};
+        }
 
         bool covered = for_write;
         if (!covered) {

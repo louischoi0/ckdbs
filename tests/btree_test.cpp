@@ -277,10 +277,11 @@ TEST(BtreeTest, ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo) {
     const auto changes = split.value().changes();
     ASSERT_GE(changes.size(), 2u);
 
-    // The new leaf first: PAGE_INIT describes it completely, and the
-    // HEAP_INSERT the caller emits afterwards fills it.
+    // The new leaf first, holding the row. Not a PAGE_INIT the row's insert
+    // fills any more: every page a split writes is an image in its one
+    // BTREE_SPLIT record, which carries the row (BD-R12).
     EXPECT_EQ(changes[0].page_id, split.value().page_id);
-    EXPECT_TRUE(changes[0].is_new_page);
+    EXPECT_FALSE(changes[0].is_new_page);
     EXPECT_EQ(changes[0].min_key, 2u);
 
     // The old leaf is reported too, whose forward link now reaches it. Not a
@@ -522,49 +523,6 @@ TEST(BtreeTest, ALookupFindsALiveIdAmongRetiredSlots) {
         EXPECT_FALSE(loc.ok()) << "id " << id << " was retired";
         EXPECT_EQ(loc.status().code(), StatusCode::kNotFound) << "id " << id;
     }
-}
-
-TEST(BtreeTest, ALookupFindsAnIdInALeafWhoseSlotsAreOutOfOrder) {
-    storage::InMemoryPageStore store(128);
-
-    // Leaves are in ascending key order in every tree this engine builds -
-    // ids are issued monotonically and the split path refuses to divide a
-    // page - which is what makes the leaf-local binary search correct. But
-    // nothing *depends* on that: a search that finds nothing falls through
-    // to a linear scan, so an out-of-order leaf costs probes and still
-    // returns the right answer.
-    //
-    // Only reachable by writing the slots directly, because BtreeInsert
-    // would refuse the descending sequence (OutOfSpace, naming the open
-    // split policy). That is the point - this covers the day some future
-    // relayout or a recovered page makes the assumption false, so the
-    // fallback is not silently dead code that has already rotted.
-    auto created = store.CreateNew();
-    ASSERT_TRUE(created.ok()) << created.status().message();
-    auto& [root_id, root_bytes_ref] = created.value();
-    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
-    auto leaf = heap::PageView::CreateEmptyAs(root_bytes, /*min_key=*/0, PageType::kBtreeLeaf);
-    ASSERT_TRUE(leaf.ok()) << leaf.status().message();
-
-    const std::vector<std::uint64_t> ids = {50, 10, 40, 20, 30};
-    for (std::uint64_t id : ids) {
-        auto slot = leaf.value().InsertTuple(MakeTuple(id, kSmallFiller), /*trx_id=*/1, /*owner_oid=*/0);
-        ASSERT_TRUE(slot.ok()) << "id " << id << ": " << slot.status().message();
-    }
-
-    for (std::uint64_t id : ids) {
-        auto loc = BtreeLookup(store, root_id, id);
-        ASSERT_TRUE(loc.ok()) << "id " << id << ": " << loc.status().message();
-        EXPECT_EQ(loc.value().page_id, root_id);
-
-        auto tuple = heap::PageView(root_bytes).ReadTuple(loc.value().slot);
-        ASSERT_TRUE(tuple.ok()) << tuple.status().message();
-        EXPECT_EQ(IdOf(tuple.value().payload), id) << "found the wrong slot for id " << id;
-    }
-
-    auto absent = BtreeLookup(store, root_id, 25);
-    EXPECT_FALSE(absent.ok());
-    EXPECT_EQ(absent.status().code(), StatusCode::kNotFound);
 }
 
 TEST(BtreeTest, ADeleteMarkedTupleIsStillFoundBecauseVisibilityIsNotThisLayersJob) {

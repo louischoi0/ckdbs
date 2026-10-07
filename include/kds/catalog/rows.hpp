@@ -88,9 +88,10 @@ struct SysTableRow {
     // would have been a rewrite of every row at mount rather than a format
     // event. Nothing on this row names a core any more.
 
-    // **The retired key-order byte**: written 0, read only by the mount's
-    // refusal of a relation still carrying `kRetiredKeyOrderUnordered`
-    // (`heap-and-tuple.md` §4.1, BB-R11).
+    // **The retired key-order byte**: written 0 and never read. BB-R11's
+    // mount refusal of a relation still marked out of key order read it
+    // until BD-R8's superblock 20, which no volume holding such a relation
+    // can carry (`superblock.hpp`).
     std::uint8_t retired_key_order = 0;
 
     // The relation's anchor page (storage/anchor_page.hpp; PW2-1,
@@ -123,10 +124,6 @@ struct SysTableRow {
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
 };
-
-// The value `retired_key_order` held for a relation that took a named key
-// below its mark before BB-S3 (`KeyOrder::kUnordered`, deleted at BB-S3b).
-inline constexpr std::uint8_t kRetiredKeyOrderUnordered = 1;
 
 // **The on-disk layout, pinned** (AT-S9, AT-R7). The row is a packed byte
 // stream, not a mirror struct, so `offsetof` cannot check it; these do.
