@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§14) and `worktree-keep-btree-leaf-slots` (§15) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§14) and `worktree-keep-btree-leaf-slots` (§15-§16) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -142,3 +142,12 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BD-Q0: yes.** BD is open with BD-S0..S6 and BD-R1..R12 as written at `50d35916`. BD-S1, red first, starts on `worktree-keep-btree-leaf-slots`, branched from `50d35916` |
 | **Does not settle** | writing BB's close entry, which waits for its own word; the push |
 | **Recorded at** | the order's header (W16), §4 and §6, and the index row |
+
+## 16. BD run to its close
+
+| | |
+|---|---|
+| **Word** | *"keep going until closing this milestone, follow CLA proposal"* (given twice), then *"keep going until the milestone closes"* |
+| **Mark** | BD-S1 to BD-S6 run in order on `worktree-keep-btree-leaf-slots`, each through its review and the suite; every choice a stage raised taken as CLA proposed it |
+| **Does not settle** | the push; BB's close entry, which waits for its own word; BA's resumption |
+| **Recorded at** | the order's status line, and the index row |

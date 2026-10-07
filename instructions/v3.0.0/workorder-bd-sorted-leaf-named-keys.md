@@ -31,7 +31,7 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
 - **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: open (W16), BD-S1 to BD-S5 built, BD-S6 started.**
+**Status: closed 2026-10-07 at BD-S6 (W16, §16 of `raft-marks-2026-10-07.md`); not pushed.**
 
 - §4's mark column says which items the words settle; every item is marked.
 - BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
@@ -1266,3 +1266,42 @@ reach a live entry; an aborted reservation's entry is removed and orphaned
 before the undo frees the key (AS6b) - and eight sentences beside the fixes
 still contradicting them ("never mis-attribute", "an issued id clears every
 named key"), plus wording: all applied. **Declined**: none.
+
+### BD-S6 - the close, 2026-10-07
+
+Written on `worktree-keep-btree-leaf-slots` on `91c998a3` (BD-S5).
+
+- **A row per stage**: BD-S1 (red cells, `4debe8d9`), BD-S2 (placement, the
+  shift-safe holders, the whole split, superblock 20, `62470f56`), BD-S3
+  (the gate opened, BB-R1 deleted on a btree, `07e822a6`), BD-S4 (the sim,
+  the rigs, eleven mutations killed, `b6eab627`), BD-S5 (the text,
+  `91c998a3`).
+- **What BD carries**: a btree leaf is in key order by placement at every
+  core count; a named key on a btree is refused only as a duplicate or
+  exhausted, and a rolled-back key is free (W12); an issued id is drawn
+  before the descent and re-drawn, bounded, when a named key took it first;
+  a split is one `BTREE_SPLIT`. **The heap is untouched** (BD-Q4 (a)).
+- **What bounds it**, in `known-gaps.md` and `bugs/`: a `BTREE_SPLIT` of 8
+  or more pages exceeds a 64 KiB ring or segment; whether an index split's
+  records replay as one is unchecked; BD-R4's purge obligation (a keyed
+  tombstone must outlive any purge); the equal-sort-keys index bug, which a
+  rolled-back key named again now also reaches; an omitted pk refused
+  `AlreadyExists` after `kMaxIssueRounds` collisions with named keys; a
+  heap placement whose record is never written is not taken back.
+- **BA's rows rebased** (BD-Q12 (b)) in `workorder-ba-parallelism.md`, "BA
+  rebased on BD": BA-R8's hook bullet stands, its named-key bullet's draft
+  withdrawn, its placement-order bullet resting on BD-R1; BA-R11's original
+  text stands and BB's draft is dropped; BA-S11 rests on BD-R6, its
+  `kUnordered` clause gone. BA stays paused until BB's close entry is
+  written, which waits for its own word.
+- **No measurement** (BD-R10).
+
+**Not done here, and why**: the push and BB's close entry each wait for the
+operator's word.
+
+**The review** (one `critics-developer` pass): 4 findings, all applied -
+the known-gaps entry said the issue holds no page (it holds page 7; no
+leaf); BA-S11's rebase said a `fetch_add` is the whole of an issue and kept
+*"a named key inside [cursor, ceiling) is never issued"*, both of which
+BD's bounded re-draw contradicts; §16's "Recorded at"; and BB's order now
+says its BB-S5 does not rebase BA. **Declined**: none.

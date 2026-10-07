@@ -658,6 +658,18 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   nothing. Owner: `docs/rules/keystoneid-invariant.md` K1,
   `heap-and-tuple.md` §4.1.
 
+- **An omitted pk on a btree can be refused `AlreadyExists`.** Verified at
+  `91c998a3` (BD-S5), by reading `CommandDispatcher::InsertOneRow`. The id
+  is issued before the descent, under no leaf's hold (BD-R6), so a named key
+  equal to it can be borrowed, placed and committed first; the placement's
+  duplicate check then burns the id and the issue draws again, at most
+  `kMaxIssueRounds` (8) times. A statement losing every round is refused
+  with the leaf's bare duplicate text and no byte - an `INSERT` that named
+  no key. Pinned for one round by
+  `IssueUnderTheLeafRig.AnIssuedIdANamedKeyPlacedFirstIsDrawnAgain`; eight
+  in a row needs a client naming each next id as it is issued. Owner:
+  `heap-and-tuple.md` §4.1.
+
 ## Locks
 
 - **A write refused by a lock unit waits on that unit's slot, and a wake
