@@ -230,16 +230,14 @@ TEST(WalRecyclePremiseTest, RedoBelowTheAnchorRestoresNothingTheFlooredRedoDoesN
     EXPECT_EQ(PageBytes(disks[1], kQ), want_q);
 }
 
-// §1.11's reading (`workorder-bc-wal-recycling.md`), outside BC's rules: a
-// page a `CHECKPOINT_BEGIN` lists at recLSN 0 - dirtied by a path that logged
-// nothing (`page_store_checkpoint_target.hpp`) - whose next record follows
-// the BEGIN. Analysis seeds the page at 0 and `emplace` does not overwrite
-// it with the record's LSN (`analysis.cpp`), so the page pulls nothing into
-// the redo start. If nothing else does, redo starts past the record and the
-// page on disk never receives it. The cell asserts the right answer: the
-// record is replayed. **It is red at BC-S1**, and disabled until the defect
-// is fixed: `docs/inflight/bugs/a-page-a-checkpoint-lists-at-reclsn-0-hides-its-next-record-from-redo.md`.
-TEST(WalRecyclePremiseTest, DISABLED_APageSeededAtRecLsnZeroStillHasItsLaterRecordReplayed) {
+// §1.11's reading (`workorder-bc-wal-recycling.md`): a page a
+// `CHECKPOINT_BEGIN` lists at recLSN 0 - dirtied by a path that logged
+// nothing - whose next record follows the BEGIN. Analysis kept the seeded 0,
+// so the page pulled nothing into the redo start, redo started past the
+// record, and the page on disk never received it. **Red at BC-S1**; green
+// since a seeded 0 gives way to the first LSN that reaches the page
+// (`analysis.cpp`'s `note_dirty`).
+TEST(WalRecyclePremiseTest, APageSeededAtRecLsnZeroStillHasItsLaterRecordReplayed) {
     ScriptedLog log;
     log.Append(RecordType::kTxnBegin, kTxn, kInvalidPageId);
     const Lsn init = log.PageInit(kP);
@@ -621,13 +619,12 @@ TEST(WalRecyclePremiseRigTest, ARowCommittedAfterAMountSurvivesTheNextCrash) {
         auto mounted = MountImage(root / "second");
         ASSERT_TRUE(mounted.ok()) << mounted.status().message();
         server::CommandDispatcher& d = mounted.value()->dispatcher();
-        // A guard, green at BC-S1. The first mount's completion checkpoint
-        // lists every page it redid at recLSN 0, so the second mount's redo
-        // skips the insert's `sys.tables` bump (`bugs/a-page-a-checkpoint-
-        // lists-at-reclsn-0-hides-its-next-record-from-redo.md`). What a
-        // client sees survives it: the row is on a page a later record
-        // brings into the redo start, and the high-water repair restores
-        // the mark from the row.
+        // The first mount's completion checkpoint lists every page it redid
+        // at recLSN 0. Until analysis let a seeded 0 give way to the page's
+        // next record (`analysis.cpp`'s `note_dirty`), the second mount's
+        // redo skipped this insert's `sys.tables` bump, and only the
+        // high-water repair restored the mark. The row and the issued id
+        // are what a client sees, and they must survive either way.
         const std::string by_index = d.Dispatch("SELECT id FROM t WHERE v = 2").response;
         EXPECT_NE(by_index.find("\\n2"), std::string::npos)
             << "the row committed after the first mount is missing through its index: "

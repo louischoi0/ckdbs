@@ -35,6 +35,16 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
     AnalysisResult out;
     out.scan_start_lsn = start.redo_start_lsn;
 
+    // **A page's entry is its first nonzero LSN in the scan.** 0 means "no
+    // recLSN", exactly as the store treats it (`device_page_store.cpp`'s
+    // stamp adopts the first record after a 0), so a 0 from a
+    // `CHECKPOINT_BEGIN` gives way to the next LSN that reaches the page;
+    // kept, the page would pull nothing into the redo start (`wal.md` §12-1).
+    const auto note_dirty = [&out](PageId page_id, Lsn lsn) {
+        auto [it, inserted] = out.dirty_pages.emplace(page_id, lsn);
+        if (!inserted && it->second == 0) it->second = lsn;
+    };
+
     // Seen as a loser until a terminal record says otherwise. Never
     // downgrades an outcome: a transaction that committed does not become
     // a loser because a later record still names it.
@@ -95,7 +105,8 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
 
         // A page mutation dirties its page as of *this* LSN, unless the
         // page is already known dirty from earlier - the recLSN is the
-        // oldest record that must be replayed, so the first one wins.
+        // oldest record that must be replayed, so the first nonzero one wins
+        // (`note_dirty`).
         //
         // **PAGE_HANDOFF dirties nothing and undirties nothing.** It is an
         // ownership fact rather than a mutation, so it must not become a
@@ -128,7 +139,7 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                 // Neither erased nor seeded - only `max_page_id` below
                 // takes it.
             } else {
-                out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
+                note_dirty(record.header.page_id, record.header.lsn);
             }
             out.max_page_id = (out.max_page_id == kInvalidPageId)
                                   ? record.header.page_id
@@ -205,7 +216,7 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                     note_undo_head(t.txn_id, t.last_undo_ptr);
                 }
                 for (const CheckpointDirtyPage& page : decoded.value().dirty_pages) {
-                    out.dirty_pages.emplace(page.page_id, page.rec_lsn);
+                    note_dirty(page.page_id, page.rec_lsn);
                     out.max_page_id = (out.max_page_id == kInvalidPageId)
                                           ? page.page_id
                                           : std::max(out.max_page_id, page.page_id);
