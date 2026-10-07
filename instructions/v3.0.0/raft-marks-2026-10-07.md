@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§13) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§14) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -124,3 +124,12 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BD-Q4 (a):** the heap is untouched. BB-R7, its two entry points, the mark's refusal and its ordinal mark stay; the cost is a second insert protocol kept alive for a relation type no mountable volume holds. **BD-Q8 (a):** recovery undo re-finds a row by scanning the recorded `kBtreeLeaf` and rightward while `min_key <= pk`. **BD-Q9 (a):** a named key meeting an undecided insert of the same key waits for its decide, and the re-run answers by the outcome. The word came before BD-S0's review, which sharpened all three without changing which option they are |
 | **Does not settle** | BD-Q0, BD-Q10, BD-Q11 and BD-Q12 |
 | **Recorded at** | the order's header (W13) and §4 |
+
+## 14. BD-Q10, BD-Q11 and BD-Q12 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"Q10, Q11, Q12 제안대로 마킹해줘"* |
+| **Mark** | **BD-Q10 (a):** a split is logged as one `BTREE_SPLIT` record carrying every image it writes, which redo applies whole (BD-R12). **BD-Q11 (a):** a full rightmost leaf splits at the insertion point rather than at the median (BD-R2). **BD-Q12 (b):** BB closes on the measurement it has, without rebasing BA, and BD-S6 rebases BA once, against BD (§5) |
+| **Does not settle** | BD-Q0, BD's opening; writing BB's close entry, which waits for its own word; the push |
+| **Recorded at** | the order's header (W15), BD-R2, BD-R12, §4, §5 and §6 |
