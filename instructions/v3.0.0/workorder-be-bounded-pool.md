@@ -661,3 +661,182 @@ That is the environment, not the tree. So a 64-frame budget breaks nothing
 **while it is soft**. What a hard cap breaks is BE-S4's to find.
 
 **Not measured; measured at the milestone's close.**
+
+### BE-S2 — the slot array, 2026-10-07
+
+Built at `0da17f9f` on `worktree-pool-budget-required`.
+- Frames live in chunks of `kFrameChunk` (1,024) slots. Each chunk's page
+  bytes are one `make_unique_for_overwrite` allocation that never moves.
+- The table maps `PageId → Frame*`, and a free list hands out slots.
+- A miss and a creation reserve their slot before filling it, through a
+  `ReservedFrame` guard that returns the slot on every early exit.
+- The hand is a slot index that keeps its place between sweeps, and the
+  sort is deleted.
+- A `queued` bit replaces the `std::find`.
+- The three erasers share one tail, `ReleaseFrameLocked`, which poisons the
+  slot in debug builds and, under ASan, poisons it until it is reused.
+- `Frame` grows from 40 to 48 bytes (`page_id`, `queued`).
+
+**Its review found four defects, fixed in the BE-S3 commit. Three
+suggestions were applied and two declined:**
+- **A new cell failed under `KDS_TEST_FRAME_BUDGET=64`.**
+  `ASpanSurvivesTheArraysGrowth` inherited the override's budget, so the
+  array never grew. **`0da17f9f`'s message claims "3191/3192 under a
+  64-frame budget" for the suite as it was before the cells existed. For
+  the cells it added, the claim is false.** The cell now sets its own
+  budget.
+- **The budget counted only published frames**, so concurrent fills each
+  saw room. The budget now bounds the slots in use, which include every
+  reserved fill (BE-S3's `SlotsInUseLocked`), as BE-R1 requires.
+- **Creations past an all-dirty pool walked six laps each.** BE-S3 bounds
+  them (below).
+- **The order's "a lost `loading_` race returns its slot" cell was not
+  there.** A loser of the `loading_` race reserves nothing in this design.
+  So the cell is the slot census on `ConcurrentMissesOnOnePageIssueOneDeviceRead`,
+  where eight faulters per round use one slot. `InsertFrame`'s lost-race
+  arm is reachable only by an unlatched race on the raw `*Unpinned`
+  accessors, which would be undefined behaviour on the table, so no cell
+  drives it. **This is recorded as a gap, not claimed as covered.** A
+  census on the failed-fill (`NotFound`) path and on `EvictClean` was added
+  instead.
+- **Applied:**
+  - `InsertFrame` takes the `ReservedFrame&&`, so a throwing `emplace`
+    gives the slot back;
+  - the two creations share `PublishFreshPage`;
+  - the sweep asks `IsPinnedClassFrame(frame)`, so it does no second lookup
+    per step;
+  - a dead null test was deleted;
+  - the stale comments it listed were rewritten. The header's
+    `loading_`/`unique_ptr<Page>` text, `FetchAndPin`'s, and the
+    "references into an `unordered_map`" lines all described a table that
+    is gone.
+- **Declined:**
+  - **Moving `kFrameChunk`/`frame_slots()` into the first public block** is
+    cosmetic.
+  - **A FIFO free list** would keep a freed slot poisoned longer. It is
+    declined because LIFO reuse keeps the hot slots' cache lines warm, and
+    the debug poison already catches a stale read on reuse.
+
+`docs/spec/page.md` §6 and §9 still say frames are separate heap
+allocations. BE-S6 restates them, as the order says, and until then they
+describe the engine before `0da17f9f`.
+
+### BE-S3 — bounded batches and the background, 2026-10-07
+
+Built on `worktree-pool-budget-required` from `0da17f9f`.
+
+**Code:**
+- **Reservation.** Under the budget, `ReserveFrame` takes a slot. At the
+  budget it reclaims one bounded batch per structure-latch hold, releasing
+  the latch between batches:
+  - `ReclaimBatch()` frames, which is 64, or budget / 16 when that is
+    smaller;
+  - in at most `kBatchStepsPerFrame` (8) steps per frame.
+- **`MaintainFreeReserve()`** reads the budget: `low` = budget / 16 and
+  `high` = budget / 8. It runs on the 50 ms writeback tick before the
+  drain, as bounded batches with a drain between them.
+- **`SHOW META`** prints `pool_budget`, `pool_resident`, `pool_slots`,
+  hits, misses, inline and background reclaims, inline batches, partial
+  batches, steps, queued, drained and refused. The counters are
+  `PageStore::pool_counters()`, zeros for a store with no pool.
+
+**A deviation from BE-R2 as written, and why.** BE-R2 says "a partial batch
+is still progress, and an empty one goes to BE-R4". That would refuse
+falsely. When the pool first fills, every frame is at usage ≥ 1, and no
+512-step batch finds a victim until a whole lap has brought the counters
+down. Eight empty batches (BE-R4's retry bound) would then refuse a fault
+in a pool that is entirely clean and reclaimable. So:
+- A batch that lowers a usage counter counts as progress.
+- A reservation gives up only after **one whole lap with nothing freed and
+  nothing lowered**. That means every frame is pinned, latched,
+  resident-class or dirty, and another lap cannot change it.
+- The step bound still bounds every latch hold. **Every walk is also
+  bounded by `kClockUsageCap + 1` laps in all** (`ReclaimWalk`, shared by
+  the reservation and the tick). This was added by the stage's review: with
+  the latch dropped between batches, other cores' hits can keep raising
+  the counters a walk lowers, so "a batch lowered something" alone need
+  never end.
+- On one core, a reservation walks about two laps at most. The cell
+  `NoBatchWalksPastItsBoundOverAnAllDirtyPool` explains the second lap: a
+  creation enters warm, and lowering the previous fill's counter restarts
+  the idle lap once.
+- Under BE-S3 the give-up still grows the array, because the budget is
+  soft. BE-S4 turns it into BE-R4's retries and refusal.
+
+**The batch scales below 1,024 frames.** A fixed 64 would take a quarter of
+a 256-frame pool per batch. `budget / 16` is a function of the one
+quantity the operator sets, so BE-Q5 holds.
+
+**Cells:**
+- `NoBatchWalksPastItsBoundOverAnAllDirtyPool`: steps per batch never pass
+  the bound, nothing is reclaimed from an all-dirty pool, and each fill
+  walks at most two laps.
+- `MaintainFreeReserveRestoresTheWatermarkThroughDirt`, rewritten for the
+  no-argument loop:
+  - from a free count of 0 with every frame dirty, the loop queues, drains
+    and reclaims to `high` in more than one batch (`batches_background`,
+    one per latch hold);
+  - with every frame pinned, it ends rather than spins.
+- `AScanOnOneCoreLosesNoWriteFromAnother`, armed:
+  - core 1 scans four times the budget and runs the background loop, while
+    core 0 writes each of 256 pages once;
+  - every write reads back through a fresh store after a sync.
+  - **Its first version wrote a few hot pages every round and survived the
+    mutant "reclaim dirty frames".** Those pages never cooled to usage
+    zero, so the hand never offered them. In the rewrite each page is
+    written once and cools under the scan, so the mutant fails it ("written
+    pages lost their write"). It was green 20 times out of 20 unmutated.
+- **The premise cell re-run** (`kds_pool_sweep_bench`, `build-release`,
+  the whole `2 × 131,072` pass, no sample), next to the same xrock load as
+  BE-S1:
+
+| | below p50 / p99 | past p0 / p25 / p50 / p90 / p99 / max | past total |
+|---|---|---|---|
+| BE-S1, `e4b107af` | 5.6 / 9.8 µs | 1,960 / 2,156 / 2,222 / 2,353 / 3,119 / 9,241 µs | 294 s (extrapolated) |
+| BE-S3 | 5.1 / 9.1 µs | 2.1 / 2.4 / 2.5 / 2.8 / 5.2 / 2,891 µs | 0.34 s |
+
+  - Per-miss p99 falls by a factor of 600, almost three orders of
+    magnitude, so the done condition holds.
+  - A miss past the budget is now cheaper than one below it, because it
+    reuses a slot whose memory is already mapped.
+  - The 2.9 ms maximum is the first reservation past the budget walking one
+    lap of warm frames.
+  - RSS after the pass was 1,042 MiB, the same as BE-S1.
+
+**BE-S3's review found two loops that could fail to end, plus one older
+defect. All three are fixed:**
+- **C1.** A reservation could spin while other cores kept the pool warm.
+  It is now bounded by `ReclaimWalk`'s total.
+- **C2.** One tick's `MaintainFreeReserve` could hold core 0's reactor
+  while peers took freed slots. It now does at most one deficit
+  (`high`) of reclaim per call, within the same total bound.
+- **C3, from BE-S2.** If a chunk's `push_back` threw, `free_frames_` was
+  left pointing into the dead chunk. The chunk is now pushed first.
+
+**Also taken from the review:**
+- `SlotCountLocked()` replaces seven spellings of
+  `chunks_.size() * kFrameChunk`.
+- `batches_background` is counted, so the "across several holds" claim
+  has a witness.
+- The watermark cell's no-budget line now sets its own budget. Before,
+  it passed under `KDS_TEST_FRAME_BUDGET` only by coincidence.
+- Three stale comments that named `EvictColdFramesLocked` or placed the
+  sweep inside `InsertFrame` were corrected.
+
+**What has no cell, stated rather than implied:**
+- **C1's bound.** A two-core cell that warmed every frame while the other
+  core faulted survived the mutant "no total bound". The warming thread
+  cannot re-touch a lap's worth of frames between the hand's visits, so
+  the spin never formed. Forcing it needs a seam between batches, so the
+  cell was deleted rather than kept as a pass that proves nothing. The
+  bound is argued, not tested.
+- **`AScanOnOneCoreLosesNoWriteFromAnother` does not cover a drain under
+  the writer's own hold.** Its writer releases before draining.
+- **`pool_refused` is printed and stays 0 until BE-S4 writes it.**
+
+**Known costs while the budget is soft:**
+- With the budget at or below the resident-class pages, every fill walks
+  one idle lap before it grows the array.
+- At `cores = 1`, a long write transaction past the budget does the same,
+  because the tick cannot run. BE-S4's mount floor removes the first case;
+  the second is BE-R4's stated cost.

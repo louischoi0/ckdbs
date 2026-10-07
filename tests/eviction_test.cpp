@@ -753,23 +753,33 @@ TEST(EvictionWritebackTest, ContiguousRunsCoalesceIntoOneDeviceCall) {
 }
 
 TEST_F(EvictionTest, MaintainFreeReserveRestoresTheWatermarkThroughDirt) {
-    // A dirty burst: four frames the sweep alone could never free.
+    // A dirty burst: frames the sweep alone could never free.
+    constexpr int kPages = 32;
     std::vector<PageId> ids;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kPages; ++i) {
         auto created = store_->CreateNew();
         ASSERT_TRUE(created.ok());
         FormatPage(created.value().second.bytes(), PageType::kHeap);
         created.value().second.bytes()[kPageBodyOffset] = std::byte{static_cast<unsigned char>(20 + i)};
         ids.push_back(created.value().first);
     }
-    const std::size_t resident = store_->resident_pages();
+    // No budget: nothing to maintain. Set rather than assumed, so a
+    // `KDS_TEST_FRAME_BUDGET` run asks the same question.
+    store_->SetFrameBudget(0);
+    EXPECT_EQ(store_->MaintainFreeReserve(), 0u);
 
-    // A pool exactly as large as what is resident and a watermark of two:
-    // the loop must sweep (queueing the dirt), drain (cleaning it), and
-    // sweep again (reclaiming) until the reserve exists - §4's rotation.
-    const std::size_t reclaimed = store_->MaintainFreeReserve(resident, /*watermark=*/2);
-    EXPECT_GE(reclaimed, 2u);
-    EXPECT_LE(store_->resident_pages(), resident - 2);
+    // A budget exactly as large as what is resident: the free count is 0,
+    // below `low` (32 / 16 = 2), so the loop must sweep (queueing the dirt),
+    // drain (cleaning it) and sweep again (reclaiming) until it reaches
+    // `high` (32 / 8 = 4) - §4's rotation, in bounded batches.
+    const std::size_t resident = store_->resident_pages();
+    store_->SetFrameBudget(resident);
+    const std::size_t reclaimed = store_->MaintainFreeReserve();
+    EXPECT_GE(reclaimed, 4u);
+    EXPECT_LE(store_->resident_pages(), resident - 4);
+    EXPECT_EQ(store_->pool_counters().reclaimed_background, reclaimed);
+    // In bounded batches, one per latch hold, never the deficit in one.
+    EXPECT_GE(store_->pool_counters().batches_background, 2u);
 
     // No write was lost to the reserve: every page reads back intact.
     for (std::size_t i = 0; i < ids.size(); ++i) {
@@ -779,10 +789,18 @@ TEST_F(EvictionTest, MaintainFreeReserveRestoresTheWatermarkThroughDirt) {
                   std::byte{static_cast<unsigned char>(20 + i)});
     }
 
-    // A satisfied watermark is a no-op, and an unsatisfiable one ends on
-    // "a full rotation yielded nothing" rather than spinning.
-    EXPECT_EQ(store_->MaintainFreeReserve(store_->resident_pages() + 8, 2), 0u);
-    (void)store_->MaintainFreeReserve(0, 1'000'000);  // must terminate
+    // A pool with nothing to give - every frame pinned - ends on "a whole
+    // rotation freed nothing" rather than spinning. Thirty-two pins is four
+    // operations' worth of `kPinCeiling`, so the ceiling is told so.
+    store_->SetLatchArmed(store_->latch_armed(), /*concurrent_pinners=*/kPages / 8);
+    std::vector<PageRef> held;
+    for (const PageId id : ids) {
+        auto ref = store_->GetForRead(id);
+        ASSERT_TRUE(ref.ok());
+        held.push_back(std::move(ref.value()));
+    }
+    store_->SetFrameBudget(store_->resident_pages());
+    EXPECT_EQ(store_->MaintainFreeReserve(), 0u);
 }
 
 // ---- EVT06: the scan ring -------------------------------------------------
@@ -1540,6 +1558,7 @@ TEST_F(SlotArrayTest, AScanFourTimesTheBudgetStaysInTheBudgetsSlots) {
 
 TEST_F(SlotArrayTest, ASpanSurvivesTheArraysGrowth) {
     Build(kBudget + 8);
+    store_->SetFrameBudget(0);  // unbounded, so the reads below must grow it
     auto held = store_->GetForRead(ids_[0]);
     ASSERT_TRUE(held.ok()) << held.status().message();
     const std::byte* before = held.value().bytes().data();
@@ -1547,11 +1566,12 @@ TEST_F(SlotArrayTest, ASpanSurvivesTheArraysGrowth) {
     Read(1, kBudget + 8);
     ASSERT_GT(store_->frame_slots().slots, kBudget);
 
-    EXPECT_EQ(held.value().bytes().data(), before) << "a chunk moved its bytes";
+    // The handle's own pointer is what it stored, so the test is a fresh
+    // lookup landing on the same address, and the bytes there unchanged.
     EXPECT_EQ(held.value().bytes()[kPageBodyOffset], std::byte{0});
     auto again = store_->GetForRead(ids_[0]);
     ASSERT_TRUE(again.ok()) << again.status().message();
-    EXPECT_EQ(again.value().bytes().data(), before);
+    EXPECT_EQ(again.value().bytes().data(), before) << "a chunk moved its bytes";
 }
 
 TEST_F(SlotArrayTest, ARingsReleasedSlotsReturnToTheFreeList) {
@@ -1568,7 +1588,111 @@ TEST_F(SlotArrayTest, ARingsReleasedSlotsReturnToTheFreeList) {
     // The ring's destructor gave the last four back too.
     for (const PageId id : ids_) EXPECT_FALSE(Resident(id));
     ExpectEverySlotAccountedFor();
-    EXPECT_EQ(store_->frame_slots().slots, kBudget) << "a dropped slot was never reused";
+}
+
+// ---- BE-R2: bounded batches ----------------------------------------------
+
+TEST_F(SlotArrayTest, NoBatchWalksPastItsBoundOverAnAllDirtyPool) {
+    // Every frame dirty: no batch can reclaim, so each walks to its bound
+    // and the reservation stops after one idle lap (soft until BE-S4). The
+    // counters say how far each batch went.
+    Build(0);
+    store_->SetFrameBudget(kBudget);
+    for (std::size_t i = 0; i < kBudget + 64; ++i) {
+        auto made = store_->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        FormatPage(made.value().second.bytes(), PageType::kHeap);
+    }
+    const auto counters = store_->pool_counters();
+    ASSERT_GT(counters.batches_inline, 0u) << "nothing reached the budget";
+    const std::size_t bound = DevicePageStore::kBatchStepsPerFrame * store_->ReclaimBatch();
+    EXPECT_LE(counters.batch_steps, counters.batches_inline * bound)
+        << "a batch walked past its step bound";
+    EXPECT_EQ(counters.reclaimed_inline, 0u);
+    // At most two laps per fill past the budget, not six: the walk stops
+    // after a lap that lowered no counter, and the one counter there is to
+    // lower is the previous fill's (a creation enters warm), which can
+    // restart the idle lap once.
+    EXPECT_LE(counters.batch_steps, 64 * (2 * store_->frame_slots().slots + bound));
+}
+
+TEST_F(SlotArrayTest, AScanOnOneCoreLosesNoWriteFromAnother) {
+    // BE-S3's two-core cell: core 1 scans a relation four times the budget,
+    // so the bounded batches reclaim continuously, while core 0 writes each
+    // of a few hundred other pages once. Written once, a page's frame cools
+    // to usage zero under the scan's hand while still dirty - exactly the
+    // frame a batch must queue and never reclaim. A batch that reclaimed it,
+    // or a drain that cleaned it under a write, loses that write; every
+    // page must read back with its value from a fresh store after a sync.
+    constexpr std::size_t kWritten = 256;
+    Build(4 * kBudget + kWritten);
+    store_->SetLatchArmed(true, /*concurrent_pinners=*/2);
+    store_->SetFrameBudget(kBudget);
+    auto value_of = [](std::size_t i) { return static_cast<std::byte>((i * 7 + 0x5A) & 0xFF); };
+
+    std::thread scanner([&] {
+        const CurrentCoreGuard as_core_1(1);
+        for (int pass = 0; pass < 2; ++pass) {
+            for (std::size_t i = kWritten; i < ids_.size(); ++i) {
+                auto ref = store_->GetForRead(ids_[i]);
+                ASSERT_TRUE(ref.ok()) << ref.status().message();
+            }
+            // The tick's half, on the scanning thread: background batches
+            // and the drain, holding no page latch.
+            (void)store_->MaintainFreeReserve();
+        }
+    });
+    {
+        const CurrentCoreGuard as_core_0(0);
+        for (std::size_t i = 0; i < kWritten; ++i) {
+            auto ref = store_->Get(ids_[i]);
+            ASSERT_TRUE(ref.ok()) << ref.status().message();
+            ref.value().bytes()[kPageBodyOffset + 1] = value_of(i);
+            if (i % 32 == 0) {
+                ref.value().Release();
+                ASSERT_TRUE(store_->DrainDirtyEvictionQueue().ok());
+            }
+        }
+    }
+    scanner.join();
+    EXPECT_GT(store_->pool_counters().reclaimed_inline, 0u) << "the scan never reclaimed";
+    EXPECT_GT(store_->pool_counters().dirty_queued, 0u) << "no written frame cooled to a victim";
+
+    ASSERT_TRUE(store_->Sync().ok());
+    auto reopened = DevicePageStore::Open(*device_, /*first_new_page_id=*/16);
+    ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+    std::size_t lost = 0;
+    for (std::size_t i = 0; i < kWritten; ++i) {
+        auto ref = reopened.value()->GetForRead(ids_[i]);
+        ASSERT_TRUE(ref.ok());
+        lost += ref.value().bytes()[kPageBodyOffset + 1] != value_of(i);
+    }
+    EXPECT_EQ(lost, 0u) << "written pages lost their write";
+}
+
+TEST_F(SlotArrayTest, AFailedFillAndAnEvictionEachGiveTheirSlotBack) {
+    // A page allocated in the map and never written: the miss reserves a
+    // slot, reads all zeros, answers `NotFound` - and the reservation's
+    // guard gives the slot back.
+    Build(4);
+    {
+        auto made = store_->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        ids_.push_back(made.value().first);
+    }
+    ASSERT_TRUE(store_->PersistMaps().ok());  // the bit, not the page
+    auto reopened = DevicePageStore::Open(*device_, /*first_new_page_id=*/16);
+    ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+    store_ = std::move(reopened.value());
+    auto never_written = store_->GetForRead(ids_.back());
+    EXPECT_FALSE(never_written.ok());
+    ExpectEverySlotAccountedFor();
+
+    // `EvictClean`'s drop goes through the erasers' one tail too.
+    Read(0, 4);
+    ASSERT_TRUE(store_->EvictClean(std::span<const PageId>(ids_.data(), 4)).ok());
+    EXPECT_EQ(store_->resident_pages(), 0u);
+    ExpectEverySlotAccountedFor();
 }
 
 TEST_F(SlotArrayTest, ACreationCountsAgainstTheBudget) {

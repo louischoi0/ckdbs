@@ -1935,17 +1935,18 @@ Status Expeditor::Start() {
                           "ms, switch " + (config_.cabin_optimizer ? "on" : "off"));
     }
 
-    // EVT03's background writeback: drains spec-eviction §4's dirty queue -
-    // pages a sweep found dirty at usage zero and queued instead of
-    // reclaiming. One bounded batch per tick is the cooperative-yield
-    // boundary. **Idle today by construction**: the queue only fills when
-    // the sweep runs, and nothing calls the sweep until the PageRef
-    // migration lands - so this registration is the task existing ahead of
-    // its work, the same stance the sweep itself takes. The watermark loop
-    // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
-    // it real numbers; a cadence key follows with EVT04's protocol.
+    // EVT03's background writeback and BE-R2's watermark loop. The loop
+    // reclaims in bounded batches when the pool's free count falls below
+    // budget / 16, draining the dirty queue between batches, so a fault
+    // finds a free slot instead of paying for the reclaim itself. The drain
+    // after it writes whatever the inline sweeps queued since the last
+    // tick. Both run here because the tick holds no page latch, which
+    // `WriteBack(kSkip)` needs (`device_page_store.hpp`). At `cores = 1` a
+    // long statement holds the reactor and this does not run, which is why
+    // the inline path is bounded on its own (BE-R2).
     constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
+        (void)store_->MaintainFreeReserve();
         auto drained = store_->DrainDirtyEvictionQueue();
         if (!drained.ok() && logger_->enabled(LogLevel::kWarn)) {
             logger_->Warn("expeditor", "writeback drain failed: " + drained.status().message());

@@ -1310,6 +1310,20 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " map_coverage_ids=" << map.coverage_ids
        << " headerless_pages=" << (map.has_headerless ? 1 : 0);
 
+    // The buffer pool (BE-R2, `eviction.md` EV9): its budget and what it
+    // holds, then what reclaim has cost. `pool_batch_steps` over
+    // `pool_batches_inline` is the inline walk's mean, which BE-R2 bounds.
+    const auto pool = page_store_.pool_counters();
+    os << " pool_budget=" << pool.budget << " pool_resident=" << pool.resident
+       << " pool_slots=" << pool.slots << " pool_hits=" << pool.hits
+       << " pool_misses=" << pool.misses << " pool_reclaimed_inline=" << pool.reclaimed_inline
+       << " pool_reclaimed_background=" << pool.reclaimed_background
+       << " pool_batches_inline=" << pool.batches_inline
+       << " pool_batches_background=" << pool.batches_background
+       << " pool_batches_partial=" << pool.batches_partial
+       << " pool_batch_steps=" << pool.batch_steps << " pool_dirty_queued=" << pool.dirty_queued
+       << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused;
+
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
     // live pages plateauing under a write-heavy loop is the feature, and
     // the recycle count is what proves the plateau came from reuse rather
