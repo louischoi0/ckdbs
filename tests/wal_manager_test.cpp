@@ -162,7 +162,45 @@ TEST_F(WalManagerTest, ManyCommittersResolveOnOneSync) {
     }
 }
 
-TEST_F(WalManagerTest, AFailedBatchSyncLeavesEveryCommitterWaiting) {
+// The writer thread's failed sync stops the stream every core appends to,
+// through the hook `StartWriter` installs: not only the reactor's inline sync.
+TEST_F(WalManagerTest, AFailedSyncOnTheWriterThreadStopsTheLog) {
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    wal->StartWriter();
+    ASSERT_TRUE(wal->Append(HeapInsert(1, 1), Pattern(64, 3)).ok());
+    ASSERT_TRUE(wal->Flush().ok());
+
+    device_->FailNextSync(Status::IoError("injected"));
+    EXPECT_EQ(wal->writer()->EnsureDurable(wal->flushed_lsn()).code(), StatusCode::kIoError);
+    EXPECT_TRUE(wal->stopped());
+    EXPECT_EQ(wal->Append(HeapInsert(2, 2), Pattern(64, 4)).status().code(),
+              StatusCode::kIoError);
+}
+
+// **The other direction, and the reason for the gate**: core 0's own sync
+// fails while the writer thread still has a request to serve. Before the
+// gate the writer then synced on its own, the device reported OK - the
+// injection was spent, as Linux clears a failed fsync's error - and a commit
+// was acknowledged over bytes the failure may have dropped (the review of
+// fsync's fail-stop, 2026-10-07).
+TEST_F(WalManagerTest, AWriterSyncAfterTheReactorsFailedSyncPublishesNothing) {
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    wal->StartWriter();
+    ASSERT_TRUE(wal->Append(HeapInsert(1, 1), Pattern(64, 5)).ok());
+    ASSERT_TRUE(wal->Flush().ok());
+    const Lsn before = wal->durable_lsn();
+
+    device_->FailNextSync(Status::IoError("injected"));
+    EXPECT_EQ(wal->SyncAll().code(), StatusCode::kIoError);
+    ASSERT_TRUE(wal->stopped());
+
+    EXPECT_EQ(wal->writer()->EnsureDurable(wal->flushed_lsn()).code(), StatusCode::kIoError);
+    EXPECT_EQ(wal->durable_lsn(), before);
+}
+
+TEST_F(WalManagerTest, AFailedBatchSyncStopsTheLogWithEveryCommitterUndurable) {
     auto wal = OpenManager();
     ASSERT_NE(wal, nullptr);
     auto first = wal->Commit(1, DurabilityClass::kGroup);
@@ -171,15 +209,16 @@ TEST_F(WalManagerTest, AFailedBatchSyncLeavesEveryCommitterWaiting) {
 
     device_->FailNextSync(Status::IoError("injected"));
     EXPECT_EQ(wal->DrainOnce().code(), StatusCode::kIoError);
-    // The batch is not resolved and must not be forgotten: these two are
-    // still unacknowledged, and the next drain still owes them a sync.
-    EXPECT_TRUE(wal->HasPendingGroupCommits());
+    // Neither is acknowledged, and fsync's fail-stop means neither ever is
+    // by this process: the log stops, a later drain does nothing, and the
+    // waiters are answered by the stop (`wal/stream.hpp`). The restart's
+    // recovery decides what the two commits were.
+    EXPECT_TRUE(wal->stopped());
     EXPECT_FALSE(wal->IsDurable(second.value()));
     EXPECT_EQ(wal->stats().group_batches, 0u);
-
-    ASSERT_TRUE(wal->DrainOnce().ok());
-    EXPECT_TRUE(wal->IsDurable(second.value()));
-    EXPECT_FALSE(wal->HasPendingGroupCommits());
+    EXPECT_TRUE(wal->DrainOnce().ok());
+    EXPECT_FALSE(wal->IsDurable(second.value()));
+    EXPECT_EQ(wal->EnsureDurable(second.value()).code(), StatusCode::kIoError);
 }
 
 TEST_F(WalManagerTest, GroupCommitsDoNotWaitForTheRelaxedInterval) {

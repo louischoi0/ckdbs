@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -39,12 +40,16 @@
 //   mutex_       held only to wait or to wake. **Never across an fsync**,
 //                and never by the reactor except in EnsureDurable(), which
 //                is the one call whose whole purpose is to block.
+//   sync_        the stream's `SyncDevice`, which holds the stream's
+//                `sync_mutex_` across the fsync - the one lock this thread
+//                and the reactor's own sync share, taken with no other held
+//                (`wal/stream.hpp`).
 //
 // The reactor's hot path - `Append` into the ring, `Flush` into the page
-// cache - touches none of it. Those stay `WalStream`'s, single-threaded,
-// exactly as before. **This class never touches the stream**: it takes a
-// device and a target, and the only thing it knows how to do is make bytes
-// that are already written durable.
+// cache - touches none of it. Those stay `WalStream`'s. **This class touches
+// the stream only through `sync_`**: it takes a device, a sync and a
+// target, and the only thing it knows how to do is make bytes that are
+// already written durable.
 //
 // ---- Why a target LSN rather than "sync everything" -----------------------
 //
@@ -59,8 +64,12 @@ namespace kds::wal {
 class WalWriter {
 public:
     // `device` must outlive this. The thread starts here and runs until
-    // Stop() or destruction.
-    explicit WalWriter(LogDevice* device);
+    // Stop() or destruction. **`sync` is what every sync calls, and it is
+    // required**: the manager passes the stream's `SyncDevice`, the gate
+    // every syncer of the log goes through (`wal/stream.hpp`), and a writer
+    // that synced the device itself would race the reactor's own sync past
+    // a failure. A test without a stream passes the device's `Sync`.
+    WalWriter(LogDevice* device, std::function<Status()> sync);
     ~WalWriter();
 
     WalWriter(const WalWriter&) = delete;
@@ -102,9 +111,12 @@ public:
     // call twice; the destructor calls it.
     void Stop();
 
-    // Syncs performed, and failures. A failure leaves the watermark where it
-    // was - a sync that failed proves nothing about what reached the platter
-    // - and the next request retries it.
+    // Syncs performed, and failures. **A failure is the writer's last sync**
+    // (the stream's fail-stop, `wal/stream.hpp`): the watermark stays where
+    // it was, every later wait is answered with that failure, and no later
+    // request is synced - a retried fsync can report success over pages the
+    // failed one dropped, and publishing that would claim durability for
+    // bytes that may be gone.
     std::uint64_t syncs() const noexcept { return syncs_.load(std::memory_order_relaxed); }
     std::uint64_t failures() const noexcept { return failures_.load(std::memory_order_relaxed); }
 
@@ -114,8 +126,8 @@ public:
         return reclaim_failures_.load(std::memory_order_relaxed);
     }
 
-    // The last failure, for a caller that wants to report rather than
-    // retry. Guarded by the mutex because a Status carries a string.
+    // The failure that ended this writer's syncing, OK before one.
+    // Guarded by the mutex because a Status carries a string.
     Status last_failure() const;
 
     // The device this writer syncs. Exposed for one caller:
@@ -141,6 +153,7 @@ private:
     std::condition_variable done_;   // writer -> reactor: watermark moved
     bool stopping_ = false;
     bool reclaim_requested_ = false;  // under mutex_
+    std::function<Status()> sync_;
     Status last_failure_;
 
     std::thread thread_;

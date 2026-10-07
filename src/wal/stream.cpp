@@ -63,13 +63,21 @@ StatusOr<std::unique_ptr<WalStream>> WalStream::Open(LogDevice* device, std::uin
 
 Status WalStream::FailStop(const Status& cause) {
     stopped_.store(true, std::memory_order_release);
-    return Status::IoError("WalStream: the log stopped accepting records after a refused record (" +
+    return Status::IoError("WalStream: the log stopped after a refused log write or sync (" +
                            cause.message() + "); restart the instance to recover");
+}
+
+Status WalStream::SyncDevice() {
+    std::lock_guard<std::mutex> guard(sync_mutex_);
+    if (stopped()) return StoppedStatus();
+    if (Status s = device_->Sync(); !s.ok()) return FailStop(s);
+    return Status::OK();
 }
 
 Status WalStream::StoppedStatus() {
     return Status::IoError(
-        "WalStream: the log is stopped after a refused record; restart the instance to recover");
+        "WalStream: the log is stopped after a refused log write or sync; restart the instance "
+        "to recover");
 }
 
 Status WalStream::StartSegment(std::uint64_t segment_no) {
@@ -303,9 +311,10 @@ Status WalStream::Sync() {
         }
         flushed = flushed_lsn();
     }
-    if (Status s = device_->Sync(); !s.ok()) {
-        // durable_lsn_ deliberately untouched: a sync that failed proves
-        // nothing about what reached the platter.
+    if (Status s = SyncDevice(); !s.ok()) {
+        // durable_lsn_ deliberately untouched, and the stream is stopped
+        // (`SyncDevice`): a sync that failed proves nothing about what
+        // reached the platter, and a retry proves nothing either.
         return s;
     }
     PublishDurable(flushed);

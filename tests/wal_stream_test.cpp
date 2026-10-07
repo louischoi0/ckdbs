@@ -253,7 +253,10 @@ TEST_F(WalStreamTest, DurableLsnOnlyAdvancesOnSync) {
     EXPECT_EQ(stream->durable_lsn(), stream->flushed_lsn());
 }
 
-TEST_F(WalStreamTest, FailedSyncDoesNotAdvanceTheDurablePoint) {
+// A failed sync proves nothing about what reached the platter, and since
+// fsync's fail-stop a retry is not allowed to prove it either: on Linux the
+// retry can report success over pages the failure dropped.
+TEST_F(WalStreamTest, AFailedSyncStopsTheStreamAndLeavesTheDurablePoint) {
     auto stream = OpenStream();
     ASSERT_NE(stream, nullptr);
     ASSERT_TRUE(stream->Append(HeapInsert(1, 1), Pattern(kPayloadSize, 6)).ok());
@@ -261,11 +264,12 @@ TEST_F(WalStreamTest, FailedSyncDoesNotAdvanceTheDurablePoint) {
     const Lsn before = stream->durable_lsn();
     device_->FailNextSync(Status::IoError("injected"));
     EXPECT_EQ(stream->Sync().code(), StatusCode::kIoError);
-    // A sync that failed proves nothing about what reached the platter.
+    EXPECT_TRUE(stream->stopped());
     EXPECT_EQ(stream->durable_lsn(), before);
 
-    ASSERT_TRUE(stream->Sync().ok());
-    EXPECT_EQ(stream->durable_lsn(), stream->flushed_lsn());
+    // The fault was one-shot; the stream still does not sync again.
+    EXPECT_EQ(stream->Sync().code(), StatusCode::kIoError);
+    EXPECT_EQ(stream->durable_lsn(), before);
 }
 
 // **Fail-stop** (stream.hpp): a failed device write stops the stream for

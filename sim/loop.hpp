@@ -191,7 +191,7 @@ struct SimVerdict {
     std::size_t crashes_reviving_segments = 0;
     // Iterations the log fail-stopped in (`wal/stream.hpp`): each ended its
     // ops there and was crashed and restarted, as an operator would, so the
-    // recovery after a failed log write is what it checked.
+    // recovery after a failed log write or sync is what it checked.
     std::size_t fail_stops = 0;
 
     std::string Summary(const SimConfig& config) const;

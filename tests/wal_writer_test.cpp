@@ -3,6 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <functional>
+#include <chrono>
 #include <memory>
 #include <thread>
 
@@ -26,6 +28,11 @@ namespace {
 
 constexpr std::uint64_t kSegment = 1 << 20;
 
+// A writer with no stream above it syncs the device itself.
+std::function<Status()> DeviceSync(LogDevice* device) {
+    return [device] { return device->Sync(); };
+}
+
 std::unique_ptr<LogDevice> MakeDevice() {
     auto device = MemoryLogDevice::Create(kSegment);
     EXPECT_TRUE(device.ok());
@@ -34,7 +41,7 @@ std::unique_ptr<LogDevice> MakeDevice() {
 
 TEST(WalWriter, StartsAtZeroAndSyncsOnRequest) {
     auto device = MakeDevice();
-    WalWriter writer(device.get());
+    WalWriter writer(device.get(), DeviceSync(device.get()));
     EXPECT_EQ(writer.durable_lsn(), 0u);
 
     writer.RequestSync(64);
@@ -47,7 +54,7 @@ TEST(WalWriter, StartsAtZeroAndSyncsOnRequest) {
 // request for 64 makes 64 durable, and says nothing about 128.
 TEST(WalWriter, NeverPublishesPastWhatWasAskedFor) {
     auto device = MakeDevice();
-    WalWriter writer(device.get());
+    WalWriter writer(device.get(), DeviceSync(device.get()));
 
     ASSERT_TRUE(writer.EnsureDurable(64).ok());
     EXPECT_EQ(writer.durable_lsn(), 64u);
@@ -58,7 +65,7 @@ TEST(WalWriter, NeverPublishesPastWhatWasAskedFor) {
 // reads this number as "everything below here is safe".
 TEST(WalWriter, TheWatermarkOnlyMovesForwards) {
     auto device = MakeDevice();
-    WalWriter writer(device.get());
+    WalWriter writer(device.get(), DeviceSync(device.get()));
 
     ASSERT_TRUE(writer.EnsureDurable(4096).ok());
     const Lsn high = writer.durable_lsn();
@@ -71,7 +78,7 @@ TEST(WalWriter, TheWatermarkOnlyMovesForwards) {
 // so the case that must not block is the one that is already satisfied.
 TEST(WalWriter, EnsureDurableReturnsImmediatelyWhenAlreadyPast) {
     auto device = MakeDevice();
-    WalWriter writer(device.get());
+    WalWriter writer(device.get(), DeviceSync(device.get()));
     ASSERT_TRUE(writer.EnsureDurable(1024).ok());
 
     const std::uint64_t before = writer.syncs();
@@ -83,7 +90,7 @@ TEST(WalWriter, EnsureDurableReturnsImmediatelyWhenAlreadyPast) {
 // waiter below the watermark wakes from the same device call.
 TEST(WalWriter, OneSyncSatisfiesEveryWaiterBelowIt) {
     auto device = MakeDevice();
-    WalWriter writer(device.get());
+    WalWriter writer(device.get(), DeviceSync(device.get()));
 
     std::atomic<int> woken{0};
     std::vector<std::thread> waiters;
@@ -101,7 +108,7 @@ TEST(WalWriter, OneSyncSatisfiesEveryWaiterBelowIt) {
 // destructor calls Stop() and a server may have called it already.
 TEST(WalWriter, StopIsIdempotent) {
     auto device = MakeDevice();
-    WalWriter writer(device.get());
+    WalWriter writer(device.get(), DeviceSync(device.get()));
     writer.Stop();
     writer.Stop();
     EXPECT_EQ(writer.failures(), 0u);
@@ -115,7 +122,7 @@ TEST(WalWriter, StopIsIdempotent) {
 // corrupt page rather than a slow one.
 TEST(WalWriter, PublishesTheTargetItWasGiven) {
     auto device = MakeDevice();
-    WalWriter writer(device.get());
+    WalWriter writer(device.get(), DeviceSync(device.get()));
 
     // Nothing was ever written here. The writer says so anyway.
     ASSERT_TRUE(writer.EnsureDurable(1 << 20).ok());
@@ -142,9 +149,45 @@ public:
     std::uint64_t segments_removed() const noexcept override { return 0; }
 };
 
+// fsync's fail-stop on the writer thread: the failed sync is the writer's
+// last. A later request is answered with the failure, and the device, though
+// it would succeed now (the injection is one-shot), is not synced again - a
+// retry could report success over pages the failure dropped. Through a sync
+// function, as the manager gives one (the stream's gate), counted here.
+TEST(WalWriter, AFailedSyncIsTheWritersLast) {
+    auto created = MemoryLogDevice::Create(kSegment);
+    ASSERT_TRUE(created.ok());
+    MemoryLogDevice& device = *created.value();
+    std::atomic<int> calls{0};
+    WalWriter writer(&device, [&] {
+        calls.fetch_add(1);
+        return device.Sync();
+    });
+
+    ASSERT_TRUE(writer.EnsureDurable(64).ok());
+    device.FailNextSync(Status::IoError("injected"));
+    EXPECT_EQ(writer.EnsureDurable(128).code(), StatusCode::kIoError);
+    const std::uint64_t syncs_at_failure = device.stats().syncs;
+
+    EXPECT_EQ(writer.EnsureDurable(256).code(), StatusCode::kIoError);
+    // A reclaim wakes the thread with that request still pending: the wake
+    // must not become a sync either.
+    // The answer to a wait is immediate - the failure is stored - so the
+    // cell gives the reclaim pass time to run before it looks.
+    writer.RequestSync(512);
+    writer.RequestReclaim();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(writer.EnsureDurable(512).code(), StatusCode::kIoError);
+    EXPECT_EQ(writer.durable_lsn(), 64u);
+    EXPECT_EQ(device.stats().syncs, syncs_at_failure) << "the writer synced again";
+    EXPECT_EQ(writer.syncs(), 1u);
+    writer.Stop();
+    EXPECT_EQ(calls.load(), 2) << "one sync that worked, one that failed, then none";
+}
+
 TEST(WalWriter, AFailedSyncIsReportedAndLeavesTheWatermark) {
     FailingSyncDevice device;
-    WalWriter writer(&device);
+    WalWriter writer(&device, DeviceSync(&device));
 
     Status seen = writer.EnsureDurable(64);
     EXPECT_FALSE(seen.ok());

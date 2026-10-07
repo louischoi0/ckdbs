@@ -152,7 +152,11 @@ Status WalManager::SyncAll() {
 
 void WalManager::StartWriter() {
     if (writer_ != nullptr) return;
-    owned_writer_ = std::make_unique<WalWriter>(stream_->device());
+    // The writer syncs through the stream's gate, as the stream's own sync
+    // does: one device sync at a time for the log, and a failure on either
+    // thread stops it for both (`wal/stream.hpp`'s `SyncDevice`).
+    owned_writer_ = std::make_unique<WalWriter>(
+        stream_->device(), [stream = stream_] { return stream->SyncDevice(); });
     writer_ = owned_writer_.get();
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("wal", "writer thread started; syncs leave the reactor from here on");
@@ -249,10 +253,10 @@ Status WalManager::Sync() {
 
     const bool had_staged_bytes = stream_->ring_used() > 0;
     if (Status s = stream_->Sync(); !s.ok()) {
-        // Sync() flushes first, so the failure could be either half. The
-        // stream leaves the bytes staged and the durable point where it
-        // was; nothing here may pretend otherwise, least of all the batch
-        // bookkeeping - those commits are still waiting.
+        // Sync() flushes first, so the failure could be either half; either
+        // way the log is stopped and the durable point stays where it was.
+        // The batch is not resolved: its commits are answered by the stop
+        // (the dispatcher's durability wait), never acknowledged.
         ++stats_.sync_failures;
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
             log_->Error("wal", "sync failed: " + s.message());

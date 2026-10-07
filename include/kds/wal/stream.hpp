@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <vector>
 
@@ -89,7 +90,9 @@
 //
 // **Fail-stop** (operator, 2026-10-07): a device write this stream issues
 // that fails - a flush of the staged bytes, or a roll's segment creation or
-// header - stops the stream for good. Every later `Append`, `Flush`, `Seal`
+// header - stops the stream for good, and so does a failed device sync,
+// here or on the writer thread (operator, 2026-10-07, the same day): a
+// retried fsync can report success over pages a failed one dropped. Every later `Append`, `Flush`, `Seal`
 // and `Sync`, on every core, is refused with the stopped status, and only a
 // restart, whose recovery replays the durable prefix, brings writes back.
 // The reason is the write path's order: a page is mutated under its hold and
@@ -182,6 +185,17 @@ public:
 
     // Fail-stop (above): true once a device write this stream issued failed.
     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
+
+    // **The one device sync** (fsync's fail-stop). Both threads that sync
+    // this log - its own `Sync`, and the writer thread for the peers and the
+    // loss-window tick - sync through here, one at a time under
+    // `sync_mutex_`, refusing once stopped and stopping on a failure before
+    // the mutex is released. One at a time is what makes the stop hold: two
+    // overlapping fsyncs on one descriptor can hand the error to one caller
+    // and OK to the other, and a sync that started after a failure can
+    // report OK over pages the failure dropped. The cost is a sync waiting
+    // out one already in flight. Any thread; takes no stream latch.
+    Status SyncDevice();
 
     // Stops the stream (above) and returns the refusal naming `cause`. The
     // stream's own failed writes call it, and so does the manager's ring-full
@@ -285,6 +299,10 @@ private:
     std::atomic<Lsn> durable_lsn_{0};
     std::atomic<bool> sealed_{false};
     std::atomic<bool> stopped_{false};
+    // Serializes `SyncDevice`, held across the device sync only. Never taken
+    // under the stream latch; the device's `segments_mutex_` is taken under
+    // it (`FileLogDevice::Sync` copies its descriptors).
+    std::mutex sync_mutex_;
 
     // `latch_` points at `latch_storage_` when shared and is null when not
     // (spin_latch.hpp: a null guard costs one branch and no atomic).

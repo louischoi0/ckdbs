@@ -4,7 +4,8 @@
 
 namespace kds::wal {
 
-WalWriter::WalWriter(LogDevice* device) : device_(device) {
+WalWriter::WalWriter(LogDevice* device, std::function<Status()> sync)
+    : device_(device), sync_(std::move(sync)) {
     thread_ = std::thread([this] { Run(); });
 }
 
@@ -72,16 +73,21 @@ void WalWriter::Run() {
     for (;;) {
         Lsn target = 0;
         bool reclaim = false;
+        bool failed = false;
         {
             std::unique_lock<std::mutex> guard(mutex_);
+            // A failed writer has no sync left to do (`last_failure_` is set
+            // once and never cleared), so a request behind the watermark is
+            // no longer work - only a stop or a reclaim is.
             work_.wait(guard, [&] {
                 return stopping_ || reclaim_requested_ ||
-                       requested_.load(std::memory_order_acquire) >
-                           durable_.load(std::memory_order_relaxed);
+                       (last_failure_.ok() && requested_.load(std::memory_order_acquire) >
+                                                  durable_.load(std::memory_order_relaxed));
             });
             if (stopping_) return;
             target = requested_.load(std::memory_order_acquire);
             reclaim = std::exchange(reclaim_requested_, false);
+            failed = !last_failure_.ok();
         }
 
         // **A removal runs after this pass's sync, never instead of it**
@@ -89,7 +95,7 @@ void WalWriter::Run() {
         // a removal is not starved by a stream of commits, which would leave
         // the log growing. A committer that asks during the removal waits it
         // out - the cost BC-Q5 accepted.
-        if (target <= durable_.load(std::memory_order_acquire)) {
+        if (failed || target <= durable_.load(std::memory_order_acquire)) {
             if (reclaim) Reclaim();
             continue;
         }
@@ -103,7 +109,10 @@ void WalWriter::Run() {
         // No lock is held here. That is the whole design: the reactor keeps
         // appending, flushing and serving statements for the milliseconds
         // this takes.
-        const Status synced = device_->Sync();
+        // Through the stream's gate when the manager gave one, which stops
+        // the log on a failure before it returns - so a waiter answered with
+        // the failure below finds the log already stopped.
+        const Status synced = sync_();
 
         {
             std::lock_guard<std::mutex> guard(mutex_);
@@ -118,7 +127,6 @@ void WalWriter::Run() {
                                                        std::memory_order_relaxed)) {
                 }
                 syncs_.fetch_add(1, std::memory_order_relaxed);
-                last_failure_ = Status::OK();
             } else {
                 // The watermark stays where it was: a failed sync proves
                 // nothing about what reached the platter. Recorded so a

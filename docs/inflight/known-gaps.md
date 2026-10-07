@@ -221,23 +221,6 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## WAL
 
-- **A failed device sync does not stop the log.** Recorded at BC-S4 on
-  `worktree-wal-recycling`, 2026-10-07, by its review; read, not run.
-  - Fail-stop (`wal.md` §6-5) covers a failed device write and a ring-full
-    refusal.
-    A failed `fdatasync`, on the reactor's inline sync or on the writer
-    thread, leaves the durable point where it was and is retried.
-  - On Linux a failed `fsync` can drop the dirty pages and clear the error,
-    so the retry can return OK over bytes that are gone. `durable_lsn` then
-    covers a hole: an acknowledged commit can be lost, and a page can be
-    written back ahead of a record that is not on the device.
-  - `MemoryLogDevice::FailNextSync` keeps its overlay, so the simulator
-    models only the optimistic case and cannot see this.
-  - **Cure, undecided:** stop on any sync failure too, PostgreSQL's answer
-    since 2018. The operator's fail-stop mark (BC, 2026-10-07) named a failed
-    append, not a failed sync.
-  - **No owner.**
-
 - **A refused catalog report on a new page spends one reserved page.** The
   page is left allocated, empty and unlinked. The catalog range is pages
   16..127, and nothing frees a page (`page.md` §5). This predates AZ-S1:

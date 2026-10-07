@@ -665,7 +665,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                           (checkpointed.ok() ? std::string("ok") : checkpointed.message()));
         }
 
-        // **Fail-stop** (`wal/stream.hpp`): after a failed log write the
+        // **Fail-stop** (`wal/stream.hpp`): after a failed log write or sync the
         // instance refuses every write until it restarts, so the rest of the
         // plan would check nothing but refusals. The iteration ends its ops
         // here and goes to the crash and the restart, whatever its mode.

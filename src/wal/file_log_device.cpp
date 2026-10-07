@@ -500,11 +500,18 @@ std::uint64_t FileLogDevice::segments_removed() const noexcept {
 }
 
 Status FileLogDevice::SyncDirectory() {
+    std::lock_guard<std::mutex> guard(dir_sync_mutex_);
+    if (dir_sync_failed_) {
+        return Status::IoError("FileLogDevice: an earlier fsync of directory " + dir_ +
+                               " failed; no later one is trusted");
+    }
     while (::fsync(dir_fd_.get()) != 0) {
         if (errno == EINTR) {
             continue;
         }
-        return ErrnoStatus("FileLogDevice: fsync directory " + dir_, errno);
+        const int err = errno;
+        dir_sync_failed_ = true;
+        return ErrnoStatus("FileLogDevice: fsync directory " + dir_, err);
     }
     return Status::OK();
 }

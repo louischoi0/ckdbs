@@ -1819,7 +1819,11 @@ TEST_F(FailedCommitTest, AnAutocommitWriteWhoseCommitFailsReleasesEverythingItHe
     Pump();
     ASSERT_TRUE(*wb.done) << "a later writer of the row is waiting on a transaction that no "
                              "longer exists: " << wb.out->response;
-    EXPECT_EQ(wb.out->response, "UPDATED 1") << wb.out->response;
+    // Answered, not parked - and refused, because the failed sync stopped
+    // the log (fsync's fail-stop, `wal/stream.hpp`): no write runs until a
+    // restart.
+    EXPECT_NE(wb.out->response.find("the log is stopped"), std::string::npos)
+        << wb.out->response;
 }
 
 TEST_F(FailedCommitTest, AFailedStatementInsideATransactionStillPoisonsAndStillHolds) {

@@ -382,7 +382,7 @@ recovery block prints `recovery_redo_start` and
 `recovery_redo_start_recomputed` only when redo's floor raised the start.
 
 **A failed log write stops the instance's writes** (`docs/spec/wal.md`
-§6-5). Once the log device refuses a write, every statement that writes is
+§6-5). Once the log device refuses a write or a sync, every statement that writes is
 refused with the `IoError` category, naming the stop, and `SHOW META` prints `wal_stopped=1`.
 Autocommit reads go on; a `BEGIN` is refused once its core's carved block
 of transaction ids is spent, since carving the next one writes the

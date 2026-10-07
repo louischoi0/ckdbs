@@ -206,7 +206,7 @@ TEST_F(SharedStreamTest, TheDurableWatermarkNeverMovesBackwardsUnderConcurrentSy
 TEST_F(SharedStreamTest, AttachRefusesAnUnsharedStream) {
     auto opened = WalStream::Open(device_.get(), 0, kMinRingCapacity);
     ASSERT_TRUE(opened.ok());
-    WalWriter writer(device_.get());
+    WalWriter writer(device_.get(), [stream = opened.value().get()] { return stream->SyncDevice(); });
 
     auto attached = WalManager::Attach(opened.value().get(), &writer, clock_, 1);
     EXPECT_FALSE(attached.ok());

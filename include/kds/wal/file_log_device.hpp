@@ -122,6 +122,13 @@ private:
     FileLogDevice(std::string dir, std::uint32_t core_id, std::uint64_t segment_size,
                   FileDescriptor dir_fd) noexcept;
 
+    // **One at a time, and a failure is sticky** (fsync's fail-stop): a roll
+    // and a reclaim both sync the directory, from two threads, and two
+    // overlapping fsyncs can hand one the error and the other OK - a roll
+    // told OK over a name that never reached the disk. After one failure
+    // every later directory sync fails, so the next roll fails and stops
+    // the log (`wal/stream.hpp`).
+    //
     // Over `dir_fd_`, which `Open` opened once and keeps: a roll at the
     // descriptor limit then fails at the segment's own open, before any
     // file exists, rather than at the directory's after one does - which
@@ -133,6 +140,9 @@ private:
     std::uint32_t core_id_;
     std::uint64_t segment_size_;
     FileDescriptor dir_fd_;
+    // `SyncDirectory`'s serialization and its sticky failure. Innermost.
+    std::mutex dir_sync_mutex_;
+    bool dir_sync_failed_ = false;  // under dir_sync_mutex_; never cleared
 
     // ---- The one lock in the log device (rules.md §3's justification) ---
     //
