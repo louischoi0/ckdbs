@@ -182,6 +182,11 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   wrong". The test between the pair is in `include/kds/base/status.hpp`
   and `docs/spec/protocol.md` §11. Truthfulness beats convenience: never
   accept a spelling and enforce something other than what was written.
+- **Every document is synced in English** (operator, 2026-10-07), whatever
+  language the instruction came in: specs, work orders, rules, `docs/inflight/`
+  entries, bench files, commit messages and code comments. A Korean
+  instruction still gets a Korean reply; the operator's own words may be
+  quoted verbatim, and the text around the quote is English.
 - Nothing new is reserved lightly: keywords hash as identifiers, and
   `kFingerprintVersion` moves only per `fingerprint.hpp`'s bump rule (the
   golden corpus pins it).
