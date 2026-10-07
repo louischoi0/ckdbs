@@ -47,13 +47,15 @@
 // is what a real second core would see. Without the fix it finishes inside
 // that time and the window is open.
 //
-// **Every key a cell names ascends** (BB-R3, on BB-Q8 (b),
-// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`): a named key
-// below the relation's mark is refused, so a split is an append at the
-// rightmost leaf and the row a cell stops at the seam sits in that leaf. A
-// second core that has to reach a shared page - an index leaf, the var-heap
-// tail - without passing through the leaf the first holds gets there by
-// updating rows of an earlier leaf, not by inserting them.
+// **Most cells name their keys ascending**, the shape BB-S3 reshaped them
+// to while a named key below the mark was refused: a split is an append at
+// the rightmost leaf, and a second core that has to reach a shared page - an
+// index leaf, the var-heap tail - without passing through the leaf the first
+// holds gets there by updating rows of an earlier leaf. **Two cells name
+// keys below the mark** and were restored at BD-S3
+// (`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), where a
+// leaf places a key where it sorts again: a divide under another core, and a
+// mid-chain append split.
 //
 // **The catalog's new-page cell is the exception** (AY-S7): its seam is the
 // catalog's DDL undo hook, which runs in the same gap of
@@ -251,6 +253,63 @@ TEST(InsertLogCrashRigTest, ARowWhoseLeafAnotherCoreFilledAndSplitBeforeItWasLog
     ExpectTreeWhole(db);
 }
 
+TEST(InsertLogCrashRigTest, ARowWhoseLeafAnotherCoreDividedBeforeItWasLoggedRecoversOnce) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`): BB-S3 withdrew this shape when a named key below the
+    // mark was refused; a leaf places it where it sorts again.
+    // **Window 1.** Core 0 places row 15 in the first leaf, which divides
+    // it. Before its record is appended, core 1 fills that leaf back up and
+    // divides it again - a rebuild that renumbers the slot core 0's record
+    // will name - and logs the divide. Core 0's `HEAP_INSERT(leaf, slot)`
+    // then lands after that image, and redo re-inserts row 15 at a slot
+    // another row now owns.
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CommandDispatcher& d1 = rig->core(1).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        ids = Fill(d0);
+        CarveOnCoreOne(d1, 4010, ids);
+
+        std::unique_ptr<OtherCore> other;
+        // One-shot by `other`, not by resetting the hook from inside it:
+        // that would destroy the function while it runs.
+        d0.SetBeforeInsertLogForTest([&] {
+            if (other != nullptr) return;
+            other = std::make_unique<OtherCore>([&] {
+                // Twice around the leaf's lower half: more than it has room
+                // for, so it divides again.
+                for (std::uint64_t id = 11; id < 1000; id += 10) {
+                    Ok(d1, "INSERT INTO t VALUES (" + std::to_string(id) + ", 0)");
+                    Ok(d1, "INSERT INTO t VALUES (" + std::to_string(id + 1) + ", 0)");
+                }
+            });
+            other->Wait();
+        });
+        Ok(d0, "INSERT INTO t VALUES (15, 0)");
+        d0.SetBeforeInsertLogForTest(nullptr);
+        ASSERT_NE(other, nullptr) << "the seam never ran; the cell tested nothing";
+        other->Join();
+        ids.insert(15);
+        for (std::uint64_t id = 11; id < 1000; id += 10) {
+            ids.insert(id);
+            ids.insert(id + 1);
+        }
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    const auto got = Ids(db.dispatcher(), "SELECT id FROM t");
+    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end())) << Diff(got, ids);
+    ExpectTreeWhole(db);
+}
+
 TEST(InsertLogCrashRigTest, AParentWrittenBackBeforeItsSplitIsLoggedDoesNotRouteToNothing) {
     // **Window 2, where it bites.** On the row's own leaf a writeback in
     // the gap is survivable: the row's begin and undo records precede the
@@ -322,6 +381,69 @@ TEST(InsertLogCrashRigTest, AParentWrittenBackBeforeItsSplitIsLoggedDoesNotRoute
     ExpectTreeWhole(db);
 }
 
+TEST(InsertLogCrashRigTest, AParentWrittenBackBeforeItsDivideIsLoggedDoesNotRouteToNothing) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`) under a new name, beside the variant BB-S3 reshaped
+    // it into while a named key below the mark was refused.
+    // **Window 2, where it bites.** On the row's own leaf a writeback in
+    // the gap is survivable: the row's begin and undo records precede the
+    // gap, the store's gate flushes the log ahead of any page, and recovery
+    // rolls the loser back. What is not survivable is the **structure**.
+    // Core 0's 15 divides the first leaf: it creates a leaf, rewrites the
+    // old one and puts a separator into the root - and appends none of it
+    // until the row's own record. Core 1 writes the root back in that gap,
+    // and the crash is taken before the log reaches the file. The root on
+    // disk then routes to a leaf no record creates.
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        ids = Fill(d0);
+        ASSERT_TRUE(rig->store().Sync().ok());  // everything so far on disk, logged
+        PageId root = kInvalidPageId;
+        {
+            auto oid = rig->core(0).catalog().FindTableOidByName("t");
+            ASSERT_TRUE(oid.ok());
+            auto access = rig->core(0).catalog().InitTableAccess(oid.value());
+            ASSERT_TRUE(access.ok());
+            root = access.value()->desc_page_id;
+        }
+
+        std::unique_ptr<OtherCore> other;
+        bool snapped = false;
+        // One-shot by `other`, not by resetting the hook from inside it:
+        // that would destroy the function while it runs.
+        d0.SetBeforeInsertLogForTest([&] {
+            if (other != nullptr) return;
+            other = std::make_unique<OtherCore>([&] {
+                const PageId only[] = {root};
+                (void)rig->store().WriteBack(only);
+            });
+            other->Wait();
+            // Not flushed: the crash comes before the log reaches the
+            // file - what is there is what the writeback's gate put there.
+            snapped = rig->Snapshot(snap.path, /*flush_log=*/false).ok();
+        });
+        Ok(d0, "INSERT INTO t VALUES (15, 0)");
+        d0.SetBeforeInsertLogForTest(nullptr);
+        ASSERT_NE(other, nullptr) << "the seam never ran; the cell tested nothing";
+        other->Join();
+        ASSERT_TRUE(snapped);
+    }
+
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    const auto got = Ids(db.dispatcher(), "SELECT id FROM t");
+    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end()))
+        << "the crash came before row 15 was logged";
+    ExpectTreeWhole(db);
+}
+
 TEST(InsertLogCrashRigTest, AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresUpdates) {
     // **Window 3.** Core 0 inserts row 5000 with v = 500, whose index entry
     // goes into a leaf of `ix`. Before its records are appended, core 1 sets
@@ -386,27 +508,75 @@ TEST(InsertLogCrashRigTest, AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCore
     ExpectTreeWhole(db);
 }
 
+TEST(InsertLogCrashRigTest, AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresInserts) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`): BB-S3 reshaped it while a named key below the mark
+    // was refused; a leaf places that key where it sorts again.
+    // **Window 3.** Core 0 inserts row 5000 with v = 500, whose index entry
+    // goes into a leaf of `ix`. Before its records are appended, core 1
+    // inserts rows with v = 499 - into another clustered leaf, and into the
+    // same index leaf, ahead of core 0's entry, which shifts it. The index
+    // record core 0 then appends names a slot its entry no longer holds, and
+    // was taken by re-reading that slot: redo refuses the mount, or places
+    // another row's entry and loses this one's.
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CommandDispatcher& d1 = rig->core(1).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        Ok(d0, "CREATE INDEX ix ON t (v)");
+        ids = Fill(d0);
+        CarveOnCoreOne(d1, 4010, ids);
 
-TEST(InsertLogCrashRigTest, AKeyThatWouldAppendMidChainIsRefusedAndLeavesTheChainWhole) {
-    // **Withdrawn: the mid-chain append split** (BB-R3, on BB-Q8 (b)). Found
-    // by AT-S21's first window-1 run, on one core with no race: keys named
-    // below the mark divided the first leaf twice, and the last sorted past
-    // every row of the full leaf it landed in and opened a new leaf there -
-    // an append split **mid-chain**, whose right link names the leaf to its
-    // right. That leaf was logged as a `PAGE_INIT`, which formats a page with
-    // no link, and redo rebuilt it so: after the crash a scan ended short
-    // while a point lookup still found the rows past it. A named key below
-    // the mark is refused now on every relation, so no insert lands in a
-    // leaf with a right sibling, and the split is left to the storage
-    // contract: `btree.cpp` still logs its leaf as a full image, and
-    // `btree_test.cpp`'s `AnAppendSplitInsideTheChainKeepsTheLeafToItsRight`
-    // still builds one, with no crash.
-    //
-    // What stands here instead: the key that would have opened that leaf -
-    // past the full first leaf's last row, below the second's first - is
-    // refused `OutOfRange` naming the mark (BB-R12), lands nothing, leaves
-    // the mark where it was, and the crash after it recovers the chain
-    // whole.
+        std::unique_ptr<OtherCore> other;
+        // One-shot by `other`, not by resetting the hook from inside it:
+        // that would destroy the function while it runs.
+        d0.SetBeforeInsertLogForTest([&] {
+            if (other != nullptr) return;
+            other = std::make_unique<OtherCore>([&] {
+                for (std::uint64_t id = 11; id < 400; id += 10) {
+                    Ok(d1, "INSERT INTO t VALUES (" + std::to_string(id) + ", 499)");
+                }
+            });
+            other->Wait();
+        });
+        Ok(d0, "INSERT INTO t VALUES (5000, 500)");
+        d0.SetBeforeInsertLogForTest(nullptr);
+        ASSERT_NE(other, nullptr) << "the seam never ran; the cell tested nothing";
+        other->Join();
+        ids.insert(5000);
+        for (std::uint64_t id = 11; id < 400; id += 10) ids.insert(id);
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    EXPECT_EQ(Ids(db.dispatcher(), "SELECT id FROM t WHERE v = 500"),
+              std::multiset<std::uint64_t>({5000}))
+        << "the index lost row 5000's entry";
+    const auto got = Ids(db.dispatcher(), "SELECT id FROM t");
+    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end()));
+    ExpectTreeWhole(db);
+}
+
+
+TEST(InsertLogCrashRigTest, AMidChainAppendSplitKeepsItsRightLinkAcrossACrash) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`): BB-S3 withdrew this shape when a named key below the
+    // mark was refused; a leaf places it where it sorts again.
+    // **Found by this stage's first window-1 run, and older than it.** One
+    // core, no race. 15 divides the first leaf; the rows after it fill the
+    // lower half back up and divide it again; the last, 992, sorts past
+    // every row of the full leaf it lands in and opens a new leaf there - an
+    // append-split **mid-chain**, whose right link names the leaf holding
+    // 1000. That leaf was logged as a `PAGE_INIT`, which formats a page with
+    // no link, and redo rebuilt it so: after the crash a scan ended at 992
+    // while a point lookup still found 1000 and up.
     TempDir snap;
     std::set<std::uint64_t> ids;
     {
@@ -416,18 +586,14 @@ TEST(InsertLogCrashRigTest, AKeyThatWouldAppendMidChainIsRefusedAndLeavesTheChai
         CurrentCoreGuard as(0);
         Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
         ids = Fill(d0);
-        // The first leaf ends at 1980 (`kRowsPerLeaf` rows) and the second
-        // begins at 1990: 1985 routes to the first and sorts past its last.
-        const std::string refused = d0.Dispatch("INSERT INTO t VALUES (1985, 0)").response;
-        EXPECT_TRUE(StartsWith(refused, "ERR")) << refused;
-        EXPECT_NE(refused.find("high-water mark"), std::string::npos) << refused;
-        const auto kept = Ids(d0, "SELECT id FROM t");
-        EXPECT_EQ(kept, std::multiset<std::uint64_t>(ids.begin(), ids.end()))
-            << "the refused key changed the rows: " << Diff(kept, ids);
-        // The mark did not move: the next omitted pk is the one after 4000.
-        const std::string issued = d0.Dispatch("INSERT INTO t VALUES (0)").response;
-        EXPECT_NE(issued.find(" id=4001 "), std::string::npos) << issued;
-        ids.insert(4001);
+        Ok(d0, "INSERT INTO t VALUES (15, 0)");
+        ids.insert(15);
+        for (std::uint64_t id = 11; id < 1000; id += 10) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id) + ", 0)");
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id + 1) + ", 0)");
+            ids.insert(id);
+            ids.insert(id + 1);
+        }
         ASSERT_TRUE(rig->Snapshot(snap.path).ok());
     }
     auto mounted = Mount(snap.path);
@@ -509,6 +675,69 @@ TEST(InsertLogCrashRigTest, TwoCoresSpillingIntoOneVarHeapPageRecoverInTheOrderT
                   std::string::npos)
             << "row " << id << "'s spilled value did not come back";
     }
+}
+
+TEST(InsertLogCrashRigTest, TwoCoresInsertingSpillsIntoOneVarHeapPageRecoverInTheOrderTheyWrote) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`) under a new name, beside the variant BB-S3 reshaped
+    // it into while a named key below the mark was refused.
+    // **The spill window** (AT-S21's survey). Core 0's row spills a value
+    // into the var-heap tail; before its `VARHEAP_APPEND` is appended, core
+    // 1's rows spill into the same page after it. A var-heap record names a
+    // slot and redo refuses one that is not the page's next, so core 0's
+    // record, logged after core 1's, refused the mount.
+    const std::string long_a(200, 'a');
+    const std::string long_b(200, 'b');
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CommandDispatcher& d1 = rig->core(1).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, s varchar) BTREE");
+        // Enough short rows for two clustered leaves, so core 1's rows below
+        // land in a leaf core 0 does not hold: what they share is the
+        // var-heap tail, and nothing else.
+        for (std::uint64_t k = 1; k <= 400; ++k) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(k * 10) + ", 'x')");
+            ids.insert(k * 10);
+        }
+        Ok(d0, "INSERT INTO t VALUES (15, '" + long_a + "')");
+        ids.insert(15);
+        {
+            CurrentCoreGuard as(1);
+            Ok(d1, "INSERT INTO t VALUES (5000, 'y')");  // core 1's carve (above)
+            ids.insert(5000);
+        }
+
+        std::unique_ptr<OtherCore> other;
+        d0.SetBeforeInsertLogForTest([&] {
+            if (other != nullptr) return;
+            other = std::make_unique<OtherCore>([&] {
+                for (std::uint64_t id = 6000; id < 6010; ++id) {
+                    Ok(d1, "INSERT INTO t VALUES (" + std::to_string(id) + ", '" + long_b + "')");
+                }
+            });
+            other->Wait();
+        });
+        Ok(d0, "INSERT INTO t VALUES (25, '" + long_a + "')");
+        d0.SetBeforeInsertLogForTest(nullptr);
+        ASSERT_NE(other, nullptr) << "the seam never ran; the cell tested nothing";
+        other->Join();
+        ids.insert(25);
+        for (std::uint64_t id = 6000; id < 6010; ++id) ids.insert(id);
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    const auto got = Ids(db.dispatcher(), "SELECT id FROM t");
+    EXPECT_EQ(got, std::multiset<std::uint64_t>(ids.begin(), ids.end())) << Diff(got, ids);
+    EXPECT_NE(db.dispatcher().Dispatch("SELECT s FROM t WHERE id = 25").response.find(long_a),
+              std::string::npos)
+        << "row 25's spilled value did not come back";
 }
 
 // ---- The spill's hold against a reader's (AT-S21's review, C1) ----------

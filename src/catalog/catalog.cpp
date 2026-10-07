@@ -2465,12 +2465,13 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
-        // supplied id it admits. A supplied id *below* the mark - a value
-        // this function may already have issued - is refused on every
-        // relation (BB-R3), so the two sources never meet. For a user row
-        // this runs under the exclusive hold of the page the row lands on -
-        // a btree's rightmost leaf (BB-R1, `storage::IssueUnderHold`) or a
-        // heap chain's tail held as the tail (BB-R7).
+        // supplied id it admits. A heap refuses a supplied id *below* the
+        // mark (BB-R3), so there the two sources never meet; a btree places
+        // one (BD-R7), and the two meet only on a key both drew at the mark -
+        // serialised by its row unit, the issue re-drawn if it lost
+        // (`CommandDispatcher::InsertOneRow`). For a heap row this runs under
+        // the hold of the chain's tail (BB-R7); for a btree row under none
+        // (BD-R6).
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
@@ -2506,14 +2507,14 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
 
 Status CheckNamedRowIdSpellable(std::uint64_t id) {
     if (id < kFirstRowId) {
-        return Status::InvalidArgument("primary key " + std::to_string(id) +
-                                       " is below the first issuable id (" +
+        return Status::OutOfRange("primary key " + std::to_string(id) +
+                                  " is below the first issuable id (" +
                                        std::to_string(kFirstRowId) +
                                        "); 0 is reserved for \"unset\"");
     }
     if (id > kMaxKeystoneId) {
-        return Status::InvalidArgument("primary key " + std::to_string(id) +
-                                       " does not fit the 40-bit Keystone id space (max " +
+        return Status::OutOfRange("primary key " + std::to_string(id) +
+                                  " does not fit the 40-bit Keystone id space (max " +
                                        std::to_string(kMaxKeystoneId) + ")");
     }
     return Status::OK();
@@ -2546,9 +2547,9 @@ StatusOr<std::uint64_t> Catalog::RowIdMark(Oid table_oid) {
 Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     // Spellability first, before the catalog page is touched at all: an id
     // outside the Keystone field cannot be stored by any path, so there is
-    // nothing to check a relation for. The caller asked the same question
-    // before its borrow (`CheckNamedRowIdSpellable`); this keeps the call's
-    // contract whole for any other caller.
+    // nothing to check a relation for. The insert path judged its literal
+    // before its borrow; this keeps the call's contract whole for any other
+    // caller.
     if (Status s = CheckNamedRowIdSpellable(id); !s.ok()) return s;
 
     auto acted = ForFirstRow<SysTableRow>(
@@ -2557,14 +2558,18 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
 
-            // **Below the mark, on every relation** (BB-R3, on BB-Q8's mark).
-            // The mark is the ascent expressed as one number: at or above it,
-            // the key sorts above every key the relation has placed or
-            // issued, so placing it under the hold of the last page keeps
-            // that page's slot order its key order. Below it there is no such
-            // page. A btree used to take the key anyway and flip the relation
-            // to `kUnordered`; that state is gone with the flag (BB-R10).
-            if (id < row.next_id) return RefuseRowIdBelowMark(table_oid, id, row.next_id);
+            // **Below the mark**: a heap refuses it (BB-R3, kept by
+            // BD-Q4): the mark is its ascent as one number, and below it no
+            // page keeps its slot order its key order. A btree places it
+            // where it sorts (BD-R7), so the mark gates nothing there.
+            if (id < row.next_id) {
+                // **A btree places it anyway** (BD-R6, BD-R7,
+                // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`):
+                // its leaf places the key where it sorts, so the mark gates
+                // nothing there and is left where it is - advance or nothing.
+                if (row.clustered_type == ClusteredType::kBtree) return true;
+                return RefuseRowIdBelowMark(table_oid, id, row.next_id);
+            }
 
             // At or above: the mark moves past it, persisted before the
             // caller places anything. Same ordering as AllocateRowId and the

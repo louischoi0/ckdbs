@@ -1163,15 +1163,17 @@ TEST_F(LockDeadlockTest, AnIllegalKeyIsRefusedWithoutWaitingOnAFence) {
     EXPECT_NE(wb.out->response.find("high-water mark"), std::string::npos) << wb.out->response;
 }
 
-TEST_F(LockDeadlockTest, AnIllegalKeyIsRefusedWithoutWaitingOnAFenceOnABtree) {
-    // The same rule on the default storage since SUS-1, where the judgement
-    // has an arm of its own: it looks the key up, and names a present key
-    // `AlreadyExists` and an absent one `OutOfRange` (BB-R12) - at once, with
-    // the code on the outcome a KWP client reads, and with nothing of the
-    // refused ask left registered. The heap cell above reaches none of it.
+TEST_F(LockDeadlockTest, ADuplicateIsRefusedAtOnceAndAnAbsentKeyWaitsOnAFenceOnABtree) {
+    // The judgement's btree arm (BD-R5,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): a key
+    // that can never be admitted never waits (AO-S6c-c's rule), and on a
+    // btree only a duplicate is such a key - a present key whose latest
+    // writer decided is `AlreadyExists` at once, with nothing of the refused
+    // ask left registered. An absent key below the mark is placed under BD,
+    // so a fence over it is an ordinary wait: it was `OutOfRange` before BD.
     //
-    // **Mutations**: the btree arm deleted (5 answered `OutOfRange`); the arm
-    // answering OK (both wait out the fence - AO-S6c-c's regression).
+    // **Mutations**: the arm answering OK (5 waits out the fence -
+    // AO-S6c-c's regression); the arm refusing an absent key (3 refused).
     ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO tb VALUES (5, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO tb VALUES (6, 0)").rfind("INSERTED", 0), 0u);
@@ -1183,65 +1185,34 @@ TEST_F(LockDeadlockTest, AnIllegalKeyIsRefusedWithoutWaitingOnAFenceOnABtree) {
               "UPDATED 0");
     const std::size_t held = locks_->EntryCount();
 
-    const struct {
-        const char* sql;
-        StatusCode code;
-        const char* text;
-    } cases[] = {{"INSERT INTO tb VALUES (5, 9)", StatusCode::kAlreadyExists, "duplicate primary key"},
-                 {"INSERT INTO tb VALUES (3, 9)", StatusCode::kOutOfRange, "high-water mark"}};
-    // Outside the loop: a mutant that parks leaves a coroutine pointing at
-    // its session.
-    Session b[2];
-    for (std::size_t i = 0; i < 2; ++i) {
-        Started wb = Start(cases[i].sql, b[i]);
-        Pump();
-        ASSERT_TRUE(*wb.done) << cases[i].sql << ": an illegal key waited on a fence";
-        EXPECT_EQ(wb.out->status.code(), cases[i].code) << wb.out->response;
-        EXPECT_NE(wb.out->response.find(cases[i].text), std::string::npos) << wb.out->response;
-        EXPECT_EQ(locks_->EntryCount(), held) << cases[i].sql << ": the refused ask left an entry";
-        EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << cases[i].sql << ": the refused ask left an edge";
-    }
-
-    // A wake left on the fence's own entry shows only once the fence goes.
-    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
-    EXPECT_EQ(locks_->EntryCount(), 0u) << "a refused ask's registration outlived the fence";
-}
-
-TEST_F(LockDeadlockTest, AKeyAnUndecidedWriterPlacedIsRefusedBelowTheMarkWithoutWaiting) {
-    // The judgement's undecided arm (BB-S3's review). `c` placed 7 and has
-    // not decided; `b` names 7, and `c`'s row `X` refuses its borrow. That 7
-    // is below the mark `c`'s admission moved is final - the mark only rises
-    // and outlives `c`'s rollback - but that 7 is present is not: `c`'s
-    // rollback retires the version. So the answer is `OutOfRange`, the one
-    // true whatever `c` decides, and it is given at once.
-    //
-    // **Mutations**: the undecided test dropped (`AlreadyExists`, a duplicate
-    // the rollback below then un-makes); the judgement answering OK for an
-    // undecided version (`b` waits for `c`'s decide, to be refused anyway).
-    ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
-    ASSERT_EQ(Local("INSERT INTO tb VALUES (5, 0)").rfind("INSERTED", 0), 0u);
-    ASSERT_EQ(Local("INSERT INTO tb VALUES (6, 0)").rfind("INSERTED", 0), 0u);
-
-    Session c;
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
-    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO tb VALUES (7, 0)", &c).response.rfind("INSERTED", 0),
-              0u);  // at the mark: placed, the mark moved to 8, undecided
-
-    Session b;
-    Started wb = Start("INSERT INTO tb VALUES (7, 1)", b);
+    Session dup;
+    Started wd = Start("INSERT INTO tb VALUES (5, 9)", dup);
     Pump();
-    ASSERT_TRUE(*wb.done) << "a key below the mark waited on the writer that placed it";
-    EXPECT_EQ(wb.out->status.code(), StatusCode::kOutOfRange) << wb.out->response;
-    EXPECT_NE(wb.out->response.find("high-water mark"), std::string::npos) << wb.out->response;
+    ASSERT_TRUE(*wd.done) << "a duplicate waited on a fence";
+    EXPECT_EQ(wd.out->status.code(), StatusCode::kAlreadyExists) << wd.out->response;
+    EXPECT_NE(wd.out->response.find("duplicate primary key"), std::string::npos)
+        << wd.out->response;
+    EXPECT_EQ(locks_->EntryCount(), held) << "the refused ask left an entry";
     EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "the refused ask left an edge";
 
-    // And the answer stands past the rollback, which is why it was the one
-    // to give: 7 is absent now and still below the mark.
-    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
-    const DispatchOutcome after = dispatcher_->Dispatch("INSERT INTO tb VALUES (7, 1)");
-    EXPECT_EQ(after.status.code(), StatusCode::kOutOfRange) << after.response;
-    EXPECT_EQ(locks_->EntryCount(), 0u) << "a refused ask's registration outlived its statement";
+    Session absent;
+    Started wa = Start("INSERT INTO tb VALUES (3, 9)", absent);
+    Pump();
+    ASSERT_FALSE(*wa.done) << "an absent key below the mark wrote through the fence: "
+                           << wa.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wa.done) << "the named insert never resumed after the fence went";
+    EXPECT_EQ(wa.out->response.rfind("INSERTED", 0), 0u) << wa.out->response;
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "a registration outlived the fence";
 }
+
+// `AKeyAnUndecidedWriterPlacedIsRefusedBelowTheMarkWithoutWaiting` stood
+// here (BB-S3's review): a key an undecided writer placed answered
+// `OutOfRange` below the mark. BD withdrew that answer - an undecided insert
+// is waited on, a committed row under an undecided writer is a duplicate at
+// once (BD-R5, BD-Q9) - and `NamedKeyWaitTest` below pins both.
 
 TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
     // The other insert path, which routes past `InsertOneRow` entirely and
@@ -1353,15 +1324,17 @@ TEST_F(LockDeadlockTest, ANamedKeyRefusedAtItsEncodeGivesBackItsBorrow) {
 }
 
 TEST_F(LockDeadlockTest, ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWhole) {
-    // The duplicate scan and the mark refuse after the encode's spills are
-    // logged at their append and noted on the trail (`SpillLogFor`); every
+    // The duplicate check refuses after the encode's spills are logged at
+    // their append and noted on the trail (`SpillLogFor`) - on a btree the
+    // only pk refusal that comes that late, since BD-R5's other reason is
+    // judged on the literal and the mark refuses nothing (BD-R6); every
     // other refusal cell names values that fit inline. What a refused
     // statement wrote to the var-heap is unwound with it - autocommit (BI4),
     // and inside a transaction the refusal poisons and the client rolls back
     // - leaving the rows as they were and the chain taking the next spill.
     // Inside the transaction the refused key's borrow is gone before the
-    // `ROLLBACK`: the give-back's other two arms, the duplicate scan's and
-    // the admission's, beside the codec's in the cell above.
+    // `ROLLBACK`: the give-back's placement arm, beside the codec's in the
+    // cell above.
     ASSERT_EQ(Local("CREATE TABLE sp (id int64, s varchar(16)) BTREE").rfind("CREATED", 0), 0u);
     const auto spilling = [](char fill) { return std::string(40, fill); };  // past 13 inline bytes
     const std::uint64_t oid = OidIn(Local("INSERT INTO sp VALUES (5, '" + spilling('f') + "')"));
@@ -1371,8 +1344,7 @@ TEST_F(LockDeadlockTest, ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWh
         std::uint64_t key;
         StatusCode code;
         const char* text;
-    } refusals[] = {{3, StatusCode::kOutOfRange, "high-water mark"},
-                    {5, StatusCode::kAlreadyExists, "duplicate primary key"}};
+    } refusals[] = {{5, StatusCode::kAlreadyExists, "duplicate primary key"}};
     std::uint64_t next = 6;  // the mark: a refused key moves nothing
     for (const bool in_txn : {false, true}) {
         for (const auto& r : refusals) {
@@ -2557,6 +2529,91 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesAnAppendSplitUnderThePark) {
         << "a row below the resume key was written a second time after the split";
 }
 
+TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`): BB-S3 withdrew it when keys below the mark were
+    // refused, and a leaf places them where they sort again.
+    // The hazard the key-ordered resume exists for, made to happen: while
+    // the statement is parked, another session inserts enough keys to split
+    // the leaf it stopped in. A positional cursor would come back to a page
+    // whose upper half - including rows this statement already wrote - now
+    // lives in a new sibling it has yet to visit, and would write them
+    // twice. Descending by key cannot see that difference.
+    //
+    // **The keys are sparse, and that is the whole setup.** A split divides
+    // a leaf at its middle key, so filling `tb` (ids 1..10) with ids above
+    // 100 divides it far above the resume key and leaves every row this
+    // walk wrote exactly where it was - a cell that meets a split and never
+    // meets the hazard, which a positional cursor passes. The relation here
+    // is keyed 1000, 2000 .. 10000 and the fillers are all *below* the held
+    // key, so the division falls between the rows the walk already wrote
+    // and the ones it has yet to reach. That is the case that tells the two
+    // resume shapes apart.
+    ASSERT_EQ(Local("CREATE TABLE ts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    for (int id = 1000; id <= 10000; id += 1000) {
+        ASSERT_EQ(Local("INSERT INTO ts VALUES (" + std::to_string(id) + ", 0)")
+                      .rfind("INSERTED", 0),
+                  0u)
+            << "id " << id;
+    }
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE ts SET v = 9 WHERE id = 7000", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    // `v >= 0` rather than no predicate: a `WHERE`-less write declares the
+    // relation (item 14) and is borrowed before the walk, so it would wait
+    // having written nothing and there would be no parked cursor for a
+    // split to straddle. Every row of `ts` is inserted with `v = 0`.
+    Started walk = Start("UPDATE ts SET v = 1 WHERE v >= 0", w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << walk.out->response;
+    ASSERT_EQ(w.transaction()->trail().size(), 6u)
+        << "the park must be at the seventh key for the split to straddle it";
+
+    // **The leaf count before and after, so the cell cannot pass
+    // vacuously.** `DESCRIBE`'s whole line will not do: it carries
+    // `ids_issued`, which moves with every insert whether or not a leaf
+    // ever divided, so comparing the lines would assert nothing about the
+    // tree. The assertion is on `leaves=` itself.
+    const auto leaf_count = [&]() -> int {
+        const std::string shape = Local("DESCRIBE ts");
+        const std::size_t at = shape.find("leaves=");
+        EXPECT_NE(at, std::string::npos) << shape;
+        if (at == std::string::npos) return -1;
+        return std::atoi(shape.c_str() + at + std::string("leaves=").size());
+    };
+    const int leaves_before = leaf_count();
+    ASSERT_EQ(leaves_before, 1)
+        << "the ten rows must start in one leaf for it to be the leaf the split divides";
+
+    // Enough keys *below* the held one to force the division there. They
+    // are all invisible to the parked walk's snapshot, so none of them may
+    // appear in its count.
+    for (int id = 1; id <= 400; ++id) {
+        ASSERT_EQ(Local("INSERT INTO ts VALUES (" + std::to_string(id) + ", 7)")
+                      .rfind("INSERTED", 0),
+                  0u)
+            << "id " << id;
+    }
+    EXPECT_GT(leaf_count(), leaves_before)
+        << "no leaf ever divided, so this cell would pass without exercising the hazard it is "
+           "named for";
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*walk.done) << "the wait never ended after a split under the park";
+    EXPECT_EQ(walk.out->response.rfind("UPDATED 10", 0), 0u)
+        << "the resumed walk must see its own ten rows and none of the 400 inserted after its "
+           "snapshot: " << walk.out->response;
+    EXPECT_EQ(w.transaction()->trail().size(), 10u)
+        << "a row below the resume key was written a second time after the split";
+}
+
 TEST_F(MidWalkWaitTest, ADeadlockBetweenTwoMidWalkParksUnwindsTheVictimsOpenScope) {
     // A cycle in which **both** transactions are parked mid-walk holding
     // rows, which no other cell in this file produces: every existing
@@ -2786,6 +2843,28 @@ TEST_F(NamedKeyWaitTest, ACommittedKeyUnderAnUndecidedUpdateOrDeleteIsADuplicate
         EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "the refused ask left an edge";
         ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
     }
+}
+
+TEST_F(NamedKeyWaitTest, AnUndecidedInsertItsOwnWriterUpdatedIsStillWaitedOn) {
+    // The version walk's second step (BD-S3's review): `c` inserts 7, then
+    // updates it, so the version `b` meets carries an undo pointer - to `c`'s
+    // own insert, whose writer is still in flight. The key did not exist
+    // before `c`, so `b` waits; `c`'s rollback frees it (W12).
+    Session c;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO tb VALUES (7, 0)", &c).response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 3 WHERE id = 7", &c).response, "UPDATED 1");
+
+    Session b;
+    Started wb = Start("INSERT INTO tb VALUES (7, 1)", b);
+    Pump();
+    ASSERT_FALSE(*wb.done) << "an insert its own writer updated was answered as a committed row: "
+                           << wb.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the named insert never resumed after the rollback";
+    EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
 }
 
 }  // namespace

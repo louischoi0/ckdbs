@@ -236,31 +236,20 @@ std::string WideInsert() {
     return sql + ")";
 }
 
-TEST_F(InsertWalTest, AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNoInsert) {
-    // This cell used to divide a leaf through SQL: a named key sorting
-    // inside a full leaf split it (`SplitLeafAndInsert`), and the cell
-    // pinned the record set a division needs - both halves as images and no
-    // PAGE_INIT, because a divided leaf is not one init plus the insert
-    // after it.
-    //
-    // **Withdrawn by BB-Q8 (b), as BB-R3**
-    // (instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md): a named
-    // key below the relation's mark is refused on every relation. A divide
-    // needs a key below its leaf's highest, every placed key is below the
-    // mark, so no SQL statement reaches a clustered leaf's divide any more.
-    // The divide stays in the storage contract (BB §1.5, BB-R10), which
-    // btree_test.cpp drives through `BtreeInsert` directly; a secondary
-    // index still divides from SQL (`ASplitTakesFullPageImagesAndNoIndexInsert`).
-    //
-    // What stands here now is the refusal's record set. BB-R3 refuses at the
-    // held leaf - a right sibling proves the key below the mark - before
-    // `SecureParents` or any split runs, so the refused statement logs no
-    // image, no init and no insert, the rows are what they were, and the
-    // mark has not moved.
+TEST_F(InsertWalTest, ALeafDivisionLogsOneSplitRecordCarryingBothLeavesAndNoInsert) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`) from `ALeafDivisionLogsBothPagesAsImagesAndNoPageInit`,
+    // which BB-S3 withdrew when a key below the mark was refused. A named key
+    // that sorts inside a full leaf divides it, which moves versions onto a
+    // page no other record describes - so the divide is logged as one
+    // BTREE_SPLIT carrying both leaves (and the parent) whole, with the row
+    // in it, and no PAGE_INIT, FULL_PAGE_IMAGE or BTREE_INSERT beside it
+    // (BD-R12). A PAGE_INIT would replay the new leaf empty and lose every
+    // version the division moved.
     CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
     std::string sql = "CREATE TABLE t (id int64";
     for (int i = 0; i < kWideColumns; ++i) sql += ", v" + std::to_string(i) + " varchar";
-    ASSERT_EQ(d.Dispatch(sql + ") BTREE EXPLICIT").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch(sql + ") BTREE").response.substr(0, 7), "CREATED");
 
     auto insert = [&](int id) {
         std::string s = "INSERT INTO t VALUES (" + std::to_string(id);
@@ -269,7 +258,7 @@ TEST_F(InsertWalTest, AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNo
     };
 
     // Ascending with gaps until the tree grows, so the first leaf is known
-    // full and, past the append split, known to have a right sibling.
+    // full and has a right sibling: a key inside it divides at the median.
     int last = 0;
     for (int k = 1; k <= 60; ++k) {
         const std::string reply = insert(k * 10);
@@ -279,43 +268,35 @@ TEST_F(InsertWalTest, AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNo
     }
     ASSERT_GT(last, 0);
 
-    // Totals before, compared whole after: the stream already holds the
-    // inits and images of the append split above, and the refused statement
-    // may add none of the three. Flushed on both sides, so a record already
-    // in the ring is counted in the baseline and never charged to the refusal.
-    const std::string rows_before = d.Dispatch("SELECT * FROM t").response;
+    // Deltas, not totals: only this statement's records are the subject.
     ASSERT_TRUE(wal_->Flush().ok());
-    std::vector<wal::RecordType> before = RecordTypes();
-    const std::size_t inits_before = CountOf(before, wal::RecordType::kPageInit);
-    const std::size_t images_before = CountOf(before, wal::RecordType::kBtreeSplit);
-    const std::size_t inserts_before = CountOf(before, wal::RecordType::kBtreeInsert);
-    // The premise the name rests on: an append split ran, so the first leaf
-    // filled and 15 sorts inside a full leaf - the old cell's divide.
-    ASSERT_GT(images_before, 0u) << "the first leaf never filled, so 15 would divide nothing";
-
-    // The first gap, which routes back into the full first leaf: absent and
-    // below the mark, so `OutOfRange` (BB-R12).
-    const std::string refused = insert(15);
-    EXPECT_EQ(refused.substr(0, 3), "ERR") << refused;
-    EXPECT_NE(refused.find("high-water mark"), std::string::npos) << refused;
-
-    // Flushed again before it is read, so a record the refusal left in the
-    // ring is counted rather than missed.
+    const std::vector<wal::RecordType> before = RecordTypes();
+    const std::string divided = insert(15);
+    ASSERT_EQ(divided.substr(0, 8), "INSERTED") << divided;
     ASSERT_TRUE(wal_->Flush().ok());
-    std::vector<wal::RecordType> after = RecordTypes();
-    EXPECT_EQ(CountOf(after, wal::RecordType::kPageInit), inits_before)
-        << "a refused key creates no page";
-    EXPECT_EQ(CountOf(after, wal::RecordType::kBtreeSplit), images_before)
-        << "the refusal comes before any split, so no leaf owes redo an image";
-    EXPECT_EQ(CountOf(after, wal::RecordType::kBtreeInsert), inserts_before)
-        << "nothing landed, so nothing is described";
+    const std::vector<wal::RecordType> after = RecordTypes();
 
-    EXPECT_EQ(d.Dispatch("SELECT * FROM t").response, rows_before)
-        << "the refused key left the rows as they were";
-    // The mark did not move: the next omitted key is the one after the last
-    // key placed.
-    const std::string next = d.Dispatch(WideInsert()).response;
-    EXPECT_NE(next.find(" id=" + std::to_string(last + 1) + " "), std::string::npos) << next;
+    const auto delta = [&](wal::RecordType type) {
+        return CountOf(after, type) - CountOf(before, type);
+    };
+    EXPECT_EQ(delta(wal::RecordType::kBtreeSplit), 1u) << "a divide is one record";
+    EXPECT_EQ(delta(wal::RecordType::kPageInit), 0u)
+        << "a divided leaf's contents are not describable by a PAGE_INIT plus one insert";
+    EXPECT_EQ(delta(wal::RecordType::kFullPageImage), 0u) << "the images ride the split";
+    EXPECT_EQ(delta(wal::RecordType::kBtreeInsert), 0u) << "the split carries the row";
+
+    // The record names both leaves: the one the descent landed on and the
+    // new one, each a whole image.
+    std::vector<std::vector<std::byte>> storage;
+    const std::vector<wal::DecodedRecord> records = DeviceRecords(storage);
+    const wal::DecodedRecord* split = nullptr;
+    for (const wal::DecodedRecord& record : records) {
+        if (record.type() == wal::RecordType::kBtreeSplit) split = &record;
+    }
+    ASSERT_NE(split, nullptr);
+    auto images = wal::DecodeBtreeSplit(split->payload);
+    ASSERT_TRUE(images.ok()) << images.status().message();
+    EXPECT_GE(images.value().size(), 2u) << "both halves of a division have to be logged whole";
 }
 
 TEST_F(InsertWalTest, ChainGrowthLogsTheNewPageAndTheLinkThatReachesIt) {

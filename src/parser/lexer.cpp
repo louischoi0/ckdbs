@@ -158,12 +158,14 @@ Token Lexer::ScanToken() {
         tok.negative = !tok.text.empty() && tok.text[0] == '-';
         // Wraps past 64 bits, and always did. The digits survive on the
         // token (Token::digits()) precisely because this number cannot be
-        // trusted to answer a range question - see the note there.
-        std::int64_t v = 0;
+        // trusted to answer a range question - see the note there. **The
+        // wrap is unsigned arithmetic, so it is defined** (BD-R5): a signed
+        // accumulation overflowed, which is undefined behaviour, not a wrap.
+        std::uint64_t v = 0;
         for (char d : tok.digits()) {
-            v = v * 10 + (d - '0');
+            v = v * 10 + static_cast<std::uint64_t>(d - '0');
         }
-        tok.int_val = tok.negative ? -v : v;
+        tok.int_val = static_cast<std::int64_t>(tok.negative ? 0 - v : v);
         return tok;
     }
 

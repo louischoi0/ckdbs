@@ -103,12 +103,13 @@
 // A relation is either a chain of heap pages (`ClusteredType::kHeap`,
 // heap_chain.hpp) or a clustered B+ tree (`kBtree`, btree.hpp), and every
 // statement handler below branches on `TableAccess::clustered_type` in
-// exactly one place each - `InsertIssued` and `InsertNamed`, `VisitRelation`,
-// `LocateByPk`.
+// exactly one place each - `InsertOneRow`'s placement, `VisitRelation`,
+// `LocateByPk`, and `LogInsert`'s record (a leaf's row is a `BTREE_INSERT`
+// or rides a `BTREE_SPLIT`, BD-R12).
 // Everything else in this file is storage-agnostic, which is possible
 // because a btree **leaf is a heap page**: the row codec, `PageView`
-// reads/overwrites, `HEAP_INSERT` and the `SHOW PAGE` dump all work on
-// either without knowing which they hold.
+// reads/overwrites and the `SHOW PAGE` dump all work on either without
+// knowing which they hold.
 //
 // The observable differences are narrow and worth stating:
 //
@@ -679,6 +680,15 @@ public:
         after_row_id_fixed_for_test_ = std::move(hook);
     }
 
+    // **A test seam between an omitted pk's issue and its borrow** (BD-S3's
+    // review): runs once per issue on a btree, with the id drawn. A cell that
+    // stops here lets a named key place the same id first - the one
+    // collision BD-R6 leaves, which the insert answers by drawing again.
+    // Unset in production.
+    void SetAfterRowIdIssuedForTest(std::function<void(std::uint64_t)> hook) {
+        after_row_id_issued_for_test_ = std::move(hook);
+    }
+
     // **A test seam between a row's placement and its first record** (BD-S1,
     // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` E5): runs
     // once per `INSERT` row, after the row is placed and before its index
@@ -709,6 +719,7 @@ private:
     std::function<void()> before_insert_log_for_test_;
     std::function<void(std::uint64_t)> after_row_id_fixed_for_test_;
     std::function<Status()> after_placement_for_test_;
+    std::function<void(std::uint64_t)> after_row_id_issued_for_test_;
     std::function<void()> after_assertion_publish_run_for_test_;
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
@@ -998,11 +1009,13 @@ private:
     // place and nothing of the refusal is kept: no blocker is recorded, so
     // the wake `BorrowChain` registered is dropped at the statement's end.
     // Asked for a narrower unit only - a refusal at the relation stays a
-    // wait. A named-key insert borrows before it is admitted (BB-R3), and
-    // asks through this whether the key can ever be admitted - so a key below
-    // the mark is refused, not left waiting on a fence it could never write
-    // past (AO-S6c-c's rule). Asked only on a refusal, so a granted borrow
-    // pays nothing for it.
+    // wait. A named-key insert borrows before it is admitted, and asks
+    // through this whether the key can ever be placed - so a key that never
+    // can is refused, not left waiting on a fence it could never write past
+    // (AO-S6c-c's rule): on a btree a duplicate whose writer decided or a
+    // committed row under an undecided writer (BD-R5), on a heap a key below
+    // the mark (BB-R3). Asked only on a refusal, so a granted borrow pays
+    // nothing for it.
     std::optional<Status> BorrowOrWait(const WriteScope& scope, const txn::LockKey& unit,
                                        RepeatableReadWait rerun,
                                        txn::LockMode mode = txn::LockMode::kExclusive,
@@ -1907,23 +1920,6 @@ private:
                                 const exec::StatementContext& context);
     DispatchOutcome HandleSync();
 
-    // Places a user row in whichever storage the relation uses, its id fixed
-    // under the hold of the page it lands on (BB-R1,
-    // `storage/insert_placement.hpp`), and reports the result in the
-    // vocabulary both share.
-    //
-    // `InsertIssued` - an omitted pk: `issue` issues the id, borrows it and
-    // encodes the row under the hold (BB-R2). `InsertNamed` - a named key,
-    // already borrowed and encoded: `admit` moves the mark under the hold
-    // (BB-R3).
-    StatusOr<storage::InsertPlacement> InsertIssued(const catalog::TableAccess& access,
-                                                    const storage::IssueUnderHold& issue,
-                                                    std::uint64_t trx_id);
-    StatusOr<storage::InsertPlacement> InsertNamed(const catalog::TableAccess& access,
-                                                   std::uint64_t id,
-                                                   std::span<const std::byte> payload,
-                                                   const storage::AdmitUnderHold& admit,
-                                                   std::uint64_t trx_id);
 
 
     // A full ordered scan of the relation, whichever storage it uses. Both

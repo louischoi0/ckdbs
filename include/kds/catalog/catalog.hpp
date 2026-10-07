@@ -78,9 +78,10 @@ namespace kds::catalog {
 
 // **Can this caller-named key be stored at all?** Within [kFirstRowId,
 // kMaxKeystoneId], since 0 means "unset" and the Keystone field is 40 bits
-// wide; `InvalidArgument` otherwise - a value outside the id space is simply
-// wrong, not a declined feature. Asked before anything else about the key,
-// the borrow included (BB-R3 step 1).
+// wide; `OutOfRange` otherwise - BD-R5's "exhausted", one of the two reasons
+// a named key is refused (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+// named-keys.md`). The insert path judges its literal before it reaches
+// here; the admission asks again for any other caller.
 Status CheckNamedRowIdSpellable(std::uint64_t id);
 
 // The one spelling of "a named key below the relation's mark" (BB-R3,
@@ -653,20 +654,20 @@ public:
     //
     // **Spellability, always** (`CheckNamedRowIdSpellable`, below).
     //
-    // **Then the mark, on every relation** (BB-R3, on BB-Q8's mark): an id
-    // below `next_id` is refused `OutOfRange` (`RefuseRowIdBelowMark`), and
-    // one at or above it moves the mark to `id + 1`. At or above the mark, the
-    // id sorts above every id the relation has placed or issued, so placed on
-    // the relation's last page it keeps that page's slot order its key order
-    // - BB-R1's invariant. A btree used to take a key below the mark too and
-    // flip the relation to `kUnordered`; that state is deleted (BB-R10).
+    // **Then the mark, by the relation's storage.** A heap (BB-R3, kept by
+    // BD-Q4 (a)) refuses an id below `next_id` `OutOfRange`
+    // (`RefuseRowIdBelowMark`): its tail cannot take a key below its highest,
+    // so the mark is the ascent written as one number. A btree places a key
+    // where it sorts (BD-R2, BD-R7,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), so for
+    // it the admission is advance-or-nothing and never refuses. Either way an
+    // id at or above the mark moves it to `id + 1`.
     //
-    // **Called under the hold of the page the row lands on** - a btree's
-    // rightmost leaf, a heap chain's tail held as the tail
-    // (`storage::AdmitUnderHold`, BB-R7). That is what closes BB §1.3: the
-    // mark moves while no other core can issue or admit an id for the
-    // relation, because each of them needs that page first. The latch order
-    // is that page, then this one (BB-R4, `page.md` §6).
+    // **A heap calls it under the hold of its tail**, held as the tail
+    // (`storage::AdmitUnderHold`, BB-R7): the mark moves while no other core
+    // can issue or admit an id for the relation, because each needs that page
+    // first; the latch order is that page, then this one (BB-R4, `page.md`
+    // §6). A btree calls it before its descent, under no page (BD-R6).
     //
     // ---- Why the high-water mark moves ------------------------------------
     //

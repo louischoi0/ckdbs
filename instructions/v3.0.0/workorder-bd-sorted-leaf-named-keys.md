@@ -31,7 +31,7 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
 - **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: open (W16), BD-S1 and BD-S2 built, BD-S3 started.**
+**Status: open (W16), BD-S1 to BD-S3 built, BD-S4 started.**
 
 - §4's mark column says which items the words settle; every item is marked.
 - BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
@@ -1056,3 +1056,85 @@ re-indented loop); `Record`'s `min_key` on a btree change (a cell reads it
 as the new leaf's low key).
 
 **Overhead not measured** (BD-R10, waived).
+
+### BD-S3 - the gate opened, and BB-R1 deleted, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `62470f56` (BD-S2). Run on that
+engine, Debug.
+
+- **The two reasons** (BD-R5): a named key outside `[1, 2^40 - 1]` is
+  `OutOfRange` with its token's byte, judged from the literal's digits
+  (`raw_int_text`) rather than the wrapped `int_val` - zero, negative, past
+  40 bits, or past 64 (`2^64 + 5` no longer lands as 5). The order said to
+  reuse `row_codec.cpp`'s wrapped-literal test; that test compares the
+  spelling against `std::to_string(int_val)` and would read a leading zero
+  (`007`) as wrapped, so the digits are read directly instead. A duplicate is
+  `AlreadyExists` with the byte, its text saying whether the row was
+  deleted (`btree::DuplicateKey`). The lexer's overflow is unsigned, so
+  defined.
+- **The judgement of a refused borrow** (BD-R5, BD-Q9 (a)): on a btree, a
+  present key whose latest writer decided is a duplicate at once; an
+  in-flight writer's version is walked back while each earlier writer is in
+  flight (`CommandDispatcher::UndecidedInsert`) - a chain that ends is an
+  undecided insert, and the statement waits for its decide; one that reaches
+  a decided writer is a committed row under an undecided update or delete,
+  a duplicate at once. Absent is a wait. The mark branch is the heap's alone.
+- **BB-R1 deleted on a btree** (BD-R6): an omitted pk is issued, borrowed
+  and encoded before the descent; a named key is borrowed, encoded and
+  admitted advance-or-nothing (`Catalog::AdmitExplicitRowId`, which reads
+  the relation's storage), then placed. `btree::BtreeInsert` is the one door:
+  `BtreeInsertIssued`, `BtreeInsertNamed` and `duplicate_scanned` are
+  deleted, and the dispatcher's `InsertIssued`/`InsertNamed` are the heap's.
+  **The heap's protocol is untouched** (BD-Q4 (a)).
+- **§1.6's pinning cells flipped**: the fence cell (a duplicate refused at
+  once, an absent key waits on the fence and is placed), the spilled-value
+  cell (the duplicate alone refuses after a spill), the Cabin cell (a key
+  below the mark witnessed, a duplicate not), the bulk ordinal cell (a heap
+  refuses, a btree places), the catalog cell (advance-or-nothing); the
+  undecided-writer `OutOfRange` cell retired for `NamedKeyWaitTest`.
+- **BB-S3's reshaped cells restored** from `1b5d252e^`: in
+  `supplied_key_test.cpp` the descending load, the range scan and ORDER BY
+  (with and without LIMIT) over descending keys, the interleaved backfill,
+  the rollbacks across a divide (a failed statement, an aborted update), the
+  bulk statement in any order, a duplicate of a descending key and a
+  descending key accepted; in `insert_log_crash_rig_test.cpp` a divide under
+  another core before the row is logged and the mid-chain append split
+  across a crash (beside their ascending variants); in `lock_family_test.cpp`
+  the resume across a divide under a park; in `insert_wal_test.cpp` the
+  divide's record set, now one `BTREE_SPLIT` and no insert. Not restored, and
+  why: the catalog's key-order flip cells and `DESCRIBE`'s `key_order=` cells
+  pin a flag BB-S3b deleted, and the Cabin serve's `(page, slot)` branch for
+  an unordered relation is gone with it.
+- **Re-stated**: `IdAllocationAcrossCores` - one burned id per retry since
+  the issue precedes the descent; the bound it asserts is unchanged.
+  `issue_under_the_leaf_rig_test.cpp`'s cells pass by placement.
+- **Green**: every BD-S1 cell; the suite, but for
+  `TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`
+  (an outside process holds its port).
+
+**Overhead not measured** (BD-R10, waived).
+
+**The review** (one `critics-developer` pass): 1 medium and 3 low
+findings, 2 missing items, 4 simplifications, stale texts. **Applied**:
+the medium one - an omitted pk could draw the id a named key at the mark had
+borrowed and then placed, and was refused `AlreadyExists`; it now burns the
+id and draws again (bounded), pinned by
+`IssueUnderTheLeafRig.AnIssuedIdANamedKeyPlacedFirstIsDrawnAgain` through a
+new seam between the issue and its borrow (`SetAfterRowIdIssuedForTest`),
+red with the reissue removed; the rig cells assert whether core 1 finished
+during core 0's stop (a btree's does, a heap's does not); the burn comment
+says "at most one"; a btree's `OutOfRange` placement is logged again; the
+named key's seam moved before its admission, so
+`ANamedKeyAndALaterIssuedIdLandInKeyOrder` replaces the BB cell that pinned
+issue order; the four reshaped two-core cells restored beside their
+variants (`AChildCommittedDuringTheControllersBuildIsInTheSetItBanks`,
+`AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresInserts`, and under
+new names `AParentWrittenBackBeforeItsDivideIsLoggedDoesNotRouteToNothing`
+and `TwoCoresInsertingSpillsIntoOneVarHeapPageRecoverInTheOrderTheyWrote`),
+each repeated five times green; `UndecidedInsert`'s second step pinned
+(`NamedKeyWaitTest.AnUndecidedInsertItsOwnWriterUpdatedIsStillWaitedOn`);
+`BelowMark` deleted - the admission reads the relation's `clustered_type`;
+the heap-only `InsertIssued`/`InsertNamed` inlined; `UndecidedInsert` a free
+function; one helper for the duplicate's byte;
+`CheckNamedRowIdSpellable` answers `OutOfRange`; the catalog's and the
+dispatcher's stale texts. **Declined**: none.

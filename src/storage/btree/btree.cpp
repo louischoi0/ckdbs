@@ -85,12 +85,10 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
 // `BtreeInsert` reports that in its own words. Answering it here would turn
 // a deterministic `OutOfRange` into a retryable conflict.
 //
-// **Free on the shape the engine actually inserts.** Every row SQL places
-// lands on the rightmost leaf (BB-R1, BB-R3), which has no right sibling
-// and no fetch to make. What pays is a descent that lands mid-chain - a
-// named key below the mark, which `BtreeInsertNamed` then refuses, or an
-// id `BtreeInsert`'s storage contract places there - one resident-page
-// read.
+// **Free on the commonest shape.** An issued id lands on the rightmost leaf,
+// which has no right sibling and no fetch to make. What pays is a descent
+// that lands mid-chain - a named key below the relation's highest, placed
+// where it sorts (BD-R2) - one resident-page read.
 //
 // The caller holds this leaf; the sibling is taken shared and released
 // here. The order is always leaf-then-right-neighbour, which is the order a
@@ -238,12 +236,6 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
                                "Either the chain is being split faster than a descent can cross "
                                "it, or this core is descending from a root that has since grown "
                                "a level");
-}
-
-Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot) {
-    return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
-                                 " already present at page " + std::to_string(leaf_id) + " slot " +
-                                 std::to_string(slot));
 }
 
 // Which of the two ways a full internal node can grow applies: true when
@@ -843,16 +835,27 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
     return Status::OK();
 }
 
+Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot, bool deleted) {
+    if (deleted) {
+        return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
+                                     ": a row with this key was deleted; a Keystone id is bound "
+                                     "once (page " +
+                                     std::to_string(leaf_id) + " slot " + std::to_string(slot) +
+                                     ")");
+    }
+    return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
+                                 " already present at page " + std::to_string(leaf_id) + " slot " +
+                                 std::to_string(slot));
+}
+
 namespace {
 
 // Everything an insert does once its descent holds the leaf: invariant 3,
-// the duplicate check unless the caller has run it, and the placement or
-// the split. Every door below ends here, under the hold its descent took.
+// the duplicate check, and the placement or the split.
 StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Descent& descent,
                                                   std::uint64_t id,
                                                   std::span<const std::byte> payload,
-                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
-                                                  bool duplicate_scanned);
+                                                  std::uint64_t trx_id, std::uint64_t owner_oid);
 
 }  // namespace
 
@@ -864,71 +867,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     if (Status s = RequirePayloadCarries(payload, id); !s.ok()) return s;
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
-    return PlaceUnderHold(store, descent.value(), id, payload, trx_id, owner_oid,
-                          /*duplicate_scanned=*/false);
-}
-
-StatusOr<storage::InsertPlacement> BtreeInsertIssued(storage::PageStore& store, PageId root,
-                                                      const storage::IssueUnderHold& issue,
-                                                      std::uint64_t trx_id,
-                                                      std::uint64_t owner_oid) {
-    // The top of the id space routes to the rightmost leaf and nowhere else
-    // (BB §1.5): `DescendTo` hands a leaf back only once it covers the key
-    // under the exclusive hold, and only a leaf with no right sibling covers
-    // kMaxKeystoneId. No splice can pass it while it is held - every splice
-    // writes the leaf it splits - so it stays the rightmost until released.
-    auto descent = DescendTo(store, root, kMaxKeystoneId, /*leaf_for_write=*/true);
-    if (!descent.ok()) return descent.status();
-
-    auto payload = issue();
-    if (!payload.ok()) return payload.status();
-    auto id = KeystoneIdOfPayload(payload.value());
-    if (!id.ok()) return id.status();
-    // Invariant 3 and the duplicate check run on it as they run on any id
-    // (BB-R2 step 2): the issued id is above every placed one, so both pass.
-    // They catch a mark gone backwards only where it lands the id below this
-    // leaf's `min_key` or on an id the leaf holds - not every backwards mark.
-    return PlaceUnderHold(store, descent.value(), id.value(), payload.value(), trx_id, owner_oid,
-                          /*duplicate_scanned=*/false);
-}
-
-StatusOr<storage::InsertPlacement> BtreeInsertNamed(storage::PageStore& store, PageId root,
-                                                     std::uint64_t id,
-                                                     std::span<const std::byte> payload,
-                                                     const storage::AdmitUnderHold& admit,
-                                                     std::uint64_t trx_id,
-                                                     std::uint64_t owner_oid) {
-    if (Status s = RequirePayloadCarries(payload, id); !s.ok()) return s;
-    auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
-    if (!descent.ok()) return descent.status();
-    const PageId leaf_id = descent.value().path[descent.value().depth];
-    heap::PageView leaf(descent.value().leaf.bytes());
-
-    // **Present first** (BB-R12): a client that detects duplicates by
-    // `AlreadyExists` keeps working, and the answer costs the search the
-    // placement runs anyway.
-    auto at = SearchLeaf(leaf, id);
-    if (!at.ok()) return at.status();
-    if (at.value().present) return DuplicateKey(id, leaf_id, at.value().at);
-
-    // **A right sibling means below the mark** (BB §1.5), with no read of
-    // page 7: the sibling's `min_key` is an id once placed, every placed id
-    // is below `next_id`, and `id` sorts below the sibling. Placing it would
-    // put a key below one already placed - the order BB-R3 refuses.
-    if (const PageId right = leaf.next_page_id(); right != kInvalidPageId) {
-        return Status::OutOfRange("primary key " + std::to_string(id) +
-                                  " is below the relation's high-water mark: leaf " +
-                                  std::to_string(leaf_id) + ", where it sorts, has a right "
-                                  "sibling holding a higher key already placed; a named key must "
-                                  "sort above every key the relation has placed or issued");
-    }
-
-    // The rightmost leaf, held: the mark moves under this hold or not at all
-    // (BB-R3 step 7), which is what closes BB §1.3's window - no other core
-    // can issue or admit an id for this relation while the leaf is held.
-    if (Status s = admit(id); !s.ok()) return s;
-    return PlaceUnderHold(store, descent.value(), id, payload, trx_id, owner_oid,
-                          /*duplicate_scanned=*/true);
+    return PlaceUnderHold(store, descent.value(), id, payload, trx_id, owner_oid);
 }
 
 namespace {
@@ -936,8 +875,7 @@ namespace {
 StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Descent& descent,
                                                   std::uint64_t id,
                                                   std::span<const std::byte> payload,
-                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
-                                                  bool duplicate_scanned) {
+                                                  std::uint64_t trx_id, std::uint64_t owner_oid) {
     const PageId leaf_id = descent.path[descent.depth];
     heap::PageView leaf(descent.leaf.bytes());
 
@@ -958,9 +896,12 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // for the life of the relation (BD-R4).
     auto at = SearchLeaf(leaf, id);
     if (!at.ok()) return at.status();
-    if (at.value().present && !duplicate_scanned) {
-        return DuplicateKey(id, leaf_id, at.value().at);
+    if (at.value().present) {
+        auto held = leaf.ReadTuple(at.value().at);
+        if (!held.ok()) return held.status();
+        return DuplicateKey(id, leaf_id, at.value().at, held.value().deleted);
     }
+
     const bool appends = at.value().at == leaf.slot_count();
 
     storage::InsertPlacement out;

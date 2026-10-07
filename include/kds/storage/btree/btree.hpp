@@ -58,9 +58,7 @@
 //
 // A divide bumps the old leaf's `relayout_epoch`, and a separator sorting
 // inside a full internal node divides that node. docs/spec/heap-and-tuple.md
-// section 4.1 carries why a divide keeps invariants 2 and 3. Until BD-S3
-// SQL refuses a named key below the relation's mark (BB-R3), so it reaches
-// the append alone; the storage tests drive the rest through `BtreeInsert`.
+// section 4.1 carries why a divide keeps invariants 2 and 3.
 //
 // Two consequences worth stating because they are easy to assume away:
 //
@@ -150,6 +148,11 @@ struct LeafPosition {
 };
 StatusOr<LeafPosition> SearchLeaf(heap::PageView& leaf, std::uint64_t id);
 
+// The duplicate a named key meets (BD-R5's first reason): *"duplicate primary
+// key k"*, or *"... k: a row with this key was deleted; a Keystone id is
+// bound once"* for a delete-marked row (BD-R4's tombstone).
+Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot, bool deleted);
+
 // Formats `page` as a brand-new relation's root: an empty leaf with
 // min_key 0, so a relation that never outgrows one page is exactly one
 // page, the same as a heap-clustered one. The tree gains its first
@@ -159,10 +162,13 @@ StatusOr<LeafPosition> SearchLeaf(heap::PageView& leaf, std::uint64_t id);
 Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid);
 
 // Inserts `payload` (whose leading Keystone word must carry `id`) into the
-// tree rooted at `root`, splitting and growing as needed.
+// tree rooted at `root`, at the slot `id` sorts to, splitting and growing as
+// needed. **The one door a row comes through** (BD-R6): any id, issued or
+// named - the issue-under-hold doors BB-R1 asked for are deleted with it.
 //
 // Fails with:
-//   AlreadyExists  a live tuple in the target leaf already carries `id`
+//   AlreadyExists  a tuple in the target leaf already carries `id`, live or
+//                  delete-marked (`DuplicateKey`'s text says which)
 //   OutOfRange     `id` is below the target leaf's min_key (invariant 3)
 //   OutOfSpace     the leaf is full, `id` sorts inside it, and it holds
 //                  fewer than two live tuples, so no division makes room;
@@ -181,43 +187,6 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
                                                 std::span<const std::byte> payload,
                                                 std::uint64_t trx_id,
                                                 std::uint64_t owner_oid);
-
-// **The two doors a user row comes through** (BB-R1, insert_placement.hpp's
-// `IssueUnderHold`). `BtreeInsert` above is the storage contract - any id,
-// the middle divide included, which the storage tests drive and SQL no longer
-// reaches - and these are what the statement layer calls, so that a row's id
-// is fixed under the exclusive hold of the leaf it lands on.
-//
-// `BtreeInsertIssued` - an omitted pk (BB-R2). Descends for kMaxKeystoneId,
-// which can only end on the **rightmost** leaf (`DescendTo` checks coverage
-// under the exclusive hold, and only a leaf with no right sibling covers the
-// top of the id space), and asks `issue` for the row under that hold. The id
-// it issues is above every placed id, so the leaf takes it - by append, or by
-// an append split whose new leaf's `min_key` is that id. Fails as
-// `BtreeInsert` does, and with whatever `issue` refused, in which case nothing
-// is placed and the leaf is released.
-StatusOr<storage::InsertPlacement> BtreeInsertIssued(storage::PageStore& store, PageId root,
-                                                      const storage::IssueUnderHold& issue,
-                                                      std::uint64_t trx_id,
-                                                      std::uint64_t owner_oid);
-
-// `BtreeInsertNamed` - a named key (BB-R3 steps 4-8). Descends for `id` and
-// holds the leaf it lands on; then, in order:
-//
-//   AlreadyExists  `id` is in that leaf - the descent is exact, so it is
-//                  nowhere else;
-//   OutOfRange     the leaf has a right sibling - whose `min_key` is an id
-//                  already placed, so `id` is below the relation's mark and
-//                  `admit` is never asked;
-//   ...            whatever `admit` refuses, the mark read under page 7;
-//
-// and otherwise places `id` there. Nothing is placed on any refusal.
-StatusOr<storage::InsertPlacement> BtreeInsertNamed(storage::PageStore& store, PageId root,
-                                                     std::uint64_t id,
-                                                     std::span<const std::byte> payload,
-                                                     const storage::AdmitUnderHold& admit,
-                                                     std::uint64_t trx_id,
-                                                     std::uint64_t owner_oid);
 
 // Descends to the leaf that owns `id` and finds its live slot. This is the
 // point-lookup the whole structure exists for: O(depth) page fetches plus

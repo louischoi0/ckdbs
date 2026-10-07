@@ -179,15 +179,15 @@ TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhauste
     // other of the two - and the pk token's byte, which starts at 22 in
     // `INSERT INTO t VALUES (k, 1)`.
     //
-    // 251 rows, so the first leaf has a right sibling: a key landing there
-    // is §1.4's S3 row, refused today and placed under BD.
+    // 251 even ids, so the first leaf has a right sibling: an odd key
+    // landing there is §1.4's S3 row, refused at BD-S0 and placed under BD.
     std::string load = "INSERT INTO t VALUES ";
-    for (int id = 1000; id <= 1250; ++id) {
-        load += "(" + std::to_string(id) + ", 1)" + (id < 1250 ? ", " : "");
+    for (int id = 1000; id <= 1500; id += 2) {
+        load += "(" + std::to_string(id) + ", 1)" + (id < 1500 ? ", " : "");
     }
     ASSERT_TRUE(Placed(Run(load)));
-    ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (1300, 1)")));
-    ASSERT_EQ(Run("DELETE FROM t WHERE id = 1300").response.rfind("DELETED", 0), 0u);
+    ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (1601, 1)")));
+    ASSERT_EQ(Run("DELETE FROM t WHERE id = 1601").response.rfind("DELETED", 0), 0u);
 
     struct Case {
         const char* key;
@@ -195,7 +195,7 @@ TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhauste
     };
     const Case cases[] = {
         {"1000", StatusCode::kAlreadyExists},                // present, on a leaf with a right sibling
-        {"1300", StatusCode::kAlreadyExists},                // deleted: bound once (BD-R4)
+        {"1601", StatusCode::kAlreadyExists},                // deleted: bound once (BD-R4)
         {"0", StatusCode::kOutOfRange},                      // R3
         {"-7", StatusCode::kOutOfRange},                     // R2
         {"1099511627776", StatusCode::kOutOfRange},          // R4: 2^40
