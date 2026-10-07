@@ -140,27 +140,13 @@ protected:
                (r.U64().value_or(0) & wire::kCapBulkLoad) != 0;
     }
 
-    // Encodes one chunk of int-only rows for `t (id, a, b)` - the post-pk
-    // schema, through the same codec the server decodes with.
-    std::vector<std::byte> Chunk(std::uint64_t load_id, std::uint32_t seq,
-                                 std::span<const std::pair<std::int64_t, std::int64_t>> rows) {
-        catalog::Schema post_pk;
-        for (int i = 0; i < 2; ++i) {
-            catalog::SysColumnRow col{};
-            col.type_val = catalog::kTypeValInt64;
-            post_pk.columns.push_back(col);
-        }
+    // Encodes one chunk of `rows` against `schema` - every column, the pk
+    // first - through the same codec the server decodes with.
+    static std::vector<std::byte> Chunk(std::uint64_t load_id, std::uint32_t seq,
+                                        const catalog::Schema& schema,
+                                        const std::vector<std::vector<parser::AstValue>>& rows) {
         wire::RowBatchWriter writer;
-        for (const auto& [a, b] : rows) {
-            parser::AstValue va;
-            va.type = parser::ValueType::kInt;
-            va.int_val = a;
-            parser::AstValue vb;
-            vb.type = parser::ValueType::kInt;
-            vb.int_val = b;
-            const parser::AstValue vals[] = {va, vb};
-            EXPECT_TRUE(writer.AppendRow(post_pk, vals).ok());
-        }
+        for (const auto& row : rows) EXPECT_TRUE(writer.AppendRow(schema, row).ok());
         wire::PayloadWriter w;
         w.U64(load_id);
         w.U32(seq);
@@ -169,6 +155,73 @@ protected:
         const auto batch = writer.Finish();
         out.insert(out.end(), batch.begin(), batch.end());
         return out;
+    }
+
+    // One chunk of int-only rows for `t (id, a, b)`, every pk NULL - the
+    // engine issues each.
+    static std::vector<std::byte> Chunk(
+        std::uint64_t load_id, std::uint32_t seq,
+        std::span<const std::pair<std::int64_t, std::int64_t>> rows) {
+        catalog::Schema schema;
+        for (int i = 0; i < 3; ++i) schema.columns.push_back(Col(catalog::kTypeValInt64));
+        std::vector<std::vector<parser::AstValue>> values;
+        for (const auto& [a, b] : rows) values.push_back({Null(), Int(a), Int(b)});
+        return Chunk(load_id, seq, schema, values);
+    }
+
+    static catalog::SysColumnRow Col(std::uint32_t type_val, std::uint32_t len = 0) {
+        catalog::SysColumnRow col{};
+        col.type_val = type_val;
+        col.len = len;
+        return col;
+    }
+    static parser::AstValue Null() { return parser::AstValue{}; }
+    static parser::AstValue Int(std::int64_t i) {
+        parser::AstValue v;
+        v.type = parser::ValueType::kInt;
+        v.int_val = i;
+        return v;
+    }
+    static parser::AstValue Str(std::string s) {
+        parser::AstValue v;
+        v.type = parser::ValueType::kStr;
+        v.str_val = std::move(s);
+        return v;
+    }
+    static parser::AstValue Dec(std::int64_t unscaled, std::uint8_t scale) {
+        parser::AstValue v;
+        v.type = parser::ValueType::kDecimal;
+        v.int_val = unscaled;
+        v.scale = scale;
+        return v;
+    }
+    static parser::AstValue DecWide(std::int64_t hi, std::int64_t lo, std::uint8_t scale) {
+        parser::AstValue v;
+        v.type = parser::ValueType::kDecimalWide;
+        v.dec_hi = hi;
+        v.int_val = lo;
+        v.scale = scale;
+        return v;
+    }
+
+    // BEGIN on `relation`; the load id from S_LOAD_READY and its field
+    // count, or nullopt when the server answered anything else.
+    static std::optional<std::pair<std::uint64_t, std::uint16_t>> Begin(
+        int fd, wire::FrameDecoder& decoder, const std::string& relation) {
+        wire::LoadBegin begin;
+        begin.relation = relation;
+        const auto payload = wire::EncodeLoadBegin(begin);
+        SendFrame(fd, wire::ClientFrameType::kLoadBegin, payload);
+        auto ready = ReadFrame(fd, decoder);
+        if (!ready.has_value() ||
+            ready->type != static_cast<std::uint8_t>(wire::ServerFrameType::kLoadReady)) {
+            return std::nullopt;
+        }
+        wire::PayloadReader r(ready->payload);
+        const std::uint64_t load_id = r.U64().value_or(0);
+        (void)r.U16();
+        (void)r.U32();
+        return std::pair{load_id, r.U16().value_or(0)};
     }
 
     sched::SystemClock clock_;
@@ -211,7 +264,7 @@ TEST_F(KwpLoadServerTest, ALoadLandsRowsThroughTheOneWritePath) {
         const std::uint64_t load_id = r.U64().value_or(0);
         EXPECT_EQ(r.U16().value_or(0), kKwpLoadWindow);
         EXPECT_EQ(r.U32().value_or(0), kKwpMaxChunkBytes);
-        EXPECT_EQ(r.U16().value_or(0), 2u);  // post-pk fields
+        EXPECT_EQ(r.U16().value_or(0), 3u);  // every column, the pk first (BI15)
 
         // Two chunks: three rows, then two - the T3 gate is open for `t`
         // (heap, int-only, nothing maintained), so this exercises the
@@ -403,6 +456,154 @@ TEST_F(KwpLoadServerTest, ALoadConnectionCarriesTheConfiguredKeepalive) {
 
         int text_fd = ConnectToLoopback(kTextPort);
         ASSERT_GE(text_fd, 0);
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
+// BI15 and BI16: every storable type loads, NULL included, and the pk field
+// decides each row - NULL takes an issued id, a value names one - so one
+// chunk mixes the two exactly as one T1 statement does.
+TEST_F(KwpLoadServerTest, EveryTypeLoadsAndOneChunkMixesNamedAndIssuedKeys) {
+    constexpr std::uint16_t kTextPort = 25719;
+    constexpr std::uint16_t kKwpPort = 25720;
+    const std::string created =
+        dispatcher_
+            ->Dispatch("CREATE TABLE t (id int64, a int8, b int16, c int32, d uint64, "
+                       "e bool, f date, g timestamp, h decimal(10,2), i decimal(30,4), "
+                       "j char(4), k varchar, n int64 NULL)")
+            .response;
+    ASSERT_EQ(created.rfind("CREATED", 0), 0u) << created;
+    auto access = boot_->catalog.InitTableAccess(boot_->catalog.FindTableOidByName("t").value());
+    ASSERT_TRUE(access.ok());
+    const catalog::Schema schema = access.value()->schema;
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        wire::FrameDecoder decoder;
+        ASSERT_TRUE(Handshake(fd, decoder));
+        const auto ready = Begin(fd, decoder, "t");
+        ASSERT_TRUE(ready.has_value());
+        EXPECT_EQ(ready->second, 13u);
+
+        // Row 1 takes an issued id, row 2 names 500, row 3 takes the next
+        // issued one - above the named key, which moved the mark.
+        const auto row = [&](parser::AstValue pk, std::int64_t tag) {
+            return std::vector<parser::AstValue>{
+                std::move(pk),       Int(-7),     Int(-300),       Int(70000),
+                Int(9),              Int(1),      Int(20454),      Int(1767225600000000),
+                Dec(-12345, 2),      DecWide(-1, -123456789, 4),
+                Str("ab"),           Str(std::string(100, 'x')),
+                tag == 0 ? Null() : Int(tag)};
+        };
+        const auto chunk = Chunk(ready->first, 0, schema,
+                                 {row(Null(), 0), row(Int(500), 2), row(Null(), 3)});
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
+        auto ack = ReadFrame(fd, decoder);
+        ASSERT_TRUE(ack.has_value());
+        ASSERT_EQ(ack->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck))
+            << (ack->type == static_cast<std::uint8_t>(wire::ServerFrameType::kError)
+                    ? wire::DecodeError(ack->payload).value().message
+                    : std::string());
+        SendFrame(fd, wire::ClientFrameType::kLoadEnd, {});
+        auto done = ReadFrame(fd, decoder);
+        ASSERT_TRUE(done.has_value());
+        ASSERT_EQ(done->type, static_cast<std::uint8_t>(wire::ServerFrameType::kComplete));
+        ::close(fd);
+
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT id, n FROM t"),
+                  "id,n\\n1,NULL\\n500,2\\n501,3");
+        EXPECT_EQ(SendAndReceiveLine(text_fd,
+                                     "SELECT a, b, c, d, e, f, g, h, i, j FROM t WHERE id = 500"),
+                  "a,b,c,d,e,f,g,h,i,j\\n-7,-300,70000,9,1,2026-01-01,2026-01-01 "
+                  "00:00:00,-123.45,-12345.6789,ab");
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT COUNT(*) FROM t WHERE k = '" +
+                                                  std::string(100, 'x') + "'"),
+                  "count(*)\\n3");
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
+// A row the storage gate refuses kills the load whole (BI4), and the
+// refusal keeps its code: a named key already present is `AlreadyExists`, a
+// decimal past its precision and a NULL in a `NOT NULL` column are the
+// gate's own answers - the same ones a T1 statement gets for the same row.
+TEST_F(KwpLoadServerTest, ARefusedRowKillsTheLoadWithTheGatesOwnCode) {
+    constexpr std::uint16_t kTextPort = 25721;
+    constexpr std::uint16_t kKwpPort = 25722;
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE t (id int64, h decimal(5,2), e bool)")
+                  .response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO t VALUES (100, '1.00', 0)").response.substr(0, 8),
+              "INSERTED");
+    catalog::Schema schema;
+    schema.columns = {Col(catalog::kTypeValInt64),
+                      Col(catalog::kTypeValDecimal, catalog::PackDecimalLen(5, 2)),
+                      Col(catalog::kTypeValBool)};
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        wire::FrameDecoder decoder;
+        ASSERT_TRUE(Handshake(fd, decoder));
+
+        // Each load: one good row first, so the unwind is observable, then
+        // the refused one as row 2.
+        // `bool_byte`, when set, overwrites row 2's last field - its bool -
+        // after the encode: the client codec refuses a bool that is not 0
+        // or 1, so a wire value it cannot produce is spelled by hand.
+        const auto refused = [&](std::vector<parser::AstValue> bad, StatusCode code,
+                                 const std::string& what,
+                                 std::optional<std::uint8_t> bool_byte = std::nullopt) {
+            const auto ready = Begin(fd, decoder, "t");
+            ASSERT_TRUE(ready.has_value()) << what;
+            auto chunk = Chunk(ready->first, 0, schema,
+                               {{Null(), Dec(250, 2), Int(1)}, std::move(bad)});
+            if (bool_byte.has_value()) chunk.back() = static_cast<std::byte>(*bool_byte);
+            SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
+            auto err = ReadFrame(fd, decoder);
+            ASSERT_TRUE(err.has_value()) << what;
+            ASSERT_EQ(err->type, static_cast<std::uint8_t>(wire::ServerFrameType::kError)) << what;
+            auto decoded = wire::DecodeError(err->payload);
+            ASSERT_TRUE(decoded.ok()) << what;
+            EXPECT_EQ(decoded.value().code,
+                      wire::ErrorFromStatus(
+                          Status::FromWire(static_cast<std::uint32_t>(code), "x")).code)
+                << what << ": " << decoded.value().message;
+            EXPECT_NE(decoded.value().message.find("chunk 0"), std::string::npos)
+                << what << ": " << decoded.value().message;
+            EXPECT_NE(decoded.value().message.find("row 2"), std::string::npos)
+                << what << ": " << decoded.value().message;
+        };
+        refused({Int(100), Dec(1, 2), Int(0)}, StatusCode::kAlreadyExists, "duplicate key");
+        refused({Null(), Dec(1000000, 2), Int(0)}, StatusCode::kOutOfRange, "precision");
+        refused({Null(), Null(), Int(0)}, StatusCode::kInvalidArgument, "NOT NULL");
+        refused({Null(), Dec(1, 2), Int(1)}, StatusCode::kInvalidArgument, "bool", 2);
+        ::close(fd);
+
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT id FROM t"), "id\\n100");
         ::close(text_fd);
     });
 

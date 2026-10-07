@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/type_literals.hpp"
 
 // KWP v0's socket half (docs/inflight/in-progress/workplan-kwp-load.md KL02/KL03). The syscall
 // idioms are tcp_server.cpp's, including the MSG_NOSIGNAL lesson: a client
@@ -34,12 +35,88 @@ Status SetNonBlocking(int fd) {
     return Status::OK();
 }
 
-// v0's storable wire types (KW4): the 8-byte int family and varchar.
-// Decimal needs its scale carried per README's coercion rule and NULL is
-// not storable, so both refuse at BEGIN rather than at row 40,000.
-bool LoadableColumn(std::uint32_t type_val) {
-    if (wire::WireTypeLen(type_val) == 8) return true;
-    return wire::WireTypeLen(type_val) == -1 && type_val == catalog::kTypeValVarchar;
+// One loaded field as the value a T1 statement would have carried for it.
+//
+// **A transliteration into the shape the storage gate already validates**,
+// never a coercion and never a second gate (BI2): `exec::EncodeRow` is where
+// a value meets its column, and each arm below hands it the form whose checks
+// it already runs - an integer's fit, a bool's 0/1, a date's and a
+// timestamp's range on their decoded `kInt` form, a char's width, a NULL
+// against a `NOT NULL` column.
+//
+// **A decimal goes over as its literal text**, not as a decoded `kDecimal`:
+// the decoded form is what an `UPDATE` carries back for a value already
+// stored, so the storage gate trusts its precision, and a wire value has
+// never been stored. Rendered through `FormatDecimal`, the inverse the
+// literal parser is pinned against, so `decimal(5,2)` refuses an unscaled
+// 10^9 exactly as it refuses the literal `'10000000.00'`.
+//
+// A fixed-width field of any other length is refused, never interpreted.
+StatusOr<parser::AstValue> ValueOf(const wire::DecodedField& field, std::uint32_t type_val,
+                                   std::uint32_t type_mod) {
+    parser::AstValue v;
+    if (field.is_null) return v;  // kNull
+
+    const std::int16_t width = wire::WireTypeLen(type_val);
+    if (width >= 0 && field.bytes.size() != static_cast<std::size_t>(width)) {
+        return Status::InvalidArgument("a field of type " + std::to_string(type_val) +
+                                       " carries " + std::to_string(field.bytes.size()) +
+                                       " bytes where its width is " + std::to_string(width));
+    }
+    switch (type_val) {
+        case catalog::kTypeValInt8:
+        case catalog::kTypeValInt16:
+        case catalog::kTypeValInt32:
+        case catalog::kTypeValInt64:
+        case catalog::kTypeValDate:
+        case catalog::kTypeValTimestamp: {
+            auto i = wire::DecodeInt(field.bytes);
+            if (!i.ok()) return i.status();
+            v.type = parser::ValueType::kInt;
+            v.int_val = i.value();
+            return v;
+        }
+        case catalog::kTypeValBool:
+            // The byte as sent: anything but 0 or 1 is the storage gate's
+            // refusal, not a truth value read into it.
+            v.type = parser::ValueType::kInt;
+            v.int_val = std::to_integer<std::int64_t>(field.bytes[0]);
+            return v;
+        case catalog::kTypeValUint64: {
+            auto u = wire::DecodeUint64(field.bytes);
+            if (!u.ok()) return u.status();
+            v.type = parser::ValueType::kInt;
+            v.int_val = static_cast<std::int64_t>(u.value());
+            // The digit text preserves the full unsigned range through
+            // the uint64 encode path (ast.hpp's raw_int_text note).
+            v.raw_int_text = std::to_string(u.value());
+            return v;
+        }
+        case catalog::kTypeValDecimal: {
+            auto i = wire::DecodeInt(field.bytes);
+            if (!i.ok()) return i.status();
+            v.type = parser::ValueType::kStr;
+            v.str_val = exec::FormatDecimal(i.value(), catalog::DecimalScaleOf(type_mod));
+            return v;
+        }
+        case catalog::kTypeValDecimalWide: {
+            auto i = wire::DecodeDecimalWide(field.bytes);
+            if (!i.ok()) return i.status();
+            v.type = parser::ValueType::kStr;
+            v.str_val = exec::FormatDecimalWide(i.value(), catalog::DecimalScaleOf(type_mod));
+            return v;
+        }
+        case catalog::kTypeValChar:
+        case catalog::kTypeValVarchar:
+            v.type = parser::ValueType::kStr;
+            v.str_val.assign(reinterpret_cast<const char*>(field.bytes.data()),
+                             field.bytes.size());
+            return v;
+        default:
+            // Unreachable through a catalog-built schema: float is refused
+            // at CREATE TABLE (types.md TY1).
+            return Status::Unsupported("no load encoding for type " + std::to_string(type_val));
+    }
 }
 
 }  // namespace
@@ -321,29 +398,25 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
         return;
     }
     const catalog::Schema& schema = access.value()->schema;
-    for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        if (!LoadableColumn(schema.columns[i].type_val)) {
-            SendError(conn, Status::Unsupported(
-                                "column '" +
-                                std::string(catalog::NameView(schema.columns[i].name)) +
-                                "' has a type v0 cannot load (int family and varchar only)"));
-            return;
-        }
-    }
 
     // **Everything read off `schema` is read here, before the BEGIN.**
     // `Dispatch` is a statement boundary and drops this core's catalog
     // cache when the schema word has moved (AT-S2), which frees the entry
     // `schema` refers into - so what the load needs is copied out first and
     // the borrow is not touched again.
+    //
+    // **Every column, the pk first** (bulkinsert.md BI15): field 0 is the
+    // Keystone id, and a row names it or leaves it NULL for the engine to
+    // issue - per row, so one chunk may mix the two as one T1 statement may.
+    // Every storable type loads (BI16); no column is refused here.
     LoadState load;
     load.relation = begin.value().relation;
-    load.field_count = schema.columns.size() - 1;
-    for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        load.type_vals.push_back(schema.columns[i].type_val);
+    load.field_count = schema.columns.size();
+    for (const catalog::SysColumnRow& col : schema.columns) {
+        load.type_vals.push_back(col.type_val);
+        load.type_mods.push_back(catalog::TypeModOf(col.type_val, col.len));
     }
-    auto fields = wire::DescribeSchema(schema);
-    fields.erase(fields.begin());  // the pk is the engine's, never the client's
+    const auto fields = wire::DescribeSchema(schema);
 
     // The implicit transaction (KW5, BI11): the same BEGIN the text
     // protocol runs, so every semantics is the session's own. A session
@@ -358,7 +431,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     conn.load.load_id = next_load_id_++;
     conn.phase = Phase::kLoading;
 
-    // S_LOAD_READY: the numbers, then the post-pk field descriptors in the
+    // S_LOAD_READY: the numbers, then every column's field descriptor in the
     // S_ROW_DESC encoding - one description format on the wire (CC2's
     // argument), stated by the server so drift is impossible.
     wire::PayloadWriter w;
@@ -418,41 +491,29 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     // Wire rows to the parser's value shape - the one conversion in the
     // path, and it is a *transliteration*, not a coercion: the column's
     // type decides at the same gates a T1 statement goes through.
+    //
+    // **The pk field decides the row's arity** (BI15): NULL leaves it out,
+    // which is a T1 row that omits its pk and takes an issued id; a value
+    // keeps it, which is a T1 row that names one. The pk is never NULL in
+    // a relation, so the NULL has no other reading to collide with.
+    const std::string chunk = "chunk " + std::to_string(header.value().chunk_seq);
     parser::InsertStmt stmt;
     stmt.table_name = conn.load.relation;
     stmt.rows.reserve(rows.value().size());
     for (std::size_t r = 0; r < rows.value().size(); ++r) {
+        const std::vector<wire::DecodedField>& row = rows.value()[r];
         std::vector<parser::AstValue> values;
         values.reserve(conn.load.field_count);
-        for (std::size_t f = 0; f < conn.load.field_count; ++f) {
-            const wire::DecodedField& field = rows.value()[r][f];
-            if (field.is_null) {
-                fail_load(Status::InvalidArgument("chunk " + std::to_string(header.value().chunk_seq) +
-                                      ", row " + std::to_string(r + 1) +
-                                      ": NULL is not storable"));
+        for (std::size_t f = row[0].is_null ? 1 : 0; f < conn.load.field_count; ++f) {
+            auto v = ValueOf(row[f], conn.load.type_vals[f], conn.load.type_mods[f]);
+            if (!v.ok()) {
+                fail_load(Status::FromWire(static_cast<std::uint32_t>(v.status().code()),
+                                           chunk + ", row " + std::to_string(r + 1) +
+                                               ", field " + std::to_string(f) + ": " +
+                                               v.status().message()));
                 return;
             }
-            parser::AstValue v;
-            if (wire::WireTypeLen(conn.load.type_vals[f]) == 8) {
-                if (field.bytes.size() != 8) {
-                    fail_load(Status::InvalidArgument("chunk " + std::to_string(header.value().chunk_seq) +
-                                              ", row " + std::to_string(r + 1) +
-                                              ": fixed field of the wrong width"));
-                    return;
-                }
-                std::uint64_t raw = 0;
-                std::memcpy(&raw, field.bytes.data(), 8);
-                v.type = parser::ValueType::kInt;
-                v.int_val = static_cast<std::int64_t>(raw);
-                // The digit text preserves the full unsigned range through
-                // the uint64 encode path (ast.hpp's raw_int_text note).
-                v.raw_int_text = std::to_string(raw);
-            } else {
-                v.type = parser::ValueType::kStr;
-                v.str_val.assign(reinterpret_cast<const char*>(field.bytes.data()),
-                                 field.bytes.size());
-            }
-            values.push_back(std::move(v));
+            values.push_back(std::move(v.value()));
         }
         stmt.rows.push_back(std::move(values));
     }
@@ -461,7 +522,11 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     // included when the relation is inside the gate.
     auto out = dispatcher_->ExecuteInsert(stmt, conn.session);
     if (out.response.rfind("ERR", 0) == 0) {
-        fail_load(Status::InvalidArgument("chunk " + std::to_string(header.value().chunk_seq) + ": " + out.response));
+        // The refusal keeps its code - a named key's `AlreadyExists` is what
+        // a loader switches on - and the line its row ordinal rides in.
+        const Status cause = !out.status.ok() ? out.status : StatusFromErrorReply(out.response);
+        fail_load(Status::FromWire(static_cast<std::uint32_t>(cause.code()),
+                                   chunk + ": " + cause.message()));
         return;
     }
 
