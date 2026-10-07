@@ -1454,5 +1454,144 @@ TEST(EvictionWritebackTest, TheOlderOfTwoWritebacksOfOnePageNeverLandsLast) {
         << "the older image landed last: the disk is one write behind a frame that reads clean";
 }
 
+// ---- BE-R1: the slot array -------------------------------------------------
+//
+// One chunk of slots is the budget in every cell below, so "the array did not
+// grow" is a count of chunks and the mutations BE-S2 names are each killed by
+// one cell: a hand reset per sweep by the rotation, an eraser that forgets the
+// free list by the scan's slot count, a chunk that moves its bytes by the
+// span's address.
+class SlotArrayTest : public ::testing::Test {
+protected:
+    static constexpr std::size_t kBudget = DevicePageStore::kFrameChunk;
+
+    // `pages` formatted pages on the device, then a fresh store over it with
+    // nothing resident but the maps' own reads.
+    void Build(std::size_t pages) {
+        auto device = MemoryPageDevice::Create(/*extent_pages=*/256, /*initial_pages=*/0);
+        ASSERT_TRUE(device.ok()) << device.status().message();
+        device_ = std::move(device.value());
+        {
+            auto store = DevicePageStore::Open(*device_, /*first_new_page_id=*/16);
+            ASSERT_TRUE(store.ok()) << store.status().message();
+            for (std::size_t i = 0; i < pages; ++i) {
+                auto made = store.value()->CreateNew();
+                ASSERT_TRUE(made.ok()) << made.status().message();
+                FormatPage(made.value().second.bytes(), PageType::kHeap);
+                made.value().second.bytes()[kPageBodyOffset] = static_cast<std::byte>(i);
+                ids_.push_back(made.value().first);
+            }
+            ASSERT_TRUE(store.value()->Sync().ok());
+        }
+        auto store = DevicePageStore::Open(*device_, /*first_new_page_id=*/16);
+        ASSERT_TRUE(store.ok()) << store.status().message();
+        store_ = std::move(store.value());
+    }
+
+    void Read(std::size_t first, std::size_t last) {
+        for (std::size_t i = first; i < last; ++i) {
+            auto ref = store_->GetForRead(ids_[i]);
+            ASSERT_TRUE(ref.ok()) << ref.status().message();
+            ASSERT_EQ(ref.value().bytes()[kPageBodyOffset], static_cast<std::byte>(i));
+        }
+    }
+
+    bool Resident(PageId id) const { return store_->latch_word_for_test(id).ok(); }
+
+    void ExpectEverySlotAccountedFor() {
+        const DevicePageStore::FrameSlots slots = store_->frame_slots();
+        EXPECT_EQ(slots.slots, slots.free + store_->resident_pages())
+            << "a slot is neither free nor resident";
+    }
+
+    std::unique_ptr<MemoryPageDevice> device_;
+    std::unique_ptr<DevicePageStore> store_;
+    std::vector<PageId> ids_;
+};
+
+TEST_F(SlotArrayTest, AFullRotationReclaimsWithoutAllocatingAndTheHandKeepsItsPlace) {
+    Build(2 * kBudget);
+    store_->SetFrameBudget(kBudget);
+    Read(0, kBudget);
+    Read(kBudget, 2 * kBudget);
+
+    EXPECT_EQ(store_->frame_slots().slots, kBudget) << "a reclaim allocated a chunk instead";
+    // The second half is resident whole: the hand went round the first
+    // half once and took it page by page. A hand that restarted every sweep
+    // would take each new page back on its next visit to the low slots, and
+    // the second half would not survive its own scan.
+    std::size_t second_half_resident = 0;
+    for (std::size_t i = kBudget; i < 2 * kBudget; ++i) second_half_resident += Resident(ids_[i]);
+    EXPECT_EQ(second_half_resident, kBudget);
+    ExpectEverySlotAccountedFor();
+}
+
+TEST_F(SlotArrayTest, AScanFourTimesTheBudgetStaysInTheBudgetsSlots) {
+    // The memory a scan holds is the slots that exist - 8 KiB each, plus a
+    // 48-byte frame - so the slot count is the RSS bound, asserted exactly
+    // rather than sampled from the process.
+    Build(4 * kBudget);
+    store_->SetFrameBudget(kBudget);
+    Read(0, 4 * kBudget);
+    EXPECT_EQ(store_->frame_slots().slots, kBudget);
+    EXPECT_LE(store_->resident_pages(), kBudget);
+    ExpectEverySlotAccountedFor();
+}
+
+TEST_F(SlotArrayTest, ASpanSurvivesTheArraysGrowth) {
+    Build(kBudget + 8);
+    auto held = store_->GetForRead(ids_[0]);
+    ASSERT_TRUE(held.ok()) << held.status().message();
+    const std::byte* before = held.value().bytes().data();
+    // Past the first chunk: the array grows while the handle lives.
+    Read(1, kBudget + 8);
+    ASSERT_GT(store_->frame_slots().slots, kBudget);
+
+    EXPECT_EQ(held.value().bytes().data(), before) << "a chunk moved its bytes";
+    EXPECT_EQ(held.value().bytes()[kPageBodyOffset], std::byte{0});
+    auto again = store_->GetForRead(ids_[0]);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(again.value().bytes().data(), before);
+}
+
+TEST_F(SlotArrayTest, ARingsReleasedSlotsReturnToTheFreeList) {
+    Build(12);
+    {
+        auto ring = store_->OpenScanRing(/*frames=*/4);
+        for (const PageId id : ids_) {
+            auto bytes = ring->Fetch(id);
+            ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        }
+        // Rotation dropped all but the ring's last four.
+        for (std::size_t i = 0; i + 4 < ids_.size(); ++i) EXPECT_FALSE(Resident(ids_[i]));
+    }
+    // The ring's destructor gave the last four back too.
+    for (const PageId id : ids_) EXPECT_FALSE(Resident(id));
+    ExpectEverySlotAccountedFor();
+    EXPECT_EQ(store_->frame_slots().slots, kBudget) << "a dropped slot was never reused";
+}
+
+TEST_F(SlotArrayTest, ACreationCountsAgainstTheBudget) {
+    // Creations used to reach the table with no sweep (`sweep = false`), so a
+    // bulk create grew the pool past any budget. They reserve like a miss
+    // now. Dirty frames are queued rather than reclaimed, so what bounds
+    // this run is the drain between rounds - the shape of a load with the
+    // writeback tick behind it.
+    Build(0);
+    store_->SetFrameBudget(kBudget);
+    for (std::size_t round = 0; round < 4; ++round) {
+        for (std::size_t i = 0; i < kBudget; ++i) {
+            auto made = store_->CreateNew();
+            ASSERT_TRUE(made.ok()) << made.status().message();
+            FormatPage(made.value().second.bytes(), PageType::kHeap);
+        }
+        auto drained = store_->DrainDirtyEvictionQueue();
+        ASSERT_TRUE(drained.ok()) << drained.status().message();
+    }
+    EXPECT_LE(store_->frame_slots().slots, 2 * kBudget)
+        << "creations grew the array without reclaiming";
+    ExpectEverySlotAccountedFor();
+}
+
 }  // namespace
 }  // namespace kds::storage

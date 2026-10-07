@@ -769,7 +769,7 @@ public:
     // How many frames currently hold at least one pin. Test and §11
     // observability: an unbalanced pin shows up here as a number that never
     // returns to its floor.
-    std::size_t pinned_frames() const noexcept;
+    std::size_t pinned_frames() const;
 
     // The per-operation pin ceiling (MG04, `docs/workplan-pageref.md` §7's
     // open decision, given a first value here). Derivation, from the MG03
@@ -840,15 +840,27 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
                                                       bool bump_usage);
 
+    // **A slot** (BE-R1): one entry of a chunk's frame array, beside the
+    // chunk's page bytes. A slot never moves while the store lives, so a
+    // `Frame*` or a span into `*bytes` is good for as long as the slot holds
+    // its page - the property `std::unordered_map`'s node stability used to
+    // give, now given by the chunk.
     struct Frame {
-        std::unique_ptr<Page> bytes;
+        // This slot's page bytes, in its chunk's slab. Set once, when the
+        // chunk is added, and never re-pointed.
+        Page* bytes = nullptr;
+        // The page this slot holds, or `kInvalidPageId` while the slot is
+        // free or reserved by a fault or a creation that has not yet
+        // published it. The hand skips every slot whose id is invalid.
+        PageId page_id = kInvalidPageId;
         bool dirty = false;
-        // The page latch word (page_latch.hpp), sitting in the padding
-        // after `dirty` so the frame's size does not move. A plain integer
-        // rather than a `std::atomic` so `Frame` stays movable (the table
-        // moves it in); every access goes through `std::atomic_ref`, and
-        // only when the store is armed - unarmed it stays 0 for the frame's
-        // whole life.
+        // On the dirty eviction queue already (BE-R1): the sweep's test,
+        // which was a `std::find` over the queue per dirty victim.
+        bool queued = false;
+        // The page latch word (page_latch.hpp). A plain integer rather than
+        // a `std::atomic`, as it was while the table moved frames in; every
+        // access goes through `std::atomic_ref`, and only when the store is
+        // armed - unarmed it stays 0 for the frame's whole life.
         std::uint32_t latch = 0;
         // First log record to dirty this frame since it was last written
         // back; 0 when nothing logged touched it. See StampPageLsn().
@@ -917,8 +929,9 @@ private:
     // not, and grew the frame 32 -> 40 bytes at AT-S8 step 1b - 8 bytes per
     // 8 KiB page. A 16-bit generation would have fitted the padding and can
     // wrap inside one device write on a hot page, which is the one failure
-    // the field exists to rule out.
-    static_assert(sizeof(Frame) == 40, "Frame grew; say why beside this assert");
+    // the field exists to rule out. `page_id` and `queued` (BE-R1) took
+    // padding and four bytes: 40 -> 48, still under 0.6% of the page.
+    static_assert(sizeof(Frame) == 48, "Frame grew; say why beside this assert");
     static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(Frame),
                   "std::atomic_ref needs the word aligned inside the frame");
 
@@ -1255,15 +1268,36 @@ private:
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }
-    // `sweep` runs MG06's inline reclaim **inside this call's own latch
-    // hold**, which is the only place it can run without a window: the
-    // frame it must protect is the one just inserted, and a hold that ends
-    // at the insert leaves that frame unprotected for the instant before
-    // the sweep re-takes the latch. Only `ResidentBytes`' miss path passes
-    // it - the create paths never swept and still do not, since a create
-    // that evicted would be a behaviour change nobody asked for.
-    std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes,
-                                                bool dirty, bool warm = true, bool sweep = false);
+    // Publishes `slot`, which `ReserveFrame` handed this caller and the
+    // caller has filled, as `page_id`'s frame. A page already resident wins
+    // and `slot` goes back to the free list.
+    std::span<std::byte, kPageSize> InsertFrame(PageId page_id, Frame* slot, bool dirty,
+                                                bool warm = true);
+
+    // ---- Slots (BE-R1) ---------------------------------------------------
+    //
+    // **A slot is reserved before it is filled** - before a miss's device
+    // read and before a creation builds its page - so the frame count a
+    // budget bounds includes every fill in flight. In order: a free slot;
+    // else, past the budget, the sweep's reclaim; else a new chunk. The
+    // budget is still soft (BE-S2): a reclaim that frees nothing grows the
+    // array. `ReserveFrame` takes the structure latch; the `Locked` body
+    // assumes it.
+    Frame* ReserveFrame();
+    Frame* ReserveFrameLocked();
+    // Gives back a reserved slot that was never published (a failed read, a
+    // lost race). Latch held.
+    void ReturnFrameLocked(Frame& slot) noexcept;
+    // **The erasers' one tail**: unmaps a published, unpinned frame, poisons
+    // its bytes in debug builds, resets its state and frees the slot. Latch
+    // held, and the frame's refusals already asked by the caller.
+    void ReleaseFrameLocked(Frame& frame) noexcept;
+    Frame& SlotAt(std::size_t index) noexcept {
+        return chunks_[index / kFrameChunk].frames[index % kFrameChunk];
+    }
+    // Returns a reserved slot to the free list unless `Release`d, so every
+    // early return between a reservation and its publish gives it back.
+    class ReservedFrame;
 
     // The sweep body, with the structure latch **already held**. Split from
     // the public entry point because the two callers differ in exactly that:
@@ -1508,12 +1542,10 @@ private:
     // an accurate record of what a sweep *would* have had cleaned.
     std::vector<PageId> dirty_eviction_queue_;
 
-    // The clock hand: where the next sweep resumes. An id rather than an
-    // iterator, because `frames_` rehashes and an iterator would not
-    // survive it - the sweep re-finds its position by ordering, which is
-    // O(n log n) per pass over an unordered_map and is why the frame table
-    // becomes open-addressed at EV05 (page.md §16-7).
-    PageId clock_hand_ = 0;
+    // The clock hand (BE-R1): the slot index the next sweep step visits,
+    // advancing modulo the slots that exist. One step is one slot, O(1);
+    // the sort that re-found an id-valued hand per sweep is gone with it.
+    std::size_t clock_hand_ = 0;
     std::size_t frame_budget_ = 0;  // 0 = unbounded (pre-eviction behaviour)
     std::size_t live_pins_ = 0;
     // The source of every `Frame::dirty_gen` (AT-S8 step 1b), under the
@@ -1526,7 +1558,43 @@ private:
     std::size_t pin_ceiling_ = kPinCeiling;
     std::size_t pin_high_water_ = 0;
 
-    std::unordered_map<PageId, Frame> frames_;
+    // ---- The slot array (BE-R1) -----------------------------------------
+    //
+    // Chunks of `kFrameChunk` slots, each with one allocation of page bytes
+    // that never moves while the store lives. The chunk vector itself may
+    // reallocate; a chunk's two arrays do not, so `Frame*` and every span
+    // survive growth. Allocated with `make_unique_for_overwrite`: a slot's
+    // bytes cost the process nothing until a page is read or built into it.
+    // Slots are kept once allocated - the budget bounds what is resident,
+    // not what was once.
+    struct FrameChunk {
+        std::unique_ptr<Page[]> pages;
+        std::unique_ptr<Frame[]> frames;
+    };
+    std::vector<FrameChunk> chunks_;
+    // Free slots, popped from the back. A reserved slot is on neither this
+    // list nor the table.
+    std::vector<Frame*> free_frames_;
+    // The page table: each resident page's slot. Every structural change -
+    // publish, unmap - is under the structure latch.
+    std::unordered_map<PageId, Frame*> frames_;
+
+public:
+    // Slots per chunk: 1,024 frames, 8 MiB of pages (BE-R1, BE-Q5). The
+    // unit the array grows by and nothing else.
+    static constexpr std::size_t kFrameChunk = 1024;
+
+    // The array's census, for cells and `SHOW META`: slots that exist, and
+    // how many of them are free. Every slot is free, reserved or resident,
+    // so with no fill in flight `slots == free + resident_pages()`.
+    struct FrameSlots {
+        std::size_t slots = 0;
+        std::size_t free = 0;
+    };
+    FrameSlots frame_slots() const {
+        LatchGuard structure(structure_latch());
+        return FrameSlots{chunks_.size() * kFrameChunk, free_frames_.size()};
+    }
 };
 
 }  // namespace kds::storage
