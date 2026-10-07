@@ -67,10 +67,13 @@
 // Consequently a delete-heavy relation grows monotonically, which is worth
 // knowing before pointing a benchmark at it.
 //
-// Concurrency: none of its own. Every function here takes and releases the
-// page spans it needs through the PageStore; the caller holds whatever
-// pin/latch discipline applies (CLAUDE.md's page-latch consistency model),
-// exactly as with PageView.
+// Concurrency (BB-R7): a user row's insert holds the chain's last page
+// exclusive *as* the last page - the walk takes each page exclusive while
+// it reads the link, one page at a time, and stops only where the link is
+// still invalid under that hold. The caller's IssueUnderHold /
+// AdmitUnderHold / CarveUnderHold run under it and must not park (BB-R5).
+// A growth holds the old tail and the page it creates, old before new, and
+// links the new page only once filled.
 
 namespace kds::heap {
 
@@ -97,6 +100,10 @@ struct ChainInsertResult {
     // the chain grew - the page whose link reaches it, which is the only way
     // to the new one. The caller logs, stamps, and drops it.
     storage::PageRef held;
+
+    // The id placed - read off the payload for an issued row - so a caller
+    // logging a growth has the new page's min_key without decoding it again.
+    std::uint64_t id = 0;
 };
 
 // Follows the chain from `head` and returns its last page id (the page
@@ -195,33 +202,21 @@ struct ChainAppendBatchResult {
     std::vector<BatchTouchedPage> pages;   // in chain order
 };
 
-// T3's sorted fill (bulkinsert.md §8, docs/inflight/in-progress/workplan-t3.md): places
-// `payloads` - whose Keystone ids must be exactly first_id, first_id+1, …
-// in order, engine-issued from AllocateRowIdRange - into the chain with
-// one page fetch per *page* instead of per row. The tail fills first
-// under the same invariant-3 boundary check as ChainInsert; each new page
-// is created with min_key = the id that opens it (the sorted stream's
-// exact best case) and linked only after it holds its rows. The intra-
-// batch duplicate check is vacuous by construction (contiguous ids) and
-// is not performed; the tail page's ordinary checks stay. On any failure
-// the chain may already hold earlier rows of the batch - the caller's
-// transaction scope owns unwinding them, exactly as it owns a mid-loop
-// failure of the row path.
-StatusOr<ChainAppendBatchResult> ChainAppendBatch(
-    storage::PageStore& store, PageId head, std::uint64_t first_id,
-    std::span<const std::vector<std::byte>> payloads, std::uint64_t trx_id,
-    std::uint64_t owner_oid,
-    PageId* tail_hint = nullptr);
-
-// The sorted fill's door for user rows (BB-R7): holds the tail as the tail,
-// then asks `carve` - once, under that hold - for the rows, whose ids it
-// carved from the relation's mark and which must run contiguously from the
-// first payload's. So the block is carved above every id placed before it,
-// and placed before any id issued after it. Each fresh page is held from its
-// creation through its fill and linked only once it holds its rows, and its
-// predecessor's hold ends at that link - so no walker reaches a linked page
-// that is not yet filled. `ChainAppendBatch` above is this with the payloads
-// handed in.
+// T3's sorted fill (bulkinsert.md §8), the door for its user rows (BB-R7):
+// holds the tail as the tail, then asks `carve` - once, under that hold -
+// for the rows, whose ids it carved from the relation's mark
+// (AllocateRowIdRange) and which must run contiguously from the first
+// payload's, `Corruption` otherwise. So the block is carved above every id
+// placed before it, and placed before any id issued after it, with one page
+// fetch per *page* instead of per row. The tail fills first under
+// ChainInsert's invariant-3 boundary check; each fresh page is created with
+// min_key = the id that opens it, held from its creation through its fill
+// and linked only once it holds its rows, and its predecessor's hold ends at
+// that link - so no walker reaches a linked page that is not yet filled. The
+// intra-batch duplicate check is vacuous by construction (contiguous ids) and
+// is not performed. On any failure the chain may already hold earlier rows
+// of the batch - the caller's transaction scope owns unwinding them, exactly
+// as it owns a mid-loop failure of the row path.
 using CarveUnderHold = FunctionRef<StatusOr<std::span<const std::vector<std::byte>>>()>;
 StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, PageId head,
                                                    const CarveUnderHold& carve,

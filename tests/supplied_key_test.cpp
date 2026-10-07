@@ -179,10 +179,11 @@ TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMarkPresentOrAbsent) 
 
     ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (600, 1)").response.substr(0, 8), "INSERTED");
 
-    // The refusal that keeps §3.1b true. Refused at admission, before the
-    // chain is touched at all - a tail page whose min_key is 600 would have
-    // no legal place for 550, and the tail-page-only duplicate check would
-    // stop meaning anything the moment a later page opened below it.
+    // The refusal that keeps §3.1b true. Refused under the tail's hold,
+    // before anything is placed (BB-R7) - a tail page whose min_key is 600
+    // would have no legal place for 550, and the tail-page-only duplicate
+    // check would stop meaning anything the moment a later page opened
+    // below it.
     auto backwards = d.Dispatch("INSERT INTO h VALUES (550, 2)");
     EXPECT_EQ(backwards.response.substr(0, 3), "ERR") << backwards.response;
     EXPECT_NE(backwards.response.find("high-water mark"), std::string::npos)
@@ -207,6 +208,30 @@ TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMarkPresentOrAbsent) 
     EXPECT_EQ(d.Dispatch("SELECT * FROM h WHERE id = 550").response.find("550,"),
               std::string::npos);
     EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (3)").response.find("id=601"), std::string::npos);
+}
+
+TEST_F(SuppliedKeySqlTest, AKeyBelowAHeapsTailIsRefusedAsBelowTheMark) {
+    // The chain refuses a key below its tail's min_key itself, under the
+    // tail's hold, before the mark is read (BB-R7) - and words it as the mark
+    // it is below: the caller named a key, nothing went backwards (BB-R12).
+    // A one-page chain's head opens at 0, so only a chain past its first
+    // page reaches this: two `varchar(4000)` rows fill a page, so the third
+    // issued id, 3, opens the tail.
+    auto d = Dispatcher();
+    auto created = d.Dispatch("CREATE TABLE h (id int64, s varchar(4000)) HEAP");
+    ASSERT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
+    for (const char* v : {"'a'", "'b'", "'c'"}) {
+        auto out = d.Dispatch(std::string("INSERT INTO h VALUES (") + v + ")");
+        ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << out.response;
+    }
+
+    auto below = d.Dispatch("INSERT INTO h VALUES (2, 'x')");
+    EXPECT_EQ(below.response.substr(0, 3), "ERR") << below.response;
+    EXPECT_NE(below.response.find("high-water mark"), std::string::npos) << below.response;
+    EXPECT_EQ(below.response.find("gone backwards"), std::string::npos)
+        << "a named key below the tail is the caller's error, not a sequence fault: "
+        << below.response;
+    EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = 2").response.find("2,b"), std::string::npos);
 }
 
 TEST_F(SuppliedKeySqlTest, AHeapRelationMixesNamedAndIssuedKeys) {

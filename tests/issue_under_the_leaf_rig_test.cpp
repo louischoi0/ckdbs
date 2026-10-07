@@ -56,8 +56,10 @@ sched::Coro Run(CommandDispatcher& d, OneStatement& s) {
 struct Seam {
     std::atomic<std::uint64_t> stopped_at{0};
     std::atomic<bool> release{false};
+    std::atomic<int> calls{0};
 
     void operator()(std::uint64_t id) {
+        calls.fetch_add(1, std::memory_order_relaxed);
         stopped_at.store(id, std::memory_order_release);
         while (!release.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(1ms);
@@ -71,6 +73,7 @@ struct Seam {
 struct Raced {
     std::uint64_t first_id = 0;
     std::string second_reply;
+    int seam_calls = 0;  // the seam runs once per row, or once per sorted fill
 };
 
 Raced RaceTwoInserts(TwoCoreRig& rig, const std::string& first, const std::string& second) {
@@ -119,6 +122,7 @@ Raced RaceTwoInserts(TwoCoreRig& rig, const std::string& first, const std::strin
 
     EXPECT_TRUE(StartsWith(s0.out.response, "INSERTED")) << s0.out.response;
     raced.second_reply = s1.out.response;
+    raced.seam_calls = seam.calls.load(std::memory_order_relaxed);
     return raced;
 }
 
@@ -273,6 +277,7 @@ TEST(IssueUnderTheLeafRig, OnAHeapASortedFillIsPlacedBelowALaterIssuedId) {
                                        "INSERT INTO h VALUES (40)");
     ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
     ASSERT_EQ(raced.first_id, 1u);
+    EXPECT_EQ(raced.seam_calls, 1) << "the per-row path ran, not the sorted fill";
     EXPECT_EQ(rig->core(0).dispatcher().Dispatch("SELECT id, v FROM h").response,
               "id,v\\n1,10\\n2,20\\n3,30\\n4,40");
 }

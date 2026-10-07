@@ -1330,3 +1330,71 @@ offered a choice:
 
 Suite: 3,152 cells, 3,151 green; the one failure the port 25432 another
 process holds (`kds_server`, pid 1035423), as at BB-S3.
+
+### BB-S4's review - 2026-10-07
+
+`36c44fe0`, reviewed by `critics-developer` (read-only): the heap arm's
+latching, WAL order and failure semantics are correct and match the btree
+arm; one correctness finding, a text list, three test-honesty findings, six
+simplifications. Applied in this section's commit, settled by CLA's proposal
+under §7's word where a finding offered a choice:
+
+- **A named key below a multi-page heap's tail got the wrong refusal and a
+  Warn** (medium). `ChainInsertNamed` refused it through `RefuseBelowTail`,
+  whose *"the relation's id sequence has gone backwards"* describes engine
+  damage, and the refusal came back as a placement failure, which
+  `InsertOneRow` logged. No cell reached it: every SQL heap refusal cell used
+  a one-page chain, whose head opens at 0. **Taken**: the refusal is worded
+  as the mark it is below (*"primary key K is below the relation's
+  high-water mark: the chain's tail, page P, opens at M ..."*), code
+  unchanged (`OutOfRange`), and a named key the structure refuses - a heap's
+  tail, a btree's duplicate or right sibling - is no longer logged as a
+  `heap`/`btree` Warn. The cell is
+  `SuppliedKeySqlTest.AKeyBelowAHeapsTailIsRefusedAsBelowTheMark`: a
+  `varchar(4000)` heap, three issued rows so the tail opens at 3, key 2
+  named.
+- **Text S4 left stale** - `heap-and-tuple.md` §3.1b's refusal, §4.1's *"one
+  number and no page read"*, the issue/admit holds named for the btree
+  alone, and *"What none of this touches"*; `keystoneid-invariant.md`'s
+  *"sits above"*; `heap_chain.hpp`'s concurrency header (now the latch
+  protocol `CLAUDE.md` asks for); the bug entry's `ChainAppendBatch`;
+  `AllocateRowId`'s comment; `supplied_key_test.cpp`'s *"before the chain is
+  touched"*. **Taken**, every one. `known-gaps.md`'s `sys.assertions` entry
+  credited BB-S4 with closing an orphaned-page half that was never
+  reachable - the insert holds the chain's root across `ChainInsert` (CT7) -
+  and now says so.
+- **Cells that claimed more than they checked. Taken**: the rig's sorted-fill
+  cell asserts the seam ran once, so it cannot silently test the per-row
+  path; `ATailAnotherCoreGrewPast...`'s unreachable branch is replaced by
+  `EXPECT_FALSE(store.fired())` and the cell is renamed for what it pins,
+  `TheWalkFetchesTheTailOnceSoNoGrowthLandsBetweenItsReadAndItsHold`;
+  `AnIssuedRowIsPlacedOnTheTailItWasIssuedUnder` is renamed
+  `AnIssuedRowIsAskedForOnceAndAppended`, since the rig cells carry the
+  "under the tail" property; `ACarvedFillLinksEachFreshPageOnlyOnceItIsFilled`,
+  whose fetch did not exist, is deleted and its `asked == 1` folded into the
+  byte-for-byte cell. **Added**: `ACarvedFillLinksEachPageBeforeItsHoldEnds`,
+  through a store that records each page's link at its `UnpinFrame` - the
+  release-before-link order no in-memory cell could see.
+- **Simplifications, all six taken**: S1 - the chain's local Keystone decode
+  deleted for `KeystoneIdOfPayload`, and `RequirePayloadCarries` (identical
+  in `btree.cpp`) moved to `keystone.{hpp,cpp}` once; S2 - `ChainAppendBatch`,
+  test-only since BB-S4, deleted, its two cells ported to `ChainAppendCarved`
+  and its contract text folded into the carved door's; S3 - the sorted fill's
+  `refused` optional dropped, every refusal returned through the fill as a
+  `Status` (the encode failure's row ordinal carried in the message, as the
+  per-row path carries it), byte-identical on the text reply and now carrying
+  the `Status` to a KWP client; S4 - `ChainInsertResult` carries the placed
+  `id`, so the heap `InsertIssued` wrapper that re-decoded it is gone and
+  `ChainPlacement` takes no id; S5 - `ChainAppendCarved`'s two copied fill
+  loops are one; S6 - `ChainTail` is the held walk's id.
+- **Declined, as the review declined them**: folding `ChainInsert` into
+  `ChainInsertNamed` (it would tie the storage contract's message to the
+  user-facing one), and dropping `PlaceOnTail`'s second below-tail check (it
+  would need a flag like the btree's `duplicate_scanned`).
+
+**Mutation, killed on every run**: the old below-tail refusal restored (M25,
+3/3); the predecessor released before its link is written in the carved fill
+(M26, 3/3); the sorted fill made ineligible (M27, 3/3).
+
+Suite: 3,153 cells, 3,152 green; the one failure the port 25432 another
+process holds (`kds_server`, pid 1035423), as at BB-S3.

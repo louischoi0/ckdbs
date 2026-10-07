@@ -85,7 +85,9 @@ Four things rest on *ordering* rather than on uniqueness:
   place tuples enter — so it depends on *issuance* order, not only on
   values. It is fed a monotonic sequence whoever names the ids, because
   `Catalog::AdmitExplicitRowId` refuses a below-the-mark key on every
-  relation (§2), and that refusal sits above `heap_chain.cpp`'s own.
+  relation (§2). For a named key on a heap the chain's own check runs
+  first, under the tail's hold, and the mark's inside it (BB-R7,
+  `heap::ChainInsertNamed`); for an omitted key the id is issued there.
 - the clustered btree's pages hold their slots in key order at every core
   count, because a row's id is fixed under the exclusive hold of the leaf
   it lands on and is above every id placed before it (BB-R1, BB-R3) —

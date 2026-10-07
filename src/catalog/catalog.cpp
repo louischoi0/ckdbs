@@ -2464,9 +2464,10 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // only ever moves forward, and AdmitExplicitRowId moves it past every
         // supplied id it admits. A supplied id *below* the mark - a value
         // this function may already have issued - is refused on every
-        // relation (BB-R3), so the two sources never meet. On a btree
-        // relation this runs under the exclusive hold of the rightmost leaf
-        // the row lands on (BB-R1, `storage::IssueUnderHold`).
+        // relation (BB-R3), so the two sources never meet. For a user row
+        // this runs under the exclusive hold of the page the row lands on -
+        // a btree's rightmost leaf (BB-R1, `storage::IssueUnderHold`) or a
+        // heap chain's tail held as the tail (BB-R7).
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the

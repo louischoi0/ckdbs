@@ -82,4 +82,11 @@ struct Keystone {
 // against.
 StatusOr<std::uint64_t> KeystoneIdOfPayload(std::span<const std::byte> payload);
 
+// `Corruption` unless the payload's Keystone word carries `id`. An insert is
+// handed the id beside the payload that encodes it, and two disagreeing
+// copies of a tuple's identity is the kind of defect that stays silent for
+// months, so the heap chain and the btree check them once, where both are in
+// hand.
+Status RequirePayloadCarries(std::span<const std::byte> payload, std::uint64_t id);
+
 }  // namespace kds

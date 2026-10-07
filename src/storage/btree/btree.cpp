@@ -881,20 +881,6 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 
 namespace {
 
-// Same cross-check ChainInsert makes, for the same reason: two disagreeing
-// copies of a tuple's identity is the kind of defect that stays silent for
-// months.
-Status RequirePayloadCarries(std::span<const std::byte> payload, std::uint64_t id) {
-    auto encoded_id = KeystoneIdOfPayload(payload);
-    if (!encoded_id.ok()) return encoded_id.status();
-    if (encoded_id.value() != id) {
-        return Status::Corruption("tuple's Keystone id " + std::to_string(encoded_id.value()) +
-                                  " does not match the id being inserted (" + std::to_string(id) +
-                                  ")");
-    }
-    return Status::OK();
-}
-
 // Complete, unlike the heap chain's tail-only check: the descent is exact, so
 // the leaf it landed on is the only page that may hold `id`. Still a sanity
 // check on the id sequence rather than a uniqueness index - a delete-marked

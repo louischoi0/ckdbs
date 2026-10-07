@@ -7,43 +7,6 @@
 
 namespace kds::heap {
 
-namespace {
-
-// Little-endian load of the leading Keystone word. Local rather than
-// shared for the same reason row_codec.cpp keeps its own: it is three
-// lines, and an explicit shift/mask read is what rules.md #5 asks for on
-// anything that came off a page.
-std::uint64_t LoadLe64(const std::byte* in) {
-    std::uint64_t v = 0;
-    for (int i = 7; i >= 0; --i) {
-        v = (v << 8) | static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(in[i]));
-    }
-    return v;
-}
-
-StatusOr<std::uint64_t> PayloadKeystoneId(std::span<const std::byte> payload) {
-    if (payload.size() < kKeystoneWordSize) {
-        return Status::Corruption("tuple payload is shorter than its Keystone word");
-    }
-    return Keystone::Decode(LoadLe64(payload.data())).id;
-}
-
-}  // namespace
-
-StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head) {
-    PageId current = head;
-    for (std::uint32_t steps = 0;; ++steps) {
-        if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
-
-        auto bytes = store.Get(current);
-        if (!bytes.ok()) return bytes.status();
-
-        const PageId next = PageView(bytes.value().bytes()).next_page_id();
-        if (next == kInvalidPageId) return current;
-        current = next;
-    }
-}
-
 StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
@@ -99,21 +62,6 @@ StatusOr<HeldTail> HoldTail(storage::PageStore& store, PageId head, const PageId
     return held;
 }
 
-// The caller passes `id` separately from the payload that encodes it;
-// disagreeing copies of a tuple's identity is the kind of thing that is
-// silent for months, so they are checked against each other once, where
-// both are in hand.
-Status RequirePayloadCarries(std::span<const std::byte> payload, std::uint64_t id) {
-    auto encoded_id = PayloadKeystoneId(payload);
-    if (!encoded_id.ok()) return encoded_id.status();
-    if (encoded_id.value() != id) {
-        return Status::Corruption("tuple's Keystone id " + std::to_string(encoded_id.value()) +
-                                  " does not match the id being inserted (" +
-                                  std::to_string(id) + ")");
-    }
-    return Status::OK();
-}
-
 // Invariant 3, enforced at the one door tuples come through. Below the
 // tail's min_key there is no page in this chain that may legally hold the
 // tuple: earlier pages are closed (their ids are all below this one's
@@ -143,7 +91,7 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
         auto tuple = page.ReadTuple(i);
         if (!tuple.ok()) continue;  // retired or out-of-range slot
 
-        auto existing = PayloadKeystoneId(tuple.value().payload);
+        auto existing = KeystoneIdOfPayload(tuple.value().payload);
         if (!existing.ok()) return existing.status();
         if (existing.value() == id) {
             return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
@@ -157,7 +105,7 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
     if (slot.ok()) {
         if (tail_hint != nullptr) *tail_hint = tail.id;
         return ChainInsertResult{tail.id, slot.value(), /*grew_chain=*/false,
-                                 /*linked_from=*/kInvalidPageId, std::move(tail.page)};
+                                 /*linked_from=*/kInvalidPageId, std::move(tail.page), id};
     }
     if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();  // a real failure, not a full page
@@ -195,10 +143,16 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
 
     if (tail_hint != nullptr) *tail_hint = new_id;
     return ChainInsertResult{new_id, new_slot.value(), /*grew_chain=*/true,
-                             /*linked_from=*/tail.id, std::move(tail.page)};
+                             /*linked_from=*/tail.id, std::move(tail.page), id};
 }
 
 }  // namespace
+
+StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head) {
+    auto tail = WalkToHeldTail(store, head, head);
+    if (!tail.ok()) return tail.status();
+    return tail.value().id;
+}
 
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload,
@@ -218,7 +172,7 @@ StatusOr<ChainInsertResult> ChainInsertIssued(storage::PageStore& store, PageId 
     if (!tail.ok()) return tail.status();
     auto payload = issue();
     if (!payload.ok()) return payload.status();
-    auto id = PayloadKeystoneId(payload.value());
+    auto id = KeystoneIdOfPayload(payload.value());
     if (!id.ok()) return id.status();
     return PlaceOnTail(store, std::move(tail.value()), id.value(), payload.value(), trx_id,
                        owner_oid, tail_hint);
@@ -234,9 +188,17 @@ StatusOr<ChainInsertResult> ChainInsertNamed(storage::PageStore& store, PageId h
     if (!tail.ok()) return tail.status();
     // Below the tail's min_key is below a placed id, so below the mark: the
     // chain's answer, with no read of page 7 - the btree's right sibling
-    // read as a heap reads it (BB-R7).
+    // read as a heap reads it (BB-R7), and worded as the btree words it: the
+    // caller named a key below the mark, nothing went backwards (BB-R12).
     PageView page(tail.value().page.bytes());
-    if (Status s = RefuseBelowTail(page, tail.value().id, id); !s.ok()) return s;
+    if (id < page.min_key()) {
+        return Status::OutOfRange(
+            "primary key " + std::to_string(id) +
+            " is below the relation's high-water mark: the chain's tail, page " +
+            std::to_string(tail.value().id) + ", opens at " + std::to_string(page.min_key()) +
+            ", an id already placed; a named key must sort above every key the relation has "
+            "placed or issued");
+    }
     // The mark before the duplicate check, unlike the btree (BB-R12): the
     // check reads the tail alone and cannot prove a key below it present, so
     // a heap answers `OutOfRange` for both, as it always did.
@@ -259,11 +221,11 @@ StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, Pa
     // Every payload's identity is checked against the contiguous range
     // before anything is placed - ChainInsert's id/payload agreement check,
     // once per row, ahead of the fill.
-    auto first = PayloadKeystoneId(payloads.front());
+    auto first = KeystoneIdOfPayload(payloads.front());
     if (!first.ok()) return first.status();
     const std::uint64_t first_id = first.value();
     for (std::size_t i = 0; i < payloads.size(); ++i) {
-        auto encoded_id = PayloadKeystoneId(payloads[i]);
+        auto encoded_id = KeystoneIdOfPayload(payloads[i]);
         if (!encoded_id.ok()) return encoded_id.status();
         if (encoded_id.value() != first_id + i) {
             return Status::Corruption("batch payload " + std::to_string(i) +
@@ -284,20 +246,24 @@ StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, Pa
     }
     out.pages.push_back({current, /*is_new=*/false, kInvalidPageId});
 
+    // Fills `page` from row `i` until it refuses - one fetch, many rows.
     std::size_t i = 0;
-    for (;;) {
-        // Fill this page until it refuses - one fetch, many rows.
-        PageView page(current_ref.bytes());
+    const auto fill = [&](PageView& page, PageId page_id) -> Status {
         while (i < payloads.size()) {
             auto slot = page.InsertTuple(payloads[i], trx_id);
             if (!slot.ok()) {
                 if (slot.status().code() != StatusCode::kOutOfSpace) return slot.status();
                 break;
             }
-            out.rows.push_back({current, slot.value()});
+            out.rows.push_back({page_id, slot.value()});
             ++i;
         }
-        if (i == payloads.size()) break;  // every row placed
+        return Status::OK();
+    };
+
+    PageView page(current_ref.bytes());
+    if (Status s = fill(page, current); !s.ok()) return s;
+    while (i < payloads.size()) {
 
         // Grow, ChainInsert's order (BB-R7): the fresh page is held from its
         // creation through its fill, and linked only once it holds its rows.
@@ -309,17 +275,8 @@ StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, Pa
         auto& [new_id, new_ref] = created.value();
         auto fresh = PageView::CreateEmpty(new_ref.bytes(), first_id + i, owner_oid);
         if (!fresh.ok()) return fresh.status();
-        const PageId filled_from = current;
         const std::size_t opened_at = i;
-        while (i < payloads.size()) {
-            auto slot = fresh.value().InsertTuple(payloads[i], trx_id);
-            if (!slot.ok()) {
-                if (slot.status().code() != StatusCode::kOutOfSpace) return slot.status();
-                break;
-            }
-            out.rows.push_back({new_id, slot.value()});
-            ++i;
-        }
+        if (Status s = fill(fresh.value(), new_id); !s.ok()) return s;
         if (i == opened_at) {
             // A row no empty page can hold: left allocated and unlinked, as
             // ChainInsert leaves one, so nothing reaches it.
@@ -327,30 +284,14 @@ StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, Pa
                                       " does not fit an empty page");
         }
         page.set_next_page_id(new_id);
-        out.pages.push_back({new_id, /*is_new=*/true, filled_from});
+        out.pages.push_back({new_id, /*is_new=*/true, current});
         current = new_id;
         current_ref = std::move(new_ref);  // the predecessor's hold ends here
+        page = fresh.value();
     }
 
     if (tail_hint != nullptr) *tail_hint = current;
     return out;
-}
-
-StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, PageId head,
-                                                  std::uint64_t first_id,
-                                                  std::span<const std::vector<std::byte>> payloads,
-                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
-                                                  PageId* tail_hint) {
-    if (payloads.empty()) return Status::InvalidArgument("a batch fill of no rows");
-    if (Status s = RequirePayloadCarries(payloads.front(), first_id); !s.ok()) {
-        if (s.code() != StatusCode::kCorruption) return s;
-        return Status::Corruption("batch payload 0 does not carry the batch's first id " +
-                                  std::to_string(first_id));
-    }
-    return ChainAppendCarved(
-        store, head,
-        [&]() -> StatusOr<std::span<const std::vector<std::byte>>> { return payloads; },
-        trx_id, owner_oid, tail_hint);
 }
 
 Status ChainVisit(

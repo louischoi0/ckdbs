@@ -569,9 +569,10 @@ there is no second core's registration to be answered by.
   system relation. Across a tail-page boundary the one issued first and
   placed second is refused `OutOfRange` after its build. **Not read**:
   whether any reader depends on `sys.assertions`' key order. BB fixed the
-  user relations only (BB-R9, on BB-Q5: system relations out); `ChainInsert`
-  does hold its tail as the tail since BB-S4, so the orphaned-page half is
-  closed here too. Owner: `assertion.md` §7.
+  user relations only (BB-R9, on BB-Q5: system relations out). No orphaned
+  page was ever reachable here: the insert holds the chain's root exclusive
+  across `ChainInsert` (CT7, since AT-S17), so two cores never grow this
+  chain at once. Owner: `assertion.md` §7.
 
 - **The Cabin store's partition latches are taken at `cores = 1`.** By
   reading, on `at-s12-prose-sweep` at `2b20369` (found by AT-S12's

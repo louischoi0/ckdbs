@@ -4828,19 +4828,15 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // the block is above every id placed before it and placed before any id
     // issued after it - every other insert into the relation needs that tail
     // first. The encode moves under the hold at no cost: the gate excludes
-    // var-heap schemas, so it writes no page. Each step's refusal is kept
-    // here as the statement's answer, with the row ordinal an encode failure
-    // has always carried.
+    // var-heap schemas, so it writes no page. Each step's refusal comes back
+    // through the fill as the statement's answer, an encode failure with the
+    // row ordinal it has always carried.
     std::uint64_t first_id = 0;
     std::vector<std::vector<std::byte>> payloads;
-    std::optional<DispatchOutcome> refused;
     // Named, because `CarveUnderHold` is a reference to it (`FunctionRef`).
     const auto carve = [&]() -> StatusOr<std::span<const std::vector<std::byte>>> {
         auto first = catalog_.AllocateRowIdRange(oid, stmt.rows.size());
-        if (!first.ok()) {
-            refused = DispatchOutcome{ErrorReply(first.status()), false, 0, first.status()};
-            return first.status();
-        }
+        if (!first.ok()) return first.status();
         first_id = first.value();
 
         // **The run's borrow, over the block of ids it just carved**
@@ -4872,7 +4868,6 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         if (std::optional<Status> held = BorrowOrWait(
                 scope, txn::LockKey::Range(ta.oid, first_id, first_id + stmt.rows.size()),
                 RepeatableReadWait::kCapable)) {
-            refused = DispatchOutcome{ErrorReply(*held), false, 0, *held};
             return *held;
         }
 
@@ -4885,9 +4880,9 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
                                 exec::VarHeapSink{&page_store_, ta.varheap_page_id,
                                                   /*appended=*/nullptr, ta.oid});
             if (!encoded.ok()) {
-                refused = DispatchOutcome{
-                    ErrorReply(encoded.status()) + " (row " + std::to_string(k + 1) + ")", false};
-                return encoded.status();
+                return Status::FromWire(static_cast<std::uint32_t>(encoded.status().code()),
+                                        encoded.status().message() + " (row " +
+                                            std::to_string(k + 1) + ")");
             }
             payloads.push_back(std::move(encoded.value()));
         }
@@ -4899,7 +4894,6 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
 
     auto filled = heap::ChainAppendCarved(page_store_, ta.desc_page_id, carve, WriterId(scope),
                                           ta.oid, &ta.heap_tail_hint);
-    if (refused.has_value()) return std::move(*refused);
     if (!filled.ok()) {
         return {ErrorReply(filled.status()), false, 0, filled.status()};
     }
@@ -5234,7 +5228,13 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     if (!fixed.ok()) return fixed;
     StatusOr<storage::InsertPlacement> placed = std::move(*attempt);
     if (!placed.ok()) {
-        if (logging(LogLevel::kWarn)) {
+        // A named key the structure refused below the mark - a btree's
+        // duplicate or right sibling, a heap's tail (BB-R12) - is the
+        // client's error, answered as the admission's is, and not logged.
+        const StatusCode code = placed.status().code();
+        const bool refused_key = explicit_key && (code == StatusCode::kOutOfRange ||
+                                                  code == StatusCode::kAlreadyExists);
+        if (!refused_key && logging(LogLevel::kWarn)) {
             log_->Warn(is_btree ? "btree" : "heap",
                        "insert into the relation rooted at page " +
                            std::to_string(ta.desc_page_id) +
@@ -5416,14 +5416,14 @@ namespace {
 // goes in the order redo applies it: the old tail's image (which already
 // carries the new link - ChainInsert sets it before returning), then the page
 // it points at, which the HEAP_INSERT fills.
-storage::InsertPlacement ChainPlacement(heap::ChainInsertResult&& placed, std::uint64_t id) {
+storage::InsertPlacement ChainPlacement(heap::ChainInsertResult&& placed) {
     storage::InsertPlacement out;
     out.page_id = placed.page_id;
     out.slot = placed.slot;
     out.held.push_back(std::move(placed.held));
     if (placed.grew_chain) {
         out.Record(placed.linked_from, /*is_new_page=*/false, 0);
-        out.Record(placed.page_id, /*is_new_page=*/true, id);
+        out.Record(placed.page_id, /*is_new_page=*/true, placed.id);
     }
     return out;
 }
@@ -5445,20 +5445,10 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIssued(
             // the chain by one page rather than failing (BB-R7). Duplicate-key
             // and min_key enforcement live in there - they are heap
             // invariants, not dispatcher policy.
-            std::uint64_t id = 0;
-            auto placed = heap::ChainInsertIssued(
-                page_store_, access.desc_page_id,
-                [&]() -> StatusOr<std::span<const std::byte>> {
-                    auto payload = issue();
-                    if (!payload.ok()) return payload.status();
-                    auto issued = KeystoneIdOfPayload(payload.value());
-                    if (!issued.ok()) return issued.status();
-                    id = issued.value();
-                    return payload;
-                },
-                trx_id, access.oid, &access.heap_tail_hint);
+            auto placed = heap::ChainInsertIssued(page_store_, access.desc_page_id, issue,
+                                                  trx_id, access.oid, &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
-            return ChainPlacement(std::move(placed.value()), id);
+            return ChainPlacement(std::move(placed.value()));
         }
         case catalog::ClusteredType::kBtree:
             // The relation is a clustered B+ tree (btree.hpp) rooted at the
@@ -5481,7 +5471,7 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertNamed(
                                                  admit, trx_id, access.oid,
                                                  &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
-            return ChainPlacement(std::move(placed.value()), id);
+            return ChainPlacement(std::move(placed.value()));
         }
         case catalog::ClusteredType::kBtree:
             return btree::BtreeInsertNamed(page_store_, access.desc_page_id, id, payload, admit,
