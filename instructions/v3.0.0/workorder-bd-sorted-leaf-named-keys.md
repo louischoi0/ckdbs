@@ -31,7 +31,7 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
 - **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: open (W16), BD-S1 to BD-S3 built, BD-S4 started.**
+**Status: open (W16), BD-S1 to BD-S4 built, BD-S5 started.**
 
 - §4's mark column says which items the words settle; every item is marked.
 - BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
@@ -1138,3 +1138,85 @@ the heap-only `InsertIssued`/`InsertNamed` inlined; `UndecidedInsert` a free
 function; one helper for the duplicate's byte;
 `CheckNamedRowIdSpellable` answers `OutOfRange`; the catalog's and the
 dispatcher's stale texts. **Declined**: none.
+
+### BD-S4 - the sim and the rigs, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `07e822a6` (BD-S3). Run on that
+engine, Debug.
+
+- **The sim** (BD-R9): the workload names keys - `kInsertNamed`, in and out
+  of a transaction, drawing a fresh key, one near the top, a deleted key, a
+  rolled-back key and a key outside the space - and tracks the band a fresh
+  key moves the mark into, so pk-targeted reads and writes keep reaching the
+  rows inserted after it. The oracle answers every named insert placed, a
+  duplicate, exhausted or either (`Oracle::Named`): a key consumed or pending
+  is a duplicate whatever else is unknown, an unchecked key or an
+  indeterminate unnamed insert makes it either. The loop checks each reply
+  against that answer and absorbs only an I/O error under faults, never a
+  pk refusal; the toggle pairing compares a named insert's outcome by its
+  refusal's reason. `integrity.cpp`'s slot-order check covers delete-marked
+  slots.
+- **The rigs** (`sorted_leaf_rig_test.cpp`, new): two cores naming
+  interleaved descending keys into one leaf; a shift under another core's
+  undecided row surviving its rollback; appends from two cores keeping the
+  tree whole and dense (a smoke cell); an inner build and a resumed prefix
+  answering the same while core 1 shifts the first leaf's rows under every
+  resume, its EXISTS premise asserted from `ANALYZE`.
+- **The crash cells** (`sorted_leaf_crash_test.cpp`): a loser whose rows
+  shifted each other, and a loser whose rows a later divide moved - premise
+  asserted (`leaves=` grew by two under the loser, its keys descending so a
+  divide moves rows it placed whichever point it cuts at) - rolled back
+  across a crash; a mid-leaf row placed and never logged taken back before
+  the next record; a log cut inside an internal node's divide.
+- **JB6's deterministic cell**
+  (`ExecChainTest.AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARetiredSlot`):
+  through `exec::Execute`'s `PositionSink`, at the outer walk's first page
+  boundary, `tr`'s leaf is divided ahead of the mark, compacting a retired
+  slot behind it; each inner row must be bucketed once and every author
+  answered.
+- **The mutations**, each applied from a backup and built:
+
+  | Mutation | Killed by | Verdict |
+  |---|---|---|
+  | placement at `nr_slots` | `BtreeTest.ALeafTakesEachIdAtTheSlotItSortsTo`, `SortedLeafSqlTest.*` | killed |
+  | the divide appending its row last | `BtreeTest.ADescendingRun*` | killed |
+  | recovery undo by slot alone | `RecoveryUndoLeafTest.*`, `SortedLeafCrashTest.ALoserRowADivide*` | killed |
+  | `BTREE_INSERT` redo without its neighbour check | `RedoTest.ABtreeInsert*` | killed |
+  | E5's take-back removed | `SortedLeafCrashTest.ARowPlaced*`, `.AMidLeafRow*`, `.ATakenBack*` | killed |
+  | `before_wait` refusing an undecided insert | `NamedKeyWaitTest.*` (3x) | killed |
+  | the exhausted check reading the wrapped value | `SortedLeafSqlTest.EveryRefusal*` | killed |
+  | `ProbeBuild` without `VerifyTupleAt` | `SortedLeafRigTest.AnInnerBuild*` (3x) | killed |
+  | a split replayed in part | `RedoTest.ABtreeSplit*`, `SortedLeafCrashTest.ALogCutInsideAnAppendSplit*` | killed |
+  | JB6 by ordinal | `ExecChainTest.AResumedPrefixCovers…` (3x): `build_rows` 165 for 166, an author missing | killed |
+  | the rightmost leaf split at the median | `BtreeTest.AFullRightmostLeafSplitsAtTheInsertionPoint` | killed |
+
+  The last two survived the rig cells: two cores' interleave cannot force
+  an ordinal resume across a dropped slot, nor tell a median divide from an
+  insertion-point one by leaf count. JB6's kill is the deterministic cell
+  above; the median's is the `BtreeTest` cell, and the rig cell is named a
+  smoke cell. The re-timed rig cell, the reworked JB6 cell and the loser
+  cell were re-run against their mutants after the review and still kill
+  them.
+- **Green**: the suite, 3223 of 3223 (one disabled); `scripts/sim.sh 4`,
+  190 runs, 0 failures (Debug `ckdbs-sim`; no `build-release` in this tree).
+
+**Overhead not measured** (BD-R10, waived).
+
+**The reviews** (two `critics-developer` passes). The first: 1 high, 2
+medium and 1 low on the sim, 4 on the cells, a deterministic JB6 kill, and
+duplication. **Applied**: the high one - the first fresh key moved the mark
+to 2^39 and every pk-targeted op stayed in the low band; the workload now
+tracks the high band; the fault absorb excludes pk refusals; the oracle's
+order puts consumed/pending first; the pairing compares outcomes, not
+`IsErr`; the smoke cell reworded and renamed; the E3/E4 rig re-timed and its
+EXISTS premise asserted; the loser cell's premise; the JB6 cell; the rig's
+helpers moved onto `crash_rig::` (`Ids`, `Leaves`, `StartsWith`, `Ok`), and
+`insert_log_crash_rig_test.cpp`'s copy of `Ids` with them. One applied
+finding was wrong and corrected: the pairing compared a named refusal's
+full text, and a duplicate's text names a page, which the features' own
+pages move, so the pairing failed on every committed seed; it compares the
+refusal's reason instead. The second pass, over those follow-ups: the JB6
+cell's exact count held by page geometry with the divide behind the mark,
+so the divide is anchored at the mark's author and the count is the authors
+plus the rows the divide inserted; a dead `build_rows=0` assert; the loser
+cell's keys made descending; includes. **Declined**: none.

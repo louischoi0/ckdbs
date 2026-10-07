@@ -60,6 +60,11 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
             out += " ops_on_lost_relation=" + std::to_string(ops_on_lost_relation);
         }
     }
+    if (named_placed + named_duplicate + named_exhausted != 0) {
+        out += " named=" + std::to_string(named_placed) + "/" +
+               std::to_string(named_duplicate) + "/" + std::to_string(named_exhausted) +
+               "(placed/dup/exhausted)";
+    }
     if (checkpoints != 0) {
         out += " checkpoints=" + std::to_string(checkpoints) + " recycles=" +
                std::to_string(recycles) + " segments_recycled=" + std::to_string(segments_recycled) +
@@ -309,6 +314,9 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
         case Op::Kind::kInsert:
             it.oracle.NoteIndeterminate(op.table);
             break;
+        case Op::Kind::kInsertNamed:
+            it.oracle.NoteUnchecked(op.table, op.key);
+            break;
         case Op::Kind::kUpdate:
         case Op::Kind::kDelete:
             for (const std::uint64_t id : it.oracle.Matching(op.table, PredicateOf(op))) {
@@ -318,6 +326,77 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
         default:
             break;
     }
+}
+
+// BD-R5's two reasons a named key is refused for its pk, read off a reply.
+bool IsDuplicateRefusal(const std::string& reply) {
+    return IsErr(reply) && reply.find("duplicate primary key") != std::string::npos;
+}
+bool IsExhaustedRefusal(const std::string& reply) {
+    return IsErr(reply) && reply.find("outside the Keystone id space") != std::string::npos;
+}
+
+// **A named key's INSERT, checked against the oracle** (BD-R9,
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): placed at
+// the key it named, or refused for exactly one of BD-R5's two reasons - a
+// duplicate or an exhausted key - and for the one the oracle names. A
+// refusal inside a transaction poisons it, and the client rolls back as it
+// does after any failed statement. Returns whether the reply was one of the
+// legal answers; an illegal one with faults armed is an absorbed error.
+bool CheckNamedInsert(Iteration& it, const Op& op, const std::string& reply,
+                      std::size_t op_index) {
+    const Oracle::NamedOutcome expect = it.oracle.Named(op.table, op.key);
+    const std::optional<std::uint64_t> placed = ParseInsertedId(reply);
+    const bool duplicate = IsDuplicateRefusal(reply);
+    const bool exhausted = IsExhaustedRefusal(reply);
+    bool legal = false;
+    const char* expected = "";
+    switch (expect) {
+        case Oracle::NamedOutcome::kPlaced:
+            legal = placed == op.key;
+            expected = "placed";
+            break;
+        case Oracle::NamedOutcome::kDuplicate:
+            legal = duplicate;
+            expected = "a duplicate";
+            break;
+        case Oracle::NamedOutcome::kExhausted:
+            legal = exhausted;
+            expected = "exhausted";
+            break;
+        case Oracle::NamedOutcome::kEither:
+            legal = placed == op.key || duplicate;
+            expected = "placed or a duplicate";
+            break;
+    }
+    if (!legal) {
+        // An injected I/O error is absorbed; a refusal for the pk is never
+        // an I/O outcome, so a wrong one fails with faults on too.
+        if (IsErr(reply) && it.faults_on() && !duplicate && !exhausted) {
+            AbsorbError(it, op, op_index);
+            ++it.verdict.ops_run;
+            return true;
+        }
+        Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: expected " + expected +
+                     ", got " + reply);
+        return false;
+    }
+    ++it.verdict.writes_checked;
+    if (placed.has_value()) {
+        ++it.verdict.named_placed;
+    } else if (duplicate) {
+        ++it.verdict.named_duplicate;
+    } else {
+        ++it.verdict.named_exhausted;
+    }
+    if (placed.has_value()) {
+        it.oracle.ApplyInsert(op.table, *placed, OracleRow{op.v, op.name});
+    } else if (it.txn_open) {
+        CloseOpenTransaction(it);
+        it.trace.Note("txn poisoned by a refused named key at op " + std::to_string(op_index));
+    }
+    ++it.verdict.ops_run;
+    return true;
 }
 
 bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
@@ -350,6 +429,8 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             return true;
         }
     }
+
+    if (op.kind == Op::Kind::kInsertNamed) return CheckNamedInsert(it, op, reply, op_index);
 
     if (IsErr(reply) && it.faults_on()) {
         AbsorbError(it, op, op_index);
@@ -442,6 +523,8 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
                 return false;
             }
             break;
+        case Op::Kind::kInsertNamed:
+            break;  // `CheckNamedInsert`, above
         case Op::Kind::kSync:
             if (reply != "OK synced") {
                 Fail(it, "op " + std::to_string(op_index) + " [SYNC]: " + reply);
@@ -775,6 +858,9 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     counts_skipped += other.counts_skipped;
     ops_on_lost_relation += other.ops_on_lost_relation;
     gated_missing_rows += other.gated_missing_rows;
+    named_placed += other.named_placed;
+    named_duplicate += other.named_duplicate;
+    named_exhausted += other.named_exhausted;
     checkpoints += other.checkpoints;
     recycles += other.recycles;
     segments_recycled += other.segments_recycled;
@@ -884,6 +970,13 @@ bool SameOutcome(const Op& op, const std::string& bare, const std::string& full)
             return IsErr(bare) == IsErr(full);
         case Op::Kind::kInsert:
             return ParseInsertedId(bare) == ParseInsertedId(full);
+        case Op::Kind::kInsertNamed:
+            // The refusal's reason, not its text: a duplicate's names the
+            // page, which the features' own pages move.
+            return IsErr(bare) == IsErr(full) &&
+                   IsDuplicateRefusal(bare) == IsDuplicateRefusal(full) &&
+                   IsExhaustedRefusal(bare) == IsExhaustedRefusal(full) &&
+                   ParseInsertedId(bare) == ParseInsertedId(full);
         default:
             return bare == full;
     }

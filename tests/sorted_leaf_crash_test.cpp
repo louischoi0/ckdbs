@@ -16,6 +16,7 @@
 #include "kds/base/current_core.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/server/expeditor.hpp"
+#include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
 #include "tree_structure.hpp"
@@ -45,26 +46,13 @@ namespace {
 
 namespace fs = std::filesystem;
 
+using crash_rig::Ids;
+using crash_rig::Leaves;
 using crash_rig::Mount;
 using crash_rig::Ok;
 using crash_rig::OpenFileRig;
 using crash_rig::StartsWith;
 using crash_rig::TempDir;
-
-// The ids a `SELECT` answers, in reply order: `id\n1\n2`, header first.
-std::vector<std::uint64_t> Ids(CommandDispatcher& d, const std::string& sql) {
-    std::vector<std::uint64_t> out;
-    const std::string reply = d.Dispatch(sql).response;
-    EXPECT_FALSE(StartsWith(reply, "ERR")) << sql << " -> " << reply;
-    std::size_t at = reply.find("\\n");
-    while (at != std::string::npos) {
-        const std::size_t next = reply.find("\\n", at + 2);
-        out.push_back(std::stoull(reply.substr(
-            at + 2, next == std::string::npos ? std::string::npos : next - at - 2)));
-        at = next;
-    }
-    return out;
-}
 
 // The mounted relation holds exactly `want`, the walk yields it in key
 // order, a descent finds a sample of it - every tenth row and the extremes,
@@ -135,6 +123,27 @@ std::optional<Segment> ReadSegment(const fs::path& wal_dir) {
     }
     seg.end = wal::kSegmentHeaderSize + (reader.end_lsn() - base);
     return seg;
+}
+
+// The most pages any BTREE_SPLIT in `wal_dir`'s log names: a leaf's divide
+// writes two leaves and a parent, and a divide of the parent at least two
+// more.
+std::size_t WidestSplit(const fs::path& wal_dir) {
+    const std::optional<Segment> seg = ReadSegment(wal_dir);
+    if (!seg.has_value()) return 0;
+    std::ifstream in(seg->file, std::ios::binary);
+    std::vector<char> raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::span<const std::byte> bytes(reinterpret_cast<const std::byte*>(raw.data()),
+                                           raw.size());
+    std::size_t widest = 0;
+    for (std::size_t k = 0; k < seg->starts.size(); ++k) {
+        if (seg->types[k] != wal::RecordType::kBtreeSplit) continue;
+        auto record = wal::DecodeRecord(bytes.subspan(seg->starts[k]));
+        if (!record.ok()) continue;
+        auto images = wal::DecodeBtreeSplit(record.value().payload);
+        if (images.ok()) widest = std::max(widest, images.value().size());
+    }
+    return widest;
 }
 
 // `before`'s data file beside `after`'s log, the log ending at file offset
@@ -410,6 +419,132 @@ TEST(SortedLeafCrashTest, ATakenBackRowWhoseSplitGrewTheRootLeavesTheRootPublish
     auto mounted = Mount(snap.path);
     ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
     ExpectRelation(*mounted.value(), ids, "after the crash");
+}
+
+// ---- BD-S4: the crash cells BD-R9 names -----------------------------------
+
+TEST(SortedLeafCrashTest, ALoserWhoseRowsShiftedEachOtherIsRolledBackWholeAcrossACrash) {
+    // §1.2's silent case through SQL: the loser places 50, then 40 below it
+    // (shifting 50), then 45 between them, and the crash comes before its
+    // commit. Recovery undo re-finds each by its key (E1); counting a
+    // shifted row's old slot as done would leave one standing.
+    TempDir snap;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        Ok(d0, "INSERT INTO t VALUES (10, 1)");
+        Ok(d0, "INSERT INTO t VALUES (60, 6)");
+        Session loser;
+        Ok(d0, "BEGIN", &loser);
+        for (const char* key : {"50", "40", "45"}) {
+            Ok(d0, std::string("INSERT INTO t VALUES (") + key + ", 0)", &loser);
+        }
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    ExpectRelation(*mounted.value(), {10, 60}, "after the crash");
+}
+
+TEST(SortedLeafCrashTest, ALoserRowADivideMovedIsRolledBackAcrossACrash) {
+    // A loser's rows below the mark divide the full first leaf, again and
+    // again, moving the earlier ones to new right siblings; the crash comes
+    // before its commit. Undo finds each rightward of the leaf its record
+    // names (BD-Q8 (a)), and the committed rows stay whole.
+    TempDir snap;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        ids = Fill(d0);
+        const int filled = Leaves(d0, "t");
+        Session loser;
+        loser.set_durability(wal::DurabilityClass::kRelaxed);
+        Ok(d0, "BEGIN", &loser);
+        // Descending, so every row the loser placed sorts above the next one
+        // and a divide after the first moves some of them right, whichever
+        // point it cuts at.
+        for (std::uint64_t id = 991; id >= 11; id -= 10) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id + 1) + ", 0)", &loser);
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id) + ", 0)", &loser);
+        }
+        // The premise: the leaves divided more than once under the loser,
+        // so a later divide moved rows the loser had already placed.
+        ASSERT_GE(Leaves(d0, "t"), filled + 2) << "the loser's rows divided no leaf twice";
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    ExpectRelation(*mounted.value(), ids, "after the crash");
+}
+
+TEST(SortedLeafCrashTest, AMidLeafRowPlacedAndNeverLoggedIsTakenBackBeforeTheNextRecord) {
+    // E5 mid-leaf (§1.2's own example): the leaf holds [10, 30]; 20 is placed
+    // between them and its index maintenance fails, so it is never logged;
+    // 25 is then logged at the slot it sorts to. Left on the leaf, 20 would
+    // have shifted 30 and made 25's slot name a row redo never placed.
+    TempDir snap;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        Ok(d0, "INSERT INTO t VALUES (10, 1)");
+        Ok(d0, "INSERT INTO t VALUES (30, 3)");
+        d0.SetAfterPlacementForTest([] { return Status::IoError("index maintenance failed"); });
+        const std::string failed = d0.Dispatch("INSERT INTO t VALUES (20, 2)").response;
+        d0.SetAfterPlacementForTest(nullptr);
+        ASSERT_TRUE(StartsWith(failed, "ERR")) << failed;
+        Ok(d0, "INSERT INTO t VALUES (25, 5)");
+        ASSERT_TRUE(rig->Snapshot(snap.path).ok());
+    }
+    auto mounted = Mount(snap.path);
+    ASSERT_TRUE(mounted.ok()) << "the mount refused the crash: " << mounted.status().message();
+    ExpectRelation(*mounted.value(), {10, 25, 30}, "after the crash");
+}
+
+TEST(SortedLeafCrashTest, ALogCutInsideAnInternalNodesDivideLeavesTheTreeWhole) {
+    // BD-R12's third shape: a separator sorting inside a full internal node
+    // divides it. Rows of about 4 KB put two in a leaf, so 1,400 ascending
+    // rows fill a root of 678 children and grow a level over it; a key
+    // inside the first leaf then divides that leaf, and its separator lands
+    // in the full old root, which divides too. The statement's records are
+    // cut everywhere.
+    const std::string pad(3900, 'x');
+    TempDir before;
+    TempDir after;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, s varchar(4000)) BTREE");
+        Session load;
+        load.set_durability(wal::DurabilityClass::kRelaxed);
+        for (std::uint64_t k = 1; k <= 1400; ++k) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(k * 10) + ", '" + pad + "')", &load);
+            ids.insert(k * 10);
+        }
+        ASSERT_TRUE(rig->Snapshot(before.path).ok());
+        Ok(d0, "INSERT INTO t VALUES (15, '" + pad + "')");
+        ASSERT_TRUE(rig->Snapshot(after.path).ok());
+    }
+    ASSERT_GE(WidestSplit(after.path / "wal"), 5u)
+        << "no internal node divided, so the cell would cut nothing it is named for";
+    CutEverywhere(before.path, after.path,
+                  [&](Expeditor& db, bool committed, const std::string& where) {
+                      std::set<std::uint64_t> want = ids;
+                      if (committed) want.insert(15);
+                      ExpectRelation(db, want, where);
+                  });
 }
 
 }  // namespace

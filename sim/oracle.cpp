@@ -82,6 +82,23 @@ std::vector<std::uint64_t> Oracle::Matching(const std::string& table,
     return out;
 }
 
+Oracle::NamedOutcome Oracle::Named(const std::string& table, std::uint64_t key) const {
+    constexpr std::uint64_t kMaxKeystoneId = (std::uint64_t{1} << 40) - 1;
+    if (key == 0 || key > kMaxKeystoneId) return NamedOutcome::kExhausted;
+    const auto holds = [&](const std::map<std::string, std::set<std::uint64_t>>& keys) {
+        const auto it = keys.find(table);
+        return it != keys.end() && it->second.count(key) != 0;
+    };
+    // Acknowledged facts first: a key an acked commit or the open
+    // transaction bound is a duplicate whatever else is unknown.
+    if (holds(consumed_) || holds(pending_)) return NamedOutcome::kDuplicate;
+    // The key's own fate is unknown, or an errored INSERT may hold an id the
+    // engine never named - which may be this one (`Ignorable`'s rule).
+    if (IsUnchecked(table, key)) return NamedOutcome::kEither;
+    if (indeterminate_.count(table) != 0 && !holds(issued_)) return NamedOutcome::kEither;
+    return NamedOutcome::kPlaced;
+}
+
 bool Oracle::IsUnchecked(const std::string& table, std::uint64_t id) const {
     const auto it = unchecked_.find(table);
     return it != unchecked_.end() && it->second.count(id) != 0;

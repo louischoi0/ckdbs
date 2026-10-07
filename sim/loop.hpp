@@ -177,6 +177,11 @@ struct SimVerdict {
     // ops the loop threw away rather than checked. A run where this
     // approaches `ops_run` verified nothing, however green it printed.
     std::size_t ops_on_lost_relation = 0;
+    // Named-key INSERTs by the answer they were checked to give (BD-R9):
+    // what shows the oracle's three outcomes were each exercised.
+    std::size_t named_placed = 0;
+    std::size_t named_duplicate = 0;
+    std::size_t named_exhausted = 0;
 
     // Documented-gap bookkeeping — reported, not failed (see above).
     std::size_t gated_missing_rows = 0;

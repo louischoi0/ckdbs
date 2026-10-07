@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -75,20 +76,10 @@ using crash_rig::OpenFileRig;
 using crash_rig::StartsWith;
 using crash_rig::TempDir;
 
-// The ids a `SELECT` answers, one per line after the header.
+// The ids a `SELECT` answers, as a set.
 std::multiset<std::uint64_t> Ids(CommandDispatcher& d, const std::string& sql) {
-    std::multiset<std::uint64_t> out;
-    const std::string reply = d.Dispatch(sql).response;
-    EXPECT_FALSE(StartsWith(reply, "ERR")) << sql << " -> " << reply;
-    // The text reply escapes its row separator: `id\\n1\\n2`, header first.
-    std::size_t at = reply.find("\\n");
-    while (at != std::string::npos) {
-        const std::size_t next = reply.find("\\n", at + 2);
-        out.insert(std::stoull(reply.substr(
-            at + 2, next == std::string::npos ? std::string::npos : next - at - 2)));
-        at = next;
-    }
-    return out;
+    const std::vector<std::uint64_t> ids = crash_rig::Ids(d, sql);
+    return {ids.begin(), ids.end()};
 }
 
 // The ids one set has and the other lacks, for a failure worth reading.

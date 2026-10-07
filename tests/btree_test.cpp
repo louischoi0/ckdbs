@@ -1829,5 +1829,42 @@ TEST(BtreeTest, ADescendingRunAcrossManyDividesLeavesEveryLeafInKeyOrder) {
     EXPECT_EQ(WalkIds(store, tree.root), want);
 }
 
+TEST(BtreeTest, AFullRightmostLeafSplitsAtTheInsertionPoint) {
+    // BD-Q11 (a): an id below the top of a full rightmost leaf opens the new
+    // leaf, the keys above it move with it, and every key below it stays -
+    // the left leaf stays as full as it was. A median cut would move half.
+    storage::InMemoryPageStore store(64);
+    std::size_t capacity = 0;  // rows of kSmallFiller one leaf holds
+    {
+        Tree probe(store);
+        for (std::uint64_t id = 10;; id += 10) {
+            auto r = probe.Insert(id, kSmallFiller);
+            ASSERT_TRUE(r.ok()) << r.status().message();
+            if (r.value().restructured()) break;
+            ++capacity;
+        }
+    }
+    ASSERT_GE(capacity, 8u);
+
+    storage::InMemoryPageStore fresh(64);
+    Tree tree(fresh);
+    for (std::uint64_t k = 1; k <= capacity; ++k) {
+        ASSERT_TRUE(tree.Insert(k * 10, kSmallFiller).ok());
+    }
+    // Below the top three keys of the full, rightmost leaf.
+    const std::uint64_t id = (capacity - 3) * 10 + 5;
+    auto split = tree.Insert(id, kSmallFiller);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    ASSERT_TRUE(split.value().restructured());
+
+    const std::vector<ScannedRow> rows = ScanAll(fresh, tree.root);
+    ASSERT_EQ(rows.size(), capacity + 1);
+    const PageId left = rows.front().page_id;
+    std::size_t on_left = 0;
+    for (const ScannedRow& row : rows) on_left += row.page_id == left ? 1 : 0;
+    EXPECT_EQ(on_left, capacity - 3) << "the rightmost leaf divided at the median";
+    EXPECT_EQ(rows[on_left].id, id) << "the incoming id does not open the new leaf";
+}
+
 }  // namespace
 }  // namespace kds::btree

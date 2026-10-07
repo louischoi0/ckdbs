@@ -32,6 +32,7 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kCommit: return "commit";
         case Op::Kind::kRollback: return "rollback";
         case Op::Kind::kCreateCabin: return "create-cabin";
+        case Op::Kind::kInsertNamed: return "insert-named";
     }
     return "unknown";
 }
@@ -41,7 +42,7 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
          {Op::Kind::kCreateTable, Op::Kind::kInsert, Op::Kind::kSelectPk,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kUpdate,
           Op::Kind::kDelete, Op::Kind::kBegin, Op::Kind::kCommit, Op::Kind::kRollback,
-          Op::Kind::kCreateCabin}) {
+          Op::Kind::kCreateCabin, Op::Kind::kInsertNamed}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
@@ -96,10 +97,19 @@ const Workload::Table& Workload::PickTable() { return PickTableMutable(); }
 
 // Mostly hits, sometimes an honest miss just past the end.
 std::uint64_t Workload::GuessKey(const Table& table) {
+    if (table.high_base != 0 && rng_.Chance(50)) {
+        return table.high_base + rng_.Below(table.high_inserted + 3);
+    }
     return 1 + rng_.Below(table.inserted + 3);
 }
 
+std::uint64_t Workload::FreshKey(Table& table) {
+    if (table.high_base == 0) table.high_base = table.fresh + 1;
+    return table.fresh--;
+}
+
 Op Workload::Insert(Table& table) {
+    if (table.btree && rng_.Chance(30)) return InsertNamed(table);
     Op op;
     op.kind = Op::Kind::kInsert;
     op.table = table.name;
@@ -107,7 +117,50 @@ Op Workload::Insert(Table& table) {
     op.name = NextName();
     op.sql = "INSERT INTO " + table.name + " VALUES (" + std::to_string(op.v) + ", '" +
              op.name + "')";
-    ++table.inserted;
+    ++(table.high_base != 0 ? table.high_inserted : table.inserted);
+    return op;
+}
+
+// A named key on a btree (BD-R9): ascending, below the mark, at random, a
+// deleted key again, a rolled-back key again, or one outside the id space.
+// Inside a transaction only a fresh key, which is always placed: a refusal
+// there would poison the transaction the stream goes on writing in.
+Op Workload::InsertNamed(Table& table) {
+    const auto pick = [&](const std::vector<std::uint64_t>& keys) {
+        return keys[rng_.Below(keys.size())];
+    };
+    std::uint64_t key = 0;
+    if (in_txn_) {
+        key = FreshKey(table);
+        txn_named_.emplace_back(static_cast<std::size_t>(&table - tables_.data()), key);
+    } else {
+        const std::uint64_t roll = rng_.Below(100);
+        if (roll < 20) {
+            key = (table.high_base != 0 ? table.high_base + table.high_inserted
+                                        : table.inserted + 1) +
+                  rng_.Below(3);  // near the top
+        } else if (roll < 45) {
+            key = 1 + rng_.Below(table.inserted + 1);  // below the mark
+        } else if (roll < 60) {
+            key = 1 + rng_.Below(table.inserted * 3 + 20);
+        } else if (roll < 75 && !table.deleted.empty()) {
+            key = pick(table.deleted);
+        } else if (roll < 92 && !table.rolled_back.empty()) {
+            key = pick(table.rolled_back);
+        } else if (roll < 96) {
+            key = FreshKey(table);
+        } else {
+            key = rng_.Chance(50) ? 0 : (std::uint64_t{1} << 40);  // exhausted
+        }
+    }
+    Op op;
+    op.kind = Op::Kind::kInsertNamed;
+    op.table = table.name;
+    op.key = key;
+    op.v = NextValue();
+    op.name = NextName();
+    op.sql = "INSERT INTO " + table.name + " VALUES (" + std::to_string(key) + ", " +
+             std::to_string(op.v) + ", '" + op.name + "')";
     return op;
 }
 
@@ -135,7 +188,7 @@ Op Workload::Update(const Table& table) {
     return op;
 }
 
-Op Workload::Delete(const Table& table) {
+Op Workload::Delete(Table& table) {
     Op op;
     op.kind = Op::Kind::kDelete;
     op.table = table.name;
@@ -144,6 +197,9 @@ Op Workload::Delete(const Table& table) {
     if (op.by_pk) {
         op.key = GuessKey(table);
         op.sql += " WHERE id = " + std::to_string(op.key);
+        // A key a named INSERT names again later: a duplicate for good if
+        // this delete matched and committed (BD-R4), the oracle decides.
+        if (table.deleted.size() < 64) table.deleted.push_back(op.key);
     } else {
         op.pred_v = NextValue();
         op.sql += " WHERE v = " + std::to_string(op.pred_v);
@@ -155,7 +211,7 @@ Op Workload::DataOp() {
     const std::uint64_t roll = rng_.Below(100);
     if (roll < 42) return Insert(PickTableMutable());
     if (roll < 57) return Update(PickTable());
-    if (roll < 64) return Delete(PickTable());
+    if (roll < 64) return Delete(PickTableMutable());
     if (roll < 79) {
         const Table& table = PickTable();
         Op op;
@@ -208,6 +264,14 @@ Op Workload::Next() {
             const bool commit = rng_.Chance(70);
             op.kind = commit ? Op::Kind::kCommit : Op::Kind::kRollback;
             op.sql = commit ? "COMMIT" : "ROLLBACK";
+            // A rolled-back named key is free again (W12): a later named
+            // INSERT takes it.
+            if (!commit) {
+                for (const auto& [index, key] : txn_named_) {
+                    tables_[index].rolled_back.push_back(key);
+                }
+            }
+            txn_named_.clear();
             return op;
         }
         --txn_ops_left_;

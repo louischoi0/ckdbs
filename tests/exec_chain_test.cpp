@@ -1,5 +1,6 @@
 #include "kds/exec/step_vm.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <variant>
@@ -603,6 +604,124 @@ TEST_F(ExecChainTest, AHeapWalkDeclaresTheRelationAndNoSlice) {
     ASSERT_EQ(seen.at.size(), 1u) << "a heap walk reports once, before its first page";
     EXPECT_EQ(seen.at.front().lo, 0u);
     EXPECT_EQ(seen.at.front().hi, kIdSpaceEnd);
+}
+
+// ---- BD-S4: JB6's mark is a key on a btree (BD-R3 E4) ---------------------
+//
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`. A stopping
+// sub-chain resumes its walk of the inner relation from a mark. An ordinal
+// mark counts the slots it handed on, retired ones included; a divide of the
+// marked leaf drops retired slots, so after one the ordinal names a later
+// row - and a resume skips a row it never covered. The cell makes that
+// divide happen between two resumes, deterministically: at the outer walk's
+// page boundary (`PositionSink`, where the walk holds no pin).
+
+// The inner relation's divide, at the outer walk's first page boundary.
+class DivideAtTheBoundary final : public PositionSink {
+public:
+    std::function<void()> divide;
+    catalog::Oid outer = 0;
+    bool done = false;
+    void Position(catalog::Oid rel, std::uint64_t lo, std::uint64_t) override {
+        if (done || rel != outer || lo == 0) return;
+        done = true;
+        divide();
+    }
+};
+
+TEST_F(ExecChainTest, AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARetiredSlot) {
+    // `au`'s rows are wide - thirty-one columns - so its walk crosses a page
+    // boundary within the first few dozen authors; `tr`'s are narrow, so all
+    // of it is one leaf, the rightmost, which divides at the insertion point.
+    std::string au = "CREATE TABLE au (id int64, name varchar";
+    for (int c = 0; c < 30; ++c) au += ", c" + std::to_string(c) + " int64";
+    Create(au + ")");
+    Create("CREATE TABLE tr (id int64, au_id int64, qty int64)");
+    constexpr std::uint64_t kAuthors = 160;
+    for (std::uint64_t a = 1; a <= kAuthors; ++a) {
+        std::vector<parser::AstValue> row{Str("a" + std::to_string(a))};
+        for (int c = 0; c < 30; ++c) row.push_back(Int(c));
+        Insert("au", row);
+    }
+
+    auto tr_oid = boot_->catalog.FindTableOidByName("tr");
+    ASSERT_TRUE(tr_oid.ok());
+    auto tr = boot_->catalog.InitTableAccess(tr_oid.value());
+    ASSERT_TRUE(tr.ok());
+    PageId root = tr.value()->desc_page_id;
+    const auto put = [&](std::uint64_t id, std::int64_t au_id) {
+        auto payload = EncodeRow(tr.value()->schema, tr.value()->layout, id, {Int(au_id), Int(0)});
+        ASSERT_TRUE(payload.ok()) << payload.status().message();
+        auto placed = btree::BtreeInsert(store_, root, id, payload.value(), 1, tr.value()->oid);
+        ASSERT_TRUE(placed.ok()) << placed.status().message();
+        if (placed.value().new_root != kInvalidPageId) root = placed.value().new_root;
+    };
+    // One `tr` row per author, keyed 1000 * author: each author's EXISTS stops
+    // at its own row, so the mark moves one row per outer row.
+    for (std::uint64_t a = 1; a <= kAuthors; ++a) put(1000 * a, static_cast<std::int64_t>(a));
+    // A retired slot early on the leaf - a rolled-back insert's - which the
+    // walk hands on before the mark reaches the outer page boundary.
+    put(5001, 999999);
+    {
+        auto at = btree::BtreeLookup(store_, root, 5001, storage::PageAccess::kWrite);
+        ASSERT_TRUE(at.ok()) << at.status().message();
+        ASSERT_TRUE(heap::PageView(at.value().leaf.bytes()).RetireSlot(at.value().slot).ok());
+    }
+    ASSERT_TRUE(boot_->catalog
+                    .UpdateRelationDescPage(tr_oid.value(), root, tr.value()->anchor_page_id)
+                    .ok());
+
+    DivideAtTheBoundary sink;
+    sink.outer = boot_->catalog.FindTableOidByName("au").value();
+    std::vector<std::uint64_t> got;
+    std::size_t divides = 0;
+    std::uint64_t inserted = 0;
+    sink.divide = [&] {
+        // The sink runs once the outer page is walked, so the mark is at the
+        // last author answered. Keys 20 authors above it fill the leaf until
+        // it divides there - ahead of the mark, which stays on the marked
+        // leaf with the next author's row - and the divide compacts the
+        // retired slot behind the mark out of it.
+        ASSERT_GT(got.size(), 5u) << "the retired slot 5001 is not behind the mark";
+        const std::uint64_t base = 1000 * (got.back() + 20);
+        for (std::uint64_t j = 1; j < 1000 && divides == 0; ++j) {
+            auto payload = EncodeRow(tr.value()->schema, tr.value()->layout, base + j,
+                                     {Int(999999), Int(0)});
+            ASSERT_TRUE(payload.ok());
+            auto placed = btree::BtreeInsert(store_, root, base + j, payload.value(), 1,
+                                             tr.value()->oid);
+            ASSERT_TRUE(placed.ok()) << placed.status().message();
+            ++inserted;
+            if (placed.value().restructured()) ++divides;
+        }
+    };
+
+    const StepChain chain = CompileSql(
+        "SELECT au.id FROM au WHERE EXISTS (SELECT tr.id FROM tr WHERE tr.au_id = au.id)");
+    ExecStats stats;
+    Status ran = Execute(
+        boot_->catalog, store_, chain,
+        [&](const ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            got.push_back(static_cast<std::uint64_t>(frame.Get(chain.projection.front()).int_val));
+            return storage::VisitControl::kContinue;
+        },
+        &stats, Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
+        /*snapshot=*/nullptr, /*indexes=*/true, &sink);
+    ASSERT_TRUE(ran.ok()) << ran.message();
+    ASSERT_TRUE(sink.done) << "the outer walk never crossed a page boundary";
+    ASSERT_EQ(divides, 1u) << "the inner leaf never divided at the boundary";
+    // The premise: the sub-chain resumed a prefix map rather than walking
+    // whole per author - a build, probed once per outer row.
+    const StepStats total = stats.Total();
+    EXPECT_GT(total.build_probes, 0u) << "no outer row probed the prefix map";
+    // Each inner row is bucketed once - the divide's rows among them, ahead
+    // of the mark. A resume by ordinal, after the divide dropped the retired
+    // slot behind the mark, skips the row after the mark: one author fewer.
+    EXPECT_EQ(total.build_rows, kAuthors + inserted)
+        << "a resumed prefix bucketed an inner row twice or skipped one";
+    std::vector<std::uint64_t> want;
+    for (std::uint64_t a = 1; a <= kAuthors; ++a) want.push_back(a);
+    EXPECT_EQ(got, want) << "a resumed prefix skipped an inner row it never covered";
 }
 
 }  // namespace kds::exec
