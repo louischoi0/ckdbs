@@ -145,6 +145,7 @@ add_executable(kds_tests
     bulk_insert_test.cpp
     drop_table_test.cpp
     drop_table_reclaim_test.cpp
+    page_free_test.cpp
     kwp_load_server_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp

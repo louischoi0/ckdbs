@@ -187,8 +187,7 @@ void ClearMapBit(const fs::path& file, PageId id) {
     ASSERT_TRUE(storage::ValidateFreeMapPage(bytes).ok());
     const std::uint32_t index = storage::FreeMapBitIndexOf(id);
     ASSERT_TRUE(storage::FreeMapIsAllocated(bytes, index));
-    page[storage::kPageBodyOffset + (index >> 3)] &=
-        static_cast<std::byte>(~(1u << (index & 7)));
+    storage::FreeMapRelease(bytes, index);
     ASSERT_FALSE(storage::FreeMapIsAllocated(bytes, index));
     storage::StampPageChecksum(bytes);
     f.seekp(static_cast<std::streamoff>(map_page) * kPageSize);

@@ -18,7 +18,7 @@
 // AM-S1 (`instructions/v3.0.0/workorder-am-m1-shared-pool.md`): the page
 // latch word - first the primitive alone, on raw words with no store, no
 // frame and no pin; then what the store does with it (the arming, the
-// modes the accessors pick, the sweep's and EvictClean's refusals) on
+// modes the accessors pick, the sweep's refusal) on
 // `PageLatchStoreTest` below. The scan ring's refusal (ReleaseScanSlot)
 // has one since AM-S2-P S-P2 - `ARingSlotIsNotDroppedWhileAnotherCoreHoldsIt`
 // at the bottom of this file, which is the only one of the three erasers
@@ -391,7 +391,7 @@ TEST_F(PageLatchStoreTest, OneTaskMayHoldAPageTwiceAndTheWordReturnsToFree) {
     EXPECT_EQ(WordOf(a), 0u);
 }
 
-TEST_F(PageLatchStoreTest, TheSweepAndEvictCleanRefuseAFrameAnotherCoreHolds) {
+TEST_F(PageLatchStoreTest, TheSweepRefusesAFrameAnotherCoreHolds) {
     // The AM-S2 shape, exercised now through the test hook: a hold taken
     // by core 7 has no pin in this table, and only the word says the frame
     // is spoken for. In eviction_test.cpp's discipline the sweep must
@@ -406,18 +406,16 @@ TEST_F(PageLatchStoreTest, TheSweepAndEvictCleanRefuseAFrameAnotherCoreHolds) {
     EXPECT_TRUE(store_->latch_word_for_test(held).ok()) << "the held frame is still resident";
     EXPECT_FALSE(store_->latch_word_for_test(victim).ok()) << "the victim fell";
 
-    const std::array<PageId, 1> ids{held};
-    const Status refused = store_->EvictClean(ids);
-    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument) << refused.message();
-
+    // `FreePage`'s deferral of a held frame is `page_free_test.cpp`'s, where
+    // `EvictClean`'s refusal stood until BF-R5 deleted it.
     ASSERT_TRUE(store_->UnlatchFrameForTest(held, /*core=*/7).ok());
     EXPECT_EQ(WordOf(held), 0u);
-    EXPECT_TRUE(store_->EvictClean(ids).ok()) << "released, the frame may go";
 }
 
 TEST_F(PageLatchStoreTest, ARingSlotIsNotDroppedWhileAnotherCoreHoldsIt) {
     // **The third eraser's latch refusal, which had no cell** (AM-S2-P
-    // S-P2). `EvictColdFrames` and `EvictClean` are covered above; the ring
+    // S-P2). `EvictColdFrames` is covered above and `FreePage` in
+    // `page_free_test.cpp`; the ring
     // reaches the same rule through `ReleaseScanSlot`, and the rule matters
     // more there because a ring drops frames as a matter of course rather
     // than only under pressure.

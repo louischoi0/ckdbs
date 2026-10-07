@@ -298,26 +298,6 @@ TEST_F(EvictionTest, ThePinnedClassRangeOnlyEverGrows) {
     EXPECT_TRUE(store_->IsPinnedClass(150));
 }
 
-// ---- The pre-existing eviction path learns about pins -------------------
-
-TEST_F(EvictionTest, EvictCleanRefusesAPinnedPageAsItAlreadyRefusesADirtyOne) {
-    const PageId id = MakeCleanResidentPage(std::byte{1});
-    const PageId ids[] = {id};
-
-    // ForRead for the reason above: EvictClean checks dirty *before* pinned,
-    // so a PinnedGet here would report the dirty refusal and never reach the
-    // one this test is about.
-    auto ref = store_->PinnedGetForRead(id);
-    ASSERT_TRUE(ref.ok());
-    Status refused = store_->EvictClean(ids);
-    EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(refused.message().find("pinned"), std::string::npos) << refused.message();
-
-    ref.value().Release();
-    EXPECT_TRUE(store_->EvictClean(ids).ok());
-}
-
 TEST_F(EvictionTest, AnEmptyOrZeroBudgetSweepIsAWellDefinedNoOp) {
     EXPECT_EQ(store_->EvictColdFrames(0), 0u);
     const PageId id = MakeCleanResidentPage(std::byte{1});
@@ -1001,6 +981,24 @@ PageId SweepVictimAfterAFault(bool armed) {
     auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
     EXPECT_TRUE(device.ok());
     if (!device.ok()) return kInvalidPageId;
+    // **The first page is created, synced and left behind by a store that
+    // is then closed**, so the store the cell measures holds no frame for it
+    // and its first read is a genuine fault. `EvictClean` dropped the frame
+    // in place until BF-R5 deleted it; a store opened over the same device
+    // is the same state with no eviction path a test alone would use.
+    PageId first = kInvalidPageId;
+    {
+        auto opened = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+        EXPECT_TRUE(opened.ok());
+        if (!opened.ok()) return kInvalidPageId;
+        auto made = opened.value()->CreateNew();
+        EXPECT_TRUE(made.ok()) << made.status().message();
+        if (!made.ok()) return kInvalidPageId;
+        first = made.value().first;
+        FormatPage(made.value().second.bytes(), PageType::kHeap);
+        made.value().second.Release();
+        EXPECT_TRUE(opened.value()->Sync().ok());
+    }
     auto store = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
     EXPECT_TRUE(store.ok());
     if (!store.ok()) return kInvalidPageId;
@@ -1016,23 +1014,21 @@ PageId SweepVictimAfterAFault(bool armed) {
         << "the two arms of this equivalence must actually differ";
     if (store.value()->latch_armed() != armed) return kInvalidPageId;
 
-    PageId ids[2] = {kInvalidPageId, kInvalidPageId};
-    for (PageId& id : ids) {
+    PageId ids[2] = {first, kInvalidPageId};
+    {
         auto made = store.value()->CreateNew();
         EXPECT_TRUE(made.ok()) << made.status().message();
         if (!made.ok()) return kInvalidPageId;
-        id = made.value().first;
+        ids[1] = made.value().first;
         FormatPage(made.value().second.bytes(), PageType::kHeap);
     }
-    // Clean, or the sweep would only queue them (EV02).
+    // Clean, or the sweep would only queue it (EV02).
     EXPECT_TRUE(store.value()->Sync().ok());
     EXPECT_LT(ids[0], ids[1]) << "the sweep walks in id order; the cell reads that order";
 
-    // Drop the first page's frame, then fault it back. `GetForRead` and not
-    // `Get`: a write fault marks the frame dirty, and a dirty frame is
-    // queued rather than reclaimed, which would make every run agree for
-    // the wrong reason.
-    EXPECT_TRUE(store.value()->EvictClean(std::span<const PageId>(&ids[0], 1)).ok());
+    // Fault the first page in. `GetForRead` and not `Get`: a write fault
+    // marks the frame dirty, and a dirty frame is queued rather than
+    // reclaimed, which would make every run agree for the wrong reason.
     {
         auto faulted = store.value()->GetForRead(ids[0]);
         EXPECT_TRUE(faulted.ok()) << faulted.status().message();
@@ -1085,7 +1081,14 @@ TEST(EvictionInsertSweepTest, AFaultPastTheBudgetSweepsUnderTheInsertsOwnHold) {
         ids.push_back(made.value().first);
     }
     ASSERT_TRUE(store.value()->Sync().ok());
-    ASSERT_TRUE(store.value()->EvictClean(std::span<const PageId>(ids)).ok());
+    // **Dropped by closing the store and opening another over the device**
+    // (`EvictClean` dropped them in place until BF-R5 deleted it): the new
+    // store holds no frame, so every read below is a genuine miss.
+    store.value().reset();
+    store = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/4);
+    store.value()->SetFrameBudget(kBudget);
 
     // `GetForRead` and not `Get`: a write fault leaves every frame dirty,
     // and a dirty frame is queued rather than reclaimed, so the sweep would

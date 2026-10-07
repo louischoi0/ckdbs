@@ -14,7 +14,8 @@ recorded at §21.
 **Run to its close on W2** (`raft-marks-2026-10-07.md` §23): *"go ahead dont
 stop until milestone, follow CLA proposal if decision needed"*. Each stage's
 row in §6 says where it stands. **BF-S1 is built:** the censuses, the
-premise, which held, and the red cells.
+premise, which held, and the red cells. **BF-S2 is built:** the free
+primitive, the free list and the map write barrier, with no caller yet.
 
 - BF-S0 moved no file under `src/`, `include/` or `tests/`, and no suite
   ran.
@@ -1521,5 +1522,124 @@ BF-S2). Two were declined:
 - `AllocatedPages`' scan bound stays a margin over the allocated count,
   because the store has no high-water accessor and BF does not add one for
   a test.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S2 - the primitive and the allocator - built 2026-10-07
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `970feb5f`, run
+  against the map-keyed frame table under BF-Q14 (b) (§23).
+- **Nothing calls `FreePage` in production yet.** BF-S3 adds the reclaim.
+
+**Code:**
+- **The seam.** `PageStore::FreePage`, whose default refuses
+  `NotImplemented`, and `FreeOutcome {kFreed, kDeferred}`.
+- **`DevicePageStore::FreePage`.** One hold, frame table then map:
+  - It discards the frame, dirty or not, and poisons it in debug builds.
+  - It clears the bit (`FreeMapRelease`, new in the codec), decrements
+    `allocated_pages_`, marks the region dirty and lists the id.
+  - It defers on a pin, a page latch, a writeback claim, a fault in flight
+    (`loading_`) or a `CreateAt` in flight (`claiming_`).
+  - It refuses `Corruption` below `Open`'s `first_new_page_id`, for a map
+    id, for a headerless id and for a resident `kCabinBound` frame. An id
+    already free answers `NotFound`.
+- **The free list** (BF-R6). It is an ordered set under the map latch,
+  popped lowest first by `CreateNew` ahead of the cursor, under both holds,
+  and the pop skips an id that is resident or has a fault in flight.
+  - `CreateAt` takes a listed id off the list.
+  - The cursor passes over a listed id. This was the review's B2: every id
+    a clean mount's reclaim frees lies above that mount's cursor.
+  - `CreateNewHeaderless` never pops. Since the review's B1, it marks its
+    id headerless before any frame exists.
+  - On a claimed id whose device bytes are not all zero, it writes and
+    syncs zeros first. This is R1's zero-write: after a clean restart the
+    cursor does find the bits BF cleared.
+- **`InsertFrame` refuses a create that finds a frame already resident**,
+  with `Corruption`. It is defence, and its return type became `StatusOr`.
+- **The map write barrier.** `map_flush_latch_` is held across
+  `FlushMaps`' copy and write, outer to the map latch and null unarmed.
+  `PersistMaps` is the map sync, and its comment now says so.
+- **`EvictClean` is deleted.** Its callers moved:
+  - `am_s2_pin_protocol_test`'s rounds now use the sweep, and count a page
+    still resident afterwards as the failure;
+  - the two eviction cells reopen a store over the same device;
+  - the two refusal cells became `FreePage` deferral cells.
+- **A1:** the Waystone directory walk reads a child id of 0 as an empty
+  slot (`waystone_dir.cpp`'s `LoadChild`).
+- **Census C's store sentences are restated:** `page_store.hpp`'s floor
+  cost, `high_water.hpp`'s, the hit path's "never cleared", `CreateNew`'s
+  "clear one instruction ago", `WriteBack`'s dirty-frame premise,
+  `CreatePinned`'s, `FlushPages`' and `Flush`'s ordering notes,
+  `FlushMaps`' "the rest write nothing", the eraser lists, and
+  `free_map.hpp`'s unbuilt `ALLOC`/`FREE`.
+- BF-S1's `ClearMapBit` now uses `FreeMapRelease`.
+- **Two test seams:** `SetAfterFaultPublishedForTest` and
+  `SetAfterMapCopyForTest`.
+
+**Cells** (`tests/page_free_test.cpp`, 11):
+- a freed id has no frame, and its next create returns a zeroed page;
+- a dirty frame is discarded and never written back;
+- a pinned, latched or writeback-claimed frame defers the free and changes
+  nothing;
+- a fault in flight defers it;
+- the four refusals, and `NotFound` for a second free;
+- the list is asked ahead of the cursor;
+- the cursor passes over a listed id above it;
+- a headerless create never takes a listed id, and after a restart zeroes
+  the dead image it lands on;
+- a pop skips an id whose fault is parked between its `loading_` publish
+  and its read;
+- a `PersistMaps` returns only after another thread's parked `FlushMaps`
+  copy is written;
+- a directory slot reading zero is empty.
+
+**Suite:** 3235 of 3240, plain, and 3235 of 3240 with
+`KDS_TEST_PAGE_LATCH=1`. In both, the five failures are exactly BF-S1's red
+cells, which BF-S3 turns green. The armed run also skips its three usual
+cells.
+
+**Mutations**, each built and run five times against `PageFreeTest`, plain:
+
+| mutation | killed by |
+|---|---|
+| the frame left resident | the freed-id cell, the dirty-discard cell, the list cell |
+| a pinned frame erased | the held-frame cell (plain; under the latch census the latch's own deferral covers it, so it runs plain) |
+| the list skipped | the freed-id cell, the pop cell |
+| the headerless refusal dropped | the refusal cell |
+| `CreateNewHeaderless` allowed to pop | the headerless cell, the cursor cell |
+| `FreePage`'s in-flight deferral dropped | the fault-in-flight cell |
+| the cursor takes a listed id | the cursor cell |
+| the pop's `loading_` skip dropped | the pop cell |
+| the map write barrier removed | the `PersistMaps` cell |
+| the headerless zero-write dropped | the headerless cell |
+| a zero directory slot read as page 0 | the directory cell |
+
+All eleven are killed. The first hung rather than failed, because its fault
+seam never fired. The cells' waits are now bounded at ten seconds
+(`SpinUntil`), so a seam that never fires fails its cell, and all eleven
+cells pass five runs over with the bound in place.
+
+**Review** (`critics-developer`, one pass):
+- **B1, fixed by the review.** The headerless create inserted its frame
+  before setting the headerless bit, so a writeback in the gap stamped a
+  checksum over child 1. The gap predates BF; R1's zero-write had widened
+  it to a device read, a write and an fsync. The id is now marked
+  headerless before the insert (`MarkHeaderlessBeforeInsert`).
+- **B2, taken as CLA proposed under §23:** the cursor skips listed ids, and
+  the list became an ordered set.
+- **B3, noted:** between a claim and its insert, `FreePage` could free a
+  just-claimed id. Only a reclaim's precondition rules that out - BF-R3
+  reaches only a dropped relation's checked pages - and BF-S3 keeps it so.
+- **Cell gaps, closed:** the deferral on a fault in flight, and the
+  cursor's listed-id skip.
+- **Also from the review:** text fixes (`PopFreeListLocked`'s doc,
+  `EnsureHeaderlessMap`'s caller, two `EvictClean` mentions) and the
+  cell's rename.
+- **Declined:** none.
+- **Noted as cost:** a zero-write holds the parent directory page's latch
+  across an fsync, on a reused id only.
+- **Left to BF-S6:** `allocated_pages()`'s "printed by SHOW META" (true
+  from BF-S3), and `catalog.cpp:1226` and `eviction.md:114`, which still
+  name `EvictClean`.
 
 **Overhead not measured;** BF-Q15 measures it at BF's close.

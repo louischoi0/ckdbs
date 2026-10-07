@@ -50,10 +50,13 @@
 //
 // ---- What it costs -------------------------------------------------------
 //
-// Ids below the mark are skipped for the life of the instance. Nothing
-// frees a page (page.md §5) and `CreateNew()` hands out the lowest free id,
-// so in practice there are almost no gaps below the mark to skip - and the
-// alternative to skipping them is re-issuing one the log names.
+// The cursor skips every clear bit below the mark for the rest of the run.
+// `CreateNew()` hands out the lowest free id, so few gaps lie below it, and
+// the alternative to skipping them is re-issuing one the log names. A page
+// a reclaim frees during the run comes back through the store's free list
+// instead (BF-R6), which holds only ids no replay names, so the mark does
+// not gate it; after a crash that list is gone, and the run's frees below
+// the mark wait for a clean restart.
 //
 // ---- The transaction-id half ---------------------------------------------
 //
