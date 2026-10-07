@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20) and `worktree-drop-table-page-reclaim` (§21-§22) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20) and `worktree-drop-table-page-reclaim` (§21-§23) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -206,3 +206,12 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BF-Q0: yes** - BF opens with BF-S0..S6 and BF-R1..R13 as written. **BF-Q1 (b):** the mount first, then within the run (BF-S5). **BF-Q2 (a):** a free is crash-safe once `D` is past the drop; no WAL record added. **BF-Q3 (a):** the roots wait in the tombstone's word. **BF-Q4:** superblock 21, version 20 refused (§11). **BF-Q5 (c):** the walk reclaims; the owner census is the sim's oracle. **BF-Q6 (i):** an in-memory free list ahead of the cursor. **BF-Q7 (a):** a freed page's frame is discarded, `EvictClean` deleted. **BF-Q8 (a):** what the walk reaches. **BF-Q9 (b):** the statement epoch, published before the schema word is read. **BF-Q10 (a):** all three defence checks. **BF-Q11 (a):** the RESTRICT window fixed in BF-S5. **BF-Q12 (a):** the code governs; the autocommit specs are restated. **BF-Q13:** the counters, no key, `kReclaimBatchPages` a constant. **BF-Q14 (a):** BF-S2 after BE-S2, and against the map-keyed table if BE stops at BE-S1. **BF-Q15:** measured once at BF's close. **BF-Q16 (a):** core 0's system tick. **BF-Q17 (a):** BF answers DT1's gate 3 and horizon preconditions for a dropped relation. **BF-Q18 (c):** a chain freed tail-first. Five of these are `[quiet-wrong]`: BF-Q1, Q2, Q9, Q11 and Q17 |
 | **Does not settle** | BF-S1's start; BF-S1's premise gate on BF-R4's `cores > 1` arm, where BF stops and the operator rules; the push |
 | **Recorded at** | the order's header (W1), §2's heading, §4 and §6; `index.md`'s BF row |
+
+## 23. BF run to its close
+
+| | |
+|---|---|
+| **Word** | *"go ahead dont stop until milestone, follow CLA proposal if decision needed"* |
+| **Mark** | BF-S1 to BF-S6 run in order on `worktree-drop-table-page-reclaim`, each through its review and the suite; every choice a stage raises taken as CLA proposes it. **BF-Q14 read under it:** BE has not started (BE-S1 is its next stage), so BF-S2 proceeds against the map-keyed frame table - BF-Q14's own fallback, (b) - and BE-R1's eraser list counts BF-R5's discard when BE resumes |
+| **Does not settle** | the push; BE's start; BB's close entry; BA's resumption |
+| **Recorded at** | the order's status line and §6, and the index row |

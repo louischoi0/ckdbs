@@ -8,8 +8,13 @@ Written 2026-10-07 on `worktree-drop-table-page-reclaim` from `bc144dbf`
 - **W1:** *"BF-Q0..Q 제안대로 마킹해줘"* - mark BF-Q0..Q as proposed.
 
 **Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §22): BF-Q0..Q18
-are marked as proposed, so BF-R1..R13 are rulings and BF-S1 is the next
-stage. The order's writing is recorded at §21.
+are marked as proposed, so BF-R1..R13 are rulings. The order's writing is
+recorded at §21.
+
+**Run to its close on W2** (`raft-marks-2026-10-07.md` §23): *"go ahead dont
+stop until milestone, follow CLA proposal if decision needed"*. Each stage's
+row in §6 says where it stands. **BF-S1 is built:** the censuses, the
+premise, which held, and the red cells.
 
 - BF-S0 moved no file under `src/`, `include/` or `tests/`, and no suite
   ran.
@@ -1317,3 +1322,204 @@ Five of the marks are on `[quiet-wrong]` surfaces - BF-Q1, BF-Q2, BF-Q9,
 BF-Q11 and BF-Q17 - where a wrong choice turns a refusal into a wrong
 answer. BF-S1 starts on its own word; nothing here starts it.
 
+
+### BF-S1 - the census, and red first - built 2026-10-07
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `df741e3c`
+  (`v2.7.0-669-gdf741e3c`), on the word of `raft-marks-2026-10-07.md` §23:
+  *"go ahead dont stop until milestone, follow CLA proposal if decision
+  needed"*. The suite at `df741e3c` was 3223 of 3223 before the stage.
+- **The cells** are `tests/drop_table_reclaim_test.cpp`. Each drives an
+  `Expeditor` without `Start()`, and every mount is `Expeditor::Open`.
+
+**The warm-up premise holds, so BF does not stop here.**
+`DropTableReclaimPremiseTest.AClearedBitRefusesTheNextMountUntilEveryCoreHasPublished`
+builds a volume whose log, from its anchor on, names a dropped relation's leaf
+by a record that is not its creation. It then mounts the volume, copies what a
+crash right after the completion checkpoint leaves, clears the leaf's bit in
+that copy's map page (the bytes edited and the checksum restamped, no store
+code touched), and mounts the copy. The `cores = 2` instance is an
+`Expeditor` opened at two cores and never started, not §3's `TwoCoreRig`
+(`file_rig_crash.hpp`): no peer reactor runs, so no peer can publish
+before the cut, and the mount is production's. Five runs, with no cadence
+checkpoint:
+- at `cores = 2` every second mount is refused, naming the leaf;
+- at `cores = 1` every second mount succeeds.
+
+BF-R4's `cores > 1` arm stands as written.
+
+**Red at `df741e3c`, each for the reason it names:**
+- `ADroppedRelationsPagesAreFreeAfterTheNextMount`: every page of the dropped
+  relation is still allocated after a clean restart.
+- `FiveCreateFillDropRoundsGrowTheVolumeByLessThanOneRound`: 55 pages after
+  round 1 and 223 after round 5, where one round's relation holds 40. The
+  other 8 are pages no relation owns - among them the undo pages a run leaves
+  behind (UP4) - which BF does not reclaim. Not counted page by page.
+- `ANewRelationLandsOnIdsADroppedRelationHeld`: no page of the new relation
+  lands on an id the dropped one held.
+- `TheVerifierMissesOnAnotherOwnersPage`: `VerifyTupleAt` answers `kOk` for a
+  location that names another owner's page.
+- `ReadTupleRefusesASlotThatLeavesThePage`: a slot at offset 8184 is read past
+  the page.
+
+**The suite on BF-S1's tree: 3225 of 3230.** The five failures are exactly
+these cells, and the one disabled cell is the existing
+`HeapSuspensionIsLifted`.
+
+**Green and kept green:** `ARolledBackDropLeavesTheRelationWholeAcrossARestart`.
+`sim_loop_test.cpp`'s two drop cells (`:490`, `:589`) are unchanged.
+
+**Census A - every page-creating path** (read at `df741e3c`):
+- Every logged path's first record that names the new page is a `PAGE_INIT`,
+  a `FULL_PAGE_IMAGE` or a `BTREE_SPLIT` image, and redo creates the page on
+  `NotFound` for all three (`redo.cpp:420-453`, `:538-559`). These paths are
+  the undo log, CREATE TABLE's three pages, catalog growth, every btree and
+  index split, the index build, var-heap growth and Bound Cabin growth. **No
+  logged path is red.**
+- The Bound Cabin path is logged, which corrects §1.2's "unlogged".
+- `LogCatPageInit` is right and `redo.cpp:443-447`'s comment is stale
+  (BF-S6).
+- **R1, red: `CreateNewHeaderless` from the cursor is not a never-written
+  id.** After a clean restart the cursor starts at 128 and finds the bits
+  BF cleared, and a headerless read skips both the all-zero test and the
+  checksum. A directory interior on a reused id would therefore follow the
+  dead image's bytes as child ids, and BF-R6's "cursor only" does not cover
+  it. **CLA's proposal, taken:** BF-R5's zero-write fallback, scoped to the
+  headerless create. When the claimed id's device bytes are not all zero,
+  zeros are written and synced before the headerless bit is set. It costs
+  one device read per directory-interior creation.
+- **R2:** the Waystone target page is unlogged and comes from `CreateNew`,
+  so it may pop the free list. That is benign: a reader checks the page type
+  and key, and the writer formats the page unconditionally
+  (`waystone_page.cpp:129-132`).
+- **A1, the neighbour of R1:** a never-written directory interior reads as
+  zeros, and zero is a page id - the superblock - where `kEmptyDirSlot` is
+  `0xFFFFFFFF`. That holds before BF, and R1's zero-write reaches the same
+  state. **CLA's proposal, taken in BF-S2:** the directory walk treats a
+  child id below the first user page as an empty slot.
+- **A2 - is there a window between the checkpoint's dirty-table snapshot and
+  its `CHECKPOINT_BEGIN` append?** Settled, no defect
+  (`checkpointer.cpp:147-183`).
+  - A core appends a record, stamps its page and checkpoints on one
+    thread, so none of its own records falls in its own window.
+  - A record `L` another core appends in that window, on a page the
+    snapshot saw clean, is bounded by that core: its latest checkpoint
+    either began before `L`, so its redo start is below `L`, or began after
+    `L`'s stamp, so its snapshot holds the page at a recLSN at or below `L`
+    or the page was written back after `L`.
+  - The publish folds the minimum over every core's latest redo start and
+    raises it to the highest anchor encoded before (BC-R1,
+    `superblock_checkpoint_anchor.cpp:94-99`). Each earlier anchor was
+    folded under the same bound, so the raise never lifts the anchor past
+    an `L` whose page still needs it.
+
+**Census B - who reaches a relation's pages without holding its `IS` to the
+end:**
+- **A tombstone a mount found is reached by no reader path**
+  (`expeditor.cpp:893`, `:913`; `catalog.cpp:1412`, `:2121`, `:2202`), as
+  BF-R8 argues.
+- **§1.9 item 2, settled: every resume passes `Revalidate` before it
+  re-binds.** `DispatchAndStage` begins with it (`command_dispatcher.cpp:780`),
+  and every entry and re-run reaches it. The executor cannot park
+  (`step_vm.cpp:166-175`). The one page id held across a park is a mid-walk
+  `UPDATE` or `DELETE` cursor, which its relation `IX` fences.
+- **For BF-R9:** one slot per core, published at `:780` and cleared when
+  `DispatchAndStage` returns, is enough.
+- **One red, for BF-R9 only: the KWP load endpoint**
+  (`kwp_load_server.cpp:312-318`, `:462`) reads outside `DispatchAndStage`.
+  It is safe while the reclaim runs on core 0's tick, because the load
+  server runs on core 0's reactor and both handlers are synchronous. **CLA's
+  proposal, taken in BF-S5:** both handlers publish the core's slot.
+- **An orphan Cabin set** banked by a probe compiled before the drop is
+  reachable only through a stale memo naming its `cabin_id`, which BF-R9
+  covers, and it lives until restart. BF-S6 states it.
+
+**Census C - every code premise resting on "nothing frees a page":**
+- About sixty sentences, each classified: false under BF, still true, or
+  already false at `df741e3c`.
+- The store's are restated in BF-S2. The ones whose code BF-S3 changes are
+  restated there, and the rest at BF-S6.
+- Already false before BF: the `ALLOC`-before-extend texts
+  (`file_page_device.cpp`, `page_device.hpp`, `memory_page_device.hpp`,
+  `payload.hpp:449-451`); `allocated_pages()`'s "printed by SHOW META"; the
+  `PersistMaps` durability claim; `command_dispatcher.cpp:2660`'s DT8;
+  `mount_recovery.hpp:236-239`'s "no owner index"; `btree.hpp:182-184` and
+  `index_tree.hpp:174-176`'s "never linked in"; `record.hpp:125-126`'s
+  "FREE records".
+
+**Census D - what an anchor names, and what a walk reaches:**
+- A committed `DROP INDEX`, a rolled-back `CREATE INDEX` and a rolled-back
+  `DROP INDEX` all leave the anchor slot naming a live tree. The slot is
+  never removed, and `ANCHOR_UPDATE` is redo-only.
+- A failed `CREATE INDEX` leaves no durable slot in any arm, so its tree is
+  §0's stated leak.
+- Every page class carries its type and an owner:
+  - the relation's oid on clustered, var-heap, anchor and heap pages;
+  - the index's oid on index pages, which come from another sequence, so
+    the class has to discriminate;
+  - 0 on everything else.
+- An internal node records its `level`, which is what "the class the parent
+  says" checks.
+- **Found:** a dividing leaf whose promotion fails is linked into the leaf
+  chain and reached by no descent (`btree.cpp:772-773` against `:792`;
+  `index_tree.cpp:454-455`). **CLA's proposal, taken:** BF-R3's walk also
+  follows the clustered leaf chain and the index leaves' right-sibling chain
+  from the leftmost leaf, into the same visited set and under the same owner
+  check, so those pages are reclaimed rather than leaked.
+- **Found, outside BF, and reproduced:** a root growth publishes the anchor
+  in an `ANCHOR_UPDATE` after its split record. A log cut between the two
+  leaves the anchor naming the grown-over root. Point lookups then miss every
+  committed row the split moved: 197 of 198 in a cell where the root leaf
+  divides, 680 of 1358 in one where an internal root divides. The repro is on
+  `worktree-agent-a6378d577b6230ab1` at `c4115721`, and the entry is
+  `docs/inflight/bugs/a-root-growths-anchor-publish-is-logged-after-its-split.md`.
+  For BF it is a leak, never a wrong free: from a grown-over root, the
+  descent misses the new root's right half, and the leaf-chain arm still
+  reaches every leaf.
+- The var-heap chain has no backward link, so BF-Q18 (c)'s tail-first free
+  collects the chain forward and frees it in reverse.
+
+**Decisions taken under §23, each CLA's proposal:**
+- **BF-Q14 (b).** BE has not started (BE-S1 is its next stage), so BF-S2
+  runs against the map-keyed frame table, and BE-R1's eraser list counts
+  BF-R5's discard when BE resumes.
+- R1's zero-write.
+- A1's empty-slot reading.
+- BF-R3's leaf-chain arm.
+- BF-R9's slot shape, and the load endpoint's publication.
+
+**Review** (`critics-developer`, one pass over the cells and this row):
+four defects, each fixed in the cells and each re-run.
+1. The "clean shutdown" was not clean. An `Expeditor` that is never started
+   runs no shutdown checkpoint, and a bare `Checkpoint()` keeps the redo
+   start at the oldest dirty page's recLSN. The next mount therefore replayed
+   the whole round, and its high-water repair lifted the floor over every
+   dropped page. `CleanShutdownCheckpoint` now syncs the store, then
+   checkpoints, as `CoreRuntime::ShutdownCheckpoint` does.
+2. The verifier cell could not have turned green correctly, because the
+   call carried no owner. `VerifyFor` now passes one: owner 77 must verify,
+   which is green today and stays green, and owner 88 must miss, which is
+   red today.
+3. The premise cell's refusal check matched any substring of the message.
+   It now matches redo's own `names page <leaf>,`.
+4. The `ReadTuple` cell now checks that the word it edits is the tuple's
+   offset before it relies on it.
+
+The review also corrected this row:
+- A2's argument now names BC-R1's floor and the gap between an append and
+  its stamp.
+- The rig the cells use is stated: an `Expeditor` opened at two cores and
+  never started, where §3's row named `TwoCoreRig`.
+- The 8 pages beyond the relation are no longer called undo pages without
+  a count.
+
+Three proposals were taken: the leak cell's rename, its missing direct
+includes, and switching `ClearMapBit` to BF-S2's `FreeMapRelease` (done at
+BF-S2). Two were declined:
+- the cells' helpers stay local rather than moving into a new shared
+  header, because `file_rig_crash.hpp` pulls in `two_core_rig.hpp`;
+- `AllocatedPages`' scan bound stays a margin over the allocated count,
+  because the store has no high-water accessor and BF does not add one for
+  a test.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
