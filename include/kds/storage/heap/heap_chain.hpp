@@ -7,6 +7,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/insert_placement.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
 
@@ -140,10 +141,42 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 //                  written and the chain is unchanged
 // `owner_oid` (page.md §2a): the relation's oid, stamped into any page the
 // insert creates. Not defaulted — every chain has a relation.
+//
+// **The tail is held as the tail** (BB-R7): the walk takes each page
+// exclusive while it reads the link and stops only at a page whose link is
+// still invalid under that hold, so the page an insert places into is the
+// last one until it lets go. A page another core links on during the walk is
+// walked on to, never linked over (the orphaned-page defect this closed).
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload, std::uint64_t trx_id,
                                         std::uint64_t owner_oid,
                                         PageId* tail_hint = nullptr);
+
+// **The two doors a user row comes through** (BB-R1, BB-R7;
+// `insert_placement.hpp`'s `IssueUnderHold`). `ChainInsert` above is the
+// storage contract, which the `sys.assertions` chain still places through;
+// these are what the statement layer calls, so a row's id is fixed under the
+// exclusive hold of the tail it lands on and the chain's ids ascend across
+// pages and within each at every core count.
+//
+// `ChainInsertIssued` - an omitted pk: holds the tail, then asks `issue` for
+// the row. Fails as `ChainInsert` does, and with whatever `issue` refused,
+// in which case nothing is placed and the tail is released.
+StatusOr<ChainInsertResult> ChainInsertIssued(storage::PageStore& store, PageId head,
+                                              const storage::IssueUnderHold& issue,
+                                              std::uint64_t trx_id, std::uint64_t owner_oid,
+                                              PageId* tail_hint = nullptr);
+
+// `ChainInsertNamed` - a named key: holds the tail; `OutOfRange` if `id` is
+// below the tail's `min_key` (below a placed id, so below the mark, with no
+// read of page 7); then `admit`; then the placement. A heap answers a key
+// below the mark `OutOfRange` whether or not it is present (BB-R12): its
+// duplicate check reads the tail alone.
+StatusOr<ChainInsertResult> ChainInsertNamed(storage::PageStore& store, PageId head,
+                                             std::uint64_t id, std::span<const std::byte> payload,
+                                             const storage::AdmitUnderHold& admit,
+                                             std::uint64_t trx_id, std::uint64_t owner_oid,
+                                             PageId* tail_hint = nullptr);
 
 // One row's landing place, and the per-page facts a batch fill produces
 // for the caller's logging (docs/inflight/in-progress/workplan-t3.md T3-4: a batch-filled page
@@ -179,6 +212,21 @@ StatusOr<ChainAppendBatchResult> ChainAppendBatch(
     std::span<const std::vector<std::byte>> payloads, std::uint64_t trx_id,
     std::uint64_t owner_oid,
     PageId* tail_hint = nullptr);
+
+// The sorted fill's door for user rows (BB-R7): holds the tail as the tail,
+// then asks `carve` - once, under that hold - for the rows, whose ids it
+// carved from the relation's mark and which must run contiguously from the
+// first payload's. So the block is carved above every id placed before it,
+// and placed before any id issued after it. Each fresh page is held from its
+// creation through its fill and linked only once it holds its rows, and its
+// predecessor's hold ends at that link - so no walker reaches a linked page
+// that is not yet filled. `ChainAppendBatch` above is this with the payloads
+// handed in.
+using CarveUnderHold = FunctionRef<StatusOr<std::span<const std::vector<std::byte>>>()>;
+StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, PageId head,
+                                                   const CarveUnderHold& carve,
+                                                   std::uint64_t trx_id, std::uint64_t owner_oid,
+                                                   PageId* tail_hint = nullptr);
 
 // Calls `fn` once per live slot of every page in the chain, in chain order
 // (which is id order page-wise, per the ordering property above). The

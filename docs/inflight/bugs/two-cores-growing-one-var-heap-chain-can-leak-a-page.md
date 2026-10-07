@@ -20,8 +20,9 @@ drops that hold when the walk ends. It then takes the tail exclusive
 (`:331`) and never re-reads the tail's link. When the tail is full
 (`:334`), it creates a page (`:349`), puts the value there, re-fetches the
 tail and links `tail.next = new` (`:367-369`), without asking whether the
-tail already links somewhere. The heap chain has the same gap
-(`two-cores-growing-one-heap-chain-can-orphan-a-page.md`).
+tail already links somewhere. The heap chain had the same gap until BB-S4
+closed it by holding the tail as the tail (BB-R7, `heap_chain.cpp`'s
+`HoldTail`) - the shape this entry's fix can take.
 
 Two cores that both walked to tail T while it was the last page:
 

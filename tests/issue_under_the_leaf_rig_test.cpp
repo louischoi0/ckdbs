@@ -181,5 +181,101 @@ TEST(IssueUnderTheLeafRig, ANamedKeyAtTheMarkIsPlacedBelowALaterIssuedId) {
     EXPECT_EQ(d0.Dispatch("SELECT id, v FROM t ORDER BY id").response, "id,v\\n5,50\\n6,60");
 }
 
+
+// ---- BB-S4: the heap arm (BB-R7) -------------------------------------------
+//
+// The same races on a heap relation, which only a volume from before SUS-1
+// can hold (the test binary lifts the suspension, `heap_suspension_env.cpp`).
+// The tail held as the tail stands for the btree's rightmost leaf: an issued
+// id, a named key's admission and the sorted fill's carve all happen under
+// its exclusive hold, so placement order is issue order across pages and
+// within each.
+
+std::unique_ptr<TwoCoreRig> OpenRigWithHeap(const char* create) {
+    auto opened = TwoCoreRig::Open();
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    if (!opened.ok()) return nullptr;
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    EXPECT_TRUE(StartsWith(rig->core(0).dispatcher().Dispatch(create).response, "CREATED"));
+    Session warm;
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    EXPECT_TRUE(StartsWith(d1.Dispatch("BEGIN", &warm).response, "BEGIN"));
+    EXPECT_TRUE(StartsWith(d1.Dispatch("ROLLBACK", &warm).response, "ROLLBACK"));
+    return rig;
+}
+
+// The page an `INSERTED ... page=<p> slot=<s>` reply names.
+std::string PageOf(const std::string& reply) {
+    const std::size_t at = reply.find(" page=");
+    if (at == std::string::npos) return {};
+    const std::size_t end = reply.find(' ', at + 6);
+    return reply.substr(at + 6, end == std::string::npos ? std::string::npos : end - at - 6);
+}
+
+TEST(IssueUnderTheLeafRig, OnAHeapAnIdIssuedFirstIsPlacedBelowALaterOne) {
+    std::unique_ptr<TwoCoreRig> rig = OpenRigWithHeap("CREATE TABLE h (id int64, v int64) HEAP");
+    ASSERT_NE(rig, nullptr);
+    const Raced raced =
+        RaceTwoInserts(*rig, "INSERT INTO h VALUES (10)", "INSERT INTO h VALUES (20)");
+    ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
+    ASSERT_EQ(raced.first_id, 1u);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    EXPECT_EQ(d0.Dispatch("SELECT id, v FROM h").response, "id,v\\n1,10\\n2,20")
+        << "the tail holds the later id in the lower slot";
+    EXPECT_EQ(d0.Dispatch("SELECT id, v FROM h ORDER BY id LIMIT 1").response, "id,v\\n1,10");
+}
+
+TEST(IssueUnderTheLeafRig, OnAHeapARaceAcrossAFullTailIsNotRefused) {
+    // A `varchar(4000)` cell makes a row of about 4 KB, so a page holds two
+    // and the tail is full before the race. Until BB-S4 core 1 grew a page
+    // with `min_key` 4 and placed there first, and core 0's 3 was then below
+    // the tail's `min_key` and refused `OutOfRange` - the tail-boundary
+    // refusal `heap-and-tuple.md` §4.1a stated. Under the tail's hold core 0
+    // grows the page itself, with `min_key` 3, and core 1's 4 follows it.
+    std::unique_ptr<TwoCoreRig> rig =
+        OpenRigWithHeap("CREATE TABLE h (id int64, s varchar(4000)) HEAP");
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    const std::string first = d0.Dispatch("INSERT INTO h VALUES ('a')").response;
+    const std::string second = d0.Dispatch("INSERT INTO h VALUES ('b')").response;
+    ASSERT_TRUE(StartsWith(second, "INSERTED")) << second;
+    ASSERT_EQ(PageOf(first), PageOf(second)) << "the fixture needs both rows on one page";
+
+    // Core 0's reply is checked inside the race: until BB-S4 it was the
+    // refusal.
+    const Raced raced =
+        RaceTwoInserts(*rig, "INSERT INTO h VALUES ('c')", "INSERT INTO h VALUES ('d')");
+    ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
+    ASSERT_EQ(raced.first_id, 3u);
+    EXPECT_NE(PageOf(raced.second_reply), PageOf(second)) << "the race never crossed a page";
+    EXPECT_EQ(d0.Dispatch("SELECT id, s FROM h").response, "id,s\\n1,a\\n2,b\\n3,c\\n4,d");
+}
+
+TEST(IssueUnderTheLeafRig, OnAHeapANamedKeyAtTheMarkIsPlacedBelowALaterIssuedId) {
+    std::unique_ptr<TwoCoreRig> rig = OpenRigWithHeap("CREATE TABLE h (id int64, v int64) HEAP");
+    ASSERT_NE(rig, nullptr);
+    const Raced raced =
+        RaceTwoInserts(*rig, "INSERT INTO h VALUES (5, 50)", "INSERT INTO h VALUES (60)");
+    ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
+    ASSERT_EQ(raced.first_id, 5u);
+    EXPECT_EQ(rig->core(0).dispatcher().Dispatch("SELECT id, v FROM h").response,
+              "id,v\\n5,50\\n6,60");
+}
+
+TEST(IssueUnderTheLeafRig, OnAHeapASortedFillIsPlacedBelowALaterIssuedId) {
+    // The sorted fill (bulkinsert.md T3-2: every row omits its pk, a heap
+    // with no var-heap, index, Cabin or assertion) carves its block under the
+    // hold of the tail it starts from (BB-R7); the seam runs once per fill,
+    // with the block's first id, after the carve, the borrow and the encode.
+    std::unique_ptr<TwoCoreRig> rig = OpenRigWithHeap("CREATE TABLE h (id int64, v int64) HEAP");
+    ASSERT_NE(rig, nullptr);
+    const Raced raced = RaceTwoInserts(*rig, "INSERT INTO h VALUES (10), (20), (30)",
+                                       "INSERT INTO h VALUES (40)");
+    ASSERT_TRUE(StartsWith(raced.second_reply, "INSERTED")) << raced.second_reply;
+    ASSERT_EQ(raced.first_id, 1u);
+    EXPECT_EQ(rig->core(0).dispatcher().Dispatch("SELECT id, v FROM h").response,
+              "id,v\\n1,10\\n2,20\\n3,30\\n4,40");
+}
+
 }  // namespace
 }  // namespace kds::server

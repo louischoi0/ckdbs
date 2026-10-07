@@ -662,12 +662,11 @@ public:
     // flip the relation to `kUnordered`; that state is deleted (BB-R10).
     //
     // **Called under the hold of the page the row lands on** - a btree's
-    // rightmost leaf (`storage::AdmitUnderHold`). That is what closes BB
-    // §1.3: the mark moves while no other core can issue or admit an id for
-    // the relation, because each of them needs that page first. The latch
-    // order is that page, then this one (BB-R4, `page.md` §6). A heap
-    // relation's named key is admitted before `ChainInsert` takes the tail,
-    // outside any hold: the tail is not yet held as the tail (BB-R7).
+    // rightmost leaf, a heap chain's tail held as the tail
+    // (`storage::AdmitUnderHold`, BB-R7). That is what closes BB §1.3: the
+    // mark moves while no other core can issue or admit an id for the
+    // relation, because each of them needs that page first. The latch order
+    // is that page, then this one (BB-R4, `page.md` §6).
     //
     // ---- Why the high-water mark moves ------------------------------------
     //

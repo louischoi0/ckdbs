@@ -1204,3 +1204,71 @@ it can see. The placement the mutant was written for at AT-S21 is killed.
 
 Suite: 3,141 cells, 3,140 green; the one failure the port 25432 another
 process holds, as at BB-S3.
+
+### BB-S4 — the heap arm, built 2026-10-07
+
+Built on `worktree-bb-issue-under-the-leaf` from `e242e242`, on BB-Q2 (a).
+
+**Code** (BB-R7). The chain's walk takes each page exclusive while it reads
+the link and stops only at a page whose link is still invalid under that
+hold (`HoldTail`, the hint first, then the head), so the page an insert
+places into is the last one until it lets go, and a page another core linked
+on meanwhile is walked on to, never linked over. Three doors for a user row,
+each fixing the id under that hold:
+
+- `heap::ChainInsertIssued` - an omitted pk: the tail held, then the
+  dispatcher's `IssueUnderHold` (issue, borrow, encode, the test seam);
+- `heap::ChainInsertNamed` - a named key: the tail held; below the tail's
+  `min_key` refused `OutOfRange` without reading page 7; then the
+  dispatcher's `AdmitUnderHold`; then the placement;
+- `heap::ChainAppendCarved` - the sorted fill: the tail held, then a
+  `CarveUnderHold` (`AllocateRowIdRange`, the range's borrow, the encode, the
+  seam once with the block's first id). Each fresh page is held from its
+  creation through its fill and linked only once filled; its predecessor's
+  hold ends at the link. `ChainAppendBatch` is this with the payloads handed
+  in.
+
+`ChainInsert` stays the storage contract, holding its tail as the tail too;
+`sys.assertions` still places through it (BB-R9, out of BB).
+
+**Cells.** BB-S2's two rig cells re-run on a heap relation created behind
+the SUS-1 seam the heap suites use - `OnAHeapAnIdIssuedFirstIsPlacedBelowALaterOne`,
+`OnAHeapANamedKeyAtTheMarkIsPlacedBelowALaterIssuedId` - and the sorted-fill
+cell against a peer's insert, `OnAHeapASortedFillIsPlacedBelowALaterIssuedId`.
+Storage cells in `heap_chain_test.cpp`: the walk walking on past a tail
+another core grew (`ATailAnotherCoreGrewPastIsWalkedOnRatherThanRelinked`,
+`ATailLinkedOnBeforeTheWalkHoldsItIsWalkedOn`), the issued door
+(`AnIssuedRowIsPlacedOnTheTailItWasIssuedUnder`, `AnIssueThatRefusesPlacesNothing`),
+the named door (`ANamedKeyBelowTheTailsMinKeyIsRefusedWithoutAskingTheMark`,
+`ANamedKeyIsAdmittedUnderTheTailThenPlaced`), and the carved fill
+(`ACarvedFillLinksEachFreshPageOnlyOnceItIsFilled`).
+
+**Gone**: the tail-boundary `OutOfRange` is no longer reachable by a race -
+`OnAHeapARaceAcrossAFullTailIsNotRefused` races two omitted-pk inserts
+across a full tail (`varchar(4000)`, two rows a page) and both land, in issue
+order.
+
+**Text restated**: `heap-and-tuple.md` §4.1's admission bullet and §4.1a's
+paragraph (`:250-258`), now one statement - placement order is issue order on
+every relation at every core count, with what the heap had until BB-S4; the
+comments in `catalog.hpp`, `command_dispatcher.hpp` (the seam) and
+`insert_placement.hpp` that said a heap fixed its id outside any hold.
+
+**Bug entries**: both deleted - defect A's
+(`order-by-pk-is-elided-over-a-btree-leaf-two-cores-filled-out-of-order.md`)
+and the orphaned page's (`two-cores-growing-one-heap-chain-can-orphan-a-page.md`).
+The var-heap chain's leak entry, which cited the second, now cites BB-S4's
+`HoldTail` as the shape its fix can take; its own chain is outside BB-R7.
+`known-gaps.md`'s heap-window entry is replaced by BB-R9's: two concurrent
+`CREATE ASSERTION`s can place `sys.assertions` rows out of issue order, with
+the orphaned-page half closed by `ChainInsert`'s held tail.
+
+**Mutations, each killed on every run**: the tail walked holding nothing and
+then taken without asking again - the orphan bug restored (3/3); a heap id
+issued before its tail is held (10/10, both race cells); a heap named key
+admitted before its tail is held (5/5); the sorted fill carved before its
+tail is held (5/5).
+
+Suite: 3,152 cells, 3,151 green; the one failure the port 25432 another
+process holds, as at BB-S3. Overhead not measured; measured at the
+milestone's close.

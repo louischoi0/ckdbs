@@ -153,7 +153,7 @@ CREATE TABLE t (id int64, qty int64) BTREE EXPLICIT;
 
 **The admission gate: spellability, then the storage's ordering rule.** `Catalog::AdmitExplicitRowId(oid, id)` first refuses an id outside `[kFirstRowId, kMaxKeystoneId]` as `InvalidArgument` — 0 is reserved for "unset" and a value ≥ 2^40 cannot be stored in the Keystone field by any path — before the catalog page is touched at all. Then:
 
-- **At or above the mark**, either storage: the mark moves to `id + 1`, persisted before the caller places anything. On a btree relation this runs under the exclusive hold of the rightmost leaf the key lands on (BB-R3 step 7, `storage::AdmitUnderHold`), so no other core issues or admits an id between the mark's move and the placement; on a heap relation it runs before `ChainInsert` takes the tail.
+- **At or above the mark**, either storage: the mark moves to `id + 1`, persisted before the caller places anything. On a btree relation this runs under the exclusive hold of the rightmost leaf the key lands on (BB-R3 step 7, `storage::AdmitUnderHold`), so no other core issues or admits an id between the mark's move and the placement; on a heap relation it runs under the exclusive hold of the chain's tail, held as the tail since BB-S4 (BB-R7, `heap::ChainInsertNamed`).
 - **Below the mark**, either storage: refused, and nothing is written, so a refused key burns no mark. A heap relation answers the `OutOfRange` above. A btree relation answers after its descent holds the leaf the key sorts to (`btree::BtreeInsertNamed`, BB-R3 steps 4-7), in this order: the key present in that leaf is `AlreadyExists`; a leaf with a right sibling means the key is below the mark — the sibling's `min_key` is a placed id — and is `OutOfRange` without reading the catalog page; on the rightmost leaf `AdmitExplicitRowId` itself refuses it `OutOfRange` (BB-R12).
 
 A named key's lock borrow precedes its admission (BB-R3 step 2). A refused borrow asks the mark first (`Catalog::RowIdMark`), so a key below it — final, since the mark only rises — is refused there with the same codes rather than left waiting on a fence it could never write past (AO-S6c-c's rule); a granted borrow pays nothing for the question.
@@ -247,20 +247,25 @@ sequence rather than ending it, and one below the mark is refused (BB-R3,
 §4.1). Comparing two ids of one relation orders them in issue order, and
 never across relations or histories (§4.1).
 
-**On a heap relation issue order is not placement order across cores, and
-that can be a refusal.** The bump and the placement are two
-latched spans, not one: a core can issue `n`, a second core issue `n + 1`
-and place it first, and if that placement opened a new tail page -
-`min_key = n + 1` - the first core's `n` is below the tail and
-`ChainInsert` refuses it `OutOfRange`. The sorted fill's carve has the same
-window against another core's issue. A btree relation has none since
-BB-R1: an omitted pk is issued under the exclusive hold of the rightmost
-leaf it lands on and a named key admitted under the hold of the leaf it
-lands on, so no other core can issue, admit or place between the fix and
-the placement (`btree::BtreeInsertIssued`, `btree::BtreeInsertNamed`). The window is one tail-page
-boundary wide, where the lease's was a whole block: until AT-S10b a peer's
-leased block that the chain had passed was refused on every row of it. A
-heap relation is creatable only before SUS-1
+**Placement order is issue order on every relation, at every core count
+(BB-R1, BB-R7).** An omitted pk is issued, and a named key admitted, under
+the exclusive hold of the page the row lands on - a btree's rightmost leaf
+(`btree::BtreeInsertIssued`, `btree::BtreeInsertNamed`), a heap chain's tail
+held **as** the tail (`heap::ChainInsertIssued`, `heap::ChainInsertNamed`) -
+so no other core can issue, admit or place between the fix and the
+placement. The heap's walk takes each page exclusive while it reads the link
+and stops only at a page whose link is still invalid under that hold, so a
+page another core linked on meanwhile is walked on to, never linked over.
+The sorted fill carves its block under the hold of the tail it starts from,
+holds each fresh page from its creation through its fill, and links it only
+once filled (`heap::ChainAppendCarved`). **Until BB-S4 a heap relation had a
+window there**: the bump and the placement were two latched spans, so a core
+could issue `n`, a second core issue `n + 1` and place it first - out of
+order inside one tail page, and refused `OutOfRange` across a tail-page
+boundary, where the second core's growth opened a page with `min_key = n +
+1` - and two cores growing one chain at once could overwrite a link and
+orphan a page. None of the three is reachable now. A heap relation is
+creatable only before SUS-1
 (`instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`).
 
 ## 5. Indexing

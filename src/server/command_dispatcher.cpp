@@ -4824,62 +4824,85 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         }
     }
 
-    auto first = catalog_.AllocateRowIdRange(oid, stmt.rows.size());
-    if (!first.ok()) {
-        return {ErrorReply(first.status()), false, 0, first.status()};
-    }
-
-    // **The run's borrow, over the block of ids it just carved**
-    // (AO-S6c-a). This path routes past `InsertOneRow` entirely, so without
-    // this it would be the one writer left borrowing nothing - the exact
-    // "header `trx_id`, no table entry" shape this sub-stage exists to
-    // remove, and the one AO-S6c-b would then read as a free row. SUS-1
-    // keeps the path off every relation created since the suspension, but
-    // a pre-suspension heap relation still reaches it and the test binary
-    // lifts the suspension, so it is live rather than theoretical.
+    // ---- The block, carved under the hold of the tail it starts from ------
     //
-    // **One range rather than one entry per row, and the interval is exact
-    // rather than a superset**: `AllocateRowIdRange` carved
-    // `[first, first + rows)` and every row of this run takes an id from
-    // it, so the declared unit covers precisely what is written. That is
-    // item 14's shape arrived at from the other direction - the ids are
-    // known instead of a predicate - and it is what keeps a bulk fill of
-    // any size inside `max_locks_per_txn`.
-    // The run is re-runnable - no row of it is written yet - and the cost
-    // of a park is the block already carved, which `AllocateRowIdRange`
-    // above has bumped the mark by. That is the same cost the single-id
-    // path states, and `sys.tables.next_id` being a mark on what has been
-    // *placed* is what allows it. `rows` is provably nonzero: the range
-    // allocation refuses a count of zero and returned above.
-    // `kCapable`: this is an `INSERT`, and an insert's verdict is not a
-    // function of the waiter's read view - the ids are carved from the
-    // relation's own sequence and the rows do not exist yet - so a
-    // repeatable-read run of it may wait like any other.
-    if (std::optional<Status> held = BorrowOrWait(
-            scope,
-            txn::LockKey::Range(ta.oid, first.value(), first.value() + stmt.rows.size()),
-            RepeatableReadWait::kCapable)) {
-        return {ErrorReply(*held), false, 0, *held};
-    }
-
-    // Encoded up front, ids contiguous from the range. The gate excluded
-    // spillable schemas, so the sink is never reached.
+    // **BB-R7.** The carve, the run's borrow and the encode run inside
+    // `ChainAppendCarved`, under the exclusive hold of the chain's tail, so
+    // the block is above every id placed before it and placed before any id
+    // issued after it - every other insert into the relation needs that tail
+    // first. The encode moves under the hold at no cost: the gate excludes
+    // var-heap schemas, so it writes no page. Each step's refusal is kept
+    // here as the statement's answer, with the row ordinal an encode failure
+    // has always carried.
+    std::uint64_t first_id = 0;
     std::vector<std::vector<std::byte>> payloads;
-    payloads.reserve(stmt.rows.size());
-    for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
-        auto encoded =
-            exec::EncodeRow(ta.schema, ta.layout, first.value() + k, stmt.rows[k],
-                            exec::VarHeapSink{&page_store_, ta.varheap_page_id,
-                                              /*appended=*/nullptr, ta.oid});
-        if (!encoded.ok()) {
-            return {ErrorReply(encoded.status()) + " (row " + std::to_string(k + 1) + ")",
-                    false};
+    std::optional<DispatchOutcome> refused;
+    // Named, because `CarveUnderHold` is a reference to it (`FunctionRef`).
+    const auto carve = [&]() -> StatusOr<std::span<const std::vector<std::byte>>> {
+        auto first = catalog_.AllocateRowIdRange(oid, stmt.rows.size());
+        if (!first.ok()) {
+            refused = DispatchOutcome{ErrorReply(first.status()), false, 0, first.status()};
+            return first.status();
         }
-        payloads.push_back(std::move(encoded.value()));
-    }
+        first_id = first.value();
 
-    auto filled = heap::ChainAppendBatch(page_store_, ta.desc_page_id, first.value(), payloads,
-                                         WriterId(scope), ta.oid, &ta.heap_tail_hint);
+        // **The run's borrow, over the block of ids it just carved**
+        // (AO-S6c-a). This path routes past `InsertOneRow` entirely, so without
+        // this it would be the one writer left borrowing nothing - the exact
+        // "header `trx_id`, no table entry" shape this sub-stage exists to
+        // remove, and the one AO-S6c-b would then read as a free row. SUS-1
+        // keeps the path off every relation created since the suspension, but
+        // a pre-suspension heap relation still reaches it and the test binary
+        // lifts the suspension, so it is live rather than theoretical.
+        //
+        // **One range rather than one entry per row, and the interval is exact
+        // rather than a superset**: `AllocateRowIdRange` carved
+        // `[first, first + rows)` and every row of this run takes an id from
+        // it, so the declared unit covers precisely what is written. That is
+        // item 14's shape arrived at from the other direction - the ids are
+        // known instead of a predicate - and it is what keeps a bulk fill of
+        // any size inside `max_locks_per_txn`.
+        // The run is re-runnable - no row of it is written yet - and the cost
+        // of a park is the block already carved, which `AllocateRowIdRange`
+        // above has bumped the mark by. That is the same cost the single-id
+        // path states, and `sys.tables.next_id` being a mark on what has been
+        // *placed* is what allows it. `rows` is provably nonzero: the range
+        // allocation refuses a count of zero and returned above.
+        // `kCapable`: this is an `INSERT`, and an insert's verdict is not a
+        // function of the waiter's read view - the ids are carved from the
+        // relation's own sequence and the rows do not exist yet - so a
+        // repeatable-read run of it may wait like any other.
+        if (std::optional<Status> held = BorrowOrWait(
+                scope, txn::LockKey::Range(ta.oid, first_id, first_id + stmt.rows.size()),
+                RepeatableReadWait::kCapable)) {
+            refused = DispatchOutcome{ErrorReply(*held), false, 0, *held};
+            return *held;
+        }
+
+        // Encoded ids contiguous from the range. The gate excluded spillable
+        // schemas, so the sink is never reached.
+        payloads.reserve(stmt.rows.size());
+        for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
+            auto encoded =
+                exec::EncodeRow(ta.schema, ta.layout, first_id + k, stmt.rows[k],
+                                exec::VarHeapSink{&page_store_, ta.varheap_page_id,
+                                                  /*appended=*/nullptr, ta.oid});
+            if (!encoded.ok()) {
+                refused = DispatchOutcome{
+                    ErrorReply(encoded.status()) + " (row " + std::to_string(k + 1) + ")", false};
+                return encoded.status();
+            }
+            payloads.push_back(std::move(encoded.value()));
+        }
+        // The seam, adjacent to the fix as on the row path: once per fill,
+        // with the block's first id, under the tail's hold.
+        if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(first_id);
+        return std::span<const std::vector<std::byte>>(payloads);
+    };
+
+    auto filled = heap::ChainAppendCarved(page_store_, ta.desc_page_id, carve, WriterId(scope),
+                                          ta.oid, &ta.heap_tail_hint);
+    if (refused.has_value()) return std::move(*refused);
     if (!filled.ok()) {
         return {ErrorReply(filled.status()), false, 0, filled.status()};
     }
@@ -4898,11 +4921,11 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             rec.target_page_id = filled.value().rows[k].page_id;
             rec.target_slot = filled.value().rows[k].slot;
             rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
-            auto ptr = txn_->AppendUndo(*scope.txn, rec, first.value() + k, {});
+            auto ptr = txn_->AppendUndo(*scope.txn, rec, first_id + k, {});
             if (!ptr.ok()) return {ErrorReply(ptr.status()), false, 0, ptr.status()};
 
             txn_->NoteInsert(*scope.txn, oid, filled.value().rows[k].page_id,
-                             filled.value().rows[k].slot, first.value() + k);
+                             filled.value().rows[k].slot, first_id + k);
         }
     }
 
@@ -4921,8 +4944,8 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     }
 
     return {"INSERTED oid=" + std::to_string(oid) + " rows=" + std::to_string(stmt.rows.size()) +
-                " first_id=" + std::to_string(first.value()) + " last_id=" +
-                std::to_string(first.value() + stmt.rows.size() - 1),
+                " first_id=" + std::to_string(first_id) + " last_id=" +
+                std::to_string(first_id + stmt.rows.size() - 1),
             false, stmt.rows.size()};
 }
 
@@ -5421,19 +5444,24 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIssued(
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap: {
             // The relation is a chain of heap pages (heap_chain.hpp): the
-            // tuple goes into the tail, and a full tail grows the chain by
-            // one page rather than failing. Duplicate-key and min_key
-            // enforcement live in there - they are heap invariants, not
-            // dispatcher policy.
-            auto payload = issue();
-            if (!payload.ok()) return payload.status();
-            auto id = KeystoneIdOfPayload(payload.value());
-            if (!id.ok()) return id.status();
-            auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id.value(),
-                                            payload.value(), trx_id, access.oid,
-                                            &access.heap_tail_hint);
+            // tail, held as the tail, takes the tuple, and a full tail grows
+            // the chain by one page rather than failing (BB-R7). Duplicate-key
+            // and min_key enforcement live in there - they are heap
+            // invariants, not dispatcher policy.
+            std::uint64_t id = 0;
+            auto placed = heap::ChainInsertIssued(
+                page_store_, access.desc_page_id,
+                [&]() -> StatusOr<std::span<const std::byte>> {
+                    auto payload = issue();
+                    if (!payload.ok()) return payload.status();
+                    auto issued = KeystoneIdOfPayload(payload.value());
+                    if (!issued.ok()) return issued.status();
+                    id = issued.value();
+                    return payload;
+                },
+                trx_id, access.oid, &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
-            return ChainPlacement(std::move(placed.value()), id.value());
+            return ChainPlacement(std::move(placed.value()), id);
         }
         case catalog::ClusteredType::kBtree:
             // The relation is a clustered B+ tree (btree.hpp) rooted at the
@@ -5452,9 +5480,9 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertNamed(
     const storage::AdmitUnderHold& admit, std::uint64_t trx_id) {
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap: {
-            if (Status s = admit(id); !s.ok()) return s;
-            auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id, payload, trx_id,
-                                            access.oid, &access.heap_tail_hint);
+            auto placed = heap::ChainInsertNamed(page_store_, access.desc_page_id, id, payload,
+                                                 admit, trx_id, access.oid,
+                                                 &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
             return ChainPlacement(std::move(placed.value()), id);
         }

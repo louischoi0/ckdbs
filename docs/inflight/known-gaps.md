@@ -538,19 +538,21 @@ there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
-- **Two cores inserting omitted-pk rows into one unsplit heap relation can
-  refuse the lower id `OutOfRange`.** By reading, on `at-s10-ring-consumers`
-  at `59ed9c0` (found by AT-S10b's prose pass); no cell reproduces it. Since
-  AT-S10b every core issues from the relation's one mark
-  (`Catalog::AllocateRowId`), but issuing and placing are two steps under
-  two latches: core A issues `n`, core B issues `n+1` and places it first,
-  opening a tail page with `min_key = n+1`, and `ChainInsert` refuses A's
-  `n` below it (invariant 3). The sorted fill's carve has the same window.
-  A refusal, never a wrong answer. It narrows AT-S9's leased-block entry,
-  which AT-S10b closed, to a one-id window; within one core the two steps
-  cannot interleave. A heap relation is creatable only before SUS-1, and a
-  btree relation - the default since - places each id by descent and is
-  unaffected. Owner: `heap-and-tuple.md` §4.1a.
+- **Two concurrent `CREATE ASSERTION`s can place `sys.assertions` rows out
+  of issue order.** By reading, on `bb-s0-order` at `bddd450c` (BB §1.8),
+  re-read on `worktree-bb-issue-under-the-leaf` at `6dc792c9`; no cell
+  reproduces it. `sys.assertions` is the one system relation whose rows carry
+  a Keystone word. Its id is issued before the build
+  (`assertion_catalog.cpp:493`, `AllocateRowId(kSysAssertionsTable)`) and
+  placed after it, by `EncodeRow` and `ChainInsert` (`:247-250`) under the
+  root page's hold (`:214`, `catalog.md` CT7) - two latched spans, so two
+  creates on two cores can place out of issue order: defect A's shape, on a
+  system relation. Across a tail-page boundary the one issued first and
+  placed second is refused `OutOfRange` after its build. **Not read**:
+  whether any reader depends on `sys.assertions`' key order. BB fixed the
+  user relations only (BB-R9, on BB-Q5: system relations out); `ChainInsert`
+  does hold its tail as the tail since BB-S4, so the orphaned-page half is
+  closed here too. Owner: `assertion.md` §7.
 
 - **The Cabin store's partition latches are taken at `cores = 1`.** By
   reading, on `at-s12-prose-sweep` at `2b20369` (found by AT-S12's

@@ -127,10 +127,9 @@ struct InsertPlacement {
 //
 // `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`. A user row's id
 // is fixed under the exclusive hold of the page the row lands on - a btree's
-// rightmost leaf - so placement order is issue order and every btree page's
-// slot order is its key order, at every core count. A heap chain calls the
-// same two callables before `ChainInsert` takes its tail, outside any hold:
-// the tail is not yet held as the tail (BB-R7). Until BB the
+// rightmost leaf, a heap chain's tail held as the tail (BB-R7) - so placement
+// order is issue order and every page's slot order is its key order, at
+// every core count. Until BB the
 // id was fixed under catalog page 7 and the row placed later under its page,
 // and a second core could fix a higher id and place it first in between
 // (defect A).

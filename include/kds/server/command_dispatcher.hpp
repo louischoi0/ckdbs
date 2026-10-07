@@ -668,12 +668,13 @@ public:
     // per row `InsertOneRow` places, immediately after the id is issued,
     // borrowed and its row encoded, or a named key admitted. The call stays
     // adjacent to the fix wherever the fix sits - under the exclusive hold of
-    // the page the row lands on since BB-S3 (BB-R1), so a cell that stops
+    // the page the row lands on - a btree's rightmost leaf since BB-S3, a
+    // heap chain's tail since BB-S4 (BB-R1, BB-R7) - so a cell that stops
     // here holds that page and another core's insert into the relation blocks
     // on its latch until the cell lets go. That adjacency is the rig cells'
     // whole power: a mutant that fixes the id before the hold must move this
-    // call with it, and then stops outside the hold. The sorted fill does not
-    // call it. Unset in production.
+    // call with it, and then stops outside the hold. The sorted fill calls it
+    // once, with its block's first id, after its carve. Unset in production.
     void SetAfterRowIdFixedForTest(std::function<void(std::uint64_t)> hook) {
         after_row_id_fixed_for_test_ = std::move(hook);
     }
