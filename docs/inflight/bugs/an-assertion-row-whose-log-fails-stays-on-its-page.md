@@ -17,6 +17,16 @@ AZ-S1 closed the same shape for the catalog's own `InsertRow`
 
 ## What it costs
 
+**Narrowed by BC-S4's fail-stop** (`docs/spec/wal.md` §6-5, re-read on
+`worktree-wal-recycling` on 2026-10-07). The failed log call stops the log, so
+the running instance refuses every write after it - the unchecked writes below
+cannot happen - and no page is written back after the stop. What is left is a
+window *before* the stop: another core's writeback that copies the page
+between the row's placement and its failed append. The page's LSN has not
+moved, so the WAL gate passes it, and the restart then revives the row. The
+two costs below are as they were before BC-S4, now reachable only through that
+window.
+
 - **On the running instance**: `ListAssertions` returns the row, so the name
   is taken and `SHOW ASSERTIONS` lists it, but the registry holds neither a
   live directory nor an unenforceable record for it. The relation's writes
@@ -37,5 +47,7 @@ append.
 ## The fix
 
 The row taken back or retired on the log's failure, as `ReportPlacedRow`
-does for `InsertRow`, carrying AZ-S1's open dead-slot question with it
-(`known-gaps.md`, WAL).
+does for `InsertRow`. AZ-S1's dead-slot question, which this would have
+carried, is closed by fail-stop for a page held across the placement and
+the append (`docs/spec/wal.md` §6-5); this path releases its page in between,
+so the fix also has to log the row under the hold that placed it.

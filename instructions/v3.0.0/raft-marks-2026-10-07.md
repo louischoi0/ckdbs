@@ -42,3 +42,22 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | BC-S1 is committed once its review is applied, and **BC-S2 starts**: the device (BC-R3, BC-R4) |
 | **Does not settle** | BC-S3..S5's start; the push |
 | **Recorded at** | the order's header and §6 |
+
+## 5. BC-S4's defect: investigated and fixed by fail-stop
+
+| | |
+|---|---|
+| **Word** | *"(a)로 진행해줘"*, then the answer *"Fail-stop (Recommended)"* to CLA's question of the fix |
+| **Mark** | The refused reboot BC-S4's simulator found is investigated and fixed before BC-S4 closes. **The fix is fail-stop**: after a refused record the log refuses every write until a restart (`docs/spec/wal.md` §6-5) |
+| **Does not settle** | whether a failed device *sync* stops the log too (`known-gaps.md`, WAL); the status a commit refused after the stop reports |
+| **Recorded at** | the order's §6 (BC-S4) |
+
+## 6. BC-S5 started, and the push
+
+| | |
+|---|---|
+| **Word** | *"리뷰 끝나면 커밋하고 BC-S5 진행해줘"*, then *"BC-S5 끝나면 커밋하고 main에 push해줘"* |
+| **Mark** | BC-S4 is committed after its review; BC-S5 is built, reviewed and committed, and the branch is pushed to `main` |
+| **Does not settle** | the v3.0.0 tag |
+| **Recorded at** | the order's header and §6 |
+

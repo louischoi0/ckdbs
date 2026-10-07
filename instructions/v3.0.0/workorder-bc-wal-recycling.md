@@ -6,10 +6,11 @@ Written 2026-10-07 on `worktree-wal-recycling` from `6dc792c9`
 
 **Opened 2026-10-07** (`raft-marks-2026-10-07.md` §2): BC-Q0..Q6 are
 marked as CLA proposed them, BC-Q2 on its condition, which BC-S1 decides.
-**BC-S1 started the same day and closed green** (§6): the premise holds and
-BC-Q2's condition is met. **BC-S2 started on the operator's word**
-(`raft-marks-2026-10-07.md` §4). Each later stage waits for its own word.
-**The close-out measurement is waived** (§3 there). BC cuts no tag.
+**BC closed 2026-10-07** (§6): BC-S1..S5 green, the premise held (BC-Q2's
+condition met), and BC-S4's simulator found a defect outside recycling that
+the operator's fail-stop fixed (`raft-marks-2026-10-07.md` §5). **The
+close-out measurement is waived** (§3 there), so nothing BC landed is
+measured. BC cuts no tag.
 
 **BC is not part of AR0 §8's chain.** It closes a gap AR0 never addressed:
 `known-gaps.md`'s *"The log is never recycled"* (CN-9 §4 C1). It neither
@@ -716,4 +717,51 @@ SLOT_RETIRE at lsn 135168 on page 133: slot index out of range`.
 - **A mutant** that removes the anchor's own segment is caught by the
   simulator (seed 2).
 - **The touched suites:** 320 of 320.
+
+### BC-S5 - the close, 2026-10-07
+
+On `worktree-wal-recycling` from `56a21763`.
+
+- **The measurement: not executed, waived by the operator**
+  (`raft-marks-2026-10-07.md` §3).
+- **Text restated:**
+  - `wal.md`: §2 (who recycles); §4.1 (the live run, the mount's open);
+    §6-5 (fail-stop); §11-4 (the bound, the fold floor, §1.9's three
+    cases, what removal costs); §12 (redo's floor); §13 (no retention
+    setting, the new fields);
+  - `client-manual.md` and `manual/sql/sql.md` (the `SHOW META` fields, the
+    stop as a client sees it);
+  - `CLAUDE.md`'s WAL row.
+- **Code:** `SHOW META`'s `wal_stopped=1`, with a cell; two comments that
+  cited the deleted descriptor bug (`file_log_device.hpp`,
+  `file_log_device_test.cpp`) and `ReportPlacedRow`'s, which cited the
+  deleted dead-slot entry. `ddl-transactional.md` §2 and the assertion-row
+  bug's fix lose the same citation.
+- **`docs/inflight/`:**
+  - C1's entry is deleted.
+  - C2's is restated: bounded by the live run.
+  - C3's bug file is deleted.
+  - The catalog dead-slot entry is deleted, closed by fail-stop: its failure
+    needed a refused append followed by an accepted one.
+  - The failed-sync gap is added.
+  - The assertion-row bug is narrowed to a pre-stop writeback window.
+  - The unheadered-tail bug has its second route.
+  - CN-9 carries a closure note.
+- **What BC leaves open, stated for the record:**
+  - the mount's two wiring lines have no cell (BC-S3);
+  - a failed sync does not stop the log;
+  - a header write failure leaves a log the restart refuses;
+  - the simulator ends a fault run at its first log-write fault;
+  - the recLSN-0 defect is open
+    (`bugs/a-page-a-checkpoint-lists-at-reclsn-0-hides-its-next-record-from-redo.md`).
+- **The review** (`critics-developer`):
+  - It confirmed the three deletions: the catalog dead-slot entry, the
+    descriptor bug, and every live citation of them.
+  - It fixed six overstatements in the documents and four dangling
+    citations.
+  - Taken: the dispatcher's field reads `WalManager::stopped()`.
+- **The suite at the close:** the full Debug suite, 3,180 of 3,181 green.
+  The one failure is `TcpServerListenTest.ReusePort…`, environmental: another
+  session's `kds_server` holds port 25432. It is recorded, not counted as a
+  pass.
 

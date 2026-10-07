@@ -61,8 +61,9 @@ refused, nothing names the row, so it is taken back whole
 (`PageView::UnInsertTuple`) and the page is as it was. If the hook
 succeeded and the row's record was refused, the undo record names the
 slot, so the slot is retired in place and is never reused. That dead slot
-is described by no record, which can refuse a later mount
-(`known-gaps.md`, WAL). Isolation and
+is described by no record; it cannot refuse a later mount because the
+refusal fail-stops the log (`docs/spec/wal.md` §6-5), so no later insert on
+the page is logged and the page is never written back. Isolation and
 atomicity are separate phases, and only the first is delivered by the read
 filter.
 

@@ -221,28 +221,23 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## WAL
 
-- **A catalog row whose `HEAP_INSERT` is refused leaves a dead slot that no
-  record describes.** Found by AZ-S1's review on
-  `worktree-az-s1-catalog-tail-arm` at `55a5aab`; read, not run.
-  `ReportPlacedRow` (`src/catalog/catalog.cpp`) retires the slot when the
-  row's append fails after the undo hook succeeded.
-  - **The failing case:** a later DDL logs an insert at the next slot of the
-    same tail page, and the process crashes before that page is written
-    back. Redo then meets that record on an image with one slot fewer, and
-    `RedoWriteTuple` refuses it `Corruption` (heap slots are dense), so the
-    **mount is refused**. It is a refusal, never a wrong answer.
-  - **It needs** an append refused and then accepted again, such as a ring
-    drain that fails once, and a crash before writeback.
-  - **Not new with AZ-S1:** before it, the same arm left a live row in that
-    slot, unlogged, which has the same redo shape.
-  - **Why the other arm's cure does not apply:** taking the row back, as
-    the hook-refused arm does, would let another row take a slot the undo
-    record names. Recovery's identity check then refuses the mount
-    instead.
-  - **Three cures, none chosen:** stop the instance on an append failure
-    that follows a page mutation; hold the page from further inserts until
-    a `SLOT_RETIRE` (or a full image) for the slot is logged; or accept it.
+- **A failed device sync does not stop the log.** Recorded at BC-S4 on
+  `worktree-wal-recycling`, 2026-10-07, by its review; read, not run.
+  - Fail-stop (`wal.md` §6-5) covers a failed device write and a ring-full
+    refusal.
+    A failed `fdatasync`, on the reactor's inline sync or on the writer
+    thread, leaves the durable point where it was and is retried.
+  - On Linux a failed `fsync` can drop the dirty pages and clear the error,
+    so the retry can return OK over bytes that are gone. `durable_lsn` then
+    covers a hole: an acknowledged commit can be lost, and a page can be
+    written back ahead of a record that is not on the device.
+  - `MemoryLogDevice::FailNextSync` keeps its overlay, so the simulator
+    models only the optimistic case and cannot see this.
+  - **Cure, undecided:** stop on any sync failure too, PostgreSQL's answer
+    since 2018. The operator's fail-stop mark (BC, 2026-10-07) named a failed
+    append, not a failed sync.
   - **No owner.**
+
 - **A refused catalog report on a new page spends one reserved page.** The
   page is left allocated, empty and unlinked. The catalog range is pages
   16..127, and nothing frees a page (`page.md` §5). This predates AZ-S1:
@@ -296,51 +291,25 @@ statement about an engine that no longer exists; re-verify or strike it.
   whichever stage next opens `core_runtime.cpp` — AM-S3 touches the same
   file.
 
-- **The log is never recycled; it grows for the instance's life.**
-  Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C1).
-  - `wal.md` §11-4 makes a segment below the redo start recyclable *once
-    archived* (`docs/spec/wal.md:146`). Archiving is `[PROPOSED]` (`:200`),
-    so no segment ever qualifies.
-  - The only removal in the device is the cleanup of a failed creation
-    (`src/wal/file_log_device.cpp:264`, `:274`, `:281`). Even that cleanup
-    is missing at one failure point, `:287`
-    (`bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`).
-  - **Nor can an operator reclaim the space by hand.**
-    `FileLogDevice::Open` requires the segments numbered from 0 with no gap,
-    and refuses the mount with `Corruption` naming the first missing one
-    (`src/wal/file_log_device.cpp:208-213`). Deleting old segments therefore
-    prevents the next mount.
+- **Every sync covers every live segment, so its cost grows with the
+  checkpoint interval's worth of log.** Restated at BC-S5 on
+  `worktree-wal-recycling`, 2026-10-07 (CN-9 §4 C2); first verified at
+  `8f9a887` by reading.
+  - `FileLogDevice::Sync` `fdatasync`s every segment of the live run
+    (`src/wal/file_log_device.cpp`, `include/kds/wal/stream.hpp`). Its
+    comment forbids narrowing that to the tail, because a roll can land
+    between the stream capturing its watermark and the device sync.
+  - **Since BC the run is bounded**: segments wholly below the durable redo
+    start are removed (`wal.md` §11-4), so the calls per sync are the
+    segments since the anchor's, not every segment the instance ever wrote.
+    The cost no longer grows with the instance's age.
+  - Syncing only the segments *written* since the last sync would be
+    enough: the previous tail plus any segment created since. Nothing
+    records which those are.
 
-  Cost: the WAL device's capacity is the instance's lifetime. When it fills,
-  `CreateSegment` fails, and so does every append after it. This gap also
-  drives the two entries below and the descriptor defect in
-  `bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`. Whether
-  recycling must wait for archiving is a durability decision (CN-9 §9 O4).
-  Owner: `docs/spec/wal.md` §11 and §13.
-
-- **Every sync covers every segment ever created, so its cost grows with
-  the log.** Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C2).
-  - `FileLogDevice::Sync` `fdatasync`s every open segment
-    (`src/wal/file_log_device.cpp:365-405`,
-    `include/kds/wal/stream.hpp:53-58`). Its comment forbids narrowing that
-    to the tail, for two reasons.
-    - The second reason is real: a roll can land between the stream
-      capturing its watermark and the device sync.
-    - The first reason, a partial write into an earlier segment, names no
-      writer at `d0d1d1b`. The only `LogDevice::WriteAt` callers are the
-      new segment's header (`src/wal/stream.cpp:79`) and the tail flush
-      (`:254`).
-  - With the entry above, every durable-point advance therefore issues one
-    `fdatasync` for each segment the instance has ever written.
-  - Syncing the segments *written* since the last sync would be enough.
-    Under today's writers, that is the previous tail plus any segment
-    created since the last sync copied `segments_`. Nothing records which
-    those are.
-  - `wal.md:46`'s *"issued once, over one file"* describes the logical log,
-    not the calls the device makes.
-
-  Cost: commit latency that rises with the instance's age. Not measured.
-  Owner: `docs/spec/wal.md` §3, `wal/file_log_device.cpp`.
+  Cost: one `fdatasync` per live segment per durable-point advance, bounded
+  by the checkpoint cadence. Not measured. Owner: `docs/spec/wal.md` §3,
+  `wal/file_log_device.cpp`.
 
 - **A segment roll does I/O inside the instance's append latch, which
   `wal.md` §6 both says and denies, and its cost was never priced.**

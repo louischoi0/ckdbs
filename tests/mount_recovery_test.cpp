@@ -644,5 +644,22 @@ TEST_F(RecoveryAuditTest, TheLogsRecyclingIsReportedWhereTheLogIsOwned) {
     EXPECT_NE(meta.find("wal_remove_failures=0"), std::string::npos) << meta;
 }
 
+// `wal.md` §6-5: a stopped log is named in SHOW META, and only then.
+TEST_F(RecoveryAuditTest, AFailStoppedLogIsNamedInShowMeta) {
+    auto device = wal::MemoryLogDevice::Create(64 * 1024);
+    ASSERT_TRUE(device.ok());
+    sched::ManualClock clock;
+    auto wal = wal::WalManager::Open(device.value().get(), clock, /*core_id=*/0);
+    ASSERT_TRUE(wal.ok());
+    CommandDispatcher d(boot_->superblock, boot_->catalog, *faulty_, /*log=*/nullptr, &clock,
+                        wal.value().get());
+    EXPECT_EQ(d.Dispatch("SHOW META").response.find("wal_stopped"), std::string::npos);
+
+    ASSERT_TRUE(wal.value()->Append({wal::RecordType::kHeapInsert, 1, 1}).ok());
+    device.value()->FailNextWrite(Status::IoError("injected"));
+    EXPECT_FALSE(wal.value()->Flush().ok());
+    EXPECT_NE(d.Dispatch("SHOW META").response.find(" wal_stopped=1"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace kds::server

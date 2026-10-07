@@ -1375,6 +1375,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " wal_interval_syncs=" << wal_stats.interval_syncs
            << " wal_sync_failures="
            << (wal_stats.sync_failures + wal_->writer_sync_failures());
+        // **Fail-stop** (`wal.md` §6-5), on every core - the stream is the
+        // instance's - and only once it has happened: an absent field is the
+        // running log, a present one is why every write is refused.
+        if (wal_->stopped()) os << " wal_stopped=1";
         // **Recycling** (BC-R6), on core 0 alone, the `wal_syncs` rule: the
         // removal is core 0's writer's, so a peer has no number to give.
         if (!wal_->attached()) {

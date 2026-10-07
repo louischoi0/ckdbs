@@ -176,6 +176,14 @@ Each item points at its record in `docs/inflight/`, where the code is cited.
 What follows each pointer is the `[design]` consequence for this layout. None
 was measured.
 
+**Since BC (`instructions/v3.0.0/workorder-bc-wal-recycling.md`, 2026-10-07)
+C1 is closed, C3's stranded segment is closed, and C2 and C3's descriptor
+count are bounded**: segments wholly below the durable redo start are
+removed, the descriptors go with them, and a roll at the descriptor limit no
+longer strands a file. Both stay unbounded while the anchor does not move
+(`docs/spec/wal.md` §11-4). C3's bug entry, deleted with the fix, is at
+`19e1dc1f`. What follows is the note as written against `8f9a887`.
+
 - **C1 — The log is never recycled, and old segments cannot be removed by
   hand** (`known-gaps.md`, WAL).
   - The WAL device's capacity is the instance's lifetime.

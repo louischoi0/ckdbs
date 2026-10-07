@@ -511,8 +511,8 @@ TEST_F(FileLogDeviceTest, ASyncBesideDetachAndReclaimNeverFails) {
 
 // The directory descriptor is opened once, at `Open`: a roll that meets the
 // descriptor limit fails at the segment's own open and leaves no file
-// behind (`bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`,
-// where the per-roll directory open stranded a full-size headerless one).
+// behind, where the per-roll directory open stranded a full-size headerless
+// one (the bug entry, deleted with the fix, is at `19e1dc1f`).
 TEST_F(FileLogDeviceTest, ARollAtTheDescriptorLimitStrandsNoFile) {
     auto device = OpenDevice();
     ASSERT_NE(device, nullptr);

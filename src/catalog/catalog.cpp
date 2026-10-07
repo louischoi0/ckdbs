@@ -390,9 +390,12 @@ StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
 //   its append or not at all: the stamp after it is on a page this holds
 //   pinned and exclusive, which is always resident. **This arm leaves the
 //   dead slot no record describes** that the first arm avoids. On a tail
-//   page, a later logged insert followed by a crash before writeback refuses
-//   the mount; taking the row back instead would let another row reach a
-//   slot the undo record names. It is open, in `known-gaps.md` (WAL).
+//   page, a later logged insert followed by a crash before writeback would
+//   refuse the mount; taking the row back instead would let another row
+//   reach a slot the undo record names. **Fail-stop closes it** (`wal.md`
+//   §6-5): every refusal `LogCatInsert` can meet stops the log, so no later
+//   insert is logged, and this page - held across the placement and the
+//   append - is never written back with the dead slot.
 Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
                        storage::PageStore& store, PageId page_id, heap::PageView& page,
                        std::uint16_t slot, std::span<const std::byte> encoded,

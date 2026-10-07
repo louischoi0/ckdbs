@@ -40,6 +40,16 @@ Verified at `dec4729` on `cn9-wal-device-mirror`, 2026-09-28, and re-read at
 `d0d1d1b`. Found by the second `critics-developer` pass over CN-9's
 `docs/inflight/` entries. Found by reading, not reproduced.
 
+**A second route since BC-S4's fail-stop** (`docs/spec/wal.md` §6-5),
+found by its review on `worktree-wal-recycling`, 2026-10-07; read, not run.
+If a roll's `CreateSegment` succeeds and the header `WriteAt` after it
+fails, the stream stops, and a `FileLogDevice` keeps the full-size segment
+with a zero header. The restart fail-stop requires then refuses it in
+`ScanTail` exactly as above - with no power loss. The simulator cannot see
+it: `MemoryLogDevice::Crash()` drops every segment created since the last
+sync. Either cure below covers this route; removing the segment when its
+header write fails is a third, narrower one.
+
 ## Smallest reproduction
 
 A cell over `FileLogDevice` and `WalStream`:

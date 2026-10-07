@@ -124,8 +124,9 @@ private:
 
     // Over `dir_fd_`, which `Open` opened once and keeps: a roll at the
     // descriptor limit then fails at the segment's own open, before any
-    // file exists, rather than at the directory's after one does
-    // (`bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`).
+    // file exists, rather than at the directory's after one does - which
+    // stranded a full-size headerless segment until BC-S2 (the bug entry,
+    // deleted with the fix, is at `19e1dc1f`).
     Status SyncDirectory();
 
     std::string dir_;

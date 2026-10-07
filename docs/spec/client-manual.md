@@ -374,6 +374,25 @@ to talk to.
 engine no longer has (`docs/spec/sched.md` §7). A tool that parses them
 finds them absent, not zero; the rest of the wake block is unchanged.
 
+**`SHOW META` gained the log's recycling at BC** (`docs/spec/wal.md`
+§11-4), on core 0 only: `wal_first_segment` (the oldest segment the log
+still holds), `wal_segments_removed` and `wal_remove_failures`. A failed
+removal refuses nothing; the log is only larger than it needs to be. The
+recovery block prints `recovery_redo_start` and
+`recovery_redo_start_recomputed` only when redo's floor raised the start.
+
+**A failed log write stops the instance's writes** (`docs/spec/wal.md`
+§6-5). Once the log device refuses a write, every statement that writes is
+refused with the `IoError` category, naming the stop, and `SHOW META` prints `wal_stopped=1`.
+Autocommit reads go on; a `BEGIN` is refused once its core's carved block
+of transaction ids is spent, since carving the next one writes the
+superblock. Only a restart brings writes back; the mount recovers every
+`strict` and `group` commit acknowledged before the stop, while a `relaxed`
+commit whose bytes had not reached the device is lost, as in a crash. A
+`COMMIT` refused by the stop is not known to have failed: its record may
+already be on the device, and the mount then recovers it. A client that
+retries a refused write before the restart is refused again.
+
 `--host` / `--port` override the loopback default if the server is bound
 elsewhere.
 
