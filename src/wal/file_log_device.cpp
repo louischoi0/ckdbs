@@ -217,7 +217,7 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
 
     auto device = std::unique_ptr<FileLogDevice>(
         new FileLogDevice(dir, core_id, segment_size, FileDescriptor(raw_dir_fd)));
-    device->first_ = first_needed;
+    device->first_.store(first_needed, std::memory_order_relaxed);
 
     // BC-R3: below the anchor's segment is a leftover, not opened and not
     // deleted here; at and above it, the live run, whole.
@@ -325,13 +325,13 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no) {
 
 Status FileLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                               std::span<const std::byte> in) {
-    if (Status s = CheckSegmentRange(segment_no, offset, in.size(), first_, end_segment(),
+    if (Status s = CheckSegmentRange(segment_no, offset, in.size(), first_segment(), end_segment(),
                                      segment_size_);
         !s.ok()) {
         return s;
     }
 
-    const int fd = segments_[segment_no - first_]->get();
+    const int fd = segments_[segment_no - first_segment()]->get();
     const std::byte* buffer = in.data();
     std::size_t remaining = in.size();
     std::uint64_t at = offset;
@@ -355,13 +355,13 @@ Status FileLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
 
 Status FileLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                              std::span<std::byte> out) {
-    if (Status s = CheckSegmentRange(segment_no, offset, out.size(), first_, end_segment(),
+    if (Status s = CheckSegmentRange(segment_no, offset, out.size(), first_segment(), end_segment(),
                                      segment_size_);
         !s.ok()) {
         return s;
     }
 
-    const int fd = segments_[segment_no - first_]->get();
+    const int fd = segments_[segment_no - first_segment()]->get();
     std::byte* buffer = out.data();
     std::size_t remaining = out.size();
     std::uint64_t at = offset;
@@ -420,7 +420,7 @@ Status FileLogDevice::Sync() {
     {
         std::lock_guard<std::mutex> guard(segments_mutex_);
         held.assign(segments_.begin(), segments_.end());
-        first = first_;
+        first = first_segment();
     }
 
     // fdatasync, not fsync: a segment is prewritten at creation, so its
@@ -442,15 +442,16 @@ Status FileLogDevice::Sync() {
 
 Status FileLogDevice::DetachBelow(std::uint64_t segment_no) {
     std::lock_guard<std::mutex> guard(segments_mutex_);
-    if (Status s = CheckDetachBound(segment_no, first_, end_segment()); !s.ok()) {
+    if (Status s = CheckDetachBound(segment_no, first_segment(), end_segment()); !s.ok()) {
         return s;
     }
     // The table lets go of its reference; a `Sync` still holding one keeps
     // the file open until it returns (BC-R4). No I/O here.
-    for (; first_ < segment_no; ++first_) {
+    for (std::uint64_t s = first_segment(); s < segment_no; ++s) {
         segments_.pop_front();
-        detached_.push_back(first_);
+        detached_.push_back(s);
     }
+    first_.store(segment_no, std::memory_order_release);
     return Status::OK();
 }
 

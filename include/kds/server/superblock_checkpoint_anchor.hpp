@@ -4,6 +4,7 @@
 #include <atomic>
 #include <bit>
 #include <cstdint>
+#include <functional>
 
 #include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
@@ -90,6 +91,21 @@
 // what keeps every core's latest `CHECKPOINT_BEGIN` in range. One gathered
 // checkpoint would need an instance-wide active table, which was the
 // alternative the operator declined at AT-S8.
+//
+// ---- What recycling reads here (BC-R1) -----------------------------------
+//
+// **The fold never goes down.** A page dirty at recLSN 0 in one core's
+// snapshot can show its real, older recLSN in the next core's, so the fold
+// can step back (`workorder-bc-wal-recycling.md` §1.5). Every publish
+// therefore encodes `max(fold, highest encoded)`: once a redo start is
+// valid it stays valid, so the higher of two valid starts is one.
+//
+// **`D` is the redo start of an image whose sync returned OK**, the highest
+// such - never the in-memory fold, which a failed sync leaves ahead of the
+// platter. Every image encoded after it carries at least as much, by the
+// rule above, so no later write of page 0 can put the anchor back below `D`.
+// When `D` advances, the recycler (`SetRecycler`) is handed it, outside
+// every latch; segments wholly below it are what recycling may remove.
 
 namespace kds::server {
 
@@ -116,6 +132,21 @@ public:
     // concurrent writer set before it, so whichever sync lands last lands a
     // complete one. `latch` must outlive this.
     void SetLatch(Latch* latch) noexcept { latch_ = latch; }
+
+    // **What a durable redo start is handed to** (BC-R5), null by default.
+    // Called after a publish's sync returned OK and advanced `D`, on the
+    // publishing core's thread, holding no latch. Its failure is the
+    // recycler's to count: a publish that landed does not fail because a
+    // removal did. `recycler` must outlive this.
+    void SetRecycler(std::function<void(wal::Lsn)> recycler) noexcept {
+        recycler_ = std::move(recycler);
+    }
+
+    // `D` (the header's recycling section): 0 until a publish's sync has
+    // returned OK in this process.
+    wal::Lsn durable_redo_start() const noexcept {
+        return durable_redo_start_.load(std::memory_order_acquire);
+    }
 
     Status Publish(const wal::CheckpointAnchorRecord& anchor) override;
 
@@ -164,6 +195,11 @@ private:
     // Atomic because a publish counts after its sync, outside the latch.
     std::atomic<std::uint64_t> publishes_{0};
     wal::CheckpointAnchorRecord mount_anchor_{};
+    // The highest anchor any publish has encoded, under the latch: the floor
+    // every later encode keeps to (the header's recycling section).
+    wal::CheckpointAnchorRecord encoded_floor_{};
+    std::atomic<wal::Lsn> durable_redo_start_{0};
+    std::function<void(wal::Lsn)> recycler_;
 
     // Indexed by core id, with a bit per core that has published. An array
     // and a mask rather than a map, so that "every core has published" is

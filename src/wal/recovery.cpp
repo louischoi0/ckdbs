@@ -119,6 +119,18 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
     }
 
     // ---- 2. Redo: crash-time state, uncommitted writes included ---------
+    // **Redo never reads below the scan start** (BC-R2). Analysis seeds
+    // its table from every CHECKPOINT_BEGIN in range, and a page an older
+    // one lists - written back since and clean - can sit below the anchor,
+    // so the recomputed start can fall below where the scan began. Those
+    // records change no page while the anchor is valid (BC-S1), and once
+    // recycled they are not there to read. A scan from the head (start 0)
+    // floors at nothing.
+    if (out.analysis.redo_start_lsn < out.analysis.scan_start_lsn) {
+        out.redo_start_floored_from = out.analysis.redo_start_lsn;
+        out.analysis.redo_start_lsn = out.analysis.scan_start_lsn;
+    }
+
     PhaseTimer redo_timer(clock);
     auto redone = Redo(device, core_id, store, out.analysis);
     out.timings.redo_ns = redo_timer.Elapsed();

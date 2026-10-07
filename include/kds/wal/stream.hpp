@@ -200,6 +200,14 @@ public:
     // already-sealed stream is a no-op.
     Status Seal();
 
+    // Detaches every segment wholly below `lsn` from the device's live run
+    // (BC-R4): under the latch, which is what serializes the table change
+    // with the stream's own `WriteAt`/`ReadAt`/`CreateSegment`, and with no
+    // I/O. Never reaches the segment holding the append point, whatever
+    // `lsn` says. The caller passes a durable redo start (BC-R1); the files
+    // go at the device's next `ReclaimDetached`.
+    Status DetachBelow(Lsn lsn);
+
 private:
     WalStream(LogDevice* device, std::uint32_t core_id, std::size_t ring_capacity, bool shared);
 

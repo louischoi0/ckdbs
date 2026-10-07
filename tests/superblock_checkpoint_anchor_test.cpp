@@ -1,5 +1,7 @@
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 
+#include <unistd.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -7,6 +9,8 @@
 #include <thread>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <string>
 #include <memory>
 #include <span>
 #include <vector>
@@ -22,6 +26,7 @@
 #include "kds/storage/page_mgr/checkpoint_target.hpp"
 #include "kds/storage/page_mgr/page_mgr.hpp"
 #include "kds/wal/checkpointer.hpp"
+#include "kds/wal/file_log_device.hpp"
 #include "kds/wal/memory_log_device.hpp"
 
 // The point of a durable anchor is one thing: the redo start a checkpoint
@@ -480,6 +485,126 @@ TEST_F(SuperBlockAnchorTest, ATrxIdCarveWaitsForTheSuperblockLatch) {
     held.reset();
     core0.join();
     EXPECT_EQ(superblock_.next_trx_id(), before + txn::kTrxIdBlockSize);
+}
+
+// ---- Recycling's bound (BC-S3, `workorder-bc-wal-recycling.md` BC-R1) ----
+
+// The fold can step back (§1.5); the encoded anchor does not. Once segments
+// below a redo start may be gone, a lower one written to page 0 would send
+// the next mount to a segment that is not there.
+TEST_F(SuperBlockFoldTest, AFoldBelowAnEncodedAnchorIsEncodedAtTheEncodedOne) {
+    MakeSingleStream(/*cores=*/2);
+    SuperBlockCheckpointAnchor anchor(superblock_, store_);
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/0, 900, 800, 1000, 0}).ok());
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/1, 950, 900, 1050, 0}).ok());
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/0, 1100, 1000, 1150, 0}).ok());
+    ASSERT_EQ(Reload().value().wal_anchor(0).redo_start_lsn, 900u);
+    ASSERT_EQ(anchor.durable_redo_start(), 900u);
+
+    // Core 1's next checkpoint names an older recLSN than its last one did.
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/1, 1200, 850, 1250, 0}).ok());
+    EXPECT_EQ(Reload().value().wal_anchor(0).redo_start_lsn, 900u);
+    EXPECT_EQ(anchor.durable_redo_start(), 900u);
+}
+
+// `D` moves on a sync that returned OK, and the recycler sees exactly those
+// moves - never the in-memory fold a failed sync leaves ahead of the page.
+TEST_F(SuperBlockAnchorTest, TheRecyclerIsHandedOnlyARedoStartThePlatterHolds) {
+    UnsyncablePageStore store;
+    auto page = store.CreateAt(kSuperBlockPageId);
+    ASSERT_TRUE(page.ok());
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    sb.Encode(page.value().bytes());
+
+    SuperBlockCheckpointAnchor anchor(sb, store);
+    std::vector<wal::Lsn> handed;
+    anchor.SetRecycler([&](wal::Lsn d) { handed.push_back(d); });
+
+    ASSERT_TRUE(anchor.Publish({0, 100, 200, 300, 0}).ok());
+    store.FailSync(true);
+    EXPECT_FALSE(anchor.Publish({0, 400, 500, 600, 0}).ok());
+    EXPECT_EQ(anchor.durable_redo_start(), 200u);
+    store.FailSync(false);
+    ASSERT_TRUE(anchor.Publish({0, 400, 500, 600, 0}).ok());
+    ASSERT_TRUE(anchor.Publish({0, 400, 500, 600, 0}).ok());  // no advance, no call
+
+    EXPECT_EQ(handed, (std::vector<wal::Lsn>{200, 500}));
+}
+
+// The whole path: a published anchor's redo start reaches the log, and
+// exactly the segments wholly below it leave the device. Inline here - this
+// manager has no writer thread - as in the simulator.
+TEST_F(SuperBlockAnchorTest, APublishRemovesExactlyTheSegmentsWhollyBelowItsRedoStart) {
+    auto device = wal::MemoryLogDevice::Create(64 * 1024);
+    ASSERT_TRUE(device.ok());
+    auto wal = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0);
+    ASSERT_TRUE(wal.ok());
+    const std::vector<std::byte> payload(2048, std::byte{0x5A});
+    while (device.value()->end_segment() < 5) {
+        ASSERT_TRUE(wal.value()->Append({wal::RecordType::kHeapInsert, 1, 1}, payload).ok());
+    }
+    ASSERT_TRUE(wal.value()->SyncAll().ok());
+
+    SuperBlockCheckpointAnchor anchor(superblock_, store_);
+    anchor.SetRecycler([&](wal::Lsn d) { wal.value()->RecycleBelow(d); });
+
+    // Inside segment 2: segments 0 and 1 are wholly below it, 2 is not.
+    const wal::Lsn inside_two = 2 * 64 * 1024 + wal::kSegmentHeaderSize;
+    ASSERT_TRUE(anchor.Publish({0, inside_two, inside_two, inside_two, 2}).ok());
+    EXPECT_EQ(device.value()->first_segment(), 2u);
+    EXPECT_EQ(device.value()->segments_removed(), 2u);
+
+    // Exactly at segment 3's start: segment 2 is wholly below it now.
+    const wal::Lsn at_three = 3 * 64 * 1024;
+    ASSERT_TRUE(anchor.Publish({0, at_three, at_three, at_three, 3}).ok());
+    EXPECT_EQ(device.value()->first_segment(), 3u);
+
+    // Past the last segment's start: everything but the last.
+    const wal::Lsn past = 9 * 64 * 1024;
+    ASSERT_TRUE(anchor.Publish({0, past, past, past, 9}).ok());
+    EXPECT_EQ(device.value()->first_segment(), device.value()->end_segment() - 1);
+    EXPECT_EQ(wal.value()->recycle_failures(), 0u);
+}
+
+
+// BC-R3's other half: `Open` skips the segments below the mount anchor and
+// deletes none, and the first publish after the mount - the completion
+// checkpoint's - is what removes them, once the mount has gone through.
+TEST_F(SuperBlockAnchorTest, LeftoversBelowTheMountAnchorGoWithTheFirstPublishNotWithOpen) {
+    const std::string dir = (std::filesystem::temp_directory_path() /
+                             ("kds_bc_s3_leftovers_" + std::to_string(::getpid())))
+                                .string();
+    std::filesystem::remove_all(dir);
+    constexpr std::uint64_t kSegment = 64 * 1024;
+    {
+        auto device = wal::FileLogDevice::Open(dir, 0, kSegment);
+        ASSERT_TRUE(device.ok());
+        auto wal = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0);
+        ASSERT_TRUE(wal.ok());
+        const std::vector<std::byte> payload(2048, std::byte{0x44});
+        while (device.value()->end_segment() < 4) {
+            ASSERT_TRUE(wal.value()->Append({wal::RecordType::kHeapInsert, 1, 1}, payload).ok());
+        }
+        ASSERT_TRUE(wal.value()->SyncAll().ok());
+    }
+    const auto present = [&](std::uint64_t s) {
+        return std::filesystem::exists(dir + "/wal-0-" + std::to_string(s) + ".log");
+    };
+
+    // The mount: the anchor names segment 2.
+    auto device = wal::FileLogDevice::Open(dir, 0, kSegment, /*first_needed=*/2);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    EXPECT_TRUE(present(0) && present(1)) << "Open deletes nothing";
+    auto wal = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0);
+    ASSERT_TRUE(wal.ok()) << wal.status().message();
+
+    SuperBlockCheckpointAnchor anchor(superblock_, store_);
+    anchor.SetRecycler([&](wal::Lsn d) { wal.value()->RecycleBelow(d); });
+    const wal::Lsn in_two = 2 * kSegment + wal::kSegmentHeaderSize;
+    ASSERT_TRUE(anchor.Publish({0, in_two, in_two, in_two, 2}).ok());
+    EXPECT_FALSE(present(0) || present(1));
+    EXPECT_TRUE(present(2) && present(3));
+    std::filesystem::remove_all(dir);
 }
 
 }  // namespace

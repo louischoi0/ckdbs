@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -320,6 +321,24 @@ public:
     // claim every acknowledged commit is safe.
     bool HasPendingGroupCommits() const noexcept { return pending_group_commits_ > 0; }
 
+    // **Recycling's one entry** (BC-R1, BC-R5): detaches every segment wholly
+    // below `durable_redo_start` - the redo start of an anchor already
+    // durable - under the stream's latch, then has the files removed off
+    // every reactor: by the writer thread when one runs, inline where none
+    // does (the simulator, an in-process test). Callable from any core's
+    // thread: the detach is under the latch, the request is the writer's
+    // cross-thread call, and the inline arm exists only where there is one
+    // thread. A failed removal is counted, never returned to a checkpoint
+    // whose anchor already landed.
+    void RecycleBelow(Lsn durable_redo_start);
+
+    // Removals that failed, the writer's and the inline arm's (`SHOW META`'s
+    // `wal_remove_failures`, BC-R6).
+    std::uint64_t recycle_failures() const noexcept {
+        return recycle_failures_.load(std::memory_order_relaxed) +
+               (writer_ != nullptr ? writer_->reclaim_failures() : 0);
+    }
+
     // One tick of the `system`-group WAL housekeeping task. Syncs when
     // there are group commits waiting (one sync, whole batch) or when the
     // D3 interval has elapsed with bytes unsynced. Cheap and safe to call
@@ -394,6 +413,9 @@ private:
     Lsn highest_group_commit_lsn_ = 0;
 
     sched::MonoTimeNs last_sync_ns_ = 0;
+    // Atomic: `RecycleBelow` runs on whichever core published, and a failed
+    // detach counts here from that core's thread.
+    std::atomic<std::uint64_t> recycle_failures_{0};
     Logger* log_ = nullptr;
 };
 

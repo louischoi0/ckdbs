@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/wal/manager.hpp"
+
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -601,6 +603,45 @@ TEST_F(RecoveryAuditTest, AnUntimedRecoveryPrintsNoDurations) {
     EXPECT_NE(meta.find("recovery_records=5"), std::string::npos) << meta;
     EXPECT_EQ(meta.find("recovery_redo_us="), std::string::npos)
         << "an unmeasured phase must not print a duration of zero: " << meta;
+}
+
+
+// BC-R2: redo's floor is printed only when it raised the start, and then as
+// the pair - how far below the anchor analysis reached, and where redo began.
+TEST_F(RecoveryAuditTest, ARedoStartTheFloorRaisedIsPrintedWithWhatItRaised) {
+    MountRecovery report;
+    report.records = 5;
+    report.redo_start = 9000;
+    dispatcher_->set_recovery(&report);
+    EXPECT_EQ(Run("SHOW META").find("recovery_redo_start"), std::string::npos)
+        << "absent when the floor changed nothing";
+
+    report.redo_start_floored_from = 4096;
+    const std::string meta = Run("SHOW META");
+    EXPECT_NE(meta.find("recovery_redo_start=9000"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("recovery_redo_start_recomputed=4096"), std::string::npos) << meta;
+}
+
+// BC-R6: the recycling fields are core 0's, beside `wal_syncs`.
+TEST_F(RecoveryAuditTest, TheLogsRecyclingIsReportedWhereTheLogIsOwned) {
+    auto device = wal::MemoryLogDevice::Create(64 * 1024);
+    ASSERT_TRUE(device.ok());
+    sched::ManualClock clock;
+    auto wal = wal::WalManager::Open(device.value().get(), clock, /*core_id=*/0);
+    ASSERT_TRUE(wal.ok());
+    const std::vector<std::byte> payload(2048, std::byte{0x33});
+    while (device.value()->end_segment() < 4) {
+        ASSERT_TRUE(wal.value()->Append({wal::RecordType::kHeapInsert, 1, 1}, payload).ok());
+    }
+    ASSERT_TRUE(wal.value()->SyncAll().ok());
+    wal.value()->RecycleBelow(2 * 64 * 1024 + wal::kSegmentHeaderSize);
+
+    CommandDispatcher d(boot_->superblock, boot_->catalog, *faulty_, /*log=*/nullptr, &clock,
+                        wal.value().get());
+    const std::string meta = d.Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find("wal_first_segment=2"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("wal_segments_removed=2"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("wal_remove_failures=0"), std::string::npos) << meta;
 }
 
 }  // namespace

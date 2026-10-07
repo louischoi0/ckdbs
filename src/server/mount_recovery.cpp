@@ -79,6 +79,8 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     out.redo_skipped_by_lsn = report.value().redo.skipped_by_lsn;
     out.redo_skipped_not_dirty = report.value().redo.skipped_not_dirty;
     out.pages_healed = report.value().redo.pages_healed;
+    out.redo_start = report.value().analysis.redo_start_lsn;
+    out.redo_start_floored_from = report.value().redo_start_floored_from;
     out.transactions_rolled_back = undo.transactions();
     out.compensations = undo.compensations();
     out.prepared = report.value().prepared;

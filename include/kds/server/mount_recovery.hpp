@@ -109,6 +109,10 @@ struct MountRecovery {
     // mount, not only in gtest (the f19ead1 review's deferred item).
     std::uint64_t redo_skipped_not_dirty = 0;
     std::uint64_t pages_healed = 0;         // checksum detected, an FPI healed
+    // Redo's start and, when its floor raised it (BC-R2), what analysis had
+    // recomputed - `SHOW META` prints the pair only when they differ.
+    wal::Lsn redo_start = 0;
+    wal::Lsn redo_start_floored_from = 0;
 
     // ---- What undo rolled back ----
     std::uint64_t transactions_rolled_back = 0;

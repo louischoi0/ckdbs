@@ -761,7 +761,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     // The WAL stack, before the dispatcher: INSERT logs through it, so the
     // dispatcher cannot be built until it exists.
-    auto log_device = wal::FileLogDevice::Open(expeditor->config_.wal_dir, /*core_id=*/0);
+    // **From the anchor's segment** (BC-R3): segments below it were recycled,
+    // or are leftovers of a removal a crash cut short, and this mount neither
+    // reads nor deletes them - the completion checkpoint's publish does the
+    // latter. An anchor of 0 has never been published, and recycles nothing.
+    const WalAnchorFields mount_anchor = expeditor->database_->superblock.wal_anchor(0);
+    auto log_device = wal::FileLogDevice::Open(
+        expeditor->config_.wal_dir, /*core_id=*/0, wal::kDefaultSegmentSize,
+        mount_anchor.redo_start_lsn != 0 ? mount_anchor.segment_no : 0);
     if (!log_device.ok()) return log_device.status();
     expeditor->log_device_ = std::move(log_device.value());
 
@@ -1086,6 +1093,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
     expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
     expeditor->checkpoint_anchor_->SetLatch(&expeditor->superblock_latch_);
+    // **Recycling** (BC-R5): every durable advance of the redo start, on
+    // whichever core published it, reaches core 0's log, whose writer
+    // thread removes the files.
+    expeditor->checkpoint_anchor_->SetRecycler(
+        [wal = expeditor->wal_.get()](wal::Lsn redo_start) { wal->RecycleBelow(redo_start); });
     if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
                                            *expeditor->checkpoint_target_,
                                            *expeditor->checkpoint_anchor_, &*expeditor->logger_,

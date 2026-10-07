@@ -137,6 +137,12 @@ struct RecoveryReport {
     // "compensations were emitted".
     bool undo_ran = false;
 
+    // Analysis's recomputed redo start, when redo's floor raised it to the
+    // scan start (BC-R2); 0 when the floor changed nothing. The case is the
+    // one `workorder-bc-wal-recycling.md` §1.4 describes, and BC-S1's cells
+    // show the records below the floor change no page.
+    Lsn redo_start_floored_from = 0;
+
     // Records whose page the store could not resolve to a live relation -
     // RV3's honest counter, so a catalog the crash lost reads as a number
     // rather than as silence. **Always 0 today**: RC09 owns populating it,

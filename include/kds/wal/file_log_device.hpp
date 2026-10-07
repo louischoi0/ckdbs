@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -81,8 +82,14 @@ public:
         std::uint64_t segment_size = kDefaultSegmentSize, std::uint64_t first_needed = 0);
 
     std::uint64_t segment_size() const noexcept override { return segment_size_; }
-    std::uint64_t first_segment() const noexcept override { return first_; }
-    std::uint64_t end_segment() const noexcept override { return first_ + segments_.size(); }
+    std::uint64_t first_segment() const noexcept override {
+        return first_.load(std::memory_order_acquire);
+    }
+    // Unlocked, under the contract's serialization: only the stream's own
+    // calls read the run's end, and they never run beside a table change.
+    std::uint64_t end_segment() const noexcept override {
+        return first_segment() + segments_.size();
+    }
 
     std::uint32_t core_id() const noexcept { return core_id_; }
     const std::string& dir() const noexcept { return dir_; }
@@ -109,8 +116,7 @@ public:
     // covered, so the next call repeats it.
     Status ReclaimDetached() override;
 
-    // Segments `ReclaimDetached` has removed durably, over the device's life.
-    std::uint64_t segments_removed() const noexcept;
+    std::uint64_t segments_removed() const noexcept override;
 
 private:
     FileLogDevice(std::string dir, std::uint32_t core_id, std::uint64_t segment_size,
@@ -151,7 +157,9 @@ private:
     // Segment `first_ + i` is `segments_[i]`. A deque, because a detach
     // takes from the front and a roll adds at the back.
     std::deque<std::shared_ptr<const FileDescriptor>> segments_;
-    std::uint64_t first_ = 0;
+    // Atomic so `first_segment()` may be read from any thread (`SHOW META`);
+    // written only under the mutex.
+    std::atomic<std::uint64_t> first_{0};
     // Segment numbers to unlink: detached, or skipped below `first_needed`.
     std::vector<std::uint64_t> detached_;
     std::uint64_t removed_ = 0;

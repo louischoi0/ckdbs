@@ -91,6 +91,12 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
         published_ |= std::uint64_t{1} << anchor.core_id;
         landing = FoldedAnchor();
         folded = folded_cores();  // read here: another core's publish writes the mask
+        // Never below what an earlier publish encoded (BC-R1): the fold can
+        // step back, and an anchor recycling has already read past must not.
+        if (landing.redo_start_lsn < encoded_floor_.redo_start_lsn) {
+            landing = encoded_floor_;
+        }
+        encoded_floor_ = landing;
 
         constexpr std::uint32_t kFoldSlot = 0;
         const WalAnchorFields fields{landing.checkpoint_lsn, landing.redo_start_lsn,
@@ -137,6 +143,21 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
     }
 
     ++publishes_;
+
+    // `D` moves only on a sync that returned OK, and only forward: two
+    // publishes can finish in either order, and the image this one encoded
+    // is on the platter now whichever landed last (the floor above).
+    wal::Lsn seen = durable_redo_start_.load(std::memory_order_relaxed);
+    bool advanced = false;
+    while (landing.redo_start_lsn > seen) {
+        if (durable_redo_start_.compare_exchange_weak(seen, landing.redo_start_lsn,
+                                                      std::memory_order_acq_rel,
+                                                      std::memory_order_relaxed)) {
+            advanced = true;
+            break;
+        }
+    }
+    if (advanced && recycler_) recycler_(landing.redo_start_lsn);
     return Status::OK();
 }
 

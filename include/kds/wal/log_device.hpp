@@ -101,6 +101,10 @@ public:
     // durable. A segment that could not be removed stays queued for the next
     // call, and the call reports the first failure. Never touches the live run.
     virtual Status ReclaimDetached() = 0;
+
+    // Segments `ReclaimDetached` has durably removed, over the device's life
+    // (`SHOW META`'s `wal_segments_removed`, BC-R6). Any thread.
+    virtual std::uint64_t segments_removed() const noexcept = 0;
 };
 
 // ---- Shared argument validation -----------------------------------------

@@ -1,5 +1,6 @@
 #include "kds/wal/stream.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -151,6 +152,17 @@ Status WalStream::Roll() {
 Status WalStream::Seal() {
     LatchGuard guard(latch_);
     return SealLocked();
+}
+
+Status WalStream::DetachBelow(Lsn lsn) {
+    LatchGuard guard(latch_);
+    const std::uint64_t end = device_->end_segment();
+    if (end == 0) return Status::OK();
+    // Segment `s` is wholly below `lsn` exactly when `s < lsn / segment_size`;
+    // the last segment holds the append point and stays whatever `lsn` says.
+    const std::uint64_t bound = std::min(SegmentOf(lsn), end - 1);
+    if (bound <= device_->first_segment()) return Status::OK();
+    return device_->DetachBelow(bound);
 }
 
 Status WalStream::SealLocked() {

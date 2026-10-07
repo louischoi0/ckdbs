@@ -26,6 +26,7 @@
 #include "kds/wal/file_log_device.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
+#include "kds/wal/recovery.hpp"
 #include "kds/wal/redo.hpp"
 #include "kds/wal/stream.hpp"
 
@@ -361,6 +362,112 @@ PageId InsertedPage(const std::string& reply) {
 //   3. core 1's checkpoint B1 sees Q at `q` and flushes it;
 //   4. core 0's checkpoint A2 has nothing older, so the fold is B1's - at or
 //      below `q` - and A1's BEGIN, above it, still seeds P at `r`.
+//
+// `padding_rows` rows into a second relation come first and again between
+// P's write and Q's, so the log is several segments long and `r` and `q`
+// lie in different segments. The caller takes the fold and the crash image.
+void RunPlacedSequence(server::TwoCoreRig& rig, int padding_rows) {
+    server::CommandDispatcher& d0 = rig.core(0).dispatcher();
+    server::CommandDispatcher& d1 = rig.core(1).dispatcher();
+    int next_pad = 1;
+    const auto pad = [&] {
+        CurrentCoreGuard as(0);
+        for (const int end = next_pad + padding_rows; next_pad < end; next_pad += 100) {
+            std::string sql = "INSERT INTO pad VALUES ";
+            for (int k = next_pad; k < next_pad + 100; ++k) {
+                sql += (k == next_pad ? "" : ", ") + std::string("(") + std::to_string(k) + ", 0)";
+            }
+            ASSERT_TRUE(Ok(d0, sql));
+        }
+    };
+
+    // Two leaves at least: rows 1..198 fill the first leaf, so row 10 and
+    // row 300 are on different pages.
+    PageId p = kInvalidPageId;
+    PageId q = kInvalidPageId;
+    {
+        CurrentCoreGuard as(0);
+        ASSERT_TRUE(Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE"));
+        ASSERT_TRUE(Ok(d0, "CREATE TABLE pad (id int64, v int64) BTREE"));
+    }
+    pad();
+    {
+        CurrentCoreGuard as(0);
+        for (int id = 1; id <= 400; ++id) {
+            const std::string reply =
+                d0.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", 0)").response;
+            ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+            if (id == 10) p = InsertedPage(reply);
+            if (id == 300) q = InsertedPage(reply);
+        }
+    }
+    ASSERT_NE(p, q);
+    {
+        // Core 1's transaction-id window, carved now: a carve syncs the
+        // store, which the seam's write must not have to do.
+        CurrentCoreGuard as(1);
+        ASSERT_TRUE(Ok(d1, Update(400, 1)));
+    }
+    ASSERT_TRUE(rig.core(0).Checkpoint().ok());
+    ASSERT_TRUE(rig.core(1).Checkpoint().ok());
+
+    // 1.
+    {
+        CurrentCoreGuard as(1);
+        ASSERT_TRUE(Ok(d1, Update(10, 2)));
+    }
+    pad();
+    {
+        CurrentCoreGuard as(0);
+        ASSERT_TRUE(Ok(d0, Update(300, 2)));
+    }
+
+    // 2. The seam fires on core 0's checkpoint thread, which here is this
+    // one; the write in it is core 1's.
+    //
+    // **Every copy of Q the checkpoint makes is raced, not only the first.**
+    // The anchor's publish syncs the whole store
+    // (`superblock_checkpoint_anchor.cpp`), which writes Q back a second
+    // time; a write that raced only the checkpoint's own pass is carried out
+    // by that sync and Q comes out clean.
+    int raced = 0;
+    std::uint64_t value = 3;
+    rig.store().SetAfterWritebackCopyForTest([&](PageId page) {
+        if (page != q) return;
+        ++raced;
+        CurrentCoreGuard as(1);
+        EXPECT_TRUE(Ok(d1, Update(301, ++value)));
+    });
+    ASSERT_TRUE(rig.core(0).Checkpoint().ok());
+    rig.store().SetAfterWritebackCopyForTest(nullptr);
+    ASSERT_GT(raced, 0);
+    bool q_still_dirty = false;
+    for (const auto& [page, rec_lsn] : rig.store().DirtyPagesWithRecLsn()) {
+        if (page == q) q_still_dirty = rec_lsn != 0;
+    }
+    ASSERT_TRUE(q_still_dirty) << "the raced write must keep Q dirty at its first recLSN";
+
+    // 3 and 4.
+    ASSERT_TRUE(rig.core(1).Checkpoint().ok());
+    ASSERT_TRUE(rig.core(0).Checkpoint().ok());
+
+    // Work after the last checkpoint, then the crash.
+    {
+        CurrentCoreGuard as(0);
+        ASSERT_TRUE(Ok(d0, Update(11, 4)));
+        ASSERT_TRUE(Ok(d0, Update(302, 4)));
+    }
+}
+
+server::TwoCoreRig::Options PlacedRigOptions(bool recycle) {
+    server::TwoCoreRig::Options options;
+    options.file_backed = true;
+    options.fold_anchor = true;
+    options.recycle = recycle;
+    options.wal_segment_bytes = kRigSegmentSize;
+    return options;
+}
+
 TEST(WalRecyclePremiseRigTest, ARaceInsideAWritebackPutsRedoBelowTheFoldAndTheFloorAgrees) {
     const fs::path image = fs::temp_directory_path() /
                            ("kds_bc_s1_placed_" + std::to_string(::getpid()));
@@ -369,89 +476,12 @@ TEST(WalRecyclePremiseRigTest, ARaceInsideAWritebackPutsRedoBelowTheFoldAndTheFl
     fs::remove_all(image);
     server::WalAnchorFields anchor{};
     {
-        server::TwoCoreRig::Options options;
-        options.file_backed = true;
-        options.fold_anchor = true;
-        options.wal_segment_bytes = kRigSegmentSize;
-        auto opened = server::TwoCoreRig::Open(options);
+        auto opened = server::TwoCoreRig::Open(PlacedRigOptions(/*recycle=*/false));
         ASSERT_TRUE(opened.ok()) << opened.status().message();
-        server::TwoCoreRig& rig = *opened.value();
-        server::CommandDispatcher& d0 = rig.core(0).dispatcher();
-        server::CommandDispatcher& d1 = rig.core(1).dispatcher();
-
-        // Two leaves at least: rows 1..198 fill the first leaf, so
-        // row 10 and row 300 are on different pages.
-        PageId p = kInvalidPageId;
-        PageId q = kInvalidPageId;
-        {
-            CurrentCoreGuard as(0);
-            ASSERT_TRUE(Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE"));
-            for (int id = 1; id <= 400; ++id) {
-                const std::string reply =
-                    d0.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", 0)").response;
-                ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
-                if (id == 10) p = InsertedPage(reply);
-                if (id == 300) q = InsertedPage(reply);
-            }
-        }
-        ASSERT_NE(p, q);
-        {
-            // Core 1's transaction-id window, carved now: a carve syncs the
-            // store, which the seam's write must not have to do.
-            CurrentCoreGuard as(1);
-            ASSERT_TRUE(Ok(d1, Update(400, 1)));
-        }
-        ASSERT_TRUE(rig.core(0).Checkpoint().ok());
-        ASSERT_TRUE(rig.core(1).Checkpoint().ok());
-
-        // 1.
-        {
-            CurrentCoreGuard as(1);
-            ASSERT_TRUE(Ok(d1, Update(10, 2)));
-        }
-        {
-            CurrentCoreGuard as(0);
-            ASSERT_TRUE(Ok(d0, Update(300, 2)));
-        }
-
-        // 2. The seam fires on core 0's checkpoint thread, which here is
-        // this one; the write in it is core 1's.
-        //
-        // **Every copy of Q the checkpoint makes is raced, not only the
-        // first.** The anchor's publish syncs the whole store
-        // (`superblock_checkpoint_anchor.cpp`), which writes Q back a second
-        // time; a write that raced only the checkpoint's own pass is carried
-        // out by that sync and Q comes out clean.
-        int raced = 0;
-        std::uint64_t value = 3;
-        rig.store().SetAfterWritebackCopyForTest([&](PageId page) {
-            if (page != q) return;
-            ++raced;
-            CurrentCoreGuard as(1);
-            EXPECT_TRUE(Ok(d1, Update(301, ++value)));
-        });
-        ASSERT_TRUE(rig.core(0).Checkpoint().ok());
-        rig.store().SetAfterWritebackCopyForTest(nullptr);
-        ASSERT_GT(raced, 0);
-        std::cout << "[ BC-S1 ] Q's writebacks raced in one checkpoint: " << raced << "\n";
-        bool q_still_dirty = false;
-        for (const auto& [page, rec_lsn] : rig.store().DirtyPagesWithRecLsn()) {
-            if (page == q) q_still_dirty = rec_lsn != 0;
-        }
-        ASSERT_TRUE(q_still_dirty) << "the raced write must keep Q dirty at its first recLSN";
-
-        // 3 and 4.
-        ASSERT_TRUE(rig.core(1).Checkpoint().ok());
-        ASSERT_TRUE(rig.core(0).Checkpoint().ok());
-
-        // Work after the last checkpoint, then the crash.
-        {
-            CurrentCoreGuard as(0);
-            ASSERT_TRUE(Ok(d0, Update(11, 4)));
-            ASSERT_TRUE(Ok(d0, Update(302, 4)));
-        }
-        anchor = rig.folded_anchor();
-        ASSERT_TRUE(rig.Snapshot(image).ok());
+        RunPlacedSequence(*opened.value(), /*padding_rows=*/0);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        anchor = opened.value()->folded_anchor();
+        ASSERT_TRUE(opened.value()->Snapshot(image).ok());
     }
 
     bool below = false;
@@ -460,6 +490,76 @@ TEST(WalRecyclePremiseRigTest, ARaceInsideAWritebackPutsRedoBelowTheFoldAndTheFl
     EXPECT_TRUE(below) << "the placed sequence must put analysis's start below the fold";
 
     std::error_code ec;
+    fs::remove_all(image, ec);
+}
+
+// **BC-S3: §1.4's sequence with recycling on, then the mount.** The log is
+// several segments long, the fold's durable advances have removed every
+// segment wholly below it, and analysis still recomputes a start below the
+// fold. Recovery opens the log from the anchor's segment and succeeds only
+// because redo is floored there (BC-R2); without the floor its scan would
+// start in a segment that is gone.
+TEST(WalRecyclePremiseRigTest, AfterRecyclingTheMountRecoversBecauseRedoIsFloored) {
+    const fs::path image = fs::temp_directory_path() /
+                           ("kds_bc_s3_recycled_" + std::to_string(::getpid()));
+    fs::remove_all(image);
+    server::WalAnchorFields anchor{};
+    {
+        auto opened = server::TwoCoreRig::Open(PlacedRigOptions(/*recycle=*/true));
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        server::TwoCoreRig& rig = *opened.value();
+        // The removal is the writer thread's; wait for it before the crash
+        // image, so the image holds no segment the run detached.
+        const auto reclaimed = [&] {
+            return rig.log_device().segments_removed() == rig.log_device().first_segment();
+        };
+        RunPlacedSequence(rig, /*padding_rows=*/1500);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        ASSERT_TRUE(server::Within(std::chrono::seconds(5), reclaimed));
+        ASSERT_GT(rig.log_device().first_segment(), 0u) << "the run must have recycled";
+        anchor = rig.folded_anchor();
+        ASSERT_TRUE(rig.Snapshot(image).ok());
+    }
+    ASSERT_GT(anchor.segment_no, 0u);
+    for (std::uint64_t s = 0; s < anchor.segment_no; ++s) {
+        ASSERT_FALSE(fs::exists(image / "wal" / ("wal-0-" + std::to_string(s) + ".log")))
+            << "segment " << s << " is below the anchor and was recycled";
+    }
+
+    auto log = FileLogDevice::Open((image / "wal").string(), 0, kRigSegmentSize,
+                                   /*first_needed=*/anchor.segment_no);
+    ASSERT_TRUE(log.ok()) << log.status().message();
+    const AnalysisStart start{anchor.redo_start_lsn, anchor.durable_lsn};
+
+    // Without the floor: the recomputed start is in a recycled segment.
+    auto a = Analyze(*log.value(), 0, start);
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    ASSERT_LT(a.value().redo_start_lsn / kRigSegmentSize, anchor.segment_no)
+        << "not vacuous: analysis must reach into a recycled segment";
+    {
+        auto device = storage::FilePageDevice::Open((image / "kds.db").string());
+        ASSERT_TRUE(device.ok());
+        auto store = storage::DevicePageStore::Open(*device.value(), server::kFirstUserPageId);
+        ASSERT_TRUE(store.ok());
+        auto unfloored = Redo(*log.value(), 0, *store.value(), a.value());
+        ASSERT_FALSE(unfloored.ok());
+        EXPECT_EQ(unfloored.status().code(), StatusCode::kCorruption)
+            << unfloored.status().message();
+    }
+
+    // With it: recovery succeeds, and reports how far below it was asked to go.
+    std::error_code ec;
+    fs::copy_file(image / "kds.db", image / "mounted.db", fs::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec);
+    auto device = storage::FilePageDevice::Open((image / "mounted.db").string());
+    ASSERT_TRUE(device.ok());
+    auto store = storage::DevicePageStore::Open(*device.value(), server::kFirstUserPageId);
+    ASSERT_TRUE(store.ok());
+    auto report = RecoverCore(*log.value(), 0, *store.value(), start);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().analysis.redo_start_lsn, anchor.redo_start_lsn);
+    EXPECT_EQ(report.value().redo_start_floored_from, a.value().redo_start_lsn);
+
     fs::remove_all(image, ec);
 }
 

@@ -110,6 +110,9 @@ public:
         return inner_.DetachBelow(segment_no);
     }
     Status ReclaimDetached() override { return inner_.ReclaimDetached(); }
+    std::uint64_t segments_removed() const noexcept override {
+        return inner_.segments_removed();
+    }
     Status Sync() override {
         if (held_.load(std::memory_order_acquire)) {
             parked_.fetch_add(1, std::memory_order_acq_rel);
@@ -160,6 +163,10 @@ public:
         // production's anchor, where the default rig's peer publishes into
         // an in-memory stand-in and core 0 publishes nothing.
         bool fold_anchor = false;
+        // **And the fold's durable advances recycle the log** (BC-S3), as
+        // `Expeditor` wires it. Off by default, so a cell that compares a
+        // recovery reading below the anchor still has the segments to read.
+        bool recycle = false;
     };
 
     static StatusOr<std::unique_ptr<TwoCoreRig>> Open() { return Open(Options{}); }
@@ -356,6 +363,11 @@ private:
         if (options_.fold_anchor) {
             fold_anchor_.emplace(boot_->superblock, *store_);
             fold_anchor_->SetLatch(&superblock_latch_);
+            if (options_.recycle) {
+                // Recycling as `Expeditor` wires it (BC-R5).
+                fold_anchor_->SetRecycler(
+                    [wal = wal_.get()](wal::Lsn redo_start) { wal->RecycleBelow(redo_start); });
+            }
         }
 
         for (std::uint32_t id = 0; id < 2; ++id) {

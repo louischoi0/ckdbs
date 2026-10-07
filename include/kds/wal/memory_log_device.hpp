@@ -76,6 +76,10 @@ public:
     // anchor, which a Sync() already covered, so nothing it does is refused.
     Status DetachBelow(std::uint64_t segment_no) override;
     Status ReclaimDetached() override;
+    std::uint64_t segments_removed() const noexcept override {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return stats_.segments_removed;
+    }
 
     // ---- Fault injection -------------------------------------------------
 

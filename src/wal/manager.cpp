@@ -159,6 +159,24 @@ void WalManager::StartWriter() {
     }
 }
 
+void WalManager::RecycleBelow(Lsn durable_redo_start) {
+    if (Status s = stream_->DetachBelow(durable_redo_start); !s.ok()) {
+        recycle_failures_.fetch_add(1, std::memory_order_relaxed);
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("wal", "recycling could not detach below lsn " +
+                                   std::to_string(durable_redo_start) + ": " + s.message());
+        }
+        return;
+    }
+    if (writer_ != nullptr) {
+        writer_->RequestReclaim();
+        return;
+    }
+    if (!stream_->device()->ReclaimDetached().ok()) {
+        recycle_failures_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 Status WalManager::Sync() {
     // **On the calling thread on an owning manager, always.** The writer
     // thread is not used there and that is the decision, not an omission:

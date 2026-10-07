@@ -1,5 +1,7 @@
 #include "kds/wal/writer.hpp"
 
+#include <utility>
+
 namespace kds::wal {
 
 WalWriter::WalWriter(LogDevice* device) : device_(device) {
@@ -47,6 +49,14 @@ Status WalWriter::last_failure() const {
     return last_failure_;
 }
 
+void WalWriter::RequestReclaim() {
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        reclaim_requested_ = true;
+    }
+    work_.notify_one();
+}
+
 void WalWriter::Stop() {
     if (!thread_.joinable()) return;
     {
@@ -61,15 +71,27 @@ void WalWriter::Stop() {
 void WalWriter::Run() {
     for (;;) {
         Lsn target = 0;
+        bool reclaim = false;
         {
             std::unique_lock<std::mutex> guard(mutex_);
             work_.wait(guard, [&] {
-                return stopping_ ||
+                return stopping_ || reclaim_requested_ ||
                        requested_.load(std::memory_order_acquire) >
                            durable_.load(std::memory_order_relaxed);
             });
             if (stopping_) return;
             target = requested_.load(std::memory_order_acquire);
+            reclaim = std::exchange(reclaim_requested_, false);
+        }
+
+        // **A removal runs after this pass's sync, never instead of it**
+        // (BC-Q5 (a)): a committer already waiting is not put behind it, and
+        // a removal is not starved by a stream of commits, which would leave
+        // the log growing. A committer that asks during the removal waits it
+        // out - the cost BC-Q5 accepted.
+        if (target <= durable_.load(std::memory_order_acquire)) {
+            if (reclaim) Reclaim();
+            continue;
         }
 
         // **The snapshot rule.** `target` is where the reactor's writes had
@@ -107,6 +129,13 @@ void WalWriter::Run() {
             }
         }
         done_.notify_all();
+        if (reclaim) Reclaim();
+    }
+}
+
+void WalWriter::Reclaim() {
+    if (!device_->ReclaimDetached().ok()) {
+        reclaim_failures_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

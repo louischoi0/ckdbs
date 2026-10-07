@@ -570,3 +570,77 @@ recorded rather than reported as passes:
   which hit its 20 s deadline under `ctest -j8` and passed 3 of 3 alone in
   ~0.8 s. It uses no recycling call.
 
+### BC-S3 - green, 2026-10-07
+
+On `worktree-wal-recycling` from `44e730ed`.
+
+**Built (BC-R1, BC-R2, BC-R3, BC-R5, BC-R6):**
+- **`SuperBlockCheckpointAnchor::Publish`:**
+  - It encodes `max(fold, highest encoded)`.
+  - It records `D` only after a sync that returned OK.
+  - When `D` advances, it hands it to the recycler, outside every latch.
+- **`WalManager::RecycleBelow`:**
+  - It detaches the segments wholly below `D` under the stream latch
+    (`WalStream::DetachBelow`).
+  - It asks core 0's writer thread to reclaim them; the simulator, with no
+    writer, reclaims inline.
+  - The writer runs the reclaim right after the same pass's sync. The first
+    build had it wait for a pass with no sync pending, which a steady stream
+    of commits would starve.
+- **Recovery:**
+  - `RecoverCore` floors redo at the scan start.
+  - `SHOW META` prints `recovery_redo_start` and
+    `recovery_redo_start_recomputed` when the floor raised it.
+- **The mount** opens the log from the anchor's segment. Its recycler is
+  core 0's `RecycleBelow`, so the completion checkpoint's publish removes
+  the leftovers.
+- **`SHOW META`** prints `wal_first_segment`, `wal_segments_removed` and
+  `wal_remove_failures` on core 0.
+
+**Cells:**
+- the fold floor;
+- the recycler handed only a durable `D`;
+- exactly the segments wholly below `D` removed, at three bounds;
+- leftovers removed by the first publish and not by `Open`;
+- both `SHOW META` blocks;
+- detach beside appends on a shared stream over a file device;
+- on the rig, §1.4's sequence with recycling on. Analysis's start lands in
+  a segment that is gone, and recovery from the anchor's segment succeeds
+  and reports the floor. The same image without the floor is refused
+  `Corruption`.
+
+**Mutants:**
+- **Killed, each 2 of 2:**
+  - the bound taken from the in-memory fold;
+  - the anchor's own segment counted as wholly below it;
+  - the fold floor dropped;
+  - redo's floor dropped.
+- **Survived: the detach without the stream latch, 5 of 5.** The race is a
+  few instructions wide (`WriteAt`'s table index against `DetachBelow`'s
+  `pop_front`), and a stress cell does not reach it. ThreadSanitizer is the
+  tool; its run is recorded below when it lands.
+
+**The review** (`critics-developer`):
+- **Taken:**
+  - a data race the reviewer fixed: the failure count `RecycleBelow` bumps
+    from a peer's thread is atomic now;
+  - the count renamed `recycle_failures_`;
+  - `RunPlacedSequence` no longer takes a crash image its caller discards;
+  - the shared-stream cell expects and breaks rather than asserting while its
+    thread is live.
+- **Not taken:**
+  - **A cell mounting a real `Expeditor` over a recycled log.** Production's
+    segment is fixed at 64 MiB with no setting to shrink it, so the cell
+    would write more than 64 MiB. **So the mount's two wiring lines -
+    `first_needed` from the anchor, and the recycler - have no cell, and a
+    mutant of either would survive.** That gap stands.
+  - **One helper for the three monotonic-raise loops.** Two of them are the
+    writer's, outside BC's change.
+  - **`first_needed` derived from `redo_start_lsn`** rather than read from
+    the anchor's `segment_no`. The two agree by construction, and a
+    disagreement fails loudly.
+
+**The suite:** the full Debug suite was 3176 of 3177 green before the
+review's edits. The one failure is the environmental `TcpServerListenTest`.
+The touched suites were run after the edits, 85 of 85 green.
+

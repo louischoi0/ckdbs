@@ -1367,6 +1367,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " wal_interval_syncs=" << wal_stats.interval_syncs
            << " wal_sync_failures="
            << (wal_stats.sync_failures + wal_->writer_sync_failures());
+        // **Recycling** (BC-R6), on core 0 alone, the `wal_syncs` rule: the
+        // removal is core 0's writer's, so a peer has no number to give.
+        if (!wal_->attached()) {
+            os << " wal_first_segment=" << wal_->stream()->device()->first_segment()
+               << " wal_segments_removed=" << wal_->stream()->device()->segments_removed()
+               << " wal_remove_failures=" << wal_->recycle_failures();
+        }
 
         // **How many commits this core's fsyncs are amortised over**
         // (AF-T5's §3b finding). D2's whole mechanism is that one sync
@@ -1529,6 +1536,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " recovery_redo_applied=" << recovery_->redo_applied
            << " recovery_pages_healed=" << recovery_->pages_healed
            << " recovery_torn_tail=" << (recovery_->torn_tail ? 1 : 0);
+        // **Redo's floor** (BC-R2), printed only when it raised the start:
+        // the two LSNs say how far below the anchor analysis had reached,
+        // and that redo did not go there.
+        if (recovery_->redo_start_floored_from != 0) {
+            os << " recovery_redo_start=" << recovery_->redo_start
+               << " recovery_redo_start_recomputed=" << recovery_->redo_start_floored_from;
+        }
         // R6-4's three, printed only when this mount actually resolved a
         // cross-owner transaction - one a log written before AT-S6 retired
         // 2PC left prepared. **Absent rather than zeroed**: nothing prepares

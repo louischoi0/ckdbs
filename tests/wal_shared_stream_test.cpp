@@ -1,9 +1,13 @@
 #include "kds/wal/stream.hpp"
 
+#include <unistd.h>
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <string>
 #include <set>
 #include <thread>
 #include <vector>
@@ -11,6 +15,8 @@
 #include <gtest/gtest.h>
 
 #include "kds/sched/clock.hpp"
+#include "kds/wal/file_log_device.hpp"
+#include "kds/wal/log_scanner.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/record.hpp"
@@ -359,6 +365,77 @@ TEST_F(SharedStreamTest, APeersGroupBatchClosesOnTheDrainAfterAnotherCoresSync) 
     EXPECT_FALSE(peer.value()->HasPendingGroupCommits());
     EXPECT_EQ(peer.value()->stats().group_batches, 1u);
     EXPECT_EQ(peer.value()->stats().syncs, 0u) << "the peer synced for a batch it did not own";
+}
+
+// **BC-R4 at the stream**: a detach changes the file device's table, and the
+// stream's latch is what keeps it from shifting under an unlocked
+// `WriteAt` - whose index into the table is relative to the first live
+// segment. One thread appends through rolls, another detaches behind it; every
+// record must read back in order, from the first live segment to the end.
+// Without the latch a record lands in the next segment's file, and the scan
+// below stops at the gap it leaves.
+TEST(SharedStreamRecyclingTest, ADetachBesideAppendsUnderTheLatchLosesNoRecord) {
+    const std::string dir = (std::filesystem::temp_directory_path() /
+                             ("kds_shared_stream_recycle_" + std::to_string(::getpid())))
+                                .string();
+    std::filesystem::remove_all(dir);
+    constexpr std::uint64_t kSegment = 64 * 1024;
+    auto device = FileLogDevice::Open(dir, 0, kSegment);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto opened = WalStream::Open(device.value().get(), 0, kMinRingCapacity, /*shared=*/true);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    WalStream& stream = *opened.value();
+
+    constexpr int kRecords = 6000;
+    std::atomic<bool> done{false};
+    std::thread appender([&] {
+        for (int i = 0; i < kRecords; ++i) {
+            const std::vector<std::byte> payload(kPayloadSize, static_cast<std::byte>(i & 0xFF));
+            auto lsn = stream.Append({RecordType::kHeapInsert, 1, static_cast<PageId>(i)}, payload);
+            if (!lsn.ok()) {
+                ADD_FAILURE() << lsn.status().message();
+                break;
+            }
+            if (i % 16 == 0 && !stream.Flush().ok()) break;
+        }
+        done.store(true);
+    });
+    std::uint64_t detached_to = 0;
+    while (!done.load()) {
+        // Two segments behind the append point: never the one being written.
+        const Lsn behind = stream.append_lsn() > 2 * kSegment ? stream.append_lsn() - 2 * kSegment : 0;
+        // EXPECT and break, not ASSERT: a return here would leave the
+        // appender joinable, and its destructor would end the run.
+        const Status detached = stream.DetachBelow(behind);
+        EXPECT_TRUE(detached.ok()) << detached.message();
+        if (!detached.ok()) break;
+        detached_to = device.value()->first_segment();
+    }
+    appender.join();
+    ASSERT_TRUE(stream.Sync().ok());
+    ASSERT_GT(detached_to, 0u) << "the cell must have detached while appending";
+
+    // Every record from the first live segment on, in order, each where its
+    // page id says it was appended.
+    const Lsn from = device.value()->first_segment() * kSegment + kSegmentHeaderSize;
+    int seen = 0;
+    PageId last = kInvalidPageId;
+    auto scanned = ScanLog(*device.value(), 0, from, [&](const DecodedRecord& r) {
+        if (last != kInvalidPageId && r.header.page_id != last + 1) {
+            return Status::Corruption("record for " + std::to_string(r.header.page_id) +
+                                      " follows " + std::to_string(last));
+        }
+        if (r.payload.empty() || r.payload[0] != static_cast<std::byte>(r.header.page_id & 0xFF)) {
+            return Status::Corruption("payload of " + std::to_string(r.header.page_id));
+        }
+        last = r.header.page_id;
+        ++seen;
+        return Status::OK();
+    });
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    EXPECT_FALSE(scanned.value().stopped_early);
+    EXPECT_EQ(last, static_cast<PageId>(kRecords - 1)) << "the scan stopped after " << seen;
+    std::filesystem::remove_all(dir);
 }
 
 }  // namespace

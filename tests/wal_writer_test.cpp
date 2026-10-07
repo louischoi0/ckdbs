@@ -139,6 +139,7 @@ public:
     Status Sync() override { return Status::IoError("device is on fire"); }
     Status DetachBelow(std::uint64_t) override { return Status::OK(); }
     Status ReclaimDetached() override { return Status::OK(); }
+    std::uint64_t segments_removed() const noexcept override { return 0; }
 };
 
 TEST(WalWriter, AFailedSyncIsReportedAndLeavesTheWatermark) {

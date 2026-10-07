@@ -89,6 +89,15 @@ public:
     // to park on.
     Status EnsureDurable(Lsn lsn);
 
+    // Asks the thread to run the device's `ReclaimDetached` (BC-R5): the
+    // unlinks and the directory sync of the segments recycling detached.
+    // Returns at once and does no I/O, like `RequestSync`. The removal runs
+    // right after the sync the same pass makes, so a committer already
+    // waiting is not put behind it and a stream of commits cannot starve
+    // it; a peer committer that asks during it waits it out
+    // (`workorder-bc-wal-recycling.md` §1.7, BC-Q5).
+    void RequestReclaim();
+
     // Stops the thread, after finishing whatever sync was in flight. Safe to
     // call twice; the destructor calls it.
     void Stop();
@@ -98,6 +107,12 @@ public:
     // - and the next request retries it.
     std::uint64_t syncs() const noexcept { return syncs_.load(std::memory_order_relaxed); }
     std::uint64_t failures() const noexcept { return failures_.load(std::memory_order_relaxed); }
+
+    // Reclaims that failed. A failed one leaves its segments queued on the
+    // device, and the next request retries them.
+    std::uint64_t reclaim_failures() const noexcept {
+        return reclaim_failures_.load(std::memory_order_relaxed);
+    }
 
     // The last failure, for a caller that wants to report rather than
     // retry. Guarded by the mutex because a Status carries a string.
@@ -111,6 +126,7 @@ public:
 
 private:
     void Run();
+    void Reclaim();
 
     LogDevice* device_;
 
@@ -118,11 +134,13 @@ private:
     std::atomic<Lsn> durable_{0};
     std::atomic<std::uint64_t> syncs_{0};
     std::atomic<std::uint64_t> failures_{0};
+    std::atomic<std::uint64_t> reclaim_failures_{0};
 
     mutable std::mutex mutex_;
     std::condition_variable work_;   // reactor -> writer: something to do
     std::condition_variable done_;   // writer -> reactor: watermark moved
     bool stopping_ = false;
+    bool reclaim_requested_ = false;  // under mutex_
     Status last_failure_;
 
     std::thread thread_;
