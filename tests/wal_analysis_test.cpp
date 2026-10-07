@@ -332,6 +332,67 @@ TEST_F(AnalysisTest, ARecLsnOfZeroIsSkippedAndDoesNotDragTheRedoStartToZero) {
     EXPECT_LT(second, r.value().end_lsn);
 }
 
+// **A seeded 0 gives way to the page's next record.** The checkpoint lists a
+// page dirtied by an unlogged path at 0 (mount's own redo is one), and the
+// page's next record follows the BEGIN. Kept at 0, the page pulled nothing
+// into the redo start, and with nothing else lower redo started past the
+// record - a committed change the next crash lost. Page 12's records follow
+// page 10's, so page 10's is the oldest and nothing else pulls the start down;
+// page 12 shows the unchanged half: a nonzero entry keeps the oldest LSN.
+TEST_F(AnalysisTest, ARecLsnOfZeroGivesWayToThePagesNextRecord) {
+    Lsn begin = 0;
+    Lsn on_ten = 0;
+    Lsn on_twelve = 0;
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        const CheckpointDirtyPage dirty[] = {{10, 0}};
+        begin = AppendCheckpointBegin(*s.value(), {}, dirty);
+        auto ten = s.value()->Append({RecordType::kHeapInsert, 1, 10});
+        ASSERT_TRUE(ten.ok());
+        on_ten = ten.value();
+        auto twelve = s.value()->Append({RecordType::kHeapInsert, 1, 12});
+        ASSERT_TRUE(twelve.ok());
+        on_twelve = twelve.value();
+        ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 1, 12}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kTxnCommit, 1, kInvalidPageId}).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Run(/*redo_start=*/begin);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().dirty_pages.at(10), on_ten);
+    EXPECT_EQ(r.value().redo_start_lsn, on_ten) << "page 10's record is below the redo start";
+    EXPECT_EQ(r.value().dirty_pages.at(12), on_twelve) << "a nonzero entry keeps its first LSN";
+}
+
+// The seed-against-seed orders `note_dirty` covers, with no record of the
+// page between the two BEGINs: a 0 then a nonzero seed takes the nonzero one;
+// a nonzero seed then a 0 keeps the nonzero one.
+TEST_F(AnalysisTest, ASeededZeroTakesALaterSeedAndANonzeroSeedIsKept) {
+    Lsn first_begin = 0;
+    Lsn x = 0;
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        const CheckpointDirtyPage one[] = {{20, 0}, {21, 0}};
+        first_begin = AppendCheckpointBegin(*s.value(), {}, one);
+        auto other = s.value()->Append({RecordType::kHeapInsert, 1, 22});
+        ASSERT_TRUE(other.ok());
+        x = other.value();
+        // Page 20's later recLSN as the store would report it, at or below
+        // this BEGIN; page 21 is listed at 0 again.
+        const CheckpointDirtyPage two[] = {{20, x}, {21, 0}};
+        AppendCheckpointBegin(*s.value(), {}, two);
+        const CheckpointDirtyPage three[] = {{20, 0}};
+        AppendCheckpointBegin(*s.value(), {}, three);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Run(/*redo_start=*/first_begin);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().dirty_pages.at(20), x) << "a 0 seed gives way to a later nonzero one";
+    EXPECT_EQ(r.value().dirty_pages.at(21), 0u) << "two 0 seeds stay 0";
+}
+
 TEST(RedoStartFromTest, TheSharedRuleSkipsZeroAndFloorsAtTheCheckpoint) {
     // The rule itself, since two callers depend on it: the checkpointer
     // computing it forward and analysis recomputing it backward.

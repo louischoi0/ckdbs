@@ -259,7 +259,9 @@ is still to come is not established here. BC-S1 writes the cell. A red cell
 becomes a bug entry under its own letter. It is outside BC because BC
 neither causes it nor depends on it.
 
-**BC-S1: red, and filed** as
+**Fixed on 2026-10-07 on `worktree-fix-reclsn-zero`, after BC closed**:
+analysis lets a seeded 0 give way to the first LSN that reaches the page,
+and the cell below is green and enabled. **BC-S1: red, and filed** as
 `docs/inflight/bugs/a-page-a-checkpoint-lists-at-reclsn-0-hides-its-next-record-from-redo.md`.
 The engine reaches the precondition at every mount: the completion
 checkpoint lists every page recovery redid at recLSN 0, and the first

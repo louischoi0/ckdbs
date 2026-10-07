@@ -308,7 +308,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // page's records, so for the rest this skips nothing the RV5 gate
         // would have applied. The no-entry disjunct is unreachable from any
         // result `Analyze` produces now - every page-touching record
-        // emplaces its page - and is kept for the hand-built results this
+        // enters its page (`note_dirty`) - and is kept for the hand-built results this
         // function's tests pass it.
         const auto dirty = analysis.dirty_pages.find(page_id);
         if (dirty == analysis.dirty_pages.end() || record.header.lsn < dirty->second) {
