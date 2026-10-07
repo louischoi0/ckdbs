@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§13) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§13) and `worktree-pool-budget-required` (§14-§15) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -124,3 +124,21 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BD-Q4 (a):** the heap is untouched. BB-R7, its two entry points, the mark's refusal and its ordinal mark stay; the cost is a second insert protocol kept alive for a relation type no mountable volume holds. **BD-Q8 (a):** recovery undo re-finds a row by scanning the recorded `kBtreeLeaf` and rightward while `min_key <= pk`. **BD-Q9 (a):** a named key meeting an undecided insert of the same key waits for its decide, and the re-run answers by the outcome. The word came before BD-S0's review, which sharpened all three without changing which option they are |
 | **Does not settle** | BD-Q0, BD-Q10, BD-Q11 and BD-Q12 |
 | **Recorded at** | the order's header (W13) and §4 |
+
+## 14. `buffer_pool_frames` is required, `0` is an error, and the value is a ceiling
+
+| | |
+|---|---|
+| **Word** | *"buffer_pool_frames=0은 오류. 이 값이 최대 값이 됨"*; asked what a missing key does, *"부팅 거부 (필수 키)"*; asked whether to build it, *"결정만 기록"* |
+| **Mark** | The key is required: a config without it is refused at boot, and `0` is an error. The value is the pool's maximum, not a soft target. Recorded as not built in `eviction.md` §6 and `known-gaps.md` (Eviction) at `e352eac0`; nothing in the engine moved |
+| **Does not settle** | the refusal's status code; whether the store's unbounded mode dies with the key's; what a fault at the ceiling does - each is a BE item (BE-Q2..Q4) |
+| **Recorded at** | `eviction.md` §6, `known-gaps.md` (Eviction), and `workorder-be-bounded-pool.md`'s header |
+
+## 15. BE's order written
+
+| | |
+|---|---|
+| **Word** | *"작업 지시서를 작성하고 handoff를 준비해줘 그리고 다음 세션을 열 key도 알려줘"* |
+| **Mark** | `workorder-be-bounded-pool.md` is written as BE-S0 on `worktree-pool-budget-required` from `e352eac0`, reviewed, and not opened. No engine file moves |
+| **Does not settle** | BE-Q0..Q10 |
+| **Recorded at** | the order's header and §6 |
