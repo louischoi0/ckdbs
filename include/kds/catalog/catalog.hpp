@@ -700,16 +700,10 @@ public:
     StatusOr<std::uint64_t> RowIdMark(Oid table_oid);
 
     // **The mount's refusal of a relation whose keys are out of order**
-    // (BB-R11, on BB-Q9's mark: backward compatibility given up for it).
-    // `Unsupported`, naming every relation whose `sys.tables` row still
-    // carries the deleted `kUnordered` value in its retired key-order byte -
-    // one a btree took a named key below its mark into before BB-S3. The
-    // engine reads every page's slot order as its key order, so serving such
-    // a relation would answer its `ORDER BY <pk>` wrong; there is no legacy
-    // per-page emission and no re-sort at mount. Core 0 asks it once, while
-    // it loads the catalog at mount, after recovery and the delete-mark
-    // finalize (a dropped relation's row is retired by then); no superblock
-    // version moves, so every volume without such a relation mounts.
+    // (BB-R11): `Unsupported`, naming every relation whose retired key-order
+    // byte still reads `kRetiredKeyOrderUnordered`, by its current name.
+    // Core 0's, once, after recovery and the delete-mark finalize
+    // (`heap-and-tuple.md` §4.1 carries the rule and what it cannot see).
     Status RefuseRelationsHoldingKeysOutOfOrder();
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------

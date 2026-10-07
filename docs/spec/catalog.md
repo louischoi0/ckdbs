@@ -46,9 +46,10 @@ decide (AR0-5 D21 as marked). Both endings of a catalog-writing
 transaction bump again through `InvalidateAfterCompensation()` — a
 rollback because the rows were compensated behind the cache's back, a
 commit because a delete-mark starts counting then (`ddl-transactional.md`
-§5b). The one write that keeps its own cached entry across a bump is the
-key-order flip, because the `INSERT` doing it holds the relation's
-`TableAccess*`; it bumps like any other, and other cores re-read the flag.
+§5b). The writes that keep their own cached entry across a bump are the
+in-place root moves (`UpdateRelationDescPage`, `UpdateIndexRoot`), because
+the `INSERT` doing one holds the relation's `TableAccess*`; each bumps the
+word, and other cores re-read the root from the anchor.
 
 **Asked at a task boundary, and never inside one.** `Catalog::Revalidate()`
 is one acquire load; on a mismatch the cache is dropped and the value
@@ -109,18 +110,14 @@ current rule (CT2) is live on every core rather than latent; nothing else
 in this file changed for it, which was the point of writing it first.
 
 **A catalog row is not a lock unit** (AT-S3, E13 answered no). A named
-key's admission writes the relation's `sys.tables` row - the mark, or the
-key-order flip - outside the caller's transaction (`heap-and-tuple.md`
-§4.1: both writes outlive a rollback), and neither write has a contention
-problem a lock would fix. The mark is a monotone number nobody caches:
-its read-modify-write is atomic because **no task parks under a page
-span** (`page.md` §6's discipline; `AdmitExplicitRowId`'s `before_mark`
-hook runs inside one and says so) — the page latch serialises cores, and
-it is re-entrant for the owning core, so within one core it is the
-no-park rule and nothing else. The flip is the one catalog write whose
-*staleness* is a wrong answer — a stale `kAscending` elides an
-`ORDER BY <pk>` and answers out of order — and staleness is what the word
-fixed at AT-S2: the flip bumps it. A transaction-length `X` would
+key's admission writes the relation's `sys.tables` row - the mark -
+outside the caller's transaction (`heap-and-tuple.md` §4.1: the advance
+outlives a rollback), and that write has no contention problem a lock
+would fix. The mark is a monotone number nobody caches: its
+read-modify-write is atomic because **no task parks under a page span**
+(`page.md` §6's discipline) — the page latch serialises cores, and it is
+re-entrant for the owning core, so within one core it is the no-park rule
+and nothing else. A transaction-length `X` would
 serialise every named-key `INSERT` into a relation for the length of each
 transaction and protect nothing. A peer refused a named key until AT-S5
 (`catalog_read_only_`); it admits one now, the page write being every

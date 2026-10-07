@@ -161,7 +161,6 @@ public:
     // was holding. Same in-place license, same one-field/one-owner test.
     void UpdateDescPage(Oid rel_oid, PageId root) noexcept;
 
-
     // ---- sys.types (bootstrap-immutable) --------------------------------
 
     // nullptr means "not loaded yet, scan the page"; a non-null empty

@@ -183,13 +183,11 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
 // resume from. That is this mark - a page, and how many of that page's
 // rows the walk covered in the page's own emission order.
 //
-// **Rows, not slots.** The ordinal counts accepted rows in the order the
-// walk emits them - slot order, which is key order on every relation since
-// BB (until BB-S3b a `kUnordered` relation's walk sorted each page by
-// Keystone id first, which is why the mark never counted slots). Within one statement that sequence is fixed - nothing writes
-// to the relation between the outer rows of a SELECT (spec §4, the same
-// argument JB4's location hints rest on) - so an ordinal taken by one walk
-// names the same row to the next.
+// **The ordinal** counts the rows the walk handed its visitor on that page,
+// in the order it emits them - slot order. Within one statement that
+// sequence is fixed - nothing writes to the relation between the outer rows
+// of a SELECT (spec §4, the same argument JB4's location hints rest on) - so
+// an ordinal taken by one walk names the same row to the next.
 //
 // `page == kInvalidPageId` is "from the head", which is where a first walk
 // starts and what an unset mark means.
@@ -1583,10 +1581,7 @@ private:
         // ascending - across pages by `min_key`, within a page because a row
         // is placed under its page's hold in issue order - and sorting by pk
         // is exact even after a leaf division has given a later page a lower
-        // id. Until BB-S3b a `kUnordered` relation kept the entries' own
-        // (page, slot) here instead, and a leaf two cores had filled out of
-        // order made this sort disagree with the walk that recorded the set
-        // (defect A).
+        // id.
         std::sort(located.begin(), located.end(),
                   [](const Located& a, const Located& b) { return a.pk < b.pk; });
 

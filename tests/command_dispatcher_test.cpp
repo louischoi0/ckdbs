@@ -262,9 +262,7 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
 // ---- The pk in DESCRIBE (heap-and-tuple.md §4.1) --------------------------
 //
 // `key_mode=` was a declaration and is gone with the mode, and `key_order=`
-// - the observation that stood in its position - is gone with `kUnordered`
-// (BB-S3b, BB-Q11 (a)): every page's slot order is its key order on every
-// relation, so the field could not vary. The pk column's `autoincrement=` is
+// with `kUnordered` (BB-Q11 (a)). The pk column's `autoincrement=` is
 // `if-omitted` on every relation - the sequence runs when the INSERT omits
 // the key and does not when the INSERT names one, and both are legal
 // everywhere, so neither `yes` nor `no` would be true.

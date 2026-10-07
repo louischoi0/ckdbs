@@ -88,15 +88,9 @@ struct SysTableRow {
     // would have been a rewrite of every row at mount rather than a format
     // event. Nothing on this row names a core any more.
 
-    // **The retired key-order byte** (well_known.hpp's
-    // `kRetiredKeyOrderUnordered`). It was `KeyOrder` until BB-S3b
-    // (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` BB-R10):
-    // whether a named key below the mark had landed here, which no relation
-    // can do since BB-R3. Written 0 by every row; read by one thing, the
-    // mount's refusal of a volume a relation of which still carries the old
-    // `kUnordered` value (BB-R11). It occupies the byte the `KeyMode` enum
-    // held until 2026-08-25, at the same offset and the same width, so
-    // `kOnDiskSize` has not moved since either change.
+    // **The retired key-order byte**: written 0, read only by the mount's
+    // refusal of a relation still carrying `kRetiredKeyOrderUnordered`
+    // (`heap-and-tuple.md` §4.1, BB-R11).
     std::uint8_t retired_key_order = 0;
 
     // The relation's anchor page (storage/anchor_page.hpp; PW2-1,
@@ -129,6 +123,10 @@ struct SysTableRow {
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
 };
+
+// The value `retired_key_order` held for a relation that took a named key
+// below its mark before BB-S3 (`KeyOrder::kUnordered`, deleted at BB-S3b).
+inline constexpr std::uint8_t kRetiredKeyOrderUnordered = 1;
 
 // **The on-disk layout, pinned** (AT-S9, AT-R7). The row is a packed byte
 // stream, not a mirror struct, so `offsetof` cannot check it; these do.

@@ -187,7 +187,7 @@ key:
     the error table below gives both forms);
   - on a `HEAP` relation, both are `OutOfRange`.
   The mark never moves back: a key that a failed or rolled-back statement
-  named or was issued stays below it, and a key that another session's
+  was issued, or named and had admitted, stays below it, and a key that another session's
   insert passed first is refused, not reordered. This is what keeps every
   `BTREE` page's rows in key order, so `ORDER BY <pk>` costs nothing (see
   ORDER BY).
@@ -710,11 +710,14 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   clause and the statement pays nothing. `ANALYZE` shows this as the
   absence of a `sort` line. Every other order — including `ORDER BY <pk>
   DESC` — is an output sort, which is not free; see the two notes below.
-- **That order holds on every `BTREE` relation, at any number of cores.**
-  A row's key is fixed while the page it lands on is held, and a named key
-  must sort above every key already placed or issued (see the Keystone
-  contract), so every page's rows sit in key order and the clause has
-  nothing to do.
+- **That order holds on every `BTREE` page this engine filled, at any
+  number of cores.** A row's key is fixed while the page it lands on is
+  held, and a named key must sort above every key already placed or issued
+  (see the Keystone contract), so every page's rows sit in key order and
+  the clause has nothing to do. A volume an older engine wrote with more
+  than one core can hold a page whose rows are out of key order; it
+  mounts, and `ORDER BY <pk>` returns that page's rows in the order they
+  sit.
 - **A sorted statement's `LIMIT` bounds what you receive, not what the
   engine reads.** The sort must see every qualifying row before it knows
   which comes first, so unlike an unsorted or pk-ordered `LIMIT`, it

@@ -2043,10 +2043,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // lookup or probe emits one row. **Every page's slot order is its key
     // order** on every relation (BB-R1, BB-R3 in
     // `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`), which is
-    // the premise all of that rests on; until BB-S3b a relation that had
-    // taken a named key below its mark (`kUnordered`) was emitted page by
-    // page in key order instead, and two cores could leave a leaf out of
-    // order with no flag at all (defect A). A Cabin probe stays excluded by
+    // the premise all of that rests on. A Cabin probe stays excluded by
     // name: a served set is sorted by pk into the walk's order, but the
     // exclusion is a fix, not a precaution - the discarding version of this
     // clause answered `ORDER BY <pk>` over a Cabin-probed relation with

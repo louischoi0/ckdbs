@@ -206,10 +206,6 @@ struct TableAccess {
     // core any more, because every read and write runs where its session is
     // and every page is every core's to fault.
 
-    // **No `key_order` since BB-S3b** (BB-R10): every page's slot order is
-    // its key order on every relation (BB-R1, BB-R3), so there is no
-    // relation whose pages a reader must re-sort, and nothing to cache.
-
     // The relation's anchor page - rows.hpp owns what it is and the
     // system-relation sentinel. Cacheable for varheap_page_id's reason
     // exactly: fixed at CREATE TABLE, and the page's *contents* move so

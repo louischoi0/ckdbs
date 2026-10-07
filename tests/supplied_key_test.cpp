@@ -418,7 +418,7 @@ TEST_F(SuppliedKeySqlTest, OrderByWithLimitTakesTheLowestKeysAcrossALeafBoundary
     EXPECT_EQ(EmittedIds(page2.response), window) << page2.response;
 }
 
-TEST_F(SuppliedKeySqlTest, OrderByCostsNothingOnARelationThatNeverTookAnOutOfOrderKey) {
+TEST_F(SuppliedKeySqlTest, OrderByThePkCostsNothing) {
     auto d = Dispatcher();
     CreateHeap(d);
 

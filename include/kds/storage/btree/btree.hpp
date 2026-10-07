@@ -214,8 +214,8 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
 
 // Calls `fn` once per slot of every leaf, left to right - which is pk
 // order page by page, and within a leaf slot order: key order on every leaf
-// SQL fills (BB-R1, BB-R3), not necessarily on one `BtreeInsert`'s storage
-// contract has fed an id below its highest. Signature matches heap::ChainVisit deliberately, so a
+// SQL fills (BB-R1, BB-R3), not necessarily on one the `BtreeInsert`
+// storage contract fed an id below its highest. Signature matches heap::ChainVisit deliberately, so a
 // caller can hand the same lambda to either - `access` and the
 // VisitControl contract included, with the same meaning and the same
 // consequence for getting either wrong. kStop ends the walk with

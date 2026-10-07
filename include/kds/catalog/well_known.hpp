@@ -558,17 +558,4 @@ enum class ClusteredType : std::uint8_t {
     kBtree = 1,
 };
 
-// **The retired key-order byte** (`SysTableRow::retired_key_order`).
-//
-// `KeyOrder` lived here until BB-S3b (`instructions/v3.0.0/workorder-bb-
-// issue-under-the-leaf.md` BB-R10, on BB-Q8's mark): `kAscending` = 0, and
-// `kUnordered` = 1 once a btree had admitted a named key below its mark, which
-// told the compiler to emit each page in key order rather than discard
-// `ORDER BY <pk>`. BB makes every page's slot order its key order on every
-// relation (BB-R1, BB-R3), so the state, its flip and its readers are deleted.
-// The byte stays at its offset, so no format moves: every row writes it 0, and
-// its one reader is the mount check that refuses a volume holding a relation
-// whose byte is still this value (BB-R11, on BB-Q9's mark).
-inline constexpr std::uint8_t kRetiredKeyOrderUnordered = 1;
-
 }  // namespace kds::catalog

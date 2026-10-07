@@ -538,6 +538,25 @@ there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
+- **A volume an engine older than `1b5d252e` wrote at `cores > 1` can hold
+  a btree leaf out of key order, and it mounts.** By reading, on
+  `worktree-bb-issue-under-the-leaf` at `be2bb128` (BB-S3b's review); no
+  cell reproduces it, since no engine this tree builds can write such a
+  leaf. Before BB-S3 a row's id was fixed under catalog page 7 and placed
+  later under its leaf's hold, so two cores could place 101 in slot 4 and
+  100 in slot 5 (defect A) - and nothing recorded it: the `kUnordered` byte
+  was set only by a named key below the mark. BB-R11's mount check reads
+  that byte (`Catalog::RefuseRelationsHoldingKeysOutOfOrder`), so such a
+  volume mounts, and `ORDER BY <pk>` - discarded, since every page filled
+  since BB-S3 holds its slots in key order - answers that leaf in slot
+  order; under `LIMIT` it can return other rows. **Not closed in BB**: the
+  operator confirmed BB-R11's scope as a check at catalog load and not a
+  superblock bump refusing every older volume (BB §6, *"BB-Q9 marked
+  (a)"*), and a bump is the one cheap refusal that would reach it; a mount
+  that reads every leaf's slot order costs a read of the whole volume. A
+  volume written at `cores = 1`, or by an engine at or after `1b5d252e`,
+  holds no such leaf. Owner: `heap-and-tuple.md` §4.1.
+
 - **Two concurrent `CREATE ASSERTION`s can place `sys.assertions` rows out
   of issue order.** By reading, on `bb-s0-order` at `bddd450c` (BB §1.8),
   re-read on `worktree-bb-issue-under-the-leaf` at `6dc792c9`; no cell

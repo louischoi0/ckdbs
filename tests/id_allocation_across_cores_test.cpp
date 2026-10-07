@@ -22,14 +22,15 @@ constexpr int kRowsPerCore = 200;
 // Per statement. A client retries what the engine answers `retryable=1`,
 // and one does arrive here: a descent that meets the root while the other
 // core grows it a level is refused `TxnConflict` (`btree.cpp`'s
-// `DescendTo`, AT-S5c), and the id it drew is burned.
+// `DescendTo`, AT-S5c) - before the issue since BB-R2, so it burns none; a
+// refusal after the issue, a split's parent walk, burns one.
 constexpr int kRetriesPerRow = 50;
 
 struct Writer {
     Session session;
     DispatchOutcome out;
     std::string first_refusal;  // one that was not retryable, or ran out
-    int retries = 0;            // retryable refusals - each burned an id
+    int retries = 0;            // retryable refusals - each burned at most one id
     std::atomic<bool> done{false};
 };
 
@@ -107,7 +108,6 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
     const std::uint64_t hi = std::stoull(row.substr(c2 + 1));
     EXPECT_EQ(count, static_cast<std::uint64_t>(2 * kRowsPerCore)) << reply;
     const std::uint64_t retries = static_cast<std::uint64_t>(w0.retries + w1.retries);
-    EXPECT_GE(hi - lo + 1, count) << reply;
     EXPECT_LE(hi - lo + 1, count + retries)
         << "the ids are not one sequence less at most the " << retries
         << " retried statements' ids: " << reply;

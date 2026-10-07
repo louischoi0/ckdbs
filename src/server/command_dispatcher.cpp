@@ -2063,9 +2063,6 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     std::ostringstream os;
     os << "oid=" << oid.value() << " root_page_id=" << current_root
        << " clustered_type=" << clustered
-       // `key_order=` stood here until BB-S3b (BB-Q11 (a)): every page's
-       // slot order is its key order on every relation (BB-R1, BB-R3), so a
-       // field that cannot vary reports nothing and went with the state.
        << " next_id=" << table_row.value().next_id
        << " columns=" << schema.columns.size();
 

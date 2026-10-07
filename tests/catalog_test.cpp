@@ -1386,7 +1386,7 @@ TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
 // every relation, where a btree used to admit one and flip. So these tests
 // are about what `AdmitExplicitRowId` admits and what it refuses.
 
-class KeyOrderTest : public ::testing::Test {
+class RowIdAdmissionTest : public ::testing::Test {
 protected:
     Schema OneColumnSchema() {
         Schema schema;
@@ -1403,7 +1403,7 @@ protected:
     storage::InMemoryPageStore store_{128};
 };
 
-TEST_F(KeyOrderTest, EveryNewRelationWritesTheRetiredKeyOrderByteZero) {
+TEST_F(RowIdAdmissionTest, EveryNewRelationWritesTheRetiredKeyOrderByteZero) {
     // BB-R10: the byte `KeyOrder` held stays at its offset, written 0 by
     // every row, because the mount reads it for one thing - a relation still
     // marked with the deleted `kUnordered` (BB-R11). Read back after a
@@ -1438,7 +1438,7 @@ TEST_F(KeyOrderTest, EveryNewRelationWritesTheRetiredKeyOrderByteZero) {
     EXPECT_EQ(b_row.value().retired_key_order, 0u);
 }
 
-TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
+TEST_F(RowIdAdmissionTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
     // The capability the removal bought: a heap-clustered relation may be
     // told its keys. What it may not be told is a key that goes backwards -
     // its chain's tail append, its page-wise ordering and its tail-page-only
@@ -1470,7 +1470,7 @@ TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
     EXPECT_EQ(after.value().next_id, 601u);
 }
 
-TEST_F(KeyOrderTest, ABtreeRelationIsRefusedABelowMarkKeyAsAHeapIs) {
+TEST_F(RowIdAdmissionTest, ABtreeRelationIsRefusedABelowMarkKeyAsAHeapIs) {
     // Withdrawn by BB-Q8 (b) and BB-R3: a btree used to admit a key below its
     // mark - the descent proved it unused - and flip the relation unordered.
     // It is refused now, as a heap's always was: the mark is the ascent
@@ -1510,7 +1510,7 @@ TEST_F(KeyOrderTest, ABtreeRelationIsRefusedABelowMarkKeyAsAHeapIs) {
     EXPECT_EQ(issued.value(), 601u) << "a refusal moved the mark";
 }
 
-TEST_F(KeyOrderTest, AnIssuedIdRisesAboveEverySuppliedOne) {
+TEST_F(RowIdAdmissionTest, AnIssuedIdRisesAboveEverySuppliedOne) {
     // The two id sources share one mark, which is what keeps them from
     // colliding: AllocateRowId used to refuse an explicit relation outright,
     // and now both run on every relation.
@@ -1534,7 +1534,7 @@ TEST_F(KeyOrderTest, AnIssuedIdRisesAboveEverySuppliedOne) {
     EXPECT_EQ(next.value(), 903u);
 }
 
-TEST_F(KeyOrderTest, ACatalogRelationWritesTheRetiredKeyOrderByteZero) {
+TEST_F(RowIdAdmissionTest, ACatalogRelationWritesTheRetiredKeyOrderByteZero) {
     // Not a tautology worth skipping: sys.tables rows for the bootstrap
     // relations go through InsertRelationRow too, and a bootstrap row the
     // mount found marked would refuse every volume.

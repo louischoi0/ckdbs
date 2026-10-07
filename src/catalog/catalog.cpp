@@ -909,7 +909,8 @@ void Catalog::BumpWord() {
     if (schema_word_ == nullptr) return;
     const std::uint64_t prev = schema_word_->fetch_add(1, std::memory_order_acq_rel);
     // Adopt the bump only if this cache was current. A writer whose cache
-    // `BumpVersion()` just dropped, or the flip site keeping its entry, has
+    // `BumpVersion()` just dropped, or a root move keeping its entry in
+    // place (`UpdateRelationDescPage`, `UpdateIndexRoot`), has
     // `cache_built_at_ == prev` and moves with the word. A bump from
     // another core this cache has not yet revalidated against leaves it
     // behind, so the next boundary still drops - otherwise this write would
@@ -1133,9 +1134,6 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
-    // `retired_key_order` stays 0, as every row writes it (BB-R10): the byte
-    // is read only by the mount check that refuses a relation still marked
-    // with the deleted `kUnordered`.
     row.anchor_page_id = anchor_page_id;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
@@ -2593,10 +2591,22 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
 Status Catalog::RefuseRelationsHoldingKeysOutOfOrder() {
     auto rows = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
     if (!rows.ok()) return rows.status();
+    std::vector<Oid> marked;
+    for (const SysTableRow& row : rows.value()) {
+        if (row.retired_key_order == kRetiredKeyOrderUnordered) marked.push_back(row.oid);
+    }
+    if (marked.empty()) return Status::OK();
+    // Named from `sys.objects`: `RenameTable` rewrites that row alone, so
+    // `SysTableRow::name` is the name the relation was created under.
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    if (!objects.ok()) return objects.status();
     std::string names;
     std::size_t count = 0;
-    for (const SysTableRow& row : rows.value()) {
-        if (row.retired_key_order != kRetiredKeyOrderUnordered) continue;
+    for (const SysObjectRow& row : objects.value()) {
+        if (row.type_oid != kTypeTable ||
+            std::find(marked.begin(), marked.end(), row.oid) == marked.end()) {
+            continue;
+        }
         if (count++ > 0) names += ", ";
         names += "`" + std::string(NameView(row.name)) + "`";
     }
@@ -2605,8 +2615,8 @@ Status Catalog::RefuseRelationsHoldingKeysOutOfOrder() {
         std::string(count == 1 ? "relation " : "relations ") + names +
         (count == 1 ? " holds" : " hold") +
         " keys out of order, a shape this engine no longer serves: it reads every page's slot "
-        "order as its key order, and such a relation's pages are not. Its data is reached by an "
-        "engine before BB, or not at all");
+        "order as its key order, and such a relation's pages need not be. Its data is reached "
+        "by an engine older than 1b5d252e, or not at all");
 }
 
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,

@@ -774,7 +774,11 @@ TEST_F(ExpeditorTest, AVolumeHoldingARelationWithKeysOutOfOrderIsRefusedByName) 
         ASSERT_TRUE(running.Run());
         for (const char* sql : {"CREATE TABLE fine (id int64, v int64) BTREE",
                                 "CREATE TABLE marked (id int64, v int64) BTREE",
-                                "INSERT INTO marked VALUES (1)"}) {
+                                "INSERT INTO marked VALUES (1)",
+                                // The refusal names a relation by its current
+                                // name: `sys.tables` keeps the one it was
+                                // created under, which the forge below finds.
+                                "ALTER TABLE marked RENAME TO renamed"}) {
             const std::string reply = SendLine(running.client(), sql);
             ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << sql << " -> " << reply;
         }
@@ -791,9 +795,11 @@ TEST_F(ExpeditorTest, AVolumeHoldingARelationWithKeysOutOfOrderIsRefusedByName) 
     auto refused = Expeditor::Open(config, /*now_unix_seconds=*/2000);
     ASSERT_FALSE(refused.ok()) << "a relation holding keys out of order was mounted";
     EXPECT_EQ(refused.status().code(), StatusCode::kUnsupported) << refused.status().message();
-    EXPECT_NE(refused.status().message().find("relation `marked` holds keys out of order"),
+    EXPECT_NE(refused.status().message().find("relation `renamed` holds keys out of order"),
               std::string::npos)
         << refused.status().message();
+    EXPECT_EQ(refused.status().message().find("`marked`"), std::string::npos)
+        << "the relation was named by a name it no longer has: " << refused.status().message();
     EXPECT_EQ(refused.status().message().find("`fine`"), std::string::npos)
         << "an ordered relation was named: " << refused.status().message();
 }

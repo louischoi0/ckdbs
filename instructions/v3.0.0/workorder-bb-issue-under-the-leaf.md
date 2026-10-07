@@ -1272,3 +1272,61 @@ tail is held (5/5).
 Suite: 3,152 cells, 3,151 green; the one failure the port 25432 another
 process holds, as at BB-S3. Overhead not measured; measured at the
 milestone's close.
+
+### BB-S3b's review - 2026-10-07
+
+`be2bb128`, reviewed by `critics-developer` (read-only): the deletion is
+sound for every btree reader through SQL; two correctness findings, three
+text findings, six simplifications. Applied on `36c44fe0`'s successor (this
+section's commit), settled by CLA's proposal under §7's word where a finding
+offered a choice:
+
+- **A volume an engine before BB-S3 wrote at `cores > 1` can hold a btree
+  leaf out of key order with the byte 0** (medium). Defect A never set the
+  byte, so BB-R11's check cannot see such a leaf: the volume mounts, and
+  `ORDER BY <pk>` over the leaf answers in slot order. The text stated every
+  btree page ordered. **Taken, option (a)**: the text is scoped to every page
+  filled since BB-S3 (`heap-and-tuple.md` §4.1, §4.1a's elision, §8 invariant
+  11; `CLAUDE.md`'s row and invariant 11; the manual's `ORDER BY` note), §4.1
+  says what the check cannot see, and `known-gaps.md` records the gap.
+  **Declined, option (b)** - superblock 20, refusing every older volume: the
+  operator confirmed BB-R11's scope as a check at catalog load and not a bump
+  (*"BB-Q9 marked (a)"* above), and CLA does not reopen a scope the operator
+  confirmed. The operator can take (b) by word; it would also delete the
+  mount check and its cell.
+- **The mount refusal named a relation by the name it was created under**
+  (low-medium, a code bug): `SysTableRow::name` is written once at
+  `CREATE TABLE`, and `RenameTable` rewrites `sys.objects` alone. **Taken**:
+  the names come from `sys.objects`, and the cell renames the marked
+  relation before the forge, asserting the current name present and the old
+  one absent.
+- **The flip still described as current** in `catalog.md` CT2 and CT5,
+  `rules.md` §3's catalog row and a `catalog.cpp` comment: restated - the
+  in-place root moves are the writes that keep their cached entry, and the
+  named key's admission writes the mark alone.
+- **Text**: `page.md` §6's future tense; the refusal message's *"are not"*
+  (*"need not be"*) and its *"an engine before BB"* (a commit id now);
+  *"a key a failed statement named"* corrected to *named and admitted*;
+  `id_allocation_across_cores_test.cpp`'s comments brought in line with its
+  at-most-one assertion. The heap overclaims the review listed (finding 4)
+  are true since BB-S4, and the stale bug entry went with it.
+- **Simplifications taken**: the history comments of code no longer there
+  deleted (S3); the retired byte's story kept in `heap-and-tuple.md` §4.1
+  alone, every other copy a one-line pointer, and `kRetiredKeyOrderUnordered`
+  moved beside its field in `rows.hpp` (S4); `CLAUDE.md`'s invariant 11
+  compacted, the codes and the mount refusal left to the row (S5); a cell
+  assertion that could not fail removed, `KeyOrderTest` renamed
+  `RowIdAdmissionTest` and the elision cell `OrderByThePkCostsNothing`, a
+  double blank line and a garbled sentence in `btree.hpp` (S6).
+- **Declined**: S1, deleting the clustered tree's middle divide - BB-R10
+  keeps it in the storage contract by ruling (§1.5); S2, the walk's resume
+  mark as a slot number - behaviour-preserving only while every walk enters
+  each page at slot 0, which nothing states, for ten lines on the hottest
+  path in the engine and outside BB's subject; its comment is corrected
+  instead.
+
+**Mutation, killed on every run**: the refusal naming relations from
+`sys.tables` again (3/3).
+
+Suite: 3,152 cells, 3,151 green; the one failure the port 25432 another
+process holds (`kds_server`, pid 1035423), as at BB-S3.
