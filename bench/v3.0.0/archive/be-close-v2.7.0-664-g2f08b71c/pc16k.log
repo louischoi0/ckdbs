@@ -1,0 +1,44 @@
+== B start 13:59:55 load 0.53 1.48 3.92
+big2 load 25.81 s errs 0 rss max 138.328125
+big4 load 49.65 s errs 0 rss max 138.75
+2a 0.32 s count(*),min(v),max(v)\n1769472,0,999
+p2b_probes_pass1 0.36 s
+p2c_probes_pass2 0.35 s
+== B end 14:01:14
+== A start 14:01:14 load 1.36 1.49 3.72
+big2 load 25.27 s errs 0 rss max 308.78515625
+big4 load 51.05 s errs 0 rss max 897.109375
+Traceback (most recent call last):
+  File "/home/cdkbs/bench-runs/be-close/driver/pool_past_cap.py", line 191, in <module>
+    main()
+  File "/home/cdkbs/bench-runs/be-close/driver/pool_past_cap.py", line 108, in main
+    dt, r = timed(s, "SELECT COUNT(*), MIN(v), MAX(v) FROM big2")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/bench-runs/be-close/driver/pool_past_cap.py", line 68, in timed
+    r = s.q(sql)
+        ^^^^^^^^
+  File "/home/cdkbs/bench-runs/be-close/driver/pool_lib.py", line 96, in q
+    return self.conn.send_command(sql)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pool-budget-required/tools/ckdbs_cli.py", line 204, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pool-budget-required/tools/kwp.py", line 417, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pool-budget-required/tools/kwp.py", line 309, in _recv_frame
+    self._fill()
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pool-budget-required/tools/kwp.py", line 320, in _fill
+    chunk = self.sock.recv(65536)
+            ^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out
+== A end 14:02:36
+done
+== A start 14:02:56 load 1.01 1.38 3.43
+big2 load 25.61 s errs 0 rss max 308.16796875
+big4 load 51.08 s errs 0 rss max 896.3359375
+2a 6.8 s count(*),min(v),max(v)\n1769472,0,999
+p2b_probes_pass1 12.79 s
+p2c_probes_pass2 16.73 s
+== A end 14:05:15
+done2

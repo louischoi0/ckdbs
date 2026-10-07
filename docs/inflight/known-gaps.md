@@ -12,6 +12,26 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Eviction
 
+- **A resident scan is 2.5-3.7 % slower than before BE, and the rest of
+  the cause is not found.** Measured at `eef442cf`
+  (`bench/v3.0.0/results-be-close-v2.7.0-665-geef442cf.md`):
+  - a full scan of 100,000 resident rows takes +274 µs at p50;
+  - `range100` at 10,000 rows takes +28 µs.
+
+  The neighbouring-stage bisection places it at BE-S2's slot array. Its
+  larger part, cache-set aliasing from an exact 8 KiB slot stride, is fixed
+  at BE's close. The rest is about 270 ns per page, and the store's hit
+  path, within 1 ns of `e4b107af` on a microbenchmark, does not account for
+  it. Owned by `docs/spec/eviction.md` (§3.1).
+
+- **The cold scan protects only a hot set touched more often than the scan
+  laps the pool.** Measured at `2f08b71c` (the same results file, §3): a
+  hot set of half a 16,384-frame pool, read once or three times, is 92 %
+  re-faulted after a scan four times the pool. The scan drives about eight
+  laps of the hand, and each lap lowers every hot counter. BE-Q7 names this
+  the case for the scan ring's own order, which is not written. Owned by
+  `docs/spec/eviction.md` (EV6, §3.1).
+
 - **The executor does not scan through EV6's ring, by decision.** Verified
   at `2f08b71c`: `OpenScanRing`'s only callers are `relayout_planner.cpp`
   and `cabin_optimizer_exec.cpp`. A `SELECT`'s outermost walk faults cold

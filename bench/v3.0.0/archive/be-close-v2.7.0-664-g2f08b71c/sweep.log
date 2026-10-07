@@ -1,0 +1,52 @@
+== B budget=16384 rep=1 past=0 load 0.50 0.98 1.55
+setup: 32768 pages written in 1.7 s
+budget=16384 pages=32768 resident=16384 rss_before=5648 KiB rss_after=137052 KiB
+below  n=16384  p0=1.9 p25=5.0 p50=5.2 p90=5.7 p99=8.3 max=114.6 mean=5.4 us  total=0.089 s
+past   n=16384  p0=2.1 p25=2.3 p50=2.5 p90=2.8 p99=5.1 max=336.3 mean=2.6 us  total=0.042 s
+== B budget=16384 rep=2 past=0 load 0.62 1.00 1.55
+setup: 32768 pages written in 1.9 s
+budget=16384 pages=32768 resident=16384 rss_before=5652 KiB rss_after=137056 KiB
+below  n=16384  p0=2.0 p25=5.0 p50=5.2 p90=6.4 p99=9.6 max=112.6 mean=5.5 us  total=0.091 s
+past   n=16384  p0=2.1 p25=2.3 p50=2.5 p90=2.8 p99=5.1 max=338.1 mean=2.6 us  total=0.042 s
+== A budget=16384 rep=1 past=0 load 0.62 1.00 1.55
+setup: 32768 pages written in 1.7 s
+budget=16384 pages=32768 resident=16384 rss_before=70616 KiB rss_after=137104 KiB
+below  n=16384  p0=2.1 p25=2.7 p50=5.3 p90=5.9 p99=8.7 max=193.3 mean=4.4 us  total=0.072 s
+past   n=16384  p0=112.8 p25=117.7 p50=203.9 p90=329.6 p99=366.0 max=1049.0 mean=207.3 us  total=3.396 s
+== A budget=16384 rep=2 past=0 load 0.65 1.00 1.54
+setup: 32768 pages written in 1.7 s
+budget=16384 pages=32768 resident=16384 rss_before=70580 KiB rss_after=137068 KiB
+below  n=16384  p0=2.1 p25=2.7 p50=5.3 p90=6.0 p99=9.4 max=204.3 mean=4.4 us  total=0.073 s
+past   n=16384  p0=112.0 p25=117.8 p50=200.8 p90=332.1 p99=367.2 max=1551.0 mean=207.3 us  total=3.397 s
+== B budget=65536 rep=1 past=0 load 0.68 1.00 1.54
+setup: 131072 pages written in 6.7 s
+budget=65536 pages=131072 resident=65536 rss_before=6044 KiB rss_after=535752 KiB
+below  n=65536  p0=2.1 p25=5.0 p50=5.2 p90=5.7 p99=8.5 max=451.3 mean=5.7 us  total=0.373 s
+past   n=65536  p0=2.1 p25=2.4 p50=2.5 p90=2.8 p99=5.2 max=1414.2 mean=2.6 us  total=0.172 s
+== B budget=65536 rep=2 past=0 load 0.73 1.00 1.54
+setup: 131072 pages written in 6.7 s
+budget=65536 pages=131072 resident=65536 rss_before=6044 KiB rss_after=535752 KiB
+below  n=65536  p0=2.1 p25=5.0 p50=5.2 p90=5.7 p99=8.6 max=459.0 mean=5.7 us  total=0.373 s
+past   n=65536  p0=2.1 p25=2.4 p50=2.5 p90=2.8 p99=5.3 max=1410.9 mean=2.6 us  total=0.173 s
+== A budget=65536 rep=1 past=0 load 0.75 1.00 1.53
+setup: 131072 pages written in 6.6 s
+budget=65536 pages=131072 resident=65536 rss_before=135032 KiB rss_after=536020 KiB
+below  n=65536  p0=2.2 p25=5.4 p50=5.8 p90=7.2 p99=10.0 max=943.8 mean=5.6 us  total=0.366 s
+past   n=65536  p0=490.4 p25=519.9 p50=933.2 p90=1442.6 p99=1592.5 max=4490.2 mean=923.4 us  total=60.517 s
+== B budget=131072 rep=1 past=0 load 0.97 1.01 1.50
+setup: 262144 pages written in 13.1 s
+budget=131072 pages=262144 resident=131072 rss_before=6592 KiB rss_after=1067436 KiB
+below  n=131072  p0=3.7 p25=5.0 p50=5.1 p90=5.7 p99=8.5 max=891.4 mean=5.6 us  total=0.734 s
+past   n=131072  p0=2.1 p25=2.3 p50=2.5 p90=2.8 p99=5.3 max=2912.6 mean=2.6 us  total=0.344 s
+== B budget=131072 rep=2 past=0 load 1.19 1.06 1.51
+setup: 262144 pages written in 13.1 s
+budget=131072 pages=262144 resident=131072 rss_before=6560 KiB rss_after=1067404 KiB
+below  n=131072  p0=3.7 p25=5.0 p50=5.1 p90=5.6 p99=8.4 max=875.5 mean=5.6 us  total=0.732 s
+past   n=131072  p0=2.1 p25=2.3 p50=2.5 p90=2.8 p99=5.3 max=2925.8 mean=2.6 us  total=0.343 s
+== A budget=131072 rep=1 past=4000 load 1.36 1.11 1.51
+setup: 262144 pages written in 13.0 s
+budget=131072 pages=262144 resident=131072 rss_before=135548 KiB rss_after=1066932 KiB
+below  n=131072  p0=2.1 p25=5.4 p50=5.6 p90=7.0 p99=9.8 max=1963.4 mean=5.7 us  total=0.750 s
+past   n=4000  p0=2004.5 p25=2216.4 p50=2285.4 p90=2639.5 p99=2743.9 max=9007.3 mean=2323.3 us  total=9.293 s
+past: sampled 4000 of 131072; the whole half extrapolates to 304.5 s
+done

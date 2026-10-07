@@ -1,0 +1,253 @@
+{
+ "arm": "B",
+ "cap": 16384,
+ "rows": 3538944,
+ "variants": [
+  {
+   "hot_pages": 1024,
+   "warm_passes": 1,
+   "warm": [
+    {
+     "seconds": 0.0747,
+     "misses": 1121.0,
+     "hits": 5031.0
+    }
+   ],
+   "before": {
+    "seconds": 0.0713,
+    "misses": 815.0,
+    "hits": 11270.0
+   },
+   "scan": {
+    "seconds": 0.59,
+    "misses": 64848.0
+   },
+   "after": {
+    "seconds": 0.0702,
+    "misses": 814.0,
+    "hits": 8560.0
+   },
+   "after2": {
+    "seconds": 0.0651,
+    "misses": 0.0,
+    "hits": 9374.0
+   }
+  },
+  {
+   "hot_pages": 8192,
+   "warm_passes": 1,
+   "warm": [
+    {
+     "seconds": 0.596,
+     "misses": 9104.0,
+     "hits": 42283.0
+    }
+   ],
+   "before": {
+    "seconds": 0.507,
+    "misses": 0.0,
+    "hits": 51379.0
+   },
+   "scan": {
+    "seconds": 0.57,
+    "misses": 62420.0
+   },
+   "after": {
+    "seconds": 0.5484,
+    "misses": 7510.0,
+    "hits": 43869.0
+   },
+   "after2": {
+    "seconds": 0.5156,
+    "misses": 0.0,
+    "hits": 51379.0
+   }
+  },
+  {
+   "hot_pages": 8192,
+   "warm_passes": 3,
+   "warm": [
+    {
+     "seconds": 0.5935,
+     "misses": 9104.0,
+     "hits": 42283.0
+    },
+    {
+     "seconds": 0.5092,
+     "misses": 0.0,
+     "hits": 51379.0
+    },
+    {
+     "seconds": 0.5073,
+     "misses": 0.0,
+     "hits": 51379.0
+    }
+   ],
+   "before": {
+    "seconds": 0.538,
+    "misses": 0.0,
+    "hits": 51379.0
+   },
+   "scan": {
+    "seconds": 0.56,
+    "misses": 60343.0
+   },
+   "after": {
+    "seconds": 0.5495,
+    "misses": 8243.0,
+    "hits": 43136.0
+   },
+   "after2": {
+    "seconds": 0.5159,
+    "misses": 0.0,
+    "hits": 51379.0
+   }
+  },
+  {
+   "hot_pages": 12288,
+   "warm_passes": 1,
+   "warm": [
+    {
+     "seconds": 1.0416,
+     "misses": 13200.0,
+     "hits": 64343.0
+    }
+   ],
+   "before": {
+    "seconds": 0.8226,
+    "misses": 0.0,
+    "hits": 77535.0
+   },
+   "scan": {
+    "seconds": 0.57,
+    "misses": 63340.0
+   },
+   "after": {
+    "seconds": 0.8289,
+    "misses": 12824.0,
+    "hits": 64711.0
+   },
+   "after2": {
+    "seconds": 0.773,
+    "misses": 0.0,
+    "hits": 77535.0
+   }
+  }
+ ],
+ "load_big4": {
+  "table": "big4",
+  "rows": 3538944,
+  "stmts": 3456,
+  "refusals_retried": 0,
+  "elapsed_s": 51.16,
+  "rows_per_s": 69180,
+  "errors": 0,
+  "first_error": null,
+  "stmt_latency_us": {
+   "n": 3456,
+   "p0": 6712.462054565549,
+   "p25": 7739.1620725393295,
+   "p50": 8057.544007897377,
+   "p90": 11666.562990285456,
+   "p99": 394855.6419927627,
+   "max": 882051.3320388272,
+   "sum_s": 50.07152995839715
+  },
+  "rss": {
+   "samples": 511,
+   "min_mib": 13.15234375,
+   "max_mib": 138.8828125,
+   "last_mib": 138.8828125
+  },
+  "rss_trace_mib": [
+   [
+    0.0,
+    14
+   ],
+   [
+    3.1,
+    54
+   ],
+   [
+    7.1,
+    93
+   ],
+   [
+    10.9,
+    131
+   ],
+   [
+    14.4,
+    138
+   ],
+   [
+    18.3,
+    138
+   ],
+   [
+    21.9,
+    138
+   ],
+   [
+    26.0,
+    138
+   ],
+   [
+    29.5,
+    138
+   ],
+   [
+    33.5,
+    138
+   ],
+   [
+    37.6,
+    138
+   ],
+   [
+    41.7,
+    138
+   ],
+   [
+    44.9,
+    138
+   ],
+   [
+    48.9,
+    138
+   ]
+  ],
+  "vmhwm_mib": 138.8828125,
+  "pool_end": {
+   "pool_budget": 16384.0,
+   "pool_resident": 15095.0,
+   "pool_slots": 16384.0,
+   "pool_hits": 24952014.0,
+   "pool_misses": 65654.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 50559.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 1468.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_dirty_queued": 43.0,
+   "pool_dirty_drained": 43.0,
+   "pool_refused": 0.0
+  },
+  "pool_delta": {
+   "pool_resident": 15080.0,
+   "pool_slots": 15360.0,
+   "pool_hits": 24951928.0,
+   "pool_misses": 65639.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 50559.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 1468.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_dirty_queued": 43.0,
+   "pool_dirty_drained": 43.0,
+   "pool_refused": 0.0
+  }
+ }
+}

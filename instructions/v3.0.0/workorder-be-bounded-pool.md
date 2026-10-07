@@ -9,9 +9,11 @@ Written 2026-10-07 on `worktree-pool-budget-required` from `e352eac0`
 - *"작업 지시서를 작성하고 handoff를 준비해줘"*
 - **W1:** *"push it, and mark BE-Q0..Q10 as proposed"*
 
-**Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §16): BE-Q0..Q10
-are marked as proposed, so BE-R1..R5 are rulings and BE-S1 is the next
-stage. The ruling itself is marked (`raft-marks-2026-10-07.md` §14) and
+**Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §16), and **every
+stage built the same day**, BE-S1 through BE-S6 (§6). **Its close carries a
+measured regression on resident scans (+2.5-3.7 %) and a partial scan
+resistance**, both stated in BE-S6's row and in `known-gaps.md`; the merge
+waits on the operator's reading of them. The ruling itself is marked (`raft-marks-2026-10-07.md` §14) and
 recorded in `eviction.md` §6 as not built.
 
 **BE is not part of AR0 §8's chain.** It answers an incident outside the
@@ -1061,3 +1063,67 @@ results are byte-identical, since they compare configurations and none of
 them failed. Heat changes residency, never a result.
 
 **Not measured; measured at the milestone's close.**
+
+### BE-S6 — the close, 2026-10-07
+
+**The measurement** (§5) is
+`bench/v3.0.0/results-be-close-v2.7.0-665-geef442cf.md`. A is `e4b107af`;
+B is `eef442cf`. `ck-tester` ran most of it on `2f08b71c` and stopped on a
+rate limit before writing the file. CLA finished the run and wrote it. In
+brief:
+- **Past the cap:** one `COUNT(*)` at a 65,536-frame cap takes 74.0 s → 1.3 s,
+  and the per-day probes take 300 s → 1.43 s. RSS is 1,199 MB → 503 MB at a
+  512 MiB cap. A miss costs 2,285 µs → 2.5 µs at p50. No load was refused.
+- **Point statements are flat or better.**
+- **`SHOW META` is +7 µs**, which is its longer reply (BE-S3's `pool_*`
+  fields; the neighbouring-stage bisection puts it there).
+- **Resident scans are +2.5-3.7 %.**
+
+**The close changed code, and why.** The first overhead run measured
+resident scans 3.5-4.5 % slower. The bisection placed the cost at BE-S2,
+and a hit microbenchmark found its larger part:
+- The slab laid pages at an exact 8 KiB stride, aliasing every page's
+  header onto the same cache sets: 33.5 ns a hit against A's 23.3 ns.
+- `eef442cf` pads each slot by 64 bytes and puts the `Frame` back in the
+  page table's node, with the hand finding a slot's frame by its owner id:
+  24.0-24.4 ns a hit. With the frame left in its slot it was 25.4-25.8 ns,
+  so the node won.
+- Its review found no defect. Applied: two comments that now gave the wrong
+  reason a `Frame*` stays valid, a debug assert on the sweep's lookup, and
+  three smaller comment fixes.
+- Declined: renaming `ReserveFrame`/`ReservedFrame` to their slot names,
+  which is cosmetic churn across reviewed code; and 64-byte alignment of
+  the slab, since the measured result holds with the allocator's.
+- The sweep was measured after the change: 2.5 µs per miss past the
+  budget, unchanged.
+
+**Not closed by it:**
+- **A resident scan is still 2.5-3.7 % slower than A.** That is about
+  270 ns per page, which the store's hit path, now within 1 ns of A, does
+  not account for. Not attributed; `perf` is locked out on this host.
+- **BE-R5's scan resistance is partial.** A hot set of half the pool, read
+  once or three times, is 92 % re-faulted after a scan four times the pool.
+  The hand still laps the hot frames eight times. BE-Q7 says that is the
+  case for the scan ring's own order.
+
+Both are `known-gaps.md` entries (Eviction).
+
+**Text:** the restatements BE-S6's row lists are done:
+- `eviction.md` §3.1-§3.3, §4, §6 and the EV5/EV8/EV9/EV10 rows;
+- `page.md` §6, §7, §9 and §11;
+- the store's lock-protocol header, at `2f08b71c`;
+- `CLAUDE.md`'s row and `README.md`;
+- `known-gaps.md`: the two `e352eac0` entries and the EV8 entry deleted,
+  and EV6 restated.
+
+The doc review checked every claim against the code and made 12
+corrections. The largest: both specs said the fault path never writes
+back, which drain mode makes false.
+
+**The suite** at `eef442cf`: 3208/3208 plain, at the floor and armed. This
+was run before the comment and debug-assert edits that followed the
+review; the store's 79 cells were re-run after them.
+
+**BE is closed with a measured regression stated rather than resolved.**
+CLAUDE.md's Session Workflow stops the merge on a measured regression, so
+the push waits on the operator's reading of the two findings above.
