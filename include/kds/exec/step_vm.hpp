@@ -168,10 +168,9 @@ struct StepStats {
     // `cabin_hint_hits` / `cabin_hint_misses` split the C6 advisory tier out
     // of that: how often an entry's location was still right, and how often
     // it had to be resolved through the pk instead. A rising miss count is a
-    // relation whose tuples are moving - a btree leaf divided, the one thing
-    // that moves a tuple today, which since BB-R3 (a named key below the
-    // mark refused on every relation) only `BtreeInsert`'s storage contract
-    // reaches, not SQL.
+    // relation whose tuples are moving - a btree leaf divided, or a row
+    // placed below them shifted them a slot (BD-R2); the pk check catches
+    // both (BD-R3's epoch rule: a shift bumps no epoch).
     //
     // `cabin_recordings` counts values that *became* observed during this
     // step - the miss path paying for the next execution's hit.

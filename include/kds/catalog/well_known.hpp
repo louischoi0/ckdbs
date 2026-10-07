@@ -238,8 +238,8 @@ inline constexpr Oid kSysCabinsTable = 131;
 // so the parent side is fixed by the invariant that issues it: ids are
 // issue-once (docs/rules/keystoneid-invariant.md K1) and a pk cannot be updated
 // (invariant 11), which is what buys ON UPDATE CASCADE never having to
-// exist and a stored reference being able to dangle but never to
-// mis-attribute.
+// exist and a stored reference being able to dangle but never to name a
+// different committed row.
 inline constexpr Oid kSysFkeysTable = 132;
 
 // Oid 133 was `sys.ranges`' until the split relation was retired

@@ -523,13 +523,14 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
         // append case a monotonic id sequence produces exclusively, and it
         // stays because it is correct and costs nothing.
         //
-        // Anything else has to divide the node's entries, which only
-        // `BtreeInsert`'s storage contract can require since BB-R3 - SQL
-        // places every row on the rightmost leaf, above everything there
-        // (heap-and-tuple.md section 4.1). Promoting an interior
-        // separator by the cheap path would strand every subtree above it -
-        // silent data loss, not a wrong answer someone would notice - so the
-        // two are told apart rather than assumed.
+        // Anything else has to divide the node's entries - any leaf split
+        // whose separator sorts below the node's top one: a divide, or an
+        // append split of a mid-chain leaf, both of which a named key placed
+        // where it sorts reaches (BD-R2; heap-and-tuple.md section 4.1).
+        // Promoting an interior separator by the cheap path would strand
+        // every subtree above it - silent data loss, not a wrong answer
+        // someone would notice - so the two are told apart rather than
+        // assumed.
         auto appends = SeparatorAboveEveryEntry(parent, sep);
         if (!appends.ok()) return appends.status();
 

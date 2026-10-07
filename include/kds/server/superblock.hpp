@@ -181,7 +181,8 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // this list, and it would have bought nothing: the flag had a live reader.
 // **And no bump when the flag went either** (BB-S3b, 2026-10-06): the byte
 // stays, written 0, and a relation still carrying the old 1 is refused by
-// name rather than by version (`heap-and-tuple.md` §4.1, BB-R11).
+// name rather than by version (BB-R11) - until 19 -> 20 refused the
+// volumes that could carry it, below.
 // 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges`, the range
 // directory (docs/spec/crosscore.md CC9, workplan-range-directory.md RD1),
 // on fixed page 15 - the sixth repeat of the 5 -> 6 shape, and the second

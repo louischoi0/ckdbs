@@ -122,16 +122,16 @@ struct InsertPlacement {
     }
 };
 
-// ---- The id fixed under the hold of the page it lands on (BB-R1) ---------
+// ---- A heap row's id, fixed under its tail's hold (BB-R1, BB-R7) ---------
 //
-// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`. A user row's id
-// is fixed under the exclusive hold of the page the row lands on - a btree's
-// rightmost leaf, a heap chain's tail held as the tail (BB-R7) - so placement
-// order is issue order and every page's slot order is its key order, at
-// every core count. Until BB the
-// id was fixed under catalog page 7 and the row placed later under its page,
-// and a second core could fix a higher id and place it first in between
-// (defect A).
+// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`. A heap row's id
+// is fixed under the exclusive hold of the chain's tail, held as the tail, so
+// placement order is issue order and the tail's slot order is its key order,
+// at every core count: a heap page cannot sort itself (invariant 4). **A
+// btree uses neither callable since BD** (BD-R6,
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): its leaf
+// places a row where its key sorts, so its id is fixed before the descent
+// and `btree::BtreeInsert` is its one door.
 //
 // The storage layer has no catalog, so the two things only the caller can do
 // under that hold are handed in as callables. Both run **once**, under the
@@ -140,15 +140,17 @@ struct InsertPlacement {
 // `FunctionRef`s - a reference, no allocation per row - so a caller binds a
 // named callable, or a temporary in the call's own expression.
 
-// An omitted pk (BB-R2): issue the id, borrow its lock, encode the row, and
-// return the encoded payload - whose Keystone word carries the issued id and
-// whose bytes stay valid until the insert returns.
+// An omitted pk on a heap (BB-R2): issue the id, borrow its lock, encode the
+// row, and return the encoded payload - whose Keystone word carries the
+// issued id and whose bytes stay valid until the insert returns.
 using IssueUnderHold = FunctionRef<StatusOr<std::span<const std::byte>>()>;
 
-// A named key (BB-R3 step 7): admit `id` against the relation's mark,
-// moving it past `id`. Asked only once the structure has proved `id` absent
-// from the held page and the held page the last one - below it, a key is
-// refused without the mark being read.
+// A named key on a heap (BB-R3, kept by BD-Q4): admit `id` against the
+// relation's mark, moving it past `id`. Asked under the tail's hold once `id`
+// is at or above the tail's `min_key`, and before the tail's duplicate scan:
+// a key below `min_key` is refused without the mark being read, and a heap
+// answers a key below the mark `OutOfRange` whether or not it is present
+// (BB-R12).
 using AdmitUnderHold = FunctionRef<Status(std::uint64_t id)>;
 
 }  // namespace kds::storage

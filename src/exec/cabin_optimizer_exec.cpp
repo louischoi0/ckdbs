@@ -397,8 +397,8 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             }
             auto found = btree::BtreeLookup(store_, access.value()->desc_page_id, entry.pk);
             if (!found.ok()) {
-                // Dangling: by K1 dead forever, droppable on sight - which
-                // here means leaving it out of the set being rebuilt.
+                // Dangling: no row now, so left out of the set being
+                // rebuilt; a later insert under the key witnesses itself.
                 if (found.status().code() == StatusCode::kNotFound) continue;
                 return found.status();
             }

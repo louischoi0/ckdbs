@@ -159,7 +159,8 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
                                         std::uint64_t owner_oid,
                                         PageId* tail_hint = nullptr);
 
-// **The two doors a user row comes through** (BB-R1, BB-R7;
+// **The two doors a heap row comes through** (BB-R1, BB-R7, kept for the
+// heap by BD-Q4;
 // `insert_placement.hpp`'s `IssueUnderHold`). `ChainInsert` above is the
 // storage contract, which the `sys.assertions` chain still places through;
 // these are what the statement layer calls, so a row's id is fixed under the

@@ -84,9 +84,9 @@ namespace kds::catalog {
 // here; the admission asks again for any other caller.
 Status CheckNamedRowIdSpellable(std::uint64_t id);
 
-// The one spelling of "a named key below the relation's mark" (BB-R3,
-// BB-R12's `OutOfRange`), shared by the admission and by the insert path's
-// judgement before a wait.
+// The one spelling of "a named key below the relation's mark" - a heap's
+// refusal (BB-R3, BB-R12's `OutOfRange`, kept for the heap by BD-Q4) -
+// shared by the admission and by the insert path's judgement before a wait.
 Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark);
 
 // Where a catalog row landed (workplan-ddl-transactional.md DT3a). A DDL
@@ -684,7 +684,7 @@ public:
     //
     // **No hook any more.** `before_mark` took the row's lock between the
     // judgement and the mark's move, because a statement that parked and
-    // re-ran found its own key below a mark its first attempt advanced. Under
+    // re-ran found its own key below a mark its first attempt advanced. Since
     // BB-R3 the borrow precedes the admission entirely - a refused borrow
     // advanced nothing - so the hook's reason is gone, and with it the
     // partition latch taken under page 7 (BA-R8's last bullet).
@@ -694,10 +694,10 @@ public:
     // (`ForFirstRow`'s read walk). **A judgement, not a reservation**: the
     // mark only rises, so a key below what this returns is below the mark
     // for good, while one at or above it may be passed before it is
-    // admitted. The insert path asks it for one thing - whether a named key
-    // refused a borrow can ever be admitted, so an illegal key is refused
-    // rather than left waiting on a fence (AO-S6c-c's rule, kept under
-    // BB-R3).
+    // admitted. The insert path asks it for one thing on a heap - whether a
+    // named key refused a borrow can ever be admitted, so an illegal key is
+    // refused rather than left waiting on a fence (AO-S6c-c's rule). A btree
+    // asks the leaf instead (BD-R5).
     StatusOr<std::uint64_t> RowIdMark(Oid table_oid);
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------

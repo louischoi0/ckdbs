@@ -236,9 +236,11 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     }
                     auto found = btree::BtreeLookup(store, child.desc_page_id, entry.pk);
                     if (!found.ok()) {
-                        // Dangling: by K1 the pk can never name a different
-                        // row, so this entry is dead forever - a skip, not
-                        // an error.
+                        // Dangling: the pk names no row now - a skip, not an
+                        // error. A committed key never names another row
+                        // (K1); a rolled-back one may be named again (W12,
+                        // BD-R4), and a row found under it is re-checked
+                        // against the column below like any other.
                         if (found.status().code() == StatusCode::kNotFound) continue;
                         return found.status();
                     }

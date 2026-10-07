@@ -1191,9 +1191,10 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
     // relation was required to be btree-clustered and this is where the
     // pairing was refused; the mode is gone, both storage types take a
-    // caller-supplied pk, and what neither can take - a key below the mark,
-    // since BB-R3 on both - is refused per *id* by AdmitExplicitRowId rather
-    // than per relation.
+    // caller-supplied pk, and what a relation cannot take is refused per
+    // *id* by the insert path rather than per relation - on a heap a key
+    // below its mark (BB-R3, kept by BD-Q4), on a btree a duplicate or an
+    // exhausted key (BD-R5).
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
@@ -2425,10 +2426,11 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             // because every relation's omitted-pk inserts draw from this same
             // mark. What a carve costs is stated at the call site and in
             // section 4.1 - the ids inside it are spent from the mark's point
-            // of view before they are placed. A *supplied* id cannot land
-            // inside a live carve: it must be at or above the mark on every
-            // relation (BB-R3), and the carve has already moved the mark past
-            // its own block.
+            // of view before they are placed. The carve is the heap's
+            // sorted fill (bulkinsert.md T3-2), and a *supplied* id cannot
+            // land inside a live one: a heap refuses one below its mark
+            // (BB-R3, kept by BD-Q4), and the carve has already moved the
+            // mark past its own block.
             //
             // Exhaustion checked against the range's *last* id: a range
             // that would cross the ceiling is refused whole, never split.
@@ -2465,10 +2467,11 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
-        // supplied id it admits. A heap refuses a supplied id *below* the
+        // supplied id at or above it. A heap refuses a supplied id *below* the
         // mark (BB-R3), so there the two sources never meet; a btree places
-        // one (BD-R7), and the two meet only on a key both drew at the mark -
-        // serialised by its row unit, the issue re-drawn if it lost
+        // one (BD-R7), and the two meet only on an issued id a named key took
+        // before it was placed - serialised by its row unit, the issue
+        // re-drawn if it lost
         // (`CommandDispatcher::InsertOneRow`). For a heap row this runs under
         // the hold of the chain's tail (BB-R7); for a btree row under none
         // (BD-R6).

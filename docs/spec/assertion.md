@@ -712,9 +712,13 @@ Cabin.** Not inferred from pk ordering, not from scan position, not from a
 watermark. The Cabin is the sole source of truth about its own contents.
 
 A pk watermark ("already scanned" ⇔ `pk <= watermark`) is not used: it would
-rest on Keystone pk issuance being monotonic, which
-`docs/rules/keystoneid-invariant.md` K3 ("No density promise") withholds
-precisely so that no correctness argument may be built on it.
+rest on every row written behind the scan carrying a pk above it, which
+`docs/rules/keystoneid-invariant.md` K3 withholds: issued keys ascend in issue
+order, not in placement order (at `cores > 1` an id issued before a higher
+one that was placed first lands below it, BD-R2), and a named key carries
+no order at all - a btree places one wherever it sorts, below keys the
+scan has passed (BD-R7,
+`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`).
 
 Membership removes the external assumption rather than repairing it.
 Correctness reduces to **check-then-apply atomicity** — classify the row,

@@ -681,14 +681,15 @@ bytes. The record's `page_id` names the leaf and the leaf's own header carries
 the widths, so redo needs neither the index's oid nor its layout — there is no
 second place for either to be wrong.
 
-> **IX13 — `INDEX_INSERT` is logged *before* the `HEAP_INSERT` or
-> `HEAP_OVERWRITE` it points at.**
+> **IX13 — `INDEX_INSERT` is logged *before* the row record it points at**
+> — the `BTREE_INSERT`, the `BTREE_SPLIT` carrying the row (BD-R12), or the
+> `HEAP_OVERWRITE`.
 
 The direction is forced, not stylistic. If the index record is durable and the
 row's is not, redo produces a **dangling entry**, which verification drops on
 sight (IX1) — harmless. The reverse produces a row with no index entry, which
 is a **lost row** the moment anything probes for it. Same reasoning that puts
-`kVarHeapAppend` before its `HEAP_INSERT`, arriving at the same order from the
+`kVarHeapAppend` before its row record, arriving at the same order from the
 opposite pointer direction.
 
 > **There is no `INDEX_PAGE_INIT` record, by decision.**
@@ -696,9 +697,11 @@ opposite pointer direction.
 A new index page cannot be described by its header the way a new heap page
 is: a **dividing** split leaves the new sibling already holding half the
 entries, so only a full page image describes it. So a split takes a
-`kFullPageImage` per page it created or rewrote — exactly what the clustered
-tree's internal nodes do, and for the identical reason (no record type
-describes an entry-array division).
+`kFullPageImage` per page it created or rewrote, because no record type
+describes an entry-array division. The clustered tree imaged its pages the
+same way until BD-R12 put every page of its split into one `BTREE_SPLIT`
+record (`wal.md` §5.2); whether an index split needs the same is recorded
+in `known-gaps.md`.
 
 That gives one rule with no exceptions: **an append that split nothing logs an
 `INDEX_INSERT`; an append that split logs images and no `INDEX_INSERT`.** The

@@ -47,15 +47,16 @@
 // no locator question to answer. It is compensated before the page is
 // opened as a heap page at all, and releasing the slot is the whole of it.
 //
-// So recovery takes the **no-locator branch** the live path already ships:
-// check the pk at the address, and on a mismatch **fail the mount** rather
-// than compensate a row this transaction never wrote. Narrow in practice -
-// SQL divides no leaf since BB-R3: a key named below a relation's
-// high-water mark is refused on every relation, so every row lands on the
-// rightmost leaf and a full leaf only appends; only `BtreeInsert`'s storage
-// contract still divides (`docs/spec/heap-and-tuple.md` §4.1) - and it
-// fails loudly rather than corrupting. Lifting it means putting `rel_oid` in the undo record, which
-// is a format-version event and its own decision (§4a).
+// So on a heap or catalog page recovery takes the **no-locator branch** the
+// live path already ships: check the pk at the address, and on a mismatch
+// **fail the mount** rather than compensate a row this transaction never
+// wrote - those pages never move a row. **A B+ tree leaf does**: a row
+// placed below another shifts it, and a divide moves it to a right sibling
+// (BD-R2), so there the row is re-found by its key, in the recorded leaf and
+// rightward while a leaf's `min_key` is at or below it, and only a version
+// the loser wrote is compensated (BD-Q8 (a), `RecoveryUndo::CompensateOnLeaf`;
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` BD-R3 E1).
+// Keys only move right and leaves never merge, so no catalog is needed.
 //
 // ---- Crash-restartable, with no CLR --------------------------------------
 //

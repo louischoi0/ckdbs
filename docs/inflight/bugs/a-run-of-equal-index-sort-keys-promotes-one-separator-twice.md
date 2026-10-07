@@ -34,6 +34,24 @@ SQL shape: an index on `owner` covering `balance`, and one account whose
 balance is updated about 600 times. `CREATE INDEX`'s backfill, which
 appends one entry per version, reaches the same state.
 
+**A second SQL path since BD-S3: a rolled-back key named again.** By
+reading, on `worktree-keep-btree-leaf-slots` at `07e822a6`; not
+reproduced. A rollback retires the row's slot and leaves the insert's index
+entries, because the rollback list has no index entry type
+(`txn/manager.hpp`). Since BD-S3 a rolled-back key is free (BD-R4, W12,
+`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` §1.7), so an
+`INSERT` naming it again appends a new entry with the same `(key, pk)`. A
+byte-identical entry is not stored twice (`FindExactDuplicate`), but one
+with different covered bytes - or one landing in a run that straddles a
+leaf - grows the run of equal sort keys exactly as an `UPDATE` does. A key
+inserted, rolled back and named again with a new covered value about 600
+times reaches the refusal.
+
+**While this stands, its `AlreadyExists` is the one exception to BD-R5**:
+a named key is refused because of its pk only as a duplicate or as
+exhausted, and this refusal is neither - the key is not bound, and the
+`AlreadyExists` comes from the index's separator, not from the leaf.
+
 ## What it costs
 
 A **refusal that does not clear**: every write that would append an entry

@@ -1435,9 +1435,11 @@ private:
             auto found = btree::BtreeLookup(store_, access.desc_page_id, pk);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
-                    // Dangling: the pk is in no clustered tree. By K1 it can
-                    // never resurface under a different tuple, so the entry
-                    // is dead forever - a skip, never an error.
+                    // Dangling: the pk names no row now - a skip, never an
+                    // error. A committed key never names another row (K1);
+                    // a rolled-back one may be named again (W12, BD-R4), and
+                    // a row later found under it is re-checked like any
+                    // other (MVCC and the residual).
                     continue;
                 }
                 co_return found.status();
@@ -1567,9 +1569,11 @@ private:
             auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.pk);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
-                    // Dangling: the pk is in no clustered tree. By K1 it can
-                    // never resurface under a new tuple, so this entry is
-                    // dead forever - a **skip**, never an error (§5).
+                    // Dangling: the pk names no row now - a **skip**, never
+                    // an error (§5). A committed key never names another row
+                    // (K1); a rolled-back one may be named again (W12,
+                    // BD-R4), and a row later found under it is re-checked
+                    // against the key column like any other.
                     continue;
                 }
                 co_return found.status();
@@ -1611,11 +1615,10 @@ private:
         // down to a single row.
         //
         // **That order is pk order**: every page's slot order is its key
-        // order on every relation (BB-R1, BB-R3), so the walk emits ids
-        // ascending - across pages by `min_key`, within a page because a row
-        // is placed under its page's hold in issue order - and sorting by pk
-        // is exact even after a leaf division has given a later page a lower
-        // id.
+        // order - a btree leaf's by placement (BD-R1), a heap page's by its
+        // tail taking ids in issue order (BB-R7) - so the walk emits ids
+        // ascending, across pages by `min_key`, and sorting by pk is exact
+        // even after a leaf division has given a later page a lower id.
         std::sort(located.begin(), located.end(),
                   [](const Located& a, const Located& b) { return a.pk < b.pk; });
 

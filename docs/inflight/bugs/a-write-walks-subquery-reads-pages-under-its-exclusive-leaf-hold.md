@@ -85,7 +85,10 @@ and the encode now run under it, BB-R2), which lengthens the time a sub-walk
 waits on it. On the rightmost leaf the inserter reads no neighbour
 (`btree.cpp:102`); it joins the cycle only through the descent's
 right-neighbour read above, which every write descent already has - BB adds
-no edge to it.
+no edge to it. **BD-S3 withdrew the longer hold on a btree** (BD-R6, verified
+at `07e822a6`): the issue, the borrow and the encode run before the descent
+again. A named key now lands mid-chain as often as on the rightmost leaf,
+and pays the same right-neighbour read, which is no new edge either.
 
 ## The fix, known and unscheduled
 

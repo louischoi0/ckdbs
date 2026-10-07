@@ -75,8 +75,9 @@ class OptimizerSignals;
 // set before the walk's own matches are merged in. What the announce
 // cannot cover - a write already made when it ran - is the banking gate's,
 // and §6a states the two halves as one rule. The Keystone issue-once
-// invariant (K1) is unchanged and is still what makes a stored pk a name
-// that can dangle but can never mis-attribute.
+// invariant (K1) is unchanged and is what makes a stored pk a name that can
+// dangle, and the key re-check is what keeps a re-named rolled-back key
+// from mis-attributing.
 //
 // **Concurrency: one store for the instance, partitioned by `cabin_id`**
 // (AT-S7; AR1 §11's second shape, marked as AT-0 item 9 on 2026-09-23).
@@ -113,12 +114,14 @@ inline constexpr std::uint16_t kCabinHintValid = 0x1;
 // One entry of one value's set: the authoritative half and the advisory
 // half, in 24 bytes (spec §3, C2 + C6).
 //
-// **Authority lives in the pk, never in the location.** Under K1 a stored
-// Keystone id is a forever-unique, immutable name: it can dangle - the row
-// may be gone - but it can never come to mean a different row. That buys
-// relocation invariance (the physical optimizer may move pages without ever
-// touching a Cabin), no incarnation protocol, and "dangling ⇒ dead forever,
-// droppable on sight".
+// **Authority lives in the pk, never in the location.** Under K1 a committed
+// tuple's Keystone id is never rebound, so a stored pk can dangle but never
+// names another committed row. A pk an insert left before rolling back can
+// be named again (W12, BD-R4), and that is why every serve re-checks MVCC
+// and the key column (§4): authority is the pk plus that re-check, never the
+// location. That buys relocation invariance (the physical optimizer may move
+// pages without ever touching a Cabin), no incarnation protocol, and
+// "dangling ⇒ skip now, droppable on sight".
 //
 // The location is waystone-class advice riding on cabin-class truth: it is
 // verified by the reader under the same rules and the *same code* as a

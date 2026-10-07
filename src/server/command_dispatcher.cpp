@@ -4759,7 +4759,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         InsertRowResult row{};
         // The refusal travels as its `Status`, so the code it carries - an
-        // `AlreadyExists` or an `OutOfRange` for a named key (BB-R12) - reaches
+        // `AlreadyExists` or an `OutOfRange` for a named key (BD-R5) - reaches
         // the wire rather than being re-read off the rendered line.
         if (std::optional<Status> err =
                 InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row)) {
@@ -5045,8 +5045,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // the caller, through `ErrorReply` - the one spelling that puts
     // `retryable=1` on the wire for a TxnConflict (status.hpp's
     // IsRetryable) - with the `Status` itself on the outcome, so a client
-    // reads the code a refusal carries rather than the line (BB-R12's
-    // `AlreadyExists` and `OutOfRange` among them, since BB-S3). The spent-lease refusals that
+    // reads the code a refusal carries rather than the line (BD-R5's
+    // `AlreadyExists` and `OutOfRange` among them). The spent-lease refusals that
     // were its reason on a peer went with the leases - the extent lease at
     // AW-S1b, the row-id lease at AT-S10b - and a lock wait's fault net is
     // what still refuses that way.
@@ -8649,8 +8649,9 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     if (refused_at_relation || unit.unit == txn::LockUnit::kRelation) {
         return RelationHeld(unit.rel_oid, blocker);
     }
-    // **A refusal of a narrower unit that is not to become a wait** (BB-R3):
-    // the caller's judgement, asked before anything records it as one. The
+    // **A refusal of a narrower unit that is not to become a wait**
+    // (AO-S6c-c's rule; a named key's judgement since BD-R5): the caller's
+    // judgement, asked before anything records it as one. The
     // unit's registration goes at the statement's end, which drops a wake no
     // blocker carries. A relation refusal above stays a wait: the relation's
     // holder decides whether the statement can resolve at all.

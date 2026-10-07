@@ -55,7 +55,9 @@ process. The data file is created if absent; the WAL segments live in
 mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume written before that
 change has one stream per core and **no longer mounts**: there is no
-migration, and the refusal names it. Recreate the database.
+migration, and the refusal names it. Recreate the database. The same holds
+for every volume older than superblock version 20 (2026-10-07), the format
+in which a B+ tree leaf is kept in key order by placement.
 
 The listener is **loopback only** (`127.0.0.1`), plain TCP, no TLS, no
 authentication — a development/inspection surface, not a production API.

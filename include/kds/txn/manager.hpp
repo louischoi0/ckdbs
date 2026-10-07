@@ -412,11 +412,9 @@ public:
     // life a row's address was stable for life (row_codec.hpp). A btree leaf
     // division breaks that: it moves half a leaf's tuples to another page and
     // renumbers the slots of the ones that stay
-    // (`docs/spec/heap-and-tuple.md` §4.1). SQL no longer triggers one: since
-    // BB-R3 a named key below the mark is refused on every relation, so every
-    // row lands on the rightmost leaf and a full leaf only appends. The
-    // divide stays in `BtreeInsert`'s storage contract, and when one runs
-    // mid-transaction, every entry this transaction
+    // (`docs/spec/heap-and-tuple.md` §4.1), and since BD a row placed where
+    // its key sorts shifts the rows after it a slot (BD-R2). Both run under
+    // SQL, so when one runs mid-transaction, every entry this transaction
     // recorded earlier names a slot that is out of range or holds a
     // different row - and compensating that blindly is not a failed
     // rollback, it is a rollback that corrupts a row it never wrote.

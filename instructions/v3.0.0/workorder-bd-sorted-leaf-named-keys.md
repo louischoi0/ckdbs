@@ -31,7 +31,7 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§15.
 - **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
 - **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: open (W16), BD-S1 to BD-S4 built, BD-S5 started.**
+**Status: open (W16), BD-S1 to BD-S5 built, BD-S6 started.**
 
 - §4's mark column says which items the words settle; every item is marked.
 - BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
@@ -1220,3 +1220,49 @@ cell's exact count held by page geometry with the divide behind the mark,
 so the divide is anchored at the mark's author and the count is the authors
 plus the rows the divide inserted; a dead `build_rows=0` assert; the loser
 cell's keys made descending; includes. **Declined**: none.
+
+### BD-S5 - the text, written 2026-10-07
+
+Written on `worktree-keep-btree-leaf-slots` on `b6eab627` (BD-S4).
+
+- **Every text in §1.6 restated** (BD-R11): `CLAUDE.md`'s rows and
+  invariant 11, `README.md`, `heap-and-tuple.md` §3.1, §4.1, §4.1a, §5 and
+  §8, `keystoneid-invariant.md` K1-K3 and §1, `txn.md`, `wal.md` §5.2,
+  §11a and §12, `index.md`, `cabin.md` C2 and §5, `join-inner-build.md` JB4
+  and JB6, `crosscore.md`, `waystone-concpets.md`, `assertion.md`,
+  `bulkinsert.md`, `page.md`, the manual's pk section and error table, and
+  the source comments in `src/` and `include/` that cited a withdrawn BB
+  rule or BD's superseded reasons.
+- **Corrected on the way**: `txn.md`'s delete-mark rollback
+  (`HEAP_DELETE_UNMARK`, no Waystone entry cleared); `bulkinsert.md`'s
+  per-row pk checks, the heap's below-mark refusal named.
+- **Recorded**: BD-R4's purge obligation and §1.8's index-split question in
+  `known-gaps.md`; §1.7's second path in the equal-entries bug entry;
+  `known-gaps.md:493-510` closed by superblock 20 (BD-S2).
+- **The grep** (BD-R11's done-when): every hit of `BB-R1`, `BB-R2`,
+  `BB-R3`, `BB-R11` and `BB-R12` in `src/ include/ docs/spec/ docs/rules/
+  manual/ CLAUDE.md` states history or the heap's kept rule (BD-Q4).
+- No code changes: every `src/` and `include/` hunk is a comment.
+- **Green**: the suite, 3223 of 3223 (one disabled).
+
+**The reviews.** The first pass (a workflow of four reviewers, each
+finding voted on by two verifiers): 27 confirmed, 3 refuted. **Applied**:
+all 27 - the take-back of a split, an issued id's uniqueness on a btree
+(the mark among issued ids, the placement's duplicate check against a named
+key, `kMaxIssueRounds`), a btree leaf sorted in §3.1, the per-core block
+paragraph, index.md's stale cross-reference to the clustered tree's images,
+the Cabin's and the readers' "dead forever" reasons under W12, the heap's
+rolled-back key in `txn.md`, `wal.md`'s INSERT row and ordering rule 1,
+`assertion.md`'s watermark, `bulkinsert.md`'s heap check, `CLAUDE.md`,
+`README.md` and the manual's unscoped or stale claims (with a new error row
+for an omitted pk's eighth collision), the heap comments citing BB-R12, the
+index tree's header, `LogInsert`'s and the seam's contracts, and
+`PromoteSeparator`'s reach. **Refuted** (the verifiers did not hold them):
+`heap-and-tuple.md`'s "below a full leaf", the write-walks bug entry's line
+citations, and `log_page_image.hpp`'s size claim, which the known-gaps WAL
+entry already bounds. A second pass over the applied text found one
+applied fix false - the Bound Cabin's pk row said a rolled-back key can
+reach a live entry; an aborted reservation's entry is removed and orphaned
+before the undo frees the key (AS6b) - and eight sentences beside the fixes
+still contradicting them ("never mis-attribute", "an issued id clears every
+named key"), plus wording: all applied. **Declined**: none.

@@ -80,13 +80,16 @@
 // it is the path with a benchmark pointed at it; the others follow the
 // same shape.
 //
-// One INSERT is one implicit transaction, and it emits:
+// One INSERT is one implicit transaction, and on a heap it emits:
 //
 //     TXN_BEGIN
 //     [FULL_PAGE_IMAGE  of the old tail]  only when the chain grew
 //     [PAGE_INIT        of the new tail]  only when the chain grew
 //     HEAP_INSERT       the tuple, its slot, its writer
 //     TXN_COMMIT        + the durability class's wait
+//
+// On a btree the row's record is one BTREE_SPLIT carrying every page the
+// split wrote when the insert split a leaf, a BTREE_INSERT otherwise.
 //
 // The FULL_PAGE_IMAGE is there because chain growth mutates two pages: the
 // new page's `next_page_id` link lives in the *old* tail's header, and a
@@ -134,10 +137,10 @@
 // That is wal.md section 8-1. It used to be justified the other way - one
 // cooperative thread, so no flush could observe the page between the
 // mutation and the stamp - and that stopped being true at AT-S5, when a
-// write began running on every core: another core could split the leaf the
-// record names (a divide until BB-R3 made SQL reach only the append split),
-// write back a parent whose split was not yet logged, or
-// shift the index entry the record was re-read from
+// write began running on every core: another core could move the row the
+// record names - divide its leaf, or, since BD-R2, place a row below it
+// and shift it a slot - write back a parent whose split was not yet
+// logged, or shift the index entry the record was re-read from
 // (`insert_log_crash_rig_test.cpp`).
 
 namespace kds::sched {
@@ -657,7 +660,7 @@ public:
     // once per `INSERT` row, after the row is placed and its indexes,
     // reservation and undo are written, immediately before the row's own
     // record is appended. A two-core cell puts another core's split (a
-    // divide until BB-R3), a forced writeback or another core's index insert
+    // divide or an append), a forced writeback or another core's index insert
     // there - the three windows the insert's logging bug entry named (AT-S21
     // closed it).
     // Unset in production, where it costs one empty-function test per row.
@@ -666,16 +669,15 @@ public:
     }
 
     // **A test seam at the instant a row's id is fixed** (BB-S2): runs once
-    // per row `InsertOneRow` places, immediately after the id is issued,
-    // borrowed and its row encoded, or a named key admitted. The call stays
-    // adjacent to the fix wherever the fix sits - under the exclusive hold of
-    // the page the row lands on - a btree's rightmost leaf since BB-S3, a
-    // heap chain's tail since BB-S4 (BB-R1, BB-R7) - so a cell that stops
-    // here holds that page and another core's insert into the relation blocks
-    // on its latch until the cell lets go. That adjacency is the rig cells'
-    // whole power: a mutant that fixes the id before the hold must move this
-    // call with it, and then stops outside the hold. The sorted fill calls it
-    // once, with its block's first id, after its carve. Unset in production.
+    // per id `InsertOneRow` fixes for a row - on a btree's omitted pk once
+    // per draw, so a draw that collides with a named key and is burned
+    // (BD-S3's re-draw) fires it again with the next id - once its id is
+    // borrowed and its row encoded. On a heap it sits under the exclusive
+    // hold of the chain's tail (BB-R1, BB-R7), so another core's insert into
+    // the relation blocks on that latch until the cell lets go. On a btree it
+    // sits before the descent and, for a named key, before its admission
+    // (BD-R6), so the other core does not block. The sorted fill calls it once, with its
+    // block's first id, after its carve. Unset in production.
     void SetAfterRowIdFixedForTest(std::function<void(std::uint64_t)> hook) {
         after_row_id_fixed_for_test_ = std::move(hook);
     }
@@ -1980,10 +1982,12 @@ private:
     // holds, because an unstamped page carries page_lsn 0 and a page whose
     // records failed to append is indistinguishable from one nothing
     // logged; closing that needs the abort path a transaction layer owns.
-    // `leaf_type` is the page type a PAGE_INIT record names for a new tuple
-    // page: kHeap for a chain, kBtreeLeaf for a tree.
+    // `leaf_type` picks the record set: kHeap logs PAGE_INIT/FULL_PAGE_IMAGE
+    // for a chain's growth then HEAP_INSERT; kBtreeLeaf logs one BTREE_SPLIT
+    // (carrying the row) or a BTREE_INSERT (BD-R3 E2, BD-R12).
     // `spills` are the var-heap values this tuple's cells point at. They
-    // are logged *first*, before the HEAP_INSERT, which is the ordering
+    // are logged *first*, before the row's own record (HEAP_INSERT,
+    // BTREE_INSERT or BTREE_SPLIT), which is the ordering
     // docs/rules/rule-fixed-length-tuple.md section 5 requires: a replay must
     // never reach a tuple whose pointer resolves to nothing. A crash
     // between the two leaves an unreferenced value for purge, which is the
