@@ -285,6 +285,10 @@ later must still say what it was true of:
 - **A measurement names the version and the commit it was measured at** —
   `git describe --tags`, so `v2.0.0-37-gaa3e26c` rather than `aa3e26c`
   alone.
+- **A completion report opens with the time, in UTC** (operator,
+  2026-10-07): its first line is `date -u '+%Y-%m-%d %H:%M UTC'`'s output,
+  read from the clock at the moment of writing. The commit says what tree a
+  claim was true of; the time says when the report was made of it.
 
 ## Open Decisions — DO NOT assume or silently pick
 
