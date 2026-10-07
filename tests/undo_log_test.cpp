@@ -87,7 +87,7 @@ protected:
         // job here, exactly as a real caller's TXN_COMMIT would be.
         EXPECT_TRUE(wal_->SyncAll().ok());
         std::vector<wal::DecodedRecord> found;
-        for (std::uint64_t seg = 0; seg < log_device_->segment_count(); ++seg) {
+        for (std::uint64_t seg = 0; seg < log_device_->end_segment(); ++seg) {
             storage.emplace_back(kSegmentSize - wal::kSegmentHeaderSize);
             std::vector<std::byte>& body = storage.back();
             EXPECT_TRUE(log_device_->ReadAt(seg, wal::kSegmentHeaderSize, body).ok());

@@ -142,9 +142,12 @@ StatusOr<FileDescriptor> OpenSegmentFile(const std::string& path, bool create_ex
 
 }  // namespace
 
-FileLogDevice::FileLogDevice(std::string dir, std::uint32_t core_id,
-                             std::uint64_t segment_size) noexcept
-    : dir_(std::move(dir)), core_id_(core_id), segment_size_(segment_size) {}
+FileLogDevice::FileLogDevice(std::string dir, std::uint32_t core_id, std::uint64_t segment_size,
+                             FileDescriptor dir_fd) noexcept
+    : dir_(std::move(dir)),
+      core_id_(core_id),
+      segment_size_(segment_size),
+      dir_fd_(std::move(dir_fd)) {}
 
 std::string FileLogDevice::SegmentPath(std::uint64_t segment_no) const {
     return dir_ + "/" + NamePrefix(core_id_) + std::to_string(segment_no) + kNameSuffix;
@@ -152,7 +155,8 @@ std::string FileLogDevice::SegmentPath(std::uint64_t segment_no) const {
 
 StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& dir,
                                                              std::uint32_t core_id,
-                                                             std::uint64_t segment_size) {
+                                                             std::uint64_t segment_size,
+                                                             std::uint64_t first_needed) {
     if (segment_size == 0) {
         return Status::InvalidArgument("FileLogDevice: segment_size must be non-zero");
     }
@@ -203,10 +207,31 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
         found.emplace(*segment_no, it->path().string());
     }
 
-    auto device = std::unique_ptr<FileLogDevice>(new FileLogDevice(dir, core_id, segment_size));
+    int raw_dir_fd = -1;
+    do {
+        raw_dir_fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    } while (raw_dir_fd < 0 && errno == EINTR);
+    if (raw_dir_fd < 0) {
+        return ErrnoStatus("FileLogDevice: open directory " + dir, errno);
+    }
 
-    std::uint64_t expected = 0;
+    auto device = std::unique_ptr<FileLogDevice>(
+        new FileLogDevice(dir, core_id, segment_size, FileDescriptor(raw_dir_fd)));
+    device->first_ = first_needed;
+
+    // BC-R3: below the anchor's segment is a leftover, not opened and not
+    // deleted here; at and above it, the live run, whole.
+    if (first_needed > 0 && (found.empty() || found.rbegin()->first < first_needed)) {
+        return Status::Corruption("FileLogDevice: the anchor needs segment " +
+                                  std::to_string(first_needed) + ", and " + dir +
+                                  " holds no segment at or above it");
+    }
+    std::uint64_t expected = first_needed;
     for (const auto& [segment_no, path] : found) {
+        if (segment_no < first_needed) {
+            device->detached_.push_back(segment_no);
+            continue;
+        }
         if (segment_no != expected) {
             return Status::Corruption("FileLogDevice: segment " + std::to_string(expected) +
                                       " is missing from " + dir + " (next present is " +
@@ -234,7 +259,7 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
 
         // Open() runs before any writer thread exists, so this one needs
         // no lock - stated rather than left as an inconsistency.
-        device->segments_.push_back(std::move(fd.value()));
+        device->segments_.push_back(std::make_shared<const FileDescriptor>(std::move(fd.value())));
         ++expected;
     }
 
@@ -242,9 +267,9 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
 }
 
 Status FileLogDevice::CreateSegment(std::uint64_t segment_no) {
-    if (segment_no != segments_.size()) {
+    if (segment_no != end_segment()) {
         return Status::InvalidArgument("FileLogDevice: segments are created in order (expected " +
-                                       std::to_string(segments_.size()) + ", got " +
+                                       std::to_string(end_segment()) + ", got " +
                                        std::to_string(segment_no) + ")");
     }
 
@@ -293,24 +318,26 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no) {
         // exists: a vector growing under the writer thread's iteration is
         // the one race here that corrupts rather than delays.
         std::lock_guard<std::mutex> guard(segments_mutex_);
-        segments_.push_back(std::move(fd.value()));
+        segments_.push_back(std::make_shared<const FileDescriptor>(std::move(fd.value())));
     }
     return Status::OK();
 }
 
 Status FileLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                               std::span<const std::byte> in) {
-    if (Status s = CheckSegmentRange(segment_no, offset, in.size(), segments_.size(), segment_size_);
+    if (Status s = CheckSegmentRange(segment_no, offset, in.size(), first_, end_segment(),
+                                     segment_size_);
         !s.ok()) {
         return s;
     }
 
+    const int fd = segments_[segment_no - first_]->get();
     const std::byte* buffer = in.data();
     std::size_t remaining = in.size();
     std::uint64_t at = offset;
     while (remaining > 0) {
         const ::ssize_t n =
-            ::pwrite(segments_[segment_no].get(), buffer, remaining, static_cast<::off_t>(at));
+            ::pwrite(fd, buffer, remaining, static_cast<::off_t>(at));
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
@@ -328,18 +355,19 @@ Status FileLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
 
 Status FileLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                              std::span<std::byte> out) {
-    if (Status s =
-            CheckSegmentRange(segment_no, offset, out.size(), segments_.size(), segment_size_);
+    if (Status s = CheckSegmentRange(segment_no, offset, out.size(), first_, end_segment(),
+                                     segment_size_);
         !s.ok()) {
         return s;
     }
 
+    const int fd = segments_[segment_no - first_]->get();
     std::byte* buffer = out.data();
     std::size_t remaining = out.size();
     std::uint64_t at = offset;
     while (remaining > 0) {
         const ::ssize_t n =
-            ::pread(segments_[segment_no].get(), buffer, remaining, static_cast<::off_t>(at));
+            ::pread(fd, buffer, remaining, static_cast<::off_t>(at));
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
@@ -383,11 +411,16 @@ Status FileLogDevice::Sync() {
     // which is the thing this whole design exists to stop. A segment created
     // after the copy is simply not covered by *this* sync, which is what the
     // writer's snapshot rule already assumes.
-    std::vector<int> raw;
+    //
+    // **Copied as owners, not as numbers** (BC-R4): a segment detached after
+    // the copy stays open until this sync lets go of it, so no `fdatasync`
+    // below can land on a closed or reused descriptor.
+    std::vector<std::shared_ptr<const FileDescriptor>> held;
+    std::uint64_t first = 0;
     {
         std::lock_guard<std::mutex> guard(segments_mutex_);
-        raw.reserve(segments_.size());
-        for (const FileDescriptor& fd : segments_) raw.push_back(fd.get());
+        held.assign(segments_.begin(), segments_.end());
+        first = first_;
     }
 
     // fdatasync, not fsync: a segment is prewritten at creation, so its
@@ -395,28 +428,78 @@ Status FileLogDevice::Sync() {
     // sync has left to flush is data. fsync would add a timestamp-metadata
     // journal commit to every durability point for nothing a recovery could
     // ever read.
-    for (std::size_t i = 0; i < raw.size(); ++i) {
-        while (::fdatasync(raw[i]) != 0) {
+    for (std::size_t i = 0; i < held.size(); ++i) {
+        while (::fdatasync(held[i]->get()) != 0) {
             if (errno == EINTR) {
                 continue;
             }
-            return ErrnoStatus("FileLogDevice: fdatasync segment " + std::to_string(i), errno);
+            return ErrnoStatus("FileLogDevice: fdatasync segment " + std::to_string(first + i),
+                               errno);
         }
     }
     return Status::OK();
 }
 
-Status FileLogDevice::SyncDirectory() {
-    int raw_fd = -1;
-    do {
-        raw_fd = ::open(dir_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    } while (raw_fd < 0 && errno == EINTR);
-    if (raw_fd < 0) {
-        return ErrnoStatus("FileLogDevice: open directory " + dir_, errno);
+Status FileLogDevice::DetachBelow(std::uint64_t segment_no) {
+    std::lock_guard<std::mutex> guard(segments_mutex_);
+    if (Status s = CheckDetachBound(segment_no, first_, end_segment()); !s.ok()) {
+        return s;
     }
-    FileDescriptor fd(raw_fd);
+    // The table lets go of its reference; a `Sync` still holding one keeps
+    // the file open until it returns (BC-R4). No I/O here.
+    for (; first_ < segment_no; ++first_) {
+        segments_.pop_front();
+        detached_.push_back(first_);
+    }
+    return Status::OK();
+}
 
-    while (::fsync(fd.get()) != 0) {
+Status FileLogDevice::ReclaimDetached() {
+    std::vector<std::uint64_t> pending;
+    {
+        std::lock_guard<std::mutex> guard(segments_mutex_);
+        pending.swap(detached_);
+    }
+    if (pending.empty()) {
+        return Status::OK();
+    }
+
+    Status first_failure = Status::OK();
+    std::vector<std::uint64_t> unlinked;
+    std::vector<std::uint64_t> requeue;
+    for (const std::uint64_t segment_no : pending) {
+        const std::string path = SegmentPath(segment_no);
+        if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
+            const int err = errno;
+            if (first_failure.ok()) {
+                first_failure = ErrnoStatus("FileLogDevice: unlink " + path, err);
+            }
+            requeue.push_back(segment_no);
+            continue;
+        }
+        unlinked.push_back(segment_no);
+    }
+    // One directory sync for the batch: until it returns, a crash may bring
+    // back any of these names, which the next `Open` skips (BC-R3).
+    if (Status s = SyncDirectory(); !s.ok()) {
+        if (first_failure.ok()) first_failure = s;
+        requeue.insert(requeue.end(), unlinked.begin(), unlinked.end());
+        unlinked.clear();
+    }
+
+    std::lock_guard<std::mutex> guard(segments_mutex_);
+    detached_.insert(detached_.end(), requeue.begin(), requeue.end());
+    removed_ += unlinked.size();
+    return first_failure;
+}
+
+std::uint64_t FileLogDevice::segments_removed() const noexcept {
+    std::lock_guard<std::mutex> guard(segments_mutex_);
+    return removed_;
+}
+
+Status FileLogDevice::SyncDirectory() {
+    while (::fsync(dir_fd_.get()) != 0) {
         if (errno == EINTR) {
             continue;
         }

@@ -46,15 +46,15 @@ TEST(MemoryLogDeviceTest, CreateRejectsZeroSegmentSize) {
 TEST(MemoryLogDeviceTest, SegmentsAreCreatedInOrder) {
     auto device = MakeDevice();
     ASSERT_NE(device, nullptr);
-    EXPECT_EQ(device->segment_count(), 0u);
+    EXPECT_EQ(device->end_segment(), 0u);
 
     // Out of order is rejected, and rejection does not create anything.
     EXPECT_EQ(device->CreateSegment(1).code(), StatusCode::kInvalidArgument);
-    EXPECT_EQ(device->segment_count(), 0u);
+    EXPECT_EQ(device->end_segment(), 0u);
 
     ASSERT_TRUE(device->CreateSegment(0).ok());
     ASSERT_TRUE(device->CreateSegment(1).ok());
-    EXPECT_EQ(device->segment_count(), 2u);
+    EXPECT_EQ(device->end_segment(), 2u);
     EXPECT_EQ(device->CreateSegment(1).code(), StatusCode::kInvalidArgument);
 }
 
@@ -131,7 +131,7 @@ TEST(MemoryLogDeviceTest, CrashDropsEverythingSinceTheLastSync) {
 
     // The synced write survives; the ones after it, and the segment created
     // after it, do not.
-    EXPECT_EQ(device->segment_count(), 1u);
+    EXPECT_EQ(device->end_segment(), 1u);
     std::vector<std::byte> read(durable.size());
     ASSERT_TRUE(device->ReadAt(0, 0, read).ok());
     EXPECT_EQ(read, durable);
@@ -247,7 +247,7 @@ TEST(MemoryLogDeviceTest, ACrashPrefixOfZeroIsTheWholeCrashAndOneOfEverythingIsN
     EXPECT_EQ(cut, whole) << "Crash(0) and Crash() must leave the same image";
     EXPECT_EQ(cut, std::vector<std::byte>(16, std::byte{0}))
         << "the unsynced write survived a cut that keeps nothing";
-    EXPECT_EQ(device->segment_count(), twin->segment_count());
+    EXPECT_EQ(device->end_segment(), twin->end_segment());
 
     auto keeper = armed();
     keeper->Crash(/*keep_bytes=*/keeper->UnsyncedBytes());
@@ -299,7 +299,7 @@ TEST(MemoryLogDeviceTest, FailedSyncLeavesTheDurableImageBehind) {
     EXPECT_EQ(device->Sync().code(), StatusCode::kIoError);
 
     device->Crash();
-    EXPECT_EQ(device->segment_count(), 1u);
+    EXPECT_EQ(device->end_segment(), 1u);
     std::vector<std::byte> read(pending.size());
     ASSERT_TRUE(device->ReadAt(0, 0, read).ok());
     EXPECT_EQ(read, std::vector<std::byte>(pending.size(), std::byte{0}));
@@ -404,6 +404,65 @@ TEST(MemoryLogDeviceTest, StatsAndTraceRecordWhatTheDeviceWasAsked) {
 
     device->ClearTrace();
     EXPECT_TRUE(device->trace().empty());
+}
+
+
+// ---- Recycling (BC-S2): the file device's contract, and its crash -------
+
+TEST(MemoryLogDeviceTest, ADetachedSegmentIsOutsideTheRunAndNumberingContinues) {
+    auto device = MakeDevice();
+    for (std::uint64_t s = 0; s < 4; ++s) ASSERT_TRUE(device->CreateSegment(s).ok());
+    ASSERT_TRUE(device->Sync().ok());
+    EXPECT_EQ(device->DetachBelow(4).code(), StatusCode::kInvalidArgument)
+        << "the last segment is never detached";
+    ASSERT_TRUE(device->DetachBelow(2).ok());
+    EXPECT_EQ(device->first_segment(), 2u);
+    EXPECT_EQ(device->end_segment(), 4u);
+    std::vector<std::byte> buf(16);
+    EXPECT_EQ(device->ReadAt(1, 0, buf).code(), StatusCode::kOutOfRange);
+    EXPECT_EQ(device->WriteAt(0, 0, buf).code(), StatusCode::kOutOfRange);
+    EXPECT_TRUE(device->WriteAt(2, 0, buf).ok());
+    EXPECT_EQ(device->CreateSegment(2).code(), StatusCode::kInvalidArgument);
+    EXPECT_TRUE(device->CreateSegment(4).ok());
+}
+
+TEST(MemoryLogDeviceTest, ACrashBringsBackWhatWasDetachedButNotReclaimed) {
+    auto device = MakeDevice();
+    const auto bytes = Pattern(64, 5);
+    for (std::uint64_t s = 0; s < 4; ++s) {
+        ASSERT_TRUE(device->CreateSegment(s).ok());
+        ASSERT_TRUE(device->WriteAt(s, 0, bytes).ok());
+    }
+    ASSERT_TRUE(device->Sync().ok());
+
+    ASSERT_TRUE(device->DetachBelow(2).ok());
+    device->Crash();
+    EXPECT_EQ(device->first_segment(), 0u) << "a removal is durable only once reclaimed";
+    std::vector<std::byte> back(bytes.size());
+    ASSERT_TRUE(device->ReadAt(1, 0, back).ok());
+    EXPECT_EQ(back, bytes) << "and the segment comes back whole";
+
+    ASSERT_TRUE(device->DetachBelow(3).ok());
+    ASSERT_TRUE(device->ReclaimDetached().ok());
+    device->Crash();
+    EXPECT_EQ(device->first_segment(), 3u);
+    EXPECT_EQ(device->stats().segments_removed, 3u);
+}
+
+// The memory device's one extra refusal: a segment no Sync() has made
+// durable is not detached, so a crash after its reclaim cannot leave the run
+// starting past its end (`memory_log_device.hpp`).
+TEST(MemoryLogDeviceTest, ASegmentNoSyncCoveredIsNotDetached) {
+    auto device = MakeDevice();
+    ASSERT_TRUE(device->CreateSegment(0).ok());
+    ASSERT_TRUE(device->CreateSegment(1).ok());
+    EXPECT_EQ(device->DetachBelow(1).code(), StatusCode::kInvalidArgument);
+    ASSERT_TRUE(device->Sync().ok());
+    ASSERT_TRUE(device->DetachBelow(1).ok());
+    ASSERT_TRUE(device->ReclaimDetached().ok());
+    device->Crash();
+    EXPECT_EQ(device->first_segment(), 1u);
+    EXPECT_EQ(device->end_segment(), 2u);
 }
 
 }  // namespace

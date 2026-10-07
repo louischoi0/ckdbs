@@ -45,12 +45,12 @@ StatusOr<std::unique_ptr<WalStream>> WalStream::Open(LogDevice* device, std::uin
 
     // Open() is single-threaded by contract: nothing else holds the stream
     // yet, so no latch is taken here.
-    if (device->segment_count() == 0) {
+    if (device->end_segment() == 0) {
         if (Status s = stream->StartSegment(0); !s.ok()) {
             return s;
         }
     } else {
-        if (Status s = stream->ScanTail(device->segment_count() - 1); !s.ok()) {
+        if (Status s = stream->ScanTail(device->end_segment() - 1); !s.ok()) {
             return s;
         }
     }
@@ -145,7 +145,7 @@ Status WalStream::Roll() {
     }
     // Numbered from the device rather than from append_lsn_, so the two can
     // never disagree about which segment comes next.
-    return StartSegment(device_->segment_count());
+    return StartSegment(device_->end_segment());
 }
 
 Status WalStream::Seal() {

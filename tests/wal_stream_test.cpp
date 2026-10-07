@@ -79,7 +79,7 @@ TEST_F(WalStreamTest, FreshOpenCreatesSegmentZeroWithAValidHeader) {
     auto stream = OpenStream(4);
     ASSERT_NE(stream, nullptr);
 
-    EXPECT_EQ(device_->segment_count(), 1u);
+    EXPECT_EQ(device_->end_segment(), 1u);
     // The first record of segment 0 sits just past the header block, so no
     // record ever has LSN 0 - which is what keeps page_lsn 0 meaning
     // "never logged".
@@ -333,7 +333,7 @@ TEST_F(WalStreamTest, FillingASegmentSealsItAndRollsToTheNext) {
     }
     ASSERT_TRUE(stream->Sync().ok());
 
-    EXPECT_EQ(device_->segment_count(), 2u);
+    EXPECT_EQ(device_->end_segment(), 2u);
     // The roll skips the tail that could not hold the record, and the new
     // segment's first record sits just past its header block.
     EXPECT_EQ(first_in_second_segment, kSegmentSize + kSegmentHeaderSize);
@@ -364,13 +364,13 @@ TEST_F(WalStreamTest, SealIsExplicitAndIdempotent) {
 
     ASSERT_TRUE(stream->Seal().ok());
     EXPECT_EQ(stream->append_lsn(), after_seal);
-    EXPECT_EQ(device_->segment_count(), 1u);
+    EXPECT_EQ(device_->end_segment(), 1u);
 
     // The next append is what actually rolls.
     auto lsn = stream->Append(HeapInsert(2, 2), Pattern(kPayloadSize, 11));
     ASSERT_TRUE(lsn.ok()) << lsn.status().message();
     EXPECT_EQ(lsn.value(), kSegmentSize + kSegmentHeaderSize);
-    EXPECT_EQ(device_->segment_count(), 2u);
+    EXPECT_EQ(device_->end_segment(), 2u);
     EXPECT_FALSE(stream->sealed());
 }
 
@@ -393,7 +393,7 @@ TEST_F(WalStreamTest, ReopenResumesAtTheDurableEnd) {
     ASSERT_NE(reopened, nullptr);
     EXPECT_EQ(reopened->append_lsn(), end);
     EXPECT_EQ(reopened->durable_lsn(), end);
-    EXPECT_EQ(device_->segment_count(), 1u);  // adopted, not recreated
+    EXPECT_EQ(device_->end_segment(), 1u);  // adopted, not recreated
 
     auto lsn = reopened->Append(HeapInsert(5, 1), payload);
     ASSERT_TRUE(lsn.ok());
@@ -549,7 +549,7 @@ TEST_F(WalStreamTest, AnExactlyFullSegmentRollsInsteadOfWedging) {
     ASSERT_TRUE(rolled.ok()) << rolled.status().message();
     EXPECT_EQ(rolled.value(), kSegmentSize + kSegmentHeaderSize)
         << "the record must open segment 1, past its header";
-    EXPECT_EQ(device_->segment_count(), 2u);
+    EXPECT_EQ(device_->end_segment(), 2u);
     ASSERT_TRUE(stream->Flush().ok());
 
     // The record is really there, at its address.

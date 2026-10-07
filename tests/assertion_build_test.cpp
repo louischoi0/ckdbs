@@ -275,7 +275,7 @@ TEST_F(AssertionBuildWalTest, TheEmittedRecordsRebuildTheDirectoryTheBuildProduc
     context.cabin = &rebuilt;
 
     std::size_t builds = 0;
-    for (std::uint64_t seg = 0; seg < device_->segment_count(); ++seg) {
+    for (std::uint64_t seg = 0; seg < device_->end_segment(); ++seg) {
         std::vector<std::byte> body(kSegmentBytes - wal::kSegmentHeaderSize);
         ASSERT_TRUE(device_->ReadAt(seg, wal::kSegmentHeaderSize, body).ok());
         wal::RecordReader reader(body, seg * kSegmentBytes + wal::kSegmentHeaderSize);

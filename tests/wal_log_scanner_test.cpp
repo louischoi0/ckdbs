@@ -116,7 +116,7 @@ TEST_F(LogScannerTest, CrossesASegmentBoundaryLosingAndDuplicatingNothing) {
         }
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
-    ASSERT_GT(device_->segment_count(), 1u) << "the fixture did not roll; the test proves nothing";
+    ASSERT_GT(device_->end_segment(), 1u) << "the fixture did not roll; the test proves nothing";
 
     Collected got;
     auto outcome = ScanLog((*device_), 0, 0, got.Visitor());
@@ -186,7 +186,7 @@ TEST_F(LogScannerTest, ASegmentSealedWithNoRoomForAPadStillContinuesIntoTheNext)
         }
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
-    ASSERT_GT(device_->segment_count(), 1u) << "the fixture did not roll; the test proves nothing";
+    ASSERT_GT(device_->end_segment(), 1u) << "the fixture did not roll; the test proves nothing";
 
     Collected got;
     auto outcome = ScanLog((*device_), 0, 0, got.Visitor());
@@ -430,6 +430,71 @@ TEST_F(LogScannerTest, TheyAlsoAgreeAfterASealedTailSegment) {
     auto reopened = WalStream::Open(device_.get(), 0);
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
     EXPECT_EQ(scanned.value().end_lsn, reopened.value()->append_lsn());
+}
+
+
+// ---- Recycling (BC-S2, BC-R2's backstop) --------------------------------
+
+TEST_F(LogScannerTest, AStartInARecycledSegmentIsCorruptionAndTheLiveRunStillScans) {
+    std::vector<Lsn> lsns;
+    {
+        auto stream = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(stream.ok());
+        // Enough 1 KiB records to roll into a third segment.
+        for (int i = 0; i < 30; ++i) {
+            auto lsn = stream.value()->Append({RecordType::kHeapInsert, 1, 1}, Payload(1024, 0x41));
+            ASSERT_TRUE(lsn.ok()) << lsn.status().message();
+            lsns.push_back(lsn.value());
+        }
+        ASSERT_TRUE(stream.value()->Sync().ok());
+    }
+    ASSERT_GE(device_->end_segment(), 3u);
+    ASSERT_TRUE(device_->DetachBelow(1).ok());
+
+    for (const Lsn from : {Lsn{0}, lsns.front()}) {
+        auto refused = ScanLogToEnd((*device_), 0, from);
+        ASSERT_FALSE(refused.ok()) << "from " << from;
+        EXPECT_EQ(refused.status().code(), StatusCode::kCorruption) << refused.status().message();
+    }
+
+    const Lsn live = kSegmentSize + kSegmentHeaderSize;
+    Collected seen;
+    auto scanned = ScanLog((*device_), 0, live, seen.Visitor());
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    ASSERT_FALSE(seen.lsns.empty());
+    EXPECT_EQ(seen.lsns.front(), live);
+    EXPECT_EQ(seen.lsns.back(), lsns.back());
+}
+
+TEST_F(LogScannerTest, AStreamReopensOverARunThatDoesNotStartAtZero) {
+    Lsn last = 0;
+    {
+        auto stream = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(stream.ok());
+        for (int i = 0; i < 30; ++i) {
+            auto lsn = stream.value()->Append({RecordType::kHeapInsert, 1, 1}, Payload(1024, 0x42));
+            ASSERT_TRUE(lsn.ok());
+            last = lsn.value();
+        }
+        ASSERT_TRUE(stream.value()->Sync().ok());
+    }
+    const std::uint64_t end = device_->end_segment();
+    ASSERT_TRUE(device_->DetachBelow(end - 1).ok());
+    ASSERT_TRUE(device_->ReclaimDetached().ok());
+
+    auto stream = WalStream::Open(device_.get(), 0);
+    ASSERT_TRUE(stream.ok()) << stream.status().message();
+    EXPECT_GT(stream.value()->append_lsn(), last) << "resumes at the tail of the last segment";
+    // Rolling from here numbers the next segment after the run, not after
+    // how many the device holds.
+    for (int i = 0; i < 30; ++i) {
+        ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}, Payload(1024, 0x43)).ok());
+    }
+    ASSERT_TRUE(stream.value()->Sync().ok());
+    EXPECT_GT(device_->end_segment(), end);
+    auto scanned = ScanLogToEnd((*device_), 0, (end - 1) * kSegmentSize + kSegmentHeaderSize);
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    EXPECT_FALSE(scanned.value().stopped_early);
 }
 
 }  // namespace

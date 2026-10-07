@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,29 +41,48 @@
 //
 // Concurrency: one device per stream, and the stream is either one core's
 // or the instance's (`wal/stream.hpp`, `wal/log_device.hpp`'s contract).
-// This class already satisfies the shared case and needs no change for it:
-// `CreateSegment` grows `segments_` under `segments_mutex_` while `Sync`
-// copies the descriptors under the same lock and does its `fdatasync`s
-// outside it, and the unlocked reads in `WriteAt`/`ReadAt` are safe
-// because a shared stream serializes every one of them against every
-// `CreateSegment` with its own latch. Concurrent `pwrite` and `fdatasync`
-// on one descriptor need no lock at all (the note beside the mutex below).
+// `CreateSegment` and `DetachBelow` change `segments_` under
+// `segments_mutex_`, while `Sync` copies the descriptors under the same lock
+// and does its `fdatasync`s outside it. The unlocked reads in
+// `WriteAt`/`ReadAt` are safe because the contract serializes every one of
+// them against both table changes - the stream's latch, or its one thread.
+// Concurrent `pwrite` and `fdatasync` on one descriptor need no lock at all
+// (the note beside the mutex below).
+//
+// **A descriptor outlives every `Sync` that copied it** (BC-R4). The table
+// holds each one by `shared_ptr`, and so does a `Sync`'s copy, so a segment
+// detached while a sync is in flight is closed when that sync lets go of
+// it - never under it, where its number could already name another file.
+// The cost moves with it: the filesystem frees an unlinked segment's blocks
+// at the last `close`, which can then be a syncing thread's.
 
 namespace kds::wal {
 
 class FileLogDevice final : public LogDevice {
 public:
-    // Opens `dir` (creating it if absent) and adopts whatever segments for
-    // `core_id` are already there, which is how recovery finds the stream.
-    // A segment file whose size is not exactly `segment_size` is reported
-    // as Corruption rather than silently accepted, and a gap in the
-    // numbering is Corruption too - segments are created in order.
+    // Opens `dir` (creating it if absent) and adopts the segments for
+    // `core_id` from `first_needed` up, which is how recovery finds the
+    // stream. `first_needed` is the segment holding the mount anchor's redo
+    // start (BC-R3), 0 when nothing has been recycled past:
+    //
+    //   - a segment below it is **neither opened nor deleted**. It is a
+    //     leftover of a removal a crash interrupted, gaps among them are
+    //     expected, and it is queued for the next `ReclaimDetached` - after
+    //     the mount has succeeded, so a refused mount leaves its log whole;
+    //   - every segment from it to the highest present must exist, and a gap
+    //     is Corruption, since segments are created in order;
+    //   - none at or above it, when it is above 0, is Corruption: the anchor
+    //     names a log that is not there.
+    //
+    // A segment file whose size is not exactly `segment_size` is Corruption
+    // rather than silently accepted.
     static StatusOr<std::unique_ptr<FileLogDevice>> Open(
         const std::string& dir, std::uint32_t core_id = 0,
-        std::uint64_t segment_size = kDefaultSegmentSize);
+        std::uint64_t segment_size = kDefaultSegmentSize, std::uint64_t first_needed = 0);
 
     std::uint64_t segment_size() const noexcept override { return segment_size_; }
-    std::uint64_t segment_count() const noexcept override { return segments_.size(); }
+    std::uint64_t first_segment() const noexcept override { return first_; }
+    std::uint64_t end_segment() const noexcept override { return first_ + segments_.size(); }
 
     std::uint32_t core_id() const noexcept { return core_id_; }
     const std::string& dir() const noexcept { return dir_; }
@@ -74,26 +94,44 @@ public:
     Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                   std::span<std::byte> out) override;
 
-    // fdatasync of every open segment - data only, because a segment's size
-    // and extents were made durable at creation. Directory metadata (the
-    // segment files' existence) is synced when a segment is created, not
-    // here, so a crash right after CreateSegment cannot leave a nameless
-    // file.
+    // fdatasync of every segment in the live run - data only, because a
+    // segment's size and extents were made durable at creation. Directory
+    // metadata (the segment files' existence) is synced when a segment is
+    // created or reclaimed, not here, so a crash right after CreateSegment
+    // cannot leave a nameless file.
     Status Sync() override;
 
-private:
-    FileLogDevice(std::string dir, std::uint32_t core_id, std::uint64_t segment_size) noexcept;
+    Status DetachBelow(std::uint64_t segment_no) override;
 
+    // Unlinks every detached segment and every leftover `Open` skipped -
+    // a name already gone counts as removed - then fsyncs the directory
+    // once. A failed unlink or a failed directory sync requeues what it
+    // covered, so the next call repeats it.
+    Status ReclaimDetached() override;
+
+    // Segments `ReclaimDetached` has removed durably, over the device's life.
+    std::uint64_t segments_removed() const noexcept;
+
+private:
+    FileLogDevice(std::string dir, std::uint32_t core_id, std::uint64_t segment_size,
+                  FileDescriptor dir_fd) noexcept;
+
+    // Over `dir_fd_`, which `Open` opened once and keeps: a roll at the
+    // descriptor limit then fails at the segment's own open, before any
+    // file exists, rather than at the directory's after one does
+    // (`bugs/wal-segment-descriptors-exhaust-the-open-file-limit.md`).
     Status SyncDirectory();
 
     std::string dir_;
     std::uint32_t core_id_;
     std::uint64_t segment_size_;
+    FileDescriptor dir_fd_;
 
     // ---- The one lock in the log device (rules.md §3's justification) ---
     //
-    // **What it protects:** `segments_` - the open segment descriptors -
-    // and nothing else. **Acquisition order:** innermost; nothing is taken
+    // **What it protects:** `segments_` and `first_` - the live run - and
+    // `detached_` and `removed_`, the reclaim queue and its count.
+    // **Acquisition order:** innermost; nothing is taken
     // while it is held, and it is *never* held across an `fsync` or a
     // `pwrite`.
     //
@@ -110,7 +148,13 @@ private:
     // with it is precisely the question `WalWriter` answers by publishing
     // the watermark it was *asked* for rather than the current one.
     mutable std::mutex segments_mutex_;
-    std::vector<FileDescriptor> segments_;
+    // Segment `first_ + i` is `segments_[i]`. A deque, because a detach
+    // takes from the front and a roll adds at the back.
+    std::deque<std::shared_ptr<const FileDescriptor>> segments_;
+    std::uint64_t first_ = 0;
+    // Segment numbers to unlink: detached, or skipped below `first_needed`.
+    std::vector<std::uint64_t> detached_;
+    std::uint64_t removed_ = 0;
 };
 
 }  // namespace kds::wal

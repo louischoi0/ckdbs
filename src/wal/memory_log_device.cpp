@@ -30,7 +30,8 @@ Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no) {
 Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                                 std::span<const std::byte> in) {
     std::lock_guard<std::mutex> guard(mutex_);
-    if (Status s = CheckSegmentRange(segment_no, offset, in.size(), base_.size(), segment_size_);
+    if (Status s =
+            CheckSegmentRange(segment_no, offset, in.size(), first_, base_.size(), segment_size_);
         !s.ok()) {
         return s;
     }
@@ -64,7 +65,7 @@ Status MemoryLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                                std::span<std::byte> out) {
     std::lock_guard<std::mutex> guard(mutex_);
     if (Status s =
-            CheckSegmentRange(segment_no, offset, out.size(), base_.size(), segment_size_);
+            CheckSegmentRange(segment_no, offset, out.size(), first_, base_.size(), segment_size_);
         !s.ok()) {
         return s;
     }
@@ -107,8 +108,35 @@ Status MemoryLogDevice::Sync() {
         }
         pending_[seg].clear();
     }
-    durable_segment_count_ = base_.size();
+    durable_end_ = base_.size();
     ++stats_.syncs;
+    return Status::OK();
+}
+
+Status MemoryLogDevice::DetachBelow(std::uint64_t segment_no) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (Status s = CheckDetachBound(segment_no, first_, base_.size()); !s.ok()) {
+        return s;
+    }
+    if (segment_no > durable_end_) {
+        return Status::InvalidArgument(
+            "MemoryLogDevice: cannot detach below segment " + std::to_string(segment_no) +
+            "; segments from " + std::to_string(durable_end_) + " are not durable yet");
+    }
+    trace_.push_back({OpKind::kDetach, segment_no, 0, 0});
+    first_ = segment_no;
+    return Status::OK();
+}
+
+Status MemoryLogDevice::ReclaimDetached() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    trace_.push_back({OpKind::kReclaim, first_, 0, 0});
+    for (std::uint64_t seg = durable_first_; seg < first_; ++seg) {
+        base_[seg].clear();
+        pending_[seg].clear();
+    }
+    stats_.segments_removed += first_ - durable_first_;
+    durable_first_ = first_;
     return Status::OK();
 }
 
@@ -139,10 +167,12 @@ void MemoryLogDevice::ClearInjections() noexcept {
 void MemoryLogDevice::Crash() {
     std::lock_guard<std::mutex> guard(mutex_);
     // Everything un-synced dies: the overlay whole, and the segments
-    // created since the last sync with it.
-    base_.resize(durable_segment_count_);
+    // created since the last sync with it. A detach that was never reclaimed
+    // never happened.
+    base_.resize(durable_end_);
     pending_.clear();
-    pending_.resize(durable_segment_count_);
+    pending_.resize(durable_end_);
+    first_ = durable_first_;
 }
 
 std::uint64_t MemoryLogDevice::UnsyncedBytes() const noexcept {
@@ -202,10 +232,11 @@ void MemoryLogDevice::Crash(std::uint64_t keep_bytes) {
     // A segment created since the last sync but left with no surviving
     // bytes never existed as far as the next mount is concerned - the same
     // reading `Crash()` gives, applied to the tail this cut produced.
-    while (base_.size() > durable_segment_count_ && pending_.back().empty()) {
+    while (base_.size() > durable_end_ && pending_.back().empty()) {
         base_.pop_back();
         pending_.pop_back();
     }
+    first_ = durable_first_;
 }
 
 }  // namespace kds::wal

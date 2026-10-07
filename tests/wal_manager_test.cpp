@@ -61,7 +61,7 @@ protected:
     // to what a crash would have left behind.
     std::vector<RecordHeaderFields> DurableRecords() {
         std::vector<RecordHeaderFields> found;
-        for (std::uint64_t seg = 0; seg < device_->segment_count(); ++seg) {
+        for (std::uint64_t seg = 0; seg < device_->end_segment(); ++seg) {
             std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
             EXPECT_TRUE(device_->ReadAt(seg, kSegmentHeaderSize, body).ok());
             RecordReader reader(body, seg * kSegmentSize + kSegmentHeaderSize);

@@ -53,7 +53,7 @@ protected:
     // Every record on the device, in LSN order, across every segment.
     std::vector<RecordHeaderFields> RecordsOnDevice() {
         std::vector<RecordHeaderFields> found;
-        for (std::uint64_t seg = 0; seg < device_->segment_count(); ++seg) {
+        for (std::uint64_t seg = 0; seg < device_->end_segment(); ++seg) {
             std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
             EXPECT_TRUE(device_->ReadAt(seg, kSegmentHeaderSize, body).ok());
             RecordReader reader(body, seg * kSegmentSize + kSegmentHeaderSize);
@@ -132,7 +132,7 @@ TEST_F(SharedStreamTest, EveryThreadsRecordLandsAtTheLsnItWasGiven) {
     // below would pass on a stream that never flushed or rolled under
     // contention, which is the case that matters.
     EXPECT_GT(drains.load(), 0) << "the ring never filled; the concurrent flush went untested";
-    EXPECT_GT(device_->segment_count(), 1u)
+    EXPECT_GT(device_->end_segment(), 1u)
         << "the stream never rolled; the concurrent segment roll went untested";
 
     std::multiset<Lsn> handed_out;

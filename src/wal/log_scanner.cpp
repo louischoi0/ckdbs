@@ -35,13 +35,14 @@ StatusOr<SegmentHeaderFields> ValidateSegmentHeader(std::span<const std::byte> h
 StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from_lsn,
                               const RecordVisitor& visit) {
     const std::uint64_t segment_size = device.segment_size();
-    const std::uint64_t segment_count = device.segment_count();
+    const std::uint64_t first_segment = device.first_segment();
+    const std::uint64_t end_segment = device.end_segment();
 
     if (segment_size <= kSegmentHeaderSize) {
         return Status::InvalidArgument("ScanLog: segment size " + std::to_string(segment_size) +
                                        " leaves no room for records");
     }
-    if (segment_count == 0) {
+    if (end_segment == first_segment) {
         // Nothing was ever created. The first legal record position is
         // where a fresh stream would place its first record, so a caller
         // comparing end_lsn against append_lsn sees them agree.
@@ -57,10 +58,10 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
     if (from_lsn != 0) {
         segment_no = from_lsn / segment_size;
         offset = from_lsn % segment_size;
-        if (segment_no >= segment_count) {
+        if (segment_no >= end_segment) {
             return Status::InvalidArgument(
                 "ScanLog: lsn " + std::to_string(from_lsn) + " names segment " +
-                std::to_string(segment_no) + ", past the " + std::to_string(segment_count) +
+                std::to_string(segment_no) + ", at or past the log's end at segment " + std::to_string(end_segment) +
                 " that exist");
         }
         if (offset < kSegmentHeaderSize) {
@@ -73,6 +74,17 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
                                            " is not " + std::to_string(kRecordAlignment) +
                                            "-byte aligned, so it cannot name a record");
         }
+    }
+    // **A start below the live run is Corruption, not a bad argument** (BC-R2):
+    // the segment was recycled, so a reader asking for it holds a position the
+    // durable anchor no longer covers - redo's floor keeps every reader at or
+    // above it, and this is the backstop that refuses rather than reads past.
+    // "From the beginning" is the same question when the beginning is gone.
+    if (segment_no < first_segment) {
+        return Status::Corruption("ScanLog: lsn " + std::to_string(from_lsn) + " names segment " +
+                                  std::to_string(segment_no) +
+                                  ", which was recycled; the log starts at segment " +
+                                  std::to_string(first_segment));
     }
 
     // Only the first segment of a scan may start part-way in; every later
@@ -106,7 +118,7 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
     const std::size_t body_capacity = static_cast<std::size_t>(segment_size - kSegmentHeaderSize);
     auto body_storage = std::make_unique_for_overwrite<std::byte[]>(body_capacity);
 
-    for (; segment_no < segment_count; ++segment_no) {
+    for (; segment_no < end_segment; ++segment_no) {
         const Lsn start_lsn = segment_no * segment_size;
 
         if (Status s = device.ReadAt(segment_no, 0, header_block); !s.ok()) {
@@ -174,7 +186,7 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
             // the expected shape of a crash, and the end of the stream.
             const std::uint64_t consumed = out.end_lsn - start_lsn;
             const bool sealed_by_exhaustion =
-                segment_size - consumed < kRecordHeaderSize && segment_no + 1 < segment_count;
+                segment_size - consumed < kRecordHeaderSize && segment_no + 1 < end_segment;
             if (!sealed_by_exhaustion) {
                 out.stopped_early = reader.stopped_early();
                 return out;
@@ -188,7 +200,7 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
         // Sealed. A sealed *last* segment means the roll never completed:
         // the stream ends at the segment boundary, which is exactly where
         // WalStream::ScanTail leaves append_lsn_.
-        if (segment_no + 1 == segment_count) {
+        if (segment_no + 1 == end_segment) {
             out.end_lsn = start_lsn + segment_size;
             return out;
         }

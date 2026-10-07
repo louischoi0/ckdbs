@@ -502,3 +502,71 @@ asserts what BC-Q2 needs.
 `TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`,
 which fails on this host because another session's `kds_server` holds port
 25432. That is environmental, and recorded rather than reported as a pass.
+
+### BC-S2 - green, 2026-10-07
+
+On `worktree-wal-recycling` from `fe34ceea`.
+
+**Built (BC-R3, BC-R4):**
+- **`LogDevice`.** `first_segment`/`end_segment` replace `segment_count`.
+  `RemoveBelow` is built as two calls, so the table change and the I/O can
+  land on different threads, as BC-R4 and BC-R5 ask:
+  - `DetachBelow` changes the table and does no I/O;
+  - `ReclaimDetached` does the unlinks and one directory `fsync`.
+- **`FileLogDevice`:**
+  - descriptors are shared with every `Sync` that copied them;
+  - the directory descriptor is opened once, at `Open`;
+  - `Open(first_needed)` skips the segments below it and deletes nothing.
+- **`MemoryLogDevice`:** a crash brings back every detached segment not yet
+  reclaimed. It also refuses to detach a segment no `Sync` has covered (the
+  review's finding 1, option (b)). Its alternative, making a reclaim's
+  directory sync make every created name durable, would let the sim produce
+  the unheadered segment of C5's bug entry in BC-S4. Recycling detaches only
+  below a durable anchor, so nothing BC does meets the refusal.
+- **`ScanLog`:** a start below the live run is `Corruption`.
+- **`WalStream`:** `Open` and `Roll` use `end_segment()`.
+
+**Cells.** `Open`'s matrix, detach and reclaim, the detach bound, the memory
+crash model, the scanner refusal, a stream reopened over a run that does not
+start at 0, the sync race, and the roll at the descriptor limit.
+
+**Mutants, each killed in every repeat:**
+- `Sync` copying raw descriptor numbers (the race cell, 5 of 5). The race
+  cell needed two passes to kill it: the detached segment is the first a
+  sync visits, so the cell now detaches two at once behind a slow
+  `fdatasync`, with a pipe taking the freed number;
+- `Open` deleting below `first_needed`;
+- `DetachBelow` reaching the last segment;
+- a directory `open` per roll (the limit cell);
+- `ScanLog`'s refusal removed.
+
+**Not yet.** The mutant for a table changed outside the stream latch waits
+for BC-S3, where that call site exists. The mount still passes
+`first_needed = 0`: passing the anchor's segment before redo's floor exists
+would refuse §1.4's mounts. Both land in BC-S3.
+
+**The review** (`critics-developer`):
+- **Taken:**
+  - finding 1, as option (b), above;
+  - the race cell's thread joined on every exit (the reviewer's edit);
+  - `errno` captured before an allocation;
+  - two unused memory-device accessors deleted;
+  - a dead condition in `CheckDetachBound` removed;
+  - the scanner's local and its past-the-end message renamed;
+  - a wrong comment on what moves the first segment, corrected.
+- **Not taken:**
+  - cells for a failed unlink and a failed directory sync. Neither can be
+    injected into `FileLogDevice` without a seam, and the requeue is read
+    and argued rather than built;
+  - a count kept by the device itself, which the row's wording asked for.
+    The pipe is what kills the mutant;
+  - reviving a random subset of detached segments in the memory device's
+    crash. All of them is the case that leaves recovery the most to skip.
+
+**The suite:** the full Debug suite was green but for two tests, which are
+recorded rather than reported as passes:
+- `TcpServerListenTest.ReusePort…`, environmental (port 25432 held);
+- `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`,
+  which hit its 20 s deadline under `ctest -j8` and passed 3 of 3 alone in
+  ~0.8 s. It uses no recycling call.
+

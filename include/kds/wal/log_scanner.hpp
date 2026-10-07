@@ -114,7 +114,8 @@ using RecordVisitor = std::function<Status(const DecodedRecord&)>;
 // with InvalidArgument rather than guessing at a nearby one. Zero is a
 // legal spelling of "from the beginning": no record ever has LSN 0, so it
 // cannot be confused with a real position (record.hpp), and it resolves to
-// segment 0's first record.
+// segment 0's first record. A position below the device's first segment -
+// zero included, once segment 0 is recycled - is Corruption (BC-R2).
 //
 // PAD records are consumed by the scan and never reach `visit`: they are
 // framing, not content.

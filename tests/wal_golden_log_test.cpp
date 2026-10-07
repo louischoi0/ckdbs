@@ -84,8 +84,8 @@ std::uint32_t LogCrc(wal::MemoryLogDevice& device) {
     const std::uint64_t segment_size = device.segment_size();
     std::vector<std::byte> segment(static_cast<std::size_t>(segment_size));
     std::vector<std::byte> all;
-    all.reserve(static_cast<std::size_t>(segment_size * device.segment_count()));
-    for (std::uint64_t no = 0; no < device.segment_count(); ++no) {
+    all.reserve(static_cast<std::size_t>(segment_size * device.end_segment()));
+    for (std::uint64_t no = 0; no < device.end_segment(); ++no) {
         EXPECT_TRUE(device.ReadAt(no, 0, segment).ok());
         all.insert(all.end(), segment.begin(), segment.end());
     }

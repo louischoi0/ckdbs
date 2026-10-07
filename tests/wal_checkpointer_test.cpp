@@ -375,7 +375,7 @@ TEST_F(CheckpointerTest, ASecondCheckpointOverACleanPoolAnchorsItself) {
 // the segments by hand.
 std::vector<RecordHeaderFields> RecordsOn(MemoryLogDevice& device) {
     std::vector<RecordHeaderFields> found;
-    for (std::uint64_t seg = 0; seg < device.segment_count(); ++seg) {
+    for (std::uint64_t seg = 0; seg < device.end_segment(); ++seg) {
         std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
         EXPECT_TRUE(device.ReadAt(seg, kSegmentHeaderSize, body).ok());
         RecordReader reader(body, seg * kSegmentSize + kSegmentHeaderSize);

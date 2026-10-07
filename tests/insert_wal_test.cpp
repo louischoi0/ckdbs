@@ -100,7 +100,7 @@ protected:
     // manager believes it appended is not evidence of what a crash leaves.
     std::vector<wal::DecodedRecord> DeviceRecords(std::vector<std::vector<std::byte>>& storage) {
         std::vector<wal::DecodedRecord> found;
-        for (std::uint64_t seg = 0; seg < log_device_->segment_count(); ++seg) {
+        for (std::uint64_t seg = 0; seg < log_device_->end_segment(); ++seg) {
             storage.emplace_back(kSegmentSize - wal::kSegmentHeaderSize);
             std::vector<std::byte>& body = storage.back();
             EXPECT_TRUE(log_device_->ReadAt(seg, wal::kSegmentHeaderSize, body).ok());

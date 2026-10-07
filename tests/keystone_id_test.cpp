@@ -307,7 +307,7 @@ protected:
     // Keystone ids named by durable HEAP_INSERT records, in stream order.
     std::vector<std::uint64_t> LoggedIds() {
         std::vector<std::uint64_t> ids;
-        for (std::uint64_t seg = 0; seg < log_device_->segment_count(); ++seg) {
+        for (std::uint64_t seg = 0; seg < log_device_->end_segment(); ++seg) {
             std::vector<std::byte> body(kSegmentSize - wal::kSegmentHeaderSize);
             EXPECT_TRUE(log_device_->ReadAt(seg, wal::kSegmentHeaderSize, body).ok());
             wal::RecordReader reader(body, seg * kSegmentSize + wal::kSegmentHeaderSize);

@@ -93,7 +93,8 @@ public:
     int parked() const noexcept { return parked_.load(std::memory_order_acquire); }
 
     std::uint64_t segment_size() const noexcept override { return inner_.segment_size(); }
-    std::uint64_t segment_count() const noexcept override { return inner_.segment_count(); }
+    std::uint64_t first_segment() const noexcept override { return inner_.first_segment(); }
+    std::uint64_t end_segment() const noexcept override { return inner_.end_segment(); }
     Status CreateSegment(std::uint64_t segment_no) override {
         return inner_.CreateSegment(segment_no);
     }
@@ -105,6 +106,10 @@ public:
                   std::span<std::byte> out) override {
         return inner_.ReadAt(segment_no, offset, out);
     }
+    Status DetachBelow(std::uint64_t segment_no) override {
+        return inner_.DetachBelow(segment_no);
+    }
+    Status ReclaimDetached() override { return inner_.ReclaimDetached(); }
     Status Sync() override {
         if (held_.load(std::memory_order_acquire)) {
             parked_.fetch_add(1, std::memory_order_acq_rel);

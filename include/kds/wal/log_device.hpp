@@ -32,6 +32,23 @@
 // implementation must accept that pairing: `FileLogDevice` does by POSIX
 // semantics (`pwrite` beside `fdatasync` on one descriptor), and
 // `MemoryLogDevice` takes a mutex for it, being a test double.
+//
+// **Recycling** (BC, `instructions/v3.0.0/workorder-bc-wal-recycling.md`)
+// adds two calls, split so the table change and the I/O land on different
+// threads (BC-R4, BC-R5):
+//
+//   - `DetachBelow` changes the table and does no I/O. Its caller
+//     serializes it with `CreateSegment`/`WriteAt`/`ReadAt` exactly as those
+//     are serialized with each other - the stream latch, or the one thread
+//     of an unshared stream - and it may run beside a `Sync`, which keeps
+//     every segment it started with until it returns.
+//   - `ReclaimDetached` does the I/O - the removal and the directory sync
+//     that makes it durable - and may run on any thread, beside any call.
+//
+// A detached segment is gone from the device's live run `[first_segment(),
+// end_segment())` at once, and gone from the medium only once a
+// `ReclaimDetached` has returned OK. A crash between the two may leave any
+// of them behind; the next open skips them (`FileLogDevice::Open`).
 
 namespace kds::wal {
 
@@ -47,18 +64,21 @@ public:
     // Fixed for the life of the device; every segment is exactly this big.
     virtual std::uint64_t segment_size() const noexcept = 0;
 
-    // Segments 0..segment_count()-1 exist. Recovery walks this range.
-    virtual std::uint64_t segment_count() const noexcept = 0;
+    // The live run: segments first_segment()..end_segment()-1 exist, and
+    // recovery walks inside it. Equal on an empty device. The first is 0
+    // until a segment is detached or a device is opened past recycled ones.
+    virtual std::uint64_t first_segment() const noexcept = 0;
+    virtual std::uint64_t end_segment() const noexcept = 0;
 
-    // Creates the next segment (segment_no must equal segment_count()),
+    // Creates the next segment (segment_no must equal end_segment()),
     // sized at segment_size() and readable as zeroes. Fails with
     // InvalidArgument for any other number - segments are created in
     // order, never sparsely.
     virtual Status CreateSegment(std::uint64_t segment_no) = 0;
 
-    // Writes into an existing segment. Fails with OutOfRange if the
-    // segment does not exist or the write would run past its end, IoError
-    // on a device failure. Not durable until Sync().
+    // Writes into a segment of the live run. Fails with OutOfRange if the
+    // segment is not in it or the write would run past its end, IoError on
+    // a device failure. Not durable until Sync().
     virtual Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                            std::span<const std::byte> in) = 0;
 
@@ -69,13 +89,28 @@ public:
     // Makes every prior write - and the existence of every segment created
     // so far - durable.
     virtual Status Sync() = 0;
+
+    // Removes segments first_segment()..segment_no-1 from the live run, with
+    // no I/O (the concurrency section). `segment_no` may equal
+    // first_segment(), which detaches nothing, and may not reach
+    // end_segment(): the last segment holds the stream's append point and is
+    // never detached. InvalidArgument otherwise.
+    virtual Status DetachBelow(std::uint64_t segment_no) = 0;
+
+    // Removes every detached segment from the medium and makes the removal
+    // durable. A segment that could not be removed stays queued for the next
+    // call, and the call reports the first failure. Never touches the live run.
+    virtual Status ReclaimDetached() = 0;
 };
 
 // ---- Shared argument validation -----------------------------------------
 
-// Rejects a range outside an existing segment. Shared so both
-// implementations answer identically for identical bad arguments.
+// Rejects a range outside a segment of the live run `[first, end)`. Shared
+// so both implementations answer identically for identical bad arguments.
 Status CheckSegmentRange(std::uint64_t segment_no, std::uint64_t offset, std::size_t length,
-                         std::uint64_t segment_count, std::uint64_t segment_size);
+                         std::uint64_t first, std::uint64_t end, std::uint64_t segment_size);
+
+// `DetachBelow`'s argument check, shared for the same reason.
+Status CheckDetachBound(std::uint64_t segment_no, std::uint64_t first, std::uint64_t end);
 
 }  // namespace kds::wal

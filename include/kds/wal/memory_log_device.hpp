@@ -23,7 +23,7 @@ namespace kds::wal {
 
 class MemoryLogDevice final : public LogDevice {
 public:
-    enum class OpKind { kCreate, kWrite, kRead, kSync };
+    enum class OpKind { kCreate, kWrite, kRead, kSync, kDetach, kReclaim };
 
     struct TraceEntry {
         OpKind kind;
@@ -37,6 +37,7 @@ public:
         std::uint64_t reads = 0;
         std::uint64_t syncs = 0;
         std::uint64_t segments_created = 0;
+        std::uint64_t segments_removed = 0;  // durably, by ReclaimDetached
         std::uint64_t bytes_written = 0;
         // One-shot injections that actually fired - MemoryPageDevice's
         // counter, for its reason: a driver that arms a fault cannot
@@ -50,16 +51,16 @@ public:
         std::uint64_t segment_size = kDefaultSegmentSize);
 
     std::uint64_t segment_size() const noexcept override { return segment_size_; }
-    std::uint64_t segment_count() const noexcept override {
+    std::uint64_t first_segment() const noexcept override {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return first_;
+    }
+    std::uint64_t end_segment() const noexcept override {
         std::lock_guard<std::mutex> guard(mutex_);
         return base_.size();
     }
 
-    // Segments durable as of the last Sync() - what Crash() reverts to.
-    std::uint64_t durable_segment_count() const noexcept {
-        std::lock_guard<std::mutex> guard(mutex_);
-        return durable_segment_count_;
-    }
+
 
     Status CreateSegment(std::uint64_t segment_no) override;
     Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
@@ -67,6 +68,14 @@ public:
     Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                   std::span<std::byte> out) override;
     Status Sync() override;
+    // The contract's, and one more refusal: a bound above the last Sync()'s
+    // end. `FileLogDevice` makes a segment's name durable at creation; this
+    // device makes it durable at the next Sync(), so a segment detached
+    // before that could be reclaimed and then lost to a crash, leaving a
+    // first segment past the end. Recycling detaches only below a durable
+    // anchor, which a Sync() already covered, so nothing it does is refused.
+    Status DetachBelow(std::uint64_t segment_no) override;
+    Status ReclaimDetached() override;
 
     // ---- Fault injection -------------------------------------------------
 
@@ -86,7 +95,11 @@ public:
     void ClearInjections() noexcept;
 
     // Discards every write and every segment creation since the last
-    // Sync(), modelling power loss.
+    // Sync(), modelling power loss - and brings back every segment detached
+    // since the last ReclaimDetached(), whose removal never became durable.
+    // A file device can bring back any subset of those; this one brings back
+    // all of them, which is the subset that leaves the most for a recovery
+    // to skip.
     void Crash();
 
     // **The prefix crash** (H2): keeps the first `keep_bytes` of the
@@ -139,9 +152,17 @@ private:
     // below are not safe for that pairing on their own. Uncontended on
     // every single-threaded path, so the simulator's cost is unchanged.
     mutable std::mutex mutex_;
+    // Indexed by segment number from 0, the detached ones included: a
+    // detached segment's maps are emptied by ReclaimDetached, never erased,
+    // so numbering stays the index.
     std::vector<Segment> base_;     // content as of the last Sync()
     std::vector<Segment> pending_;  // writes since; parallel to base_
-    std::uint64_t durable_segment_count_ = 0;
+    // The live run, and what Crash() reverts it to: the end as of the last
+    // Sync(), the first as of the last ReclaimDetached(), whose directory
+    // sync is what makes a removal stick.
+    std::uint64_t first_ = 0;
+    std::uint64_t durable_first_ = 0;
+    std::uint64_t durable_end_ = 0;
 
     std::optional<Status> fail_next_write_;
     std::optional<Status> fail_next_sync_;
