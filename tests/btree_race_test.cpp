@@ -13,6 +13,7 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/btree/btree_page.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "frame_budget_override.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -704,6 +705,9 @@ inline constexpr int kWalkRounds = 40;
 inline constexpr int kRetries = 64;
 
 TEST(BtreeRaceTest, TwoCoresPromotingIntoOneParentLeaveEverySeparatorOverItsSubtree) {
+    // Creates more dirty pages in one burst than the debug floor holds with
+    // no checkpoint between - BE-R4's refusal, not this cell's subject.
+    const WithoutFrameBudgetOverride full_capacity;
     for (int round = 0; round < kWalkRounds; ++round) {
         std::unique_ptr<storage::MemoryPageDevice> device;
         auto store = ArmedStore(device);

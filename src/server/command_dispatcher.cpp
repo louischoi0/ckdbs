@@ -4932,6 +4932,18 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         return std::span<const std::vector<std::byte>>(payloads);
     };
 
+    // **The no-refuse window, sized to the fill** (BE-Q11). The carved fill
+    // places every row before the undo loop and the page images below fetch
+    // again, so a refusal after it would orphan the batch. Its share covers
+    // the pages the rows can fill - each tuple with its 20-byte header, two
+    // pages per page's worth for the tail's growth and the images'
+    // re-fetches - plus one row's window for the undo pages. A full pool
+    // refuses here, with nothing placed.
+    const std::size_t fill_pages =
+        stmt.rows.size() * (std::size_t{ta.layout.row_size} + 20) / kPageSize + 1;
+    auto window = storage::NoRefuseWindow::Open(page_store_,
+                                                storage::kWindowFrames + 2 * fill_pages);
+    if (!window.ok()) return {ErrorReply(window.status()), false, 0, window.status()};
     auto filled = heap::ChainAppendCarved(page_store_, ta.desc_page_id, carve, WriterId(scope),
                                           ta.oid, &ta.heap_tail_hint);
     if (!filled.ok()) {
@@ -5168,6 +5180,19 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     Status fixed = Status::OK();
 
     const bool is_btree = ta.clustered_type == catalog::ClusteredType::kBtree;
+
+    // ---- The no-refuse window (BE-Q11) -----------------------------------
+    //
+    // From here the row writes pages - its spills, its leaf, the indexes,
+    // the reservation, the undo record, a root's re-publish - and fetches
+    // or creates more after each write. A full pool may refuse only here,
+    // before the first of them: past this line a refusal would leave a
+    // placed row with no undo record (`docs/inflight/bugs/a-fetch-refused-
+    // after-a-page-write-leaves-the-mutation-half-done.md`). Closed when
+    // this function returns, with the row's trail entry written.
+    auto window = storage::NoRefuseWindow::Open(page_store_);
+    if (!window.ok()) return window.status();
+
     std::optional<StatusOr<storage::InsertPlacement>> attempt;
     if (explicit_key) {
         // **BB-R3: the borrow and the encode, outside any latch; then the
@@ -7535,6 +7560,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // poisoned - the AS9 resolution, decided 2026-08-09: uniform with
         // every other write failure, because "open and usable" cannot be
         // promised once a multi-row statement has partly happened.
+        //
+        // **The no-refuse window opens first** (BE-Q11): the assertion
+        // reservation below is this row's first write, then its spills, and
+        // the undo record, the overwrite, the indexes and an index root's
+        // re-publish each fetch or create after one. A full pool refuses
+        // here, with nothing of this row written; earlier rows are on the
+        // trail. Closed when this row's visit returns.
+        auto window = storage::NoRefuseWindow::Open(page_store_);
+        if (!window.ok()) return window.status();
         if (asserted) {
             std::uint64_t reserver = 0;
             if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),

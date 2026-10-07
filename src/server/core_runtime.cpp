@@ -157,8 +157,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // armed by `Expeditor` - core 0 did all of it before any peer existed -
     // so a peer that borrows one applies none of those again. Applying them
     // would not be redundant, it would be wrong: `SetWalGate` would swap the
-    // default gate every core without its own asks, and `SetFrameBudget`
-    // would hand one pool a per-core share of itself.
+    // default gate every core without its own asks.
     //
     // **A peer does set its own WAL gate** (BA-S1, `device_page_store.hpp`'s
     // "Which gate"), before its first writeback - the completion checkpoint
@@ -177,19 +176,13 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             }
         }
     } else {
-        auto store = storage::DevicePageStore::Open(device, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(
+            device, storage::FrameCapacity{config.buffer_pool_frames}, kFirstUserPageId);
         if (!store.ok()) return store.status();
         runtime->owned_store_ = std::move(store.value());
         runtime->store_ = runtime->owned_store_.get();
         runtime->store_->SetLogger(log);
         runtime->store_->SetWalGate(runtime->wal_.get());
-    }
-    // Only when the config carries a share. Zero must not be written:
-    // Open() may already hold the debug KDS_TEST_FRAME_BUDGET override,
-    // and writing zero here would silently undo it on every peer store -
-    // the same rule the core-0 site follows (expeditor.cpp).
-    if (runtime->owned_store_ != nullptr && config.buffer_pool_frames != 0) {
-        runtime->store_->SetFrameBudget(config.buffer_pool_frames);
     }
 
     // **This core's recovery** (RV1/RV2, server/mount_recovery.hpp) - which

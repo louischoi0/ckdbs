@@ -182,6 +182,7 @@ add_executable(kds_tests
     file_log_device_test.cpp
     sim_rng_test.cpp
     sim_loop_test.cpp
+    bounded_pool_test.cpp
     wal_golden_log_test.cpp
     wal_shared_stream_test.cpp
     wal_recycle_premise_test.cpp

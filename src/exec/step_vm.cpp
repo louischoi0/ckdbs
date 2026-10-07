@@ -2663,6 +2663,11 @@ void InstallSuspendAudit(const storage::PageStore* store) noexcept {
             return "a coroutine suspended while holding a page pin "
                    "(workplan-crosscore.md P4d-3)";
         }
+        // A window is per thread, which is sound only while no task parks
+        // inside one: another task on this reactor would spend its share.
+        if (storage::NoRefuseWindowOpenOnThisThread()) {
+            return "a coroutine suspended inside a no-refuse window (BE-Q11)";
+        }
         return {};
     });
 }

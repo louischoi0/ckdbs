@@ -52,7 +52,7 @@ std::unique_ptr<storage::MemoryPageDevice> MakeDevice() {
 }
 
 std::unique_ptr<storage::DevicePageStore> OpenStore(storage::PageDevice& device) {
-    auto opened = storage::DevicePageStore::Open(device, kFirstUser);
+    auto opened = storage::DevicePageStore::Open(device, ::kds::storage::FrameCapacity{4096}, kFirstUser);
     EXPECT_TRUE(opened.ok()) << opened.status().message();
     return opened.ok() ? std::move(opened.value()) : nullptr;
 }

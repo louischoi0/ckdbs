@@ -322,6 +322,38 @@ public:
     };
     virtual PoolCounters pool_counters() const { return {}; }
 
+    // ---- Where a full pool may refuse (BE-R4, BE-Q11) -------------------
+    //
+    // A pool at its cap with nothing reclaimable refuses a fault or a
+    // creation `ResourceExhausted`. That is safe only where the mutation
+    // has written nothing yet: a refusal after a page write leaves the
+    // write with nothing that undoes it (`docs/inflight/bugs/a-fetch-refused-
+    // after-a-page-write-leaves-the-mutation-half-done.md`). So each
+    // mutation that writes and then fetches opens a **no-refuse window**
+    // before its first write. Opening it takes a share of the pool for the
+    // window, and **that** is where a full pool refuses. Inside, fills draw
+    // on the share, and a mutation that outgrows it stops the instance
+    // rather than return an error into a half-done write. Windows nest; the
+    // outermost one holds the share. Per thread, and sound because no window
+    // holds a suspension point: every window is opened and closed inside one
+    // synchronous call.
+    //
+    // **Drain mode** is for the passes that are not a row's mutation and
+    // hold no page latch between their steps - recovery's redo and undo, a
+    // rollback, an assertion's commit and abort loops. At the cap, a fill on
+    // such a thread holding no pin writes the dirty queue back and retries,
+    // which is sound there and nowhere else (`device_page_store.hpp`'s
+    // durability-wait bullet), instead of being refused.
+    //
+    // A store with no pool does nothing for either.
+    virtual Status BeginNoRefuseWindow(std::size_t frames) {
+        (void)frames;
+        return Status::OK();
+    }
+    virtual void EndNoRefuseWindow() noexcept {}
+    virtual void BeginDrainOnPressure() noexcept {}
+    virtual void EndDrainOnPressure() noexcept {}
+
     // ---- The raw seam: protected since MG06 ----------------------------
     //
     // What a store implements - and, since MG06, *only* what a store
@@ -508,5 +540,51 @@ inline void PageRef::Release() noexcept {
 inline void PageRef::MarkDirty() noexcept {
     if (store_ != nullptr) store_->MarkFrameDirty(page_id_);
 }
+
+// The window's share, in frames (BE-Q11): what one row's mutation is
+// allowed to fault or create after its first write - eight times
+// `kPinCeiling`'s per-operation bound, so a clustered split, an index
+// split per index, an undo page and a spill fit with room to spare.
+inline constexpr std::size_t kWindowFrames = 64;
+
+// A no-refuse window, held for one mutation (`PageStore`'s note). `Open`
+// is the refusal point: it fails `ResourceExhausted` when the pool cannot
+// promise the share, and the caller has written nothing yet.
+class NoRefuseWindow {
+public:
+    [[nodiscard]] static StatusOr<NoRefuseWindow> Open(PageStore& store,
+                                                       std::size_t frames = kWindowFrames) {
+        if (Status s = store.BeginNoRefuseWindow(frames); !s.ok()) return s;
+        return NoRefuseWindow(&store);
+    }
+    NoRefuseWindow(NoRefuseWindow&& other) noexcept : store_(std::exchange(other.store_, nullptr)) {}
+    NoRefuseWindow& operator=(NoRefuseWindow&&) = delete;
+    NoRefuseWindow(const NoRefuseWindow&) = delete;
+    ~NoRefuseWindow() {
+        if (store_ != nullptr) store_->EndNoRefuseWindow();
+    }
+
+private:
+    explicit NoRefuseWindow(PageStore* store) noexcept : store_(store) {}
+    PageStore* store_;
+};
+
+// Whether this thread is inside a no-refuse window on any store - what the
+// executor's suspend audit asks, since no window may hold a suspension point.
+bool NoRefuseWindowOpenOnThisThread() noexcept;
+
+// Drain mode for the life of the guard (`PageStore`'s note).
+class DrainOnPressure {
+public:
+    explicit DrainOnPressure(PageStore& store) noexcept : store_(store) {
+        store_.BeginDrainOnPressure();
+    }
+    ~DrainOnPressure() { store_.EndDrainOnPressure(); }
+    DrainOnPressure(const DrainOnPressure&) = delete;
+    DrainOnPressure& operator=(const DrainOnPressure&) = delete;
+
+private:
+    PageStore& store_;
+};
 
 }  // namespace kds::storage

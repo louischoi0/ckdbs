@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
     std::vector<PageId> ids;
     ids.reserve(pages);
     {
-        auto store = DevicePageStore::Open(*device.value());
+        auto store = DevicePageStore::Open(*device.value(), kds::storage::FrameCapacity{kSetupBatch});
         if (!store.ok()) return Fail(store.status().message());
         const auto start = Clock::now();
         std::vector<PageId> batch;
@@ -140,9 +140,8 @@ int main(int argc, char** argv) {
                     std::chrono::duration<double>(Clock::now() - start).count());
     }
 
-    auto store = DevicePageStore::Open(*device.value());
+    auto store = DevicePageStore::Open(*device.value(), kds::storage::FrameCapacity{budget});
     if (!store.ok()) return Fail(store.status().message());
-    store.value()->SetFrameBudget(budget);
 
     std::vector<double> below;
     std::vector<double> past;

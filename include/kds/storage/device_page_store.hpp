@@ -280,6 +280,14 @@ inline constexpr PageId kHeaderlessMapPageId = 2;
 static_assert(kFreeMapPageId == FreeMapPageIdFor(0));
 static_assert(kHeaderlessMapPageId == HeaderlessMapPageIdFor(0));
 
+// How many frames a pool may hold - the store's one size, required at
+// `Open` (BE-R3). A type of its own so a call that names only a first page
+// id, as every `Open` did before the capacity was required, does not compile
+// into a pool of that many frames.
+struct FrameCapacity {
+    std::size_t frames = 0;
+};
+
 class DevicePageStore final : public PageStore {
 public:
     // `device` must outlive the store. A device with no pages, or one whose
@@ -289,7 +297,12 @@ public:
     //
     // `first_new_page_id` is where CreateNew() starts looking; pick a value
     // above any id that gets CreateAt'ed.
+    //
+    // `capacity` is the pool's ceiling: resident frames, fills in flight
+    // included, never exceed it (BE-R1, BE-R3). Zero is `InvalidArgument` -
+    // there is no unbounded pool.
     static StatusOr<std::unique_ptr<DevicePageStore>> Open(PageDevice& device,
+                                                           FrameCapacity capacity,
                                                            PageId first_new_page_id = 1);
 
     StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override;
@@ -409,15 +422,14 @@ public:
     // needed", exactly as §4 words it. Returns how many it wrote.
     StatusOr<std::size_t> DrainDirtyEvictionQueue();
 
-    // §4's watermark loop, on the writeback tick (BE-R2). When the budget's
-    // free count - the budget minus the slots in use - is below `low`
-    // (budget / 16, `eviction.md`'s `free_watermark`), it reclaims in
-    // bounded batches until the count reaches `high` (budget / 8). The
-    // latch is released between batches, and the dirty queue is drained
-    // between them, so queued dirt becomes reclaimable on the hand's next
-    // visit. It stops early after a whole lap that reclaims, cleans and
-    // decrements nothing. Returns frames reclaimed. A
-    // no-op with no budget.
+    // §4's watermark loop, on the writeback tick (BE-R2). When the pool's
+    // free count - the capacity less the slots in use and the open windows'
+    // promises - is below `low` (capacity / 16, `eviction.md`'s
+    // `free_watermark`), it reclaims in bounded batches until the count
+    // reaches `high` (capacity / 8), at most one deficit per call. The latch
+    // is released between batches, and the dirty queue is drained between
+    // them, so queued dirt becomes reclaimable on the hand's next visit. It
+    // stops early as `ReclaimWalk` says. Returns frames reclaimed.
     //
     // **Its caller holds no page latch**, which is what makes the drain's
     // `WriteBack(kSkip)` sound here and nowhere on the fault path (the
@@ -432,7 +444,7 @@ public:
     static constexpr std::size_t kReclaimBatch = 64;
     static constexpr std::size_t kBatchStepsPerFrame = 8;
     std::size_t ReclaimBatch() const noexcept {
-        return std::clamp<std::size_t>(frame_budget_ / 16, 1, kReclaimBatch);
+        return std::clamp<std::size_t>(capacity_ / 16, 1, kReclaimBatch);
     }
 
     // ---- Scan ring (docs/spec/eviction.md §5, EVT06) --------------------
@@ -657,21 +669,37 @@ public:
     // changes no result and no cell (`AttachWakers`, AU-S1b).
     PageId first_evictable_page_id() const noexcept { return first_evictable_page_id_; }
 
-    // ---- The frame budget: what arms the sweep (MG06) -------------------
+    // ---- The capacity (BE-R3) ------------------------------------------
     //
-    // How many frames may stay resident. 0 - the default - means unbounded,
-    // which is exactly the pre-eviction behaviour; a nonzero budget makes
-    // every fault that pushes residency past it run the CLOCK sweep for the
-    // excess, inline, on the faulting path (EV5's on-demand trigger). The
-    // page just faulted is never its own victim: its usage counter was just
-    // bumped, and the sweep decrements before it reclaims.
-    //
-    // In debug builds `KDS_TEST_FRAME_BUDGET` in the environment overrides
-    // an unset budget at Open() - which is how MG05 runs the entire suite
-    // under brutal eviction pressure without threading a knob through every
-    // fixture.
-    void SetFrameBudget(std::size_t frames) noexcept { frame_budget_ = frames; }
-    std::size_t frame_budget() const noexcept { return frame_budget_; }
+    // How many frames the pool may hold, fixed at `Open` (`eviction.md` §7:
+    // no runtime resize). In debug builds `KDS_TEST_FRAME_BUDGET` in the
+    // environment can only **lower** it, and never below
+    // `kWorkingMinimumFrames` - which is how MG05 runs the whole suite under
+    // eviction pressure without threading a knob through every fixture,
+    // and why that run is the floor (BE-R3).
+    std::size_t frame_capacity() const noexcept { return capacity_; }
+
+    // The working minimum of BE-Q6's mount floor: frames beyond the
+    // resident-class pages that a statement needs to run at all.
+    static constexpr std::size_t kWorkingMinimumFrames = 256;
+
+    // BE-R4: walks a full pool retries before it refuses (`eviction.md`'s
+    // `evict_retry_budget`, a constant since BE-Q5).
+    static constexpr std::size_t kRefuseRetries = 8;
+
+    // Resident frames of a pinned class (EV3) - never reclaimed, so what
+    // the mount floor counts (BE-R3).
+    std::size_t resident_class_frames() const;
+
+    // **BE-Q6's mount floor**, asked once the volume is mounted: the
+    // resident-class frames now resident plus `kWorkingMinimumFrames`. A
+    // configured capacity below it is refused `InvalidArgument`, naming both
+    // numbers, because a pool its own pinned pages exhaust would refuse
+    // every statement. A capacity only the debug override lowered below it
+    // is raised to it instead (BE-R3's clamp). A snapshot: Bound Cabin pages
+    // grow after mount, and one that cannot get a slot is refused like any
+    // creation. Mount-time only - before any peer shares the store.
+    Status ApplyMountFloor();
 
     // ---- The page latch's switch (AM-S1) ---------------------------------
     //
@@ -1288,20 +1316,33 @@ private:
     // and `slot` goes back to the free list.
     std::span<std::byte, kPageSize> InsertFrame(PageId page_id, ReservedFrame&& slot, bool dirty,
                                                 bool warm = true);
-    // The two creations' common tail: a zeroed slot published dirty, since
-    // a brand-new page exists only in its frame until it is written back.
-    std::span<std::byte, kPageSize> PublishFreshPage(PageId page_id);
+    // The two creations' common tail: the slot they reserved before
+    // claiming an id, zeroed and published dirty, since a brand-new page
+    // exists only in its frame until it is written back.
+    std::span<std::byte, kPageSize> PublishFreshPage(PageId page_id, ReservedFrame&& slot);
 
     // ---- Slots (BE-R1) ---------------------------------------------------
     //
     // **A slot is reserved before it is filled** - before a miss's device
-    // read and before a creation builds its page - so the slots in use,
-    // which the budget bounds, include every fill in flight. Under the
-    // budget it takes a slot; at it, it reclaims in bounded batches (BE-R2)
+    // read, and before a creation claims its id - so the slots in use, which
+    // the capacity bounds, include every fill in flight (BE-R1). Under the
+    // limit it takes a slot; at it, it reclaims in bounded batches (BE-R2)
     // with the structure latch released between them, until a batch frees
-    // one or a whole lap has freed nothing and lowered no usage counter. The
-    // budget is still soft (BE-S3): that last case grows the array.
-    Frame* ReserveFrame();
+    // one or the walk ends (`ReclaimWalk`). Then BE-R4: in drain mode the
+    // dirty queue is written back and the walk runs again; otherwise the
+    // walk is retried `kRefuseRetries` times, and the fill is refused
+    // `ResourceExhausted` - or, inside a window whose share is spent, the
+    // instance is stopped (`FailStop`). Nothing on this path writes back
+    // outside drain mode, and nothing waits.
+    //
+    // **The limit**: outside a window, the capacity less every open
+    // window's unspent share; inside one with share left, the capacity. A
+    // window's fill spends its share as it goes, so `in use + promised`
+    // never exceeds the capacity and a window with share left always finds
+    // a slot.
+    StatusOr<Frame*> ReserveFrame();
+    // Logs and aborts: a fill inside a window that the pool cannot serve.
+    [[noreturn]] void FailStop() const;
     // Gives back a reserved slot that was never published (a failed read, a
     // lost race). Latch held.
     void ReturnFrameLocked(Frame& slot) noexcept;
@@ -1352,7 +1393,10 @@ private:
         bool progressed = false;  // a usage counter came down: a later batch may reclaim
     };
     SweepResult SweepLocked(std::size_t want, std::size_t max_steps);
-    std::size_t SlotCountLocked() const noexcept { return chunks_.size() * kFrameChunk; }
+    // One inline batch (BE-R2) at the reservation's or a window's limit,
+    // booked in the inline counters. Latch held.
+    SweepResult InlineBatchLocked();
+    std::size_t SlotCountLocked() const noexcept { return slot_count_; }
     std::size_t SlotsInUseLocked() const noexcept {
         return SlotCountLocked() - free_frames_.size();
     }
@@ -1603,7 +1647,12 @@ private:
     // advancing modulo the slots that exist. One step is one slot, O(1);
     // the sort that re-found an id-valued hand per sweep is gone with it.
     std::size_t clock_hand_ = 0;
-    std::size_t frame_budget_ = 0;  // 0 = unbounded (pre-eviction behaviour)
+    std::size_t capacity_ = 0;  // set once, at Open
+    // What `Open` was asked for, before the debug override lowered it.
+    std::size_t configured_capacity_ = 0;
+    // Frames promised to open no-refuse windows and not yet spent, under
+    // the structure latch.
+    std::size_t window_promised_ = 0;
     std::size_t live_pins_ = 0;
     // The source of every `Frame::dirty_gen` (AT-S8 step 1b), under the
     // structure latch.
@@ -1622,13 +1671,16 @@ private:
     // reallocate; a chunk's two arrays do not, so `Frame*` and every span
     // survive growth. Allocated with `make_unique_for_overwrite`: a slot's
     // bytes cost the process nothing until a page is read or built into it.
-    // Slots are kept once allocated - the budget bounds what is resident,
-    // not what was once.
+    // Slots are kept once allocated - the capacity bounds them, and what is
+    // resident within them.
     struct FrameChunk {
         std::unique_ptr<Page[]> pages;
         std::unique_ptr<Frame[]> frames;
     };
     std::vector<FrameChunk> chunks_;
+    // Slots that exist: whole chunks, and a last one cut at the configured
+    // capacity (`TakeSlotLocked` says why not `capacity_`).
+    std::size_t slot_count_ = 0;
     // Free slots, popped from the back. A reserved slot is on neither this
     // list nor the table.
     std::vector<Frame*> free_frames_;
@@ -1654,6 +1706,11 @@ public:
     }
 
     PoolCounters pool_counters() const override;
+
+    Status BeginNoRefuseWindow(std::size_t frames) override;
+    void EndNoRefuseWindow() noexcept override;
+    void BeginDrainOnPressure() noexcept override;
+    void EndDrainOnPressure() noexcept override;
 
 private:
     // BE-R2's counters (`PoolCounters`). Relaxed atomics: the hit path

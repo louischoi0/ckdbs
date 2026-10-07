@@ -202,7 +202,7 @@ protected:
         ASSERT_TRUE(device.ok()) << device.status().message();
         device_ = std::move(device.value());
 
-        auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
         ASSERT_TRUE(store.ok()) << store.status().message();
         store_ = std::move(store.value());
 

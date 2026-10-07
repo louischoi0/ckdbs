@@ -1368,7 +1368,7 @@ TEST(CommandDispatcherSyncTest, SyncPersistsThroughAnUncleanShutdown) {
     ASSERT_TRUE(device.ok());
 
     {
-        auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
         ASSERT_TRUE(store.ok());
         auto boot = bootstrap::BootstrapDatabase(*store.value(), 1000);
         ASSERT_TRUE(boot.ok());
@@ -1381,7 +1381,7 @@ TEST(CommandDispatcherSyncTest, SyncPersistsThroughAnUncleanShutdown) {
     }
     device.value()->Crash();
 
-    auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
+    auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
     ASSERT_TRUE(store.ok());
     auto boot = bootstrap::BootstrapDatabase(*store.value(), 2000);
     ASSERT_TRUE(boot.ok());

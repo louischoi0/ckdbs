@@ -1,6 +1,7 @@
 #include "sim/loop.hpp"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <utility>
 
@@ -605,6 +606,12 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     options.waystone = toggles.waystone;
     options.cabins = toggles.cabins;
     options.access_statistics = toggles.access_statistics;
+    // A cap per seed (BE-Q2): two of the three sit near the floor (128
+    // system pages plus a working minimum of 256), so a seed's workload runs
+    // against reclaim, and the third leaves room, so the corpus keeps the
+    // shape that rarely evicts.
+    constexpr std::array<std::size_t, 3> kCaps{512, 1024, 8192};
+    options.buffer_pool_frames = kCaps[config.seed % kCaps.size()];
     return options;
 }
 

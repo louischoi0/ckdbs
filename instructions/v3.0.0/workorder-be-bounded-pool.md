@@ -840,3 +840,163 @@ defect. All three are fixed:**
 - At `cores = 1`, a long write transaction past the budget does the same,
   because the tick cannot run. BE-S4's mount floor removes the first case;
   the second is BE-R4's stated cost.
+
+### BE-S4 — the hard cap, 2026-10-07
+
+Built on `worktrees/pool-budget-required` from `8ef588e0`.
+
+**The key, at both doors (BE-R3).**
+- `Expeditor::Config::ApplyFile` refuses a file without
+  `buffer_pool_frames`, and refuses a 0.
+- `Expeditor::Open` refuses a 0, so a server started with no `--config` is
+  refused too, because its `Config` carries the 0 it was built with.
+- Each refusal is `InvalidArgument` and names the key (BE-Q3), through one
+  `CheckBufferPoolFrames`.
+- `CheckFrameBudget`, `FrameBudgetShare`, the peer's share and the
+  peer-budget overwrite in `Expeditor::Start` are deleted. The one pool is
+  opened at the whole value.
+- `kds.conf.sample` carries the key uncommented, with an example
+  (131,072 frames = 1 GiB) and its arithmetic.
+
+**The store (BE-R3, BE-Q2 (b)).**
+- `DevicePageStore::Open` takes a required `FrameCapacity`, a type of its
+  own so that an old `Open(device, first_id)` call fails to compile rather
+  than becoming a pool of that many frames. 0 is refused.
+- `SetFrameBudget` and `frame_budget()` are deleted. `frame_capacity()`
+  reads the capacity.
+- The slot array grows in chunks cut at the capacity, so the pool cannot
+  pass it structurally.
+- All the `Open` call sites carry a capacity: 58 in `src/`, `tests/`,
+  `sim/` and `bench/`. The order counted 51 at `e352eac0`.
+- **`CoreRuntime::Config::buffer_pool_frames` is re-scoped, not deleted.**
+  The order deletes it, but a runtime that opens a store of its own (a
+  fixture's) needs a capacity for it. A second key for the same quantity
+  is what BE-Q5 forbids, so the field became that store's required
+  capacity and is ignored where the pool is shared, which is every
+  production core.
+- **The sim chooses a capacity per seed:** 512, 1,024 or 8,192 frames.
+- **The debug override** `KDS_TEST_FRAME_BUDGET` only lowers the capacity,
+  and never below `kWorkingMinimumFrames`.
+
+**The mount floor (BE-Q6).** `DevicePageStore::ApplyMountFloor()` runs after
+the completion checkpoint. The floor is:
+- every id below the resident limit, faulted or not;
+- plus the Bound Cabin pages resident now;
+- plus 256.
+
+A configured capacity below the floor is refused `InvalidArgument`, naming
+both numbers. A capacity that only the override lowered is raised to the
+floor.
+
+**The refusal (BE-R4) and where it may happen (BE-Q11, taken on W1).**
+- A reservation's limit is the capacity, less every open window's unspent
+  share.
+- At the limit it reclaims in bounded walks (BE-S3) and retries
+  `kRefuseRetries` (8) times. Then it is refused `ResourceExhausted`,
+  naming the capacity and how many frames are resident, pinned and dirty.
+  Nothing on that path writes back or waits.
+- A creation reserves its slot **before it claims an id**, so a refused
+  creation claims nothing.
+- **Windows:** `NoRefuseWindow::Open(store, frames)` promises a share of
+  the capacity. That is the refusal point, with nothing written. Inside the
+  window, fills spend the share, and a fill past the share that the pool
+  cannot serve fail-stops the process (`FailStop`).
+- **Windows are opened at:**
+  - each `INSERT` row, before its spills and placement and through the
+    root re-publish;
+  - each `UPDATE` row, before its spills;
+  - the carved bulk fill, sized to its pages.
+- **Drain mode:** `DrainOnPressure` covers mount recovery (`Expeditor::Open`
+  and the sim), `TransactionManager::Abort`, and the assertion `CommitTxn`
+  and `AbortTxn` loops. On a thread holding no pin, a reservation in drain
+  mode writes the dirty queue back and walks again before it would refuse.
+- **The suspend audit** records a park inside a window, as it records one
+  under a pin.
+
+**Deviations from the order as written, each with its reason:**
+- **The windows are BE-Q11's, which the order did not contain.** Census B
+  found that BE-Q4 (a)'s refusal reaches seven groups of sites that a
+  refusal leaves half done.
+- **The reserve is promised when a window opens, not drawn from a
+  standing pool.** BE-S1's draft opened windows per row, and a long
+  `INSERT` at `cores = 1` could fill the pool with dirty frames and fail-stop
+  on the reserve. Promising the share at the open makes that case a
+  refusal, at the one point where a refusal is safe.
+- **Drain mode extends BE-Q11's recovery arm to rollback and the assertion
+  loops.** Each holds no pin between its steps, and a refusal inside any of
+  them is permanent damage (Census B #11-#13). BE-Q4 (a)'s "nothing writes
+  back on the fault path" still holds for every fill outside drain mode.
+
+**Cells:**
+- `ExpeditorConfigTest.BufferPoolFramesIsRequiredAndNonzero`: a missing
+  key, 0, and both doors. It kills the mutant "a 0 accepted".
+- `ExpeditorTest.APoolBelowTheVolumesFloorIsRefusedAtMountNamingBothNumbers`:
+  the floor minus one is refused, naming 383 and 384; the floor mounts; a
+  0 is refused.
+- `BoundedPoolTest.AFaultIntoAPoolOfPinnedFramesIsRefusedAndThePoolNeverGrows`:
+  every frame pinned, the fault refused, the slots exactly the capacity, and
+  one released pin lets the fault through. It kills the mutant "the cap
+  check dropped".
+- `SlotArrayTest.AFullDirtyPoolRefusesTheNextFillAfterBoundedWalks`: the
+  bulk create past the cap is refused and never grows the pool, with each
+  walk bounded. It kills the mutant "the creation's reservation skipped".
+- `BoundedPoolTest.AWindowIsRefusedWhenThePoolCannotPromiseItsShare`.
+- `BoundedPoolTest.AnInsertRefusedForAFullPoolLeavesNoRowBehind`, through
+  the sim harness: wide rows fill a 512-frame pool inside `BEGIN` until a
+  row's window is refused ("buffer pool full ... another mutation's 64
+  frames"). After `ROLLBACK` the relation holds exactly its 3 committed
+  rows, and again after a crash and a reboot's recovery. **With
+  `InsertOneRow`'s window deleted the cell fails**: the count query
+  itself errors.
+
+**What has no cell, stated rather than implied:**
+- The `UPDATE` and carved-fill windows.
+- Drain mode under `Abort` or recovery at the cap.
+- `FailStop`.
+- The census's writers outside a statement (access statistics, Waystone
+  trails, the purge, Cabin and assertion builds, DDL page creation). Each
+  of these meets the ordinary refusal before its first write, as Census B
+  classified them (SAFE), and no cell drives one into a full pool.
+- A rollback compensation refused while its thread holds a pin. Drain mode
+  cannot run there, so it would meet the refusal, which is Census B's #11
+  damage. No path into `Abort` that holds a pin was found, but nothing
+  enforces that either.
+
+**Cells that opt out of the floor.** Under the override, four cells dirty
+more pages in one burst than the 256-frame floor holds with no checkpoint
+between, which is BE-R4's refusal working as ruled:
+- `AllocRaceTest.ConcurrentCreatesNeverHandTwoCallersTheSameId`;
+- the two `FreeMapRaceTest` region cells;
+- `BtreeRaceTest.TwoCoresPromotingIntoOneParentLeaveEverySeparatorOverItsSubtree`.
+
+Each holds `WithoutFrameBudgetOverride` (`tests/frame_budget_override.hpp`)
+with the reason beside it. So do the `SlotArrayTest` cells, whose capacity
+is their subject. Every other cell runs at the floor.
+
+**The suite:** 3203/3203 plain, under `KDS_TEST_FRAME_BUDGET=64` (the floor, 256) and armed. **The sim corpus** (`scripts/sim.sh 8`, Debug binary): 266 runs, 0 failures, every seed now under a cap.
+
+**BE-S4's review found one defect and fixed it.**
+- **B1.** `TakeSlotLocked` cut each chunk at the current capacity. A
+  capacity that the debug override lowered and the mount floor then raised
+  left a short chunk that was not the last one (for example 256 then 128).
+  `SlotAt`'s `index / kFrameChunk` then read past it. Chunks are now cut at
+  the configured capacity, which never moves. No cell catches a read past
+  the end without ASan.
+
+**Applied from the review:**
+- **B2.** The `UPDATE` window now opens above the assertion reservation.
+  That reservation is the row's first write, and the comment that said
+  "nothing of this row written" was false.
+- **B3.** `Expeditor::Open` asks the floor right after `SetResidentLimit`
+  as well as after the mount. A pool below the system pages was refused
+  with a pool-full message from inside the mount; it now gets the floor's
+  numbers.
+- The window's reclaim walk is `InlineBatchLocked`, shared with the
+  reservation. Before, the window's copy booked only one counter.
+- `FailStop` lost its always-invalid page argument.
+- Two debug asserts were added: a second store's window opened on a thread
+  that already has one, and a pin released on a thread that never took it.
+- The stale wording in the store's header and in a `CoreRuntime` cell was
+  rewritten. `eviction.md`'s and `known-gaps.md`'s are BE-S6's.
+
+**Suite after the review:** 3203/3203 plain, at the floor, and armed.

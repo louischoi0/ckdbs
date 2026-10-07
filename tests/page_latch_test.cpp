@@ -277,7 +277,7 @@ protected:
         auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
         ASSERT_TRUE(device.ok()) << device.status().message();
         device_ = std::move(device.value());
-        auto store = DevicePageStore::Open(*device_, /*first_new_page_id=*/16);
+        auto store = DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
         ASSERT_TRUE(store.ok()) << store.status().message();
         store_ = std::move(store.value());
     }

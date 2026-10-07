@@ -466,7 +466,7 @@ TEST(ExecSuspendAuditTest, TheExecutorReportsALivePinAsUnsafeToSuspendUnder) {
     // mechanically live_pins() != 0 against the installing core's store.
     auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
     ASSERT_TRUE(device.ok()) << device.status().message();
-    auto store = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
     ASSERT_TRUE(store.ok()) << store.status().message();
 
     exec::InstallSuspendAudit(store.value().get());

@@ -5,6 +5,7 @@
 #include "kds/base/current_core.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -299,8 +300,16 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
 }
 
 StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& device,
+                                                                 FrameCapacity capacity,
                                                                  PageId first_new_page_id) {
+    if (capacity.frames == 0) {
+        return Status::InvalidArgument(
+            "DevicePageStore: a pool of 0 frames; buffer_pool_frames is the pool's maximum and "
+            "there is no unbounded pool");
+    }
     auto store = std::unique_ptr<DevicePageStore>(new DevicePageStore(device, first_new_page_id));
+    store->capacity_ = capacity.frames;
+    store->configured_capacity_ = capacity.frames;
 
     // Region 0 always exists - it holds the superblock, both of its own
     // bitmaps and the whole catalog - so it is loaded, or created, rather
@@ -332,9 +341,17 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
     // rather than config on purpose: it exists to run the *whole* suite
     // against a brutal budget, and a config key would have to be planted in
     // hundreds of tests to reach the stores they construct.
+    // It only lowers the capacity, and never below the working minimum
+    // (BE-R3): a pool the override made smaller than a statement's working
+    // set would refuse correct traffic, which is not the pressure the run
+    // exists to apply.
     if (const char* budget = std::getenv("KDS_TEST_FRAME_BUDGET"); budget != nullptr) {
         const long parsed = std::strtol(budget, nullptr, 10);
-        if (parsed > 0) store->SetFrameBudget(static_cast<std::size_t>(parsed));
+        if (parsed > 0) {
+            const std::size_t lowered =
+                std::max<std::size_t>(static_cast<std::size_t>(parsed), kWorkingMinimumFrames);
+            store->capacity_ = std::min(store->capacity_, lowered);
+        }
     }
     // AM-S1's census: `KDS_TEST_PAGE_LATCH=1` arms the page latch on every
     // debug-build store, so one `ctest` run exercises the armed primitive
@@ -646,10 +663,8 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
 
 // ---- Slots (BE-R1) ---------------------------------------------------------
 
-std::span<std::byte, kPageSize> DevicePageStore::PublishFreshPage(PageId page_id) {
-    // A creation reserves its slot like a miss (BE-R1), so it counts
-    // against the budget too - it used to escape it.
-    ReservedFrame slot(*this, ReserveFrame());
+std::span<std::byte, kPageSize> DevicePageStore::PublishFreshPage(PageId page_id,
+                                                                  ReservedFrame&& slot) {
     std::fill(slot.bytes().begin(), slot.bytes().end(), std::byte{0});
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("pagestore", "alloc page=" + std::to_string(page_id) + " (allocated=" +
@@ -658,11 +673,33 @@ std::span<std::byte, kPageSize> DevicePageStore::PublishFreshPage(PageId page_id
     return InsertFrame(page_id, std::move(slot), /*dirty=*/true);
 }
 
-DevicePageStore::Frame* DevicePageStore::ReserveFrame() {
+namespace {
+// **Which mode this thread's fills are in** (BE-Q11), for one store at a
+// time. Per thread rather than per task, which is sound because a window
+// and a drain-mode pass are each opened and closed inside one synchronous
+// call: no other task runs on this thread in between.
+struct FillMode {
+    const void* store = nullptr;  // the store the window is open on
+    int window_depth = 0;
+    std::size_t window_left = 0;  // the outermost window's unspent share
+    const void* drain_store = nullptr;
+    int drain_depth = 0;
+};
+thread_local FillMode t_fill;
+// Pins this thread holds, across every store: drain mode writes back only
+// when it is zero (`ReserveFrame`). `CountPin` and `UncountPin` move it, and
+// a pin is taken and dropped on the thread that holds the handle.
+thread_local std::size_t t_pins_here = 0;
+}  // namespace
+
+bool NoRefuseWindowOpenOnThisThread() noexcept { return t_fill.window_depth > 0; }
+
+StatusOr<DevicePageStore::Frame*> DevicePageStore::ReserveFrame() {
     AssertOrderBeforeFrames("ReserveFrame");
     misses_.Add();
+    const bool in_window = t_fill.store == this && t_fill.window_depth > 0;
     // MG06's on-demand trigger (EV5), in BE-R2's bounded form: a fill at the
-    // budget reclaims a batch before it takes a slot, so the next
+    // limit reclaims a batch before it takes a slot, so the next
     // `ReclaimBatch() - 1` fills find slots free and pay nothing. No frame of
     // this fill exists yet, so the sweep needs no guard pin on it.
     //
@@ -670,44 +707,195 @@ DevicePageStore::Frame* DevicePageStore::ReserveFrame() {
     // core's hit never waits behind more than one batch's walk. A batch that
     // frees nothing is not a full pool: the first fill past a pool whose
     // frames are all warm walks a lap decrementing before any frame reaches
-    // zero. So the loop gives up only after a whole lap - every slot
-    // visited once - in which nothing was freed and no usage counter came
-    // down: a pool of pinned, latched, resident-class or dirty frames, which
-    // another lap cannot change. Soft until BE-S4: that case grows the array.
-    ReclaimWalk walk;
-    for (;;) {
-        LatchGuard structure(structure_latch());
-        if (frame_budget_ == 0 || SlotsInUseLocked() < frame_budget_) return TakeSlotLocked();
-        const std::size_t want = ReclaimBatch();
-        const SweepResult batch = SweepLocked(want, kBatchStepsPerFrame * want);
-        batches_inline_.Add();
-        batch_steps_.Add(batch.steps);
-        reclaimed_inline_.Add(batch.reclaimed);
-        if (batch.reclaimed < want) batches_partial_.Add();
-        if (batch.reclaimed != 0) return TakeSlotLocked();
-        if (walk.Done(batch, batch.progressed, SlotCountLocked())) return TakeSlotLocked();
+    // zero. So a walk ends only as `ReclaimWalk` says: a lap that freed and
+    // lowered nothing, or `kClockUsageCap + 1` laps in all.
+    for (std::size_t attempt = 0;;) {
+        ReclaimWalk walk;
+        for (;;) {
+            LatchGuard structure(structure_latch());
+            const bool spend_share = in_window && t_fill.window_left > 0;
+            const std::size_t used = SlotsInUseLocked();
+            const std::size_t limit =
+                spend_share ? capacity_
+                            : (capacity_ > window_promised_ ? capacity_ - window_promised_ : 0);
+            if (used < limit) {
+                if (spend_share) {
+                    --t_fill.window_left;
+                    --window_promised_;
+                }
+                return TakeSlotLocked();
+            }
+            const SweepResult batch = InlineBatchLocked();
+            if (batch.reclaimed != 0) continue;  // the limit test takes it
+            if (walk.Done(batch, batch.progressed, SlotCountLocked())) break;
+        }
+        // **Drain mode, holding no pin** (BE-Q11): the dirty queue the walk
+        // just filled is written back, and the next walk reclaims it. Sound
+        // because this thread holds no page latch, so the writeback's shared
+        // try cannot re-enter a hold of its own, and a durability wait holds
+        // nothing. A drain that cleaned something does not count as a retry.
+        if (t_fill.drain_store == this && t_fill.drain_depth > 0 && t_pins_here == 0) {
+            auto drained = DrainDirtyEvictionQueue();
+            if (drained.ok() && drained.value() > 0) continue;
+        }
+        // BE-R4: retry the walk - a drain on another core may have cleaned
+        // frames meanwhile - and nothing on this path writes back or waits.
+        if (++attempt < kRefuseRetries) continue;
+        if (in_window) FailStop();
+        refused_.Add();
+        std::size_t pinned = 0;
+        std::size_t dirty = 0;
+        std::size_t resident = 0;
+        {
+            LatchGuard structure(structure_latch());
+            resident = frames_.size();
+            for (const auto& [id, frame] : frames_) {
+                pinned += frame->pins != 0;
+                dirty += frame->dirty;
+            }
+        }
+        return Status::ResourceExhausted(
+            "buffer pool full: buffer_pool_frames " + std::to_string(capacity_) + ", " +
+            std::to_string(resident) + " resident (" + std::to_string(pinned) + " pinned, " +
+            std::to_string(dirty) + " dirty), nothing reclaimable; raise buffer_pool_frames or "
+            "split the statement");
     }
 }
 
 DevicePageStore::Frame* DevicePageStore::TakeSlotLocked() {
     if (free_frames_.empty()) {
+        // The caller's limit test proved a slot is due, so the array is below
+        // the capacity: grow it by a chunk (BE-R1). **Cut at the configured
+        // capacity, not `capacity_`**: `SlotAt` indexes by `kFrameChunk`, so
+        // only the last chunk may be short, and `capacity_` can rise after a
+        // chunk was cut at it - `ApplyMountFloor` raises a debug-lowered one
+        // to the floor - which would leave a short chunk mid-array. The
+        // configured value never moves and bounds `capacity_` from above; the
+        // limit test, not the array's size, is what holds the ceiling.
+        const std::size_t n = std::min(kFrameChunk, configured_capacity_ - slot_count_);
         // Every allocation first, then the pointers: a `bad_alloc` anywhere
         // here leaves no free-list entry pointing into a chunk that died.
-        free_frames_.reserve(free_frames_.size() + kFrameChunk);
-        chunks_.push_back(FrameChunk{std::make_unique_for_overwrite<Page[]>(kFrameChunk),
-                                     std::make_unique<Frame[]>(kFrameChunk)});
+        free_frames_.reserve(free_frames_.size() + n);
+        chunks_.push_back(FrameChunk{std::make_unique_for_overwrite<Page[]>(n),
+                                     std::make_unique<Frame[]>(n)});
         FrameChunk& chunk = chunks_.back();
         // Pushed high to low, so the chunk fills from its first slot.
-        for (std::size_t i = kFrameChunk; i-- > 0;) {
+        for (std::size_t i = n; i-- > 0;) {
             chunk.frames[i].bytes = &chunk.pages[i];
             KDS_ASAN_POISON(chunk.pages[i].data(), kPageSize);
             free_frames_.push_back(&chunk.frames[i]);
         }
+        slot_count_ += n;
     }
     Frame* slot = free_frames_.back();
     free_frames_.pop_back();
     KDS_ASAN_UNPOISON(slot->bytes->data(), kPageSize);
     return slot;
+}
+
+DevicePageStore::SweepResult DevicePageStore::InlineBatchLocked() {
+    const std::size_t want = ReclaimBatch();
+    const SweepResult batch = SweepLocked(want, kBatchStepsPerFrame * want);
+    batches_inline_.Add();
+    batch_steps_.Add(batch.steps);
+    reclaimed_inline_.Add(batch.reclaimed);
+    if (batch.reclaimed < want) batches_partial_.Add();
+    return batch;
+}
+
+void DevicePageStore::FailStop() const {
+    const std::string why =
+        "buffer pool: a mutation inside its no-refuse window outgrew its share of "
+        "buffer_pool_frames " + std::to_string(capacity_) +
+        "; stopping rather than return an error into a half-done write (BE-Q11). The log "
+        "holds every committed change; restart to recover";
+    if (log_ != nullptr) log_->Error("pagestore", why);
+    std::fprintf(stderr, "%s\n", why.c_str());
+    std::abort();
+}
+
+Status DevicePageStore::BeginNoRefuseWindow(std::size_t frames) {
+    if (t_fill.store == this && t_fill.window_depth > 0) {
+        ++t_fill.window_depth;  // nested: the outermost holds the share
+        return Status::OK();
+    }
+    // One store's window per thread: a second store's would overwrite this
+    // one's state and strand its promise. One store serves an instance, so
+    // only a defect reaches it.
+    assert(t_fill.window_depth == 0 && "a no-refuse window is open on another store");
+    // Promised under the same limit an ordinary fill meets, so the share is
+    // capacity no window and no fill already holds - reclaimed for if need
+    // be, and refused, with nothing written, if the pool cannot give it.
+    for (std::size_t attempt = 0;;) {
+        ReclaimWalk walk;
+        for (;;) {
+            LatchGuard structure(structure_latch());
+            const std::size_t used = SlotsInUseLocked();
+            if (used + window_promised_ + frames <= capacity_) {
+                window_promised_ += frames;
+                t_fill = FillMode{this, 1, frames, t_fill.drain_store, t_fill.drain_depth};
+                return Status::OK();
+            }
+            const SweepResult batch = InlineBatchLocked();
+            if (batch.reclaimed != 0) continue;
+            if (walk.Done(batch, batch.progressed, SlotCountLocked())) break;
+        }
+        if (++attempt < kRefuseRetries) continue;
+        refused_.Add();
+        return Status::ResourceExhausted(
+            "buffer pool full: buffer_pool_frames " + std::to_string(capacity_) +
+            " cannot hold another mutation's " + std::to_string(frames) +
+            " frames; raise buffer_pool_frames or split the statement");
+    }
+}
+
+void DevicePageStore::EndNoRefuseWindow() noexcept {
+    if (t_fill.store != this || t_fill.window_depth == 0) return;
+    if (--t_fill.window_depth > 0) return;
+    {
+        LatchGuard structure(structure_latch());
+        window_promised_ -= t_fill.window_left;
+    }
+    t_fill.window_left = 0;
+    t_fill.store = nullptr;
+}
+
+void DevicePageStore::BeginDrainOnPressure() noexcept {
+    if (t_fill.drain_store != nullptr && t_fill.drain_store != this) return;
+    t_fill.drain_store = this;
+    ++t_fill.drain_depth;
+}
+
+void DevicePageStore::EndDrainOnPressure() noexcept {
+    if (t_fill.drain_store != this || t_fill.drain_depth == 0) return;
+    if (--t_fill.drain_depth == 0) t_fill.drain_store = nullptr;
+}
+
+Status DevicePageStore::ApplyMountFloor() {
+    const std::size_t resident_class = resident_class_frames();
+    const std::size_t floor = resident_class + kWorkingMinimumFrames;
+    if (configured_capacity_ < floor) {
+        return Status::InvalidArgument(
+            "buffer_pool_frames " + std::to_string(configured_capacity_) +
+            " is below this volume's floor of " + std::to_string(floor) + ": " +
+            std::to_string(resident_class) +
+            " resident-class pages, which never leave the pool, plus a working minimum of " +
+            std::to_string(kWorkingMinimumFrames) + " frames");
+    }
+    capacity_ = std::max(capacity_, floor);
+    return Status::OK();
+}
+
+std::size_t DevicePageStore::resident_class_frames() const {
+    LatchGuard structure(structure_latch());
+    // Every id below the resident limit, faulted yet or not - the system
+    // pages fault lazily, and each stays once it does - and the pinned
+    // pages above it that are resident now (Bound Cabin pages).
+    std::size_t n = first_evictable_page_id_;
+    for (const auto& [id, frame] : frames_) {
+        n += id >= first_evictable_page_id_ && IsPinnedClassFrame(*frame);
+    }
+    return n;
 }
 
 void DevicePageStore::ReturnFrameLocked(Frame& slot) noexcept {
@@ -778,7 +966,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
 
     // The slot first, the read into it (BE-R1): the fill in flight counts
     // against the budget from here, and a failed read gives it back.
-    ReservedFrame slot(*this, ReserveFrame());
+    auto reserved = ReserveFrame();
+    if (!reserved.ok()) return reserved.status();
+    ReservedFrame slot(*this, reserved.value());
     const std::span<std::byte, kPageSize> bytes = slot.bytes();
     if (Status s = device_.ReadPage(page_id, bytes); !s.ok()) return s;
 
@@ -1094,6 +1284,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
     // what the structure latch may not span, so they run here and the
     // decision they feed is re-taken inside `ClaimNamedIdLocked` - the
     // retry idiom `FetchPinned` uses for a page in flight.
+    //
+    // **The slot before the claim** (BE-R1, BE-R4): a full pool refuses here,
+    // with no id claimed, rather than after the map bit is set.
+    auto reserved = ReserveFrame();
+    if (!reserved.ok()) return reserved.status();
+    ReservedFrame slot(*this, reserved.value());
     if (Status s = EnsureAddressable(page_id); !s.ok()) return s;
     if (auto region = EnsureRegionResident(FreeMapRegionOf(page_id)); !region.ok()) {
         return region.status();
@@ -1161,7 +1357,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
 
     // The claim is dropped after this returns, by which time the frame is in
     // the table and `frames_.count` is what refuses the next caller.
-    return PublishFreshPage(page_id);
+    return PublishFreshPage(page_id, std::move(slot));
 }
 
 StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::CreateNewUnpinned() {
@@ -1179,6 +1375,11 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // duplicate ids (`tests/alloc_race_test.cpp`). The loop turns only when
     // the scan reaches a region this store has not loaded, which is the one
     // thing `ClaimNextFreeIdLocked` refuses to do for itself.
+    //
+    // The slot before the claim, as `CreateAtUnpinned`'s.
+    auto reserved = ReserveFrame();
+    if (!reserved.ok()) return reserved.status();
+    ReservedFrame slot(*this, reserved.value());
     PageId page_id = kInvalidPageId;
     for (;;) {
         std::uint32_t missing_region = 0;
@@ -1201,7 +1402,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // reachable: it asks whether an *allocated* id is live, and this bit was
     // clear one instruction ago.
     if (Status s = EnsureAddressable(page_id); !s.ok()) return s;
-    return std::make_pair(page_id, PublishFreshPage(page_id));
+    return std::make_pair(page_id, PublishFreshPage(page_id, std::move(slot)));
 }
 
 Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
@@ -1700,13 +1901,13 @@ StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue() {
 }
 
 std::size_t DevicePageStore::MaintainFreeReserve() {
-    if (frame_budget_ == 0) return 0;
-    const std::size_t low = std::max<std::size_t>(frame_budget_ / 16, 1);
-    const std::size_t high = std::max<std::size_t>(frame_budget_ / 8, low);
+    if (capacity_ == 0) return 0;
+    const std::size_t low = std::max<std::size_t>(capacity_ / 16, 1);
+    const std::size_t high = std::max<std::size_t>(capacity_ / 8, low);
     // Slots in use include every fill in flight: what the next reservation sees.
     auto free_count = [this] {
-        const std::size_t used = SlotsInUseLocked();
-        return used < frame_budget_ ? frame_budget_ - used : 0;
+        const std::size_t used = SlotsInUseLocked() + window_promised_;
+        return used < capacity_ ? capacity_ - used : 0;
     };
     {
         LatchGuard structure(structure_latch());
@@ -2224,6 +2425,7 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
 // mark and the ceiling from having two definitions that can drift.
 void DevicePageStore::CountPin(Frame& frame) noexcept {
     ++frame.pins;
+    ++t_pins_here;
     ++live_pins_;
     if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
 #ifndef NDEBUG
@@ -2423,6 +2625,10 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
 void DevicePageStore::UncountPin(Frame& frame) noexcept {
     if (frame.pins != 0) {
         --frame.pins;
+        // A pin uncounted on a thread that never counted it would let drain
+        // mode write back under a held page - the shape it must not run in.
+        assert(t_pins_here != 0 && "a pin released on a thread that did not take it");
+        if (t_pins_here != 0) --t_pins_here;
         if (live_pins_ != 0) --live_pins_;
     }
 }
@@ -2637,7 +2843,7 @@ DevicePageStore::PoolCounters DevicePageStore::pool_counters() const {
         out.resident = frames_.size();
         out.slots = SlotCountLocked();
     }
-    out.budget = frame_budget_;
+    out.budget = capacity_;
     out.hits = hits_.Load();
     out.misses = misses_.Load();
     out.reclaimed_inline = reclaimed_inline_.Load();

@@ -117,20 +117,11 @@ public:
         // `Expeditor` passes this unconditionally now.
         storage::DevicePageStore* shared_store = nullptr;
 
-        // This core's share of the instance frame budget
-        // (`buffer_pool_frames`, docs/spec/eviction.md §6: the key is a
-        // total, divided evenly per core - EV4). 0 = unbounded, the same
-        // meaning SetFrameBudget gives it. Core 0's share is applied by
-        // `Expeditor::Open` at store open rather than through this struct,
-        // and it is the **same** `frames / cores` every peer gets: this said
-        // "the even part plus the division remainder", and `FrameBudgetShare`
-        // (`expeditor.cpp`) is one division, so the remainder is dropped.
-        //
-        // **Ignored where `shared_store` is set**, and the division goes
-        // with it: one pool takes the whole `buffer_pool_frames`, which
-        // `Expeditor::Start` applies to that pool where it decides to share
-        // it. That is what EV4 asked for, and dividing was standing in for a
-        // pool that could not be shared.
+        // The capacity of a store this runtime opens for itself - a
+        // fixture's, where `shared_store` is null - and required there: 0 is
+        // refused at `Open`, as everywhere (BE-R3). **Ignored where
+        // `shared_store` is set**, which is every production core: the one
+        // pool was opened at `buffer_pool_frames` by `Expeditor::Open`.
         std::size_t buffer_pool_frames = 0;
 
         // Settings a peer shares with core 0.
