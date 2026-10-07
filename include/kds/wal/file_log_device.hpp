@@ -95,7 +95,8 @@ public:
     const std::string& dir() const noexcept { return dir_; }
     std::string SegmentPath(std::uint64_t segment_no) const;
 
-    Status CreateSegment(std::uint64_t segment_no) override;
+    Status CreateSegment(std::uint64_t segment_no,
+                         std::span<const std::byte> header = {}) override;
     Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                    std::span<const std::byte> in) override;
     Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,

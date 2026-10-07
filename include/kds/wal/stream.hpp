@@ -26,7 +26,8 @@
 // the gauges' relaxed atomics compile to the plain moves they replaced.
 // Opened **shared**, one latch (`base/latch.hpp`) guards the staging
 // state. **Acquisition order: this latch is outermost** - the device's own
-// lock is taken under it and nothing else is:
+// lock is taken under it, and so is `sync_mutex_` by a roll (below); nothing
+// else is:
 //
 //   - `Append`, from any thread: latch; size checks; the roll if the
 //     segment is full; encode into the staging buffer; bump the cursor;
@@ -34,9 +35,12 @@
 //     known before its bytes are visible to anyone else - `StampPageLsn`
 //     and the `recLSN` discipline (page.md section 8) are unchanged.
 //   - `Flush` and `Seal`, from any thread: the device write happens
-//     **under the latch**, and so does the segment roll's `CreateSegment`
-//     - which is not microseconds but a `posix_fallocate`, a full-segment
-//     prewrite and two `fsync`s (`wal/file_log_device.cpp`). That is why
+//     **under the latch**, and so does the segment roll - which is not
+//     microseconds but a device sync of the segment it leaves (through
+//     `SyncDevice`, so the seal marker is durable before the next segment
+//     exists), then the next segment's `CreateSegment`: a
+//     `posix_fallocate`, a full-segment prewrite with the header over it,
+//     and two `fsync`s (`wal/file_log_device.cpp`). That is why
 //     the latch is a mutex and not a spin: a waiter sleeps for the length
 //     of a segment creation instead of burning a core through it.
 //     Moving the write out from under the latch (stage a second buffer,
@@ -186,15 +190,16 @@ public:
     // Fail-stop (above): true once a device write this stream issued failed.
     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
 
-    // **The one device sync** (fsync's fail-stop). Both threads that sync
-    // this log - its own `Sync`, and the writer thread for the peers and the
-    // loss-window tick - sync through here, one at a time under
+    // **The one device sync** (fsync's fail-stop). Every syncer of this log
+    // - its own `Sync`, the writer thread for the peers and the loss-window
+    // tick, and a roll (under the latch, `StartSegment`) - syncs through here, one at a time under
     // `sync_mutex_`, refusing once stopped and stopping on a failure before
     // the mutex is released. One at a time is what makes the stop hold: two
     // overlapping fsyncs on one descriptor can hand the error to one caller
     // and OK to the other, and a sync that started after a failure can
     // report OK over pages the failure dropped. The cost is a sync waiting
-    // out one already in flight. Any thread; takes no stream latch.
+    // out one already in flight - for a roll, with every appender behind
+    // it. Any thread; takes no stream latch itself.
     Status SyncDevice();
 
     // Stops the stream (above) and returns the refusal naming `cause`. The
@@ -299,9 +304,11 @@ private:
     std::atomic<Lsn> durable_lsn_{0};
     std::atomic<bool> sealed_{false};
     std::atomic<bool> stopped_{false};
-    // Serializes `SyncDevice`, held across the device sync only. Never taken
-    // under the stream latch; the device's `segments_mutex_` is taken under
-    // it (`FileLogDevice::Sync` copies its descriptors).
+    // Serializes `SyncDevice`, held across the device sync only. Taken
+    // under the stream latch by a roll (`StartSegment`), and with no latch
+    // by `Sync` and the writer thread; nothing holding it takes the latch,
+    // so the order is latch -> sync_mutex_ -> the device's `segments_mutex_`
+    // (`FileLogDevice::Sync` copies its descriptors).
     std::mutex sync_mutex_;
 
     // `latch_` points at `latch_storage_` when shared and is null when not

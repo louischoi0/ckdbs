@@ -176,7 +176,10 @@ Each item points at its record in `docs/inflight/`, where the code is cited.
 What follows each pointer is the `[design]` consequence for this layout. None
 was measured.
 
-**Since BC (`instructions/v3.0.0/workorder-bc-wal-recycling.md`, 2026-10-07)
+**C5 is closed since the unheadered-tail fix (2026-10-07,
+`worktree-fix-roll-header`)**: a roll syncs the segment it leaves and
+creates the next with its header under one fsync. **Since BC
+(`instructions/v3.0.0/workorder-bc-wal-recycling.md`, 2026-10-07)
 C1 is closed, C3's stranded segment is closed, and C2 and C3's descriptor
 count are bounded**: segments wholly below the durable redo start are
 removed, the descriptors go with them, and a roll at the descriptor limit no

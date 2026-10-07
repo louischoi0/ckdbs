@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/wal/log_scanner.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
@@ -162,19 +163,20 @@ TEST_F(WalStreamTest, StagedBytesAreNotOnTheDeviceUntilFlush) {
     ASSERT_TRUE(lsn.ok());
     EXPECT_EQ(stream->ring_used(), EncodedRecordSize(payload.size()));
     EXPECT_EQ(stream->flushed_lsn(), kSegmentHeaderSize);
-    EXPECT_EQ(device_->stats().writes, 1u);  // only the segment header so far
+    // None yet: the segment header goes in with the creation, not as a write.
+    EXPECT_EQ(device_->stats().writes, 0u);
 
     ASSERT_TRUE(stream->Flush().ok());
     EXPECT_EQ(stream->ring_used(), 0u);
     EXPECT_EQ(stream->flushed_lsn(), stream->append_lsn());
-    EXPECT_EQ(device_->stats().writes, 2u);
+    EXPECT_EQ(device_->stats().writes, 1u);
 
     // Batched: many records, one write.
     for (int i = 0; i < 10; ++i) {
         ASSERT_TRUE(stream->Append(HeapInsert(2, 2), payload).ok());
     }
     ASSERT_TRUE(stream->Flush().ok());
-    EXPECT_EQ(device_->stats().writes, 3u);
+    EXPECT_EQ(device_->stats().writes, 2u);
 }
 
 TEST_F(WalStreamTest, PayloadlessRecordsAppendToo) {
@@ -612,6 +614,88 @@ TEST_F(WalStreamTest, ReopeningAtAnExactlyFullSegmentRollsToo) {
     EXPECT_EQ(lsn.value(), kSegmentSize + kSegmentHeaderSize);
     ASSERT_TRUE(reopened->Flush().ok());
     EXPECT_EQ(ReadRecordAt(lsn.value(), RecordType::kHeapInsert), payload);
+}
+
+
+// ---- A roll's order, durable (the unheadered-tail bug's fix) -------------
+
+// Fills segment 0 until the next append has to roll, and returns the LSN of
+// the last record in it.
+Lsn FillToTheRoll(WalStream& stream, const std::vector<std::byte>& payload) {
+    const std::uint64_t total = EncodedRecordSize(payload.size());
+    Lsn last = 0;
+    while (kSegmentSize - stream.append_lsn() % kSegmentSize >= total) {
+        auto lsn = stream.Append(HeapInsert(1, 1), payload);
+        EXPECT_TRUE(lsn.ok()) << lsn.status().message();
+        if (!lsn.ok()) return last;
+        last = lsn.value();
+    }
+    return last;
+}
+
+// **A crash right after a roll, before any sync.** The roll made the
+// segment it left durable and created the next with its header, so the
+// restarted stream finds a consistent log - and a record written after the
+// restart is one the recovery scan reaches. Before the fix the roll synced
+// nothing: the crash took the old segment's seal marker and kept the new
+// segment, the stream resumed in it, and every scan stopped at the old one's
+// end, so that record was invisible to recovery.
+TEST_F(WalStreamTest, ACrashRightAfterARollLeavesALogTheScanReadsToTheEnd) {
+    const std::vector<std::byte> payload = Pattern(kPayloadSize, 11);
+    Lsn before_roll = 0;
+    {
+        auto stream = OpenStream();
+        ASSERT_NE(stream, nullptr);
+        before_roll = FillToTheRoll(*stream, payload);
+        ASSERT_TRUE(stream->Append(HeapInsert(2, 2), payload).ok());
+        ASSERT_EQ(device_->end_segment(), 2u);
+    }
+    device_->Crash();
+    ASSERT_EQ(device_->end_segment(), 2u) << "the new segment is durable at creation";
+
+    auto reopened = OpenStream();
+    ASSERT_NE(reopened, nullptr);
+    auto after = reopened->Append(HeapInsert(3, 3), payload);
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    ASSERT_TRUE(reopened->Sync().ok());
+
+    bool saw_before = false;
+    bool saw_after = false;
+    auto scanned = ScanLog(*device_, 0, 0, [&](const DecodedRecord& r) {
+        saw_before = saw_before || r.header.lsn == before_roll;
+        saw_after = saw_after || r.header.lsn == after.value();
+        return Status::OK();
+    });
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    EXPECT_TRUE(saw_before) << "the roll did not make the segment it left durable";
+    EXPECT_TRUE(saw_after) << "a record written after the restart is invisible to recovery";
+}
+
+// The header is part of the creation: written before the segment exists,
+// on a device that refuses the write, there is no segment and the log stops.
+// A restart then resumes at the sealed old segment and rolls again.
+TEST_F(WalStreamTest, ARefusedHeaderWriteCreatesNoSegmentAndTheRestartRollsAgain) {
+    const std::vector<std::byte> payload = Pattern(kPayloadSize, 12);
+    {
+        auto stream = OpenStream();
+        ASSERT_NE(stream, nullptr);
+        FillToTheRoll(*stream, payload);
+        // Sealed first, so the append's roll writes nothing but the header.
+        ASSERT_TRUE(stream->Seal().ok());
+        device_->FailNextWrite(Status::IoError("injected: the header"));
+        EXPECT_EQ(stream->Append(HeapInsert(2, 2), payload).status().code(), StatusCode::kIoError);
+        EXPECT_TRUE(stream->stopped());
+        EXPECT_EQ(device_->end_segment(), 1u) << "a refused header left a segment";
+    }
+    device_->Crash();
+
+    auto reopened = OpenStream();
+    ASSERT_NE(reopened, nullptr);
+    ASSERT_TRUE(reopened->Append(HeapInsert(3, 3), payload).ok());
+    EXPECT_EQ(device_->end_segment(), 2u) << "the restarted stream rolls into a new segment";
+    ASSERT_TRUE(reopened->Sync().ok());
+    auto scanned = ScanLogToEnd(*device_, 0, 0);
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
 }
 
 }  // namespace

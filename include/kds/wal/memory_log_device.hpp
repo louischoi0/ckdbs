@@ -62,15 +62,21 @@ public:
 
 
 
-    Status CreateSegment(std::uint64_t segment_no) override;
+    // A segment created with a header is durable at once, name and header,
+    // as `FileLogDevice`'s is; one created without stays the test double it
+    // always was, durable at the next Sync(). An armed `FailNextWrite`
+    // fails a creation that writes a header, and creates nothing.
+    Status CreateSegment(std::uint64_t segment_no,
+                         std::span<const std::byte> header = {}) override;
     Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                    std::span<const std::byte> in) override;
     Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                   std::span<std::byte> out) override;
     Status Sync() override;
-    // The contract's, and one more refusal: a bound above the last Sync()'s
-    // end. `FileLogDevice` makes a segment's name durable at creation; this
-    // device makes it durable at the next Sync(), so a segment detached
+    // The contract's, and one more refusal: a bound above the durable end
+    // (the last Sync()'s, or the last header-bearing creation's).
+    // `FileLogDevice` makes a segment's name durable at creation; this
+    // device does so for a headerless one only at the next Sync(), so a segment detached
     // before that could be reclaimed and then lost to a crash, leaving a
     // first segment past the end. Recycling detaches only below a durable
     // anchor, which a Sync() already covered, so nothing it does is refused.

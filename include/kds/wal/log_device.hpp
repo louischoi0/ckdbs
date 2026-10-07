@@ -71,10 +71,15 @@ public:
     virtual std::uint64_t end_segment() const noexcept = 0;
 
     // Creates the next segment (segment_no must equal end_segment()),
-    // sized at segment_size() and readable as zeroes. Fails with
-    // InvalidArgument for any other number - segments are created in
-    // order, never sparsely.
-    virtual Status CreateSegment(std::uint64_t segment_no) = 0;
+    // sized at segment_size() and readable as zeroes but for `header`, which
+    // is written at offset 0 **as part of the creation**: on success the
+    // segment's name and its header are both durable. A failure, or a crash
+    // during the call, leaves no segment of that number in the live run.
+    // Fails with InvalidArgument for any other number - segments are created
+    // in order, never sparsely. `header` is never larger than a segment; the
+    // stream's is one block.
+    virtual Status CreateSegment(std::uint64_t segment_no,
+                                 std::span<const std::byte> header = {}) = 0;
 
     // Writes into a segment of the live run. Fails with OutOfRange if the
     // segment is not in it or the write would run past its end, IoError on
