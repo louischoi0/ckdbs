@@ -1398,3 +1398,21 @@ under §7's word where a finding offered a choice:
 
 Suite: 3,153 cells, 3,152 green; the one failure the port 25432 another
 process holds (`kds_server`, pid 1035423), as at BB-S3.
+
+### BB-S5 - measured in part, the rest deferred by the operator - 2026-10-07
+
+The operator stopped BB-S5 here to take other work first: *"일단
+benchmarking은 그대로 두고 main에 푸시해줘 다른 작업이 있어서 측정은 현재
+결과까지 포함하고 미루려고해"* - push to main now, include the measurement as
+far as it got, and defer the rest.
+
+- **Measured** (`bench/v3.0.0/results-bb-s5-overhead-v2.7.0-640-gb76261bb.md`,
+  A `bddd450c` against B `b76261bb`): the `cores = 1` gate - C1, C1s, C2,
+  pinned, 12 runs at three row counts - **resolves no cost of BB**; C3 at
+  `cores = 8` complete and C4 at six of ten runs, unpinned, B not slower.
+- **Not executed**: C4's last runs, C5, any wait breakdown, a pinned
+  `cores = 2` cell.
+- **Not done, and BB not closed**: the BA rebase
+  (`workorder-ba-parallelism.md`, drafted and unreviewed, left out of this
+  push), the close entry with what BB carries, `index.md`'s BB row and BA's
+  resumption. BA stays paused until BB closes.
