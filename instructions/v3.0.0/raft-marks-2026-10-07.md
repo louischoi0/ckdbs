@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6) and `worktree-bd-sorted-leaf-named-keys` (§7-§13) and `worktree-pool-budget-required` (§14-§16) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16) and `worktree-keep-btree-leaf-slots` (§18-§19) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -151,3 +151,30 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BE-Q0:** BE opens with BE-S0..S6 and BE-R1..R5 as written. **BE-Q1 (a):** a chunked slot array with a free list and a hand over slots. **BE-Q2 (b):** the store's unbounded mode is deleted everywhere, its `Open` taking a required capacity at all 51 sites. **BE-Q3:** a missing key, `0` and a cap below the floor are refused `InvalidArgument`. **BE-Q4 (a):** at the cap, the bounded sweep retries and then `ResourceExhausted`; nothing writes back on the fault path, so one statement dirtying more than the cap is refused. **BE-Q5:** no new keys. **BE-Q6:** a mount floor of resident-class pages plus 256 frames. **BE-Q7 (a):** the outermost read walk faults cold; the scan ring is declined. **BE-Q8:** measured once at BE's close. **BE-Q9:** BE before BA-S8; BD runs in parallel. **BE-Q10:** `txn.md` governs a refused statement's scope |
 | **Does not settle** | BE-S1's premise gate: if the in-engine sweep costs under a tenth of the standalone figure, BE stops at BE-S1 and the operator rules again |
 | **Recorded at** | the order's header (W1), §2's heading and §4; `index.md`'s BE row |
+
+## 17. BD-Q10, BD-Q11 and BD-Q12 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"Q10, Q11, Q12 제안대로 마킹해줘"* |
+| **Mark** | **BD-Q10 (a):** a split is logged as one `BTREE_SPLIT` record carrying every image it writes, which redo applies whole (BD-R12). **BD-Q11 (a):** a full rightmost leaf splits at the insertion point rather than at the median (BD-R2). **BD-Q12 (b):** BB closes on the measurement it has, without rebasing BA, and BD-S6 rebases BA once, against BD (§5) |
+| **Does not settle** | BD-Q0, BD's opening; writing BB's close entry, which waits for its own word; the push |
+| **Recorded at** | the order's header (W15), BD-R2, BD-R12, §4, §5 and §6 |
+
+## 18. BD opened
+
+| | |
+|---|---|
+| **Word** | *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"* |
+| **Mark** | **BD-Q0: yes.** BD is open with BD-S0..S6 and BD-R1..R12 as written at `50d35916`. BD-S1, red first, starts on `worktree-keep-btree-leaf-slots`, branched from `50d35916` |
+| **Does not settle** | writing BB's close entry, which waits for its own word; the push |
+| **Recorded at** | the order's header (W16), §4 and §6, and the index row |
+
+## 19. BD run to its close
+
+| | |
+|---|---|
+| **Word** | *"keep going until closing this milestone, follow CLA proposal"* (given twice), then *"keep going until the milestone closes"* |
+| **Mark** | BD-S1 to BD-S6 run in order on `worktree-keep-btree-leaf-slots`, each through its review and the suite; every choice a stage raised taken as CLA proposed it |
+| **Does not settle** | the push; BB's close entry, which waits for its own word; BA's resumption |
+| **Recorded at** | the order's status line, and the index row |

@@ -228,11 +228,21 @@ recovery's undo phase walks this chain rather than the log.
 
 **`pk` is the identity check.** Compensation proves it is writing the row it
 means to before it writes: a btree leaf division moves tuples and renumbers
-slots, so `(target_page_id, target_slot)` is where the row *was*
+slots, and a placement mid-leaf shifts every slot after it (BD-R2), so
+`(target_page_id, target_slot)` is where the row *was*
 (`TransactionManager::Compensate`, `txn::RecoveryUndo`). The live path reads
-the pk from its in-memory trail; recovery has only this record, and
-`kDeleteMark` and `kInsert` carry no image to recover one from, so every type
-carries it.
+the pk from its in-memory trail and, on a mismatch, re-finds the row by pk
+with its leaf held. **Recovery undo re-finds a btree row by its key**
+(BD-R3 E1, BD-Q8 (a), `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`):
+on a `kBtreeLeaf` page it searches the recorded leaf, then rightward along
+the chain while a leaf's `min_key` is at or below the pk - keys only move
+right and leaves never merge - and compensates only a version the loser
+wrote, judged by the header's `trx_id`; a version naming another writer was
+already compensated and counts as done, as does an insert whose key is in
+no leaf on that path. Heap and catalog pages, which never shift, keep the
+exact slot-and-pk check. Recovery has only this record, and `kDeleteMark`
+and `kInsert` carry no image to recover a pk from, so every type carries
+it.
 
 ```
 UndoRecordType: kInvalid = 0
@@ -737,10 +747,12 @@ level: **can the re-run answer differently once this holder decides?**
   not a function of the waiter's read view at all: a caller-named key's
   uniqueness is proved by a physical descent onto the one page that may
   hold it, and an issued key comes from the relation's own sequence. So the
-  wait ends in a row written, in `AlreadyExists` for a key the holder took,
-  or - since BB-R3 refuses a named key below the relation's mark - in
-  `OutOfRange` for a key the mark passed during the wait; neither is
-  retryable, which is the honest answer either way.
+  wait ends in a row written or in `AlreadyExists` for a key the holder
+  committed - on a btree a named key waits on an undecided insert of the
+  same key and is placed if it rolls back (BD-R5, BD-Q9 (a)) - and
+  `AlreadyExists` is not retryable, which is the honest answer. On a heap
+  the wait can also end in `OutOfRange` for a key the mark passed during
+  it (BB-R3, kept for the heap by BD-Q4 (a)).
 - **Yes, for the foreign-key forward check.** Its `check_view` is minted
   at the check rather than at `BEGIN` — a constraint reads latest state
   (`foreign-keys.md` §4, which is where that rule lives; §4.4 below is
@@ -873,8 +885,11 @@ declared in the spec that owns the subsystem, and this is that spec:
 > `6dc792c9`: `UPDATE`'s and `DELETE`'s per-row tuple borrows run inside
 > the walk's write hold of the page, and a named-key `INSERT`'s
 > `before_mark` hook borrows under page 7 exclusive (`catalog.cpp:2558`,
-> `:2594`), which BB-S3 removes. From BB-S3 an insert borrows its issued
-> id under the exclusive hold of the leaf it lands on (BB-R2). What holds
+> `:2594`), which BB-S3 removes. A heap insert borrows its issued id under
+> the exclusive hold of the chain's tail (BB-R2, kept for the heap by
+> BD-Q4 (a)); a btree insert borrowed under its leaf's hold from BB-S3
+> until BD-S3, and borrows before its descent, holding no page, since
+> (BD-R6). What holds
 > is that nothing parks there: a refused borrow comes back as a refusal
 > and the park is `DispatchAsync`'s, once every hold is released. In
 > BB-R4's order - **a user relation page, a `sys.tables` chain page, a
@@ -934,10 +949,17 @@ recovery-driven rollback reuses this code path:
 
 | Trail entry | Compensation | Record |
 |---|---|---|
-| insert | `RetireSlot` + clear the Waystone entry | `SLOT_RETIRE` |
+| insert | `RetireSlot` - the slot keyless; on a btree the key is free again (BD-R4, W12), while on a heap the mark the key moved stays past it and the key stays refused `OutOfRange` (BB-R3, kept by BD-Q4 (a)) | `SLOT_RETIRE` |
 | overwrite | `OverwriteTuple(slot, image, prior_trx_id, prior_undo_ptr)` | `HEAP_OVERWRITE` |
-| delete-mark | `ClearDeleteMark(slot, prior_trx_id, prior_undo_ptr)` | `HEAP_DELETE_MARK` |
+| delete-mark | `ClearDeleteMark(slot, prior_trx_id, prior_undo_ptr)` | `HEAP_DELETE_UNMARK` |
 | var-heap append | `varheap::PageRelease(slot)` — the value dies with the version that wrote it | `VARHEAP_RELEASE` |
+
+On a btree each slot is the trail's, checked against the pk and re-found by
+pk under the leaf's hold on a mismatch (§3.3's identity check). No rollback
+clears a Waystone entry: a trail entry naming the retired slot is a miss at
+its next replay, which verifies the Keystone id (`heap-and-tuple.md` §8 invariant 9). A rollback
+leaves the insert's secondary index entries, which a reader verifies
+against the base row (`index.md`).
 
 Then `TXN_ABORT`, with no durability wait — a transaction whose abort record did
 not survive is a transaction with no commit record, which recovery rolls back

@@ -10,6 +10,10 @@ Written 2026-10-06 on `worktree-bb-s0-order` from `bddd450c`
 id is issued under the hold of the leaf it lands on. BB replaces BA-S1b. BA's
 remaining stages wait until BB closes, and BB-S5 is where BA resumes.
 
+**BD-Q12 (b)** (`raft-marks-2026-10-07.md` §17): BB-S5 closes on the
+measurement it has and does not rebase BA; BD-S6 rebased BA's rows against
+BD (`workorder-ba-parallelism.md`, "BA rebased on BD").
+
 **Opened 2026-10-06** (`raft-marks-2026-10-06.md` §5):
 
 - BB-Q0..Q7 are marked as CLA proposed them.

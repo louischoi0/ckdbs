@@ -518,5 +518,86 @@ TEST_F(RecoveryUndoTest, AChainThatDoesNotTerminateIsCorruptionRatherThanAHang) 
     EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
 }
 
+
+// ---- BD-S1: a loser's row a shift or a divide moved (BD-R3 E1, BD-Q8) ------
+//
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` §1.2. Under
+// sorted placement a btree row's slot changes after its undo record named
+// it: a later insert below it shifts it right, a divide moves it to the
+// right sibling. Recovery undo re-finds the row by pk on a `kBtreeLeaf` -
+// the recorded leaf, then rightward - and compensates only a version the
+// loser wrote. Red at BD-S0, where a dead or missing slot counts as done and
+// the row survives the crash.
+
+class RecoveryUndoLeafTest : public RecoveryUndoTest {
+protected:
+    static constexpr PageId kRightLeaf = server::kFirstUserPageId + 2;
+
+    void SetUp() override {
+        RecoveryUndoTest::SetUp();
+        ASSERT_TRUE(heap::PageView::CreateEmptyAs(Heap(), /*min_key=*/1, PageType::kBtreeLeaf)
+                        .ok());
+    }
+
+    // Every key a live or delete-marked slot carries, in slot order, on `page`.
+    std::vector<std::uint64_t> Keys(PageId page) {
+        auto p = store_.Get(page);
+        EXPECT_TRUE(p.ok()) << p.status().message();
+        heap::PageView view(p.value().bytes());
+        std::vector<std::uint64_t> keys;
+        const std::uint16_t n = view.slot_count();
+        for (std::uint16_t i = 0; i < n; ++i) {
+            auto payload = view.PayloadAt(i, n);
+            if (!payload.ok()) continue;
+            auto id = KeystoneIdOfPayload(payload.value());
+            EXPECT_TRUE(id.ok());
+            keys.push_back(id.value());
+        }
+        return keys;
+    }
+};
+
+TEST_F(RecoveryUndoLeafTest, ALoserWhoseFirstRowItsSecondShiftedRightIsRolledBackWhole) {
+    // §1.2's silent case: the loser placed 50 at slot 0, then 40, which
+    // sorts below it and took slot 0, shifting 50 to slot 1. Both records
+    // name slot 0. Undo retires 40 for the newer record and must then find
+    // 50 by its key, not count slot 0's corpse as done.
+    heap::PageView view(Heap());
+    ASSERT_TRUE(view.InsertTuple(Payload(40, 0x40), kLoser, kNoUndoPtr).ok());
+    ASSERT_TRUE(view.InsertTuple(Payload(50, 0x50), kLoser, kNoUndoPtr).ok());
+    const std::uint64_t first = Record(UndoRecordType::kInsert, /*slot=*/0, /*pk=*/50, kNoUndoPtr);
+    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/0, /*pk=*/40, first);
+
+    RecoveryUndo undo(undo_);
+    ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok());
+    EXPECT_TRUE(Keys(kHeapPage).empty()) << "a loser's row survived the crash";
+}
+
+TEST_F(RecoveryUndoLeafTest, ALoserRowADivideMovedToTheRightSiblingIsRolledBack) {
+    // The loser placed 150 at slot 2 of this leaf; a divide then moved it
+    // to a new right sibling, where it is at slot 0. The record still names
+    // this leaf and slot 2, which now lies past the directory's end.
+    auto right = store_.CreateAt(kRightLeaf);
+    ASSERT_TRUE(right.ok()) << right.status().message();
+    auto right_view = heap::PageView::CreateEmptyAs(right.value().bytes(), /*min_key=*/100,
+                                                    PageType::kBtreeLeaf);
+    ASSERT_TRUE(right_view.ok());
+    ASSERT_TRUE(right_view.value().InsertTuple(Payload(150, 0x15), kLoser, kNoUndoPtr).ok());
+    ASSERT_TRUE(right_view.value().InsertTuple(Payload(160, 0x16), /*trx_id=*/5, kNoUndoPtr).ok());
+    right.value().Release();
+
+    heap::PageView view(Heap());
+    ASSERT_TRUE(view.InsertTuple(Payload(10, 0x10), /*trx_id=*/5, kNoUndoPtr).ok());
+    ASSERT_TRUE(view.InsertTuple(Payload(20, 0x20), /*trx_id=*/5, kNoUndoPtr).ok());
+    view.set_next_page_id(kRightLeaf);
+    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/2, /*pk=*/150, kNoUndoPtr);
+
+    RecoveryUndo undo(undo_);
+    ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok());
+    EXPECT_EQ(Keys(kHeapPage), (std::vector<std::uint64_t>{10, 20}));
+    EXPECT_EQ(Keys(kRightLeaf), (std::vector<std::uint64_t>{160}))
+        << "the loser's moved row survived the crash";
+}
+
 }  // namespace
 }  // namespace kds::txn

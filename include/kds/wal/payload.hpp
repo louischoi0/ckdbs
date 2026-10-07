@@ -476,6 +476,37 @@ StatusOr<std::size_t> EncodeFullPageImage(std::span<std::byte> out,
                                           std::span<const std::byte, kPageSize> page);
 StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::byte> in);
 
+// ---- BTREE_SPLIT ---------------------------------------------------------
+//
+// Every page one B+ tree split writes, as full images, in one record
+// (BD-R12, record.hpp's kBtreeSplit):
+//
+//   [ nr_pages:u32 | reserved:u32 = 0 ]
+//   nr_pages x [ page_id:u32 | reserved:u32 = 0 | kPageSize bytes ]
+//
+// Each entry is a multiple of the record alignment, so the record carries
+// no padding. A split writes at most two pages per level and a new root, so
+// the count is small; zero pages, or a length that disagrees with the
+// count, is Corruption.
+
+inline constexpr std::size_t kBtreeSplitFixedSize = 8;
+inline constexpr std::size_t kBtreeSplitEntrySize = 8 + kPageSize;
+static_assert(kBtreeSplitFixedSize % kRecordAlignment == 0);
+static_assert(kBtreeSplitEntrySize % kRecordAlignment == 0);
+
+constexpr std::size_t BtreeSplitSize(std::size_t nr_pages) noexcept {
+    return kBtreeSplitFixedSize + nr_pages * kBtreeSplitEntrySize;
+}
+
+struct BtreeSplitImage {
+    PageId page_id = kInvalidPageId;
+    std::span<const std::byte> image;  // kPageSize bytes
+};
+
+StatusOr<std::size_t> EncodeBtreeSplit(std::span<std::byte> out,
+                                       std::span<const BtreeSplitImage> images);
+StatusOr<std::vector<BtreeSplitImage>> DecodeBtreeSplit(std::span<const std::byte> in);
+
 // ---- Which core appended a record (AR0 M0, AL-R4/AL-R5/AL-R6) ----------
 //
 // Under per-core streams the answer was the stream. There is one stream

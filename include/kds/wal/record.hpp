@@ -152,11 +152,8 @@ enum class RecordType : std::uint8_t {
     // bounded by the data and a record must fit a segment; `payload.hpp` carries
     // the format and each chunk's place in its run (AY-S8).
     kAssertSnapshot = 24,
-    // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
-    // there is no B+ tree page format to describe, and a number reserved
-    // for a payload nobody can encode is a number that gets used wrong.
-    // Appending them later is exactly what this enum's append-only rule is
-    // for.
+    // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) were not assigned here:
+    // they are appended as 29 and 30 below, once BD gave them a payload.
     //
     // The PL handoff (`docs/spec/page.md` §2b, workplan-peer-writer.md
     // PW1c-1): *this page left this stream at this LSN*, appended by the
@@ -230,6 +227,32 @@ enum class RecordType : std::uint8_t {
     // rollback; a **purge drain** carries `kNoTxnId`, because no
     // transaction owns it.
     kVarHeapRelease = 28,
+    // **One row placed in a B+ tree leaf where its key sorts** (BD-R3 E2,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`; the name
+    // wal.md §5.2 proposed). HEAP_INSERT's payload, `{trx_id, undo_ptr,
+    // slot, tuple_len}` and the tuple, with a different redo: the directory
+    // entries at and after `slot` move up one, as the live placement moved
+    // them. **Strict, with no re-application arm**: `slot <= nr_slots` and
+    // the key sorts strictly between its new neighbours, or the record is
+    // not this page's and redo refuses it `Corruption` - HEAP_INSERT's
+    // overwrite-in-place reading of a slot below `nr_slots` would put a
+    // mid-leaf row over its neighbour. Redo gates it on `page_lsn` like
+    // every page record, and an insert whose split imaged the leaf logs no
+    // BTREE_INSERT (the split's record carries the row), so a correct
+    // stream never applies one twice. A heap page keeps HEAP_INSERT.
+    kBtreeInsert = 29,
+    // **Every page one B+ tree split writes, as one record** (BD-R12,
+    // BD-Q10 (a)): the new leaf, the old leaf, every internal node created
+    // or amended and a new root, each as a full image. Redo applies each
+    // page gated by its own `page_lsn`, and the record's CRC makes the split
+    // atomic: a torn record ends the log before it, so a split is replayed
+    // whole or not at all. Before it a split was a run of separate records,
+    // and a log ending between two of them left a leaf routed and unlinked
+    // (BD-S1's `SortedLeafCrashTest.ALogCutInsideAnAppendSplit...`). The
+    // envelope names the leaf that split; the payload
+    // names every page (`payload.hpp`). It carries the inserted row, so no
+    // insert record follows it.
+    kBtreeSplit = 30,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A
@@ -253,7 +276,7 @@ enum class RecordType : std::uint8_t {
 // Keep this pinned to the last enumerator when appending a type; the test that
 // every named type encodes is what proves it stayed pinned.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kVarHeapRelease);
+    static_cast<std::uint8_t>(RecordType::kBtreeSplit);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

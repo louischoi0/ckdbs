@@ -2041,9 +2041,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // (page-wise `min_key`, which a division preserves); an index step does
     // because IX8a sorts its pks back into that order deliberately; a
     // lookup or probe emits one row. **Every page's slot order is its key
-    // order** on every relation (BB-R1, BB-R3 in
-    // `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`), which is
-    // the premise all of that rests on. A Cabin probe stays excluded by
+    // order** - a btree leaf's by placement (BD-R1,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), a heap
+    // page's by issue order under its tail's hold (BB-R7) - which is the
+    // premise all of that rests on. A Cabin probe stays excluded by
     // name: a served set is sorted by pk into the walk's order, but the
     // exclusion is a fix, not a precaution - the discarding version of this
     // clause answered `ORDER BY <pk>` over a Cabin-probed relation with

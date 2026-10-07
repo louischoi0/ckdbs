@@ -277,10 +277,11 @@ TEST(BtreeTest, ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo) {
     const auto changes = split.value().changes();
     ASSERT_GE(changes.size(), 2u);
 
-    // The new leaf first: PAGE_INIT describes it completely, and the
-    // HEAP_INSERT the caller emits afterwards fills it.
+    // The new leaf first, holding the row. Not a PAGE_INIT the row's insert
+    // fills any more: every page a split writes is an image in its one
+    // BTREE_SPLIT record, which carries the row (BD-R12).
     EXPECT_EQ(changes[0].page_id, split.value().page_id);
-    EXPECT_TRUE(changes[0].is_new_page);
+    EXPECT_FALSE(changes[0].is_new_page);
     EXPECT_EQ(changes[0].min_key, 2u);
 
     // The old leaf is reported too, whose forward link now reaches it. Not a
@@ -522,49 +523,6 @@ TEST(BtreeTest, ALookupFindsALiveIdAmongRetiredSlots) {
         EXPECT_FALSE(loc.ok()) << "id " << id << " was retired";
         EXPECT_EQ(loc.status().code(), StatusCode::kNotFound) << "id " << id;
     }
-}
-
-TEST(BtreeTest, ALookupFindsAnIdInALeafWhoseSlotsAreOutOfOrder) {
-    storage::InMemoryPageStore store(128);
-
-    // Leaves are in ascending key order in every tree this engine builds -
-    // ids are issued monotonically and the split path refuses to divide a
-    // page - which is what makes the leaf-local binary search correct. But
-    // nothing *depends* on that: a search that finds nothing falls through
-    // to a linear scan, so an out-of-order leaf costs probes and still
-    // returns the right answer.
-    //
-    // Only reachable by writing the slots directly, because BtreeInsert
-    // would refuse the descending sequence (OutOfSpace, naming the open
-    // split policy). That is the point - this covers the day some future
-    // relayout or a recovered page makes the assumption false, so the
-    // fallback is not silently dead code that has already rotted.
-    auto created = store.CreateNew();
-    ASSERT_TRUE(created.ok()) << created.status().message();
-    auto& [root_id, root_bytes_ref] = created.value();
-    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
-    auto leaf = heap::PageView::CreateEmptyAs(root_bytes, /*min_key=*/0, PageType::kBtreeLeaf);
-    ASSERT_TRUE(leaf.ok()) << leaf.status().message();
-
-    const std::vector<std::uint64_t> ids = {50, 10, 40, 20, 30};
-    for (std::uint64_t id : ids) {
-        auto slot = leaf.value().InsertTuple(MakeTuple(id, kSmallFiller), /*trx_id=*/1, /*owner_oid=*/0);
-        ASSERT_TRUE(slot.ok()) << "id " << id << ": " << slot.status().message();
-    }
-
-    for (std::uint64_t id : ids) {
-        auto loc = BtreeLookup(store, root_id, id);
-        ASSERT_TRUE(loc.ok()) << "id " << id << ": " << loc.status().message();
-        EXPECT_EQ(loc.value().page_id, root_id);
-
-        auto tuple = heap::PageView(root_bytes).ReadTuple(loc.value().slot);
-        ASSERT_TRUE(tuple.ok()) << tuple.status().message();
-        EXPECT_EQ(IdOf(tuple.value().payload), id) << "found the wrong slot for id " << id;
-    }
-
-    auto absent = BtreeLookup(store, root_id, 25);
-    EXPECT_FALSE(absent.ok());
-    EXPECT_EQ(absent.status().code(), StatusCode::kNotFound);
 }
 
 TEST(BtreeTest, ADeleteMarkedTupleIsStillFoundBecauseVisibilityIsNotThisLayersJob) {
@@ -829,12 +787,11 @@ TEST(BtreeTest, AFullLeafDividesToMakeRoomForALowerId) {
     std::vector<std::uint64_t> got;
     got.reserve(rows.size());
     for (const ScannedRow& row : rows) got.push_back(row.id);
-    // Sorted before comparing, deliberately: **within** a page tuples are
-    // unordered (invariant 4), and a division appends the incoming tuple
-    // after the half it wrote back, so it lands at the end of its page's
-    // slots. What must hold is that nothing was lost or duplicated.
-    std::sort(got.begin(), got.end());
-    EXPECT_EQ(got, want) << "a division must lose nothing and duplicate nothing";
+    // **Not sorted before comparing** (BD-R1, BD-S1): a leaf's keyed slots
+    // ascend, so the walk is already key order - the incoming tuple lands
+    // where it sorts in whichever half took it, not after the half the
+    // division wrote back. Red at BD-S0, which appended it last.
+    EXPECT_EQ(got, want) << "a division must lose nothing, duplicate nothing, and keep key order";
 
     std::set<PageId> pages;
     for (const ScannedRow& row : rows) pages.insert(row.page_id);
@@ -1795,137 +1752,118 @@ TEST(BtreeTest, AGrowthRecordsTheOldRootItMarks) {
     EXPECT_TRUE(InternalView(bytes.value().bytes()).grown_over());
 }
 
-// ---- BB-R1: the id fixed under the hold of the leaf it lands on ----------
+// ---- One door, and its duplicate (BD-R5, BD-R6) ---------------------------
 //
-// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`. The two entry
-// points the statement layer places a user row through: an omitted pk issued
-// by a callable run under the rightmost leaf's hold (BB-R2), and a named key
-// admitted against the relation's mark only once the leaf it lands on is held
-// and has proved the key absent and itself rightmost (BB-R3). The cross-core
-// window they close is the rig's (`issue_under_the_leaf_rig_test.cpp`); these
-// pin what each callable is asked, and when.
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`. BB-R1's two
+// doors - an issue and an admission run under the rightmost leaf's hold -
+// are deleted on a btree with BB-R1 itself (W10): `BtreeInsert` is the one
+// door, any id placed where it sorts. What it refuses for the key is a
+// duplicate, live or delete-marked, and the text says which.
 
-TEST(BtreeTest, AnIssuedRowLandsOnTheRightmostLeafWithTheIdItsCallableIssued) {
-    storage::InMemoryPageStore store(128);
-    Tree tree(store);
-    FillOnePerLeaf(tree, 6);  // 10..60, one per leaf
-
-    int asked = 0;
-    std::vector<std::byte> row;
-    auto placed = BtreeInsertIssued(
-        store, tree.root,
-        [&]() -> StatusOr<std::span<const std::byte>> {
-            ++asked;
-            row = MakeTuple(70, kOnePerLeafFiller);
-            return std::span<const std::byte>(row);
-        },
-        /*trx_id=*/1, /*owner_oid=*/0);
-    ASSERT_TRUE(placed.ok()) << placed.status().message();
-    if (placed.value().new_root != kInvalidPageId) tree.root = placed.value().new_root;
-    EXPECT_EQ(asked, 1);
-
-    const std::vector<ScannedRow> rows = ScanAll(store, tree.root);
-    ASSERT_EQ(rows.size(), 7u);
-    EXPECT_EQ(rows.back().id, 70u);
-    EXPECT_EQ(rows.back().page_id, placed.value().page_id);
-    EXPECT_EQ(MinKeyOf(store, placed.value().page_id), 70u)
-        << "a full rightmost leaf appends a new one whose min_key is the issued id";
-}
-
-TEST(BtreeTest, AnIssueThatRefusesPlacesNothingAndReturnsItsRefusal) {
+TEST(BtreeTest, ADuplicateKeyIsRefusedAndADeletedOneSaysItIsBoundOnce) {
     storage::InMemoryPageStore store(128);
     Tree tree(store);
     tree.Fill(3, kSmallFiller);
 
-    auto placed = BtreeInsertIssued(
-        store, tree.root,
-        []() -> StatusOr<std::span<const std::byte>> {
-            return Status::TxnConflict("row id=4 is held by transaction 9");
-        },
-        /*trx_id=*/1, /*owner_oid=*/0);
-    ASSERT_FALSE(placed.ok());
-    EXPECT_EQ(placed.status().code(), StatusCode::kTxnConflict);
+    auto live = tree.Insert(2, kSmallFiller);
+    ASSERT_FALSE(live.ok());
+    EXPECT_EQ(live.status().code(), StatusCode::kAlreadyExists) << live.status().message();
+    EXPECT_NE(live.status().message().find("duplicate primary key 2"), std::string::npos)
+        << live.status().message();
+
+    {
+        auto at = BtreeLookup(store, tree.root, 3, storage::PageAccess::kWrite);
+        ASSERT_TRUE(at.ok()) << at.status().message();
+        ASSERT_TRUE(heap::PageView(at.value().leaf.bytes()).DeleteMark(at.value().slot, 9).ok());
+    }
+    auto deleted = tree.Insert(3, kSmallFiller);
+    ASSERT_FALSE(deleted.ok());
+    EXPECT_EQ(deleted.status().code(), StatusCode::kAlreadyExists);
+    EXPECT_NE(deleted.status().message().find("a Keystone id is bound once"), std::string::npos)
+        << deleted.status().message();
     EXPECT_EQ(ScanAll(store, tree.root).size(), 3u);
-    EXPECT_TRUE(tree.Insert(5, kSmallFiller).ok()) << "the refused issue left its leaf held";
 }
 
-TEST(BtreeTest, ANamedKeyUnderALeafWithARightSiblingIsRefusedWithoutAskingTheMark) {
-    // A leaf with a right sibling holds only keys below the mark (BB §1.5):
-    // its sibling's min_key is an id already placed.
-    storage::InMemoryPageStore store(128);
-    Tree tree(store);
-    FillOnePerLeaf(tree, 6);  // the leaf holding 30 covers [30, 40)
+// ---- BD-S1: a leaf in key order whatever order ids arrive in (BD-R1, BD-R2) -
+//
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`. A row takes
+// the slot its key sorts to, so a walk yields every leaf's ids ascending -
+// live, delete-marked, on a leaf that divided. Red at BD-S0, where a leaf
+// places at its slot count and the divide appends its incoming row last.
 
-    int asked = 0;
-    const std::vector<std::byte> row = MakeTuple(35, 0);
-    auto refused = BtreeInsertNamed(
-        store, tree.root, 35, row,
-        [&](std::uint64_t) {
-            ++asked;
-            return Status::OK();
-        },
-        /*trx_id=*/1, /*owner_oid=*/0);
-    ASSERT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kOutOfRange) << refused.status().message();
-    EXPECT_NE(refused.status().message().find("high-water mark"), std::string::npos)
-        << refused.status().message();
-    EXPECT_EQ(asked, 0) << "the mark was asked about a key a right sibling already refuses";
-    EXPECT_EQ(ScanAll(store, tree.root).size(), 6u);
+std::vector<std::uint64_t> WalkIds(storage::PageStore& store, PageId root) {
+    std::vector<std::uint64_t> ids;
+    for (const ScannedRow& row : ScanAll(store, root)) ids.push_back(row.id);
+    return ids;
 }
 
-TEST(BtreeTest, ANamedKeyAlreadyPresentIsRefusedBeforeTheMarkIsAsked) {
+TEST(BtreeTest, ALeafTakesEachIdAtTheSlotItSortsTo) {
     storage::InMemoryPageStore store(128);
     Tree tree(store);
-    tree.Fill(5, kSmallFiller);
+    for (std::uint64_t id : {30, 10, 50, 20, 40}) {
+        ASSERT_TRUE(tree.Insert(id, kSmallFiller).ok()) << id;
+    }
+    EXPECT_EQ(WalkIds(store, tree.root), (std::vector<std::uint64_t>{10, 20, 30, 40, 50}));
 
-    int asked = 0;
-    const std::vector<std::byte> row = MakeTuple(4, kSmallFiller);
-    auto dup = BtreeInsertNamed(
-        store, tree.root, 4, row,
-        [&](std::uint64_t) {
-            ++asked;
-            return Status::OK();
-        },
-        /*trx_id=*/1, /*owner_oid=*/0);
-    ASSERT_FALSE(dup.ok());
-    EXPECT_EQ(dup.status().code(), StatusCode::kAlreadyExists) << dup.status().message();
-    EXPECT_EQ(asked, 0) << "a present key was admitted before it was refused";
+    // And the lookup finds each at the slot the walk saw it in.
+    for (std::uint64_t id : {10, 20, 30, 40, 50}) {
+        auto at = BtreeLookup(store, tree.root, id);
+        ASSERT_TRUE(at.ok()) << id << ": " << at.status().message();
+        heap::PageView leaf(at.value().leaf.bytes());
+        auto tuple = leaf.ReadTuple(at.value().slot);
+        ASSERT_TRUE(tuple.ok());
+        EXPECT_EQ(IdOf(tuple.value().payload), id);
+    }
 }
 
-TEST(BtreeTest, ANamedKeyTheMarkRefusesPlacesNothing) {
-    storage::InMemoryPageStore store(128);
+TEST(BtreeTest, ADescendingRunAcrossManyDividesLeavesEveryLeafInKeyOrder) {
+    storage::InMemoryPageStore store(256);
     Tree tree(store);
-    tree.Fill(5, kSmallFiller);
-
-    std::uint64_t asked_for = 0;
-    const std::vector<std::byte> row = MakeTuple(40, kSmallFiller);
-    auto refused = BtreeInsertNamed(
-        store, tree.root, 40, row,
-        [&](std::uint64_t id) {
-            asked_for = id;
-            return Status::OutOfRange("primary key 40 is below the high-water mark 41");
-        },
-        /*trx_id=*/1, /*owner_oid=*/0);
-    ASSERT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kOutOfRange);
-    EXPECT_EQ(asked_for, 40u);
-    EXPECT_EQ(ScanAll(store, tree.root).size(), 5u);
+    const std::uint64_t kRows = 600;
+    for (std::uint64_t id = kRows; id >= 1; --id) {
+        auto r = tree.Insert(id, kSmallFiller);
+        ASSERT_TRUE(r.ok()) << id << ": " << r.status().message();
+    }
+    std::vector<std::uint64_t> want;
+    for (std::uint64_t id = 1; id <= kRows; ++id) want.push_back(id);
+    EXPECT_EQ(WalkIds(store, tree.root), want);
 }
 
-TEST(BtreeTest, AnAdmittedNamedKeyIsPlacedOnTheLeafItWasAdmittedUnder) {
-    storage::InMemoryPageStore store(128);
-    Tree tree(store);
-    tree.Fill(5, kSmallFiller);
+TEST(BtreeTest, AFullRightmostLeafSplitsAtTheInsertionPoint) {
+    // BD-Q11 (a): an id below the top of a full rightmost leaf opens the new
+    // leaf, the keys above it move with it, and every key below it stays -
+    // the left leaf stays as full as it was. A median cut would move half.
+    storage::InMemoryPageStore store(64);
+    std::size_t capacity = 0;  // rows of kSmallFiller one leaf holds
+    {
+        Tree probe(store);
+        for (std::uint64_t id = 10;; id += 10) {
+            auto r = probe.Insert(id, kSmallFiller);
+            ASSERT_TRUE(r.ok()) << r.status().message();
+            if (r.value().restructured()) break;
+            ++capacity;
+        }
+    }
+    ASSERT_GE(capacity, 8u);
 
-    const std::vector<std::byte> row = MakeTuple(90, kSmallFiller);
-    auto placed = BtreeInsertNamed(
-        store, tree.root, 90, row, [](std::uint64_t) { return Status::OK(); },
-        /*trx_id=*/1, /*owner_oid=*/0);
-    ASSERT_TRUE(placed.ok()) << placed.status().message();
-    const std::vector<ScannedRow> rows = ScanAll(store, tree.root);
-    ASSERT_EQ(rows.size(), 6u);
-    EXPECT_EQ(rows.back().id, 90u);
-    EXPECT_EQ(rows.back().page_id, placed.value().page_id);
+    storage::InMemoryPageStore fresh(64);
+    Tree tree(fresh);
+    for (std::uint64_t k = 1; k <= capacity; ++k) {
+        ASSERT_TRUE(tree.Insert(k * 10, kSmallFiller).ok());
+    }
+    // Below the top three keys of the full, rightmost leaf.
+    const std::uint64_t id = (capacity - 3) * 10 + 5;
+    auto split = tree.Insert(id, kSmallFiller);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    ASSERT_TRUE(split.value().restructured());
+
+    const std::vector<ScannedRow> rows = ScanAll(fresh, tree.root);
+    ASSERT_EQ(rows.size(), capacity + 1);
+    const PageId left = rows.front().page_id;
+    std::size_t on_left = 0;
+    for (const ScannedRow& row : rows) on_left += row.page_id == left ? 1 : 0;
+    EXPECT_EQ(on_left, capacity - 3) << "the rightmost leaf divided at the median";
+    EXPECT_EQ(rows[on_left].id, id) << "the incoming id does not open the new leaf";
 }
 
 }  // namespace

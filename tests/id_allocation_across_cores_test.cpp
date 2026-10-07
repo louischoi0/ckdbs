@@ -22,8 +22,8 @@ constexpr int kRowsPerCore = 200;
 // Per statement. A client retries what the engine answers `retryable=1`,
 // and one does arrive here: a descent that meets the root while the other
 // core grows it a level is refused `TxnConflict` (`btree.cpp`'s
-// `DescendTo`, AT-S5c) - before the issue since BB-R2, so it burns none; a
-// refusal after the issue, a split's parent walk, burns one.
+// `DescendTo`, AT-S5c), and since BD-R6 the id is issued before the descent,
+// so every such refusal burns the one id it drew.
 constexpr int kRetriesPerRow = 50;
 
 struct Writer {
@@ -88,10 +88,11 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
     // Every row, every id distinct - and **no gap but the burned ones**:
     // the mark is one sequence both cores bump, so the only ids missing are
     // the ones a retried statement drew and never placed. **At most one per
-    // retry, and possibly none** since BB-S3: the id is issued under the
-    // rightmost leaf's hold (BB-R2), so a descent refused at a root the other
-    // core grew a level over is refused before it draws one; only a refusal
-    // after the issue - a split's parent walk - burns its id. A block cached on
+    // retry**: since BD-R6 (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`) the id is issued before the descent, so a descent
+    // refusal burns the one it drew, while a retryable refusal that comes
+    // before the issue - the relation's `IS` fault net - burns none, and a
+    // burned id 1 falls below the span. A block cached on
     // either core would leave its unspent remainder - thousands of ids - as
     // a gap, and a block leased ahead of the mark would put one core's ids
     // above the other's later ones. The primary key refuses a duplicate, so

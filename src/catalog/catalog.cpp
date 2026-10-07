@@ -1190,9 +1190,10 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
     // relation was required to be btree-clustered and this is where the
     // pairing was refused; the mode is gone, both storage types take a
-    // caller-supplied pk, and what neither can take - a key below the mark,
-    // since BB-R3 on both - is refused per *id* by AdmitExplicitRowId rather
-    // than per relation.
+    // caller-supplied pk, and what a relation cannot take is refused per
+    // *id* by the insert path rather than per relation - on a heap a key
+    // below its mark (BB-R3, kept by BD-Q4), on a btree a duplicate or an
+    // exhausted key (BD-R5).
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
@@ -2424,10 +2425,11 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             // because every relation's omitted-pk inserts draw from this same
             // mark. What a carve costs is stated at the call site and in
             // section 4.1 - the ids inside it are spent from the mark's point
-            // of view before they are placed. A *supplied* id cannot land
-            // inside a live carve: it must be at or above the mark on every
-            // relation (BB-R3), and the carve has already moved the mark past
-            // its own block.
+            // of view before they are placed. The carve is the heap's
+            // sorted fill (bulkinsert.md T3-2), and a *supplied* id cannot
+            // land inside a live one: a heap refuses one below its mark
+            // (BB-R3, kept by BD-Q4), and the carve has already moved the
+            // mark past its own block.
             //
             // Exhaustion checked against the range's *last* id: a range
             // that would cross the ceiling is refused whole, never split.
@@ -2464,12 +2466,14 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
-        // supplied id it admits. A supplied id *below* the mark - a value
-        // this function may already have issued - is refused on every
-        // relation (BB-R3), so the two sources never meet. For a user row
-        // this runs under the exclusive hold of the page the row lands on -
-        // a btree's rightmost leaf (BB-R1, `storage::IssueUnderHold`) or a
-        // heap chain's tail held as the tail (BB-R7).
+        // supplied id at or above it. A heap refuses a supplied id *below* the
+        // mark (BB-R3), so there the two sources never meet; a btree places
+        // one (BD-R7), and the two meet only on an issued id a named key took
+        // before it was placed - serialised by its row unit, the issue
+        // re-drawn if it lost
+        // (`CommandDispatcher::InsertOneRow`). For a heap row this runs under
+        // the hold of the chain's tail (BB-R7); for a btree row under none
+        // (BD-R6).
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
@@ -2505,14 +2509,14 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
 
 Status CheckNamedRowIdSpellable(std::uint64_t id) {
     if (id < kFirstRowId) {
-        return Status::InvalidArgument("primary key " + std::to_string(id) +
-                                       " is below the first issuable id (" +
+        return Status::OutOfRange("primary key " + std::to_string(id) +
+                                  " is below the first issuable id (" +
                                        std::to_string(kFirstRowId) +
                                        "); 0 is reserved for \"unset\"");
     }
     if (id > kMaxKeystoneId) {
-        return Status::InvalidArgument("primary key " + std::to_string(id) +
-                                       " does not fit the 40-bit Keystone id space (max " +
+        return Status::OutOfRange("primary key " + std::to_string(id) +
+                                  " does not fit the 40-bit Keystone id space (max " +
                                        std::to_string(kMaxKeystoneId) + ")");
     }
     return Status::OK();
@@ -2545,9 +2549,9 @@ StatusOr<std::uint64_t> Catalog::RowIdMark(Oid table_oid) {
 Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     // Spellability first, before the catalog page is touched at all: an id
     // outside the Keystone field cannot be stored by any path, so there is
-    // nothing to check a relation for. The caller asked the same question
-    // before its borrow (`CheckNamedRowIdSpellable`); this keeps the call's
-    // contract whole for any other caller.
+    // nothing to check a relation for. The insert path judged its literal
+    // before its borrow; this keeps the call's contract whole for any other
+    // caller.
     if (Status s = CheckNamedRowIdSpellable(id); !s.ok()) return s;
 
     auto acted = ForFirstRow<SysTableRow>(
@@ -2556,14 +2560,18 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
 
-            // **Below the mark, on every relation** (BB-R3, on BB-Q8's mark).
-            // The mark is the ascent expressed as one number: at or above it,
-            // the key sorts above every key the relation has placed or
-            // issued, so placing it under the hold of the last page keeps
-            // that page's slot order its key order. Below it there is no such
-            // page. A btree used to take the key anyway and flip the relation
-            // to `kUnordered`; that state is gone with the flag (BB-R10).
-            if (id < row.next_id) return RefuseRowIdBelowMark(table_oid, id, row.next_id);
+            // **Below the mark**: a heap refuses it (BB-R3, kept by
+            // BD-Q4): the mark is its ascent as one number, and below it no
+            // page keeps its slot order its key order. A btree places it
+            // where it sorts (BD-R7), so the mark gates nothing there.
+            if (id < row.next_id) {
+                // **A btree places it anyway** (BD-R6, BD-R7,
+                // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`):
+                // its leaf places the key where it sorts, so the mark gates
+                // nothing there and is left where it is - advance or nothing.
+                if (row.clustered_type == ClusteredType::kBtree) return true;
+                return RefuseRowIdBelowMark(table_oid, id, row.next_id);
+            }
 
             // At or above: the mark moves past it, persisted before the
             // caller places anything. Same ordering as AllocateRowId and the
@@ -2589,37 +2597,6 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     // `next_id`'s advance is not cached and publishes nothing: no cached
     // field moved.
     return Status::OK();
-}
-
-Status Catalog::RefuseRelationsHoldingKeysOutOfOrder() {
-    auto rows = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
-    if (!rows.ok()) return rows.status();
-    std::vector<Oid> marked;
-    for (const SysTableRow& row : rows.value()) {
-        if (row.retired_key_order == kRetiredKeyOrderUnordered) marked.push_back(row.oid);
-    }
-    if (marked.empty()) return Status::OK();
-    // Named from `sys.objects`: `RenameTable` rewrites that row alone, so
-    // `SysTableRow::name` is the name the relation was created under.
-    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
-    if (!objects.ok()) return objects.status();
-    std::string names;
-    std::size_t count = 0;
-    for (const SysObjectRow& row : objects.value()) {
-        if (row.type_oid != kTypeTable ||
-            std::find(marked.begin(), marked.end(), row.oid) == marked.end()) {
-            continue;
-        }
-        if (count++ > 0) names += ", ";
-        names += "`" + std::string(NameView(row.name)) + "`";
-    }
-    if (count == 0) return Status::OK();
-    return Status::Unsupported(
-        std::string(count == 1 ? "relation " : "relations ") + names +
-        (count == 1 ? " holds" : " hold") +
-        " keys out of order, a shape this engine no longer serves: it reads every page's slot "
-        "order as its key order, and such a relation's pages need not be. Its data is reached "
-        "by an engine older than 1b5d252e, or not at all");
 }
 
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,

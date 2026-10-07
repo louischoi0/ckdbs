@@ -93,9 +93,11 @@ Refused, truthfully:
 
 ### 2.2 Per-row validation, statement-scoped errors
 
-Arity and the pk-column rule ("do not supply a value for primary-key
-column…") are checked **per row**, and every error message carries the
-1-based row ordinal: `row 37: expected 4 value(s)`. A statement that fails
+Arity (`n` values naming the key, or `n − 1` to have it issued) and the
+named key's own checks - an integer literal, inside the id space, not a
+duplicate, and on a heap at or above the mark (BB-R3, kept by BD-Q4 (a))
+(`heap-and-tuple.md` §4.1) - are checked **per row**, and every
+error message carries the 1-based row ordinal, ` (row 37)`. A statement that fails
 on row 37 inserted nothing (BI4) — rows 1–36 are unwound by the same
 `WriteScope` verdict rule `HandleInsert` applies to one row, and the
 ordinal is what makes a 1,000-row refusal debuggable instead of a guessing

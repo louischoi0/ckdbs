@@ -78,14 +78,15 @@ namespace kds::catalog {
 
 // **Can this caller-named key be stored at all?** Within [kFirstRowId,
 // kMaxKeystoneId], since 0 means "unset" and the Keystone field is 40 bits
-// wide; `InvalidArgument` otherwise - a value outside the id space is simply
-// wrong, not a declined feature. Asked before anything else about the key,
-// the borrow included (BB-R3 step 1).
+// wide; `OutOfRange` otherwise - BD-R5's "exhausted", one of the two reasons
+// a named key is refused (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+// named-keys.md`). The insert path judges its literal before it reaches
+// here; the admission asks again for any other caller.
 Status CheckNamedRowIdSpellable(std::uint64_t id);
 
-// The one spelling of "a named key below the relation's mark" (BB-R3,
-// BB-R12's `OutOfRange`), shared by the admission and by the insert path's
-// judgement before a wait.
+// The one spelling of "a named key below the relation's mark" - a heap's
+// refusal (BB-R3, BB-R12's `OutOfRange`, kept for the heap by BD-Q4) -
+// shared by the admission and by the insert path's judgement before a wait.
 Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark);
 
 // Where a catalog row landed (workplan-ddl-transactional.md DT3a). A DDL
@@ -653,20 +654,20 @@ public:
     //
     // **Spellability, always** (`CheckNamedRowIdSpellable`, below).
     //
-    // **Then the mark, on every relation** (BB-R3, on BB-Q8's mark): an id
-    // below `next_id` is refused `OutOfRange` (`RefuseRowIdBelowMark`), and
-    // one at or above it moves the mark to `id + 1`. At or above the mark, the
-    // id sorts above every id the relation has placed or issued, so placed on
-    // the relation's last page it keeps that page's slot order its key order
-    // - BB-R1's invariant. A btree used to take a key below the mark too and
-    // flip the relation to `kUnordered`; that state is deleted (BB-R10).
+    // **Then the mark, by the relation's storage.** A heap (BB-R3, kept by
+    // BD-Q4 (a)) refuses an id below `next_id` `OutOfRange`
+    // (`RefuseRowIdBelowMark`): its tail cannot take a key below its highest,
+    // so the mark is the ascent written as one number. A btree places a key
+    // where it sorts (BD-R2, BD-R7,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), so for
+    // it the admission is advance-or-nothing and never refuses. Either way an
+    // id at or above the mark moves it to `id + 1`.
     //
-    // **Called under the hold of the page the row lands on** - a btree's
-    // rightmost leaf, a heap chain's tail held as the tail
-    // (`storage::AdmitUnderHold`, BB-R7). That is what closes BB §1.3: the
-    // mark moves while no other core can issue or admit an id for the
-    // relation, because each of them needs that page first. The latch order
-    // is that page, then this one (BB-R4, `page.md` §6).
+    // **A heap calls it under the hold of its tail**, held as the tail
+    // (`storage::AdmitUnderHold`, BB-R7): the mark moves while no other core
+    // can issue or admit an id for the relation, because each needs that page
+    // first; the latch order is that page, then this one (BB-R4, `page.md`
+    // §6). A btree calls it before its descent, under no page (BD-R6).
     //
     // ---- Why the high-water mark moves ------------------------------------
     //
@@ -683,7 +684,7 @@ public:
     //
     // **No hook any more.** `before_mark` took the row's lock between the
     // judgement and the mark's move, because a statement that parked and
-    // re-ran found its own key below a mark its first attempt advanced. Under
+    // re-ran found its own key below a mark its first attempt advanced. Since
     // BB-R3 the borrow precedes the admission entirely - a refused borrow
     // advanced nothing - so the hook's reason is gone, and with it the
     // partition latch taken under page 7 (BA-R8's last bullet).
@@ -693,18 +694,11 @@ public:
     // (`ForFirstRow`'s read walk). **A judgement, not a reservation**: the
     // mark only rises, so a key below what this returns is below the mark
     // for good, while one at or above it may be passed before it is
-    // admitted. The insert path asks it for one thing - whether a named key
-    // refused a borrow can ever be admitted, so an illegal key is refused
-    // rather than left waiting on a fence (AO-S6c-c's rule, kept under
-    // BB-R3).
+    // admitted. The insert path asks it for one thing on a heap - whether a
+    // named key refused a borrow can ever be admitted, so an illegal key is
+    // refused rather than left waiting on a fence (AO-S6c-c's rule). A btree
+    // asks the leaf instead (BD-R5).
     StatusOr<std::uint64_t> RowIdMark(Oid table_oid);
-
-    // **The mount's refusal of a relation whose keys are out of order**
-    // (BB-R11): `Unsupported`, naming every relation whose retired key-order
-    // byte still reads `kRetiredKeyOrderUnordered`, by its current name.
-    // Core 0's, once, after recovery and the delete-mark finalize
-    // (`heap-and-tuple.md` §4.1 carries the rule and what it cannot see).
-    Status RefuseRelationsHoldingKeysOutOfOrder();
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 

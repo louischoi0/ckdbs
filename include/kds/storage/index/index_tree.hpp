@@ -17,19 +17,13 @@
 // ---- Why this is not storage/btree/ -------------------------------------
 //
 // `btree.hpp` is the *clustered* tree: a relation's storage, keyed on the
-// Keystone id, whose split is an append of a fresh rightmost leaf that moves
-// nothing. It refuses `OutOfSpace` for any key sorting below its target
-// leaf's contents, and its header says why - dividing a full page's contents
-// would decide the **heap page split policy**, which CLAUDE.md leaves open.
-// That bargain is available to it because invariant 11 makes every pk
-// monotonic.
-//
-// A secondary key is not monotonic. Arbitrary-order arrival is the defining
-// property of the thing, so a dividing split is mandatory and the clustered
-// tree cannot be taught one without settling the decision it exists to
-// avoid. This tree divides - and decides nothing beyond itself, because an
-// index page holds entries rather than tuples, has no `min_key`, and
-// contains no Keystone id (index_page.hpp).
+// Keystone id. Since BD it places a row where its key sorts and splits a
+// full leaf (an append, or a divide at the insertion point or the median,
+// `btree.hpp`), so neither tree relies on monotonic keys any more. What
+// still separates them is the entry: a clustered leaf is a heap page with a
+// `min_key` and whole tuples, and an index page holds entries with no
+// `min_key` and no Keystone id (index_page.hpp), so this tree divides
+// entries and decides nothing beyond itself.
 //
 // Everything else is deliberately the same shape, including the
 // `VisitControl` contract, so a caller can hand the same lambda to either

@@ -6,8 +6,11 @@
 #include <string>
 #include <vector>
 
+#include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/storage/page_header.hpp"
+#include "kds/storage/visit.hpp"
 #include "kds/txn/varheap_release.hpp"  // a loser's spill is released, not retired
 #include "kds/wal/payload.hpp"
 
@@ -88,6 +91,29 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
         return bytes.status().WithContext("undo: page " + std::to_string(rec.target_page_id) +
                                           " named by an undo record");
     }
+    // ---- A B+ tree leaf: the row is re-found by its key (BD-R3 E1) -------
+    //
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`,
+    // BD-Q8 (a). A leaf places a row where its key sorts, so a later insert
+    // below it shifts it right, and a divide moves it to a new right
+    // sibling: the record's slot no longer names it, and the identity check
+    // below would either refuse the mount or count a shifted row's corpse
+    // as done (§1.2's silent case). Keys only move right and leaves never
+    // merge, so the row is in the recorded leaf or along the chain to its
+    // right while a leaf's `min_key` is at or below the key. Each key is in
+    // at most one slot of a leaf (E5's take-back keeps it so), and the WAL
+    // keeps order, so what is found is the loser's or nothing.
+    //
+    // **Only a version the loser wrote is compensated**, judged by the
+    // header's `trx_id` - which is also the rule for a crash during undo:
+    // a version that no longer names the loser was compensated already.
+    // Heap and catalog pages never shift, and keep the exact check below.
+    if (storage::RawPageType(bytes.value().bytes()) ==
+        static_cast<std::uint8_t>(PageType::kBtreeLeaf)) {
+        bytes.value().Release();
+        return CompensateOnLeaf(store, txn_id, rec);
+    }
+
     heap::PageView view(bytes.value().bytes());
     const std::optional<std::uint64_t> here = PkAt(view, rec.target_slot);
 
@@ -125,29 +151,83 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
             "undo: row id " + std::to_string(rec.pk) + " is no longer at page " +
             std::to_string(rec.target_page_id) + " slot " + std::to_string(rec.target_slot) +
             " (found " + (here.has_value() ? std::to_string(here.value()) : std::string("nothing")) +
-            "); a leaf division moved it and recovery cannot re-locate a row - "
+            "); a heap or catalog page never moves a row, so the page is not the one "
+            "the record was written against - "
             "docs/spec/wal.md");
     }
 
+    return Apply(store, txn_id, rec, rec.target_page_id, view, rec.target_slot);
+}
+
+Status RecoveryUndo::CompensateOnLeaf(storage::PageStore& store, std::uint64_t txn_id,
+                                      const UndoVersion& rec) {
+    PageId page_id = rec.target_page_id;
+    for (std::uint32_t steps = 0;; ++steps) {
+        if (Status s = storage::CheckPageWalkBudget(steps, rec.target_page_id, "undo's re-find");
+            !s.ok()) {
+            return s;
+        }
+        auto bytes = store.Get(page_id);
+        if (!bytes.ok()) return bytes.status().WithContext("undo: leaf " + std::to_string(page_id));
+        if (storage::RawPageType(bytes.value().bytes()) !=
+            static_cast<std::uint8_t>(PageType::kBtreeLeaf)) {
+            return Status::Corruption("undo: page " + std::to_string(page_id) +
+                                      " on the leaf chain from " +
+                                      std::to_string(rec.target_page_id) + " is not a leaf");
+        }
+        heap::PageView view(bytes.value().bytes());
+        if (view.min_key() > rec.pk) break;  // keys only move right: past here it is nowhere
+        auto at = btree::SearchLeaf(view, rec.pk);
+        if (!at.ok()) return at.status();
+        if (at.value().present) {
+            auto tuple = view.ReadTuple(at.value().at);
+            if (!tuple.ok()) return tuple.status();
+            if (tuple.value().trx_id != txn_id) {
+                // Not the loser's version: an earlier pass compensated it.
+                ++already_done_;
+                return Status::OK();
+            }
+            return Apply(store, txn_id, rec, page_id, view, at.value().at);
+        }
+        const PageId next = view.next_page_id();
+        if (next == kInvalidPageId) break;
+        page_id = next;
+    }
+    // In no leaf on the path. An insert that redo never placed, or that an
+    // earlier pass retired, has nothing left to undo (H1's reading); a row
+    // the loser overwrote or delete-marked is a committed row, and its
+    // absence means the log and the tree disagree.
+    if (rec.type == UndoRecordType::kInsert) {
+        ++already_done_;
+        return Status::OK();
+    }
+    return Status::Corruption("undo: row id " + std::to_string(rec.pk) +
+                              " is in no leaf from page " + std::to_string(rec.target_page_id) +
+                              " rightward, where its key sorts");
+}
+
+Status RecoveryUndo::Apply(storage::PageStore& store, std::uint64_t txn_id,
+                           const UndoVersion& rec, PageId page_id, heap::PageView& view,
+                           std::uint16_t slot) {
     switch (rec.type) {
         case UndoRecordType::kInsert: {
-            if (Status s = view.RetireSlot(rec.target_slot); !s.ok()) return s;
+            if (Status s = view.RetireSlot(slot); !s.ok()) return s;
             if (wal_ == nullptr) break;
             std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
-            const wal::SlotRetirePayload fields{rec.target_slot};
+            const wal::SlotRetirePayload fields{slot};
             if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
             // **The aborting transaction's id, not kNoTxnId** - the same
             // amendment the live compensation carries: kNoTxnId would hide
             // the rollback from the next analysis phase.
             auto out = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kSlotRetire, txn_id, rec.target_page_id}, buf);
+                wal::RecordSpec{wal::RecordType::kSlotRetire, txn_id, page_id}, buf);
             if (!out.ok()) return out.status();
-            if (Status s = store.StampPageLsn(rec.target_page_id, out.value()); !s.ok()) return s;
+            if (Status s = store.StampPageLsn(page_id, out.value()); !s.ok()) return s;
             break;
         }
 
         case UndoRecordType::kOverwrite: {
-            if (Status s = view.OverwriteTuple(rec.target_slot, rec.image, rec.prior_trx_id,
+            if (Status s = view.OverwriteTuple(slot, rec.image, rec.prior_trx_id,
                                                rec.prior_undo_ptr);
                 !s.ok()) {
                 return s;
@@ -155,20 +235,20 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
             if (wal_ == nullptr) break;
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + rec.image.size());
             const wal::HeapWritePayload fields{rec.prior_trx_id, rec.prior_undo_ptr,
-                                               rec.target_slot,
+                                               slot,
                                                static_cast<std::uint16_t>(rec.image.size())};
             auto n = wal::EncodeHeapWrite(buf, fields, rec.image);
             if (!n.ok()) return n.status();
             auto out = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapOverwrite, txn_id, rec.target_page_id},
+                wal::RecordSpec{wal::RecordType::kHeapOverwrite, txn_id, page_id},
                 std::span(buf).first(n.value()));
             if (!out.ok()) return out.status();
-            if (Status s = store.StampPageLsn(rec.target_page_id, out.value()); !s.ok()) return s;
+            if (Status s = store.StampPageLsn(page_id, out.value()); !s.ok()) return s;
             break;
         }
 
         case UndoRecordType::kDeleteMark: {
-            if (Status s = view.ClearDeleteMark(rec.target_slot, rec.prior_trx_id,
+            if (Status s = view.ClearDeleteMark(slot, rec.prior_trx_id,
                                                 rec.prior_undo_ptr);
                 !s.ok()) {
                 return s;
@@ -176,20 +256,20 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
             if (wal_ == nullptr) break;
             std::array<std::byte, wal::kDeleteUnmarkPayloadSize> buf{};
             const wal::HeapDeleteUnmarkPayload fields{rec.prior_trx_id, rec.prior_undo_ptr,
-                                                      rec.target_slot};
+                                                      slot};
             if (auto n = wal::EncodeHeapDeleteUnmark(buf, fields); !n.ok()) return n.status();
             auto out = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapDeleteUnmark, txn_id, rec.target_page_id},
+                wal::RecordSpec{wal::RecordType::kHeapDeleteUnmark, txn_id, page_id},
                 buf);
             if (!out.ok()) return out.status();
-            if (Status s = store.StampPageLsn(rec.target_page_id, out.value()); !s.ok()) return s;
+            if (Status s = store.StampPageLsn(page_id, out.value()); !s.ok()) return s;
             break;
         }
 
         case UndoRecordType::kInvalid:
         default:
             return Status::Corruption("undo: record at page " +
-                                      std::to_string(rec.target_page_id) + " has type " +
+                                      std::to_string(page_id) + " has type " +
                                       std::to_string(static_cast<int>(rec.type)));
     }
 

@@ -222,8 +222,9 @@ D7's last gate. The gates' text is `git show 2b20369:docs/spec/crosscore.md`
 **Retired: id-block-aligned spreading**, at AT-S9 (`range_size_ids` is
 refused by name), and the row-id leases it was built from at AT-S10b.
 Every core issues an omitted pk from the relation's one row-id mark,
-bumped in place under its page latch, so **the pk is an identity and a
-sequence**, monotonic in issue order across every core
+bumped in place under its page latch, so **an issued pk is an identity
+and a sequence**, monotonic in issue order across every core; a named key
+carries no order on a btree
 (`docs/spec/heap-and-tuple.md` §4.1, §4.1a; invariant 11). The mechanism -
 each core inserting from its own leased block into its own range's tail,
 ranges aligned to block boundaries - is

@@ -1330,4 +1330,41 @@ BA-Q14 **(b)** and paused BA for a sub-milestone,
 `workorder-bb-issue-under-the-leaf.md`. Nothing of BA-S1b was built: its
 worktree `ba-s1b-leaf-order-key-order` holds no change from `bddd450c`.
 
-BA resumes at BB-S5, with BA-S1b struck and BA-S11's row rebased on BB-R1.
+BA resumes once BB closes, with BA-S1b struck; its rows are rebased on BD (below).
+
+### BA rebased on BD - 2026-10-07
+
+BD-Q12 (b) (`raft-marks-2026-10-07.md` §17,
+`workorder-bd-sorted-leaf-named-keys.md` §5): BB closes on the measurement it
+has, without rebasing BA, and BD-S6 rebases these rows once, against BD.
+BB's drafted rebase (its BB-S5 row) is dropped. BA stays paused until BB's
+close entry is written, which waits for its own word.
+
+- **BA-R8's last bullet** (*"The `before_mark` hook. Its two partition
+  latches move out from under page 7"*): the hook is gone - since BB-R3 the
+  borrow precedes the admission, and the latches with it. That stands.
+- **BA-R8's named-key bullet**: BB's draft would have added *"a btree now
+  refuses below the cursor too"*. **Withdrawn**: a btree places a named key
+  below the mark where it sorts (BD-R2, BD-R5), and its admission is
+  advance-or-nothing (BD-R7). The heap's below-mark refusal stands, and
+  compares against the cursor, as BA-R8 says.
+- **BA-R8's "Placement order" bullet**: a btree's leaf keeps its key order by
+  placement (BD-R1), so the cursor can issue as fast as it likes without
+  widening defect A on a btree; BA-S11's cells test the walk's order, which
+  placement keeps. A heap's still needs its tail's hold (BB-R7).
+- **BA-R11's "who it reaches"**: BA's original text stands. The encode
+  precedes the descent again on a btree (BD-R6: issue, borrow, encode,
+  descend, place), so a spilled value is noted before the descent, as BA
+  first wrote; BB's draft, which had the spills follow the descent, is
+  dropped. A structural refusal of a statement whose trail an earlier spill
+  changed keeps today's refusal.
+- **BA-S11's row**: it rests on BD-R6, not BB-R1. On a btree no leaf's
+  hold covers the issue, so BA-R8's cursor runs outside any leaf's hold:
+  below the ceiling an issue is a `fetch_add` plus BD's bounded re-draw
+  (`kMaxIssueRounds`) when a named key took the id first; the ceiling's
+  raise stays under page 7 and the WAL append. *"Every leaf in key order
+  (or the relation `kUnordered`, per BA-S1b)"* reads *"every leaf in key
+  order"*: `kUnordered` is deleted (BB-R10) and BA-S1b struck. *"A named
+  key inside [cursor, ceiling) is never issued"* reads *"an id a named key
+  inside [cursor, ceiling) placed is never placed again: an issue that
+  draws it is re-drawn"*.

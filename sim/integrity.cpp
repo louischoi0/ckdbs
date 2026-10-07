@@ -197,9 +197,10 @@ private:
         bool have_prev_pages = false;
         std::uint64_t current_max_id = 0;
         bool current_has_tuples = false;
-        // The last live id this page's walk emitted: slots are visited in
+        // The last keyed id this page's walk emitted: slots are visited in
         // slot order, so a live id at or below it is a slot holding a lower
-        // key than one before it (kSlotOrder, BB-R1).
+        // key than one before it (kSlotOrder): every keyed slot of a leaf
+        // ascends by placement (BD-R1), live and delete-marked alike.
         std::uint64_t current_last_id = 0;
 
         auto on_new_page = [&](PageId page_id, heap::PageView& page) {

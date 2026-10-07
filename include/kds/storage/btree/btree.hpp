@@ -28,44 +28,48 @@
 //
 // Reusing the leaf body rather than defining a second tuple format is
 // deliberate and load-bearing: `heap::PageView` insert/read/overwrite/
-// delete-mark, `exec::EncodeRow`/`DecodeRow` and the `HEAP_INSERT` redo
-// record all apply to a leaf verbatim.
+// delete-mark and `exec::EncodeRow`/`DecodeRow` apply to a leaf verbatim.
 // A clustered-btree relation is therefore not a second storage engine,
-// it is the heap with a directory over it.
+// it is the heap with a directory over it. What differs is where a row
+// goes and how its insert is logged (below).
 //
-// ---- Through SQL a split moves nothing; a divide is the storage contract's
+// ---- A leaf is in key order by placement (BD-R1, BD-R2) -----------------
 //
-// Every row SQL places lands on the **rightmost** leaf (BB-R1, BB-R3 in
-// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`): an omitted pk
-// is issued under that leaf's hold, and a named key is admitted only at or
-// above the relation's mark, which only the rightmost leaf covers. So when
-// that leaf is full the split is an append:
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`. A row takes
+// the slot its key sorts to (`heap::PageView::InsertTupleAt`): the
+// directory entries after it move up one, no tuple byte moves, and every
+// keyed slot of a leaf - live and delete-marked - ascends by Keystone id,
+// whatever order keys arrive in and at every core count. That is the
+// premise the `ORDER BY <pk>` elision reads, and `SearchLeaf` below is the
+// one binary search every caller asks. An insert logs `BTREE_INSERT`, whose
+// redo shifts as the placement did.
 //
-//     new leaf, low key = the id that caused the split, tuple goes there;
-//     old leaf's next_page_id repointed at it; the same id copied up as
-//     the parent's separator.
+// **A full leaf grows three ways**, and every page a split writes is logged
+// as an image in one `BTREE_SPLIT` record that carries the row (BD-R12):
 //
-// No key is moved between pages, and every leaf's slot order is its key
-// order at every core count - the premise the `ORDER BY <pk>` elision reads.
+//   - **append** - the id sorts above every key the leaf holds: a new leaf
+//     whose low key is the id, nothing moved, the old leaf linked to it and
+//     the id copied up as the parent's separator;
+//   - **insertion point** - the rightmost leaf, the id below one of its
+//     keys: the id opens the new leaf and the keys above it move there, so
+//     the left leaf stays full (BD-Q11 (a));
+//   - **median** - any other divide (`SplitLeafAndInsert`): the keys cut at
+//     their median, the upper half moved to a new leaf.
 //
-// `BtreeInsert`, the storage contract, takes any id. One below a full
-// leaf's highest makes the leaf divide (`SplitLeafAndInsert`: the live
-// versions cut at their median key, the upper half moved to a new leaf, the
-// old leaf's `relayout_epoch` bumped), and a separator sorting inside a full
-// internal node divides that node. SQL reaches neither since BB-R3; the
-// storage tests drive both, and docs/spec/heap-and-tuple.md section 4.1
-// carries why a divide keeps invariants 2 and 3.
+// A divide bumps the old leaf's `relayout_epoch`, and a separator sorting
+// inside a full internal node divides that node. docs/spec/heap-and-tuple.md
+// section 4.1 carries why a divide keeps invariants 2 and 3.
 //
 // Two consequences worth stating because they are easy to assume away:
 //
-//   1. **Only a divide moves a tuple**, and a divide rewrites no page's
-//      `min_key`, so a leaf's `min_key` is immutable exactly as a heap
-//      page's is (invariant 2). There is no relayout and no compaction.
-//   2. Through SQL, leaves fill left-to-right and are never merged, so the
-//      tree's space utilisation matches the heap chain's - no 50% worst
-//      case, and no reuse of space freed by DELETE either, for the same
-//      missing page compaction.
+//   1. **A placement and a divide move rows; nothing rewrites a `min_key`**,
+//      so a leaf's `min_key` is immutable exactly as a heap page's is
+//      (invariant 2). There is no relayout and no compaction. A `(page,
+//      slot)` is therefore true only under the leaf's hold (`Location`).
+//   2. Leaves are never merged, and nothing reuses space freed by DELETE,
+//      for the same missing page compaction as the heap chain's.
 //
+
 // ---- Structural changes are reported, not logged here -------------------
 //
 // This file mutates pages; it does not know about the WAL. An insert
@@ -111,9 +115,10 @@ namespace kds::btree {
 // Where a tuple lives, and the leaf it lives in, **held**: what a descent
 // hands back to a reader or a writer.
 //
-// **`slot` is true only while `leaf` is held** (AT-0 item 12). A divide on
-// another core rebuilds the leaf and renumbers its slots
-// (`SplitLeafAndInsert`), so a `(page_id, slot)` read after the hold is
+// **`slot` is true only while `leaf` is held** (AT-0 item 12). Another
+// core's insert below the row shifts it a slot up (BD-R2), and a divide
+// rebuilds the leaf and renumbers its slots (`SplitLeafAndInsert`), so a
+// `(page_id, slot)` read after the hold is
 // gone can name a different row: a point read answers zero rows through
 // its residual, a point write declines the row it was sent to, an FK check
 // decides on another row. Read or write the slot through `leaf`, and never
@@ -126,6 +131,28 @@ struct Location {
     storage::PageRef leaf;
 };
 
+// **Where `id` sits among a leaf's keyed slots** (BD-R2,
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`).
+//
+// Every keyed slot of a leaf ascends by Keystone id - live rows and
+// delete-marked rows alike - because a row is placed at the slot its key
+// sorts to and a divide writes each half back in key order. A retired slot
+// carries no key and sits anywhere. So one binary search answers what an
+// insert, a lookup, redo's BTREE_INSERT and recovery undo's re-find ask: is
+// the key present, and where would it go. `at` is the first keyed slot whose
+// key is at or above `id`, or `slot_count()` when there is none - the slot
+// a placement takes, so redo checks a record's slot against it.
+struct LeafPosition {
+    std::uint16_t at = 0;
+    bool present = false;  // the key at `at` is `id`
+};
+StatusOr<LeafPosition> SearchLeaf(heap::PageView& leaf, std::uint64_t id);
+
+// The duplicate a named key meets (BD-R5's first reason): *"duplicate primary
+// key k"*, or *"... k: a row with this key was deleted; a Keystone id is
+// bound once"* for a delete-marked row (BD-R4's tombstone).
+Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot, bool deleted);
+
 // Formats `page` as a brand-new relation's root: an empty leaf with
 // min_key 0, so a relation that never outgrows one page is exactly one
 // page, the same as a heap-clustered one. The tree gains its first
@@ -135,10 +162,13 @@ struct Location {
 Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid);
 
 // Inserts `payload` (whose leading Keystone word must carry `id`) into the
-// tree rooted at `root`, splitting and growing as needed.
+// tree rooted at `root`, at the slot `id` sorts to, splitting and growing as
+// needed. **The one door a row comes through** (BD-R6): any id, issued or
+// named - the issue-under-hold doors BB-R1 asked for are deleted with it.
 //
 // Fails with:
-//   AlreadyExists  a live tuple in the target leaf already carries `id`
+//   AlreadyExists  a tuple in the target leaf already carries `id`, live or
+//                  delete-marked (`DuplicateKey`'s text says which)
 //   OutOfRange     `id` is below the target leaf's min_key (invariant 3)
 //   OutOfSpace     the leaf is full, `id` sorts inside it, and it holds
 //                  fewer than two live tuples, so no division makes room;
@@ -158,43 +188,6 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
                                                 std::uint64_t trx_id,
                                                 std::uint64_t owner_oid);
 
-// **The two doors a user row comes through** (BB-R1, insert_placement.hpp's
-// `IssueUnderHold`). `BtreeInsert` above is the storage contract - any id,
-// the middle divide included, which the storage tests drive and SQL no longer
-// reaches - and these are what the statement layer calls, so that a row's id
-// is fixed under the exclusive hold of the leaf it lands on.
-//
-// `BtreeInsertIssued` - an omitted pk (BB-R2). Descends for kMaxKeystoneId,
-// which can only end on the **rightmost** leaf (`DescendTo` checks coverage
-// under the exclusive hold, and only a leaf with no right sibling covers the
-// top of the id space), and asks `issue` for the row under that hold. The id
-// it issues is above every placed id, so the leaf takes it - by append, or by
-// an append split whose new leaf's `min_key` is that id. Fails as
-// `BtreeInsert` does, and with whatever `issue` refused, in which case nothing
-// is placed and the leaf is released.
-StatusOr<storage::InsertPlacement> BtreeInsertIssued(storage::PageStore& store, PageId root,
-                                                      const storage::IssueUnderHold& issue,
-                                                      std::uint64_t trx_id,
-                                                      std::uint64_t owner_oid);
-
-// `BtreeInsertNamed` - a named key (BB-R3 steps 4-8). Descends for `id` and
-// holds the leaf it lands on; then, in order:
-//
-//   AlreadyExists  `id` is in that leaf - the descent is exact, so it is
-//                  nowhere else;
-//   OutOfRange     the leaf has a right sibling - whose `min_key` is an id
-//                  already placed, so `id` is below the relation's mark and
-//                  `admit` is never asked;
-//   ...            whatever `admit` refuses, the mark read under page 7;
-//
-// and otherwise places `id` there. Nothing is placed on any refusal.
-StatusOr<storage::InsertPlacement> BtreeInsertNamed(storage::PageStore& store, PageId root,
-                                                     std::uint64_t id,
-                                                     std::span<const std::byte> payload,
-                                                     const storage::AdmitUnderHold& admit,
-                                                     std::uint64_t trx_id,
-                                                     std::uint64_t owner_oid);
-
 // Descends to the leaf that owns `id` and finds its live slot. This is the
 // point-lookup the whole structure exists for: O(depth) page fetches plus
 // one leaf scan, against the heap chain's O(pages).
@@ -213,9 +206,8 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
                                storage::PageAccess access = storage::PageAccess::kRead);
 
 // Calls `fn` once per slot of every leaf, left to right - which is pk
-// order page by page, and within a leaf slot order: key order on every leaf
-// SQL fills (BB-R1, BB-R3), not necessarily on one the `BtreeInsert`
-// storage contract fed an id below its highest. Signature matches heap::ChainVisit deliberately, so a
+// order page by page, and within a leaf slot order, which is key order on
+// every leaf (BD-R1). Signature matches heap::ChainVisit deliberately, so a
 // caller can hand the same lambda to either - `access` and the
 // VisitControl contract included, with the same meaning and the same
 // consequence for getting either wrong. kStop ends the walk with

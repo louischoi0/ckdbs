@@ -239,6 +239,44 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## WAL
 
+- **A `BTREE_SPLIT` of 8 or more pages exceeds a 64 KiB ring or segment.**
+  Verified at `07e822a6` (BD-S3), by reading. A split's record carries a
+  full image of every page it writes (8,200 bytes each), so 8 pages need
+  more than 64 KiB, and `kMinRingCapacity` and the sim's segments are both
+  64 KiB. The `static_assert` in `storage/log_page_image.hpp` holds the
+  deepest split (`kMaxStructuralChanges`) under the *default* ring only.
+  Unreachable in practice - a split writes two pages per level it climbs,
+  so 8 pages need three full internal levels to divide at once - but where
+  it happens the append is refused `InvalidArgument` after the split's
+  pages changed in memory. Raising the minimum past the deepest split was
+  declined at BD-S2's review: it moves the premise of the cells that open
+  at the minimum ring and of the sim's segment rolls. Owner:
+  `docs/spec/wal.md` §5.2.
+
+- **Whether an index split's records replay as one is unchecked below the
+  root leaf.** Verified at `4debe8d9` (BD-S1). The secondary index tree
+  logs a split as separate page images and no `INDEX_INSERT`, the shape the
+  clustered tree's append split had when a log cut between its parent and
+  its link left a leaf off the walk (`workorder-bd-sorted-leaf-named-keys.md`
+  §1.8, fixed by `BTREE_SPLIT`).
+  BD-S1 cut the log after every record of the root leaf's split and it did
+  not reproduce; a leaf split under an internal node and an internal node's
+  divide were not cut. Owner: `docs/spec/index.md`; a fix, if one
+  reproduces, is an order of its own.
+
+- **A heap placement whose record is never written is not taken back.**
+  Verified at `07e822a6` (BD-S3), by reading; BD-S1's
+  `SortedLeafCrashTest.ARowPlacedAndNeverLoggedLeavesNoHoleForTheNextRecordsRedo`
+  reproduced the shape on a btree leaf at `ec3acda5`. When index
+  maintenance, the assertion reservation, the undo append or the spills'
+  noting fails after a placement and before its record, BD-S2 removes a
+  btree row from its still-held leaf; a heap row stays on its page with no
+  record. A later logged insert on the same page then names a slot redo has
+  never seen, and the mount is refused (the btree cell's refusal read
+  *"redo names slot 4 on a page holding 3"*). BD left the heap's protocol untouched (BD-Q4 (a)), and
+  no volume this engine mounts holds a heap user relation, so only the
+  parser's test seam reaches it. Owner: `heap-and-tuple.md` §3.1b.
+
 - **A refused catalog report on a new page spends one reserved page.** The
   page is left allocated, empty and unlinked. The catalog range is pages
   16..127, and nothing frees a page (`page.md` §5). This predates AZ-S1:
@@ -484,9 +522,10 @@ statement about an engine that no longer exists; re-verify or strike it.
 §3a), so a parent `DELETE` on any core waits for it. The entry that stood
 here recorded the window from AT-S5f (verified at `f247c52`), and AY-S4
 reproduced it at `64b97e7` (a two-core rig cell, an orphan 5/5). That cell
-went at BB-S3's review - BB-R3 refuses the below-mark key it wrote behind
-the walk, so it passed with nothing tested - and the window is pinned on one
-thread by `FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.
+went at BB-S3's review - BB-R3 then refused the below-mark key it wrote
+behind the walk, so it passed with nothing tested. BD-S3 withdrew that
+refusal on a btree (BD-R5), so the shape is reachable again through SQL. The
+window stays pinned on one thread by `FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.
 A second orphaning shape AY-S4 found - a parent `DELETE`
 answered "no children" over a child an undecided `UPDATE` had moved off it,
 the rollback then restoring the reference - closed in the same stage, the
@@ -505,24 +544,13 @@ there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
-- **A volume an engine older than `1b5d252e` wrote at `cores > 1` can hold
-  a btree leaf out of key order, and it mounts.** By reading, on
-  `worktree-bb-issue-under-the-leaf` at `be2bb128` (BB-S3b's review); no
-  cell reproduces it, since no engine this tree builds can write such a
-  leaf. Before BB-S3 a row's id was fixed under catalog page 7 and placed
-  later under its leaf's hold, so two cores could place 101 in slot 4 and
-  100 in slot 5 (defect A) - and nothing recorded it: the `kUnordered` byte
-  was set only by a named key below the mark. BB-R11's mount check reads
-  that byte (`Catalog::RefuseRelationsHoldingKeysOutOfOrder`), so such a
-  volume mounts, and `ORDER BY <pk>` - discarded, since every page filled
-  since BB-S3 holds its slots in key order - answers that leaf in slot
-  order; under `LIMIT` it can return other rows. **Not closed in BB**: the
-  operator confirmed BB-R11's scope as a check at catalog load and not a
-  superblock bump refusing every older volume (BB §6, *"BB-Q9 marked
-  (a)"*), and a bump is the one cheap refusal that would reach it; a mount
-  that reads every leaf's slot order costs a read of the whole volume. A
-  volume written at `cores = 1`, or by an engine at or after `1b5d252e`,
-  holds no such leaf. Owner: `heap-and-tuple.md` §4.1.
+**A volume an engine older than `1b5d252e` wrote at `cores > 1` no longer
+mounts** (closed at BD-S2, `62470f56`, verified at `07e822a6`): superblock
+20 refuses every version-19 volume (BD-R8, no migration), so a btree leaf
+two cores filled out of key order before BB-S3 can no longer reach the
+fallback-free leaf search or the `ORDER BY <pk>` elision. The entry that
+stood here recorded that such a volume mounted under BB-R11's byte check,
+which went with the bump (`heap-and-tuple.md` §4.1).
 
 - **Two concurrent `CREATE ASSERTION`s can place `sys.assertions` rows out
   of issue order.** By reading, on `bb-s0-order` at `bddd450c` (BB §1.8),
@@ -623,6 +651,34 @@ there is no second core's registration to be answered by.
   value a concurrent writeback recorded at its copy; the interleaving needs
   two writebacks and an eviction inside one device write, and no cell forces
   it. Owner: `docs/spec/page.md` §6.
+
+## Keystone ids
+
+- **A purge of a user relation owes a keyed tombstone, and none is built.**
+  Verified at `07e822a6` (BD-S3). Since BD a committed key stays bound
+  because its delete-marked row stays in its leaf for the life of the
+  relation - nothing purges a user relation (`Catalog::RetireDeleteMarks`
+  walks catalog chains only) - and that row is the tombstone BD-R4 rests
+  on: the duplicate check reads it, and a key whose row was deleted is
+  refused `AlreadyExists`. A purge that retired a delete-marked slot keyless,
+  as a rollback does, would free a committed key and let a named key rebind
+  it, against K1. **What a purge owes**: a keyed, never-visible tombstone in
+  the row's key position, which the duplicate check and the placement order
+  read and every walk and `VerifyTupleAt` treat as absent - or it reclaims
+  nothing. Owner: `docs/rules/keystoneid-invariant.md` K1,
+  `heap-and-tuple.md` §4.1.
+
+- **An omitted pk on a btree can be refused `AlreadyExists`.** Verified at
+  `91c998a3` (BD-S5), by reading `CommandDispatcher::InsertOneRow`. The id
+  is issued before the descent, under no leaf's hold (BD-R6), so a named key
+  equal to it can be borrowed, placed and committed first; the placement's
+  duplicate check then burns the id and the issue draws again, at most
+  `kMaxIssueRounds` (8) times. A statement losing every round is refused
+  with the leaf's bare duplicate text and no byte - an `INSERT` that named
+  no key. Pinned for one round by
+  `IssueUnderTheLeafRig.AnIssuedIdANamedKeyPlacedFirstIsDrawnAgain`; eight
+  in a row needs a client naming each next id as it is issued. Owner:
+  `heap-and-tuple.md` §4.1.
 
 ## Locks
 

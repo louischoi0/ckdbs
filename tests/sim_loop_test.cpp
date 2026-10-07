@@ -226,7 +226,12 @@ TEST(SimLoop, TheDurabilityAssertionFiresOnARecoverylessBoot) {
     without.skip_recovery = true;
     const SimVerdict fired = RunSimulation(without);
     ASSERT_FALSE(fired.ok) << "the assertion cannot fail, so it proves nothing";
-    EXPECT_NE(fired.detail.find("missing"), std::string::npos) << fired.detail;
+    // Skipping recovery leaves committed rows unredone (missing) or a
+    // loser's rows un-undone (never accepted); which one the seed's stream
+    // reaches first moves with the workload - BD-S4's named keys moved it.
+    EXPECT_TRUE(fired.detail.find("missing") != std::string::npos ||
+                fired.detail.find("never accepted") != std::string::npos)
+        << fired.detail;
 }
 
 // ---- SIM02: each corruption is caught by exactly its category -------------

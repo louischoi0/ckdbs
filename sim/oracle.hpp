@@ -96,11 +96,14 @@ public:
         tables_ = std::move(working_);
         working_.clear();
         touched_.clear();
+        for (auto& [table, ids] : pending_) consumed_[table].insert(ids.begin(), ids.end());
+        pending_.clear();
         in_txn_ = false;
     }
     void Rollback() {
         working_.clear();
         touched_.clear();
+        pending_.clear();  // a rolled-back key is free again (W12)
         in_txn_ = false;
     }
     // The transaction's outcome is unknown — its COMMIT answered an error.
@@ -117,12 +120,25 @@ public:
     void ApplyInsert(const std::string& table, std::uint64_t id, OracleRow row) {
         Live()[table][id] = std::move(row);
         // Every id the engine ever named, including one a later DELETE or a
-        // ROLLBACK removed: ids are issued once and never rebound
-        // (invariant 11), so this is exactly the complement of "a row the
-        // engine never named", which is what an errored INSERT can leave.
+        // ROLLBACK removed - a rolled-back named key may be named again
+        // (W12, BD-R4), and it is in this set either way - so this is exactly
+        // the complement of "a row the engine never named", which is what an
+        // errored INSERT can leave.
         issued_[table].insert(id);
+        // Bound once its tuple commits (BD-R4): at once in autocommit, at
+        // the transaction's commit otherwise.
+        (in_txn_ ? pending_ : consumed_)[table].insert(id);
         Touch(table, id);
     }
+
+    // **What a named key's INSERT must answer** (BD-R5,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): placed
+    // where it sorts, refused as a duplicate - a key a committed tuple once
+    // carried, live or deleted, or one the open transaction placed - or as
+    // exhausted, outside [1, 2^40 - 1]. `kEither` where the oracle cannot
+    // know: the key, or an INSERT whose id was never named, is unchecked.
+    enum class NamedOutcome : std::uint8_t { kPlaced, kDuplicate, kExhausted, kEither };
+    NamedOutcome Named(const std::string& table, std::uint64_t key) const;
 
     // Rows the predicate matches, which is what the engine's `UPDATED <n>`
     // / `DELETED <n>` is compared against.
@@ -211,6 +227,11 @@ private:
     std::map<std::string, std::set<std::uint64_t>> touched_;
 
     std::map<std::string, std::set<std::uint64_t>> issued_;
+    // Keys bound for good (BD-R4): committed by an autocommit insert or a
+    // committed transaction, whatever deleted them since; and the open
+    // transaction's own, bound if it commits and free if it rolls back.
+    std::map<std::string, std::set<std::uint64_t>> consumed_;
+    std::map<std::string, std::set<std::uint64_t>> pending_;
     std::map<std::string, std::size_t> indeterminate_;
     std::map<std::string, std::set<std::uint64_t>> unchecked_;
 };

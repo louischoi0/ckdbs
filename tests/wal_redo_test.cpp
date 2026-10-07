@@ -1,6 +1,7 @@
 #include "kds/wal/redo.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <utility>
 #include <string>
@@ -12,6 +13,7 @@
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/varheap.hpp"
 #include "kds/txn/undo_page.hpp"
@@ -588,6 +590,130 @@ TEST_F(VarHeapWriteAtTest, ASlotPastTheEndIsCorruption) {
     auto s = varheap::PageWriteAt(page(), 4, Bytes(8, 1));
     ASSERT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
+}
+
+// ---- BTREE_INSERT and BTREE_SPLIT (BD-S2) ---------------------------------
+//
+// `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` BD-R3 E2 and
+// BD-R12: a leaf insert replays where its key sorts, shifting the rows after
+// it, and refuses a record whose key does not sort there; a split's one
+// record replays every page it names.
+
+// A row whose Keystone word carries `pk`.
+std::vector<std::byte> Row(std::uint64_t pk) {
+    std::vector<std::byte> out(24, std::byte{0x5A});
+    auto word = Keystone::Encode(pk, 0, 0);
+    EXPECT_TRUE(word.ok());
+    const std::uint64_t w = word.ok() ? word.value() : 0;
+    std::memcpy(out.data(), &w, sizeof(w));
+    return out;
+}
+
+void AppendLeafInit(WalStream& w) {
+    std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+    const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kBtreeLeaf),
+                                 {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
+    ASSERT_TRUE(EncodePageInit(init, fields).ok());
+    ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
+}
+
+void AppendBtreeInsert(WalStream& w, std::uint16_t slot, std::uint64_t pk) {
+    const std::vector<std::byte> row = Row(pk);
+    std::vector<std::byte> buf(kHeapWriteFixedSize + row.size());
+    const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0, slot,
+                              static_cast<std::uint16_t>(row.size())};
+    ASSERT_TRUE(EncodeHeapWrite(buf, hw, row).ok());
+    ASSERT_TRUE(w.Append({RecordType::kBtreeInsert, 7, kPage}, buf).ok());
+}
+
+std::vector<std::uint64_t> LeafKeys(storage::PageStore& store, PageId page_id) {
+    auto p = store.Get(page_id);
+    EXPECT_TRUE(p.ok()) << p.status().message();
+    if (!p.ok()) return {};
+    heap::PageView view(p.value().bytes());
+    std::vector<std::uint64_t> keys;
+    for (std::uint16_t i = 0; i < view.slot_count(); ++i) {
+        auto payload = view.PayloadAt(i, view.slot_count());
+        if (!payload.ok()) continue;
+        auto id = KeystoneIdOfPayload(payload.value());
+        EXPECT_TRUE(id.ok());
+        keys.push_back(id.ok() ? id.value() : 0);
+    }
+    return keys;
+}
+
+TEST_F(RedoTest, ABtreeInsertReplaysAtItsSlotAndShiftsTheRowsAfterIt) {
+    auto s = WalStream::Open(device_.get(), 0);
+    ASSERT_TRUE(s.ok()) << s.status().message();
+    AppendLeafInit(*s.value());
+    AppendBtreeInsert(*s.value(), 0, 10);
+    AppendBtreeInsert(*s.value(), 1, 30);
+    AppendBtreeInsert(*s.value(), 1, 20);  // between them: 30 moves to slot 2
+    ASSERT_TRUE(s.value()->Sync().ok());
+
+    auto redone = Redo(*device_, 0, store_, Analyzed());
+    ASSERT_TRUE(redone.ok()) << redone.status().message();
+    EXPECT_EQ(LeafKeys(store_, kPage), (std::vector<std::uint64_t>{10, 20, 30}))
+        << "a mid-leaf insert replayed over its neighbour (HEAP_INSERT's overwrite arm)";
+}
+
+TEST_F(RedoTest, ABtreeInsertWhoseKeyDoesNotSortAtItsSlotIsCorruption) {
+    // Strict, with no re-application arm: a record whose key would land out
+    // of order is not this page's.
+    auto s = WalStream::Open(device_.get(), 0);
+    ASSERT_TRUE(s.ok()) << s.status().message();
+    AppendLeafInit(*s.value());
+    AppendBtreeInsert(*s.value(), 0, 30);
+    AppendBtreeInsert(*s.value(), 1, 20);  // after 30: out of order
+    ASSERT_TRUE(s.value()->Sync().ok());
+
+    auto redone = Redo(*device_, 0, store_, Analyzed());
+    ASSERT_FALSE(redone.ok());
+    EXPECT_EQ(redone.status().code(), StatusCode::kCorruption) << redone.status().message();
+}
+
+TEST_F(RedoTest, ABtreeSplitReplaysEveryPageItNamesAndAnalysisDirtiesEach) {
+    // Two leaves as a split leaves them: the old one linked to the new one.
+    constexpr PageId kNew = kPage + 1;
+    std::vector<std::byte> left(kPageSize);
+    std::vector<std::byte> right(kPageSize);
+    {
+        auto l = heap::PageView::CreateEmptyAs(std::span<std::byte, kPageSize>(left.data(), kPageSize),
+                                               1, PageType::kBtreeLeaf);
+        ASSERT_TRUE(l.ok());
+        ASSERT_TRUE(l.value().InsertTuple(Row(10), 7).ok());
+        l.value().set_next_page_id(kNew);
+        auto r = heap::PageView::CreateEmptyAs(
+            std::span<std::byte, kPageSize>(right.data(), kPageSize), 20, PageType::kBtreeLeaf);
+        ASSERT_TRUE(r.ok());
+        ASSERT_TRUE(r.value().InsertTuple(Row(20), 7).ok());
+    }
+    // Two images do not fit the fixture's 16 KiB segment; a record must fit
+    // one (the default segment is 64 MiB).
+    device_ = std::move(MemoryLogDevice::Create(1 << 20).value());
+    const BtreeSplitImage images[] = {{kNew, right}, {kPage, left}};
+    std::vector<std::byte> payload(BtreeSplitSize(2));
+    ASSERT_TRUE(EncodeBtreeSplit(payload, images).ok());
+
+    auto s = WalStream::Open(device_.get(), 0);
+    ASSERT_TRUE(s.ok()) << s.status().message();
+    ASSERT_TRUE(s.value()->Append({RecordType::kBtreeSplit, 7, kPage}, payload).ok());
+    ASSERT_TRUE(s.value()->Sync().ok());
+
+    const AnalysisResult analysis = Analyzed();
+    EXPECT_EQ(analysis.dirty_pages.count(kPage), 1u);
+    EXPECT_EQ(analysis.dirty_pages.count(kNew), 1u) << "the split's second page was not dirtied";
+    EXPECT_EQ(analysis.max_page_id, kNew);
+
+    auto redone = Redo(*device_, 0, store_, analysis);
+    ASSERT_TRUE(redone.ok()) << redone.status().message();
+    EXPECT_EQ(redone.value().page_images, 2u);
+    EXPECT_EQ(LeafKeys(store_, kPage), std::vector<std::uint64_t>{10});
+    EXPECT_EQ(LeafKeys(store_, kNew), std::vector<std::uint64_t>{20});
+    auto old_leaf = store_.Get(kPage);
+    ASSERT_TRUE(old_leaf.ok());
+    EXPECT_EQ(heap::PageView(old_leaf.value().bytes()).next_page_id(), kNew)
+        << "the link the split wrote did not replay with it";
 }
 
 }  // namespace

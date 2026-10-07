@@ -17,7 +17,8 @@ Decisions:
   holds the parent's engine pk (40-bit id in a u64/int cell), never a
   business key. Consequences bought outright by K1/K2: *ON UPDATE
   CASCADE does not exist* (the referenced key is immutable), and a
-  stored reference can dangle but never mis-attribute (issue-once).
+  stored reference can dangle but never names a different committed
+  parent (issue-once, K1).
 - **F2 — Actions: RESTRICT / NO ACTION only.** The grammar is
   `REFERENCES <parent>` with no action clause; CASCADE and SET NULL are
   not accepted.

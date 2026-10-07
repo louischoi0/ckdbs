@@ -1,13 +1,17 @@
 #include "kds/wal/redo.hpp"
 
 #include <cstring>
+#include <optional>
 #include <map>
 #include <set>
 #include <string>
 
+#include "kds/base/function_ref.hpp"
 #include "kds/storage/anchor_page.hpp"
+#include "kds/storage/btree/btree.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/varheap.hpp"
@@ -124,6 +128,13 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
 }
 
 Status ApplyHeapWrite(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    // A B+ tree leaf's rows arrive as BTREE_INSERT (BD-R3 E2): a HEAP_INSERT
+    // naming one would replay a mid-leaf row over its neighbour through the
+    // overwrite arm below, so it is not this page's record.
+    if (record.type() == RecordType::kHeapInsert &&
+        storage::RawPageType(page) == static_cast<std::uint8_t>(PageType::kBtreeLeaf)) {
+        return Status::Corruption("HEAP_INSERT names a B+ tree leaf, whose rows are BTREE_INSERTs");
+    }
     auto decoded = DecodeHeapWrite(record.payload);
     if (!decoded.ok()) {
         return decoded.status();
@@ -266,6 +277,88 @@ Status ApplyIndexInsert(std::span<std::byte, kPageSize> page, const DecodedRecor
     return Status::OK();
 }
 
+// The siblings' stance (the 3f07eda review's C2): a record that is not this
+// page's is refused, never applied - a heap page's body+4 read as an entry
+// count is exactly the forged bound the anchor accessors refuse.
+Status ApplyAnchorUpdate(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    if (storage::RawPageType(page) != static_cast<std::uint8_t>(PageType::kAnchor)) {
+        return Status::Corruption("ANCHOR_UPDATE names page type " +
+                                  std::to_string(storage::RawPageType(page)) + ", not an anchor");
+    }
+    auto decoded = DecodeAnchorUpdate(record.payload);
+    if (!decoded.ok()) {
+        return decoded.status();
+    }
+    if (decoded.value().index_oid == 0) {
+        storage::SetAnchorClusteredRoot(page, decoded.value().root);
+        return Status::OK();
+    }
+    // A full or forged table here means the log and the page disagree -
+    // Corruption whatever the accessor's own spelling (its
+    // ResourceExhausted is a live-path answer, not a replay one).
+    if (Status s = storage::SetAnchorIndexRoot(page, decoded.value().index_oid,
+                                               decoded.value().root);
+        !s.ok()) {
+        return Status::Corruption(s.message());
+    }
+    return Status::OK();
+}
+
+// **A row placed where its key sorts** (BTREE_INSERT, BD-R3 E2). Strict:
+// redo reaches this only for a page below the record's LSN, so the leaf is
+// the one the record was written against, and the slot the record names is
+// the one the live placement's search answered - `btree::SearchLeaf` on the
+// same leaf. Anything else is a record that is not this page's, and is
+// refused rather than placed.
+Status ApplyBtreeInsert(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    if (storage::RawPageType(page) != static_cast<std::uint8_t>(PageType::kBtreeLeaf)) {
+        return Status::Corruption("BTREE_INSERT names page type " +
+                                  std::to_string(storage::RawPageType(page)) +
+                                  ", not a B+ tree leaf");
+    }
+    auto decoded = DecodeHeapWrite(record.payload);
+    if (!decoded.ok()) return decoded.status();
+    auto key = KeystoneIdOfPayload(decoded.value().tuple);
+    if (!key.ok()) return key.status();
+    heap::PageView view(page);
+    auto at = btree::SearchLeaf(view, key.value());
+    if (!at.ok()) return at.status();
+    const std::uint16_t slot = decoded.value().fields.slot;
+    if (at.value().present || at.value().at != slot) {
+        return Status::Corruption("BTREE_INSERT of key " + std::to_string(key.value()) +
+                                  " names slot " + std::to_string(slot) + ", where the leaf " +
+                                  (at.value().present ? std::string("already holds the key")
+                                                      : "sorts it at slot " +
+                                                            std::to_string(at.value().at)));
+    }
+    auto placed = view.InsertTupleAt(slot, decoded.value().tuple, decoded.value().fields.trx_id,
+                                     decoded.value().fields.undo_ptr);
+    return placed.ok() ? Status::OK() : placed.status();
+}
+
+// The applier for a record that changes the one page its envelope names,
+// or null for a type redo does not know (wal.md §5.2: a hard error, never
+// skipped). FULL_PAGE_IMAGE and BTREE_SPLIT are whole-page records and are
+// handled by the visitor itself.
+using Applier = Status (*)(std::span<std::byte, kPageSize>, const DecodedRecord&);
+Applier ApplierFor(RecordType type) noexcept {
+    switch (type) {
+        case RecordType::kPageInit: return ApplyPageInit;
+        case RecordType::kHeapInsert:
+        case RecordType::kHeapOverwrite: return ApplyHeapWrite;
+        case RecordType::kBtreeInsert: return ApplyBtreeInsert;
+        case RecordType::kHeapDeleteMark: return ApplyDeleteMark;
+        case RecordType::kHeapDeleteUnmark: return ApplyDeleteUnmark;
+        case RecordType::kSlotRetire: return ApplySlotRetire;
+        case RecordType::kUndoWrite: return ApplyUndoWrite;
+        case RecordType::kVarHeapAppend: return ApplyVarHeapAppend;
+        case RecordType::kVarHeapRelease: return ApplyVarHeapRelease;
+        case RecordType::kIndexInsert: return ApplyIndexInsert;
+        case RecordType::kAnchorUpdate: return ApplyAnchorUpdate;
+        default: return nullptr;
+    }
+}
+
 }  // namespace
 
 StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::PageStore& store,
@@ -273,27 +366,14 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
     RedoStats stats;
     PoisonedPages poisoned;
 
-    const auto visit = [&](const DecodedRecord& record) -> Status {
-        ++stats.records;
-
-        if (TouchesNoPage(record.type())) {
-            ++stats.no_page;
-            return Status::OK();
-        }
-        if (IsAssertionRecord(record.type())) {
-            // RC07's, and blocked on assertion.md §7's genesis
-            // decision. Counted rather than dropped so the deferral shows
-            // up in the report instead of being assumed.
-            ++stats.deferred_assertions;
-            return Status::OK();
-        }
-        if (record.header.page_id == kInvalidPageId) {
-            ++stats.no_page;
-            return Status::OK();
-        }
-
-        const PageId page_id = record.header.page_id;
-        const bool is_image = record.type() == RecordType::kFullPageImage;
+    // One page's share of one record: the dirty filter, the load (or the
+    // creation a whole-page record may make), the poison and `page_lsn`
+    // gates, `apply`, and the stamp. A record names one page in its
+    // envelope, except BTREE_SPLIT, whose payload names every page it
+    // writes and which runs this once per page (BD-R12).
+    const auto apply_page =
+        [&](const DecodedRecord& record, PageId page_id, bool is_image,
+            FunctionRef<Status(std::span<std::byte, kPageSize>)> apply) -> Status {
 
         // PW1c-2's filter: a record for a page analysis holds no dirty
         // entry for - or one below that entry's recLSN - describes state
@@ -318,7 +398,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
 
         // A page the log names may not exist in the store at all - the
         // crash can have lost the allocation that created it. PAGE_INIT and
-        // an FPI both describe a whole page, so either can create one;
+        // an image both describe a whole page, so either can create one;
         // anything else needs the page to be there already.
         // Dynamic extent while the branches below decide *which* page this
         // is, narrowed to the fixed extent once past them. A
@@ -336,7 +416,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         if (got.ok()) {
             page_bytes = got.value().bytes();
         } else if (got.status().code() == StatusCode::kCorruption) {
-            // Checksum failure. Held, not failed: an FPI later in the
+            // Checksum failure. Held, not failed: an image later in the
             // stream is exactly what heals this (page.md §10).
             if (!is_image) {
                 poisoned.insert(page_id);
@@ -391,103 +471,23 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // The stamp survives as a claim (`device_page_store`'s
         // claim-at-fault), which is why redo leaves it alone.
         //
-        // RV5, the whole of idempotence. An FPI is gated too: a page
+        // RV5, the whole of idempotence. An image is gated too: a page
         // already at or past this LSN does not need its image restored.
         if (storage::GetPageLsn(page) >= record.header.lsn) {
             ++stats.skipped_by_lsn;
             return Status::OK();
         }
 
-        Status applied = Status::OK();
-        switch (record.type()) {
-            case RecordType::kFullPageImage: {
-                auto image = DecodeFullPageImage(record.payload);
-                if (!image.ok()) {
-                    return image.status();
-                }
-                std::memcpy(page.data(), image.value().data(), kPageSize);
-                ++stats.page_images;
-                if (poisoned.erase(page_id) != 0) {
-                    ++stats.pages_healed;
-                }
-                break;
-            }
-            case RecordType::kPageInit:
-                applied = ApplyPageInit(page, record);
-                break;
-            case RecordType::kHeapInsert:
-            case RecordType::kHeapOverwrite:
-                applied = ApplyHeapWrite(page, record);
-                break;
-            case RecordType::kHeapDeleteMark:
-                applied = ApplyDeleteMark(page, record);
-                break;
-            case RecordType::kHeapDeleteUnmark:
-                applied = ApplyDeleteUnmark(page, record);
-                break;
-            case RecordType::kSlotRetire:
-                applied = ApplySlotRetire(page, record);
-                break;
-            case RecordType::kUndoWrite:
-                applied = ApplyUndoWrite(page, record);
-                break;
-            case RecordType::kVarHeapAppend:
-                applied = ApplyVarHeapAppend(page, record);
-                break;
-            case RecordType::kVarHeapRelease:
-                applied = ApplyVarHeapRelease(page, record);
-                break;
-            case RecordType::kIndexInsert:
-                applied = ApplyIndexInsert(page, record);
-                break;
-            case RecordType::kAnchorUpdate: {
-                // The siblings' stance (the 3f07eda review's C2): a record
-                // that is not this page's is refused, never applied - a
-                // heap page's body+4 read as an entry count is exactly the
-                // forged bound the anchor accessors refuse.
-                if (storage::RawPageType(page) !=
-                    static_cast<std::uint8_t>(PageType::kAnchor)) {
-                    applied = Status::Corruption(
-                        "redo: ANCHOR_UPDATE names page " + std::to_string(page_id) +
-                        ", which is page type " +
-                        std::to_string(storage::RawPageType(page)) + ", not an anchor");
-                    break;
-                }
-                auto decoded = DecodeAnchorUpdate(record.payload);
-                if (!decoded.ok()) {
-                    applied = decoded.status();
-                    break;
-                }
-                if (decoded.value().index_oid == 0) {
-                    storage::SetAnchorClusteredRoot(page, decoded.value().root);
-                } else {
-                    // A full or forged table here means the log and the
-                    // page disagree - Corruption whatever the accessor's
-                    // own spelling (its ResourceExhausted is a live-path
-                    // answer, not a replay one).
-                    if (Status s = storage::SetAnchorIndexRoot(
-                            page, decoded.value().index_oid, decoded.value().root);
-                        !s.ok()) {
-                        applied = Status::Corruption(s.message());
-                    }
-                }
-                break;
-            }
-            default:
-                // wal.md §5.2: an unknown type during replay is a hard
-                // error, never skipped. ALLOC/FREE land here too - they are
-                // assigned and emitted by nothing (page.md §5's
-                // SpaceManager is unbuilt), so one in a stream means the
-                // stream was written by something this build does not know.
-                return Status::Corruption(
-                    "redo: no applier for record type " +
-                    std::string(RecordTypeName(record.type())) + " at lsn " +
-                    std::to_string(record.header.lsn));
-        }
-        if (!applied.ok()) {
+        if (Status applied = apply(page); !applied.ok()) {
             return applied.WithContext("redo of " + std::string(RecordTypeName(record.type())) +
                                        " at lsn " + std::to_string(record.header.lsn) +
                                        " on page " + std::to_string(page_id));
+        }
+        if (is_image) {
+            ++stats.page_images;
+            if (poisoned.erase(page_id) != 0) {
+                ++stats.pages_healed;
+            }
         }
 
         // The page_lsn is what makes the next pass skip this record, and it
@@ -502,10 +502,79 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // (`page_header.hpp`); it stays truthful about which core last
         // wrote the page. `ApplyPageInit` is the one path that still writes
         // a stamp, from `LoggingCoreOf(record.header.flags)` - the record's
-        // own core, not the recovering core. An FPI writes none: its memcpy
+        // own core, not the recovering core. An image writes none: its memcpy
         // restores whatever stamp the captured image carried.
         ++stats.applied;
         return Status::OK();
+    };
+
+    const auto copy_image = [](std::span<const std::byte> image) {
+        return [image](std::span<std::byte, kPageSize> page) {
+            std::memcpy(page.data(), image.data(), kPageSize);
+            return Status::OK();
+        };
+    };
+
+    const auto visit = [&](const DecodedRecord& record) -> Status {
+        ++stats.records;
+
+        if (TouchesNoPage(record.type())) {
+            ++stats.no_page;
+            return Status::OK();
+        }
+        if (IsAssertionRecord(record.type())) {
+            // RC07's, and blocked on assertion.md §7's genesis
+            // decision. Counted rather than dropped so the deferral shows
+            // up in the report instead of being assumed.
+            ++stats.deferred_assertions;
+            return Status::OK();
+        }
+        if (record.header.page_id == kInvalidPageId) {
+            ++stats.no_page;
+            return Status::OK();
+        }
+
+        const PageId page_id = record.header.page_id;
+        if (record.type() == RecordType::kFullPageImage) {
+            auto image = DecodeFullPageImage(record.payload);
+            if (!image.ok()) {
+                return image.status();
+            }
+            return apply_page(record, page_id, /*is_image=*/true, copy_image(image.value()));
+        }
+        if (record.type() == RecordType::kBtreeSplit) {
+            // Whole or not at all is the record's CRC's to give (a torn
+            // record ends the log before it); here each page it names is
+            // applied through its own gates, as if it were an image of its
+            // own.
+            auto images = DecodeBtreeSplit(record.payload);
+            if (!images.ok()) {
+                return images.status();
+            }
+            for (const BtreeSplitImage& image : images.value()) {
+                if (Status s = apply_page(record, image.page_id, /*is_image=*/true,
+                                          copy_image(image.image));
+                    !s.ok()) {
+                    return s;
+                }
+            }
+            return Status::OK();
+        }
+        const Applier applier = ApplierFor(record.type());
+        if (applier == nullptr) {
+            // wal.md §5.2: an unknown type during replay is a hard error,
+            // never skipped. ALLOC/FREE land here too - they are assigned
+            // and emitted by nothing (page.md §5's SpaceManager is unbuilt),
+            // so one in a stream means the stream was written by something
+            // this build does not know.
+            return Status::Corruption("redo: no applier for record type " +
+                                      std::string(RecordTypeName(record.type())) + " at lsn " +
+                                      std::to_string(record.header.lsn));
+        }
+        return apply_page(record, page_id, /*is_image=*/false,
+                          [&](std::span<std::byte, kPageSize> page) {
+                              return applier(page, record);
+                          });
     };
 
     auto scan = ScanLog(device, core_id, analysis.redo_start_lsn, visit);

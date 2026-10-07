@@ -70,8 +70,9 @@
 // **Buckets append in walk order and replay front to back.** Spec §3's
 // third fact: a probe emits each key's matches in exactly the order the
 // walk would have, because build order *is* walk order, whatever that order
-// is (pk order: every page's slot order is its key order since BB-R1 and
-// BB-R3, and the map would keep any other order a walk had). The chain is
+// is (pk order: every page's slot order is its key order - a btree leaf's
+// by placement since BD-R1 - and the map would keep any other order a walk
+// had). The chain is
 // appended at the tail for exactly this reason; a
 // head-insert list would be one instruction cheaper and would reverse
 // every reply. The contrast to keep in view: the Cabin's recording SORTS

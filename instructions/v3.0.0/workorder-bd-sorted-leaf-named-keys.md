@@ -2,7 +2,7 @@
 
 Written 2026-10-07 on `worktree-bd-sorted-leaf-named-keys` from `bf8ea937`
 (`v2.7.0-652-gbf8ea937`), on the operator's words below. All are verbatim,
-from one session, and recorded in `raft-marks-2026-10-07.md` §7-§13.
+from one session, and recorded in `raft-marks-2026-10-07.md` §7-§13, §17 and §18.
 
 **The operator's words**, numbered so the rest of this order can cite them:
 
@@ -28,14 +28,14 @@ from one session, and recorded in `raft-marks-2026-10-07.md` §7-§13.
 - **W12:** *"롤백된 아이디는 당연히 재사용되어야해"*
 - **W13:** *"BD-Q4, Q8, Q9 제안대로 마킹해줘"*
 - **W14:** *"리뷰 끝나면 반영해서 push해"*
+- **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
+- **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
 
-**Status: written, reviewed, and not yet opened.**
+**Status: closed 2026-10-07 at BD-S6 (W16, §19 of `raft-marks-2026-10-07.md`); not pushed.**
 
-- §4's mark column says which items the words settle.
-- BD-Q0 and BD-Q10..Q12 wait for the operator.
-- No stage has started.
-- W11 asked for this order alone, so nothing under `src/`, `include/` or
-  `tests/` moves with it.
+- §4's mark column says which items the words settle; every item is marked.
+- BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.
+- BD-S0 itself moved no file under `src/`, `include/` or `tests/` (W11).
 
 **What BD withdraws** (`workorder-bb-issue-under-the-leaf.md`). On a btree:
 
@@ -58,7 +58,8 @@ On every relation, BB-R11's mount check goes with superblock 20 (BD-R8).
 
 **BB and BA.** BD is not part of AR0 §8's chain. BB is not closed: BB-S5's
 rebase of BA is drafted and unreviewed, and BA is paused until BB closes.
-BD-Q12 asks which order carries that rebase (§5).
+By BD-Q12 (b), BB closes on the measurement it has, and BD-S6 rebases BA
+once, against BD (§5).
 
 ## 0. What BD is
 
@@ -220,8 +221,12 @@ A mid-leaf insert would therefore replay as an overwrite of its neighbour
 - The row sits on its leaf with no trail entry and no record. Its own
   comment calls it *"a row a rollback would not undo"*
   (`command_dispatcher.cpp:5354-5360`).
-- Today its writer has aborted, so no reader sees it, and it is harmless
-  but for `RefuseDuplicate` counting it. Under BD it breaks two things
+- Its writer has aborted, so no reader sees it. **It is not harmless
+  today**, as this paragraph first said: BD-S1's cell
+  `SortedLeafCrashTest.ARowPlacedAndNeverLoggedLeavesNoHoleForTheNextRecordsRedo`
+  places an unlogged row by ascending keys, logs the next insert on the
+  same leaf at the slot after it, and the mount is refused (*"redo names
+  slot 4 on a page holding 3"*). Under BD it breaks two more things
   [inferred]:
   - **W12.** A second slot can carry the same key, which makes the search,
     E1's re-find and a divide's cut ambiguous.
@@ -487,9 +492,14 @@ cannot cut the log inside a statement's records (`sim/faults.hpp:31-41`).
   omitted pk appends, and so does every ascending named key.
 - **Cost at `cores > 1`, with BB-R1 deleted.** An id issued before a higher
   one that was placed first lands below that one and shifts it [inferred].
-  On a full rightmost leaf that is a divide: two 8 KiB images, an epoch
-  bump, and a left half that later ids never refill. BD-Q11 asks for the
-  remedy.
+  On a full rightmost leaf, a median divide would leave a left half that
+  later ids never refill.
+- **The rightmost leaf splits at the insertion point (BD-Q11 (a)).**
+  - The keys above the incoming one move to the new leaf, and the left leaf
+    stays full.
+  - A named key far below the leaf's top makes the left leaf sparse
+    instead. That costs space, never correctness.
+  - A leaf with a right sibling divides at the median, as today.
 
 **BD-R3 — every holder of a btree row's slot made shift-safe (§1.2).** This
 lands before the gate opens (§5).
@@ -717,7 +727,7 @@ KWP `position` field stays as it is (§1.4).
   - a named insert waiting on an undecided inserter, both arms;
   - a committed row under an undecided update, refused at once;
   - E3 and E4 under a concurrent shift;
-  - BD-R2's rightmost-leaf divide at `cores > 1`.
+  - the rightmost leaf's insertion-point split at `cores > 1` (BD-Q11).
 - **Crash cells:**
   - §1.2's silent case: 50, then 40, then the crash;
   - a loser moved by a divide;
@@ -735,6 +745,7 @@ KWP `position` field stays as it is (§1.4).
   - the exhausted check reading the wrapped value;
   - `ProbeBuild` without `VerifyTupleAt`;
   - JB6 by ordinal;
+  - the rightmost leaf split at the median;
   - a split replayed in part.
 - **§1.6's pinning cells** are flipped, and BB-S3's reshaped cells get their
   subjects back.
@@ -765,7 +776,7 @@ KWP `position` field stays as it is (§1.4).
 - **What it covers:** every split of the clustered tree, whether an append
   split, a mid-chain append split, a leaf divide or an internal node's
   divide. Under BD each one is reachable from SQL.
-- **Proposed:**
+- **Marked (BD-Q10 (a)):**
   - one `BTREE_SPLIT` record, appended as kind 30, carrying every page image
     the split writes;
   - redo applies it whole, with each page gated by its own `page_lsn`;
@@ -784,7 +795,7 @@ KWP `position` field stays as it is (§1.4).
 |---|---|---|---|
 | BD-S0 | **The order** | this file, its review, and the marks recorded | S |
 | BD-S1 | **Red first** | <ul><li>**Red at BD-S0's commit, through SQL:**<ul><li>`pk = 100`, then `pk = 99`, placed, and `ORDER BY id` elided and ascending (W8);</li><li>a descending multi-row `VALUES` placed;</li><li>a rolled-back key named again and placed (W12);</li><li>a named insert waiting on an undecided inserter, both arms;</li><li>a committed key under an undecided update, `AlreadyExists` at once (L2 answers `OutOfRange` today);</li><li>`0`, `-1`, `2^40` and `2^64 + 5`, each `OutOfRange` with the token's byte;</li><li>the census cell: every pk-caused refusal is `AlreadyExists` or `OutOfRange`.</li></ul></li><li>**Red through the storage contract and the crash rig:**<ul><li>the divide's incoming row out of order;</li><li>§1.2's silent recovery case;</li><li>E5's misaligned redo;</li><li>a mid-leaf `HEAP_INSERT` replayed as an overwrite;</li><li>a log cut inside a divide's records.</li></ul></li><li>**Decided here:**<ul><li>the append split's and the index split's cut-off cells (§1.8), with a bug entry filed for each that reproduces.</li></ul></li><li>**Guard, green and kept green:**<ul><li>a deleted key named again is `AlreadyExists`.</li></ul></li></ul> | M |
-| BD-S2 | **Sorted placement, the shift-safe holders, the whole split** (BD-R2, BD-R3, BD-R8, BD-R12) | <ul><li>**Code:**<ul><li>insert-at-slot, and the one `lower_bound`;</li><li>the merged divide;</li><li>`BtreeInsert` sorted, with the fallback and its cell gone;</li><li>`BTREE_INSERT`, with its strict redo and no record after a split's image;</li><li>`BTREE_SPLIT`;</li><li>recovery undo's re-find;</li><li>E5's take-back;</li><li>`ProbeBuild`'s verify, and JB6's key mark;</li><li>superblock 20, and BB-R11's check deleted.</li></ul></li><li>**Still refused:** SQL refuses below the mark until S3, so S1's storage and crash cells are what turn green here.</li><li>**Green:**<ul><li>the golden log, re-pinned;</li><li>the suite;</li><li>the contract suites, byte-for-byte.</li></ul></li></ul> | L |
+| BD-S2 | **Sorted placement, the shift-safe holders, the whole split** (BD-R2, BD-R3, BD-R8, BD-R12) | <ul><li>**Code:**<ul><li>insert-at-slot, and the one `lower_bound`;</li><li>the merged divide;</li><li>`BtreeInsert` sorted, with the fallback and its cell gone;</li><li>`BTREE_INSERT`, with its strict redo and no record after a split's image;</li><li>`BTREE_SPLIT`, and the rightmost leaf's insertion-point split;</li><li>recovery undo's re-find;</li><li>E5's take-back;</li><li>`ProbeBuild`'s verify, and JB6's key mark;</li><li>superblock 20, and BB-R11's check deleted.</li></ul></li><li>**Still refused:** SQL refuses below the mark until S3, so S1's storage and crash cells are what turn green here - except the E2 and divide-cut crash cells, which reach their key through SQL and turn green at S3 (BD-S1's review, finding 2). S2's own proof for those two is a redo-level `BTREE_INSERT` neighbour-check cell and a `BTREE_SPLIT` whole-or-nothing cell.</li><li>**Green:**<ul><li>the golden log, re-pinned;</li><li>the suite;</li><li>the contract suites, byte-for-byte.</li></ul></li></ul> | L |
 | BD-S3 | **The gate opened, and BB-R1 deleted** (BD-R4..R7) | <ul><li>**Deleted on a btree:**<ul><li>L2, S3 and S5;</li><li>the two doors;</li><li>the issue and the admission under the hold.</li></ul></li><li>**Changed:**<ul><li>admit is advance-or-nothing;</li><li>`before_wait` as BD-R5 states it;</li><li>exhausted on the literal, with the byte;</li><li>the two texts.</li></ul></li><li>**The heap's protocol untouched.**</li><li>**Cells:**<ul><li>S1's SQL cells green;</li><li>§1.6's pinning cells flipped;</li><li>BB-S3's reshaped cells restored.</li></ul></li><li>**Green:** the suite.</li></ul> | L |
 | BD-S4 | **The sim and the rigs** (BD-R9) | <ul><li>the workload and the oracle;</li><li>the rigs and the crash cells;</li><li>the mutations, each killed on every run.</li></ul> | M |
 | BD-S5 | **The text** (BD-R11) | every row of BD-R11, the grep included, and `known-gaps.md:493-510` closed | M |
@@ -794,7 +805,7 @@ KWP `position` field stays as it is (§1.4).
 
 | item | what | class | CLA's proposal | mark |
 |---|---|---|---|---|
-| BD-Q0 | **Open BD** with BD-S0..S6 and BD-R1..R12 as written | process | Yes | — |
+| BD-Q0 | **Open BD** with BD-S0..S6 and BD-R1..R12 as written | process | Yes | **yes**, W16 |
 | BD-Q1 | **How a leaf stays in key order** (BD-R2).<br>(a) Shift the directory and change what addresses a slot.<br>(b) Fixed slot numbers, plus a key-order array | invariant | (a) | **(a)**, W4 |
 | BD-Q2 | **What keeps an id issued once** (BD-R4) | invariant, user-visible | **First offered:** a keyed tombstone for every slot that ever held a tuple. **Revised for W12:** an id is consumed when its tuple commits, the delete-marked row is today's tombstone, a rolled-back key is free, and a purge owes a keyed tombstone | **as proposed** (W6), **revised by W12** |
 | BD-Q3 | **The reading of W5's two reasons** (BD-R5).<br>(a) Duplicate is a slot keyed `k` (`AlreadyExists`); exhausted is outside `[1, 2^40 − 1]` (`OutOfRange`), with `InvalidArgument` folded in.<br>(b) Present-now against used-before, with out-of-space values left `InvalidArgument` | user-visible | (a) | **(a)**, W7 |
@@ -804,9 +815,9 @@ KWP `position` field stays as it is (§1.4).
 | BD-Q7 | **The close-out measurement** (BD-R10) | process | Measured once at the close | **waived**, W10 |
 | BD-Q8 | **How recovery undo re-finds a row** (BD-R3 E1).<br>(a) Scan the recorded leaf, and rightward while `min_key ≤ pk`.<br>(b) Add `rel_oid` to the undo record, and use the live locator | format, invariant | (a). It needs no catalog during undo. (b) is one mechanism for both rollbacks, and free under W9, but it needs the catalog readable during undo, which is unchecked | **as proposed: (a)**, W13 |
 | BD-Q9 | **A named key meeting an undecided insert of the same key** (BD-R5).<br>(a) Wait for its decide, and answer by the outcome.<br>(b) `AlreadyExists` at once | user-visible | (a). Under W12 a rollback frees the key | **as proposed: (a)**, W13 |
-| BD-Q10 | **How a split replays whole** (BD-R12).<br>(a) One `BTREE_SPLIT` record carrying every image the split writes.<br>(b) A group of records that redo applies only once the group's closing record is durable | format, **[quiet-wrong] if neither** | (a). One record is atomic by its CRC, and redo gains no buffering | — |
-| BD-Q11 | **A rightmost leaf's split at `cores > 1`** (BD-R2).<br>(a) Split a full rightmost leaf at the insertion point rather than the median, so ids arriving out of issue order leave the left leaf full.<br>(b) The median, as today | performance shape | (a). With BB-R1 deleted, the median divide on the rightmost leaf leaves half-full leaves that no later id refills | — |
-| BD-Q12 | **Which order carries BB-S5's rebase of BA.**<br>(a) BB closes first, rebasing BA against BB's rules.<br>(b) BB closes on the measurement it has, and BD-S6 rebases BA once, against BD | process | (b). BD withdraws the BB rules that rebase reads, so rebasing against BB would be done twice | — |
+| BD-Q10 | **How a split replays whole** (BD-R12).<br>(a) One `BTREE_SPLIT` record carrying every image the split writes.<br>(b) A group of records that redo applies only once the group's closing record is durable | format, **[quiet-wrong] if neither** | (a). One record is atomic by its CRC, and redo gains no buffering | **as proposed: (a)**, W15 |
+| BD-Q11 | **A rightmost leaf's split at `cores > 1`** (BD-R2).<br>(a) Split a full rightmost leaf at the insertion point rather than the median, so ids arriving out of issue order leave the left leaf full.<br>(b) The median, as today | performance shape | (a). With BB-R1 deleted, the median divide on the rightmost leaf leaves half-full leaves that no later id refills | **as proposed: (a)**, W15 |
+| BD-Q12 | **Which order carries BB-S5's rebase of BA.**<br>(a) BB closes first, rebasing BA against BB's rules.<br>(b) BB closes on the measurement it has, and BD-S6 rebases BA once, against BD | process | (b). BD withdraws the BB rules that rebase reads, so rebasing against BB would be done twice | **as proposed: (b)**, W15 |
 
 ## 5. Sequencing
 
@@ -815,8 +826,9 @@ KWP `position` field stays as it is (§1.4).
    recovery case, E5's misaligned redo and §1.8's half split reachable from
    SQL.
 2. **BD-S1, then S2, S3, S4, S5 and S6.** S4 may start once S3 has landed.
-3. **BB and BA.** BA stays paused until BB closes (BD-Q12). BA's rows
-   rebased against BD:
+3. **BB and BA (BD-Q12 (b)).** BB closes on the measurement it has, without
+   rebasing BA. BA stays paused until then, and BD-S6 rebases these rows
+   once, against BD:
    - **BA-R8's last bullet:** the hook is gone. That stands.
    - **BA-R8's named-key bullet:** *"a btree now refuses below the cursor
      too"* is withdrawn.
@@ -892,3 +904,404 @@ simplifications**, and corrected four line numbers in §1.6 and BD-R8 itself.
 - **Keeping only one of the header's status and §6.** The header carries
   three status lines, as every order's does, because other orders and the
   index read it. §6 carries the history.
+
+### BD-Q10, BD-Q11 and BD-Q12 marked as proposed - 2026-10-07
+
+On W15 (`raft-marks-2026-10-07.md` §17):
+
+- **BD-Q10 (a):** a split is logged as one `BTREE_SPLIT` record carrying
+  every image it writes (BD-R12).
+- **BD-Q11 (a):** a full rightmost leaf splits at the insertion point
+  (BD-R2).
+- **BD-Q12 (b):** BB closes on the measurement it has, and BD-S6 rebases BA
+  once (§5).
+
+BD-Q0, BD's opening, is the one item left. No stage has started.
+
+### BD opened - 2026-10-07
+
+On W16 (`raft-marks-2026-10-07.md` §18), BD-Q0 is marked yes, and BD is
+open with BD-S0..S6 and BD-R1..R12 as written at `50d35916`. BD-S1 starts
+on `worktree-keep-btree-leaf-slots`, branched from `50d35916`.
+
+### BD-S1 - red first, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `ec3acda5` (BD opened). Run on
+that engine, Debug. Every cell below is red for the reason it names, and
+the full suite is red on exactly these cells (and on
+`TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`,
+whose port an outside `kds_server` process held; it fails alone at
+`ec3acda5` too).
+
+- **Through SQL**, `tests/sorted_leaf_named_keys_test.cpp`:
+  - `AKeyBelowAnEarlierOneIsPlacedAndOrderByStaysElided` (W8);
+  - `ADescendingMultiRowValuesIsPlacedInKeyOrder`;
+  - `ARolledBackKeyIsNamedAgainAndPlaced` (W12);
+  - `EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhausted` - the census:
+    each case's exact code and the token's byte, §1.4's S3 row, and a key
+    named twice in one statement. It shows `2^64 + 5` placed as id 5 today,
+    which §1.4 had only inferred.
+- **Two sessions**, `tests/lock_family_test.cpp` (`NamedKeyWaitTest`): a
+  named key waiting on an undecided inserter, both arms; a committed key
+  under an undecided update or delete, `AlreadyExists` at once.
+- **The storage contract**, `tests/btree_test.cpp`:
+  `ALeafTakesEachIdAtTheSlotItSortsTo`,
+  `ADescendingRunAcrossManyDividesLeavesEveryLeafInKeyOrder`, and
+  `AFullLeafDividesToMakeRoomForALowerId` flipped to compare unsorted (one
+  of §1.6's pinning cells).
+- **Recovery undo**, `tests/recovery_undo_test.cpp`
+  (`RecoveryUndoLeafTest`): §1.2's silent case, and a loser's row a divide
+  moved to the right sibling.
+- **The crash rig**, `tests/sorted_leaf_crash_test.cpp` (helpers shared with
+  `insert_log_crash_rig_test.cpp` in `tests/file_rig_crash.hpp`):
+  - E5's misaligned redo, through a new seam
+    (`CommandDispatcher::SetAfterPlacementForTest`, which fails the
+    index-maintenance exit). **Red with ascending keys at `ec3acda5`**: the
+    mount is refused, so §1.2's "harmless today" is corrected above. No bug
+    entry, because BD-S2 fixes it in this session.
+  - E2's mid-leaf replay, and a log cut everywhere inside a divide - **both
+    reach their key through SQL, so they turn green at S3**, not S2.
+- **Decided**:
+  - the append split's cut **reproduces** - after record 5 of 8, the parent's
+    image, rows inserted after the restart are off the walk - and is
+    `docs/inflight/bugs/a-log-cut-inside-an-append-split-leaves-its-leaf-off-the-walk.md`,
+    which BD-R12 fixes;
+  - the index split's cut (the root leaf's split) **does not reproduce**, and
+    stays as a guard.
+- **Guard, green**: `ADeletedKeyNamedAgainIsAlreadyExists`.
+
+**The review** (one `critics-developer` pass, 8 correctness findings, 3
+missing cells, 6 simplifications). **Applied**: the seam routed through the
+index-maintenance exit; the E2 and divide-cut cells' stage corrected; the
+cut mounts the whole log too, pairs the before snapshot's data file with the
+cut log, and names the record kind it cut after; the bug entry's record
+list; the census's exact codes; the smaller items; the S3 row, a key named
+twice, and the undecided-delete arm; the shared crash helpers; the divide
+cell flipped rather than copied; the out-of-range cell merged into the
+census; one helper for the two inserter arms; sampled descents on each cut.
+**Declined**: E5's bug entry (BD-S2 fixes it in this session, and a defect
+fixed in the session that found it gets none); dropping `Walk()` for
+`Ordered()` alone (the bare walk is the leaf's own order, which an elided
+`ORDER BY` reports only while the elision holds); one parser for the SQL and
+crash files' replies (different reply shapes, `id,qty` against `id`).
+
+**Overhead not measured** (BD-R10, waived).
+
+
+### BD-S2 - sorted placement, the shift-safe holders, the whole split, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `4debe8d9` (BD-S1). Run on that
+engine, Debug.
+
+- **Placement** (BD-R2): `heap::PageView::InsertTupleAt` moves the
+  directory entries at and after the slot up one; `btree::SearchLeaf`, one
+  binary search over the keyed slots, replaces `RefuseDuplicate`,
+  `MaxLiveId` and `FindSlotForId` with its fallback, and is public for redo
+  and recovery undo. The divide merges the incoming row into the sorted
+  versions and cuts once: the rightmost leaf at the insertion point
+  (BD-Q11 (a)), falling back to the median for an id below every key or a
+  moving half no empty leaf holds; any other leaf at the median. The append
+  split keeps its shape. `BtreeTest.ALookupFindsAnIdInALeafWhoseSlotsAreOutOfOrder`
+  is deleted with the fallback.
+- **The log** (BD-R3 E2, BD-R12): `BTREE_INSERT` (29) carries HEAP_INSERT's
+  payload, and its redo places the row only at the slot `SearchLeaf`
+  answers, refusing anything else `Corruption`. `BTREE_SPLIT` (30) carries
+  every page a split writes as an image; analysis dirties each, redo applies
+  each through its own `page_lsn` gate. A btree insert logs one of the two,
+  after its spills and index entries, and a HEAP_INSERT naming a B+ tree
+  leaf is refused at redo. The record fits the default ring for the deepest
+  split (`static_assert`).
+- **E1**: recovery undo re-finds a `kBtreeLeaf` row by its key, in the
+  recorded leaf and rightward while `min_key <= pk`, and compensates only a
+  version the loser wrote.
+- **E3**: `ProbeBuild` verifies a btree entry and resolves a miss by pk.
+- **E4**: JB6's mark is the last pk covered on a btree.
+- **E5**: a btree placement is taken back at the index-maintenance,
+  reservation, undo-append and spill-noting exits; a split's row is retired
+  and the split logged under `kNoTxnId`, with a root it grew published.
+- **BD-R8**: superblock 20; BB-R11's mount check, its cell and
+  `kRetiredKeyOrderUnordered` deleted, the byte reserved.
+- **Re-pinned**: the golden log (`0xd4d0579a`: the two `golden_tree` rows'
+  record type), `insert_wal_test`'s record kinds, the appended-type cell,
+  `BtreeTest.ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo` (the new
+  leaf is an image now), `keystone_id_test`'s logged-id reader.
+- **New cells**: three redo cells (`BTREE_INSERT` shifts; one out of key
+  order is `Corruption`; `BTREE_SPLIT` replays and dirties every page) and
+  `SortedLeafCrashTest.ATakenBackRowWhoseSplitGrewTheRootLeavesTheRootPublished`,
+  red with the take-back's root publish removed.
+- **Green here from BD-S1**: the storage contract's three cells, recovery
+  undo's two, E5's crash cell, and the append split's log cut - so
+  `docs/inflight/bugs/a-log-cut-inside-an-append-split-leaves-its-leaf-off-the-walk.md`
+  is deleted. **Still red, as §3 says**: the SQL and two-session cells, and
+  the E2 and divide-cut crash cells, all gated by SQL's below-mark refusal
+  until BD-S3.
+
+**The review** (one `critics-developer` pass): 2 high, 2 low, 8
+simplifications, 9 stale comments. **Applied**: C1, a take-back of a split
+that grew the root now publishes it (the cell above); C2, the spills are
+noted before the row's trail entry and their failure is a take-back; C4's
+first half, a HEAP_INSERT on a leaf refused; redo's dispatch as one applier
+table over `FunctionRef`; `LogBtreeSplit` takes the placement's changes,
+with no dedupe; `SearchLeaf` shared by redo and undo; `take_back` moved
+above the Cabin comment; the `fits_one_leaf` comment; every stale comment
+named. **Declined**: C3, raising `kMinRingCapacity` past the deepest split
+(a 64 KiB ring or segment refuses a split of 8 or more pages, which takes
+three full internal levels) - it moves the premise of the cells that open
+at the minimum ring and the sim's segment rolls, and is recorded in
+`known-gaps.md` at BD-S5 instead; C4's second half, which noted a stricter
+behaviour and asked for nothing; one helper for E3 and the Cabin serve (the
+serve's miss heals the entry and counts it, a helper would carry both
+concerns); `LogInsert`'s span ternary as an `if` (one expression against a
+re-indented loop); `Record`'s `min_key` on a btree change (a cell reads it
+as the new leaf's low key).
+
+**Overhead not measured** (BD-R10, waived).
+
+### BD-S3 - the gate opened, and BB-R1 deleted, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `62470f56` (BD-S2). Run on that
+engine, Debug.
+
+- **The two reasons** (BD-R5): a named key outside `[1, 2^40 - 1]` is
+  `OutOfRange` with its token's byte, judged from the literal's digits
+  (`raw_int_text`) rather than the wrapped `int_val` - zero, negative, past
+  40 bits, or past 64 (`2^64 + 5` no longer lands as 5). The order said to
+  reuse `row_codec.cpp`'s wrapped-literal test; that test compares the
+  spelling against `std::to_string(int_val)` and would read a leading zero
+  (`007`) as wrapped, so the digits are read directly instead. A duplicate is
+  `AlreadyExists` with the byte, its text saying whether the row was
+  deleted (`btree::DuplicateKey`). The lexer's overflow is unsigned, so
+  defined.
+- **The judgement of a refused borrow** (BD-R5, BD-Q9 (a)): on a btree, a
+  present key whose latest writer decided is a duplicate at once; an
+  in-flight writer's version is walked back while each earlier writer is in
+  flight (`CommandDispatcher::UndecidedInsert`) - a chain that ends is an
+  undecided insert, and the statement waits for its decide; one that reaches
+  a decided writer is a committed row under an undecided update or delete,
+  a duplicate at once. Absent is a wait. The mark branch is the heap's alone.
+- **BB-R1 deleted on a btree** (BD-R6): an omitted pk is issued, borrowed
+  and encoded before the descent; a named key is borrowed, encoded and
+  admitted advance-or-nothing (`Catalog::AdmitExplicitRowId`, which reads
+  the relation's storage), then placed. `btree::BtreeInsert` is the one door:
+  `BtreeInsertIssued`, `BtreeInsertNamed` and `duplicate_scanned` are
+  deleted, and the dispatcher's `InsertIssued`/`InsertNamed` are the heap's.
+  **The heap's protocol is untouched** (BD-Q4 (a)).
+- **§1.6's pinning cells flipped**: the fence cell (a duplicate refused at
+  once, an absent key waits on the fence and is placed), the spilled-value
+  cell (the duplicate alone refuses after a spill), the Cabin cell (a key
+  below the mark witnessed, a duplicate not), the bulk ordinal cell (a heap
+  refuses, a btree places), the catalog cell (advance-or-nothing); the
+  undecided-writer `OutOfRange` cell retired for `NamedKeyWaitTest`.
+- **BB-S3's reshaped cells restored** from `1b5d252e^`: in
+  `supplied_key_test.cpp` the descending load, the range scan and ORDER BY
+  (with and without LIMIT) over descending keys, the interleaved backfill,
+  the rollbacks across a divide (a failed statement, an aborted update), the
+  bulk statement in any order, a duplicate of a descending key and a
+  descending key accepted; in `insert_log_crash_rig_test.cpp` a divide under
+  another core before the row is logged and the mid-chain append split
+  across a crash (beside their ascending variants); in `lock_family_test.cpp`
+  the resume across a divide under a park; in `insert_wal_test.cpp` the
+  divide's record set, now one `BTREE_SPLIT` and no insert. Not restored, and
+  why: the catalog's key-order flip cells and `DESCRIBE`'s `key_order=` cells
+  pin a flag BB-S3b deleted, and the Cabin serve's `(page, slot)` branch for
+  an unordered relation is gone with it.
+- **Re-stated**: `IdAllocationAcrossCores` - one burned id per retry since
+  the issue precedes the descent; the bound it asserts is unchanged.
+  `issue_under_the_leaf_rig_test.cpp`'s cells pass by placement.
+- **Green**: every BD-S1 cell; the suite, but for
+  `TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`
+  (an outside process holds its port).
+
+**Overhead not measured** (BD-R10, waived).
+
+**The review** (one `critics-developer` pass): 1 medium and 3 low
+findings, 2 missing items, 4 simplifications, stale texts. **Applied**:
+the medium one - an omitted pk could draw the id a named key at the mark had
+borrowed and then placed, and was refused `AlreadyExists`; it now burns the
+id and draws again (bounded), pinned by
+`IssueUnderTheLeafRig.AnIssuedIdANamedKeyPlacedFirstIsDrawnAgain` through a
+new seam between the issue and its borrow (`SetAfterRowIdIssuedForTest`),
+red with the reissue removed; the rig cells assert whether core 1 finished
+during core 0's stop (a btree's does, a heap's does not); the burn comment
+says "at most one"; a btree's `OutOfRange` placement is logged again; the
+named key's seam moved before its admission, so
+`ANamedKeyAndALaterIssuedIdLandInKeyOrder` replaces the BB cell that pinned
+issue order; the four reshaped two-core cells restored beside their
+variants (`AChildCommittedDuringTheControllersBuildIsInTheSetItBanks`,
+`AnIndexRecordCarriesItsOwnRowsEntryAcrossAnotherCoresInserts`, and under
+new names `AParentWrittenBackBeforeItsDivideIsLoggedDoesNotRouteToNothing`
+and `TwoCoresInsertingSpillsIntoOneVarHeapPageRecoverInTheOrderTheyWrote`),
+each repeated five times green; `UndecidedInsert`'s second step pinned
+(`NamedKeyWaitTest.AnUndecidedInsertItsOwnWriterUpdatedIsStillWaitedOn`);
+`BelowMark` deleted - the admission reads the relation's `clustered_type`;
+the heap-only `InsertIssued`/`InsertNamed` inlined; `UndecidedInsert` a free
+function; one helper for the duplicate's byte;
+`CheckNamedRowIdSpellable` answers `OutOfRange`; the catalog's and the
+dispatcher's stale texts. **Declined**: none.
+
+### BD-S4 - the sim and the rigs, built 2026-10-07
+
+Built on `worktree-keep-btree-leaf-slots` on `07e822a6` (BD-S3). Run on that
+engine, Debug.
+
+- **The sim** (BD-R9): the workload names keys - `kInsertNamed`, in and out
+  of a transaction, drawing a fresh key, one near the top, a deleted key, a
+  rolled-back key and a key outside the space - and tracks the band a fresh
+  key moves the mark into, so pk-targeted reads and writes keep reaching the
+  rows inserted after it. The oracle answers every named insert placed, a
+  duplicate, exhausted or either (`Oracle::Named`): a key consumed or pending
+  is a duplicate whatever else is unknown, an unchecked key or an
+  indeterminate unnamed insert makes it either. The loop checks each reply
+  against that answer and absorbs only an I/O error under faults, never a
+  pk refusal; the toggle pairing compares a named insert's outcome by its
+  refusal's reason. `integrity.cpp`'s slot-order check covers delete-marked
+  slots.
+- **The rigs** (`sorted_leaf_rig_test.cpp`, new): two cores naming
+  interleaved descending keys into one leaf; a shift under another core's
+  undecided row surviving its rollback; appends from two cores keeping the
+  tree whole and dense (a smoke cell); an inner build and a resumed prefix
+  answering the same while core 1 shifts the first leaf's rows under every
+  resume, its EXISTS premise asserted from `ANALYZE`.
+- **The crash cells** (`sorted_leaf_crash_test.cpp`): a loser whose rows
+  shifted each other, and a loser whose rows a later divide moved - premise
+  asserted (`leaves=` grew by two under the loser, its keys descending so a
+  divide moves rows it placed whichever point it cuts at) - rolled back
+  across a crash; a mid-leaf row placed and never logged taken back before
+  the next record; a log cut inside an internal node's divide.
+- **JB6's deterministic cell**
+  (`ExecChainTest.AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARetiredSlot`):
+  through `exec::Execute`'s `PositionSink`, at the outer walk's first page
+  boundary, `tr`'s leaf is divided ahead of the mark, compacting a retired
+  slot behind it; each inner row must be bucketed once and every author
+  answered.
+- **The mutations**, each applied from a backup and built:
+
+  | Mutation | Killed by | Verdict |
+  |---|---|---|
+  | placement at `nr_slots` | `BtreeTest.ALeafTakesEachIdAtTheSlotItSortsTo`, `SortedLeafSqlTest.*` | killed |
+  | the divide appending its row last | `BtreeTest.ADescendingRun*` | killed |
+  | recovery undo by slot alone | `RecoveryUndoLeafTest.*`, `SortedLeafCrashTest.ALoserRowADivide*` | killed |
+  | `BTREE_INSERT` redo without its neighbour check | `RedoTest.ABtreeInsert*` | killed |
+  | E5's take-back removed | `SortedLeafCrashTest.ARowPlaced*`, `.AMidLeafRow*`, `.ATakenBack*` | killed |
+  | `before_wait` refusing an undecided insert | `NamedKeyWaitTest.*` (3x) | killed |
+  | the exhausted check reading the wrapped value | `SortedLeafSqlTest.EveryRefusal*` | killed |
+  | `ProbeBuild` without `VerifyTupleAt` | `SortedLeafRigTest.AnInnerBuild*` (3x) | killed |
+  | a split replayed in part | `RedoTest.ABtreeSplit*`, `SortedLeafCrashTest.ALogCutInsideAnAppendSplit*` | killed |
+  | JB6 by ordinal | `ExecChainTest.AResumedPrefixCovers…` (3x): `build_rows` 165 for 166, an author missing | killed |
+  | the rightmost leaf split at the median | `BtreeTest.AFullRightmostLeafSplitsAtTheInsertionPoint` | killed |
+
+  The last two survived the rig cells: two cores' interleave cannot force
+  an ordinal resume across a dropped slot, nor tell a median divide from an
+  insertion-point one by leaf count. JB6's kill is the deterministic cell
+  above; the median's is the `BtreeTest` cell, and the rig cell is named a
+  smoke cell. The re-timed rig cell, the reworked JB6 cell and the loser
+  cell were re-run against their mutants after the review and still kill
+  them.
+- **Green**: the suite, 3223 of 3223 (one disabled); `scripts/sim.sh 4`,
+  190 runs, 0 failures (Debug `ckdbs-sim`; no `build-release` in this tree).
+
+**Overhead not measured** (BD-R10, waived).
+
+**The reviews** (two `critics-developer` passes). The first: 1 high, 2
+medium and 1 low on the sim, 4 on the cells, a deterministic JB6 kill, and
+duplication. **Applied**: the high one - the first fresh key moved the mark
+to 2^39 and every pk-targeted op stayed in the low band; the workload now
+tracks the high band; the fault absorb excludes pk refusals; the oracle's
+order puts consumed/pending first; the pairing compares outcomes, not
+`IsErr`; the smoke cell reworded and renamed; the E3/E4 rig re-timed and its
+EXISTS premise asserted; the loser cell's premise; the JB6 cell; the rig's
+helpers moved onto `crash_rig::` (`Ids`, `Leaves`, `StartsWith`, `Ok`), and
+`insert_log_crash_rig_test.cpp`'s copy of `Ids` with them. One applied
+finding was wrong and corrected: the pairing compared a named refusal's
+full text, and a duplicate's text names a page, which the features' own
+pages move, so the pairing failed on every committed seed; it compares the
+refusal's reason instead. The second pass, over those follow-ups: the JB6
+cell's exact count held by page geometry with the divide behind the mark,
+so the divide is anchored at the mark's author and the count is the authors
+plus the rows the divide inserted; a dead `build_rows=0` assert; the loser
+cell's keys made descending; includes. **Declined**: none.
+
+### BD-S5 - the text, written 2026-10-07
+
+Written on `worktree-keep-btree-leaf-slots` on `b6eab627` (BD-S4).
+
+- **Every text in §1.6 restated** (BD-R11): `CLAUDE.md`'s rows and
+  invariant 11, `README.md`, `heap-and-tuple.md` §3.1, §4.1, §4.1a, §5 and
+  §8, `keystoneid-invariant.md` K1-K3 and §1, `txn.md`, `wal.md` §5.2,
+  §11a and §12, `index.md`, `cabin.md` C2 and §5, `join-inner-build.md` JB4
+  and JB6, `crosscore.md`, `waystone-concpets.md`, `assertion.md`,
+  `bulkinsert.md`, `page.md`, the manual's pk section and error table, and
+  the source comments in `src/` and `include/` that cited a withdrawn BB
+  rule or BD's superseded reasons.
+- **Corrected on the way**: `txn.md`'s delete-mark rollback
+  (`HEAP_DELETE_UNMARK`, no Waystone entry cleared); `bulkinsert.md`'s
+  per-row pk checks, the heap's below-mark refusal named.
+- **Recorded**: BD-R4's purge obligation and §1.8's index-split question in
+  `known-gaps.md`; §1.7's second path in the equal-entries bug entry;
+  `known-gaps.md:493-510` closed by superblock 20 (BD-S2).
+- **The grep** (BD-R11's done-when): every hit of `BB-R1`, `BB-R2`,
+  `BB-R3`, `BB-R11` and `BB-R12` in `src/ include/ docs/spec/ docs/rules/
+  manual/ CLAUDE.md` states history or the heap's kept rule (BD-Q4).
+- No code changes: every `src/` and `include/` hunk is a comment.
+- **Green**: the suite, 3223 of 3223 (one disabled).
+
+**The reviews.** The first pass (a workflow of four reviewers, each
+finding voted on by two verifiers): 27 confirmed, 3 refuted. **Applied**:
+all 27 - the take-back of a split, an issued id's uniqueness on a btree
+(the mark among issued ids, the placement's duplicate check against a named
+key, `kMaxIssueRounds`), a btree leaf sorted in §3.1, the per-core block
+paragraph, index.md's stale cross-reference to the clustered tree's images,
+the Cabin's and the readers' "dead forever" reasons under W12, the heap's
+rolled-back key in `txn.md`, `wal.md`'s INSERT row and ordering rule 1,
+`assertion.md`'s watermark, `bulkinsert.md`'s heap check, `CLAUDE.md`,
+`README.md` and the manual's unscoped or stale claims (with a new error row
+for an omitted pk's eighth collision), the heap comments citing BB-R12, the
+index tree's header, `LogInsert`'s and the seam's contracts, and
+`PromoteSeparator`'s reach. **Refuted** (the verifiers did not hold them):
+`heap-and-tuple.md`'s "below a full leaf", the write-walks bug entry's line
+citations, and `log_page_image.hpp`'s size claim, which the known-gaps WAL
+entry already bounds. A second pass over the applied text found one
+applied fix false - the Bound Cabin's pk row said a rolled-back key can
+reach a live entry; an aborted reservation's entry is removed and orphaned
+before the undo frees the key (AS6b) - and eight sentences beside the fixes
+still contradicting them ("never mis-attribute", "an issued id clears every
+named key"), plus wording: all applied. **Declined**: none.
+
+### BD-S6 - the close, 2026-10-07
+
+Written on `worktree-keep-btree-leaf-slots` on `91c998a3` (BD-S5).
+
+- **A row per stage**: BD-S1 (red cells, `4debe8d9`), BD-S2 (placement, the
+  shift-safe holders, the whole split, superblock 20, `62470f56`), BD-S3
+  (the gate opened, BB-R1 deleted on a btree, `07e822a6`), BD-S4 (the sim,
+  the rigs, eleven mutations killed, `b6eab627`), BD-S5 (the text,
+  `91c998a3`).
+- **What BD carries**: a btree leaf is in key order by placement at every
+  core count; a named key on a btree is refused only as a duplicate or
+  exhausted, and a rolled-back key is free (W12); an issued id is drawn
+  before the descent and re-drawn, bounded, when a named key took it first;
+  a split is one `BTREE_SPLIT`. **The heap is untouched** (BD-Q4 (a)).
+- **What bounds it**, in `known-gaps.md` and `bugs/`: a `BTREE_SPLIT` of 8
+  or more pages exceeds a 64 KiB ring or segment; whether an index split's
+  records replay as one is unchecked; BD-R4's purge obligation (a keyed
+  tombstone must outlive any purge); the equal-sort-keys index bug, which a
+  rolled-back key named again now also reaches; an omitted pk refused
+  `AlreadyExists` after `kMaxIssueRounds` collisions with named keys; a
+  heap placement whose record is never written is not taken back.
+- **BA's rows rebased** (BD-Q12 (b)) in `workorder-ba-parallelism.md`, "BA
+  rebased on BD": BA-R8's hook bullet stands, its named-key bullet's draft
+  withdrawn, its placement-order bullet resting on BD-R1; BA-R11's original
+  text stands and BB's draft is dropped; BA-S11 rests on BD-R6, its
+  `kUnordered` clause gone. BA stays paused until BB's close entry is
+  written, which waits for its own word.
+- **No measurement** (BD-R10).
+
+**Not done here, and why**: the push and BB's close entry each wait for the
+operator's word.
+
+**The review** (one `critics-developer` pass): 4 findings, all applied -
+the known-gaps entry said the issue holds no page (it holds page 7; no
+leaf); BA-S11's rebase said a `fetch_add` is the whole of an issue and kept
+*"a named key inside [cursor, ceiling) is never issued"*, both of which
+BD's bounded re-draw contradicts; §19's "Recorded at"; and BB's order now
+says its BB-S5 does not rebase BA. **Declined**: none.

@@ -187,9 +187,8 @@ StatusOr<ChainInsertResult> ChainInsertNamed(storage::PageStore& store, PageId h
     auto tail = HoldTail(store, head, tail_hint);
     if (!tail.ok()) return tail.status();
     // Below the tail's min_key is below a placed id, so below the mark: the
-    // chain's answer, with no read of page 7 - the btree's right sibling
-    // read as a heap reads it (BB-R7), and worded as the btree words it: the
-    // caller named a key below the mark, nothing went backwards (BB-R12).
+    // chain's answer, with no read of page 7 (BB-R7), worded as BB-R12
+    // worded it for every relation then and for the heap now (BD-Q4).
     PageView page(tail.value().page.bytes());
     if (id < page.min_key()) {
         return Status::OutOfRange(
@@ -199,9 +198,11 @@ StatusOr<ChainInsertResult> ChainInsertNamed(storage::PageStore& store, PageId h
             ", an id already placed; a named key must sort above every key the relation has "
             "placed or issued");
     }
-    // The mark before the duplicate check, unlike the btree (BB-R12): the
-    // check reads the tail alone and cannot prove a key below it present, so
-    // a heap answers `OutOfRange` for both, as it always did.
+    // The mark before the duplicate check (BB-R12, kept for the heap by
+    // BD-Q4): a key below the mark is refused `OutOfRange` whether or not the
+    // tail holds it, so a heap never answers a named key `AlreadyExists`. A
+    // btree admits first too, but never refuses there; its descent's
+    // duplicate check answers (BD-R5).
     if (Status s = admit(id); !s.ok()) return s;
     return PlaceOnTail(store, std::move(tail.value()), id, payload, trx_id, owner_oid, tail_hint);
 }

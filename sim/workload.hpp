@@ -71,16 +71,21 @@ struct Op {
         kCommit,
         kRollback,
         kCreateCabin,
+        // A named key (BD, `instructions/v3.0.0/workorder-bd-sorted-leaf-
+        // named-keys.md`): `key` is the pk the INSERT names. Placed where it
+        // sorts, or refused as a duplicate or as exhausted (BD-R5) - the
+        // oracle says which.
+        kInsertNamed,
     };
     Kind kind;
     std::string table;
     std::string sql;
     // Semantic fields the oracle needs to build its expectation.
-    std::uint64_t key = 0;       // kSelectPk; kUpdate/kDelete when by_pk
+    std::uint64_t key = 0;       // kSelectPk, kInsertNamed; kUpdate/kDelete when by_pk
     std::uint64_t lo = 0;        // kSelectRange
     std::uint64_t hi = 0;        // kSelectRange
-    std::int64_t v = 0;          // kInsert, kFilterScan; kUpdate's new v
-    std::string name;            // kInsert; kUpdate's new name
+    std::int64_t v = 0;          // kInsert(Named), kFilterScan; kUpdate's new v
+    std::string name;            // kInsert(Named); kUpdate's new name
     bool btree = false;          // kCreateTable
 
     // kUpdate / kDelete: the predicate is `id = key` when by_pk, else
@@ -108,6 +113,22 @@ private:
         std::string name;
         bool btree;
         std::uint64_t inserted = 0;  // the id-guessing counter, not truth
+        // Keys a named INSERT reuses (BD-R9): ones a DELETE by pk named,
+        // and ones a rolled-back transaction named - a deleted key is a
+        // duplicate for good, a rolled-back one is free (W12).
+        std::vector<std::uint64_t> deleted;
+        std::vector<std::uint64_t> rolled_back;
+        // Inside a transaction a named key is drawn from here, descending:
+        // below 2^39 no issue reaches (issues start low and jump above the
+        // first such key), so it is always free there - a refusal inside a
+        // transaction would poison it and end the stream's transaction.
+        std::uint64_t fresh = std::uint64_t{1} << 39;
+        // The first fresh key moves the mark to just above it, so every id
+        // issued after it lands in a high band: `high_base` is its first id,
+        // and `high_inserted` counts the omitted-pk inserts into it, so the
+        // pk-targeted ops can still aim at the rows issued there.
+        std::uint64_t high_base = 0;
+        std::uint64_t high_inserted = 0;
     };
 
     std::int64_t NextValue();
@@ -115,13 +136,17 @@ private:
     const Table& PickTable();
     Table& PickTableMutable();
     std::uint64_t GuessKey(const Table& table);
+    // A key below 2^39 no issue reaches (`Table::fresh`), noting the band
+    // issued ids jump to once the first one moves the mark.
+    std::uint64_t FreshKey(Table& table);
 
     // The data-op half of the mix: everything legal inside a transaction
     // and out of one.
     Op DataOp();
     Op Insert(Table& table);
+    Op InsertNamed(Table& table);
     Op Update(const Table& table);
-    Op Delete(const Table& table);
+    Op Delete(Table& table);
 
     Rng rng_;
     Profile profile_;
@@ -130,6 +155,9 @@ private:
 
     bool in_txn_ = false;
     std::size_t txn_ops_left_ = 0;
+    // The named keys the open transaction placed, by table index: a
+    // rollback frees them for reuse.
+    std::vector<std::pair<std::size_t, std::uint64_t>> txn_named_;
 
     // Cabins are named by (table, column) and a second CREATE on the same
     // pair is an error, so the generator remembers what it declared.

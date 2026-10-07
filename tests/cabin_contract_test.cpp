@@ -794,34 +794,24 @@ TEST(CabinContractTest, AWriteHookAppendServesInPkOrder) {
         << "heap: a served set emitted out of pk order";
 }
 
-TEST(CabinContractTest, ANamedKeyBelowTheMarkIsRefusedAndNoCabinSetWitnessesIt) {
-    // **Withdrawn, and what stands in its place.** This cell pinned the
-    // other half of the ordering rule: caller-supplied ids named out of
-    // order left a page's slots in insertion order, not key order, and a
-    // serve had to emit them as the walk did rather than sort by pk. BB-Q8
-    // (b) withdrew the shape - BB-R3 refuses a named key below the mark on
-    // every relation, btree included - so every page's slot order is its
-    // key order, the walk's order and pk order are one order, and the
-    // serve's `(page, slot)` branch that existed for the difference goes
-    // with `kUnordered` (BB-R10).
+TEST(CabinContractTest, ANamedKeyBelowTheMarkIsWitnessedAndADuplicateIsNot) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`) from the shape BB-S3 withdrew: caller-supplied ids
+    // named out of order. Before BB they left a page's slots in insertion
+    // order and a serve had to emit them as the walk did; since BD a leaf
+    // places each where it sorts, so the walk's order and pk order are one
+    // order and the served reply must equal the cabin-free one.
     //
-    // What a Cabin must still get right is the refusal itself. The witness
-    // (§5) runs only once a row is placed, so a refused key reaches no
-    // entry set. An entry for one would be surplus - a dangling pk for the
-    // absent key, a second entry for the present one - which the serve
-    // subtracts, so the reply alone cannot see it: the set's size is the
-    // witness. Both refusals BB-R12 names are driven against an observed
-    // value, each answering byte for byte as the cabin-free baseline does,
-    // and neither may move the rows, the set or the mark.
-    //
-    // Named keys with gaps, ascending: the shape a client that names its
-    // pks still has.
+    // And the witness (§5) runs once a row is placed: a key below the mark is
+    // placed now, so it enters the entry set; a duplicate is refused before
+    // placement and must not. The set's size is the witness - a surplus entry
+    // is subtracted by the serve, so the reply alone cannot see one.
     Instance db(/*cabins=*/true);
     Instance base(/*cabins=*/false);
     for (Instance* d : {&db, &base}) {
         ASSERT_EQ(d->Run("CREATE TABLE e (id int64, sym varchar, qty int64) BTREE").substr(0, 7),
                   "CREATED");
-        for (int id : {10, 20, 30, 40, 50}) {
+        for (int id : {50, 40, 30, 20, 10}) {
             const std::string n = std::to_string(id);
             ASSERT_EQ(d->Run("INSERT INTO e VALUES (" + n + ", 'aaa', " + n + ")").substr(0, 8),
                       "INSERTED")
@@ -847,42 +837,29 @@ TEST(CabinContractTest, ANamedKeyBelowTheMarkIsRefusedAndNoCabinSetWitnessesIt) 
     ASSERT_TRUE(db.cabins().Find(*key).valid());
     const std::size_t before = db.cabins().Find(*key).size();
 
-    // Absent and below the mark: `OutOfRange` (BB-R12).
-    const std::string absent = "INSERT INTO e VALUES (25, 'aaa', 25)";
-    const std::string refused_absent = base.Run(absent);
-    EXPECT_EQ(refused_absent.rfind("ERR", 0), 0u) << refused_absent;
-    EXPECT_NE(refused_absent.find("high-water mark"), std::string::npos) << refused_absent;
-    EXPECT_EQ(db.Run(absent), refused_absent);
-
-    // Present: `AlreadyExists`, so duplicate detection keeps working.
+    // Present: `AlreadyExists`, refused before placement, so not witnessed.
     const std::string present = "INSERT INTO e VALUES (30, 'aaa', 99)";
     const std::string refused_present = base.Run(present);
     EXPECT_EQ(refused_present.rfind("ERR", 0), 0u) << refused_present;
     EXPECT_NE(refused_present.find("duplicate primary key"), std::string::npos)
         << refused_present;
     EXPECT_EQ(db.Run(present), refused_present);
-
     EXPECT_EQ(db.cabins().Find(*key).size(), before) << "a refused key reached the entry set";
-    EXPECT_EQ(base.Run(sql), want) << "a refused key landed";
-    EXPECT_EQ(db.Run(sql), want) << "a refused key changed the served reply";
-    // The served reply cannot show a row the witness missed, so the cabined
-    // instance's rows are read by the bare walk, which no Cabin serves.
-    const std::string walk = "SELECT * FROM e";
-    EXPECT_EQ(db.Run(walk), base.Run(walk)) << "a refused key landed on the cabined instance";
 
-    // The mark did not move: the next omitted pk is the one after 50.
+    // Absent and below the mark: placed where it sorts, and witnessed.
+    const std::string absent = "INSERT INTO e VALUES (25, 'aaa', 25)";
+    EXPECT_EQ(base.Run(absent).rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(db.Run(absent).rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(db.cabins().Find(*key).size(), before + 1) << "a placed key was not witnessed";
+    EXPECT_EQ(db.Run(sql), base.Run(sql)) << "the served reply after a key below the mark";
+    const std::string ordered = sql + " ORDER BY id";
+    EXPECT_EQ(db.Run(ordered), base.Run(ordered));
+
+    // The mark did not move for a key below it: the next omitted pk is 51.
     const std::string next = "INSERT INTO e VALUES ('aaa', 60)";
     const std::string issued = base.Run(next);
     EXPECT_NE(issued.find(" id=51 "), std::string::npos) << issued;
     EXPECT_EQ(db.Run(next), issued);
-    // A placed row does append, so the unchanged size above is the
-    // refusals' and not a witness that never fires.
-    EXPECT_EQ(db.cabins().Find(*key).size(), before + 1);
-    EXPECT_EQ(db.Run(sql), base.Run(sql)) << "the served execution after the append";
-
-    // And the clause that asks for pk order agrees with the baseline too.
-    const std::string ordered = sql + " ORDER BY id";
-    EXPECT_EQ(db.Run(ordered), base.Run(ordered));
 }
 
 TEST(CabinContractTest, ACorrelatedExistsConvergesToObservedSets) {

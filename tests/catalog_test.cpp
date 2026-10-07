@@ -892,17 +892,13 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
 }
 
 TEST_F(CatalogTest, ARefusedBelowMarkKeyMovesNoWordAndDropsNoCache) {
-    // Withdrawn by BB-Q8 (b) and BB-R3: a named key below the mark used to be
-    // admitted on a btree and flip the relation's key order in place - the
-    // one DDL-frequency write that bumped the word and kept the writer's
-    // entry. The key is refused now, on every relation, before the row is
-    // written, so there is no flip left to publish. What stays to pin is
-    // that the refusal publishes nothing: a below-mark key - and since BB-R3
-    // a named key another core's issue raced past - must cost neither the
-    // writer its entry nor every reader a refill.
+    // A heap refuses a named key below its mark (BB-R3, kept by BD-Q4) before
+    // the row is written; a btree places one (BD-R7) and refuses nothing.
+    // What this pins is that the refusal publishes nothing: a below-mark key
+    // must cost neither the writer its entry nor every reader a refill.
     catalog_.SetSchemaWord(&word);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    auto oid = catalog_.CreateTable(kNamespacePublic, "f", MinimalPkSchema(), ClusteredType::kBtree);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "f", MinimalPkSchema(), ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     for (int i = 0; i < 3; ++i) ASSERT_TRUE(catalog_.AllocateRowId(oid.value()).ok());
     ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
@@ -1470,16 +1466,12 @@ TEST_F(RowIdAdmissionTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
     EXPECT_EQ(after.value().next_id, 601u);
 }
 
-TEST_F(RowIdAdmissionTest, ABtreeRelationIsRefusedABelowMarkKeyAsAHeapIs) {
-    // Withdrawn by BB-Q8 (b) and BB-R3: a btree used to admit a key below its
-    // mark - the descent proved it unused - and flip the relation unordered.
-    // It is refused now, as a heap's always was: the mark is the ascent
-    // written as one number, and a named key at or above it sorts above every
-    // key the relation has placed or issued, which is what keeps every page's
-    // slot order its key order. `AdmitExplicitRowId` answers `OutOfRange`,
-    // BB-R12's absent arm; a key that is present is refused `AlreadyExists`
-    // by the descent before it gets here (`BtreeInsertNamed`), which a catalog
-    // alone cannot reach.
+TEST_F(RowIdAdmissionTest, ABtreeAdmissionAdvancesTheMarkOrLeavesItAndNeverRefuses) {
+    // BD-R6/BD-R7 (`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`):
+    // a btree leaf places a key where it sorts, so its admission is
+    // advance-or-nothing - a key at or above the mark moves it past the key,
+    // one below leaves it where it is, and neither is refused. The heap's
+    // refusal is `AHeapRelationTakesASuppliedKeyAtOrAboveTheMark`'s.
     Catalog catalog(store_, storage::kDefaultInlineCellWidth);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
@@ -1488,26 +1480,16 @@ TEST_F(RowIdAdmissionTest, ABtreeRelationIsRefusedABelowMarkKeyAsAHeapIs) {
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 600).ok());
+    // Below the mark, in a gap and twice over: admitted, and the mark stays.
+    EXPECT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 550).ok());
+    EXPECT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 549).ok());
 
-    // Below the mark, in a gap nothing was ever placed or issued in: refused
-    // all the same - the mark is judged, not the gap.
-    auto refused = catalog.AdmitExplicitRowId(oid.value(), 550);
-    EXPECT_EQ(refused.code(), StatusCode::kOutOfRange) << refused.message();
-    EXPECT_NE(refused.message().find("high-water mark"), std::string::npos) << refused.message();
-
-    // A backfill of old ids is refused key by key: one refusal opens nothing
-    // for the next.
-    auto again = catalog.AdmitExplicitRowId(oid.value(), 549);
-    EXPECT_EQ(again.code(), StatusCode::kOutOfRange) << again.message();
-
-    // And neither refusal moved the mark: the next omitted insert still gets
-    // the id after the last one admitted.
     auto row = catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().next_id, 601u) << "a below-mark id must not walk the mark backwards";
     auto issued = catalog.AllocateRowId(oid.value());
     ASSERT_TRUE(issued.ok()) << issued.status().message();
-    EXPECT_EQ(issued.value(), 601u) << "a refusal moved the mark";
+    EXPECT_EQ(issued.value(), 601u);
 }
 
 TEST_F(RowIdAdmissionTest, AnIssuedIdRisesAboveEverySuppliedOne) {

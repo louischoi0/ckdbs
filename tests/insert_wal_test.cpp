@@ -160,9 +160,9 @@ TEST_F(InsertWalTest, InsertEmitsBeginHeapInsertAndCommit) {
     EXPECT_EQ(d.Dispatch("INSERT INTO t VALUES (7)").response.substr(0, 8), "INSERTED");
 
     std::vector<wal::RecordType> types = RecordTypes();
-    ASSERT_EQ(types.size(), before + 3) << "one insert is BEGIN + HEAP_INSERT + COMMIT";
+    ASSERT_EQ(types.size(), before + 3) << "one insert is BEGIN + BTREE_INSERT + COMMIT";
     EXPECT_EQ(types[before + 0], wal::RecordType::kTxnBegin);
-    EXPECT_EQ(types[before + 1], wal::RecordType::kHeapInsert);
+    EXPECT_EQ(types[before + 1], wal::RecordType::kBtreeInsert);
     EXPECT_EQ(types[before + 2], wal::RecordType::kTxnCommit);
 }
 
@@ -176,7 +176,7 @@ TEST_F(InsertWalTest, TheLoggedTupleIsByteIdenticalToTheOneInThePage) {
 
     const wal::DecodedRecord* insert = nullptr;
     for (const wal::DecodedRecord& record : records) {
-        if (record.type() == wal::RecordType::kHeapInsert) insert = &record;
+        if (record.type() == wal::RecordType::kBtreeInsert) insert = &record;
     }
     ASSERT_NE(insert, nullptr);
 
@@ -236,31 +236,20 @@ std::string WideInsert() {
     return sql + ")";
 }
 
-TEST_F(InsertWalTest, AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNoInsert) {
-    // This cell used to divide a leaf through SQL: a named key sorting
-    // inside a full leaf split it (`SplitLeafAndInsert`), and the cell
-    // pinned the record set a division needs - both halves as images and no
-    // PAGE_INIT, because a divided leaf is not one init plus the insert
-    // after it.
-    //
-    // **Withdrawn by BB-Q8 (b), as BB-R3**
-    // (instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md): a named
-    // key below the relation's mark is refused on every relation. A divide
-    // needs a key below its leaf's highest, every placed key is below the
-    // mark, so no SQL statement reaches a clustered leaf's divide any more.
-    // The divide stays in the storage contract (BB §1.5, BB-R10), which
-    // btree_test.cpp drives through `BtreeInsert` directly; a secondary
-    // index still divides from SQL (`ASplitTakesFullPageImagesAndNoIndexInsert`).
-    //
-    // What stands here now is the refusal's record set. BB-R3 refuses at the
-    // held leaf - a right sibling proves the key below the mark - before
-    // `SecureParents` or any split runs, so the refused statement logs no
-    // image, no init and no insert, the rows are what they were, and the
-    // mark has not moved.
+TEST_F(InsertWalTest, ALeafDivisionLogsOneSplitRecordCarryingBothLeavesAndNoInsert) {
+    // **Restored at BD-S3** (`instructions/v3.0.0/workorder-bd-sorted-leaf-
+    // named-keys.md`) from `ALeafDivisionLogsBothPagesAsImagesAndNoPageInit`,
+    // which BB-S3 withdrew when a key below the mark was refused. A named key
+    // that sorts inside a full leaf divides it, which moves versions onto a
+    // page no other record describes - so the divide is logged as one
+    // BTREE_SPLIT carrying both leaves (and the parent) whole, with the row
+    // in it, and no PAGE_INIT, FULL_PAGE_IMAGE or BTREE_INSERT beside it
+    // (BD-R12). A PAGE_INIT would replay the new leaf empty and lose every
+    // version the division moved.
     CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
     std::string sql = "CREATE TABLE t (id int64";
     for (int i = 0; i < kWideColumns; ++i) sql += ", v" + std::to_string(i) + " varchar";
-    ASSERT_EQ(d.Dispatch(sql + ") BTREE EXPLICIT").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch(sql + ") BTREE").response.substr(0, 7), "CREATED");
 
     auto insert = [&](int id) {
         std::string s = "INSERT INTO t VALUES (" + std::to_string(id);
@@ -269,53 +258,45 @@ TEST_F(InsertWalTest, AKeyThatWouldDivideALeafIsRefusedAndLogsNoImageNoInitAndNo
     };
 
     // Ascending with gaps until the tree grows, so the first leaf is known
-    // full and, past the append split, known to have a right sibling.
+    // full and has a right sibling: a key inside it divides at the median.
     int last = 0;
     for (int k = 1; k <= 60; ++k) {
         const std::string reply = insert(k * 10);
         ASSERT_EQ(reply.substr(0, 8), "INSERTED") << reply;
         last = k * 10;
-        if (CountOf(RecordTypes(), wal::RecordType::kFullPageImage) > 0) break;
+        if (CountOf(RecordTypes(), wal::RecordType::kBtreeSplit) > 0) break;
     }
     ASSERT_GT(last, 0);
 
-    // Totals before, compared whole after: the stream already holds the
-    // inits and images of the append split above, and the refused statement
-    // may add none of the three. Flushed on both sides, so a record already
-    // in the ring is counted in the baseline and never charged to the refusal.
-    const std::string rows_before = d.Dispatch("SELECT * FROM t").response;
+    // Deltas, not totals: only this statement's records are the subject.
     ASSERT_TRUE(wal_->Flush().ok());
-    std::vector<wal::RecordType> before = RecordTypes();
-    const std::size_t inits_before = CountOf(before, wal::RecordType::kPageInit);
-    const std::size_t images_before = CountOf(before, wal::RecordType::kFullPageImage);
-    const std::size_t inserts_before = CountOf(before, wal::RecordType::kHeapInsert);
-    // The premise the name rests on: an append split ran, so the first leaf
-    // filled and 15 sorts inside a full leaf - the old cell's divide.
-    ASSERT_GT(images_before, 0u) << "the first leaf never filled, so 15 would divide nothing";
-
-    // The first gap, which routes back into the full first leaf: absent and
-    // below the mark, so `OutOfRange` (BB-R12).
-    const std::string refused = insert(15);
-    EXPECT_EQ(refused.substr(0, 3), "ERR") << refused;
-    EXPECT_NE(refused.find("high-water mark"), std::string::npos) << refused;
-
-    // Flushed again before it is read, so a record the refusal left in the
-    // ring is counted rather than missed.
+    const std::vector<wal::RecordType> before = RecordTypes();
+    const std::string divided = insert(15);
+    ASSERT_EQ(divided.substr(0, 8), "INSERTED") << divided;
     ASSERT_TRUE(wal_->Flush().ok());
-    std::vector<wal::RecordType> after = RecordTypes();
-    EXPECT_EQ(CountOf(after, wal::RecordType::kPageInit), inits_before)
-        << "a refused key creates no page";
-    EXPECT_EQ(CountOf(after, wal::RecordType::kFullPageImage), images_before)
-        << "the refusal comes before any split, so no leaf owes redo an image";
-    EXPECT_EQ(CountOf(after, wal::RecordType::kHeapInsert), inserts_before)
-        << "nothing landed, so nothing is described";
+    const std::vector<wal::RecordType> after = RecordTypes();
 
-    EXPECT_EQ(d.Dispatch("SELECT * FROM t").response, rows_before)
-        << "the refused key left the rows as they were";
-    // The mark did not move: the next omitted key is the one after the last
-    // key placed.
-    const std::string next = d.Dispatch(WideInsert()).response;
-    EXPECT_NE(next.find(" id=" + std::to_string(last + 1) + " "), std::string::npos) << next;
+    const auto delta = [&](wal::RecordType type) {
+        return CountOf(after, type) - CountOf(before, type);
+    };
+    EXPECT_EQ(delta(wal::RecordType::kBtreeSplit), 1u) << "a divide is one record";
+    EXPECT_EQ(delta(wal::RecordType::kPageInit), 0u)
+        << "a divided leaf's contents are not describable by a PAGE_INIT plus one insert";
+    EXPECT_EQ(delta(wal::RecordType::kFullPageImage), 0u) << "the images ride the split";
+    EXPECT_EQ(delta(wal::RecordType::kBtreeInsert), 0u) << "the split carries the row";
+
+    // The record names both leaves: the one the descent landed on and the
+    // new one, each a whole image.
+    std::vector<std::vector<std::byte>> storage;
+    const std::vector<wal::DecodedRecord> records = DeviceRecords(storage);
+    const wal::DecodedRecord* split = nullptr;
+    for (const wal::DecodedRecord& record : records) {
+        if (record.type() == wal::RecordType::kBtreeSplit) split = &record;
+    }
+    ASSERT_NE(split, nullptr);
+    auto images = wal::DecodeBtreeSplit(split->payload);
+    ASSERT_TRUE(images.ok()) << images.status().message();
+    EXPECT_GE(images.value().size(), 2u) << "both halves of a division have to be logged whole";
 }
 
 TEST_F(InsertWalTest, ChainGrowthLogsTheNewPageAndTheLinkThatReachesIt) {
@@ -390,7 +371,7 @@ TEST_F(InsertWalTest, ASpilledValueIsLoggedBeforeTheTupleThatPointsAtIt) {
     };
 
     const std::size_t vh = index_of(wal::RecordType::kVarHeapAppend);
-    const std::size_t insert = index_of(wal::RecordType::kHeapInsert);
+    const std::size_t insert = index_of(wal::RecordType::kBtreeInsert);
     ASSERT_LT(vh, types.size()) << "the value spilled but no VARHEAP_APPEND was logged";
     ASSERT_LT(insert, types.size());
 
@@ -641,7 +622,7 @@ TEST_F(InsertWalTest, TheInsertedPageCarriesTheHeapInsertsLsn) {
     std::vector<wal::DecodedRecord> records = DeviceRecords(storage);
     const wal::DecodedRecord* insert = nullptr;
     for (const wal::DecodedRecord& record : records) {
-        if (record.type() == wal::RecordType::kHeapInsert) insert = &record;
+        if (record.type() == wal::RecordType::kBtreeInsert) insert = &record;
     }
     ASSERT_NE(insert, nullptr);
 
@@ -721,7 +702,7 @@ TEST_F(InsertWalTest, StrictInsertIsDurableBeforeTheReplyIsProduced) {
 
     log_device_->Crash();  // revert to the last Sync()
     std::vector<wal::RecordType> types = RecordTypes();
-    EXPECT_EQ(CountOf(types, wal::RecordType::kHeapInsert), 1u)
+    EXPECT_EQ(CountOf(types, wal::RecordType::kBtreeInsert), 1u)
         << "a strict insert that survived the reply must survive the crash";
     EXPECT_EQ(CountOf(types, wal::RecordType::kTxnCommit), 1u);
 }
@@ -747,7 +728,7 @@ TEST_F(InsertWalTest, RelaxedInsertReturnsWithoutSyncingAndIsLostToACrash) {
     EXPECT_EQ(wal_->stats().syncs, syncs_before) << "relaxed must not wait on the device";
 
     log_device_->Crash();
-    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kHeapInsert), 0u)
+    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kBtreeInsert), 0u)
         << "that is the loss window relaxed buys its latency with";
 }
 
@@ -764,11 +745,11 @@ TEST_F(InsertWalTest, RelaxedBecomesDurableOnTheDrainInterval) {
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (14)").response.substr(0, 8), "INSERTED");
 
     ASSERT_TRUE(wal_->DrainOnce().ok());  // interval not elapsed: still nothing
-    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kHeapInsert), 0u);
+    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kBtreeInsert), 0u);
 
     clock_.Advance(2'000'000);
     ASSERT_TRUE(wal_->DrainOnce().ok());
-    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kHeapInsert), 1u);
+    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kBtreeInsert), 1u);
 }
 
 TEST_F(InsertWalTest, ClientSyncMakesARelaxedInsertDurableWithoutWaitingForTheInterval) {
@@ -779,7 +760,7 @@ TEST_F(InsertWalTest, ClientSyncMakesARelaxedInsertDurableWithoutWaitingForTheIn
     EXPECT_EQ(d.Dispatch("SYNC").response, "OK synced");
 
     log_device_->Crash();
-    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kHeapInsert), 1u);
+    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kBtreeInsert), 1u);
 }
 
 // ---- The config spelling ------------------------------------------------
@@ -821,10 +802,10 @@ TEST_F(InsertWalTest, AnIndexEntryIsLoggedBeforeTheRowItPointsAt) {
 
     const std::vector<wal::RecordType> types = RecordTypes();
     ASSERT_EQ(CountOf(types, wal::RecordType::kIndexInsert), 1u);
-    ASSERT_EQ(CountOf(types, wal::RecordType::kHeapInsert), 1u);
+    ASSERT_EQ(CountOf(types, wal::RecordType::kBtreeInsert), 1u);
 
     const auto index_at = std::find(types.begin(), types.end(), wal::RecordType::kIndexInsert);
-    const auto heap_at = std::find(types.begin(), types.end(), wal::RecordType::kHeapInsert);
+    const auto heap_at = std::find(types.begin(), types.end(), wal::RecordType::kBtreeInsert);
     EXPECT_LT(index_at - types.begin(), heap_at - types.begin())
         << "INDEX_INSERT must precede the HEAP_INSERT it points at";
 }
@@ -898,7 +879,11 @@ TEST_F(InsertWalTest, ASplitTakesFullPageImagesAndNoIndexInsert) {
     ASSERT_TRUE(wal_->Flush().ok());
 
     const std::vector<wal::RecordType> types = RecordTypes();
-    EXPECT_EQ(CountOf(types, wal::RecordType::kHeapInsert), static_cast<std::size_t>(kRows));
+    // One record per row in the clustered tree: a BTREE_INSERT, or the
+    // BTREE_SPLIT that carries the row (BD-R12).
+    EXPECT_EQ(CountOf(types, wal::RecordType::kBtreeInsert) +
+                  CountOf(types, wal::RecordType::kBtreeSplit),
+              static_cast<std::size_t>(kRows));
     // Fewer than one per row, because the appends that split took images
     // instead - and at least one image was taken.
     EXPECT_LT(CountOf(types, wal::RecordType::kIndexInsert), static_cast<std::size_t>(kRows));

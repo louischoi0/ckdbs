@@ -4298,13 +4298,19 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
         }
     }
 
-    // Every page the insert restructured, in the order the storage layer
+    // **A B+ tree leaf logs one record for the row** (BD-R3 E2, BD-R12):
+    // a BTREE_SPLIT carrying every page the split wrote, the row already in
+    // whichever leaf took it, or a BTREE_INSERT naming the slot the row was
+    // placed at. Either comes after the row's spills and index entries, the
+    // order the heap's HEAP_INSERT keeps below.
+    const bool btree = leaf_type == PageType::kBtreeLeaf;
+
+    // Every page a heap insert restructured, in the order the storage layer
     // says redo has to apply it, and all of it before the tuple's own
     // record. A brand-new tuple page is a PAGE_INIT that the HEAP_INSERT
-    // below then fills; everything else - a link edit, a B+ tree internal
-    // node created or amended, a new root - is a full page image, because
-    // no record type describes those (insert_placement.hpp).
-    for (const storage::StructuralChange& change : placed.changes()) {
+    // below then fills; a link edit is a full page image (insert_placement.hpp).
+    for (const storage::StructuralChange& change :
+         btree ? std::span<const storage::StructuralChange>{} : placed.changes()) {
         if (change.is_new_page) {
             if (auto rec = wal::LogPageInit(wal_, txn_id, change.page_id, leaf_type,
                                             change.min_key, owner_oid);
@@ -4334,17 +4340,28 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     // by verification, a row with no entry is lost.
     if (Status s = LogIndexWrites(index_writes, txn_id); !s.ok()) return s;
 
-    // undo_ptr 0: an insert supersedes no version, so its undo chain ends
-    // at itself (wal.md section 5.1).
-    std::vector<std::byte> payload(wal::kHeapWriteFixedSize + tuple.size());
-    const wal::HeapWritePayload fields{trx_id, /*undo_ptr=*/0, placed.slot,
-                                       static_cast<std::uint16_t>(tuple.size())};
-    if (auto n = wal::EncodeHeapWrite(payload, fields, tuple); !n.ok()) return n.status();
+    if (btree && placed.restructured()) {
+        // The split's one record, which carries the row: no insert record
+        // follows it, as an index split logs no INDEX_INSERT.
+        if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, placed.changes());
+            !s.ok()) {
+            return s;
+        }
+    } else {
+        // undo_ptr 0: an insert supersedes no version, so its undo chain
+        // ends at itself (wal.md section 5.1).
+        std::vector<std::byte> payload(wal::kHeapWriteFixedSize + tuple.size());
+        const wal::HeapWritePayload fields{trx_id, /*undo_ptr=*/0, placed.slot,
+                                           static_cast<std::uint16_t>(tuple.size())};
+        if (auto n = wal::EncodeHeapWrite(payload, fields, tuple); !n.ok()) return n.status();
 
-    auto rec = wal_->Append(
-        wal::RecordSpec{wal::RecordType::kHeapInsert, txn_id, placed.page_id}, payload);
-    if (!rec.ok()) return rec.status();
-    if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
+        auto rec = wal_->Append(
+            wal::RecordSpec{btree ? wal::RecordType::kBtreeInsert : wal::RecordType::kHeapInsert,
+                            txn_id, placed.page_id},
+            payload);
+        if (!rec.ok()) return rec.status();
+        if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
+    }
 
     // Every record naming a page this insert holds is appended and stamped,
     // so the holds go - here, and not at the caller's return: an own
@@ -4756,7 +4773,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         InsertRowResult row{};
         // The refusal travels as its `Status`, so the code it carries - an
-        // `AlreadyExists` or an `OutOfRange` for a named key (BB-R12) - reaches
+        // `AlreadyExists` or an `OutOfRange` for a named key (BD-R5) - reaches
         // the wire rather than being re-read off the rendered line.
         if (std::optional<Status> err =
                 InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row)) {
@@ -4992,6 +5009,56 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             false, stmt.rows.size()};
 }
 
+namespace {
+
+// A heap chain's insert in the vocabulary both storages share. Chain growth
+// goes in the order redo applies it: the old tail's image (which already
+// carries the new link - ChainInsert sets it before returning), then the page
+// it points at, which the HEAP_INSERT fills.
+storage::InsertPlacement ChainPlacement(heap::ChainInsertResult&& placed) {
+    storage::InsertPlacement out;
+    out.page_id = placed.page_id;
+    out.slot = placed.slot;
+    out.held.push_back(std::move(placed.held));
+    if (placed.grew_chain) {
+        out.Record(placed.linked_from, /*is_new_page=*/false, 0);
+        out.Record(placed.page_id, /*is_new_page=*/true, placed.id);
+    }
+    return out;
+}
+
+StatusOr<storage::InsertPlacement> FromChain(StatusOr<heap::ChainInsertResult> placed) {
+    if (!placed.ok()) return placed.status();
+    return ChainPlacement(std::move(placed.value()));
+}
+
+// **Whether a version an in-flight writer holds is that writer's undecided
+// insert** (BD-R5, BD-Q9 (a), `instructions/v3.0.0/workorder-bd-sorted-leaf-
+// named-keys.md`): its version chain, walked while each earlier version's
+// writer is still in flight, ends at no version at all - the key did not
+// exist before that transaction. A chain that reaches a decided writer is a
+// committed row under an undecided update or delete; an unreadable step is
+// answered the same.
+bool UndecidedInsert(txn::TransactionManager& txn, std::uint64_t undo_ptr) {
+    std::uint64_t ptr = undo_ptr;
+    for (std::uint32_t steps = 0; steps < txn::kMaxUndoChainLength; ++steps) {
+        if (ptr == txn::kNoUndoPtr) return true;  // no version before: an insert
+        auto version = txn.undo().Read(ptr);
+        if (!version.ok() || !txn.IsInFlight(version.value().prior_trx_id)) return false;
+        ptr = version.value().prior_undo_ptr;
+    }
+    return false;
+}
+
+// How many times an omitted pk is issued again when the id it drew was
+// placed meanwhile by a named key (BD-R6's one collision: a named key at
+// the mark borrows before an issue draws the same id, then places it).
+// Each round burns one id; two rounds at once is already a race against a
+// client naming the mark itself, so a small bound is a guard, not a budget.
+constexpr int kMaxIssueRounds = 8;
+
+}  // namespace
+
 std::optional<Status> CommandDispatcher::InsertOneRow(
     catalog::Oid oid, const catalog::TableAccess*& ta_ptr,
     const std::vector<parser::AstValue>& values, WriteScope& scope,
@@ -5004,8 +5071,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // the caller, through `ErrorReply` - the one spelling that puts
     // `retryable=1` on the wire for a TxnConflict (status.hpp's
     // IsRetryable) - with the `Status` itself on the outcome, so a client
-    // reads the code a refusal carries rather than the line (BB-R12's
-    // `AlreadyExists` and `OutOfRange` among them, since BB-S3). The spent-lease refusals that
+    // reads the code a refusal carries rather than the line (BD-R5's
+    // `AlreadyExists` and `OutOfRange` among them). The spent-lease refusals that
     // were its reason on a peer went with the leases - the extent lease at
     // AW-S1b, the row-id lease at AT-S10b - and a lock wait's fault net is
     // what still refuses that way.
@@ -5057,19 +5124,36 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 "primary-key column '" + std::string(catalog::NameView(ta.schema.columns.front().name)) +
                 "' needs an integer literal (byte " + std::to_string(key.byte_offset) + ")");
         }
-        if (key.int_val < 0) {
-            return Status::InvalidArgument("primary key " + std::to_string(key.int_val) +
-                                           " is negative (byte " +
-                                           std::to_string(key.byte_offset) + ")");
+        // **Exhausted** (BD-R5 2., `instructions/v3.0.0/workorder-bd-sorted-
+        // leaf-named-keys.md`): a key outside `[kFirstRowId, kMaxKeystoneId]`
+        // is one of the two reasons a named key is refused, `OutOfRange` with
+        // its byte - zero, a negative number, one above the 40-bit space, or
+        // a literal the lexer wrapped past 64 bits. Judged from the literal's
+        // own digits (`raw_int_text`), never from `int_val`, which a wrap
+        // makes a different number: `2^64 + 5` must not land as key 5.
+        // Before the foreign-key and assertion steps, either of which can
+        // wait.
+        // A value built rather than parsed carries no spelling; its number
+        // is then the spelling.
+        const std::string spelled =
+            key.raw_int_text.empty() ? std::to_string(key.int_val) : key.raw_int_text;
+        const auto exhausted = [&]() -> Status {
+            return Status::OutOfRange(
+                "primary key " + spelled + " is outside the Keystone id space [" +
+                std::to_string(catalog::kFirstRowId) + ", " + std::to_string(kMaxKeystoneId) +
+                "] (byte " + std::to_string(key.byte_offset) + ")");
+        };
+        std::string_view digits = spelled;
+        if (!digits.empty() && digits.front() == '-') {
+            if (digits.find_first_not_of("0-") != std::string_view::npos) return exhausted();
+            digits = "0";  // "-0" is zero, refused below
         }
-        supplied_id = static_cast<std::uint64_t>(key.int_val);
-        // Spellability with the literal's other checks (BB-R3 step 1), so a
-        // key no relation can store is refused before the foreign-key and
-        // assertion steps, either of which can wait, and names its byte.
-        if (Status s = catalog::CheckNamedRowIdSpellable(supplied_id); !s.ok()) {
-            return Status::InvalidArgument(s.message() + " (byte " +
-                                           std::to_string(key.byte_offset) + ")");
+        supplied_id = 0;
+        for (char d : digits) {
+            supplied_id = supplied_id * 10 + static_cast<std::uint64_t>(d - '0');
+            if (supplied_id > kMaxKeystoneId) return exhausted();
         }
+        if (supplied_id < catalog::kFirstRowId) return exhausted();
         body_storage.assign(values.begin() + 1, values.end());
     }
     const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;
@@ -5142,22 +5226,23 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         return s;
     }
 
-    // ---- The id, fixed under the hold of the page the row lands on --------
+    // ---- The id, and where the row lands ---------------------------------
     //
-    // **BB-R1** (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`).
-    // Until BB the id was fixed under catalog page 7 and the row placed
-    // later under its own page, and between the two another core could fix
-    // a higher id and place it first: the page then held the higher id in
-    // the lower slot, and `ORDER BY <pk>`, which the compiler discards on
-    // the premise that a page's slot order is its key order, came back out
-    // of order (defect A). Now the id is fixed while the page it lands on is
-    // held exclusive, so placement order is issue order on every core.
+    // **A btree places a row where its key sorts** (BD-R2, BD-R6,
+    // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), so its
+    // id is fixed before the descent and no page hold covers the issue or
+    // the admission: BB-R1, which fixed the id under the hold of the page it
+    // lands on so that placement order was issue order, is withdrawn there
+    // (W10) - its one reason was a leaf's key order, which placement keeps.
+    // An omitted pk: issue, borrow, encode, descend, place. A named key:
+    // borrow, encode, admit (advance-or-nothing), descend, the duplicate
+    // check, place. **A heap keeps BB-R1** (BD-Q4 (a)): its tail cannot take
+    // a key below its highest, so the id is fixed under the tail's hold.
     //
-    // Both sources still sit after admission and the foreign-key check, so
-    // a row they refuse burns nothing. What each does under the hold, and in
-    // which order, is the borrow's question (BB §1.4): a recorded wait
-    // survives only while the statement's trail is unchanged, and a spill is
-    // a trail entry, so **the borrow always precedes the encode**.
+    // Both sources sit after admission and the foreign-key check, so a row
+    // they refuse burns nothing. **The borrow always precedes the encode**
+    // (BB §1.4): a recorded wait survives only while the statement's trail is
+    // unchanged, and a spill is a trail entry.
     std::uint64_t row_id = 0;
     std::vector<std::byte> encoded;
     // With a manager, each spill is noted and logged at its append, under
@@ -5173,11 +5258,26 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         encoded = std::move(row.value());
         return Status::OK();
     };
-    // What the caller's own half refused under the hold - a borrow, an
-    // encode, an admission - as opposed to what the storage refused. The
-    // first is the statement's answer as it stands; the second is a
-    // placement failure and is logged as one.
+    // **A duplicate carries the pk token's byte** (BD-R5), as the exhausted
+    // refusal above does.
+    const auto duplicate_at_pk = [&](const Status& duplicate) {
+        return Status::AlreadyExists(duplicate.message() + " (byte " +
+                                     std::to_string(values.front().byte_offset) + ")");
+    };
+    // What the caller's own half refused - a borrow, an encode, an
+    // admission - as opposed to what the storage refused. The first is the
+    // statement's answer as it stands; the second is a placement failure and
+    // is logged as one.
     Status fixed = Status::OK();
+    // The key's borrow, given back by a statement it protected nothing for
+    // (BB-S3's review; AZ-S5's shape for a failed check's `S`): nothing was
+    // written under it, and kept to the decide it would stall another insert
+    // of the same id, waiting on a holder that can no longer place it.
+    const auto give_back = [&](const txn::LockKey& unit, bool held_before) {
+        if (held_before || locks_ == nullptr || scope.txn == nullptr) return;
+        locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
+                          [&](const txn::LockHoldings::Held& h) { return h.key == unit; });
+    };
 
     const bool is_btree = ta.clustered_type == catalog::ClusteredType::kBtree;
 
@@ -5195,46 +5295,42 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
 
     std::optional<StatusOr<storage::InsertPlacement>> attempt;
     if (explicit_key) {
-        // **BB-R3: the borrow and the encode, outside any latch; then the
-        // descent, which holds the leaf the key lands on and admits it
-        // there.** (Spellability was step 1, above, with the literal.) The
-        // borrow precedes the admission entirely, so a statement that parks
-        // on it and re-runs has advanced nothing and finds its key as
-        // admissible as before - which is why the `before_mark` hook that
-        // rode inside `AdmitExplicitRowId` is gone.
         const txn::LockKey key_unit = txn::LockKey::Tuple(ta.oid, supplied_id);
-        // **An illegal key is refused, never left waiting** (AO-S6c-c's
-        // rule). The borrow now comes before the admission, so a key below
-        // the mark would wait out a fence it could never write past; the
-        // judgement is asked only once a refusal is in hand, so a granted
-        // borrow pays nothing for it. Below the mark is final - the mark
-        // only rises. The answer names a present key `AlreadyExists` and an
-        // absent one `OutOfRange` (BB-R12) - **and a version an undecided
-        // writer placed `OutOfRange` too**: that writer's abort would retire
-        // it, so its presence is not yet a fact, while the key's being below
-        // the mark already is (BB-S3's review).
+        // **A refused borrow is judged once, and only then** (AO-S6c-c's
+        // rule: a key that can never be admitted never waits), so a granted
+        // borrow pays nothing for it.
+        //
+        // A btree (BD-R5): a slot keyed `k` whose latest writer has decided
+        // is a duplicate at once. Where that writer is in flight, an
+        // undecided **insert** is not yet a duplicate - its rollback frees
+        // `k` (W12) - so the statement waits for its decide and the re-run
+        // answers by the outcome (BD-Q9 (a)); a committed row under an
+        // undecided update or delete is a duplicate at once. Absent, or a
+        // lookup that failed, is a wait like any other (a fence over `k`).
+        //
+        // A heap (BB-R3, kept by BD-Q4): below the mark is final - the mark
+        // only rises - and is refused at once, `OutOfRange`.
         const auto refuse_if_never_admissible = [&]() -> Status {
-            auto mark = catalog_.RowIdMark(oid);
-            if (!mark.ok()) return mark.status();
-            if (supplied_id >= mark.value()) return Status::OK();
-            if (is_btree) {
-                auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, supplied_id);
-                if (present.ok()) {
-                    auto version =
-                        heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
-                    const bool undecided = version.ok() && txn_ != nullptr &&
-                                           txn_->IsInFlight(version.value().trx_id);
-                    if (!undecided) {
-                        return Status::AlreadyExists(
-                            "duplicate primary key " + std::to_string(supplied_id) +
-                            " already present at page " + std::to_string(present.value().page_id) +
-                            " slot " + std::to_string(present.value().slot));
-                    }
-                }
-                // A lookup that failed says nothing about presence; below the
-                // mark is the answer either way.
+            if (!is_btree) {
+                auto mark = catalog_.RowIdMark(oid);
+                if (!mark.ok()) return mark.status();
+                if (supplied_id >= mark.value()) return Status::OK();
+                return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
             }
-            return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
+            auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, supplied_id);
+            if (!present.ok()) return Status::OK();
+            auto version =
+                heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
+            if (!version.ok()) return Status::OK();
+            const bool undecided =
+                txn_ != nullptr && txn_->IsInFlight(version.value().trx_id);
+            const Status duplicate = duplicate_at_pk(btree::DuplicateKey(
+                supplied_id, present.value().page_id, present.value().slot,
+                version.value().deleted));
+            const std::uint64_t undo_ptr = version.value().undo_ptr;
+            present.value().leaf.Release();  // before the undo pages are read
+            if (!undecided) return duplicate;
+            return UndecidedInsert(*txn_, undo_ptr) ? Status::OK() : duplicate;
         };
         const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(key_unit);
         if (std::optional<Status> held =
@@ -5242,39 +5338,77 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                              txn::LockMode::kExclusive, refuse_if_never_admissible)) {
             return *held;
         }
-        // **A refused statement gives back the key's borrow its own ask took**
-        // (BB-S3's review; AZ-S5's shape for a failed check's `S`). Nothing was
-        // written under it, so it protects no row - and kept to the decide it
-        // would stall an omitted-pk insert that drew the same id meanwhile,
-        // waiting on a holder that can no longer place it.
-        const auto give_back = [&]() {
-            if (held_before || locks_ == nullptr || scope.txn == nullptr) return;
-            locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
-                              [&](const txn::LockHoldings::Held& h) { return h.key == key_unit; });
-        };
         row_id = supplied_id;
         if (Status s = encode(); !s.ok()) {
-            give_back();
+            give_back(key_unit, held_before);
             return s;
         }
-        attempt.emplace(InsertNamed(
-            ta, row_id, encoded,
-            [&](std::uint64_t id) -> Status {
-                fixed = catalog_.AdmitExplicitRowId(oid, id);
-                if (fixed.ok() && after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(id);
-                return fixed;
-            },
-            /*trx_id=*/WriterId(scope)));
-        if (!attempt->ok()) give_back();
+        if (is_btree) {
+            if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
+            // **Admitting before the descent is safe** (BD-R6): every placed
+            // id is below the mark, so a key at or above it cannot be a
+            // duplicate, and two statements naming one key serialise on its
+            // row unit. The admission never refuses on a btree; it moves the
+            // mark past `k` or leaves it where it is.
+            if (Status s = catalog_.AdmitExplicitRowId(oid, supplied_id); !s.ok()) {
+                give_back(key_unit, held_before);
+                return s;
+            }
+            attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
+                                               /*trx_id=*/WriterId(scope), ta.oid));
+        } else {
+            attempt.emplace(FromChain(heap::ChainInsertNamed(
+                page_store_, ta.desc_page_id, row_id, encoded,
+                [&](std::uint64_t id) -> Status {
+                    fixed = catalog_.AdmitExplicitRowId(oid, id);
+                    if (fixed.ok() && after_row_id_fixed_for_test_) {
+                        after_row_id_fixed_for_test_(id);
+                    }
+                    return fixed;
+                },
+                /*trx_id=*/WriterId(scope), ta.oid, &ta.heap_tail_hint)));
+        }
+        if (!attempt->ok()) give_back(key_unit, held_before);
+    } else if (is_btree) {
+        // A refused borrow burns the id (K3), which is then free (BD-R4):
+        // nothing is on the trail, so the wait survives and `DispatchAsync`
+        // re-runs the statement for a fresh id.
+        //
+        // **An issued id can meet a named key** (BD-S3's review): a named
+        // key at the mark borrows it, an issue draws the same id before the
+        // named key's admission moves the mark, and the named key places it
+        // first. Its row unit serialises the two, and this placement then
+        // finds the key present - which is not a reason an omitted pk is
+        // refused for. The id is burned, its borrow given back, and another
+        // drawn; a spill the abandoned round wrote is left as any failed
+        // placement leaves one.
+        for (int round = 0;; ++round) {
+            auto issued = catalog_.AllocateRowId(oid);
+            if (!issued.ok()) return issued.status();
+            row_id = issued.value();
+            if (after_row_id_issued_for_test_) after_row_id_issued_for_test_(row_id);
+            const txn::LockKey unit = txn::LockKey::Tuple(ta.oid, row_id);
+            if (std::optional<Status> held =
+                    BorrowOrWait(scope, unit, RepeatableReadWait::kCapable)) {
+                return *held;
+            }
+            spills.clear();
+            if (Status s = encode(); !s.ok()) return s;
+            if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
+            attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
+                                               /*trx_id=*/WriterId(scope), ta.oid));
+            if (attempt->ok() || attempt->status().code() != StatusCode::kAlreadyExists ||
+                round + 1 == kMaxIssueRounds) {
+                break;
+            }
+            give_back(unit, /*held_before=*/false);
+        }
     } else {
-        // **BB-R2: the descent first, then issue, borrow and encode under
-        // the hold of the leaf it took** - the rightmost, the only leaf an
-        // issued id can land on. A refused borrow releases everything with
-        // the id burned (K3) and nothing on the trail, so the wait survives
-        // and `DispatchAsync` re-runs the statement for a fresh id. The
-        // encode's spills nest under the leaf as `UPDATE`'s do (BB-Q3).
-        attempt.emplace(InsertIssued(
-            ta,
+        // A heap (BB-R2, kept by BD-Q4): the descent to the tail first, then
+        // issue, borrow and encode under its hold. A refused borrow releases
+        // everything with the id burned (K3) and nothing on the trail.
+        attempt.emplace(FromChain(heap::ChainInsertIssued(
+            page_store_, ta.desc_page_id,
             [&]() -> StatusOr<std::span<const std::byte>> {
                 auto issued = catalog_.AllocateRowId(oid);
                 if (!issued.ok()) return fixed = issued.status();
@@ -5288,17 +5422,20 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
                 return std::span<const std::byte>(encoded);
             },
-            /*trx_id=*/WriterId(scope)));
+            /*trx_id=*/WriterId(scope), ta.oid, &ta.heap_tail_hint)));
     }
     if (!fixed.ok()) return fixed;
     StatusOr<storage::InsertPlacement> placed = std::move(*attempt);
     if (!placed.ok()) {
-        // A named key the structure refused below the mark - a btree's
-        // duplicate or right sibling, a heap's tail (BB-R12) - is the
-        // client's error, answered as the admission's is, and not logged.
         const StatusCode code = placed.status().code();
-        const bool refused_key = explicit_key && (code == StatusCode::kOutOfRange ||
-                                                  code == StatusCode::kAlreadyExists);
+        // A duplicate, BD-R5's first reason, carries the pk token's byte.
+        if (explicit_key && code == StatusCode::kAlreadyExists) {
+            return duplicate_at_pk(placed.status());
+        }
+        // A heap's key below its tail (BB-R12, kept by BD-Q4) is the client's
+        // error too, answered as the admission's is, and not logged. A
+        // btree's `OutOfRange` is invariant 3 failing, and is logged.
+        const bool refused_key = explicit_key && !is_btree && code == StatusCode::kOutOfRange;
         if (!refused_key && logging(LogLevel::kWarn)) {
             log_->Warn(is_btree ? "btree" : "heap",
                        "insert into the relation rooted at page " +
@@ -5307,6 +5444,73 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         }
         return placed.status();
     }
+
+    // The tree grew a level, so the relation's root moved. Published only
+    // once the new root's contents are logged: a root published before the
+    // pages under it are described is a root recovery cannot follow. Since
+    // PW2-4 the move writes the anchor and updates the cached entry **in
+    // place** - `ta` stays valid, no invalidation broadcast, no catalog
+    // write. Both the success path below and E5's take-back of a split run
+    // it, after the holds the placement handed out are gone.
+    const auto publish_root = [&]() -> Status {
+        if (placed.value().new_root == kInvalidPageId) return Status::OK();
+        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root,
+                                                       ta.anchor_page_id);
+            !s.ok()) {
+            if (logging(LogLevel::kError)) {
+                log_->Error("btree", "table oid " + std::to_string(oid) +
+                                         " grew a level but its root could not be repointed at "
+                                         "page " +
+                                         std::to_string(placed.value().new_root) + ": " +
+                                         s.message());
+            }
+            return s;
+        }
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("btree", "table oid " + std::to_string(oid) +
+                                    " grew a level; root is now page " +
+                                    std::to_string(placed.value().new_root));
+        }
+        return Status::OK();
+    };
+
+    // ---- E5: a placement no record will describe is taken back ----------
+    //
+    // BD-R3 E5 (`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`).
+    // From here to the row's trail entry, a failure leaves a row on its leaf
+    // with no trail entry and no record, and the leaf is still held
+    // (AT-S21). Left there it would shift neighbours redo never sees shift,
+    // and its slot would make the next logged insert's slot name a row redo
+    // never placed - the mount refuses it (BD-S1's cell). So a btree leaf
+    // gives it back under the hold: the slot and its bytes go, the last the
+    // leaf allocated. A split cannot give back a rebuilt page, so there the
+    // row's slot is retired, keyless, the split is logged without a live row
+    // (`kNoTxnId`: no transaction owns a structural change), and a root it
+    // grew is published as the success path would. A heap relation is
+    // untouched (BD-Q4).
+    const auto take_back = [&](Status failed) -> Status {
+        if (!is_btree) return failed;
+        Status undone = [&]() -> Status {
+            auto page = page_store_.Get(placed.value().page_id);
+            if (!page.ok()) return page.status();
+            heap::PageView leaf(page.value().bytes());
+            if (!placed.value().restructured()) return leaf.UnInsertTuple(placed.value().slot);
+            if (Status s = leaf.RetireSlot(placed.value().slot); !s.ok()) return s;
+            page.value().Release();
+            if (Status s = storage::LogBtreeSplit(wal_, page_store_, wal::kNoTxnId,
+                                                  placed.value().changes());
+                !s.ok()) {
+                return s;
+            }
+            placed.value().held.clear();
+            return publish_root();
+        }();
+        if (!undone.ok() && logging(LogLevel::kError)) {
+            log_->Error("btree", "taking back the unlogged placement of id " +
+                                     std::to_string(row_id) + " failed: " + undone.message());
+        }
+        return failed;
+    };
 
     // ---- The Cabin witness (docs/spec/cabin.md §5) ----------------------
     //
@@ -5336,16 +5540,21 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // stays the code it always was.
     std::vector<exec::IndexWrite> index_writes;
     const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
-    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, body,
-                                          /*first_col_pos=*/1, encoded, row_id,
-                                          /*previous=*/{}, log_index ? &log_index : nullptr);
-        !s.ok()) {
+    // The seam fails this exit, not one of its own (BD-S1, E5).
+    Status maintained =
+        after_placement_for_test_ ? after_placement_for_test_() : Status::OK();
+    if (maintained.ok()) {
+        maintained = exec::MaintainIndexes(catalog_, page_store_, ta, body,
+                                           /*first_col_pos=*/1, encoded, row_id,
+                                           /*previous=*/{}, log_index ? &log_index : nullptr);
+    }
+    if (Status s = maintained; !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("index", "maintaining the indexes of table oid " +
                                      std::to_string(oid) + " for id " +
                                      std::to_string(row_id) + " failed: " + s.message());
         }
-        return s;
+        return take_back(s);
     }
 
     // ---- The reservation (docs/spec/assertion.md §6.2 step 3) -----------
@@ -5360,7 +5569,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                                             body, row_id, placed.value().page_id,
                                             placed.value().slot);
         !s.ok()) {
-        return s;
+        return take_back(s);
     }
 
     // ---- The rollback trail, and the durable record beside it -----------
@@ -5376,6 +5585,14 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // means "inserted" to every reader; the record is reachable only
     // through the transaction chain, which is what keeps §3.6's visibility
     // rule intact.
+    //
+    // **The spills are noted before the row's trail entry** (BD-S2's review,
+    // C2): noting one appends an undo record and can fail, and a failure
+    // after `NoteInsert` would leave the trail naming a row no record
+    // describes - whose live rollback logs a `SLOT_RETIRE` that redo, never
+    // having placed the row, applies to the neighbour the shift moved up.
+    // Before `NoteInsert` the failure is E5's, and the row is taken back. An
+    // insert undo record with no row behind it is work recovery counts done.
     if (scope.txn != nullptr) {
         txn::UndoRecordFields rec{};
         rec.prior_trx_id = txn::kNoTrxId;
@@ -5384,20 +5601,13 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         rec.target_slot = placed.value().slot;
         rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
         auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
-        if (!ptr.ok()) return ptr.status();
-
+        if (!ptr.ok()) return take_back(ptr.status());
+    }
+    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return take_back(s);
+    if (scope.txn != nullptr) {
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
     }
-
-    // The spills, **after** the row's own record and not before it. The
-    // only ordering this owes is "before `LogInsert` writes the
-    // VARHEAP_APPENDs"; putting it here shortens the window in which the
-    // tuple sits in the page with no trail entry naming it, which is a row
-    // a rollback would not undo. `Abort` has no suspension point, so
-    // reversing the trail's order relative to the two writes is
-    // unobservable.
-    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return s;
 
     if (before_insert_log_for_test_) before_insert_log_for_test_();
 
@@ -5415,34 +5625,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         return s;
     }
 
-    // The tree grew a level, so the relation's root moved. Persisted only
-    // now: the new root's contents are logged above, and a root published
-    // before the pages under it are described is a root recovery cannot
-    // follow. Since PW2-4 the move writes the anchor and updates the
-    // cached entry **in place** - `ta` stays valid, no invalidation
-    // broadcast, no catalog write.
-    if (placed.value().new_root != kInvalidPageId) {
-        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root,
-                                                       ta.anchor_page_id);
-            !s.ok()) {
-            if (logging(LogLevel::kError)) {
-                log_->Error("btree", "table oid " + std::to_string(oid) +
-                                         " grew a level but its root could not be repointed at "
-                                         "page " +
-                                         std::to_string(placed.value().new_root) + ": " +
-                                         s.message());
-            }
-            return s;
-        }
-        if (logging(LogLevel::kInfo)) {
-            log_->Info("btree", "table oid " + std::to_string(oid) +
-                                    " grew a level; root is now page " +
-                                    std::to_string(placed.value().new_root));
-        }
-        // The in-place update (PW2-4) keeps `ta` valid, so the refresh the
-        // pre-anchor invalidation forced is gone - the pointer reference
-        // stays for the day a move ever invalidates again.
-    }
+    if (Status s = publish_root(); !s.ok()) return s;
 
     // A relation growing a page is rare and structural - the closest thing
     // this engine has to a file extending - so it is Debug, above the
@@ -5473,76 +5656,6 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     out.page_id = placed.value().page_id;
     out.slot = placed.value().slot;
     return std::nullopt;
-}
-
-namespace {
-
-// A heap chain's insert in the vocabulary both storages share. Chain growth
-// goes in the order redo applies it: the old tail's image (which already
-// carries the new link - ChainInsert sets it before returning), then the page
-// it points at, which the HEAP_INSERT fills.
-storage::InsertPlacement ChainPlacement(heap::ChainInsertResult&& placed) {
-    storage::InsertPlacement out;
-    out.page_id = placed.page_id;
-    out.slot = placed.slot;
-    out.held.push_back(std::move(placed.held));
-    if (placed.grew_chain) {
-        out.Record(placed.linked_from, /*is_new_page=*/false, 0);
-        out.Record(placed.page_id, /*is_new_page=*/true, placed.id);
-    }
-    return out;
-}
-
-Status UnknownClusteredType(const catalog::TableAccess& access) {
-    return Status::Corruption("relation oid " + std::to_string(access.oid) +
-                              " has an unknown clustered_type");
-}
-
-}  // namespace
-
-StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIssued(
-    const catalog::TableAccess& access, const storage::IssueUnderHold& issue,
-    std::uint64_t trx_id) {
-    switch (access.clustered_type) {
-        case catalog::ClusteredType::kHeap: {
-            // The relation is a chain of heap pages (heap_chain.hpp): the
-            // tail, held as the tail, takes the tuple, and a full tail grows
-            // the chain by one page rather than failing (BB-R7). Duplicate-key
-            // and min_key enforcement live in there - they are heap
-            // invariants, not dispatcher policy.
-            auto placed = heap::ChainInsertIssued(page_store_, access.desc_page_id, issue,
-                                                  trx_id, access.oid, &access.heap_tail_hint);
-            if (!placed.ok()) return placed.status();
-            return ChainPlacement(std::move(placed.value()));
-        }
-        case catalog::ClusteredType::kBtree:
-            // The relation is a clustered B+ tree (btree.hpp) rooted at the
-            // same desc page: the descent for the top of the id space holds
-            // the rightmost leaf, and a full leaf splits right without moving
-            // a key. Reports its own structural set, and a new root when the
-            // tree grew a level.
-            return btree::BtreeInsertIssued(page_store_, access.desc_page_id, issue, trx_id,
-                                            access.oid);
-    }
-    return UnknownClusteredType(access);
-}
-
-StatusOr<storage::InsertPlacement> CommandDispatcher::InsertNamed(
-    const catalog::TableAccess& access, std::uint64_t id, std::span<const std::byte> payload,
-    const storage::AdmitUnderHold& admit, std::uint64_t trx_id) {
-    switch (access.clustered_type) {
-        case catalog::ClusteredType::kHeap: {
-            auto placed = heap::ChainInsertNamed(page_store_, access.desc_page_id, id, payload,
-                                                 admit, trx_id, access.oid,
-                                                 &access.heap_tail_hint);
-            if (!placed.ok()) return placed.status();
-            return ChainPlacement(std::move(placed.value()));
-        }
-        case catalog::ClusteredType::kBtree:
-            return btree::BtreeInsertNamed(page_store_, access.desc_page_id, id, payload, admit,
-                                           trx_id, access.oid);
-    }
-    return UnknownClusteredType(access);
 }
 
 Status CommandDispatcher::WalkHeapChain(
@@ -8584,8 +8697,9 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     if (refused_at_relation || unit.unit == txn::LockUnit::kRelation) {
         return RelationHeld(unit.rel_oid, blocker);
     }
-    // **A refusal of a narrower unit that is not to become a wait** (BB-R3):
-    // the caller's judgement, asked before anything records it as one. The
+    // **A refusal of a narrower unit that is not to become a wait**
+    // (AO-S6c-c's rule; a named key's judgement since BD-R5): the caller's
+    // judgement, asked before anything records it as one. The
     // unit's registration goes at the statement's end, which drops a wake no
     // blocker carries. A relation refusal above stays a wait: the relation's
     // holder decides whether the statement can resolve at all.

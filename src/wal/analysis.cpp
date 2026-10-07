@@ -4,6 +4,7 @@
 #include <string>
 
 #include "kds/wal/log_scanner.hpp"
+#include "kds/wal/payload.hpp"
 
 namespace kds::wal {
 
@@ -144,6 +145,23 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
             out.max_page_id = (out.max_page_id == kInvalidPageId)
                                   ? record.header.page_id
                                   : std::max(out.max_page_id, record.header.page_id);
+        }
+
+        // A split's one record writes every page it names, not only the
+        // envelope's (BD-R12): each is dirty as of this LSN, and each id is
+        // in use.
+        if (record.type() == RecordType::kBtreeSplit) {
+            auto images = DecodeBtreeSplit(record.payload);
+            if (!images.ok()) {
+                return images.status().WithContext("analysis: BTREE_SPLIT at lsn " +
+                                                   std::to_string(record.header.lsn));
+            }
+            for (const BtreeSplitImage& image : images.value()) {
+                note_dirty(image.page_id, record.header.lsn);
+                out.max_page_id = (out.max_page_id == kInvalidPageId)
+                                      ? image.page_id
+                                      : std::max(out.max_page_id, image.page_id);
+            }
         }
 
         // An undo record this transaction just wrote becomes the head of
