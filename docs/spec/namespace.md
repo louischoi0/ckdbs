@@ -59,9 +59,12 @@ enforces.
 
 Consequences, all of them load-bearing:
 
-- `(oid, pk)` stays forever-unique without qualification, so every advisory
-  structure keyed by oid — Waystone trails, access stats, Cabin bounds —
-  needs no namespace context and none of them changes.
+- `(oid, pk)` stays unique without a namespace qualification - unique at
+  any instant, and for life up to a `PURGE` that frees a key, which every
+  advisory structure re-checks against the row now there
+  (`heap-and-tuple.md` §4.1c) - so every advisory structure keyed by oid -
+  Waystone trails, access stats, Cabin bounds - needs no namespace context
+  and none of them changes.
 - A namespace is itself an object with an oid, registered in `sys.objects`
   with `type_oid = kTypeNamespace`, exactly as the two well-known ones are.
 - The DT2 tombstone rule extends unchanged: a dropped namespace's oid is

@@ -6,7 +6,9 @@ where an id comes from — the `INSERT` names it or omits it, per row, and
 there is no key mode — so every "at or above the mark" / "below the mark"
 phrase here is that section's rule. BD
 (`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`) restated K1
-and K3 on 2026-10-07.
+and K3 on 2026-10-07; BH (`instructions/v3.0.0/workorder-bh-purge-key.md`)
+gave K1 its one named exception, `PURGE`, on 2026-10-08
+(`heap-and-tuple.md` §4.1c).
 Depends on: Keystone super-column contract (40-bit id + 8-bit flags +
 16-bit meta id), per-relation catalog metadata, WAL, core-ownership
 dispatch.
@@ -15,18 +17,25 @@ features that *consume* the invariant keep their own specs.
 
 Decisions fixed here:
 
-- **K1 — Issue-once.** A Keystone id is bound to at most one committed
-  tuple in the lifetime of a relation. It is never rebound to another
-  tuple, by any path: not through the allocator, not through
-  delete-then-insert, not through crash recovery. **An id is consumed when
-  a tuple carrying it commits** (BD-R4): a committed key stays in its leaf
-  for the life of the relation, live and then delete-marked, and the
-  delete-marked row is its tombstone. An id issued and burned without
-  placement, or placed and rolled back, was never bound, and a named key
-  may take it. **A purge, when one is built, owes a keyed, never-visible
-  tombstone in the row's key position** - which the duplicate check and
-  the placement order read and every walk treats as absent - or it
-  reclaims nothing.
+- **K1 — Issue-once, with one named exception.** A Keystone id is bound
+  to at most one committed tuple in the lifetime of a relation, **except
+  across a `PURGE` that freed it**. No other path rebinds it: not the
+  allocator, not delete-then-insert, not crash recovery, and not a purge
+  the engine runs on its own. **An id is consumed when a tuple carrying it
+  commits** (BD-R4): a committed key stays in its leaf, live and then
+  delete-marked, and the delete-marked row is its tombstone - until a
+  `PURGE` retires it. An id issued and burned without placement, or placed
+  and rolled back, was never bound, and a named key may take it.
+  - **`PURGE` is the operator's statement** (BH-R1). It frees one
+    committed key at a time, visibly and logged, and only once no reader
+    can see the row it deleted (`heap-and-tuple.md` §4.1c, PU5). After it,
+    an `INSERT` naming the key is judged as if the key had never been
+    placed. The issue cursor never hands a purged key out (K3): only an
+    `INSERT` that names it takes it again.
+  - **An engine-internal purge still owes a keyed, never-visible
+    tombstone in the row's key position** - which the duplicate check and
+    the placement order read and every walk treats as absent - or it
+    reclaims nothing.
 - **K2 — Immutable.** A tuple's Keystone id never changes after
   insert. An UPDATE that targets the super column is **Unsupported**
   (hard rejection at compile, no slow path).
@@ -57,7 +66,7 @@ Decisions fixed here:
 ## 1. The invariant and why it earns its place
 
 > **Keystone ids are issued once, bound to at most one committed tuple,
-> never rebound, never mutated.**
+> never rebound except by an explicit `PURGE`, never mutated.**
 
 What this buys, engine-wide:
 
@@ -67,18 +76,23 @@ What this buys, engine-wide:
    walks the *new* tuple's undo chain and silently misses a row its
    snapshot is entitled to. Issue-once deletes the hazard structurally
    instead of gating it behind a purge-horizon rule that every future
-   feature would have to re-prove. A rolled-back key named again does not
-   reopen it: the rolled-back tuple was never visible to another
+   feature would have to re-prove. **`PURGE` is that rule, built for one
+   statement** (BH-R5): it retires a tombstone only once every live and
+   future reader sees its deleter as committed, and every view that can
+   read a superseded user row is registered with that horizon (BH-S1's
+   Census A) - an obligation every later view kind inherits. A rolled-back
+   key named again does not reopen it: the rolled-back tuple was never visible to another
    snapshot, the new row starts no undo chain, and every structure that
    keeps `(oid, pk)` past a write verifies against the row now there
    (`workorder-bd-sorted-leaf-named-keys.md` §1.7).
-2. **(oid, pk) is a forever-unique key.** Every structure keyed on it —
-   the statistics primitives, waystone trail entries, in-memory canonical
-   caches, any replication or change feed — gets identity for free: a
-   stored (oid, pk) can dangle; a committed pk never names another row,
-   and one a rolled-back insert left can be named again, which the
-   read-time verification against the row now there catches - so
-   "dangling ⇒ skip" is sound. The oid half holds because
+2. **(oid, pk) is unique at any instant, and unique for life up to a
+   `PURGE`.** Every structure keyed on it — the statistics primitives,
+   waystone trail entries, in-memory canonical caches, any replication or
+   change feed — gets identity for free: a stored (oid, pk) can dangle;
+   a committed pk names another row only after a `PURGE` freed it, and one
+   a rolled-back insert left can be named again - both of which the
+   read-time verification against the row now there catches (BH-S1's
+   Census B checked every consumer) - so "dangling ⇒ skip" is sound. The oid half holds because
    `Catalog::GenerateUserOid()` recovers its position from the catalog on
    first use (`keystoneid-k0-findings.md` §6). The pk half — K1 across a
    crash — holds exactly as far as the mark's durability does:
@@ -86,11 +100,11 @@ What this buys, engine-wide:
    precedes the row it covers and replays with every other catalog write
    (`docs/spec/wal.md`), and the sorted fill's carve moves the mark the
    same way, so a crash burns ids and never reissues one.
-3. **Audit posture.** For the finance-adjacent positioning: "a row's
-   identifier never changes and is never reissued" is a compliance
-   sentence, not just an implementation detail. Immutable, unique-for-
-   all-time record identity is a precondition for defensible audit
-   trails.
+3. **Audit posture.** "A row's identifier never changes and is never
+   reissued **except by an explicit, logged `PURGE`**" is a compliance
+   sentence, not just an implementation detail. An external system that
+   captured a Keystone id must treat a purged key as a new identity, and
+   the purge is in the log to say when it became one.
 4. **Simpler invalidation everywhere.** Validation logic that would
    otherwise need epoch-style incarnation checks on ids reduces to
    existence + visibility checks.

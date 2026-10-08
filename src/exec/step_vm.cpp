@@ -1470,10 +1470,11 @@ private:
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
                     // Dangling: the pk names no row now - a skip, never an
-                    // error. A committed key never names another row (K1);
-                    // a rolled-back one may be named again (W12, BD-R4), and
-                    // a row later found under it is re-checked like any
-                    // other (MVCC and the residual).
+                    // error. A committed key names another row only after a
+                    // `PURGE` freed it (K1); a rolled-back or purged one may
+                    // be named again (W12, BD-R4, BH), and a row later found
+                    // under it is re-checked like any other (MVCC and the
+                    // residual).
                     continue;
                 }
                 co_return found.status();
@@ -1604,10 +1605,11 @@ private:
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
                     // Dangling: the pk names no row now - a **skip**, never
-                    // an error (§5). A committed key never names another row
-                    // (K1); a rolled-back one may be named again (W12,
-                    // BD-R4), and a row later found under it is re-checked
-                    // against the key column like any other.
+                    // an error (§5). A committed key names another row only
+                    // after a `PURGE` freed it (K1); a rolled-back or purged
+                    // one may be named again (W12, BD-R4, BH), and a row
+                    // later found under it is re-checked against the key
+                    // column like any other.
                     continue;
                 }
                 co_return found.status();

@@ -75,9 +75,9 @@ class OptimizerSignals;
 // set before the walk's own matches are merged in. What the announce
 // cannot cover - a write already made when it ran - is the banking gate's,
 // and §6a states the two halves as one rule. The Keystone issue-once
-// invariant (K1) is unchanged and is what makes a stored pk a name that can
-// dangle, and the key re-check is what keeps a re-named rolled-back key
-// from mis-attributing.
+// invariant (K1) is what makes a stored pk a name that can dangle, and the
+// key re-check is what keeps a re-named rolled-back or purged key from
+// mis-attributing (`heap-and-tuple.md` §4.1c).
 //
 // **Concurrency: one store for the instance, partitioned by `cabin_id`**
 // (AT-S7; AR1 §11's second shape, marked as AT-0 item 9 on 2026-09-23).
@@ -115,10 +115,11 @@ inline constexpr std::uint16_t kCabinHintValid = 0x1;
 // half, in 24 bytes (spec §3, C2 + C6).
 //
 // **Authority lives in the pk, never in the location.** Under K1 a committed
-// tuple's Keystone id is never rebound, so a stored pk can dangle but never
-// names another committed row. A pk an insert left before rolling back can
-// be named again (W12, BD-R4), and that is why every serve re-checks MVCC
-// and the key column (§4): authority is the pk plus that re-check, never the
+// tuple's Keystone id is rebound only after a `PURGE` freed it, so a stored
+// pk can dangle and names another committed row only then. That key, and a
+// pk an insert left before rolling back, can be named again (W12, BD-R4,
+// BH), and that is why every serve re-checks MVCC and the key column (§4):
+// authority is the pk plus that re-check, never the
 // location. That buys relocation invariance (the physical optimizer may move
 // pages without ever touching a Cabin), no incarnation protocol, and
 // "dangling ⇒ skip now, droppable on sight".

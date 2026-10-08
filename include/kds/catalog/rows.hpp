@@ -854,7 +854,8 @@ constexpr bool IsCabinServing(const SysCabinRow& row) noexcept {
 //     for every foreign key there can be. That is what makes ON UPDATE
 //     CASCADE unnecessary rather than deferred - the referenced key is
 //     immutable (invariant 11) - and what makes a stale reference able to
-//     dangle but never to name a different row (K1's issue-once).
+//     dangle, and to name a different row only after a `PURGE` freed its
+//     key, which RESTRICT keeps from happening under a live child (K1).
 //   - **no action.** v1 is RESTRICT / NO ACTION only (F2), so an action
 //     field would have exactly one legal value. CASCADE and SET NULL need
 //     the budget-interaction design F2 defers, and adding the field then is

@@ -2074,8 +2074,9 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                     // Delete-marked, not retired: a retired slot has no
                     // compensation that puts it back, and `ScanAll` now
                     // knows how to read a mark (DT5). The row's bytes stay
-                    // where they are, which is what a rollback needs and
-                    // what nothing purges.
+                    // where they are, which is what a rollback needs; the
+                    // mark is retired later by the catalog's own purge once
+                    // every reader has settled (`PurgeSettledDeleteMarks`).
                     if (ddl_undo_hook_) {
                         if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id,
                                                        i, {}, tuple.trx_id, tuple.undo_ptr,

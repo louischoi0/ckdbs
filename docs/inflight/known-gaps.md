@@ -655,19 +655,61 @@ which went with the bump (`heap-and-tuple.md` §4.1).
 
 ## Keystone ids
 
-- **A purge of a user relation owes a keyed tombstone, and none is built.**
-  Verified at `07e822a6` (BD-S3). Since BD a committed key stays bound
-  because its delete-marked row stays in its leaf for the life of the
-  relation - nothing purges a user relation (`Catalog::RetireDeleteMarks`
-  walks catalog chains only) - and that row is the tombstone BD-R4 rests
-  on: the duplicate check reads it, and a key whose row was deleted is
-  refused `AlreadyExists`. A purge that retired a delete-marked slot keyless,
-  as a rollback does, would free a committed key and let a named key rebind
-  it, against K1. **What a purge owes**: a keyed, never-visible tombstone in
-  the row's key position, which the duplicate check and the placement order
-  read and every walk and `VerifyTupleAt` treat as absent - or it reclaims
-  nothing. Owner: `docs/rules/keystoneid-invariant.md` K1,
-  `heap-and-tuple.md` §4.1.
+- **An engine-internal purge of a user relation still owes a keyed
+  tombstone, and none is built; `PURGE` frees a key by design.** Verified at
+  `26766699` (BH-S3). A committed key stays bound because its delete-marked
+  row stays in its leaf - the tombstone BD-R4 rests on - until the operator's
+  `PURGE` retires it (`heap-and-tuple.md` §4.1c), K1's one named exception.
+  Nothing else retires a delete-marked user row (`Catalog::RetireDeleteMarks`
+  walks catalog chains only). **What an engine-internal purge would owe**: a
+  keyed, never-visible tombstone in the row's key position, which the
+  duplicate check and the placement order read and every walk and
+  `VerifyTupleAt` treat as absent - or it reclaims nothing. Owner:
+  `docs/rules/keystoneid-invariant.md` K1, `heap-and-tuple.md` §4.1.
+
+- **What bounds `PURGE`** (BH, `instructions/v3.0.0/workorder-bh-purge-key.md`
+  §0), verified at `26766699`:
+  - **One open older snapshot blocks every `PURGE` of a key deleted after
+    it.** An idle REPEATABLE READ session refuses each such `PURGE` at
+    `exec::kPurgeHorizonWaitNs` (1 s), `TxnConflict retryable=1`.
+  - **Nothing wakes its wait.** Neither a horizon advance nor a deleter's
+    decide kicks the waiting core: the wait polls, one of "what still
+    polls" (Locks, below), and a wide window is re-walked from its low key
+    on every attempt.
+  - **A refusal or a crash in the middle of a window leaves it partly
+    purged**, up to some key in key order (each key whole); the refusal's
+    text says how many, and a re-run finishes the window
+    (`PurgeKeySqlCrashTest`, `PurgeKeyTest.ARefusalWhileWriting...`).
+  - **A crash or a refusal between a key's retire and its spill release
+    leaks that row's spills**, which no sweep reclaims (the mount sweep
+    covers `sys.assertions` only). Spills of versions older than the
+    tombstone, in the undo chain's keeping, were already leaked before BH.
+  - **The leaf space a purge frees comes back only at a dividing split**,
+    never at an append split: a retired slot keeps its directory entry.
+  - **A wide window collects every target before it writes**, so its
+    target list grows with the window.
+  - **A purged version's secondary-index entries are never removed** (BH-Q8
+    (a)), so the equal-index-sort-keys defect gains a path
+    (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`).
+  - **The audit claim carries the exception**: a key is never reissued
+    except by an explicit, logged `PURGE`, and an external system that
+    captured a Keystone id must treat a purged key as a new identity.
+  - **Every future read view inherits the horizon obligation**: a view kind
+    that can read a superseded user row must be registered with the horizon,
+    read latest state only, or be excluded by a relation `X` - or a `PURGE`
+    may retire a row it is entitled to read, a wrong answer with no error
+    (`heap-and-tuple.md` §4.1c; BH-S1's Census A).
+  Owner: `heap-and-tuple.md` §4.1c.
+
+- **`DELETE` refuses a system relation only by accident.** Verified at
+  `80a0c223` (BH-S1, Census D). `DELETE FROM sys.tables` resolves the name,
+  and `InitTableAccess` answers `NotFound` *"no columns for this rel_id"*,
+  because a bootstrap relation has no `sys.columns` rows (`catalog.cpp`).
+  The refusal would change the day the catalog learns its own columns, and
+  `NotFound` says the relation is absent when it is not. `PURGE` refuses one
+  explicitly, `Unsupported` (BH-Q17); `DELETE` and `UPDATE` do not.
+  `PurgeKeyTest.CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident`
+  pins the accident. Owner: `heap-and-tuple.md` §4.
 
 - **An omitted pk on a btree can be refused `AlreadyExists`.** Verified at
   `91c998a3` (BD-S5), by reading `CommandDispatcher::InsertOneRow`. The id

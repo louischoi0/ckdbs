@@ -894,7 +894,7 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // whether that is past every key here. Complete, unlike the heap chain's
     // tail-only check: the descent is exact, so the leaf it landed on is the
     // only page that may hold `id`, and a delete-marked tuple holds its key
-    // for the life of the relation (BD-R4).
+    // until a `PURGE` retires it (BD-R4, BH).
     auto at = SearchLeaf(leaf, id);
     if (!at.ok()) return at.status();
     if (at.value().present) {

@@ -47,6 +47,14 @@ leaf - grows the run of equal sort keys exactly as an `UPDATE` does. A key
 inserted, rolled back and named again with a new covered value about 600
 times reaches the refusal.
 
+**A third SQL path since BH-S3: a purged key named again.** By reading, on
+`worktree-bh-purge-key` at `26766699`; not reproduced. `PURGE` retires a
+deleted row's slot keyless and leaves its index entries (BH-Q8 (a),
+`heap-and-tuple.md` §4.1c), so an `INSERT` naming the purged key again with
+a different covered value appends an equal `(key, pk)` entry, as the
+rolled-back path does. About 600 rounds of delete, purge and re-insert
+reach the refusal.
+
 **While this stands, its `AlreadyExists` is the one exception to BD-R5**:
 a named key is refused because of its pk only as a duplicate or as
 exhausted, and this refusal is neither - the key is not bound, and the

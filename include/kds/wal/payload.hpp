@@ -382,8 +382,11 @@ StatusOr<HeapDeleteUnmarkPayload> DecodeHeapDeleteUnmark(std::span<const std::by
 //   emitted by rollback     the aborting transaction's id
 //   emitted by a purge pass kNoTxnId
 //
-// Nothing purges yet, so today every SLOT_RETIRE in a stream is a rollback
-// compensation (txn/manager.cpp).
+// Three emit at `kNoTxnId`: the catalog's own mark retirement
+// (`Catalog::RetireDeleteMarks`), `sys.assertions`' drop of a live row
+// (`exec::LogSlotRetire`), and a user `PURGE` (`exec::PurgeKey`, BH). Every
+// other SLOT_RETIRE in a stream is a rollback compensation
+// (txn/manager.cpp).
 
 struct SlotRetirePayload {
     std::uint16_t slot;

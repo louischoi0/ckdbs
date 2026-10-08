@@ -28,9 +28,10 @@
 //
 // **The pk is authoritative and the hint is advisory**, which is C2 carried
 // over from the observational class unchanged. Under K1 a stored Keystone id
-// is a forever-unique name: it can dangle - the row may be gone - but it can
-// never come to mean a different row, so a wrong hint costs a descent and
-// never a wrong answer. The hint is verified through the one verifier
+// is a name: it can dangle - the row may be gone - and it comes to mean a
+// different row only after a `PURGE` freed it, once no reader could see the
+// old one (`heap-and-tuple.md` §4.1c). A bound entry's pk is never resolved
+// to read a row, so a wrong hint costs a descent and never a wrong answer. The hint is verified through the one verifier
 // (`exec/tuple_verify.hpp`) that Waystone replay and the observational Cabin
 // already share.
 //

@@ -1752,3 +1752,35 @@ The sim cannot reach these, each killed by a cell (BH-S3):
 **Accepted as they stand:** the refusal-while-writing cell depends on the
 var-heap page's second fetch being key 2's. That fails loudly, never
 wrongly.
+
+### BH-S5 — the close - 2026-10-08
+
+- **Where:** on `worktree-bh-purge-key` from BH-S4's commit.
+- **The text** (BH-R12):
+  - **K1 and its reasons are restated** with the one named exception
+    (`docs/rules/keystoneid-invariant.md`).
+  - **`heap-and-tuple.md`** gains §4.1c, the specification as built
+    (PU1-PU12, with BH-S3's per-attempt transaction and BH-S4's
+    release-refusal wording). Its §4 sentences and invariant 11 carry the
+    exception.
+  - **The other specs:** `namespace.md`, `cabin.md`, `assertion.md` and
+    `foreign-keys.md` are restated. The `cabin.md` contradiction §1.10 recorded is
+    corrected: `DELETE` writes the bound class's departure, and `PURGE`
+    writes none.
+  - **The manual:** `manual/sql/sql.md` gains a PURGE section after
+    DELETE. It loses *"Nothing purges."*, *"stays bound for the life of the
+    relation"* and *"nothing reclaims it"*, and gains PURGE's error rows and
+    the head list's `PURGE`.
+  - **The code comments** Census C listed are restated, `payload.hpp`'s
+    included, and `catalog.cpp:2078`'s stale *"what nothing purges"* with
+    them.
+  - **The bug entry** gains the purged-key path.
+  - **`known-gaps.md`:** the Keystone id entry is restated, and three
+    entries are added: what bounds `PURGE`, the horizon obligation every
+    future read view inherits, and Census D's accidental `DELETE` refusal.
+  - **`CLAUDE.md`:** invariant 11, and the Keystone id and Caller-supplied
+    pk rows.
+- **The done-when grep**, widened as BH-S1 recorded, finds every remaining
+  hit true. Each one is about oids, transaction ids, Cabin group ids,
+  catalog ids, timers, index entries, persisted enum numbers, the lifetime
+  budget or issued ids, or it is a sentence restated with the exception.

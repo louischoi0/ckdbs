@@ -219,7 +219,7 @@ shared lookup machinery but different lifecycle contracts:
 
 | Field | Width | Notes |
 |---|---|---|
-| pk | 40 bit | Keystone id, authoritative (K1 invariants: never reused, never changed) |
+| pk | 40 bit | Keystone id, authoritative (K1 invariants: never reused except after a `PURGE` freed it, never changed - `DELETE` writes the departure and `PURGE` writes none) |
 | flags | 8 bit | includes `RESERVED` for in-flight entries (§6) and `ORPHANED` (bit 3, `kEntryOrphaned`) for an entry whose reservation aborted (AS6b, §7) |
 | reserved | 16 bit | alignment |
 | location hint: page id / epoch / slot | 64 bit | advisory; shares Waystone validation rules; on hint failure fall back to pk descent and heal in place |

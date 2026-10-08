@@ -190,7 +190,7 @@ key:
   - **duplicate**, `AlreadyExists`: a row with this key exists, live
     (`ERR duplicate primary key <k> already present at page <p> slot <s>
     (byte <n>)`) or deleted (`ERR duplicate primary key <k>: a row with
-    this key was deleted; a Keystone id is bound once (page <p> slot <s>)
+    this key was deleted; PURGE frees its key (page <p> slot <s>)
     (byte <n>)`). A key named twice in one statement is a duplicate at its
     second row;
   - **exhausted**, `OutOfRange`: the key is outside `[1, 2^40 - 1]`
@@ -199,8 +199,8 @@ key:
     too long for 64 bits.
 
   **A key whose insert rolled back is free**, and naming it again places
-  it. **A key whose row was committed stays bound for the life of the
-  relation**, even after `DELETE`. A named key meeting another session's
+  it. **A key whose row was committed stays bound**, even after `DELETE`,
+  **until a `PURGE` frees it** (§3, PURGE); then naming it again places it. A named key meeting another session's
   uncommitted insert of the same key waits for that session to commit
   (then `AlreadyExists`) or roll back (then placed); one meeting a
   committed row that another session is updating or deleting is
@@ -538,8 +538,9 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
 - **A named pk is refused as a duplicate when its key is bound** (see the
   Keystone contract): on a `BTREE` relation the clustered descent lands on
   the only leaf that could hold the key and names a used one `AlreadyExists`.
-  A `DELETE`d row still holds its key, and nothing reclaims it, so a
-  deleted pk cannot be re-supplied; a key whose insert rolled back can.
+  A `DELETE`d row still holds its key until a `PURGE` frees it, so a
+  deleted pk cannot be re-supplied before one; a key whose insert rolled
+  back, or a purged one, can.
 - Replies: `INSERTED oid=<o> id=<n> page=<p> slot=<s>` for one row, where
   `slot` is the slot at placement — a later insert into the same page can
   move it; `INSERTED oid=<o> rows=<n> first_id=<f> last_id=<l>` for
@@ -601,8 +602,9 @@ FROM <table> [WHERE ...]` parses (`ParseDelete`, `DeleteStmt` in the AST)
 and executes. It arrived with the transaction work (T01-T14). Semantics:
 
 - A DELETE is a **delete-mark**, never a physical removal — the tuple's
-  bytes stay for readers whose snapshot predates the deleter. Nothing
-  purges.
+  bytes stay for readers whose snapshot predates the deleter. `PURGE`
+  (below) is the one statement that removes a deleted row and frees its
+  key.
 - No column list, nothing to assign; the WHERE nests subqueries exactly as
   SELECT's does. An empty WHERE marks every row.
 - DELETE deliberately does not touch Cabins or secondary indexes (removal is
@@ -611,6 +613,56 @@ and executes. It arrived with the transaction work (T01-T14). Semantics:
   departure entry that keeps assertion group headers truthful.
 
 ---
+
+### PURGE (built 2026-10-08, BH)
+
+```sql
+DELETE FROM accounts WHERE id = 5;
+PURGE FROM accounts WHERE id = 5;          -- PURGED 1
+INSERT INTO accounts VALUES (5, 0);        -- placed: the key is free again
+PURGE FROM accounts WHERE id BETWEEN 100 AND 199;
+```
+
+`PURGE FROM <table> WHERE <pk comparisons>` removes the deleted rows of a
+primary-key window and **frees their keys**, so an `INSERT` that names one
+is placed as if the key had never been used. It is the one exception to
+"a committed key stays bound" (the Keystone contract).
+
+- **The window.** Every conjunct compares the primary key with a
+  non-negative integer literal — `=`, `<`, `<=`, `>`, `>=`, `BETWEEN a AND
+  b` — and they are ANDed into one key range. Any other conjunct is refused,
+  not ignored, because ignoring one would free more than was asked
+  (`id > 0 AND id != 5` would free 5).
+- **What is freed.** A key whose row a committed `DELETE` removed. A live
+  key is passed over in a wider window; named alone (`id = 5`, `id BETWEEN
+  5 AND 5`) it is refused. A key never placed, rolled back, or already
+  purged purges nothing and is no error, so a `PURGE` can always be run
+  again.
+- **It waits for older readers.** A row is freed only once no open
+  snapshot can still read it, so a `PURGE` right after its `DELETE` may
+  wait for a `REPEATABLE READ` transaction that began before the delete,
+  or for an undecided writer of the key. It polls for up to 1 s, then is
+  refused `TXN_CONFLICT retryable=1` naming the key, having purged nothing.
+  While it waits it holds nothing, so DDL on the relation is not delayed.
+- **Autocommit only, `BTREE` only, admin only.** Inside `BEGIN` it is
+  refused `NOT_IMPLEMENTED` without poisoning the transaction; a system or
+  heap relation is `UNSUPPORTED`; it needs the admin role.
+- **Reply:** `PURGED <n>`, the keys freed; `rows_affected` on the wire. It
+  is durable as any commit is, under the session's durability class.
+- **Partial outcomes.** The whole window is judged before anything is
+  written, then each key is freed whole, in key order. A crash or an I/O
+  refusal in the middle leaves the window freed up to some key and
+  untouched after it; the refusal says how many keys it freed, and running
+  the statement again finishes the window.
+- **What it leaves.** Secondary indexes, Cabins and Waystone trails keep
+  their entries for the freed key; every read re-checks them against the
+  row now there, so a freed and re-inserted key reads as the new row,
+  once. Assertion counts are already right: `DELETE` removed the row's
+  contribution, and `PURGE` adds no second removal. The engine never
+  issues a freed key on its own; only an `INSERT` that names it takes it.
+- **An identity note.** A system that recorded a key from outside the
+  engine must treat a purged key as a new identity: the purge is in the
+  log to say when it became one.
 
 ## 4. SELECT
 
@@ -1035,13 +1087,18 @@ in §7 below now carries and which both used to reach a client as a bare
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k>` |
 | A non-integer supplied pk | `InvalidArgument` — `ERR primary-key column '<name>' needs an integer literal (byte <n>)` |
 | A supplied pk outside `[1, 2^40 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR primary key <k> is outside the Keystone id space [1, 1099511627775] (byte <n>)` |
-| A supplied pk already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key `ERR duplicate primary key <k>: a row with this key was deleted; a Keystone id is bound once (page <p> slot <s>) (byte <n>)` |
+| A supplied pk already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate primary key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |
 | A supplied pk below the high-water mark of a `HEAP` relation (none can be created since SUS-1) | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order`, or when the key sorts below the chain's tail `ERR primary key <k> is below the relation's high-water mark: the chain's tail, page <p>, opens at <m>, an id already placed; a named key must sort above every key the relation has placed or issued` (neither form carries a byte) |
 | An omitted pk on a `BTREE` relation whose issued id met a concurrently named key 8 times in a row | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s>` (no byte: the key was issued, not written) |
 | `ASSIGNED` in CREATE TABLE | `Unsupported` — `ERR UNSUPPORTED retryable=0 the ASSIGNED key mode no longer exists (byte <n>) - ...` (removed 2026-08-25 and not coming back, which is why it is the permanent half; `EXPLICIT` is accepted and does nothing) |
 | Assigning the pk in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
-| Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)` |
+| Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE)` |
+| `PURGE` inside a transaction | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE inside a transaction is not implemented; run it in autocommit (byte 0)`; the transaction is not poisoned |
+| `PURGE` of a system or heap relation | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' is a system relation; PURGE frees keys of user relations only (byte <n>)`, or `… is a heap relation, whose chain grows only at its tail; PURGE frees keys of btree relations only (byte <n>)` |
+| `PURGE` with no `WHERE`, or a conjunct other than a pk comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the primary key; … (byte <n>)`, or `… PURGE admits only comparisons of the primary key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |
+| `PURGE` naming one live key, or a negative pk literal | `InvalidArgument` — `ERR primary key <k> is live; PURGE frees only a key whose row was deleted (byte <n>)`, or `ERR primary key literal <k> is negative, and no key is below 1 (byte <n>)` |
+| `PURGE` meeting an older snapshot, or an undecided writer, for 1 s | `TxnConflict`, retryable — `ERR TXN_CONFLICT retryable=1 PURGE cannot free primary key <k> yet: …; nothing was purged, and running it again once that ends will` |
 | Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |
 | Bare `decimal` | `ERR column '<c>' needs a precision and a scale - decimal(p, s) - at byte <n>; there is no default scale, ...` |
 | `float` column | `Unsupported` from the row-layout build: no decided on-disk encoding, and the type is refused rather than deferred |

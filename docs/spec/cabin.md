@@ -101,9 +101,10 @@ CabinEntry (24 B):
 **C2 — authority lives in the pk, never the location.** The pk is
 resolved through the clustered tree when the hint fails; under the
 adopted issue-once invariant (K1/K2) a stored id is an
-**immutable name**: it can dangle, and a committed id never names another
-row; an entry naming a rolled-back key can meet a new row (W12, BD-R4),
-which the read-time key re-check filters. This buys four things:
+**immutable name**: it can dangle, and a committed id names another row
+only after a `PURGE` freed it; an entry naming a rolled-back or purged key
+can meet a new row (W12, BD-R4, `heap-and-tuple.md` §4.1c), which the
+read-time key re-check filters. This buys four things:
 
 1. **Relocation invariance** — the physical optimizer moves pages
    without ever touching a Cabin, exactly as decided for secondary
@@ -111,14 +112,15 @@ which the read-time key re-check filters. This buys four things:
    that required maintenance on relocation would couple two subsystems
    that are deliberately independent.
 2. **No incarnation checks** — a pk needs no epoch or identity
-   protocol; by K1 there is at most one committed tuple it can ever mean,
-   and a rolled-back key named again is caught by the read-time key
-   re-check. MVCC
+   protocol; by K1 there is at most one committed tuple it can mean at any
+   instant, and a rolled-back or purged key named again is caught by the
+   read-time key re-check. MVCC
    visibility is evaluated on the tuple as always.
 3. **Dangling ⇒ skip** — a pk absent from the clustered tree names no
-   row now. A committed key never names another row (K1), and a fully
-   purged one would leave a keyed tombstone (K1's purge obligation). A
-   rolled-back insert's key is free and may be named again (W12, BD-R4);
+   row now. A committed key names another row only after a `PURGE` freed
+   it, and an engine-internal purge would leave a keyed tombstone (K1's
+   purge obligation). A rolled-back insert's key, and a purged one, is
+   free and may be named again (W12, BD-R4, §4.1c);
    a row found under it later is re-checked against the key column like
    any other, and the insert that placed it witnessed it itself (§5). So
    a dangling entry is droppable on sight.
@@ -318,9 +320,10 @@ Any physical removal of surplus entries is bound by two rules, one per
 class:
 
 - **Dangling entries** — pk not present in the clustered tree. A
-  committed key never names another row (K1), and a rolled-back key
-  named again is re-checked against the key column and witnessed by its
-  own insert (W12, BD-R4): droppable on sight, no horizon reasoning.
+  committed key names another row only after a `PURGE`, and a rolled-back
+  or purged key named again is re-checked against the key column and
+  witnessed by its own insert (W12, BD-R4, §4.1c): droppable on sight, no
+  horizon reasoning - the purge itself did the horizon reasoning.
 - **Non-matching entries** — the tuple exists but no longer matches
   `v`. Droppable only past the same oldest-active horizon that undo
   truncation uses (a pre-update snapshot may still match the entry).
@@ -360,8 +363,10 @@ made when it ran — is the banking gate's, and §6a states the two halves
 as one rule.
 
 The second classic hazard — identifier reuse corrupting stale
-references — is deleted by the adopted issue-once invariant (K1), which
-is unchanged. This spec is valid **only** under it and under §6a's rule.
+references — is deleted by the adopted issue-once invariant (K1), whose
+one exception, `PURGE`, frees a key only once no reader can see its deleted
+row, and whose re-placed row every serve re-checks. This spec is valid
+**only** under it and under §6a's rule.
 
 ### 6a. A set is banked only from a view nothing can contradict
 
@@ -710,7 +715,7 @@ Bound, 32 B (`BoundCabinEntry`, `include/kds/storage/cabin_bound_page.hpp`,
 
 | Field | Width | Notes |
 |---|---|---|
-| pk | 40 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and it never names another row - a committed id is never rebound, and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
+| pk | 40 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and it never names another row - a committed id is never rebound except by `PURGE`, which runs after `DELETE` wrote the row's departure, and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
 | flags | 8 bit | includes the `RESERVED` bit for an in-flight entry (assertion §6) |
 | reserved | 16 bit | written 0, ignored |
 | location hint (page id / epoch / slot) | 64 bit | **advisory**, verified through the one verifier `exec/tuple_verify.hpp`; on failure fall back to a pk descent and heal in place |
@@ -759,8 +764,10 @@ with the group key in place of the value.
 | Removal | Any failure, cap, or pressure may un-observe a value at any time | Only `DROP ASSERTION` removes one, which tears the structure down and unpins its pages (`ASSERT_DROP`). `DROP TABLE` on a relation carrying an assertion is `Restrict` |
 | Restart | Every value reads as unobserved; traffic rebuilds | Replay restores headers and entries exactly; the constraint is enforceable immediately, with **no enforcement gap** |
 
-`DELETE` calls neither class's write hook: for the observational class because
-removal is forbidden (§5 — an older snapshot may still match through the undo
-chain), for the bound class because v1 constrains upper bounds only and a
-deletion is strictly decreasing (AS11). The two reasons are unrelated and
-neither may be cited for the other.
+`DELETE` calls the observational class's write hook never, because removal
+is forbidden (§5 — an older snapshot may still match through the undo
+chain). It **does** write the bound class's departure (`ReserveDelete`, AS11:
+check-free, maintenance only), so a deleted row's net contribution is 0 - and
+`PURGE`, which runs after it, writes none (`heap-and-tuple.md` §4.1c), or the
+group would be understated. The two classes' rules are unrelated and neither
+may be cited for the other.
