@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 
 #include "kds/base/status.hpp"
@@ -208,6 +209,28 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
 // `Location` exists to close.
 StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id,
                                storage::PageAccess access = storage::PageAccess::kRead);
+
+// **The purge's find and verify** (BH-R3, BH-R6 phase 2, BH-R7;
+// `instructions/v3.0.0/workorder-bh-purge-key.md`): descends to `id` with
+// the leaf held exclusive and hands the slot back, **only if it is still
+// the tombstone the caller judged** - keyed `id`, delete-marked, and
+// stamped by `deleter_trx_id`.
+//
+// `std::nullopt` is the skip, not a failure (PU12): the key is absent
+// (never placed, rolled back, or purged by another `PURGE`), or its slot
+// is a row an `INSERT` placed after the caller judged it. Skipping is what
+// keeps a re-placed live row from being retired, and it is the one check
+// BH-R4's lock-free design rests on.
+//
+// The slot comes back **still held**, as `BtreeLookup`'s `Location` does,
+// and nothing on it is written yet: the caller reads the version's spills
+// off the page, then retires `slot` through `leaf` and logs the
+// `SLOT_RETIRE` under the same hold (AT-S21) - so a refusal before the
+// retire leaves the page as it was. This function has neither a log nor a
+// schema.
+StatusOr<std::optional<Location>> BtreeHoldTombstone(storage::PageStore& store, PageId root,
+                                                     std::uint64_t id,
+                                                     std::uint64_t deleter_trx_id);
 
 // Calls `fn` once per slot of every leaf, left to right - which is pk
 // order page by page, and within a leaf slot order, which is key order on

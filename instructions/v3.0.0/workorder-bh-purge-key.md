@@ -885,10 +885,14 @@ PU6 says.
 
 ### BH-R7 — Logging, recovery and durability (PU6, PU8; BH-Q6, BH-Q11)
 
-- **The primitive** is btree-level. It finds, verifies and retires the
-  slot, and hands back the held leaf and a copy of the payload. The caller
-  then logs and releases, as an insert does with `placed.held`. The
-  primitive cannot find spills itself, because it has no schema.
+- **The primitive** is btree-level. It finds and verifies the slot, and
+  hands it back held, writing nothing (`btree::BtreeHoldTombstone`). The
+  caller (`exec::PurgeKey`) reads the version's spills off the held page,
+  then retires the slot and logs it under the same hold, then releases. The
+  primitive cannot find spills itself, because it has no schema. Decoding
+  before the retire means a cell that cannot be read refuses the key with
+  the page untouched (BH-S2's review, finding 2, which changed this text
+  rather than the code).
 - **The retire.** `SLOT_RETIRE` at `kNoTxnId` through
   `exec::LogSlotRetire`, under the leaf's exclusive hold, as AT-S21 logs
   every mutation under the hold that placed it.
@@ -1037,7 +1041,7 @@ cannot be.
 |---|---|---|---|
 | BH-S0 | **The order** | <ul><li>This file</li><li>Its `critics-developer` review (§7)</li><li>The words recorded in `raft-marks-2026-10-08.md`</li><li>The index row</li></ul> | S |
 | BH-S1 | **The census, and red first** | <ul><li>**Census A** (BH-R5): every unregistered view, the `PURGE`'s own included, and every spill-decoding site, each shown safe across a `PURGE` on another core or listed for BH-S3 to register or reorder.</li><li>**Census B** (§1.6): one cell per consumer, through a test-only seam that retires a committed tombstone keyless and re-places its key with different values: index probes on the old key, the new key, a range and a join; a Cabin serve, the foreign-key reverse check through a Cabin, and the inner build; assertion `COUNT` and `SUM` against a recount; a Waystone replay. **Expected green.** A red one stops BH at this row for a ruling.</li><li>**Census C** (§1.9): BH-R12's grep, run, with every hit classed.</li><li>**Census D:** how `DELETE` refuses a system relation, which PU10 follows.</li><li>**Red at BH-S0's commit**, committed red as BD-S1's were (§1.8): `PURGE` after `DELETE`, then the named `INSERT`, expecting it placed; the REPEATABLE READ reader's cell; the commit-arm cell.</li><li>**Guard, green and kept green:** BD-S1's `ADeletedKeyNamedAgainIsAlreadyExists`.</li></ul> | M |
-| BH-S2 | **The primitive** (BH-R3, BH-R6 phase 2, BH-R7) | <ul><li>**Code:** the btree-level find, verify and retire, handing back the held leaf and the payload copy; the caller's `exec::LogSlotRetire` at `kNoTxnId` under the hold, then `txn::ReleaseVarHeapSlot` at `kNoTxnId` for each copied spill. A verify mismatch is a skip. No caller from SQL yet.</li><li>**Cells:** a purged key re-placed at the storage level; a live slot, an undecided deleter and a re-placed key, each skipped or refused as BH-R3 says; the crash cells of BH-R11 at the storage level; redo applied twice; a loser re-insert after a purge undone at mount.</li><li>**Mutations, each repeated:** the skip turned into a retire; the release before the retire; the release omitted; the envelope given a transaction id.</li><li>**The suite green**, except the red cells BH-S1 committed, and the waystone, index, cabin and inner-build contract suites byte-identical.</li></ul> | M |
+| BH-S2 | **The primitive** (BH-R3, BH-R6 phase 2, BH-R7) | <ul><li>**Code:** the btree-level find and verify, handing back the held slot; the caller decodes the spills, retires the slot and logs `exec::LogSlotRetire` at `kNoTxnId` under the hold, then `txn::ReleaseVarHeapSlot` at `kNoTxnId` for each copied spill. A verify mismatch is a skip. No caller from SQL yet.</li><li>**Cells:** a purged key re-placed at the storage level; a live slot, an undecided deleter and a re-placed key, each skipped or refused as BH-R3 says; the crash cells of BH-R11 at the storage level; redo applied twice; a loser re-insert after a purge undone at mount.</li><li>**Mutations, each repeated:** the skip turned into a retire; the release before the retire; the release omitted; the envelope given a transaction id.</li><li>**The suite green**, except the red cells BH-S1 committed, and the waystone, index, cabin and inner-build contract suites byte-identical.</li></ul> | M |
 | BH-S3 | **The statement** (BH-R2, BH-R4, BH-R5, BH-R6 phase 1, BH-R8, PU10) | <ul><li>**Opened only once Census A has no row open.**</li><li>**Code:** the arm, `ParsePurge`, the dispatch route, the window from the one recognizer, every refusal in PU10, the relation units, the re-mint, the polled wait under `kPurgeHorizonWait`, phase 1, the phase-2 loop under `DrainOnPressure`, the reply with its count, and the duplicate text (BH-Q13). The `PURGE` counted in BF-S5's statement epoch, with a cell: a drop's reclaim waits for a `PURGE` in flight on its relation.</li><li>**Green:** BH-S1's red cells, and BH-R11's SQL and lock cells.</li><li>**Mutations, each repeated:** the horizon check removed; the re-mint skipped; the deleter's commit check removed; the live check removed; `DELETE`'s departure written; `<>` folded.</li><li>**The suite green**, also under `KDS_TEST_PAGE_LATCH=1`.</li></ul> | L |
 | BH-S4 | **The sim and the rigs** (BH-R11) | <ul><li>the `kPurge` op, both forms, with the oracle's `consumed_` and `pending_` rules;</li><li>the two-core cells;</li><li>the crash cells at the SQL level;</li><li>`scripts/sim.sh` green;</li><li>each of BH-S2's and BH-S3's mutations killed from the sim or a rig, or listed in this row with the reason it cannot be.</li></ul> | M |
 | BH-S5 | **The close** | <ul><li>A row per stage, and what bounds BH.</li><li>**The measurement** (§6).</li><li>**The text** (BH-R12), its grep included: K1 and its reasons, invariant 11, `heap-and-tuple.md` §4.1c, `namespace.md`, `cabin.md`, `assertion.md`, `foreign-keys.md`, the manual, the bug entry, `payload.hpp`'s comment.</li><li>**`known-gaps.md`**, as BH-R12 lists.</li><li>**`CLAUDE.md`'s** invariant 11, Keystone id row and Caller-supplied pk row.</li></ul> | M |
@@ -1391,3 +1395,94 @@ One citation drift was corrected.
     file-local, as in `sorted_leaf_named_keys_test.cpp`.
   - **`PurgeWaitTest` deriving from `LockDeadlockTest`.** That is
     `MidWalkWaitTest`'s convention.
+
+### BH-S2 — the primitive - 2026-10-08
+
+- **Where:** on `worktree-bh-purge-key` from `80a0c223`.
+- **Code:**
+  - `btree::BtreeHoldTombstone` finds and verifies a key's slot under
+    the leaf's exclusive hold. It hands back `std::nullopt`, a skip, for an
+    absent key, a live slot, or a slot another deleter stamped.
+  - `exec::PurgeKey`, in this order:
+    - decodes the version's spills off the held page;
+    - retires the slot and logs `SLOT_RETIRE` at `kNoTxnId` under that
+      hold;
+    - releases the hold;
+    - releases each spill with `VARHEAP_RELEASE` at `kNoTxnId`.
+  - `exec::RowSpills` is factored out of the mount sweep's
+    `ReferencedSpills`, so the sweep and the purge share one decoder.
+  - The log-cut helpers move from `sorted_leaf_crash_test.cpp` to
+    `file_rig_crash.hpp`, so this stage's crash cells use them rather than
+    a copy.
+  - No caller from SQL yet.
+- **Cells** in `tests/purge_key_crash_test.cpp`, on the file rig, all green:
+  - a purged key is named again and placed, and its spill released;
+  - each skip: live, another deleter, never placed, and re-placed after a
+    purge;
+  - the records are `SLOT_RETIRE` then `VARHEAP_RELEASE`, both at
+    `kNoTxnId`;
+  - a crash at every record boundary mounts with the key free, and the
+    image before the purge mounts with it bound;
+  - a restart after a recovered purge recovers it the same way;
+  - a loser `INSERT` of the purged key is undone at mount.
+
+  `RedoTest.APurgesSlotRetireReplaysOnceAndTwiceIsANoOp` covers **"redo
+  applied twice"**. A mount cannot reach the appliers' already-applied
+  arms: redo skips by page LSN first, and the retire is stamped under the
+  hold that wrote it. **Not a cell here: an undecided deleter.** The
+  primitive checks only the slot's identity, and the judging is BH-S3's.
+- **Mutations, each run twice, each killed:**
+
+  | mutation | killed by |
+  |---|---|
+  | the skip turned into a retire | `ASlotThatIsNotTheJudgedTombstoneIsSkipped` |
+  | the release before the retire | the record-order cell |
+  | the release omitted | the spill cell and the record-order cell |
+  | the envelope given the deleter's id | the record-order cell |
+
+  Each was applied to a file copy, built and run, and the file was
+  restored from its copy.
+- **The suite:** the full Debug suite ran on this stage's uncommitted code
+  beside the BH-S1 tree later committed as `80a0c223`, 3288/3292: the three BH-S1 red
+  cells and the environmental `TcpServerListenTest`. After the review's
+  refactor (below), the stage's cells and `SortedLeafCrashTest` were re-run
+  green, and BH-S3's full run covers the rest. Overhead not measured;
+  measured at the milestone's close.
+
+### BH-S2's review - 2026-10-08
+
+One `critics-developer` pass. **No correctness defect.** It checked against
+the code:
+
+- that a write lookup returns a delete-marked slot;
+- that a tombstone's `trx_id` is its deleter's;
+- that the retire/append/stamp order is the house order under one hold,
+  and that BC-S4's fail-stop keeps an unlogged retire from being written
+  back;
+- that no two versions or rows share a spill, because an `UPDATE`
+  re-encodes the row;
+- that the release takes its own hold;
+- that redo's applier and every leaf invariant already handle a retired
+  slot.
+
+**Applied:**
+
+1. **The mount-twice cell claimed to reach the appliers' already-applied
+   arms**, and it cannot. It is renamed to what it pins, a restart after a
+   recovered purge. The redo-level cell is added for the claim.
+2. **The order said the primitive retires.** The code's split is better,
+   because decoding before any write leaves the page untouched on a
+   refusal. BH-R7's text and this stage's row now say what the code does.
+3. **`HeldTombstone` duplicated `Location`** with a payload copy nothing
+   needed. The struct is deleted, and `PurgeKey` reads the tuple off the
+   held leaf.
+4. **The record-order cell re-read the segment file.** `Segment` now
+   keeps each record's `txn_id`.
+5. **The cells repeated their setup five times.** It is now one `Load`
+   helper.
+6. **The moved helpers were wrapped by hand**, since clang-format is not
+   installed.
+
+**Noted, not changed:** `BtreeHoldTombstone` reads any `NotFound` as a
+skip, including a missing root. That is unreachable while the relation's
+`IX` and BF's statement epoch keep a drop out.

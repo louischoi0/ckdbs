@@ -52,6 +52,13 @@ inline constexpr catalog::Oid kVarHeapCatalogRelations[] = {
     catalog::kSysAssertionsTable,
 };
 
+// The var-heap slots one row's payload points at, appended to `out` in
+// column order. Fails on a cell it cannot decode. **Not catalog-only**:
+// `PURGE` reads a user row's spills through it (BH-R7), so the sweep and
+// the purge share one decoder.
+Status RowSpills(const catalog::TableAccess& access, std::span<const std::byte> payload,
+                 std::vector<SpillRef>& out);
+
 // Every var-heap slot the relation's **live** rows point at.
 //
 // Delete-marked rows count as live references, deliberately: nothing retires

@@ -101,6 +101,7 @@ add_library(kds
     src/wal/writer.cpp
     src/exec/row_codec.cpp
     src/exec/catalog_spills.cpp
+    src/exec/purge_key.cpp
     src/exec/varheap_sweep.cpp
     src/stats/trace.cpp
     src/exec/index_key.cpp

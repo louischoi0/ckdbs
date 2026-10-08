@@ -1099,6 +1099,28 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
                                "a level");
 }
 
+// **A write lookup and the verify, under the hold the retire will use.**
+// The hold is what orders the purge against a named `INSERT` of `id`: the
+// insert's duplicate check runs under the same exclusive latch
+// (`PlaceUnderHold`), so it meets either the tombstone (refused) or a
+// keyless slot (placed), never a half-retired one.
+StatusOr<std::optional<Location>> BtreeHoldTombstone(storage::PageStore& store, PageId root,
+                                                     std::uint64_t id,
+                                                     std::uint64_t deleter_trx_id) {
+    auto at = BtreeLookup(store, root, id, storage::PageAccess::kWrite);
+    if (!at.ok()) {
+        if (at.status().code() == StatusCode::kNotFound) return std::optional<Location>{};
+        return at.status();
+    }
+    heap::PageView leaf(at.value().leaf.bytes());
+    auto tuple = leaf.ReadTuple(at.value().slot);
+    if (!tuple.ok()) return tuple.status();
+    if (!tuple.value().deleted || tuple.value().trx_id != deleter_trx_id) {
+        return std::optional<Location>{};  // not the tombstone judged: PU12's skip
+    }
+    return std::optional<Location>{std::move(at.value())};
+}
+
 // **No coverage check here, and the reason is directional** (AT-S5c). A
 // seek names where an ordered scan starts, and the scan walks *forward*
 // from it along `next_page_id`. A split can only move keys to the right, so

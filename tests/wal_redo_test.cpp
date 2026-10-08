@@ -1,5 +1,6 @@
 #include "kds/wal/redo.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -179,6 +180,38 @@ TEST_F(RedoTest, ReplayingTwiceIsAByteForByteNoOp) {
     // And the second pass did the work of skipping rather than of applying.
     EXPECT_EQ(second.value().applied, 0u);
     EXPECT_EQ(second.value().skipped_by_lsn, 5u);
+}
+
+TEST_F(RedoTest, APurgesSlotRetireReplaysOnceAndTwiceIsANoOp) {
+    // BH-R7 (`instructions/v3.0.0/workorder-bh-purge-key.md`): a `PURGE`
+    // logs `SLOT_RETIRE` at `kNoTxnId`, no transaction's. Redo applies it
+    // with the rollback's own applier - the slot answers NotFound - and a
+    // second pass over the same range moves no byte.
+    WriteHeapStream(4);
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        std::array<std::byte, kSlotRetirePayloadSize> buf{};
+        ASSERT_TRUE(EncodeSlotRetire(buf, SlotRetirePayload{/*slot=*/1}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kSlotRetire, kNoTxnId, kPage}, buf).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    const AnalysisResult analysis = Analyzed();
+
+    ASSERT_TRUE(Redo((*device_), 0, store_, analysis).ok());
+    {
+        auto page = store_.Get(kPage);
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        heap::PageView view(page.value().bytes());
+        EXPECT_EQ(view.ReadTuple(1).status().code(), StatusCode::kNotFound)
+            << "the purge's retire was not replayed";
+        EXPECT_TRUE(view.ReadTuple(0).ok());
+    }
+    const std::vector<std::byte> after_first = PageBytes(kPage);
+    auto second = Redo((*device_), 0, store_, analysis);
+    ASSERT_TRUE(second.ok()) << second.status().message();
+    EXPECT_EQ(PageBytes(kPage), after_first);
+    EXPECT_EQ(second.value().applied, 0u);
 }
 
 TEST_F(RedoTest, ARecordAtOrBelowThePagesLsnIsSkipped) {
