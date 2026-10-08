@@ -266,9 +266,7 @@ TEST_F(KwpLoadServerTest, ALoadLandsRowsThroughTheOneWritePath) {
         EXPECT_EQ(r.U32().value_or(0), kKwpMaxChunkBytes);
         EXPECT_EQ(r.U16().value_or(0), 3u);  // every column, the pk first (BI15)
 
-        // Two chunks: three rows, then two - the T3 gate is open for `t`
-        // (heap, int-only, nothing maintained), so this exercises the
-        // sorted fill through the load path.
+        // Two chunks: three rows, then two, every key issued.
         const std::pair<std::int64_t, std::int64_t> first[] = {{10, 1}, {20, 2}, {30, 3}};
         const std::pair<std::int64_t, std::int64_t> second[] = {{40, 4}, {50, 5}};
         const auto chunk0 = Chunk(load_id, 0, first);
@@ -496,17 +494,21 @@ TEST_F(KwpLoadServerTest, EveryTypeLoadsAndOneChunkMixesNamedAndIssuedKeys) {
         EXPECT_EQ(ready->second, 13u);
 
         // Row 1 takes an issued id, row 2 names 500, row 3 takes the next
-        // issued one - above the named key, which moved the mark.
+        // issued one - above the named key, which moved the mark - and row 4
+        // names 300, below the mark, which a btree places where it sorts
+        // (BD). `d` is a uint64 above INT64_MAX on every row.
+        parser::AstValue big = Int(-1);
+        big.raw_int_text = "18446744073709551615";
         const auto row = [&](parser::AstValue pk, std::int64_t tag) {
             return std::vector<parser::AstValue>{
                 std::move(pk),       Int(-7),     Int(-300),       Int(70000),
-                Int(9),              Int(1),      Int(20454),      Int(1767225600000000),
+                big,                 Int(1),      Int(20454),      Int(1767225600000000),
                 Dec(-12345, 2),      DecWide(-1, -123456789, 4),
                 Str("ab"),           Str(std::string(100, 'x')),
                 tag == 0 ? Null() : Int(tag)};
         };
         const auto chunk = Chunk(ready->first, 0, schema,
-                                 {row(Null(), 0), row(Int(500), 2), row(Null(), 3)});
+                                 {row(Null(), 0), row(Int(500), 2), row(Null(), 3), row(Int(300), 4)});
         SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
         auto ack = ReadFrame(fd, decoder);
         ASSERT_TRUE(ack.has_value());
@@ -523,14 +525,56 @@ TEST_F(KwpLoadServerTest, EveryTypeLoadsAndOneChunkMixesNamedAndIssuedKeys) {
         int text_fd = ConnectToLoopback(kTextPort);
         ASSERT_GE(text_fd, 0);
         EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT id, n FROM t"),
-                  "id,n\\n1,NULL\\n500,2\\n501,3");
+                  "id,n\\n1,NULL\\n300,4\\n500,2\\n501,3");
         EXPECT_EQ(SendAndReceiveLine(text_fd,
                                      "SELECT a, b, c, d, e, f, g, h, i, j FROM t WHERE id = 500"),
-                  "a,b,c,d,e,f,g,h,i,j\\n-7,-300,70000,9,1,2026-01-01,2026-01-01 "
+                  "a,b,c,d,e,f,g,h,i,j\\n-7,-300,70000,18446744073709551615,1,2026-01-01,2026-01-01 "
                   "00:00:00,-123.45,-12345.6789,ab");
         EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT COUNT(*) FROM t WHERE k = '" +
                                                   std::string(100, 'x') + "'"),
-                  "count(*)\\n3");
+                  "count(*)\\n4");
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
+// A relation that is its pk alone: a NULL pk row is a row of no values,
+// T1's omitted-pk arity at width zero, and takes an issued id.
+TEST_F(KwpLoadServerTest, APkOnlyRelationLoadsIssuedAndNamedKeys) {
+    constexpr std::uint16_t kTextPort = 25723;
+    constexpr std::uint16_t kKwpPort = 25724;
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE t (id int64)").response.substr(0, 7), "CREATED");
+    catalog::Schema schema;
+    schema.columns = {Col(catalog::kTypeValInt64)};
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        wire::FrameDecoder decoder;
+        ASSERT_TRUE(Handshake(fd, decoder));
+        const auto ready = Begin(fd, decoder, "t");
+        ASSERT_TRUE(ready.has_value());
+        EXPECT_EQ(ready->second, 1u);
+        const auto chunk = Chunk(ready->first, 0, schema, {{Null()}, {Int(7)}, {Null()}});
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
+        auto ack = ReadFrame(fd, decoder);
+        ASSERT_TRUE(ack.has_value());
+        ASSERT_EQ(ack->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck));
+        SendFrame(fd, wire::ClientFrameType::kLoadEnd, {});
+        ASSERT_TRUE(ReadFrame(fd, decoder).has_value());
+        ::close(fd);
+
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT id FROM t"), "id\\n1\\n7\\n8");
         ::close(text_fd);
     });
 
@@ -599,6 +643,24 @@ TEST_F(KwpLoadServerTest, ARefusedRowKillsTheLoadWithTheGatesOwnCode) {
         refused({Null(), Dec(1000000, 2), Int(0)}, StatusCode::kOutOfRange, "precision");
         refused({Null(), Null(), Int(0)}, StatusCode::kInvalidArgument, "NOT NULL");
         refused({Null(), Dec(1, 2), Int(1)}, StatusCode::kInvalidArgument, "bool", 2);
+
+        // A fixed-width field of the wrong length - the decimal sent as 4
+        // bytes - is refused before any reading of it, naming the column.
+        {
+            const auto ready = Begin(fd, decoder, "t");
+            ASSERT_TRUE(ready.has_value());
+            catalog::Schema narrow = schema;
+            narrow.columns[1] = Col(catalog::kTypeValInt32);
+            SendFrame(fd, wire::ClientFrameType::kLoadChunk,
+                      Chunk(ready->first, 0, narrow, {{Null(), Int(1), Int(0)}}));
+            auto err = ReadFrame(fd, decoder);
+            ASSERT_TRUE(err.has_value());
+            ASSERT_EQ(err->type, static_cast<std::uint8_t>(wire::ServerFrameType::kError));
+            const std::string message = wire::DecodeError(err->payload).value().message;
+            EXPECT_NE(message.find("chunk 0, row 1: column 'h' carries 4 bytes"),
+                      std::string::npos)
+                << message;
+        }
         ::close(fd);
 
         int text_fd = ConnectToLoopback(kTextPort);

@@ -51,31 +51,30 @@ Status SetNonBlocking(int fd) {
 // literal parser is pinned against, so `decimal(5,2)` refuses an unscaled
 // 10^9 exactly as it refuses the literal `'10000000.00'`.
 //
-// A fixed-width field of any other length is refused, never interpreted.
-StatusOr<parser::AstValue> ValueOf(const wire::DecodedField& field, std::uint32_t type_val,
-                                   std::uint32_t type_mod) {
+// A fixed-width field of any other length is refused, never interpreted -
+// which is also what makes every decode below infallible.
+StatusOr<parser::AstValue> ValueOf(const wire::DecodedField& field,
+                                   const wire::FieldDescription& desc) {
     parser::AstValue v;
     if (field.is_null) return v;  // kNull
 
-    const std::int16_t width = wire::WireTypeLen(type_val);
-    if (width >= 0 && field.bytes.size() != static_cast<std::size_t>(width)) {
-        return Status::InvalidArgument("a field of type " + std::to_string(type_val) +
-                                       " carries " + std::to_string(field.bytes.size()) +
-                                       " bytes where its width is " + std::to_string(width));
+    if (desc.type_len >= 0 && field.bytes.size() != static_cast<std::size_t>(desc.type_len)) {
+        return Status::InvalidArgument("column '" + desc.name + "' carries " +
+                                       std::to_string(field.bytes.size()) +
+                                       " bytes where its width is " +
+                                       std::to_string(desc.type_len));
     }
-    switch (type_val) {
+    const std::uint8_t scale = catalog::DecimalScaleOf(desc.type_mod);
+    switch (desc.type_oid) {
         case catalog::kTypeValInt8:
         case catalog::kTypeValInt16:
         case catalog::kTypeValInt32:
         case catalog::kTypeValInt64:
         case catalog::kTypeValDate:
-        case catalog::kTypeValTimestamp: {
-            auto i = wire::DecodeInt(field.bytes);
-            if (!i.ok()) return i.status();
+        case catalog::kTypeValTimestamp:
             v.type = parser::ValueType::kInt;
-            v.int_val = i.value();
+            v.int_val = wire::DecodeInt(field.bytes).value();
             return v;
-        }
         case catalog::kTypeValBool:
             // The byte as sent: anything but 0 or 1 is the storage gate's
             // refusal, not a truth value read into it.
@@ -83,29 +82,22 @@ StatusOr<parser::AstValue> ValueOf(const wire::DecodedField& field, std::uint32_
             v.int_val = std::to_integer<std::int64_t>(field.bytes[0]);
             return v;
         case catalog::kTypeValUint64: {
-            auto u = wire::DecodeUint64(field.bytes);
-            if (!u.ok()) return u.status();
+            const std::uint64_t u = wire::DecodeUint64(field.bytes).value();
             v.type = parser::ValueType::kInt;
-            v.int_val = static_cast<std::int64_t>(u.value());
+            v.int_val = static_cast<std::int64_t>(u);
             // The digit text preserves the full unsigned range through
             // the uint64 encode path (ast.hpp's raw_int_text note).
-            v.raw_int_text = std::to_string(u.value());
+            v.raw_int_text = std::to_string(u);
             return v;
         }
-        case catalog::kTypeValDecimal: {
-            auto i = wire::DecodeInt(field.bytes);
-            if (!i.ok()) return i.status();
+        case catalog::kTypeValDecimal:
             v.type = parser::ValueType::kStr;
-            v.str_val = exec::FormatDecimal(i.value(), catalog::DecimalScaleOf(type_mod));
+            v.str_val = exec::FormatDecimal(wire::DecodeInt(field.bytes).value(), scale);
             return v;
-        }
-        case catalog::kTypeValDecimalWide: {
-            auto i = wire::DecodeDecimalWide(field.bytes);
-            if (!i.ok()) return i.status();
+        case catalog::kTypeValDecimalWide:
             v.type = parser::ValueType::kStr;
-            v.str_val = exec::FormatDecimalWide(i.value(), catalog::DecimalScaleOf(type_mod));
+            v.str_val = exec::FormatDecimalWide(wire::DecodeDecimalWide(field.bytes).value(), scale);
             return v;
-        }
         case catalog::kTypeValChar:
         case catalog::kTypeValVarchar:
             v.type = parser::ValueType::kStr;
@@ -115,7 +107,8 @@ StatusOr<parser::AstValue> ValueOf(const wire::DecodedField& field, std::uint32_
         default:
             // Unreachable through a catalog-built schema: float is refused
             // at CREATE TABLE (types.md TY1).
-            return Status::Unsupported("no load encoding for type " + std::to_string(type_val));
+            return Status::Unsupported("column '" + desc.name + "': no load encoding for type " +
+                                       std::to_string(desc.type_oid));
     }
 }
 
@@ -411,12 +404,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // Every storable type loads (BI16); no column is refused here.
     LoadState load;
     load.relation = begin.value().relation;
-    load.field_count = schema.columns.size();
-    for (const catalog::SysColumnRow& col : schema.columns) {
-        load.type_vals.push_back(col.type_val);
-        load.type_mods.push_back(catalog::TypeModOf(col.type_val, col.len));
-    }
-    const auto fields = wire::DescribeSchema(schema);
+    load.fields = wire::DescribeSchema(schema);
 
     // The implicit transaction (KW5, BI11): the same BEGIN the text
     // protocol runs, so every semantics is the session's own. A session
@@ -438,9 +426,9 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     w.U64(conn.load.load_id);
     w.U16(kKwpLoadWindow);
     w.U32(kKwpMaxChunkBytes);
-    w.U16(static_cast<std::uint16_t>(conn.load.field_count));
+    w.U16(static_cast<std::uint16_t>(conn.load.fields.size()));
     auto head = w.Take();
-    wire::EncodeRowDescription(fields, head);
+    wire::EncodeRowDescription(conn.load.fields, head);
     Send(conn, wire::ServerFrameType::kLoadReady, head);
 
     if (logging(LogLevel::kInfo)) {
@@ -478,7 +466,7 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
         return;
     }
 
-    auto rows = wire::DecodeRowBatch(reader.Rest(), conn.load.field_count);
+    auto rows = wire::DecodeRowBatch(reader.Rest(), conn.load.fields.size());
     if (!rows.ok()) {
         fail_load(Status::InvalidArgument(rows.status().message()));
         return;
@@ -503,14 +491,11 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     for (std::size_t r = 0; r < rows.value().size(); ++r) {
         const std::vector<wire::DecodedField>& row = rows.value()[r];
         std::vector<parser::AstValue> values;
-        values.reserve(conn.load.field_count);
-        for (std::size_t f = row[0].is_null ? 1 : 0; f < conn.load.field_count; ++f) {
-            auto v = ValueOf(row[f], conn.load.type_vals[f], conn.load.type_mods[f]);
+        values.reserve(row.size());
+        for (std::size_t f = row[0].is_null ? 1 : 0; f < row.size(); ++f) {
+            auto v = ValueOf(row[f], conn.load.fields[f]);
             if (!v.ok()) {
-                fail_load(Status::FromWire(static_cast<std::uint32_t>(v.status().code()),
-                                           chunk + ", row " + std::to_string(r + 1) +
-                                               ", field " + std::to_string(f) + ": " +
-                                               v.status().message()));
+                fail_load(v.status().WithContext(chunk + ", row " + std::to_string(r + 1)));
                 return;
             }
             values.push_back(std::move(v.value()));
@@ -525,8 +510,7 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
         // The refusal keeps its code - a named key's `AlreadyExists` is what
         // a loader switches on - and the line its row ordinal rides in.
         const Status cause = !out.status.ok() ? out.status : StatusFromErrorReply(out.response);
-        fail_load(Status::FromWire(static_cast<std::uint32_t>(cause.code()),
-                                   chunk + ": " + cause.message()));
+        fail_load(cause.WithContext(chunk));
         return;
     }
 
