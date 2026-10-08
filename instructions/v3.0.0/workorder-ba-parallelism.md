@@ -13,7 +13,7 @@ order and gates none.
 **Paused 2026-10-06 for its sub-milestone BB** (`raft-marks-2026-10-06.md`
 §4): BA-Q14 is marked (b), and `workorder-bb-issue-under-the-leaf.md` takes
 defect A in BA-S1b's place. BA resumes at BB's close (BB-S5).
-**Resumed 2026-10-08**: BB closed (`raft-marks-2026-10-08.md` §2), and BD-S6
+**Resumed 2026-10-08**: BB closed (`raft-marks-2026-10-08.md` §6), and BD-S6
 had rebased these rows (§6, "BA rebased on BD"). BA-S2 waits for its own
 word.
 
@@ -1379,7 +1379,7 @@ close entry is written, which waits for its own word.
 
 BB's close entry is written (`workorder-bb-issue-under-the-leaf.md` §6,
 "BB-S5 - the close", on `worktree-bb-s5-close`; `raft-marks-2026-10-08.md`
-§2), so BA is no longer paused. Its rows stand as rebased on BD above. BB-S5
+§6), so BA is no longer paused. Its rows stand as rebased on BD above. BB-S5
 hands BA one item: C4 at `cores = 2` (four relations, pinned) leans against
 BB on its medians and is unresolved at ten runs
 (`bench/v3.0.0/results-bb-s5-overhead-v2.7.0-640-gb76261bb.md`). BA's census

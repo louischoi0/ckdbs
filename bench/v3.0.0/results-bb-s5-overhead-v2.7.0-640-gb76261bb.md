@@ -1,7 +1,7 @@
 # BB-S5 overhead (v2.7.0-640-gb76261bb)
 
 **Status: BB closed on this measurement (BD-Q12 (b), the operator's word of
-2026-10-08, `raft-marks-2026-10-08.md` §2).** On 2026-10-07 the operator
+2026-10-08, `raft-marks-2026-10-08.md` §6).** On 2026-10-07 the operator
 deferred the rest and this file was pushed in part at `dbeb876c`. The
 detached job kept running and finished every cell it had been given: C4's
 last four runs, C5, and pinned `cores = 2` C3 and C4. Those runs were

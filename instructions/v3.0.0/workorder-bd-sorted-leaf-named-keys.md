@@ -60,7 +60,7 @@ On every relation, BB-R11's mount check goes with superblock 20 (BD-R8).
 rebase of BA is drafted and unreviewed, and BA is paused until BB closes.
 By BD-Q12 (b), BB closes on the measurement it has, and BD-S6 rebases BA
 once, against BD (§5). **BB closed 2026-10-08 and BA resumed**
-(`raft-marks-2026-10-08.md` §2).
+(`raft-marks-2026-10-08.md` §6).
 
 ## 0. What BD is
 

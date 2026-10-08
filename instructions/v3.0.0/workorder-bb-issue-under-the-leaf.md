@@ -34,7 +34,7 @@ constraint sharper than BB-Q7: no cost BB-R8 resolves is landed as a deferral
 (§6). BB cuts no tag.
 
 **Closed 2026-10-08** at BB-S5 on `worktree-bb-s5-close`
-(`raft-marks-2026-10-08.md` §2): on the measurement it has, with BA's rows
+(`raft-marks-2026-10-08.md` §6): on the measurement it has, with BA's rows
 rebased by BD-S6. BA is no longer paused (§6, "BB-S5 - the close").
 
 ## 0. What BB is
@@ -1428,7 +1428,7 @@ far as it got, and defer the rest.
 ### BB-S5 - the close, 2026-10-08
 
 Written on `worktree-bb-s5-close` from `65a28553`, on the operator's
-*"close entry 작성 진행"* (`raft-marks-2026-10-08.md` §2). BB closes on the
+*"close entry 작성 진행"* (`raft-marks-2026-10-08.md` §6). BB closes on the
 measurement it has (BD-Q12 (b)). It does not rebase BA, because BD-S6 did.
 BB cuts no tag.
 
