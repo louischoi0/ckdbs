@@ -66,16 +66,15 @@ neighbours:
   reason (*"live or delete-marked"* becomes *"live, or delete-marked and not
   purged"*). BD's order is closed and is not edited. BH-S5 restates the
   specs that carry its rules.
-- **BF** (opened, BF-S1 next) says *"BD-R4's purge obligation is about rows
-  of a live relation, and BF does not touch it"*
-  (`workorder-bf-drop-table-page-reclaim.md:28-31`).
+- **BF** (closed at BF-S6, merged into this branch at `274b92ef`) says
+  *"BD-R4's purge obligation is about rows of a live relation, and BF does
+  not touch it"* (`workorder-bf-drop-table-page-reclaim.md:28-31`).
   - BH frees no page.
-  - Under BH-Q6 (a) BH moves no superblock version, so no order between
-    the two is needed; under (b), BH-Q15 decides it.
-  - **A `PURGE` writes a relation's pages.** If BF-S5's within-run reclaim
-    is built, its statement epoch (BF-Q9 (b)) must count a `PURGE` like any
-    other statement. BH-S3 checks that against whichever of BF's stages has
-    landed.
+  - BF-S3 moved the superblock to 21. Under BH-Q6 (a) BH moves it no
+    further; under (b), BH-Q15 decides the number.
+  - **A `PURGE` writes a relation's pages, and BF-S5's within-run reclaim
+    is built.** Its statement epoch (BF-Q9 (b)) must count a `PURGE` like
+    any other statement, and BH-S3 checks that it does.
 - **BG** (opened) shares nothing with BH.
 - **The equal-index-sort-keys defect**
   (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`)
@@ -137,7 +136,7 @@ key is free, and an `INSERT` that names it is placed.
   partly purged, and a refusal says how many keys it purged.
 - **BH-R7.** It logs `SLOT_RETIRE` and then `VARHEAP_RELEASE`, both at
   `kNoTxnId`, through the existing helpers. Redo already applies both, so
-  no record kind is added and the superblock stays at 20. Its
+  no record kind is added and the superblock stays where BF left it. Its
   `TXN_COMMIT` carries the reply's durability.
 - **BH-R8.** It does not run `DELETE`'s per-row code: no assertion
   departure, no foreign-key check, no Cabin or index hook, no undo record.
@@ -301,8 +300,9 @@ four rows.
 - **The format.** `kSuperBlockVersion` is 20
   (`include/kds/server/superblock.hpp:256`), checked by exact match
   (`src/server/superblock.cpp:69-83`). A new record kind is *"a
-  format-version event"* (`record.hpp:44-47`). BF's 21 has not landed in
-  this tree.
+  format-version event"* (`record.hpp:44-47`). **Since the merge at
+  `274b92ef` it is 21**: BF-S3 moved it for the drop tombstone's roots.
+  Nothing in BH rests on the number.
 
 ### 1.3 The horizon, and the views it does not see
 
@@ -895,7 +895,8 @@ PU6 says.
 - **Durability.** The `PURGE`'s `TXN_COMMIT` follows every purge record,
   and `WalManager::Commit` syncs per durability class (§1.5). The reply
   needs nothing more.
-- **No record kind is added**, so the superblock stays at 20 (BH-Q6 (a)).
+- **No record kind is added**, so the superblock stays at 21, where BF-S3
+  left it (BH-Q6 (a)).
 
 ### BH-R8 — Not `DELETE`'s per-row code
 
@@ -1020,7 +1021,7 @@ cannot be.
 | BH-S0 | **The order** | <ul><li>This file</li><li>Its `critics-developer` review (§7)</li><li>The words recorded in `raft-marks-2026-10-08.md`</li><li>The index row</li></ul> | S |
 | BH-S1 | **The census, and red first** | <ul><li>**Census A** (BH-R5): every unregistered view, the `PURGE`'s own included, and every spill-decoding site, each shown safe across a `PURGE` on another core or listed for BH-S3 to register or reorder.</li><li>**Census B** (§1.6): one cell per consumer, through a test-only seam that retires a committed tombstone keyless and re-places its key with different values: index probes on the old key, the new key, a range and a join; a Cabin serve, the foreign-key reverse check through a Cabin, and the inner build; assertion `COUNT` and `SUM` against a recount; a Waystone replay. **Expected green.** A red one stops BH at this row for a ruling.</li><li>**Census C** (§1.9): BH-R12's grep, run, with every hit classed.</li><li>**Census D:** how `DELETE` refuses a system relation, which PU10 follows.</li><li>**Red at BH-S0's commit**, committed red as BD-S1's were (§1.8): `PURGE` after `DELETE`, then the named `INSERT`, expecting it placed; the REPEATABLE READ reader's cell; the commit-arm cell.</li><li>**Guard, green and kept green:** BD-S1's `ADeletedKeyNamedAgainIsAlreadyExists`.</li></ul> | M |
 | BH-S2 | **The primitive** (BH-R3, BH-R6 phase 2, BH-R7) | <ul><li>**Code:** the btree-level find, verify and retire, handing back the held leaf and the payload copy; the caller's `exec::LogSlotRetire` at `kNoTxnId` under the hold, then `txn::ReleaseVarHeapSlot` at `kNoTxnId` for each copied spill. A verify mismatch is a skip. No caller from SQL yet.</li><li>**Cells:** a purged key re-placed at the storage level; a live slot, an undecided deleter and a re-placed key, each skipped or refused as BH-R3 says; the crash cells of BH-R11 at the storage level; redo applied twice; a loser re-insert after a purge undone at mount.</li><li>**Mutations, each repeated:** the skip turned into a retire; the release before the retire; the release omitted; the envelope given a transaction id.</li><li>**The suite green**, except the red cells BH-S1 committed, and the waystone, index, cabin and inner-build contract suites byte-identical.</li></ul> | M |
-| BH-S3 | **The statement** (BH-R2, BH-R4, BH-R5, BH-R6 phase 1, BH-R8, PU10) | <ul><li>**Opened only once Census A has no row open.**</li><li>**Code:** the arm, `ParsePurge`, the dispatch route, the window from the one recognizer, every refusal in PU10, the relation units, the re-mint, the polled wait under `kPurgeHorizonWait`, phase 1, the phase-2 loop under `DrainOnPressure`, the reply with its count, and the duplicate text (BH-Q13). If BF's within-run reclaim has landed, the `PURGE` counted in its statement epoch.</li><li>**Green:** BH-S1's red cells, and BH-R11's SQL and lock cells.</li><li>**Mutations, each repeated:** the horizon check removed; the re-mint skipped; the deleter's commit check removed; the live check removed; `DELETE`'s departure written; `<>` folded.</li><li>**The suite green**, also under `KDS_TEST_PAGE_LATCH=1`.</li></ul> | L |
+| BH-S3 | **The statement** (BH-R2, BH-R4, BH-R5, BH-R6 phase 1, BH-R8, PU10) | <ul><li>**Opened only once Census A has no row open.**</li><li>**Code:** the arm, `ParsePurge`, the dispatch route, the window from the one recognizer, every refusal in PU10, the relation units, the re-mint, the polled wait under `kPurgeHorizonWait`, phase 1, the phase-2 loop under `DrainOnPressure`, the reply with its count, and the duplicate text (BH-Q13). The `PURGE` counted in BF-S5's statement epoch, with a cell: a drop's reclaim waits for a `PURGE` in flight on its relation.</li><li>**Green:** BH-S1's red cells, and BH-R11's SQL and lock cells.</li><li>**Mutations, each repeated:** the horizon check removed; the re-mint skipped; the deleter's commit check removed; the live check removed; `DELETE`'s departure written; `<>` folded.</li><li>**The suite green**, also under `KDS_TEST_PAGE_LATCH=1`.</li></ul> | L |
 | BH-S4 | **The sim and the rigs** (BH-R11) | <ul><li>the `kPurge` op, both forms, with the oracle's `consumed_` and `pending_` rules;</li><li>the two-core cells;</li><li>the crash cells at the SQL level;</li><li>`scripts/sim.sh` green;</li><li>each of BH-S2's and BH-S3's mutations killed from the sim or a rig, or listed in this row with the reason it cannot be.</li></ul> | M |
 | BH-S5 | **The close** | <ul><li>A row per stage, and what bounds BH.</li><li>**The measurement** (§6).</li><li>**The text** (BH-R12), its grep included: K1 and its reasons, invariant 11, `heap-and-tuple.md` §4.1c, `namespace.md`, `cabin.md`, `assertion.md`, `foreign-keys.md`, the manual, the bug entry, `payload.hpp`'s comment.</li><li>**`known-gaps.md`**, as BH-R12 lists.</li><li>**`CLAUDE.md`'s** invariant 11, Keystone id row and Caller-supplied pk row.</li></ul> | M |
 
@@ -1038,7 +1039,7 @@ word.
 | BH-Q3 | **The wait on older readers** (PU5, BH-R5). Reply point 2: wait, then `TxnConflict` at the 1 s fault net.<br>(a) A polled wait bounded by `kPurgeHorizonWait`, a 1 s constant with no key, then `TxnConflict retryable=1`.<br>(b) Refuse at once, `TxnConflict retryable=1`.<br>(c) Bound it by `lock_wait_fault_net_ms`, re-scoped to cover a wait the engine cannot wake | design, user-visible; **revises point 2** | (a). It keeps point 2's wait and its second. (c) changes what the key means: it bounds a lost wake and logs its firing as a fault (§1.3), so one key would hold two quantities, and setting it to `0` for fast lock-fault detection would make every `PURGE` refuse while any older snapshot exists. Under OLTP load some statement's snapshot nearly always predates a `DELETE` that just committed, so (b) would refuse most `PURGE`s issued right after their `DELETE` | — |
 | BH-Q4 | **Inside an explicit transaction** (PU9). Reply point 3.<br>(a) Autocommit only; inside `BEGIN` refused `NotImplemented`, before `BeginWrite`, unpoisoned.<br>(b) Admitted, with an undo image so that a rollback restores the tombstone | scope | (a). (b) needs a new undo record, a restore through a slot the purge freed, and a re-proof of BH-R4 under a transaction that keeps writing. `NotImplemented` and not `Unsupported`, because (b) is buildable without changing the architecture | — |
 | BH-Q5 | **Atomicity** (PU6, BH-R6). Reply point 3: one record per key, no rollback.<br>(a) Judged whole before written; each key purged whole; a refusal while writing, or a crash, can leave the window partly purged; a refusal says how many keys it purged; a re-run finishes.<br>(b) All-or-nothing per statement, through a new record kind or undo images | design, user-visible; **revises point 3** | (a). The revision is the refusal: the review found three ways phase 2 can be refused after a write (§1.5), so a crash is not the only partial outcome. A partly-run `PURGE` leaves every key in a state the operator asked for, and the statement is idempotent. (b) adds a record kind (BH-Q6 (b)) for a maintenance statement | — |
-| BH-Q6 | **The format** (BH-R7). Reply point 3: *"a new record kind, so the superblock moves"*.<br>(a) Reuse `SLOT_RETIRE` and `VARHEAP_RELEASE` at `kNoTxnId`, whose purge envelopes already exist; no record kind is added; superblock stays 20.<br>(b) A new `BTREE_PURGE` kind; superblock 21 or 22 against BF (BH-Q15) | format; **revises point 3** | (a). The survey found both purge envelopes already emitted and applied (§1.2). No on-disk meaning changes: an older engine reads a purged key as never placed, which is what BH means by it. So the standing order (`raft-marks-2026-10-07.md` §11) does not apply | — |
+| BH-Q6 | **The format** (BH-R7). Reply point 3: *"a new record kind, so the superblock moves"*.<br>(a) Reuse `SLOT_RETIRE` and `VARHEAP_RELEASE` at `kNoTxnId`, whose purge envelopes already exist; no record kind is added; the superblock stays at 21.<br>(b) A new `BTREE_PURGE` kind; superblock 22 (BH-Q15) | format; **revises point 3** | (a). The survey found both purge envelopes already emitted and applied (§1.2). No on-disk meaning changes: an older engine reads a purged key as never placed, which is what BH means by it. So the standing order (`raft-marks-2026-10-07.md` §11) does not apply | — |
 | BH-Q7 | **The syntax** (PU1, PU10). Reply point 4.<br>(a) `PURGE FROM t WHERE` in PU1's six forms only, a text-matched head; no `WHERE` is `NotImplemented`.<br>(b) As (a), and `PURGE FROM t` with no `WHERE` purges every purgeable key | user-visible | (a). A whole-relation form is a sweep, and none was asked for. Refusing it is `NotImplemented`, so a later word can add it | — |
 | BH-Q8 | **Secondary-index entries** (BH-R9). Reply point 5.<br>(a) Left; reads re-check; the equal-sort-keys defect gains a path.<br>(b) Removed by the purge, re-proving AT-S15's leaf coverage | design | (a). §1.6 found every probe re-checks. (b) ends the premise AT-S15's coverage check stands on | — |
 | BH-Q9 | **Heap and system relations** (PU9). Reply point 6.<br>(a) A heap is `Unsupported`; a system relation is refused as `DELETE` refuses it.<br>(b) A heap is purged too | scope | (a). A heap refuses a named key below its mark because its chain grows only at its tail (§1.7). Freeing such a key would need a different chain, so this is the architecture and not a missing build. No new heap is created (SUS-1) | — |
@@ -1047,7 +1048,7 @@ word.
 | BH-Q12 | **The reply** (PU7). New.<br>(a) `PURGED n` as `rows_affected`, and no counter.<br>(b) As (a), plus a `SHOW META` counter beside `catalog_marks_purged=` | user-visible | (a). The reply already carries the count | — |
 | BH-Q13 | **The duplicate text** (PU12). New. *"a Keystone id is bound once"* becomes *"PURGE frees its key"* | user-visible | Yes. The old text would be false, and the new one names the way out | — |
 | BH-Q14 | **The measurement** (§6), once at BH's close, per `CLAUDE.md`'s Session Workflow step 3. New | process | As written | — |
-| BH-Q15 | **Order against BF.** New. Only needed under BH-Q6 (b); under (a) neither order moves the other's superblock | sequencing | Moot under BH-Q6 (a). Under (b): BH takes the version after whichever of BF-S3 and BH-S2 lands second | — |
+| BH-Q15 | **The superblock number.** New. Only needed under BH-Q6 (b), since BF-S3 already took 21 | format | Moot under BH-Q6 (a). Under (b): 22, with 21 refused by the standing order | — |
 | BH-Q16 | **Locks** (BH-R4). New, raised by the review.<br>(a) The relation's `IS` and `IX` only; races settled by the leaf latch and the phase-2 skip; an undecided writer polled.<br>(b) As `DELETE`: `Tuple X` for one key and `Range X` for a wider window, held to the end, with the view re-minted after every lock wait | design; **[quiet-wrong]** | (a). Every writer already skips a resolved tombstone (§1.1), and the leaf latch orders an `INSERT` against the retire, so a row or range unit excludes nothing that could change the answer. (b) raises the relation's fence counter for every other writer, and hides a cycle from the wait-for graph: a reader holding the horizon waits on the range unit while the `PURGE` polls on its snapshot | — |
 
 Four items, and two rules, are `[quiet-wrong]`, where a wrong choice turns
@@ -1066,8 +1067,7 @@ a refusal into a wrong answer:
 4. **BH-S4 after BH-S3.**
 5. **BH-S5 last.**
 
-BH runs beside BF and BG. It shares no file with BF's store changes, and
-under BH-Q6 (a) no superblock version.
+BF has closed. BH runs beside BG, and shares nothing with it.
 
 **Measurement.** Once, at BH's close, in `build-release` (`ck-tester`), per
 `CLAUDE.md`'s Session Workflow step 3. It compares the commit BH opened at
@@ -1092,7 +1092,9 @@ not measured; measured at the milestone's close".
 ### BH-S0 — written 2026-10-08
 
 - **Where:** on `worktree-bh-purge-key` from `0446b3b0`
-  (`v2.7.0-691-g0446b3b0`), on W1-W3.
+  (`v2.7.0-691-g0446b3b0`), on W1-W3. `origin/main` was merged in at
+  `274b92ef`, bringing BF-S1..S6. The survey stays at `0446b3b0`, and the
+  BF and superblock statements were restated for the merge.
 - **How §1 was made:** read, not run, from three read-only surveys and
   CLA's own reads.
 - **What the reads settled:**
