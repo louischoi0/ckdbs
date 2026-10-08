@@ -1745,8 +1745,8 @@ private:
         std::uint64_t Load() const noexcept { return value.load(std::memory_order_relaxed); }
     };
     Counter hits_, misses_, reclaimed_inline_, reclaimed_background_, batches_inline_,
-        batches_background_, batches_partial_, batch_steps_, dirty_queued_, dirty_drained_,
-        refused_;
+        batches_background_, batches_partial_, batch_steps_, batch_steps_background_,
+        dirty_queued_, dirty_drained_, refused_;
 };
 
 }  // namespace kds::storage

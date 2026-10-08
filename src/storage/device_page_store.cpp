@@ -1932,6 +1932,7 @@ std::size_t DevicePageStore::MaintainFreeReserve() {
             slots = SlotCountLocked();
         }
         batches_background_.Add();
+        batch_steps_background_.Add(batch.steps);
         reclaimed_background_.Add(batch.reclaimed);
         reclaimed_total += batch.reclaimed;
         auto drained = DrainDirtyEvictionQueue();  // a failure stays dirty, queued again later
@@ -2862,6 +2863,7 @@ DevicePageStore::PoolCounters DevicePageStore::pool_counters() const {
     out.batches_background = batches_background_.Load();
     out.batches_partial = batches_partial_.Load();
     out.batch_steps = batch_steps_.Load();
+    out.batch_steps_background = batch_steps_background_.Load();
     out.dirty_queued = dirty_queued_.Load();
     out.dirty_drained = dirty_drained_.Load();
     out.refused = refused_.Load();

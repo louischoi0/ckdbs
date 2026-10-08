@@ -334,6 +334,9 @@ public:
         std::uint64_t batches_background = 0;
         std::uint64_t batches_partial = 0;  // inline batches that freed less than asked
         std::uint64_t batch_steps = 0;      // slots the inline batches walked
+        // Slots the tick's batches walked. With `batch_steps`, every step the
+        // hand takes in a running server - over `slots`, its laps (BG-S1).
+        std::uint64_t batch_steps_background = 0;
         std::uint64_t dirty_queued = 0;     // dirty victims queued for writeback
         std::uint64_t dirty_drained = 0;    // queued pages the drain wrote clean
         std::uint64_t refused = 0;          // reservations refused at the cap

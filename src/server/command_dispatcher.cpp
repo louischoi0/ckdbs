@@ -1312,7 +1312,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
 
     // The buffer pool (BE-R2, `eviction.md` EV9): its budget and what it
     // holds, then what reclaim has cost. `pool_batch_steps` over
-    // `pool_batches_inline` is the inline walk's mean, which BE-R2 bounds.
+    // `pool_batches_inline` is the inline walk's mean, which BE-R2 bounds;
+    // it and `pool_batch_steps_background` over `pool_slots` are the
+    // hand's laps (BG-S1).
     const auto pool = page_store_.pool_counters();
     os << " pool_budget=" << pool.budget << " pool_resident=" << pool.resident
        << " pool_slots=" << pool.slots << " pool_hits=" << pool.hits
@@ -1321,7 +1323,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " pool_batches_inline=" << pool.batches_inline
        << " pool_batches_background=" << pool.batches_background
        << " pool_batches_partial=" << pool.batches_partial
-       << " pool_batch_steps=" << pool.batch_steps << " pool_dirty_queued=" << pool.dirty_queued
+       << " pool_batch_steps=" << pool.batch_steps
+       << " pool_batch_steps_background=" << pool.batch_steps_background
+       << " pool_dirty_queued=" << pool.dirty_queued
        << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused;
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
