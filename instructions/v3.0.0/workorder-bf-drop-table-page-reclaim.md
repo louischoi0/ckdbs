@@ -17,7 +17,10 @@ row in §6 says where it stands. **BF-S1 is built:** the censuses, the
 premise, which held, and the red cells. **BF-S2 is built:** the free
 primitive, the free list and the map write barrier, with no caller yet. **BF-S3 is built:** the carrier, the
 gate, the walk and the mount-time reclaim. **BF-S4 is built:** the sim's drop op,
-its owner census, and the two-core rigs.
+its owner census, and the two-core rigs. **BF-S5 is built:** the statement
+epoch, the commit arms and the reclaimer's inbox, so a drop committed in
+the run is freed in the run, and BF-Q11 (a)'s second RESTRICT ask and the
+child's parent `IS`.
 
 - BF-S0 moved no file under `src/`, `include/` or `tests/`, and no suite
   ran.
@@ -1982,5 +1985,160 @@ DT1's stated leaks.
   defence cells.
 
 **Suite:** 3248 of 3248, plain, and 3248 of 3248 with `KDS_TEST_PAGE_LATCH=1`.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+
+### BF-S5 - reclaim within the run - built 2026-10-08
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `535313c0`, opened
+  by BF-Q1 (b) and BF-Q9 (b) (§22).
+
+**Code:**
+- **The statement epoch** (`server/statement_epoch.hpp`, BF-R9). There is
+  one slot per core, a cache line each, owned by `Expeditor` and handed to
+  every core's dispatcher.
+  - `DispatchAndStage` opens a `StatementEpochScope`. It stores
+    `kEntering` and issues a `seq_cst` fence, then revalidates the
+    catalog, then publishes the word the cache was revalidated at. The slot
+    goes idle when the statement returns.
+  - Only the outermost of nested heads publishes.
+  - The KWP load endpoint's two handlers, which bind outside
+    `DispatchAndStage`, take a scope each (BF-S1's Census B). They now also
+    revalidate, which they did not before.
+  - The Cabin optimizer's tick takes no slot. It runs on core 0's reactor,
+    the same one the reclaim's tick runs on, so the two cannot interleave
+    (BF-Q16 (a), Census B's fourth unsettled item).
+- **The commit arms.** A drop records what it owes once its catalog write
+  succeeds: its oid and roots, keyed by its transaction.
+  - `EndDdlScopeById` queues the drop with the reclaimer at its
+    transaction's commit, at the commit LSN EndWrite or `COMMIT`
+    acknowledged.
+  - The word is read after the commit's move.
+  - It forgets the drop at any other ending.
+  - `Catalog::DropTable` hands back the roots it wrote through a
+    `PendingRoots* owed` out-parameter, so the dispatcher does not scan
+    `PendingReclaims()` again.
+- **The reclaimer's inbox.** `EnqueueCommittedDrop` is thread-safe and is
+  drained by `Step` on core 0. A job's gate is the commit LSN + 1. Its epoch
+  check runs once, before the walk reads a page: every slot is idle or at
+  the drop's word. The tick steps while `reclaim_pending` is nonzero.
+- **BF-Q11 (a).**
+  - `DROP TABLE` asks its two RESTRICT predicates again under the relation
+    `X`.
+  - A child's `CREATE TABLE` takes its parent's `IS` with each foreign
+    key it declares, held to its decide. The `IS` is taken right after the
+    parent is looked up, before `InitTableAccess` and before any write. The
+    remaining window, a drop that commits between the lookup and the grant,
+    is stated in code: the epoch still holds the pages, and BF-R10 refuses a
+    later bind.
+
+**Cells** (`tests/in_run_reclaim_test.cpp`, two dispatchers over one store
+on the test's thread):
+- a drop committed in the run is freed in the run;
+- a drop rolled back with nothing queued frees nothing, and the relation is
+  whole;
+- the relation is in flight on core 1 across the drop's commit on core 0,
+  with the seam (`SetEpochSeamForTest(EpochSeam, hook)`) dropping the
+  relation, running the reclaim and handing the freed ids to a new relation
+  at one of three points in core 1's statement head: `kAfterRead` (inside
+  `Catalog::Revalidate`, just after it reads the word - the point that tells
+  a publish before the read from one after it), `kBeforePublish` (after the
+  revalidate, slot still `kEntering`) and `kAfterPublish` (the old word
+  published). The reclaim waits, and the statement answers without a
+  `Corruption`. One cell for each path, each run at all three points:
+  - a stale-memo read;
+  - `DESCRIBE`;
+  - the reverse foreign-key walk of a parent `DELETE`;
+- `AChildsOpenCreateHoldsItsParentsIntention`: the open child transaction
+  holds the parent's `IS` (asserted on the lock table, since the window
+  has no seam), and after its commit the drop is refused naming the
+  foreign key;
+- `AForeignKeyCreatedBeforeTheDropsExclusiveStillRefusesIt`: a child
+  committed at `SetBeforeDropExclusiveForTest`, between the drop's first
+  RESTRICT ask and its `X`, is refused by the second ask;
+- `ABindPastAGateDefectIsRefusedByTheRootCheck`: core 1 is left out of the
+  epochs, so the reclaim frees `t` and a new relation takes its pages under
+  core 1's memo; the bind is refused by BF-R10's root check ("was
+  reclaimed"). It is the only cell that reaches `StillOwned`, which answers
+  only when the gate is wrong.
+
+**Suite:** 3255 of 3256 plain, and 3254 of 3256 with `KDS_TEST_PAGE_LATCH=1`.
+Neither failure is BF's:
+- `TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`
+  fails in both passes, and 10 of 10 when run alone. An unrelated
+  `kds_server` on the host listens on the test's hard-coded port 25432
+  (`bind() failed: Address already in use`). BF touches no code it reaches.
+- `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense` failed
+  once in the latch-armed pass at `-j8`: one insert was refused
+  `TXN_CONFLICT retryable=1` after the descent's five attempts, 82 s into a
+  loaded run. It passed 6 of 6 alone, latch-armed, and it passed in the
+  latch-armed pass on the same code before the kill cells' test-only seams
+  were added. The rig takes no crash, so the open root-growth bug
+  (`a-root-growths-anchor-publish-is-logged-after-its-split.md`) is not
+  its shape.
+
+**Mutations**, each built and run three times against BF's cells:
+
+| Mutation | Result | Killed by |
+|---|---|---|
+| the epoch predicate ignored | killed | `ADescribeInFlightHoldsTheReclaim` |
+| the publish moved after the read | killed, once the `kAfterRead` seam existed | `ADescribeInFlightHoldsTheReclaim` at `kAfterRead` |
+| the predicate reads `kEntering` only | killed | `ADescribeInFlightHoldsTheReclaim` at `kAfterPublish` |
+| the queue filled before the decide | killed | `ADropRolledBackWithItsReclaimQueuedFreesNothing` |
+| the RESTRICT check not asked again under `X` | killed, once its seam existed | `AForeignKeyCreatedBeforeTheDropsExclusiveStillRefusesIt` |
+| a foreign key's creation takes no parent `IS` | killed | `AChildsOpenCreateHoldsItsParentsIntention` |
+| the bind's root check removed (BF-S3's survivor) | killed, once the gate-defect cell existed | `ABindPastAGateDefectIsRefusedByTheRootCheck` |
+
+The first run had three survivors, and each named a missing cell, not a
+dead line:
+- **The publish order**: both seams fired after `Enter` and `Revalidate`
+  alike, so swapping the two lines changed nothing a seam could see. The
+  `kAfterRead` seam sits between the read and what follows it.
+- **The second RESTRICT ask**: a child's fkey row is visible at once, so the
+  first ask already refused. No cell put a child between the asks.
+- **The root check**: the epoch keeps a stale bind's pages allocated, so no
+  correct gate ever lets a bind reach a freed page. Only a cell that leaves
+  a core out of the epochs, a gate defect by construction, reaches it. The
+  order's claim that BF-S5's in-run cells would kill it (BF-S4's table) held
+  only after that cell was added.
+
+**Review:** (`critics-developer`, one pass, on `drop-table-page-reclaim` from `535313c0`; returned 04:59 UTC.)
+**Correctness:** sound.
+- The memory-ordering argument closes: the commit's schema-word bump comes before the enqueue on the same thread; the inbox mutex orders the enqueue before the drain; the drain comes before `AllAtLeast`'s seq_cst fence; [atomics.order] p4.4 rules out a statement reading the old word while the reclaimer reads the slot from before its `kEntering`.
+- The queued word is above the drop's write bump, because an autocommit drop also goes through `MarkHoldsDdl`.
+- Every outside entry is covered: `Dispatch`/`DispatchAsync` reach `DispatchAndStage`, and `ExecuteInsert` is reached only from the load chunk handler, which takes a scope.
+- Queueing happens only on the two commit sites, and every ending erases the entry.
+- `PendingReclaims` is never stale (DT2: no oid is reissued). `core_id_` is always in range. "Passed once is passed for good" is sound.
+- If `Revalidate` throws, the slot is left at `kEntering`. This fails safe (it blocks reclaims) and is left as is.
+
+**Fixed by the review:**
+- `EnqueueCommittedDrop` raised `pending` after releasing the inbox latch, so a drain could make it wrap to 2^64-1. It now adds under the latch.
+
+**Taken as CLA proposed under §23** (CLA's own choice among the reviewer's proposals):
+- Gap 1: the fkey cell did not test the `IS`. The child's fkey row is visible at once, so the drop's first RESTRICT ask refuses. The window has no seam, so the cell now asserts that the open child transaction holds the parent's `IS` (`borrows().Holds(LockKey::Relation(parent))`), then checks the end-to-end refusal.
+- Gap 2: no cell had a published old word. The seam is now `SetEpochSeamForTest(EpochSeam, hook)` with `kBeforePublish`/`kAfterPublish`, and each Census B path runs at both. A mutant where `AllAtLeast` checks only `kEntering` was added.
+- Gap 3: the child's parent `IS` was taken after `CreateTable` wrote rows. It is now taken right after the parent is resolved, before `InitTableAccess` and before any write. The residual window, a drop that commits between the lookup and the grant, is stated in code: the pages stay held by the epoch, and a later bind is refused by BF-R10.
+- Gap 4: `statement_epoch.hpp` now states why the Cabin tick takes no slot (it runs synchronously on core 0's reactor, as the reclaim tick does).
+- Gap 5: corrected `page_reclaim.hpp`'s "which jobs exist" and threading text, `command_dispatcher.hpp`'s `BorrowRelationForDdl` caller text (already stale before BF), and the drop's info log.
+- Cut 1: `Catalog::DropTable` takes `PendingRoots* owed` and returns the roots it wrote. The dispatcher's extra `PendingReclaims()` scan, and its silent skip, are deleted.
+- Cut 2: `tests/reclaim_census.hpp` (Fill, DescribeField, AllocatedPages, PagesOf) is shared by both reclaim test files. This also replaces the in-run copy's fixed 4096-page range.
+- Cut 3: `FinishDdlStatement` uses `committed = !failed && ended.ok()`.
+
+**Declined:** none.
+
+**The kill cells' review** (`critics-developer`, a second pass over the
+seams and cells the first mutation run asked for; returned 06:15 UTC):
+correctness sound, no edit made.
+- Taken: the statement head passed `Revalidate` a non-empty hook on every
+  statement, so "empty in production" was untrue. The hook is now built
+  only while a seam is set.
+- Taken: the root-check cell did not state its premise. It now asserts
+  that the new relation owns `t`'s anchor and descriptor page, the two
+  pages `StillOwned` reads. Exact equality of the page sets was too strong,
+  because the new relation took all but one of `t`'s pages.
+- Declined: naming the seam by a parameter instead of a ternary, and a
+  shared fire-once hook helper. Each saves a few lines in a test and
+  changes nothing it proves.
 
 **Overhead not measured;** BF-Q15 measures it at BF's close.

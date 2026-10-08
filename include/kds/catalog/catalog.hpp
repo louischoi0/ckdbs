@@ -245,8 +245,15 @@ public:
     // **Asked at a task boundary and nowhere inside one**: a drop frees
     // every `const TableAccess*` a running statement holds. `catalog.md`
     // CT2-CT4 carry the rule, the nine sites, what an unasking task serves
-    // and why a drop of the memo is enough.
-    void Revalidate();
+    // and why a drop of the memo is enough. `after_read` runs once the word
+    // is read: a test seam (BF-R12), empty in production.
+    void Revalidate(const std::function<void()>& after_read = {});
+    // The schema word this core's cache was last revalidated against, and
+    // the instance's word now (BF-R9's two readings); 0 with no word.
+    std::uint64_t cache_built_at() const noexcept { return cache_built_at_; }
+    std::uint64_t schema_word_now() const noexcept {
+        return schema_word_ == nullptr ? 0 : schema_word_->load(std::memory_order_acquire);
+    }
 
     // Whether the memo `Revalidate` last settled is still the word's: false
     // once another core's catalog write has moved it since. Read, never
@@ -580,9 +587,13 @@ public:
     // `sys.objects` retype is in place and a catalog row has no undo
     // chain, so other sessions see the relation become a tombstone the
     // moment the drop runs, before it commits.
+    //
+    // `owed`, when given, receives the roots the tombstone now carries
+    // (BF-R2) - what a reclaim within the run is queued with (BF-R9).
     Status DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
                       std::uint64_t trx_id = kBootstrapXid,
-                      std::vector<CatalogRowChange>* written = nullptr);
+                      std::vector<CatalogRowChange>* written = nullptr,
+                      PendingRoots* owed = nullptr);
 
     // ---- Pending reclaims (BF-R2) ------------------------------------
     //

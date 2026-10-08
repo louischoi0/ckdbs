@@ -48,6 +48,8 @@
 
 #include <gtest/gtest.h>
 
+#include "reclaim_census.hpp"
+
 #include "kds/base/current_core.hpp"
 #include "kds/exec/tuple_verify.hpp"
 #include "kds/server/expeditor.hpp"
@@ -62,6 +64,10 @@ namespace kds::server {
 namespace {
 
 namespace fs = std::filesystem;
+using reclaim_census::AllocatedPages;
+using reclaim_census::DescribeField;
+using reclaim_census::Fill;
+using reclaim_census::PagesOf;
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -100,57 +106,6 @@ StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& dir, std::uint32_t co
 void Ok(Expeditor& db, const std::string& sql) {
     const std::string reply = db.dispatcher().Dispatch(sql).response;
     ASSERT_FALSE(StartsWith(reply, "ERR")) << sql << " -> " << reply;
-}
-
-// `rows` rows into `t (id int64, v varchar)`, the pk issued, 100 a statement.
-void Fill(Expeditor& db, const std::string& table, int rows) {
-    for (int done = 0; done < rows;) {
-        std::string sql = "INSERT INTO " + table + " VALUES ";
-        for (int k = 0; k < 100 && done < rows; ++k, ++done) {
-            if (k > 0) sql += ", ";
-            sql += "('row" + std::to_string(done) + "')";
-        }
-        Ok(db, sql);
-    }
-}
-
-// The relation's `oid=` and `root_page_id=`, from `DESCRIBE`.
-std::uint64_t DescribeField(Expeditor& db, const std::string& table, const std::string& key) {
-    const std::string shape = db.dispatcher().Dispatch("DESCRIBE " + table).response;
-    const std::string field = key + "=";
-    std::size_t at = StartsWith(shape, field) ? 0 : shape.find(" " + field);
-    EXPECT_NE(at, std::string::npos) << shape;
-    if (at == std::string::npos) return 0;
-    if (at != 0) ++at;
-    return std::strtoull(shape.c_str() + at + field.size(), nullptr, 10);
-}
-
-// Every allocated id at or above the first user page, with its header's
-// `owner_oid` (0 for a headerless page).
-std::vector<std::pair<PageId, std::uint64_t>> AllocatedPages(Expeditor& db) {
-    storage::DevicePageStore& store = db.store();
-    std::vector<std::pair<PageId, std::uint64_t>> out;
-    const PageId end = kFirstUserPageId + 4 * store.allocated_pages() + 1024;
-    for (PageId id = kFirstUserPageId; id < end; ++id) {
-        if (!store.IsAllocated(id) || storage::IsMapPageId(id)) continue;
-        if (store.IsHeaderless(id)) {
-            out.emplace_back(id, 0);
-            continue;
-        }
-        auto page = store.GetForRead(id);
-        EXPECT_TRUE(page.ok()) << id << ": " << page.status().message();
-        out.emplace_back(id, page.ok() ? storage::GetOwnerOid(page.value().bytes()) : 0);
-    }
-    return out;
-}
-
-// The ids of the pages stamped with `oid`.
-std::set<PageId> PagesOf(Expeditor& db, std::uint64_t oid) {
-    std::set<PageId> out;
-    for (const auto& [id, owner] : AllocatedPages(db)) {
-        if (owner == oid) out.insert(id);
-    }
-    return out;
 }
 
 // What a clean stop does (`CoreRuntime::ShutdownCheckpoint`): pages first,
@@ -223,10 +178,10 @@ PageId VolumeWithADroppedLeafInItsReplayRange(const fs::path& dir) {
     Expeditor& db = *opened.value();
     CurrentCoreGuard as(0);
     Ok(db, "CREATE TABLE t (id int64, v varchar)");
-    Fill(db, "t", 3);
-    leaf = static_cast<PageId>(DescribeField(db, "t", "root_page_id"));
+    Fill(db.dispatcher(), "t", 3);
+    leaf = static_cast<PageId>(DescribeField(db.dispatcher(), "t", "root_page_id"));
     CleanShutdownCheckpoint(db);
-    Fill(db, "t", 3);
+    Fill(db.dispatcher(), "t", 3);
     Ok(db, "DROP TABLE t");
     EXPECT_TRUE(db.wal().Flush().ok());
     TempDir crash;
@@ -301,9 +256,9 @@ Dropped CreateFillDrop(const fs::path& dir, const std::string& table, int rows,
     CurrentCoreGuard as(0);
     Settle(db);
     Ok(db, "CREATE TABLE " + table + " (id int64, v varchar)" + storage);
-    Fill(db, table, rows);
-    out.oid = DescribeField(db, table, "oid");
-    out.pages = PagesOf(db, out.oid);
+    Fill(db.dispatcher(), table, rows);
+    out.oid = DescribeField(db.dispatcher(), table, "oid");
+    out.pages = PagesOf(db.store(), out.oid);
     Ok(db, "DROP TABLE " + table);
     CleanShutdownCheckpoint(db);
     return out;
@@ -324,7 +279,7 @@ TEST(DropTableReclaimTest, ADroppedRelationsPagesAreFreeAfterTheNextMount) {
     for (const PageId id : dropped.pages) {
         EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id << " of the dropped relation";
     }
-    EXPECT_TRUE(PagesOf(db, dropped.oid).empty());
+    EXPECT_TRUE(PagesOf(db.store(), dropped.oid).empty());
 }
 
 TEST(DropTableReclaimTest, FiveCreateFillDropRoundsGrowTheVolumeByLessThanOneRound) {
@@ -385,8 +340,8 @@ TEST(DropTableReclaimTest, ANewRelationLandsOnIdsADroppedRelationHeld) {
     CurrentCoreGuard as(0);
     Settle(db);
     Ok(db, "CREATE TABLE u (id int64, v varchar)");
-    Fill(db, "u", 1000);
-    const std::set<PageId> reused = PagesOf(db, DescribeField(db, "u", "oid"));
+    Fill(db.dispatcher(), "u", 1000);
+    const std::set<PageId> reused = PagesOf(db.store(), DescribeField(db.dispatcher(), "u", "oid"));
     std::vector<PageId> common;
     std::set_intersection(dropped.pages.begin(), dropped.pages.end(), reused.begin(), reused.end(),
                           std::back_inserter(common));
@@ -410,7 +365,7 @@ Ledger TwoRelationsOneDropped(const fs::path& dir) {
     Expeditor& db = *opened.value();
     CurrentCoreGuard as(0);
     Ok(db, "CREATE TABLE keep (id int64, v varchar)");
-    Fill(db, "keep", 500);
+    Fill(db.dispatcher(), "keep", 500);
     out.keep_rows = 500;
     Ok(db, "CREATE TABLE t (id int64, n int64, v varchar)");
     for (int done = 0; done < 1500;) {
@@ -425,8 +380,8 @@ Ledger TwoRelationsOneDropped(const fs::path& dir) {
     const std::string spill(300, 's');
     for (int k = 0; k < 80; ++k) Ok(db, "INSERT INTO t VALUES (" + std::to_string(k) + ", '" + spill + "')");
     Ok(db, "CREATE INDEX t_n ON t (n)");
-    out.dropped.oid = DescribeField(db, "t", "oid");
-    out.dropped.pages = PagesOf(db, out.dropped.oid);
+    out.dropped.oid = DescribeField(db.dispatcher(), "t", "oid");
+    out.dropped.pages = PagesOf(db.store(), out.dropped.oid);
     Ok(db, "DROP TABLE t");
     CleanShutdownCheckpoint(db);
     return out;
@@ -543,7 +498,7 @@ TEST(DropTableReclaimCrashTest, APageReusedBeforeTheClearIsNotFreedByTheRedrive)
             if (taken || std::string(what) != "before the clear") return;
             taken = true;
             Ok(db, "CREATE TABLE u (id int64, v varchar)");
-            Fill(db, "u", 1500);
+            Fill(db.dispatcher(), "u", 1500);
             reuse_rows = 1500;
             ASSERT_TRUE(db.Sync().ok());
             CrashImage(dir.path, image.path);
@@ -564,7 +519,7 @@ TEST(DropTableReclaimCrashTest, APageReusedBeforeTheClearIsNotFreedByTheRedrive)
     EXPECT_EQ(db.reclaim_counters().pending.load(), 0u);
     EXPECT_EQ(db.dispatcher().Dispatch("SELECT COUNT(*) FROM u").response,
               "count(*)\\n" + std::to_string(reuse_rows));
-    for (const PageId id : PagesOf(db, DescribeField(db, "u", "oid"))) {
+    for (const PageId id : PagesOf(db.store(), DescribeField(db.dispatcher(), "u", "oid"))) {
         EXPECT_TRUE(db.store().IsAllocated(id)) << "u's page " << id << " was freed by the re-drive";
     }
 }
@@ -591,8 +546,8 @@ TEST(DropTableReclaimCrashTest, ARelaxedDropCrashedBeforeItsCommitIsDurableFrees
         Expeditor& db = *opened.value();
         CurrentCoreGuard as(0);
         Ok(db, "CREATE TABLE t (id int64, v varchar)");
-        Fill(db, "t", 1000);
-        pages = PagesOf(db, DescribeField(db, "t", "oid"));
+        Fill(db.dispatcher(), "t", 1000);
+        pages = PagesOf(db.store(), DescribeField(db.dispatcher(), "t", "oid"));
         ASSERT_TRUE(db.Sync().ok());
         // The drop's records reach the log file, and its commit - relaxed,
         // so acknowledged before it is written - does not.
@@ -806,9 +761,9 @@ TEST(DropTableReclaimGuardTest, ARolledBackDropLeavesTheRelationWholeAcrossARest
         Expeditor& db = *opened.value();
         CurrentCoreGuard as(0);
         Ok(db, "CREATE TABLE t (id int64, v varchar)");
-        Fill(db, "t", 1000);
-        oid = DescribeField(db, "t", "oid");
-        pages = PagesOf(db, oid);
+        Fill(db.dispatcher(), "t", 1000);
+        oid = DescribeField(db.dispatcher(), "t", "oid");
+        pages = PagesOf(db.store(), oid);
         Ok(db, "BEGIN");
         Ok(db, "DROP TABLE t");
         Ok(db, "ROLLBACK");
@@ -819,7 +774,7 @@ TEST(DropTableReclaimGuardTest, ARolledBackDropLeavesTheRelationWholeAcrossARest
     Expeditor& db = *opened.value();
     CurrentCoreGuard as(0);
     Settle(db);
-    EXPECT_EQ(PagesOf(db, oid), pages);
+    EXPECT_EQ(PagesOf(db.store(), oid), pages);
     EXPECT_EQ(db.dispatcher().Dispatch("SELECT COUNT(*) FROM t").response, "count(*)\\n1000");
 }
 

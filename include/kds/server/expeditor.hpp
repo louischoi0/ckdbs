@@ -30,6 +30,7 @@
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
 #include "kds/server/page_reclaim.hpp"
+#include "kds/server/statement_epoch.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/kwp_load_server.hpp"
 #include "kds/server/tcp_server.hpp"
@@ -891,6 +892,8 @@ private:
     // every core's `SHOW META` prints.
     ReclaimCounters reclaim_counters_;
     std::optional<PageReclaimer> reclaimer_;
+    // BF-R9's statement-epoch slots, one per core.
+    std::optional<StatementEpochs> statement_epochs_;
     // Where the mount's recovery scan ended (BF-R4): every record that names
     // a pending tombstone's pages lies below it, so once the durable redo
     // start reaches it no mount can replay one. Set once `RecoverCoreAtMount`

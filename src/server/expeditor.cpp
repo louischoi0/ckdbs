@@ -1114,6 +1114,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         return s;
     }
     expeditor->dispatcher_->SetReclaimCounters(&expeditor->reclaim_counters_);
+    // Reclaim within the run (BF-R9): every core publishes its statement
+    // epoch, and a committed drop is queued from whichever core committed it.
+    expeditor->statement_epochs_.emplace(expeditor->config_.cores);
+    expeditor->dispatcher_->SetStatementEpochs(&*expeditor->statement_epochs_);
+    expeditor->dispatcher_->SetReclaimQueue(&*expeditor->reclaimer_);
 
     // PHY01's collector, wired to both feeders: every core's dispatcher
     // touches S1/S2 per successful SELECT, the one Cabin store forwards S3
@@ -1220,7 +1225,7 @@ OptimizerSurface Expeditor::Optimizer() {
 Status Expeditor::ReclaimStep() {
     // `D` is the anchor's durable redo start, 0 until the completion
     // checkpoint publishes - the safe direction (BF-R4).
-    return reclaimer_->Step(checkpoint_anchor_->durable_redo_start());
+    return reclaimer_->Step(checkpoint_anchor_->durable_redo_start(), &*statement_epochs_);
 }
 
 Status Expeditor::Checkpoint() {
@@ -1811,6 +1816,8 @@ Status Expeditor::Start() {
                 return s;
             }
             core.value()->dispatcher().SetReclaimCounters(&reclaim_counters_);
+            core.value()->dispatcher().SetStatementEpochs(&*statement_epochs_);
+            core.value()->dispatcher().SetReclaimQueue(&*reclaimer_);
             cores_.push_back(std::move(core.value()));
         }
 
@@ -1964,7 +1971,9 @@ Status Expeditor::Start() {
     // tombstone is owed. A failed step is logged and the next tick retries.
     constexpr sched::MonoTimeNs kReclaimIntervalNs = 50'000'000;  // 50 ms, the drain's
     scheduler.SubmitEvery(kReclaimIntervalNs, [this] {
-        if (reclaimer_->jobs() == 0) return;
+        // Pending, not `jobs()`: a drop committed in the run waits in the
+        // reclaimer's inbox until a step drains it.
+        if (reclaim_counters_.pending.load(std::memory_order_relaxed) == 0) return;
         if (Status s = ReclaimStep(); !s.ok() && logger_->enabled(LogLevel::kWarn)) {
             logger_->Warn("reclaim", "reclaim step failed: " + s.message());
         }

@@ -32,15 +32,19 @@
 //    checks make that re-drive idempotent: a freed page is passed over, and
 //    one another relation has reused fails the owner check.
 //
-// **Which jobs exist.** Through BF-S4, the tombstones a mount finds pending
+// **Which jobs exist.** Two kinds. The tombstones a mount finds pending
 // (BF-R8): no statement of that run can reach their pages - the name
 // resolves NotFound, every memo and cache is built after the mount, and a
 // trail entry for the dead oid is dropped at `TrailReplay::Build`
-// (BF-S1's Census B). A drop committed during the run is reclaimed at the
-// next mount.
+// (BF-S1's Census B). And a drop committed during the run (BF-R9), queued
+// at its commit and walked only once every core's statement epoch has
+// reached the schema word the commit moved to (`statement_epoch.hpp`). A
+// crash loses that queue; the next mount finds the tombstone pending.
 //
-// **Threading.** Driven from one thread, core 0's reactor; the counters are
-// atomic because `SHOW META` reads them from any core. The store calls it
+// **Threading.** Stepped from one thread, core 0's reactor. The inbox
+// `EnqueueCommittedDrop` writes is the one structure any core touches, under
+// its own latch; the counters are atomic because `SHOW META` reads them
+// from any core. The store calls it
 // makes are the store's own concurrency (`device_page_store.hpp`), and the
 // clear is an ordinary catalog write under the page latch.
 
@@ -48,6 +52,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -56,6 +61,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/server/statement_epoch.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/wal/record.hpp"
 
@@ -95,11 +101,20 @@ public:
     // reaching `gate_lsn` - the end of the mount's recovery scan.
     Status CollectAtMount(wal::Lsn gate_lsn);
 
+    // **A drop committed during the run** (BF-R9), queued by its commit arm
+    // from whichever core committed it: gated on `D` past the commit and on
+    // every statement epoch reaching `word`, the schema word after the
+    // commit's move. Thread-safe: the inbox is the one structure a peer
+    // touches, and `Step` drains it on core 0. A crash loses the inbox; the
+    // next mount finds the tombstone pending and drives it (BF-R7).
+    void EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots roots,
+                              wal::Lsn commit_lsn, std::uint64_t word);
+
     // One bounded step against the durable redo start `durable_redo_start`.
     // Returns OK when it did nothing or made progress; a job that cannot
     // proceed for a reason a later step cannot change is refused - counted,
     // logged, left pending for the next mount - and never fails the step.
-    Status Step(wal::Lsn durable_redo_start);
+    Status Step(wal::Lsn durable_redo_start, const StatementEpochs* epochs = nullptr);
 
     // Jobs this run still holds, refused ones included.
     std::size_t jobs() const noexcept { return jobs_.size(); }
@@ -154,6 +169,10 @@ private:
         catalog::Oid oid = 0;
         catalog::PendingRoots roots;
         wal::Lsn gate = 0;
+        // The schema word every running statement must have revalidated at
+        // (BF-R9); 0 for a tombstone a mount found, which no statement of
+        // its run can reach (BF-R8).
+        std::uint64_t word = 0;
         Phase phase = Phase::kWalk;
         // The walk's frontier, every page it took, and what it found: tree
         // pages by level (every tree's level-L pages together), and each
@@ -196,6 +215,9 @@ private:
     ReclaimCounters& counters_;
     Logger* log_;
     std::deque<Job> jobs_;
+    // Committed drops from every core, drained into `jobs_` by `Step`.
+    std::mutex inbox_latch_;
+    std::vector<Job> inbox_;
     std::function<void(const char*)> cut_for_test_;
     void Cut(const char* what) {
         if (cut_for_test_) cut_for_test_(what);

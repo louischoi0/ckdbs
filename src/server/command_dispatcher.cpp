@@ -1,5 +1,6 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/page_reclaim.hpp"
+#include "kds/server/statement_epoch.hpp"
 #include "kds/server/read_borrow.hpp"
 
 #include "kds/txn/lock_table.hpp"
@@ -774,11 +775,37 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     co_return Status::OK();
 }
 
+CommandDispatcher::StatementEpochScope::StatementEpochScope(CommandDispatcher& dispatcher)
+    : d_(dispatcher) {
+    const bool outermost = d_.epoch_depth_++ == 0;
+    // Published before the word is read (BF-R9): `kEntering` and a fence,
+    // so a reclaimer either sees this statement or the statement sees the
+    // drop's word.
+    const auto seam = [this](EpochSeam at) {
+        if (d_.epoch_seam_for_test_ && d_.epoch_seam_at_ == at) d_.epoch_seam_for_test_();
+    };
+    if (outermost && d_.epochs_ != nullptr) d_.epochs_->Enter(d_.core_id_);
+    d_.catalog_.Revalidate(d_.epoch_seam_for_test_
+                               ? std::function<void()>([&] { seam(EpochSeam::kAfterRead); })
+                               : std::function<void()>{});
+    seam(EpochSeam::kBeforePublish);
+    if (outermost && d_.epochs_ != nullptr) {
+        d_.epochs_->Publish(d_.core_id_, d_.catalog_.cache_built_at());
+    }
+    seam(EpochSeam::kAfterPublish);
+}
+
+CommandDispatcher::StatementEpochScope::~StatementEpochScope() {
+    if (--d_.epoch_depth_ == 0 && d_.epochs_ != nullptr) d_.epochs_->Leave(d_.core_id_);
+}
+
 DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Session* session) {
     // The statement boundary is where the catalog asks whether the schema
     // moved (AT-S2; `Catalog::Revalidate`): before this statement resolves
-    // anything and after the previous one released everything it held.
-    catalog_.Revalidate();
+    // anything and after the previous one released everything it held. And
+    // where this core publishes its statement epoch (BF-R9), around that
+    // revalidation, for as long as the statement runs.
+    const StatementEpochScope epoch(*this);
     // **This statement runs as this dispatcher's core** (AM-S2 step 3,
     // `base/current_core.hpp`). On a reactor thread it is what
     // `Scheduler::RunOnce` already declared and this costs a redundant
@@ -2641,29 +2668,43 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // DT3's RESTRICT, both blockers named. A referencing foreign key
         // blocks at the *declared* level - the constraint exists whether or
         // not rows do - which is the check known-gaps.md said was waiting for
-        // exactly this caller.
-        auto fkeys = catalog_.ListForeignKeys();
-        if (!fkeys.ok()) {
-            return {ErrorReply(fkeys.status()), false, 0, fkeys.status()};
-        }
-        for (const catalog::SysFkeyRow& fk : fkeys.value()) {
-            if (fk.parent_rel_oid != oid.value()) continue;
-            return {"ERR relation '" + stmt.table_name + "' is referenced by a foreign key on '" +
-                        RelationNameOf(fk.child_rel_oid) + "'; drop the referencing relation first",
-                    false};
-        }
-
-        // An enforcing constraint is not allowed to die quietly - ALTER's AL4
-        // argument, same predicate, third caller.
-        auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
-        if (!restricting.ok()) {
-            return {ErrorReply(restricting.status()), false, 0, restricting.status()};
-        }
-        if (!restricting.value().empty()) {
-            return {"ERR assertion '" + restricting.value().front().name +
-                        "' is declared on this relation; DROP ASSERTION first",
-                    false};
-        }
+        // exactly this caller. An enforcing constraint is not allowed to die
+        // quietly - ALTER's AL4 argument, same predicate, third caller.
+        //
+        // **Asked twice since BF-Q11 (a)**: before the `X`, so a refused drop
+        // waits for nobody, and again under it, so a foreign key or an
+        // assertion created between the first ask and the grant still
+        // refuses. A child's `CREATE TABLE` takes the parent's `IS` for the
+        // same window from its side. Before BF a dangle there pointed at
+        // allocated pages; once a drop's pages are reclaimed within the run,
+        // a cached parent could be descended into reused ones.
+        const auto restricted = [&]() -> std::optional<DispatchOutcome> {
+            auto fkeys = catalog_.ListForeignKeys();
+            if (!fkeys.ok()) {
+                return DispatchOutcome{ErrorReply(fkeys.status()), false, 0, fkeys.status()};
+            }
+            for (const catalog::SysFkeyRow& fk : fkeys.value()) {
+                if (fk.parent_rel_oid != oid.value()) continue;
+                return DispatchOutcome{"ERR relation '" + stmt.table_name +
+                                           "' is referenced by a foreign key on '" +
+                                           RelationNameOf(fk.child_rel_oid) +
+                                           "'; drop the referencing relation first",
+                                       false};
+            }
+            auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
+            if (!restricting.ok()) {
+                return DispatchOutcome{ErrorReply(restricting.status()), false, 0,
+                                       restricting.status()};
+            }
+            if (!restricting.value().empty()) {
+                return DispatchOutcome{"ERR assertion '" + restricting.value().front().name +
+                                           "' is declared on this relation; DROP ASSERTION first",
+                                       false};
+            }
+            return std::nullopt;
+        };
+        if (auto refused = restricted(); refused.has_value()) return *refused;
+        if (before_drop_exclusive_for_test_) before_drop_exclusive_for_test_();
 
         // ---- AO-S6e-b: the relation `X`, and what waits for what --------
         //
@@ -2684,6 +2725,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             held.has_value()) {
             return {ErrorReply(*held), false, 0, *held};
         }
+        if (auto refused = restricted(); refused.has_value()) return *refused;
 
         std::vector<std::uint64_t> dropped_cabins;
         // Transactional when inside an explicit transaction (DT5): the
@@ -2694,12 +2736,18 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // changed rows.
         DdlScope ddl = DdlScopeFor(scope);
         std::vector<catalog::CatalogRowChange> changed;
+        catalog::PendingRoots owed;
         Status dropped =
             catalog_.DropTable(oid.value(), dropped_cabins, ddl.trx_id,
-                               ddl.txn != nullptr ? &changed : nullptr);
+                               ddl.txn != nullptr ? &changed : nullptr, &owed);
         NoteCatalogRowChanges(ddl, changed);
         if (Status s = dropped; !s.ok()) {
             return {ErrorReply(s), false, 0, s};
+        }
+        // What the drop owes (BF-R9), queued at its transaction's commit by
+        // `EndDdlScopeById`: the roots its retype wrote into the tombstone.
+        if (reclaim_queue_ != nullptr && scope.txn != nullptr) {
+            owed_drops_.push_back(OwedDrop{scope.txn->id(), oid.value(), owed});
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -2711,7 +2759,8 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "dropped table " + stmt.table_name + " (oid " +
                                   std::to_string(oid.value()) +
-                                  "); its pages are reclaimed at the next mount");
+                                  "); its pages are reclaimed once no reader or replay "
+                                  "can reach them");
         }
         return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
     });
@@ -4038,6 +4087,21 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                     parent_view.has_value() ? &*parent_view : nullptr);
                 !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
+            }
+            // The parent's `IS`, held to the decide (BF-Q11 (a)), taken as
+            // soon as the parent is named and before anything is written,
+            // so a refusal leaves no rows and a wait can re-run: a drop of
+            // the parent holding `X` refuses this create, and one arriving
+            // after waits for it and then finds the foreign key on its
+            // second RESTRICT ask. A drop that committed between the lookup
+            // above and this grant is not closed here; the pages stay
+            // allocated while this statement runs (BF-R9's epoch), and a
+            // later bind of the dangling parent is refused (BF-R10).
+            if (std::optional<Status> held =
+                    BorrowRelationForDdl(scope.txn, parent_oid.value(), /*poisons=*/true,
+                                         txn::LockMode::kIntentionShared);
+                held.has_value()) {
+                return {ErrorReply(*held), false, 0, *held};
             }
             auto parent = catalog_.InitTableAccess(parent_oid.value());
             if (!parent.ok()) {
@@ -5937,7 +6001,8 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     const Status verdict =
         failed ? Status::InvalidArgument(out.response) : Status::OK();
-    if (Status ended = EndWrite(session, scope, verdict); !ended.ok() && !failed) {
+    const Status ended = EndWrite(session, scope, verdict);
+    if (!ended.ok() && !failed) {
         // The DDL succeeded and its commit did not - the commit failure is
         // the client's answer, exactly as the DML handlers report it.
         out = {ErrorReply(ended), false};
@@ -5945,8 +6010,12 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
     // The implicit transaction resolved inside EndWrite, so the seam that
     // explicit COMMIT/ROLLBACK reaches through EndDdlScope runs here: the
     // cache the open DDL filtered is stale either way, and settled marks
-    // are worth one sweep (§5d).
-    if (owned) EndDdlScopeById(id);
+    // are worth one sweep (§5d). Committed, it also queues a drop's
+    // reclaim (BF-R9), at the commit EndWrite acknowledged.
+    const bool committed = !failed && ended.ok();
+    if (owned) {
+        EndDdlScopeById(id, committed ? session.acknowledged_commit_lsn() : wal::kNoLsn);
+    }
 }
 
 Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
@@ -6019,13 +6088,13 @@ std::optional<DispatchOutcome> CommandDispatcher::ExistingRelationReply(
     return DispatchOutcome{"EXISTS oid=" + std::to_string(existing.value()), false};
 }
 
-void CommandDispatcher::EndDdlScope(const Session& session) {
+void CommandDispatcher::EndDdlScope(const Session& session, wal::Lsn committed_lsn) {
     const txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return;
-    EndDdlScopeById(txn->id());
+    EndDdlScopeById(txn->id(), committed_lsn);
 }
 
-void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
+void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed_lsn) {
     const bool held_ddl = std::erase(ddl_txns_, txn_id) > 0;
     // **Both endings need this, and only the rollback half used to.** A
     // rollback compensates through the page, retiring rows behind the
@@ -6079,6 +6148,21 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
             }
         }
         catalog_.InvalidateAfterCompensation();
+    }
+    // **A committed drop is queued with the word the commit moved to**
+    // (BF-R9): read after the move above, so every statement whose memo
+    // could hold the relation revalidated below it. Any other ending
+    // forgets the drop: a rolled-back retype owes nothing.
+    for (auto owed = owed_drops_.begin(); owed != owed_drops_.end();) {
+        if (owed->txn_id != txn_id) {
+            ++owed;
+            continue;
+        }
+        if (committed_lsn != wal::kNoLsn && reclaim_queue_ != nullptr) {
+            reclaim_queue_->EnqueueCommittedDrop(owed->oid, owed->roots, committed_lsn,
+                                                 catalog_.schema_word_now());
+        }
+        owed = owed_drops_.erase(owed);
     }
 }
 
@@ -8100,8 +8184,9 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
 
     // Its catalog rows are committed now, so every reader may see them
     // unfiltered again (DT3c). Before `Finish()`, which clears the
-    // session's transaction pointer this reads.
-    EndDdlScope(session);
+    // session's transaction pointer this reads. A drop it made is queued
+    // for reclamation at this commit (BF-R9).
+    EndDdlScope(session, committed.value());
     session.Finish();
     // The session's next statement mints no snapshot below this (BA-R1c).
     session.set_acknowledged_commit_lsn(committed.value());
@@ -8357,7 +8442,8 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
 }
 
 std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* holder,
-                                                              catalog::Oid oid, bool poisons) {
+                                                              catalog::Oid oid, bool poisons,
+                                                              txn::LockMode mode) {
     if (locks_ == nullptr || holder == nullptr) return std::nullopt;
 
     // AR2 §3's DDL row: **the relation, `X`, for the DDL transaction**. Its
@@ -8373,8 +8459,8 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* 
     // same condition every other wait in this file records under. Without
     // it the honest answer is the refusal itself, which is what a
     // synchronous `Dispatch()` has always had.
-    auto took = locks_->TryAcquire(holder->id(), unit, txn::LockMode::kExclusive,
-                                   holder->borrows(), &blocker, may_park_ ? &wake : nullptr);
+    auto took = locks_->TryAcquire(holder->id(), unit, mode, holder->borrows(), &blocker,
+                                   may_park_ ? &wake : nullptr);
     if (!took.ok()) return took.status();
     if (took.value()) return std::nullopt;
     if (wake.slot != nullptr) {

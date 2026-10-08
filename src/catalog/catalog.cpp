@@ -959,9 +959,10 @@ void Catalog::BumpWord() {
     if (cache_built_at_ == prev) cache_built_at_ = prev + 1;
 }
 
-void Catalog::Revalidate() {
+void Catalog::Revalidate(const std::function<void()>& after_read) {
     if (schema_word_ == nullptr) return;
     const std::uint64_t now = schema_word_->load(std::memory_order_acquire);
+    if (after_read) after_read();
     if (now == cache_built_at_) return;
     cache_.Invalidate();
     cache_built_at_ = now;
@@ -1960,7 +1961,8 @@ Status Catalog::DropNamespace(Oid namespace_oid, std::uint64_t trx_id,
 }
 
 Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
-                          std::uint64_t trx_id, std::vector<CatalogRowChange>* written) {
+                          std::uint64_t trx_id, std::vector<CatalogRowChange>* written,
+                          PendingRoots* owed_out) {
     // Transactional only when a caller supplies an id (DT5). Without one
     // this is the path that always existed: retype, then **retire** the
     // dependents outright, which no rollback can put back - and which is
@@ -2147,6 +2149,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     }
 
     BumpVersion("drop table");
+    if (owed_out != nullptr) *owed_out = UnpackPendingRoots(pending_roots);
     return Status::OK();
 }
 

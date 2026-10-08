@@ -40,7 +40,30 @@ Status PageReclaimer::CollectAtMount(wal::Lsn gate_lsn) {
     return Status::OK();
 }
 
-Status PageReclaimer::Step(wal::Lsn durable_redo_start) {
+void PageReclaimer::EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots roots,
+                                         wal::Lsn commit_lsn, std::uint64_t word) {
+    Job job;
+    job.oid = oid;
+    job.roots = roots;
+    // Every record that names the relation's pages precedes the commit, so
+    // a redo start past the commit replays none of them (BF-R4).
+    job.gate = commit_lsn + 1;
+    job.word = word;
+    job.frontier.push_back(Visit{roots.anchor, Expect::kAnchor, oid, kAnyLevel});
+    // Counted under the latch, before the push: a step on core 0 that
+    // drains and finishes the job then decrements a count that already
+    // holds it, so `pending` never wraps below zero.
+    const std::lock_guard<std::mutex> hold(inbox_latch_);
+    counters_.pending.fetch_add(1, std::memory_order_relaxed);
+    inbox_.push_back(std::move(job));
+}
+
+Status PageReclaimer::Step(wal::Lsn durable_redo_start, const StatementEpochs* epochs) {
+    {
+        const std::lock_guard<std::mutex> hold(inbox_latch_);
+        for (Job& job : inbox_) jobs_.push_back(std::move(job));
+        inbox_.clear();
+    }
     std::size_t budget = kReclaimBatchPages;
     for (auto it = jobs_.begin(); it != jobs_.end() && budget > 0;) {
         Job& job = *it;
@@ -49,6 +72,18 @@ Status PageReclaimer::Step(wal::Lsn durable_redo_start) {
         if (job.phase == Phase::kRefused || durable_redo_start < job.gate) {
             ++it;
             continue;
+        }
+        // The statement epoch (BF-R9): no statement still running may hold
+        // a memo from before the drop's commit, checked before the walk
+        // reads a page.
+        if (job.word != 0) {
+            if (epochs == nullptr || !epochs->AllAtLeast(job.word)) {
+                ++it;
+                continue;
+            }
+            // Passed once is passed for good: a statement that starts later
+            // revalidated past the drop, so its memo cannot hold the relation.
+            job.word = 0;
         }
         if (job.phase == Phase::kWalk) {
             if (!WalkSome(job, budget)) {
