@@ -359,3 +359,54 @@ Two of its findings went past the text:
 Declined: the three cuts the review suggested for length. The order states
 its rules once in §0, again with their reasons in §2, and as questions in
 §4, which is the house shape for every order.
+
+### BG-S1 — the premise, measured, 2026-10-08
+
+On `worktree-bg-s1-laps`, opened from `8e63ee70`; the code at `640ccc4a`
+(`v2.7.0-680-g640ccc4a`). Results:
+`bench/v3.0.0/results-bg-s1-laps-v2.7.0-680-g640ccc4a.md`.
+
+**The code change** is the stage's one: `pool_batch_steps_background`,
+the tick's reclaim steps. Laps are it plus `pool_batch_steps`, over
+`pool_slots`. `MaintainFreeReserveRestoresTheWatermarkThroughDirt` pins it.
+§1.4's "the tick adds none" is true of `cd8ca91e`, which §1 surveys, and is
+left as written.
+
+**The gate passed.** BE-S6's cell was re-run twice, with identical counts
+both times. The laps were 3.60, 4.96, 5.96 and 5.71. In every variant that
+exceeds `u + 1`, and the hot set went, so §1.1's mechanism holds.
+- **§1.1's "about eight laps" was an overestimate.** It held `C − H` fixed.
+  A model that frees the whole pool once the hot frames go comes within
+  0.35 laps of every variant. The residue is not attributed.
+- **The tick walks 2-3 % of the hand's steps.**
+
+**The 682 survivors are explained.** They are not hot frames that outlived
+the laps:
+- They are a contiguous tail in pk order: the leaves the scan faulted last,
+  still resident cold when it ended.
+- The 1,024-row variant kept 20.5 % of its rows, which is the pool's share
+  of the scan's faults.
+- One row, the table's first leaf, also survived in the one-pass 8,192-row
+  runs. It is reported as unexplained.
+
+**The census**, in the results file's §3:
+- one `kScan` producer and one `kRing` producer;
+- three erasers, all through `ReleaseFrameLocked`. BF has not landed.
+- **two warm faulters a scan reaches outside its walk:**
+  - var-heap values (`varheap.cpp:396`);
+  - undo pages (`undo_log.cpp:189`).
+
+  **BG-S2 has to queue them or state them as the queue's bound.** This
+  is new; the order does not decide it.
+
+**Review:** the `critics-developer` review of the counter found no defect.
+- Applied:
+  - the rename from `background_steps` to `batch_steps_background`, so the
+    key reads with its siblings;
+  - two comment fixes.
+- Declined: updating §1.4, for the reason above.
+- Stated in the results file: its caveat on the denominator. The slot array
+  was full before the scan, so the caveat does not bite.
+
+The full suite's result is in the stage report. Overhead was not measured;
+it is measured at the milestone's close.

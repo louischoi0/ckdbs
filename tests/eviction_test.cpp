@@ -787,6 +787,15 @@ TEST_F(EvictionTest, MaintainFreeReserveRestoresTheWatermarkThroughDirt) {
     EXPECT_EQ(store_->pool_counters().reclaimed_background, reclaimed);
     // In bounded batches, one per latch hold, never the deficit in one.
     EXPECT_GE(store_->pool_counters().batches_background, 2u);
+    // The tick's walk is counted as its own, and the inline count is not
+    // charged for it: the hand's laps are the two counts' sum over the slots
+    // (BG-S1). Every reclaimed frame cost the hand at least the step that
+    // reached it.
+    EXPECT_GE(store_->pool_counters().batch_steps_background, reclaimed);
+    EXPECT_LE(store_->pool_counters().batch_steps_background,
+              store_->pool_counters().batches_background * DevicePageStore::kBatchStepsPerFrame *
+                  store_->ReclaimBatch());
+    EXPECT_EQ(store_->pool_counters().batch_steps, 0u);
 
     // No write was lost to the reserve: every page reads back intact.
     for (std::size_t i = 0; i < ids.size(); ++i) {
