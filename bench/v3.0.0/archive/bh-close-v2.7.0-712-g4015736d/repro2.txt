@@ -1,0 +1,11 @@
+CREATED oid=4000
+cell1 delete-purge-insert per key: {'INSERTED': 1000} {}
+count count(*)\n1000
+CREATED oid=4004
+DELETED 1000 PURGED 1000
+cell2 purge all then insert singly asc: ok 1000 bad {} None
+count count(*)\n1000
+CREATED oid=4008
+DELETED 100 PURGED 100
+cell3 purge 100-key window then insert singly: ok 100 bad {} None
+count count(*)\n1000

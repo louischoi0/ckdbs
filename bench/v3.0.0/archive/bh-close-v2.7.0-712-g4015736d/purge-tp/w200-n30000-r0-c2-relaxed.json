@@ -1,0 +1,65 @@
+{
+ "tag": "w200-n30000-r0",
+ "window": 200,
+ "keys": 30000,
+ "run": 0,
+ "cores": 2,
+ "durability": "relaxed",
+ "wait_s": 0.0,
+ "host_before": {
+  "loadavg": "1.52 1.63 2.31 1/269 2063364",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.48 1.62 2.30 1/279 2063383",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "mount_ckpt_us": 5602.0,
+ "delete": {
+  "phase": "delete",
+  "detail": "",
+  "ops": 150,
+  "errors": 0,
+  "first_error": null,
+  "elapsed_s": 0.310102,
+  "qps": 483.7,
+  "mean_us": 2066.7,
+  "p0_us": 1113.4,
+  "p25_us": 1596.4,
+  "p50_us": 2046.5,
+  "p95_us": 2933.9,
+  "p99_us": 3091.9,
+  "max_us": 3113.3
+ },
+ "purge": {
+  "phase": "purge",
+  "detail": "",
+  "ops": 150,
+  "errors": 0,
+  "first_error": null,
+  "elapsed_s": 0.187644,
+  "qps": 799.4,
+  "mean_us": 1250.2,
+  "p0_us": 1088.8,
+  "p25_us": 1177.9,
+  "p50_us": 1245.6,
+  "p95_us": 1379.9,
+  "p99_us": 1392.2,
+  "max_us": 1839.5
+ },
+ "delete_keys_per_s": 96742.2,
+ "purge_keys_per_s": 159877.0,
+ "bound_probe_refused": true,
+ "bad_purge_replies": 0,
+ "live_after_purge": "0",
+ "reinserted_keys": 30000,
+ "reinsert_refused_separator": 0,
+ "reinsert_refused_separator_keys": [],
+ "reinsert_refused_other": [],
+ "reinsert_s": 1.583,
+ "count_after_reinsert": "30000"
+}

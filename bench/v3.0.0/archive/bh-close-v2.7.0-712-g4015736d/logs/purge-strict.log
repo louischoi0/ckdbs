@@ -1,0 +1,6 @@
+w1-n1000-r0 c1 strict load 1.46 del 714/s purge 711/s p50=1232.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=1000/1000 sep_refused=0 other_refused=0 after=1000
+w1-n1000-r1 c1 strict load 1.50 del 752/s purge 733/s p50=1206.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=1000/1000 sep_refused=0 other_refused=0 after=1000
+w1-n1000-r2 c1 strict load 1.46 del 707/s purge 690/s p50=1235.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=1000/1000 sep_refused=0 other_refused=0 after=1000
+w1000-n10000-r0 c1 strict load 1.42 del 308981/s purge 134361/s p50=7407.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=10000/10000 sep_refused=0 other_refused=0 after=10000
+w1000-n10000-r1 c1 strict load 1.33 del 296688/s purge 132877/s p50=7524.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=10000/10000 sep_refused=0 other_refused=0 after=10000
+w1000-n10000-r2 c1 strict load 1.26 del 321360/s purge 130374/s p50=7527.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=10000/10000 sep_refused=0 other_refused=0 after=10000

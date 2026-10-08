@@ -1,0 +1,10 @@
+n10000-r0 load 1.53->1.45 errs=0 insert:A=49.8/B=49.8 insert-again:A=49.5/B=49.5 select-pk:A=65.5/B=65.5 update-pk:A=53.1/B=53.0 delete-pk:A=49.7/B=49.6 range100:A=863.3/B=794.0 ping:A=45.5/B=44.7
+n10000-r1 load 1.45->1.60 errs=0 insert:A=49.0/B=49.1 insert-again:A=49.1/B=49.3 select-pk:A=65.3/B=66.0 update-pk:A=52.1/B=53.1 delete-pk:A=49.0/B=49.3 range100:A=859.5/B=811.4 ping:A=44.4/B=45.9
+n10000-r2 load 1.60->1.59 errs=0 insert:A=49.3/B=49.5 insert-again:A=49.2/B=49.4 select-pk:A=65.6/B=65.1 update-pk:A=53.2/B=53.4 delete-pk:A=49.5/B=49.7 range100:A=864.9/B=799.5 ping:A=43.2/B=45.8
+n10000-r3 load 1.59->1.54 errs=0 insert:A=49.5/B=49.9 insert-again:A=49.5/B=49.9 select-pk:A=65.4/B=66.4 update-pk:A=53.0/B=54.3 delete-pk:A=49.3/B=50.2 range100:A=859.1/B=807.5 ping:A=44.5/B=45.8
+n10000-r4 load 1.54->1.53 errs=0 insert:A=49.5/B=49.3 insert-again:A=49.6/B=49.5 select-pk:A=65.4/B=66.0 update-pk:A=53.1/B=53.2 delete-pk:A=49.3/B=49.7 range100:A=888.4/B=801.7 ping:A=42.9/B=45.8
+n10000-r5 load 1.53->1.52 errs=0 insert:A=49.6/B=49.0 insert-again:A=49.5/B=49.4 select-pk:A=65.9/B=65.3 update-pk:A=53.5/B=52.7 delete-pk:A=49.8/B=49.0 range100:A=864.3/B=794.9 ping:A=45.6/B=43.7
+n10000-r6 load 1.52->1.52 errs=0 insert:A=49.4/B=49.6 insert-again:A=49.6/B=49.4 select-pk:A=65.0/B=65.1 update-pk:A=52.7/B=53.0 delete-pk:A=49.6/B=49.8 range100:A=859.9/B=790.4 ping:A=45.9/B=44.7
+n10000-r7 load 1.52->1.47 errs=0 insert:A=49.5/B=49.4 insert-again:A=49.4/B=49.3 select-pk:A=64.8/B=65.7 update-pk:A=52.7/B=53.0 delete-pk:A=49.4/B=49.5 range100:A=862.6/B=796.2 ping:A=45.7/B=43.4
+n10000-r8 load 1.44->1.40 errs=0 insert:A=49.2/B=49.1 insert-again:A=49.2/B=49.2 select-pk:A=65.2/B=65.6 update-pk:A=53.0/B=53.0 delete-pk:A=49.5/B=49.7 range100:A=867.0/B=789.8 ping:A=42.7/B=45.6
+n10000-r9 load 1.40->1.41 errs=0 insert:A=49.2/B=49.1 insert-again:A=49.4/B=49.1 select-pk:A=65.3/B=64.8 update-pk:A=53.0/B=52.2 delete-pk:A=49.5/B=49.1 range100:A=857.9/B=788.7 ping:A=45.2/B=45.1

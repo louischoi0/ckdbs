@@ -1921,3 +1921,31 @@ hint text as it found it.
     scan.
   - **The literal test** costs a length check on each pk conjunct.
   - **A re-measurement at the closing commit** is the next step.
+
+### BH closed - 2026-10-08
+
+- **The closing measurement**, at `4015736d` (`v2.7.0-712-g4015736d`)
+  against `10593366`, in `build-release`, interleaved
+  (`bench/v3.0.0/results-bh-close-v2.7.0-712-g4015736d.md`):
+  - **No point or bulk-insert shape regresses beyond noise.** By-pk
+    `INSERT`, `SELECT` and `DELETE` sit within ±0.4 µs at p50, against a
+    0.6 µs floor. `UPDATE` reads 0.2-0.7 µs faster.
+  - **The append-split path is unhurt.** A new bulk-insert arm, about 360
+    append splits per run, reads 0.5-1 % faster, so the compaction's scan
+    costs nothing resolvable.
+  - **The whole-relation scan reads +1.8 %** at `cores = 1` and +2.2 % at
+    `cores = 2` over 10,000 rows. Its code is unchanged since A, and the
+    711 file showed the same shape swing −8 % to +13 % with the build
+    alone, so it is not attributed to BH.
+  - **The purge-then-reinsert repro places 1,000 of 1,000.** It placed 995
+    at `04649133`.
+  - **Purge throughput is unchanged** within 1 %.
+- **Not re-run at the close:** DELETE-to-PURGE latency under readers, the
+  snapshot probe, and `group` or `strict` at `cores = 2`. The 711 file's
+  numbers describe `04649133`.
+- **Every stage is landed:** BH-S1 `80a0c223`, BH-S2 `bbc7aa3e`, BH-S3
+  `26766699`, BH-S4 `469e0b92`, BH-S5 `04649133` and `4015736d`.
+- **The final suite** at `4015736d` passed 3315/3315, and the sim corpus
+  190/190.
+- **Found and filed, not fixed:**
+  `docs/inflight/bugs/an-integer-literal-past-int64-in-a-where-compares-as-its-wrap.md`.

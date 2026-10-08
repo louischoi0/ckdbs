@@ -1,0 +1,265 @@
+{
+ "label": "snap-c1",
+ "mode": "snapshot",
+ "cores": 1,
+ "durability": "relaxed",
+ "keys": 2000,
+ "readers": 0,
+ "writers": 0,
+ "wait_s": 10.0,
+ "host_before": {
+  "loadavg": "1.57 1.64 1.87 1/271 2034670",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "mount_ckpt_us": 12686.0,
+ "snapshot_rows": [
+  {
+   "hold_ms": 0,
+   "rep": 0,
+   "total_ms": 0.07,
+   "first_attempt_ms": 0.06,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 0,
+   "rep": 1,
+   "total_ms": 0.07,
+   "first_attempt_ms": 0.07,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 0,
+   "rep": 2,
+   "total_ms": 0.07,
+   "first_attempt_ms": 0.07,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 0,
+   "rep": 3,
+   "total_ms": 0.05,
+   "first_attempt_ms": 0.05,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 0,
+   "rep": 4,
+   "total_ms": 0.07,
+   "first_attempt_ms": 0.06,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 50,
+   "rep": 0,
+   "total_ms": 50.25,
+   "first_attempt_ms": 50.25,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 50,
+   "rep": 1,
+   "total_ms": 50.3,
+   "first_attempt_ms": 50.3,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 50,
+   "rep": 2,
+   "total_ms": 50.28,
+   "first_attempt_ms": 50.28,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 50,
+   "rep": 3,
+   "total_ms": 50.28,
+   "first_attempt_ms": 50.27,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 50,
+   "rep": 4,
+   "total_ms": 50.28,
+   "first_attempt_ms": 50.28,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 200,
+   "rep": 0,
+   "total_ms": 200.37,
+   "first_attempt_ms": 200.37,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 200,
+   "rep": 1,
+   "total_ms": 200.41,
+   "first_attempt_ms": 200.41,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 200,
+   "rep": 2,
+   "total_ms": 200.41,
+   "first_attempt_ms": 200.41,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 200,
+   "rep": 3,
+   "total_ms": 200.42,
+   "first_attempt_ms": 200.42,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 200,
+   "rep": 4,
+   "total_ms": 200.46,
+   "first_attempt_ms": 200.46,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 500,
+   "rep": 0,
+   "total_ms": 500.41,
+   "first_attempt_ms": 500.41,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 500,
+   "rep": 1,
+   "total_ms": 500.39,
+   "first_attempt_ms": 500.39,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 500,
+   "rep": 2,
+   "total_ms": 500.42,
+   "first_attempt_ms": 500.42,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 500,
+   "rep": 3,
+   "total_ms": 500.43,
+   "first_attempt_ms": 500.43,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 500,
+   "rep": 4,
+   "total_ms": 500.45,
+   "first_attempt_ms": 500.45,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 900,
+   "rep": 0,
+   "total_ms": 900.43,
+   "first_attempt_ms": 900.43,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 900,
+   "rep": 1,
+   "total_ms": 900.46,
+   "first_attempt_ms": 900.46,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 900,
+   "rep": 2,
+   "total_ms": 900.46,
+   "first_attempt_ms": 900.46,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 900,
+   "rep": 3,
+   "total_ms": 900.42,
+   "first_attempt_ms": 900.42,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 900,
+   "rep": 4,
+   "total_ms": 900.45,
+   "first_attempt_ms": 900.45,
+   "refusals": 0,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 1100,
+   "rep": 0,
+   "total_ms": 1100.37,
+   "first_attempt_ms": 1000.75,
+   "refusals": 1,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 1100,
+   "rep": 1,
+   "total_ms": 1100.36,
+   "first_attempt_ms": 1000.89,
+   "refusals": 1,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 1100,
+   "rep": 2,
+   "total_ms": 1100.36,
+   "first_attempt_ms": 1001.21,
+   "refusals": 1,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 1100,
+   "rep": 3,
+   "total_ms": 1100.39,
+   "first_attempt_ms": 1000.89,
+   "refusals": 1,
+   "reply": "PURGED 1"
+  },
+  {
+   "hold_ms": 1100,
+   "rep": 4,
+   "total_ms": 1100.38,
+   "first_attempt_ms": 1001.35,
+   "refusals": 1,
+   "reply": "PURGED 1"
+  }
+ ],
+ "host_after": {
+  "loadavg": "1.22 1.55 1.84 2/270 2034712",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ }
+}

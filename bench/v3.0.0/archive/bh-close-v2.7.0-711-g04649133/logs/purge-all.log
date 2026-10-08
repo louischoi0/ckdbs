@@ -1,0 +1,164 @@
+w1-n200-r0 c1 relaxed load 1.38 del 17043/s purge 15658/s p50=61.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r1 c1 relaxed load 1.38 del 17312/s purge 15707/s p50=61.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r2 c1 relaxed load 1.38 del 16911/s purge 15739/s p50=61.7us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r3 c1 relaxed load 1.38 del 16884/s purge 15689/s p50=62.0us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r4 c1 relaxed load 1.38 del 16978/s purge 15777/s p50=62.0us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n1000-r0 c1 relaxed load 1.38 del 17366/s purge 15547/s p50=63.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r1 c1 relaxed load 1.38 del 17299/s purge 15606/s p50=63.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r2 c1 relaxed load 1.43 del 17097/s purge 15397/s p50=63.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r3 c1 relaxed load 1.43 del 17191/s purge 15403/s p50=64.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r4 c1 relaxed load 1.43 del 17301/s purge 15479/s p50=63.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n10000-r0 c1 relaxed load 1.43 del 18449/s purge 17658/s p50=55.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r1 c1 relaxed load 1.43 del 19387/s purge 17361/s p50=55.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r2 c1 relaxed load 1.56 del 19767/s purge 17398/s p50=55.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r3 c1 relaxed load 1.56 del 19657/s purge 17156/s p50=56.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r4 c1 relaxed load 1.60 del 18798/s purge 10686/s p50=57.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w200-n30000-r0 c1 relaxed load 1.60 del 115608/s purge 161994/s p50=1230.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r1 c1 relaxed load 1.59 del 112151/s purge 160803/s p50=1246.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r2 c1 relaxed load 1.58 del 112182/s purge 165815/s p50=1204.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r3 c1 relaxed load 1.58 del 114974/s purge 165414/s p50=1201.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r4 c1 relaxed load 1.53 del 114593/s purge 165736/s p50=1198.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r0 c1 relaxed load 1.53 del 484526/s purge 173422/s p50=5763.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r1 c1 relaxed load 1.59 del 484451/s purge 171649/s p50=5813.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r2 c1 relaxed load 1.59 del 472852/s purge 171750/s p50=5819.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r3 c1 relaxed load 1.58 del 478801/s purge 170116/s p50=5878.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r4 c1 relaxed load 1.58 del 480317/s purge 172106/s p50=5807.0us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r0 c1 relaxed load 1.58 del 1506845/s purge 174156/s p50=57402.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r1 c1 relaxed load 1.59 del 1490147/s purge 175390/s p50=56957.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r2 c1 relaxed load 1.59 del 1475852/s purge 175188/s p50=57024.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r3 c1 relaxed load 1.54 del 1479603/s purge 174660/s p50=57238.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r4 c1 relaxed load 1.54 del 1460538/s purge 176478/s p50=56639.4us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1-n200-r0 c2 relaxed load 1.58 del 19544/s purge 18071/s p50=54.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r1 c2 relaxed load 1.58 del 17918/s purge 14976/s p50=66.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r2 c2 relaxed load 1.58 del 17657/s purge 14721/s p50=65.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r3 c2 relaxed load 1.58 del 17320/s purge 14971/s p50=64.7us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n200-r4 c2 relaxed load 1.58 del 16832/s purge 15333/s p50=67.7us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=200/200 sep_refused=0 other_refused=0 after=200
+w1-n1000-r0 c2 relaxed load 1.58 del 17800/s purge 14608/s p50=67.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r1 c2 relaxed load 1.58 del 17440/s purge 14637/s p50=66.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r2 c2 relaxed load 1.56 del 16692/s purge 14093/s p50=68.4us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r3 c2 relaxed load 1.56 del 16896/s purge 14243/s p50=68.0us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r4 c2 relaxed load 1.56 del 17382/s purge 14497/s p50=66.0us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n10000-r0 c2 relaxed load 1.56 del 16712/s purge 13909/s p50=68.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r1 c2 relaxed load 1.59 del 15808/s purge 13414/s p50=68.7us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r2 c2 relaxed load 1.59 del 17609/s purge 14310/s p50=66.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r3 c2 relaxed load 1.58 del 19452/s purge 16725/s p50=56.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n10000-r4 c2 relaxed load 1.58 del 19232/s purge 17111/s p50=56.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w200-n30000-r0 c2 relaxed load 1.58 del 99279/s purge 161372/s p50=1237.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r1 c2 relaxed load 1.49 del 99855/s purge 156937/s p50=1255.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r2 c2 relaxed load 1.49 del 99916/s purge 159474/s p50=1250.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r3 c2 relaxed load 1.45 del 94517/s purge 162920/s p50=1230.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w200-n30000-r4 c2 relaxed load 1.41 del 99789/s purge 160722/s p50=1244.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r0 c2 relaxed load 1.41 del 405043/s purge 167713/s p50=5963.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r1 c2 relaxed load 1.46 del 396108/s purge 147224/s p50=6788.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r2 c2 relaxed load 1.46 del 396771/s purge 147329/s p50=6782.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r3 c2 relaxed load 1.46 del 404359/s purge 167727/s p50=5963.4us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1000-n30000-r4 c2 relaxed load 1.42 del 363639/s purge 147355/s p50=6784.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r0 c2 relaxed load 1.42 del 1129994/s purge 170148/s p50=58809.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r1 c2 relaxed load 1.39 del 1242314/s purge 150609/s p50=66215.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r2 c2 relaxed load 1.39 del 1225358/s purge 149714/s p50=66761.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r3 c2 relaxed load 1.44 del 1174092/s purge 170341/s p50=58703.0us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w10000-n30000-r4 c2 relaxed load 1.44 del 1237509/s purge 150919/s p50=66336.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=29821/30000 sep_refused=179 other_refused=0 after=29821
+w1-n1000-r0 c1 strict load 1.48 del 876/s purge 891/s p50=999.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r1 c1 strict load 1.52 del 856/s purge 864/s p50=990.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r2 c1 strict load 1.52 del 890/s purge 869/s p50=992.7us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1000-n10000-r0 c1 strict load 1.56 del 298868/s purge 119273/s p50=7920.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r1 c1 strict load 1.44 del 313962/s purge 137280/s p50=7212.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r2 c1 strict load 1.37 del 334258/s purge 133419/s p50=7417.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n1000-r0 c2 strict load 1.29 del 822/s purge 810/s p50=1074.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r1 c2 strict load 1.26 del 829/s purge 843/s p50=1025.9us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r2 c2 strict load 1.26 del 819/s purge 817/s p50=1030.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1000-n10000-r0 c2 strict load 1.24 del 273489/s purge 98634/s p50=8250.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r1 c2 strict load 1.27 del 226390/s purge 119939/s p50=8184.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r2 c2 strict load 1.23 del 316362/s purge 121896/s p50=8141.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n1000-r0 c1 group load 1.25 del 851/s purge 870/s p50=1000.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r1 c1 group load 1.23 del 847/s purge 830/s p50=1008.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r2 c1 group load 1.23 del 890/s purge 874/s p50=1007.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1000-n10000-r0 c1 group load 1.21 del 282099/s purge 135006/s p50=7302.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r1 c1 group load 1.32 del 267924/s purge 119156/s p50=7443.1us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r2 c1 group load 1.34 del 374117/s purge 139591/s p50=7141.2us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1-n1000-r0 c2 group load 1.27 del 815/s purge 843/s p50=1023.8us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r1 c2 group load 1.33 del 865/s purge 892/s p50=998.3us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1-n1000-r2 c2 group load 1.33 del 850/s purge 843/s p50=1012.7us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=995/1000 sep_refused=5 other_refused=0 after=995
+w1000-n10000-r0 c2 group load 1.38 del 240512/s purge 116896/s p50=8209.4us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r1 c2 group load 1.38 del 258002/s purge 107009/s p50=8501.6us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+w1000-n10000-r2 c2 group load 1.58 del 292032/s purge 132595/s p50=7442.5us errs d=0 p=0 bad=0 bound_refused=True live=0 reins=9941/10000 sep_refused=59 other_refused=0 after=9941
+tp-finished
+c1-R0W0-r0: R=0 W=0 c1 total p0/25/50/95/99/max = 41.9/53.9/58.2/70.5/80.5/22564.7 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R3W0-r0: R=3 W=0 c1 total p0/25/50/95/99/max = 44.5/88.0/98.7/125.6/159.7/32197.4 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R2W1-r0: R=2 W=1 c1 total p0/25/50/95/99/max = 48.8/92.6/99.0/123.1/165.5/14913.6 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R0W0-r0: R=0 W=0 c2 total p0/25/50/95/99/max = 44.1/54.6/58.5/69.6/78.9/11274.1 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R3W0-r0: R=3 W=0 c2 total p0/25/50/95/99/max = 41.5/75.3/83.2/110.8/126.7/33126.0 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R2W1-r0: R=2 W=1 c2 total p0/25/50/95/99/max = 56.7/95.0/102.8/134.1/157.4/28508.7 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R0W0-r1: R=0 W=0 c1 total p0/25/50/95/99/max = 41.5/53.9/57.8/67.6/77.1/15000.7 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R3W0-r1: R=3 W=0 c1 total p0/25/50/95/99/max = 43.9/85.9/97.1/125.5/156.0/26644.6 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R2W1-r1: R=2 W=1 c1 total p0/25/50/95/99/max = 48.4/93.2/99.9/127.0/173.5/16077.3 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R0W0-r1: R=0 W=0 c2 total p0/25/50/95/99/max = 44.3/54.7/59.1/71.5/83.1/14682.6 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R3W0-r1: R=3 W=0 c2 total p0/25/50/95/99/max = 41.1/76.0/83.9/113.0/126.7/25776.8 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R2W1-r1: R=2 W=1 c2 total p0/25/50/95/99/max = 35.7/67.2/72.4/87.5/98.6/37682.6 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R0W0-r2: R=0 W=0 c1 total p0/25/50/95/99/max = 42.1/53.4/57.4/68.4/77.8/9743.6 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R3W0-r2: R=3 W=0 c1 total p0/25/50/95/99/max = 45.1/87.2/98.3/122.4/151.7/25738.9 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c1-R2W1-r2: R=2 W=1 c1 total p0/25/50/95/99/max = 44.5/93.3/99.7/125.9/163.4/33678.3 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R0W0-r2: R=0 W=0 c2 total p0/25/50/95/99/max = 44.1/54.4/58.3/69.2/78.0/17460.0 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R3W0-r2: R=3 W=0 c2 total p0/25/50/95/99/max = 41.7/84.1/92.6/112.3/123.7/41285.5 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+c2-R2W1-r2: R=2 W=1 c2 total p0/25/50/95/99/max = 41.5/75.1/82.8/112.2/131.1/105291.2 us refusals=0 bad=0 reins=19881/20000 sep_refused=119 other_refused=0
+lat-finished
+  hold=0ms rep=0: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=1: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=2: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=3: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=4: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=50ms rep=0: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=1: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=2: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=3: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=4: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=200ms rep=0: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=1: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=2: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=3: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=4: total=200.5ms first=200.5ms refusals=0 PURGED 1
+  hold=500ms rep=0: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=1: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=2: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=3: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=4: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=900ms rep=0: total=900.4ms first=900.4ms refusals=0 PURGED 1
+  hold=900ms rep=1: total=900.5ms first=900.5ms refusals=0 PURGED 1
+  hold=900ms rep=2: total=900.5ms first=900.5ms refusals=0 PURGED 1
+  hold=900ms rep=3: total=900.4ms first=900.4ms refusals=0 PURGED 1
+  hold=900ms rep=4: total=900.5ms first=900.5ms refusals=0 PURGED 1
+  hold=1100ms rep=0: total=1100.4ms first=1000.7ms refusals=1 PURGED 1
+  hold=1100ms rep=1: total=1100.4ms first=1000.9ms refusals=1 PURGED 1
+  hold=1100ms rep=2: total=1100.4ms first=1001.2ms refusals=1 PURGED 1
+  hold=1100ms rep=3: total=1100.4ms first=1000.9ms refusals=1 PURGED 1
+  hold=1100ms rep=4: total=1100.4ms first=1001.4ms refusals=1 PURGED 1
+  hold=0ms rep=0: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=1: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=2: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=3: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=0ms rep=4: total=0.1ms first=0.1ms refusals=0 PURGED 1
+  hold=50ms rep=0: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=1: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=2: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=3: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=50ms rep=4: total=50.3ms first=50.3ms refusals=0 PURGED 1
+  hold=200ms rep=0: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=1: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=2: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=3: total=200.4ms first=200.4ms refusals=0 PURGED 1
+  hold=200ms rep=4: total=200.5ms first=200.5ms refusals=0 PURGED 1
+  hold=500ms rep=0: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=1: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=2: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=3: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=500ms rep=4: total=500.4ms first=500.4ms refusals=0 PURGED 1
+  hold=900ms rep=0: total=900.4ms first=900.4ms refusals=0 PURGED 1
+  hold=900ms rep=1: total=900.5ms first=900.5ms refusals=0 PURGED 1
+  hold=900ms rep=2: total=900.5ms first=900.5ms refusals=0 PURGED 1
+  hold=900ms rep=3: total=900.4ms first=900.4ms refusals=0 PURGED 1
+  hold=900ms rep=4: total=900.5ms first=900.5ms refusals=0 PURGED 1
+  hold=1100ms rep=0: total=1100.4ms first=1000.8ms refusals=1 PURGED 1
+  hold=1100ms rep=1: total=1100.4ms first=1000.3ms refusals=1 PURGED 1
+  hold=1100ms rep=2: total=1100.4ms first=1001.0ms refusals=1 PURGED 1
+  hold=1100ms rep=3: total=1100.4ms first=1000.9ms refusals=1 PURGED 1
+  hold=1100ms rep=4: total=1100.4ms first=1000.9ms refusals=1 PURGED 1

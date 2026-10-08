@@ -1,0 +1,11 @@
+CREATED oid=4000
+load INSERTED oid=4000 rows=500 first_id=501 last_id=1000
+DELETED 1000
+PURGED 1000
+count(*)\n0
+reinsert 1 INSERTED oid=4000 rows=500 first_id=1 last_id=500
+one: ERR duplicate primary key 1 already present at page 129 slot 0 (byte 22)
+one: ERR duplicate primary key 2 already present at page 129 slot 1 (byte 22)
+two asc: ERR duplicate primary key 3 already present at page 129 slot 2 (byte 22) (row 1)
+two desc: ERR duplicate primary key 6 already present at page 129 slot 5 (byte 22) (row 1)
+count(*)\n500

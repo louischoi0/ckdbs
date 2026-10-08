@@ -1,0 +1,11 @@
+DELETED 166 PURGED 166
+insert 167 INSERTED oid=4000 id=167 page=132 slot=0
+insert 168 INSERTED oid=4000 id=168 page=132 slot=1
+insert 167 ERR duplicate primary key 167 already present at page 132 slot 0 (byte 22)
+insert 167 ERR duplicate primary key 167 already present at page 132 slot 0 (byte 22)
+insert 332 INSERTED oid=4000 id=332 page=132 slot=2
+insert 250 INSERTED oid=4000 id=250 page=132 slot=2
+insert 167 again ERR duplicate primary key 167 already present at page 132 slot 0 (byte 22)
+rows 160..170: id\n160\n161\n162\n163\n164\n165\n166\n167\n168
+DELETED 68 PURGED 68
+insert 333 (leaf partly purged) INSERTED oid=4000 id=333 page=135 slot=0

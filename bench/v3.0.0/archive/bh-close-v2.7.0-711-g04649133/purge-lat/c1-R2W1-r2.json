@@ -1,0 +1,133 @@
+{
+ "label": "c1-R2W1-r2",
+ "mode": "readers",
+ "cores": 1,
+ "durability": "relaxed",
+ "keys": 60000,
+ "readers": 2,
+ "writers": 1,
+ "wait_s": 5.0,
+ "host_before": {
+  "loadavg": "1.59 1.64 1.89 1/269 2034555",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "mount_ckpt_us": 7562.0,
+ "samples": 20000,
+ "delete": {
+  "phase": "delete",
+  "detail": "",
+  "ops": 20000,
+  "errors": 0,
+  "first_error": null,
+  "elapsed_s": 0.0,
+  "qps": 0.0,
+  "mean_us": 103.7,
+  "p0_us": 46.9,
+  "p25_us": 92.5,
+  "p50_us": 97.9,
+  "p95_us": 124.3,
+  "p99_us": 161.8,
+  "max_us": 17445.7
+ },
+ "delete_to_purge": {
+  "phase": "delete-to-purge",
+  "detail": "",
+  "ops": 20000,
+  "errors": 0,
+  "first_error": null,
+  "elapsed_s": 4.359381,
+  "qps": 4587.8,
+  "mean_us": 113.1,
+  "p0_us": 44.5,
+  "p25_us": 93.3,
+  "p50_us": 99.7,
+  "p95_us": 125.9,
+  "p99_us": 163.4,
+  "max_us": 33678.3
+ },
+ "purge_first_attempt": {
+  "phase": "purge-first-attempt",
+  "detail": "",
+  "ops": 20000,
+  "errors": 0,
+  "first_error": null,
+  "elapsed_s": 4.359381,
+  "qps": 4587.8,
+  "mean_us": 112.7,
+  "p0_us": 44.2,
+  "p25_us": 92.9,
+  "p50_us": 99.3,
+  "p95_us": 125.5,
+  "p99_us": 163.1,
+  "max_us": 33677.0
+ },
+ "refusals": 0,
+ "keys_with_refusal": 0,
+ "bad": 0,
+ "reinserted": 19881,
+ "reinsert_refused_separator": 119,
+ "reinsert_refused_other": 0,
+ "run_s": 4.359,
+ "background": {
+  "reader": [
+   {
+    "phase": "reader",
+    "detail": "",
+    "ops": 55327,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.748725,
+    "qps": 9624.2,
+    "mean_us": 101.6,
+    "p0_us": 48.3,
+    "p25_us": 88.6,
+    "p50_us": 95.4,
+    "p95_us": 124.0,
+    "p99_us": 167.1,
+    "max_us": 33692.1
+   },
+   {
+    "phase": "reader",
+    "detail": "",
+    "ops": 53816,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.74782,
+    "qps": 9362.9,
+    "mean_us": 104.4,
+    "p0_us": 53.2,
+    "p25_us": 90.5,
+    "p50_us": 97.3,
+    "p95_us": 125.0,
+    "p99_us": 172.1,
+    "max_us": 33673.4
+   }
+  ],
+  "writer": [
+   {
+    "phase": "writer",
+    "detail": "",
+    "ops": 56802,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.747292,
+    "qps": 9883.3,
+    "mean_us": 97.8,
+    "p0_us": 42.2,
+    "p25_us": 82.0,
+    "p50_us": 92.6,
+    "p95_us": 119.3,
+    "p99_us": 158.0,
+    "max_us": 33628.4
+   }
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.79 1.68 1.90 1/274 2034582",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ }
+}
