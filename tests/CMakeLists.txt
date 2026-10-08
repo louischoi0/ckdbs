@@ -127,6 +127,7 @@ add_executable(kds_tests
     command_dispatcher_test.cpp
     supplied_key_test.cpp
     sorted_leaf_named_keys_test.cpp
+    purge_key_test.cpp
     sorted_leaf_crash_test.cpp
     sorted_leaf_rig_test.cpp
     tcp_server_test.cpp

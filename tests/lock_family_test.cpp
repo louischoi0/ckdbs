@@ -2156,6 +2156,52 @@ protected:
     }
 };
 
+TEST_F(MidWalkWaitTest, AResumedWriteKeepsTheReadCommittedViewItParkedUnder) {
+    // BH-S1's Census A, row 5: the resume is a re-dispatch, which clears
+    // the statement boundary, and with DDL open on the core `ViewFor` takes
+    // it again - re-minting the READ COMMITTED transaction's registered
+    // view above the snapshot the walk goes on reading at. The horizon then
+    // no longer sees that snapshot, which a `PURGE` on another core reads as
+    // licence to retire a row the walk is still entitled to. Both writes
+    // park, so both resume branches are pinned.
+    for (const char* write : {"UPDATE tb SET v = 1 WHERE v >= 0", "DELETE FROM tb WHERE v >= 0"}) {
+        Session w;
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN ISOLATION LEVEL READ COMMITTED", &w)
+                      .response.rfind("BEGIN", 0),
+                  0u);
+        // DDL open in the transaction, so `ViewFor` takes the boundary.
+        ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE side (id int64) BTREE", &w)
+                      .response.rfind("CREATED", 0),
+                  0u);
+
+        Session holder;
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
+                      .response.rfind("UPDATED", 0),
+                  0u);
+
+        Started walk = Start(write, w);
+        Pump();
+        ASSERT_FALSE(*walk.done) << write << " did not park: " << walk.out->response;
+        ASSERT_NE(w.transaction(), nullptr);
+        const std::uint64_t parked = w.transaction()->view().snapshot_lsn;
+
+        // A commit while it is parked, so a re-mint would land above it.
+        const std::string advanced = Local("INSERT INTO t VALUES (0)");  // an issued key
+        ASSERT_EQ(advanced.rfind("INSERTED", 0), 0u) << advanced;
+        ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+        Pump();
+        ASSERT_TRUE(*walk.done) << write << " never resumed";
+        EXPECT_EQ(walk.out->response.rfind("ERR", 0), std::string::npos) << walk.out->response;
+        EXPECT_EQ(w.transaction()->view().snapshot_lsn, parked)
+            << write << ": the resume re-minted the transaction's registered view above the "
+                        "snapshot its walk reads";
+
+        ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &w).response.rfind("ROLLBACK", 0), 0u);
+        ASSERT_EQ(Local("DELETE FROM t WHERE id > 10"), "DELETED 1");
+    }
+}
+
 TEST_F(MidWalkWaitTest, ATenRowUpdateMeetingAHeldRowKeepsWhatItWroteAndWaits) {
     // AO-5's S3b cell. The holder takes row 7 and does not decide; the
     // ten-row UPDATE walks into it having written six rows.
@@ -2865,6 +2911,86 @@ TEST_F(NamedKeyWaitTest, AnUndecidedInsertItsOwnWriterUpdatedIsStillWaitedOn) {
     Pump();
     ASSERT_TRUE(*wb.done) << "the named insert never resumed after the rollback";
     EXPECT_EQ(wb.out->response.rfind("INSERTED", 0), 0u) << wb.out->response;
+}
+
+// ---- BH: a `PURGE` waits for older readers and undecided deleters --------
+//
+// PU4 and PU5 (`instructions/v3.0.0/workorder-bh-purge-key.md` §2): a key
+// whose deleter some live reader cannot see yet, or whose latest writer is
+// in flight, is waited on, polled, and refused `TxnConflict` at
+// `kPurgeHorizonWait` (1 s). **Red at BH-S1**, committed red as BD-S1's
+// were: until BH-S3, `PURGE` is an unknown head and answers at once.
+class PurgeWaitTest : public LockDeadlockTest {
+protected:
+    // `kPurgeHorizonWait` and one tick past it; BH-S3 names the constant.
+    static constexpr std::uint64_t kPastTheBoundNs = 1'000'000'000 + 1;
+
+    void SetUp() override {
+        LockDeadlockTest::SetUp();
+        // The lock family's fault net is also 1 s by default, so a `PURGE`
+        // bounded by it instead of `kPurgeHorizonWait` - BH-Q3 (c), rejected -
+        // would pass the bound cell unseen. Moved well past the bound here.
+        dispatcher_->set_lock_wait_fault_net_ns(10 * kPastTheBoundNs);
+        ASSERT_EQ(Local("CREATE TABLE tb (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+        ASSERT_EQ(Local("INSERT INTO tb VALUES (5, 1)").rfind("INSERTED", 0), 0u);
+        ASSERT_EQ(Local("INSERT INTO tb VALUES (9, 1)").rfind("INSERTED", 0), 0u);
+    }
+};
+
+TEST_F(PurgeWaitTest, AnOlderRepeatableReadReaderKeepsItsRowAndThePurgeIsRefusedAtTheBound) {
+    // BH-R5's gate, `[quiet-wrong]`: a reader whose snapshot predates the
+    // `DELETE` is entitled to the row, so the slot must not be retired
+    // while it lives - and a retire under it would answer zero rows with
+    // no error.
+    Session reader;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader)
+                  .response.rfind("BEGIN", 0),
+              0u);
+    ASSERT_NE(dispatcher_->Dispatch("SELECT * FROM tb WHERE id = 5", &reader).response.find("5,1"),
+              std::string::npos);
+    ASSERT_EQ(Local("DELETE FROM tb WHERE id = 5"), "DELETED 1");
+
+    Session b;
+    Started purge = Start("PURGE FROM tb WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*purge.done) << "the purge answered over an older reader: "
+                              << purge.out->response;
+    clock_.Advance(kPastTheBoundNs);
+    Pump();
+    ASSERT_TRUE(*purge.done) << "the wait outlived kPurgeHorizonWait";
+    const Status refused = StatusFromErrorReply(purge.out->response);
+    EXPECT_EQ(refused.code(), StatusCode::kTxnConflict) << purge.out->response;
+    EXPECT_TRUE(refused.retryable()) << purge.out->response;
+
+    EXPECT_NE(dispatcher_->Dispatch("SELECT * FROM tb WHERE id = 5", &reader).response.find("5,1"),
+              std::string::npos)
+        << "the older reader lost its row";
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &reader).response.rfind("COMMIT", 0), 0u);
+
+    // The reader gone, nothing holds the horizon below the deleter.
+    EXPECT_EQ(RunAsync("PURGE FROM tb WHERE id = 5", b).response, "PURGED 1");
+    EXPECT_EQ(Local("INSERT INTO tb VALUES (5, 2)").rfind("INSERTED", 0), 0u);
+}
+
+TEST_F(PurgeWaitTest, AnUndecidedDeleteThatCommitsWhileAPurgeWaitsIsPurged) {
+    // The commit arm (BH-S0's review, finding 1): the `PURGE`'s own view is
+    // registered at its `Begin`, before the deleter commits, so without the
+    // re-mint before each judging pass it would hold the horizon below the
+    // deleter forever and be refused at the bound.
+    Session c;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("DELETE FROM tb WHERE id = 5", &c).response, "DELETED 1");
+
+    Session b;
+    Started purge = Start("PURGE FROM tb WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*purge.done) << "the purge answered over an undecided deleter: "
+                              << purge.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &c).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*purge.done) << "the purge never resumed after the deleter's commit";
+    EXPECT_EQ(purge.out->response, "PURGED 1");
+    EXPECT_EQ(Local("INSERT INTO tb VALUES (5, 2)").rfind("INSERTED", 0), 0u);
 }
 
 }  // namespace

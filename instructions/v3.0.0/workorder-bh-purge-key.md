@@ -669,7 +669,9 @@ any commit.
 
 - Autocommit only.
 - A btree user relation only. The system-relation check runs before the
-  heap check, since every system relation is a catalog heap chain.
+  heap check, since every system relation is a catalog heap chain. It asks
+  `catalog::IsSystemNamespace` of the resolved relation's namespace
+  (BH-Q17).
 - The admin role.
 
 **PU10 — The refusals.** Each is returned before the transaction is
@@ -679,7 +681,7 @@ touched, except the last three. Every byte travels in the text as
 | case | code | byte |
 |---|---|---|
 | inside `BEGIN` | `NotImplemented`; the transaction is not poisoned | 0 |
-| a system relation | as `DELETE` refuses one (Census D) | as `DELETE` |
+| a system relation | `Unsupported` (BH-Q17; Census D found `DELETE` refuses one only by accident) | the name |
 | a heap relation | `Unsupported` | the name |
 | no `WHERE` | `NotImplemented` | past the name |
 | a conjunct outside PU1's six forms: another column, `<>`, `IS [NOT] NULL`, `IN`, a function, a subquery, a column-to-column comparison | `NotImplemented` | the conjunct's column, function or literal; a bare subquery's is the `WHERE` token |
@@ -1067,6 +1069,7 @@ per-item mark of the operator's own.
 | BH-Q14 | **The measurement** (§6), once at BH's close, per `CLAUDE.md`'s Session Workflow step 3. New | process | As written | **As written**, adopted 2026-10-08 on the standing go-ahead |
 | BH-Q15 | **The superblock number.** New. Only needed under BH-Q6 (b), since BF-S3 already took 21 | format | Moot under BH-Q6 (a). Under (b): 22, with 21 refused by the standing order | **Moot (BH-Q6 (a))**, adopted 2026-10-08 on the standing go-ahead |
 | BH-Q16 | **Locks** (BH-R4). New, raised by the review.<br>(a) The relation's `IS` and `IX` only; races settled by the leaf latch and the phase-2 skip; an undecided writer polled.<br>(b) As `DELETE`: `Tuple X` for one key and `Range X` for a wider window, held to the end, with the view re-minted after every lock wait | design; **[quiet-wrong]** | (a). Every writer already skips a resolved tombstone (§1.1), and the leaf latch orders an `INSERT` against the retire, so a row or range unit excludes nothing that could change the answer. (b) raises the relation's fence counter for every other writer, and hides a cycle from the wait-for graph: a reader holding the horizon waits on the range unit while the `PURGE` polls on its snapshot | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q17 | **A system relation** (PU9, PU10). New at BH-S1, raised by Census D: `DELETE FROM sys.tables` is not refused by design. The name resolves, and `InitTableAccess` answers `NotFound` *"no columns for this rel_id"*, because a bootstrap relation has no `sys.columns` rows (`catalog.cpp:2199`).<br>(a) An explicit check, `catalog::IsSystemNamespace` on the resolved relation's namespace, refused `Unsupported` at the name's byte, before the heap check.<br>(b) Follow `DELETE`: the same incidental `NotFound` | user-visible | (a). A refusal that comes from a missing catalog row would change the day the catalog learns its own columns, and `NotFound` says the relation is absent when it is not. `Unsupported`, because the catalog's marks are the engine's own purge (§1.2), not the operator's to free. `DELETE`'s accident is outside BH: listed for `known-gaps.md` at BH-S5, and pinned by Census D's cell | **(a)**, adopted 2026-10-08 on the standing go-ahead |
 
 Four items, and two rules, are `[quiet-wrong]`, where a wrong choice turns
 a refusal into a wrong answer:
@@ -1222,3 +1225,169 @@ each for the reason above.
 - **BH-Q0..Q16 are adopted as §5 proposes**, not marked per item. Before
   adopting BH-Q1 and BH-Q16, CLA re-read their premises, which the header
   states. Neither proposal was revised.
+
+### BH-S1 — the census, and red first - 2026-10-08
+
+- **Where:** on `worktree-bh-purge-key` from `10593366`.
+- **Census B, green, as expected.** It ran six cells in
+  `tests/purge_key_test.cpp`, through a test-only seam (`RetireTombstone`)
+  that retires a committed tombstone keyless under its leaf's exclusive
+  hold. Each cell then names the key again with different values. Each
+  consumer answers the new row once and never the old one:
+  - **Index:** probes on the old value, on the new value, and over a range
+    spanning both, plus a join probing through the index.
+  - **Cabin:** a serve on the old value and on the new one.
+  - **Foreign key:** the reverse check, through a stale Cabin entry. The
+    parent the child left is freed, and the parent the child joined is
+    kept.
+  - **Inner build:** the join buckets the row under its new key.
+  - **Assertions:** a group's `COUNT(*) <= 2` and its `SUM(qty) <= 10` each
+    refuse the next row, exactly as a recount says. So the retire wrote no
+    second departure (BH-R8's premise).
+  - **Waystone:** a replayed trail lands where a fresh descent would. The
+    cell is a pk lookup, since a trail never serves a search (invariant 9);
+    its first draft filtered on a non-pk column and read no trail.
+  - The index, Cabin, foreign-key, inner-build and Waystone cells each
+    assert that their consumer ran: `index_scanned=`, a Cabin hit,
+    `inner_built=1` or `replays=`. Without that, a cell could pass on a
+    plain walk. The assertion cells need no such check, because the
+    refusal is the consumer's own answer.
+- **Census C, run** over `src/ include/ docs/spec/ docs/rules/ manual/
+  CLAUDE.md` at `10593366`, by line and across line breaks.
+  - 39 sentences become false once `PURGE` exists, and each is listed for
+    BH-S5 with the text it should carry. Every other hit stays true: about
+    issued ids, catalog ids, oids, group ids, pages, timers or persisted
+    enum numbers.
+  - **Not in §1.9, and added to BH-S5's list:**
+    - `manual/sql/sql.md:541-542` (*"a deleted pk cannot be re-supplied"*);
+    - `include/kds/storage/btree/btree.hpp:150-152`, which quotes the
+      duplicate text;
+    - `CLAUDE.md:73`'s *"stays bound for the relation's life"*, which the
+      grep's phrase does not match.
+  - **Added to §1.10:** `catalog.cpp:2078`'s *"what nothing purges"*, which
+    the catalog's own `PurgeSettledDeleteMarks` (`catalog.cpp:1059`)
+    already contradicts.
+  - **Line drift since `0446b3b0`:**
+    - `step_vm.cpp:1473` and `:1607` (were `:1439` and `:1574`);
+    - `rows.hpp:857` (was `:832`);
+    - `cabin_bound_page.hpp:31` (was `:30`);
+    - `sql.md:604-605` ("Nothing purges."), `:1044` (the head list) and
+      `:1017-1060` (§8).
+  - **BH-R12's done-when grep is widened** by *"relation's life"*,
+    *"nothing reclaims"*, *"lifetime of a relation"*, *"names a
+    different"*, *"mean a different row"* and *"never reissue"*. It is run
+    across line breaks, because `sql.md:604-605` and `cabin.md:104` break
+    inside a phrase.
+- **Census D, answered.** `DELETE FROM sys.tables` is not refused by
+  design.
+  - The name resolves, and `InitTableAccess` answers `NotFound` *"no
+    columns for this rel_id"* (`catalog.cpp:2199`), because a bootstrap
+    relation has no `sys.columns` rows.
+  - There is nothing deliberate for PU10 to follow, so **BH-Q17** is
+    written and adopted: an explicit `IsSystemNamespace` check, refused
+    `Unsupported` at the name.
+  - `CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident` pins the
+    accident.
+- **Red, committed red:**
+  - `PurgeKeyTest.APurgedKeyIsNamedAgainAndPlaced`;
+  - `PurgeWaitTest.AnOlderRepeatableReadReaderKeepsItsRowAndThePurgeIsRefusedAtTheBound`;
+  - `PurgeWaitTest.AnUndecidedDeleteThatCommitsWhileAPurgeWaitsIsPurged`
+    (the commit arm).
+
+  Each answers *"ERR unknown command"* at `10593366`.
+- **Guard, green:** `SortedLeafSqlTest.ADeletedKeyNamedAgainIsAlreadyExists`.
+- **The baseline suite at `10593366`** passed 3274 of 3275 cells. The one
+  failure is
+  `TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`:
+  its fixed port 25432 is held by a `kds_server` that this session did not
+  start. The failure is environmental and is repeated on every run below.
+- **Census A, run** (read at `10593366`, by a read-only survey that CLA
+  checked against the code before acting on it). It rests on how
+  `ResolvedForEveryReader` reads a view (`manager.cpp:807-833`):
+  - **A future registered mint is covered.** `MintReadView` lowers its
+    core's slot before it reads the ceiling, and the gate reads
+    `PendingCommitBound`.
+  - **An unregistered view is not covered.** So each kind of unregistered
+    view was shown safe on its own argument.
+
+  Eleven view kinds and seven spill-decoding sites. **One row was open, and
+  it is closed at this stage:**
+  - **Row 5: a write parked mid-walk inside a READ COMMITTED transaction,
+    then resumed.**
+    - The resume is a re-dispatch. `DispatchInner` clears
+      `statement_boundary_taken_` (`command_dispatcher.cpp:1046`).
+    - With DDL open on the core, `ViewFor` → `EnsureStatementBoundary`
+      re-mints the transaction's registered view (`:6063-6082`). The walk
+      meanwhile goes on reading at the parked snapshot.
+    - The horizon then no longer sees that snapshot, so a `PURGE` on another
+      core could retire a row the walk is entitled to. The same gap already
+      lets undo recycling pass under the walk's snapshot, since that is
+      bounded by the same horizon. So this was a latent defect before BH,
+      **fixed in the session that found it, so it gets no bug entry**.
+    - **Fix:** both resume branches mark the boundary as taken, because the
+      resume is the same statement.
+    - **Cell:** `MidWalkWaitTest.AResumedWriteKeepsTheReadCommittedViewItParkedUnder`,
+      over both `UPDATE` and `DELETE`. It was **killed with the fix
+      removed**: both arms red, then the file was restored from a copy.
+  - **Safe, each on its own argument:**
+    - Registered, so the gate sees them: explicit transactions, the
+      autocommit `SELECT` lease, and the `PURGE`'s own view, provided
+      BH-S3 re-mints it before each judging pass.
+    - Covered by the owned transaction's earlier `Begin`, which stays in
+      `live_`: the autocommit `UPDATE`/`DELETE` copy of `snap`. This is
+      **fragile**: it rests on `BeginWrite` running before `SnapshotFor`.
+      BH-S3 pins that ordering with a comment at both sites.
+    - Read only the header, or only `kLive` rows: the latest-state check
+      views (foreign keys, the Cabin build, the assertion build, the
+      catalog).
+    - No manager, so no `PURGE`: `ReadView::Everything()`.
+    - Excluded by the relation's `X`: `CREATE INDEX`'s backfill, which takes
+      no view and resolves tombstone spills after releasing the leaf.
+  - **What BH-S3 inherits.** The `PURGE` must hold its relation's
+    `IS`/`IX` **through its last spill release**, because the backfill
+    and the assertion build are safe only because their `X` excludes it.
+  - **Every spill-decoding site of the step VM classifies first and reads
+    under the leaf's hold**: walk, point, index, Cabin serve, Waystone
+    replay and inner build. A purge's release follows its retire, which
+    needs the leaf exclusive. So no site reads a released spill.
+
+### BH-S1's review - 2026-10-08
+
+One `critics-developer` pass over BH-S1's diff at `10593366`.
+
+**Correctness: four findings, all applied by the reviewer and re-run green
+by CLA.**
+
+1. **The Waystone cell never read a trail.** It filtered on a non-pk
+   column, and a trail serves only a lookup or a probe (invariant 9,
+   `IsTrailReplayable`). It also ran the query twice, where a replay needs
+   a third run. It is now a pk lookup, run three times, with `replays=`
+   asserted before the retire and the trail asserted consulted after.
+2. **Every other Census B cell could pass on a plain walk.** Each now
+   asserts its consumer ran:
+   - `index_scanned=` for the index probe;
+   - the Cabin store's `hits` for the serve and for the foreign-key reverse
+     check;
+   - `inner_built=1` for the inner build.
+3. **Refusals asserted only an `ERR` prefix.** They now assert
+   `FK_VIOLATION` and `ASSERTION_VIOLATION`.
+4. **`kPastTheBoundNs` was also just past the lock family's 1 s fault
+   net**, so a `PURGE` bounded by the net, which BH-Q3 (c) rejects, would
+   have passed unseen. `PurgeWaitTest` raises the net tenfold.
+
+**Checked and sound:** the resume fix and its cell, the seam, the red
+cells against PU1-PU12 and BH-R11, and a spot-check of §7's citations.
+One citation drift was corrected.
+
+**Simplifications:**
+- **Applied:** the two assertion cells are merged into one over
+  `COUNT(*) <= 2` and `SUM(qty) <= 10`.
+- **Taken at BH-S3:**
+  - once `PURGE` exists, Census B's cells go through the statement and the
+    seam is deleted, leaving one cell set over the real writer;
+  - `kPastTheBoundNs` becomes `kPurgeHorizonWait + 1`.
+- **Rejected:**
+  - **De-duplicating the test-local `Ids` and `Placed` helpers.** They are
+    file-local, as in `sorted_leaf_named_keys_test.cpp`.
+  - **`PurgeWaitTest` deriving from `LockDeadlockTest`.** That is
+    `MidWalkWaitTest`'s convention.

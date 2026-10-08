@@ -7345,6 +7345,13 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // would say this statement had written nothing.
         statement_trail_mark_ = parked.trail_mark;
         context = parked.context;
+        // **And so is its statement boundary** (BH-S1, Census A row 5). The
+        // re-dispatch cleared it, and a READ COMMITTED transaction would
+        // otherwise re-mint its registered view at the next `ViewFor`
+        // while this walk goes on reading at `snap` - a view the horizon no
+        // longer sees, so a `PURGE` on another core could retire a row
+        // this statement's snapshot is still entitled to.
+        statement_boundary_taken_ = true;
         session.clear_parked_write();
     } else {
         auto opened = BeginWrite(session);
@@ -9102,6 +9109,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
         resume_from = parked.cursor;
         statement_trail_mark_ = parked.trail_mark;
         context = parked.context;
+        statement_boundary_taken_ = true;  // `HandleUpdate`'s resume, for its reason
         session.clear_parked_write();
     } else {
         auto opened = BeginWrite(session);
