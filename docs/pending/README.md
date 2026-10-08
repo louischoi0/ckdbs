@@ -24,3 +24,4 @@ entry.
 | entry | subject | raised |
 |---|---|---|
 | `session-load-balancing.md` | Moving a session between cores after it is accepted, instead of pinning it to the accepting core for its life | 2026-10-08 |
+| `v20-insert-slowdown.md` | xrock's trade load ran ~3x slower after the move to superblock 20; the first pass found the comparison confounded and the exact investigation deferred | 2026-10-08 |
