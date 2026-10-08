@@ -20,7 +20,9 @@ gate, the walk and the mount-time reclaim. **BF-S4 is built:** the sim's drop op
 its owner census, and the two-core rigs. **BF-S5 is built:** the statement
 epoch, the commit arms and the reclaimer's inbox, so a drop committed in
 the run is freed in the run, and BF-Q11 (a)'s second RESTRICT ask and the
-child's parent `IS`.
+child's parent `IS`. **BF is closed (BF-S6, 2026-10-08)** with the text
+restated; its overhead measurement was waived by the operator and not
+executed.
 
 - BF-S0 moved no file under `src/`, `include/` or `tests/`, and no suite
   ran.
@@ -2142,3 +2144,50 @@ correctness sound, no edit made.
   changes nothing it proves.
 
 **Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S6 - the close - closed 2026-10-08
+
+- **Where:** on `worktree-drop-table-page-reclaim`. The text landed at
+  `c2ce15c3`; BF's code is final at `f2de416c` (BF-S5), and BF-S6 moved no
+  line of it, only comments.
+
+**The stages:**
+
+| Stage | Commit | What landed |
+|---|---|---|
+| BF-S0 | `df741e3c` | the order, reviewed, BF-Q0..Q18 proposed |
+| BF-S1 | `970feb5f` | the censuses, the premise (it held), five red cells; the root growth's log cut filed |
+| BF-S2 | `805e6c9a` | `FreePage`, the free list, the map write barrier; `EvictClean` deleted |
+| BF-S3 | `f41ac53d` | the tombstone's roots (superblock 21), the replay gate, the owner-checked walk, the mount-time reclaim, BF-R10's defence checks |
+| BF-S4 | `535313c0` | the sim's drop op and owner census, the two-core rigs; the gate moved to the recovery scan's end |
+| BF-S5 | `f2de416c` | the statement epoch, reclaim within the run, BF-Q11 (a) |
+| BF-S6 | `c2ce15c3` | the text (BF-R13) |
+
+**What BF carries:** a dropped relation's pages go back to the allocator
+once no replay and no reader can reach them: at mount for a tombstone the
+mount finds, and within the run for a drop committed there, under the
+statement epoch. `drop-table.md` DT1 states what is reclaimed;
+`known-gaps.md` "Page reclamation" states what is not - the pages no root
+reaches, the `cores > 1` wait for every core's first checkpoint, the free
+list a crash forgets, the in-run gate's delay, a refused reclaim's
+re-drive, `SHOW PAGE` of a reused id, and the per-page checks not built.
+
+**Review:** `critics-developer` on the text: nine wording fixes, three of
+them false statements (a refused reclaim's re-drive, a rolled-back
+`CREATE INDEX`'s tree, the superblock latch's citation). Its one open item,
+`expeditor.cpp`'s "nothing calls the sweep", was restated by CLA.
+
+**Suite:** at `c2ce15c3`, 3255 of 3256 plain and 3255 of 3256 with
+`KDS_TEST_PAGE_LATCH=1`. The one failure,
+`TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`,
+is an unrelated `kds_server` on the host holding the test's hard-coded
+port 25432.
+
+**The measurement (BF-Q15) was not executed.** The operator waived it on
+2026-10-08 (*"measurement 스킵하고 다음 단계 ㄱㄱ"*, "skip the measurement,
+go to the next step") while `ck-tester` was mid-run. The run was stopped
+and its partial output discarded unread, so nothing from it is reported.
+**BF closes with its overhead unmeasured**: what BF adds to every page
+creation (the free-list check, BF-R6), to every statement head (two stores
+and a fence, BF-R9) and to every bind (two owner reads, BF-R10) has no
+number, and no regression claim is made either way.
