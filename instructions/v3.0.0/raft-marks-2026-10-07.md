@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20) and `worktree-drop-table-page-reclaim` (§21-§22) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20), `worktree-drop-table-page-reclaim` (§21-§22) and `worktree-bg-scan-ring-order` (§23-§24) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -206,3 +206,22 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BF-Q0: yes** - BF opens with BF-S0..S6 and BF-R1..R13 as written. **BF-Q1 (b):** the mount first, then within the run (BF-S5). **BF-Q2 (a):** a free is crash-safe once `D` is past the drop; no WAL record added. **BF-Q3 (a):** the roots wait in the tombstone's word. **BF-Q4:** superblock 21, version 20 refused (§11). **BF-Q5 (c):** the walk reclaims; the owner census is the sim's oracle. **BF-Q6 (i):** an in-memory free list ahead of the cursor. **BF-Q7 (a):** a freed page's frame is discarded, `EvictClean` deleted. **BF-Q8 (a):** what the walk reaches. **BF-Q9 (b):** the statement epoch, published before the schema word is read. **BF-Q10 (a):** all three defence checks. **BF-Q11 (a):** the RESTRICT window fixed in BF-S5. **BF-Q12 (a):** the code governs; the autocommit specs are restated. **BF-Q13:** the counters, no key, `kReclaimBatchPages` a constant. **BF-Q14 (a):** BF-S2 after BE-S2, and against the map-keyed table if BE stops at BE-S1. **BF-Q15:** measured once at BF's close. **BF-Q16 (a):** core 0's system tick. **BF-Q17 (a):** BF answers DT1's gate 3 and horizon preconditions for a dropped relation. **BF-Q18 (c):** a chain freed tail-first. Five of these are `[quiet-wrong]`: BF-Q1, Q2, Q9, Q11 and Q17 |
 | **Does not settle** | BF-S1's start; BF-S1's premise gate on BF-R4's `cores > 1` arm, where BF stops and the operator rules; the push |
 | **Recorded at** | the order's header (W1), §2's heading, §4 and §6; `index.md`'s BF row |
+
+## 23. BG's order written
+
+| | |
+|---|---|
+| **Word** | *"write the scan ring work order"* |
+| **Mark** | `workorder-bg-scan-queue.md` is written as BG-S0 on `worktree-bg-scan-ring-order` from `cd8ca91e`, reviewed, and not opened. It answers BE's close finding of partial scan resistance, the case BE-Q7 named. No engine file moves |
+| **Reading** | "The scan ring" read as the order BE-Q7 said would follow, not as a fixed mechanism. BG-Q1 puts the operator's words - (b), the slot ring for executor scans - beside CLA's proposal (a), a scan queue inside the store |
+| **Does not settle** | BG-Q0..Q8 |
+| **Recorded at** | the order's header and §6, and `index.md`'s BG row |
+
+## 24. BG opened, BG-Q0..Q8 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"mark BG-Q0..Q8 as proposed"* |
+| **Mark** | **BG-Q0: yes** - BG opens with BG-S0..S4 and BG-R1..R5 as written. **BG-Q1 (a):** a scan queue the reclaim reads before the hand. **BG-Q2 (a):** the slot ring retired, its consumers on the queue. **BG-Q3:** promotion at the head, the counter kept. **BG-Q4:** `kRing` stays distinct from `kScan`. **BG-Q5:** no keys; `kds.scan_ring_frames` deleted from `eviction.md` §6. **BG-Q6:** BG-S4's bar as §4 states it after BG-S0's review. **BG-Q7:** either order against BF. **BG-Q8:** measured once at BG's close |
+| **Does not settle** | BG-Q9, the queue's floor, which BG-S0's review added after the word was given; BG-S2 waits for it. BG-S1's premise gate, where BG stops for a ruling |
+| **Recorded at** | the order's header (W1), §2's heading and §4; `index.md`'s BG row |
