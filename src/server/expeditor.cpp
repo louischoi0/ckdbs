@@ -884,6 +884,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         &expeditor->clock_);
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
+    // BF-R4's gate for a tombstone this mount finds pending: the log's
+    // append point with the scan and its undo done.
+    expeditor->reclaim_gate_ = expeditor->wal_->appended_lsn();
 
     // RV3 D3a: redo just mutated catalog pages under a catalog constructed
     // above it. Nothing reads a catalog row between construction and here
@@ -1099,6 +1102,17 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         return s;
     }
 
+    // **DROP TABLE page reclamation, collected** (BF-R8): after the
+    // completion checkpoint, which is what moves `D` past this mount's scan
+    // at `cores = 1`, and before any listener binds. Executed on core 0's
+    // system tick, never here, so a mount does not grow by what was dropped.
+    expeditor->reclaimer_.emplace(expeditor->database_->catalog, *expeditor->store_,
+                                  expeditor->reclaim_counters_, &*expeditor->logger_);
+    if (Status s = expeditor->reclaimer_->CollectAtMount(expeditor->reclaim_gate_); !s.ok()) {
+        return s;
+    }
+    expeditor->dispatcher_->SetReclaimCounters(&expeditor->reclaim_counters_);
+
     // PHY01's collector, wired to both feeders: every core's dispatcher
     // touches S1/S2 per successful SELECT, the one Cabin store forwards S3
     // from its counting sites. One construction site, the config's clock
@@ -1199,6 +1213,12 @@ OptimizerSurface Expeditor::Optimizer() {
     }
     surface.view_latch = config_.cores > 1 ? &cabin_view_latch_ : nullptr;
     return surface;
+}
+
+Status Expeditor::ReclaimStep() {
+    // `D` is the anchor's durable redo start, 0 until the completion
+    // checkpoint publishes - the safe direction (BF-R4).
+    return reclaimer_->Step(checkpoint_anchor_->durable_redo_start());
 }
 
 Status Expeditor::Checkpoint() {
@@ -1788,6 +1808,7 @@ Status Expeditor::Start() {
                 !s.ok()) {
                 return s;
             }
+            core.value()->dispatcher().SetReclaimCounters(&reclaim_counters_);
             cores_.push_back(std::move(core.value()));
         }
 
@@ -1936,6 +1957,17 @@ Status Expeditor::Start() {
     // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
     // it real numbers; a cadence key follows with EVT04's protocol.
     constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]
+    // **DROP TABLE page reclamation** (BF-R8, BF-Q16 (a)): one bounded step
+    // per tick on core 0's `system` group, a predicate and a return when no
+    // tombstone is owed. A failed step is logged and the next tick retries.
+    constexpr sched::MonoTimeNs kReclaimIntervalNs = 50'000'000;  // 50 ms, the drain's
+    scheduler.SubmitEvery(kReclaimIntervalNs, [this] {
+        if (reclaimer_->jobs() == 0) return;
+        if (Status s = ReclaimStep(); !s.ok() && logger_->enabled(LogLevel::kWarn)) {
+            logger_->Warn("reclaim", "reclaim step failed: " + s.message());
+        }
+    });
+
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
         auto drained = store_->DrainDirtyEvictionQueue();
         if (!drained.ok() && logger_->enabled(LogLevel::kWarn)) {

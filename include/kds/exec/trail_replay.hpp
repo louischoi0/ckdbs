@@ -53,12 +53,13 @@
 // Until a mover exists every comparison is between two zeros; the
 // hand-bumped-epoch contract test is what proves the check would fire.
 //
-// **That a page still belongs to the relation it was recorded from.**
-// `Build()` checks `entry.rel_oid` against the step's, which is a check
-// against the *query*, not against storage: nothing asks the page which
-// relation owns it, because nothing can. Sufficient only while pages are
-// never freed and reallocated between relations - i.e. until `DROP TABLE`
-// or page reuse exists.
+// **That a page still belongs to the relation it was recorded from** is two
+// checks. `Build()` checks `entry.rel_oid` against the step's - a check
+// against the *query* - and the verifier then checks the page's class and
+// `owner_oid` against the step's relation (BF-R10), so an entry naming a
+// page a dropped relation's reclaim freed and another relation reused is a
+// miss. The authority is that no reader reaches a freed page (BF-R8); the
+// owner check is defence.
 //
 // Concurrency: built and read on one core, immutable once built.
 

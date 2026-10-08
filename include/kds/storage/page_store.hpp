@@ -301,6 +301,16 @@ public:
     };
     virtual MapResidency map_residency() const noexcept { return {}; }
 
+    // BF-R11's store half, for `SHOW META`: pages allocated now, pages
+    // `FreePage` has freed, and creations served from its free list rather
+    // than the cursor. Zero for a store that cannot free.
+    struct AllocationCounters {
+        std::uint64_t allocated = 0;
+        std::uint64_t freed = 0;
+        std::uint64_t reused = 0;
+    };
+    virtual AllocationCounters allocation_counters() const noexcept { return {}; }
+
     // ---- The raw seam: protected since MG06 ----------------------------
     //
     // What a store implements - and, since MG06, *only* what a store

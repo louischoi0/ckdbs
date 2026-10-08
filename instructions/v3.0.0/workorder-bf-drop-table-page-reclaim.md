@@ -15,7 +15,8 @@ recorded at §21.
 stop until milestone, follow CLA proposal if decision needed"*. Each stage's
 row in §6 says where it stands. **BF-S1 is built:** the censuses, the
 premise, which held, and the red cells. **BF-S2 is built:** the free
-primitive, the free list and the map write barrier, with no caller yet.
+primitive, the free list and the map write barrier, with no caller yet. **BF-S3 is built:** the carrier, the
+gate, the walk and the mount-time reclaim.
 
 - BF-S0 moved no file under `src/`, `include/` or `tests/`, and no suite
   ran.
@@ -1641,5 +1642,200 @@ cells pass five runs over with the bound in place.
 - **Left to BF-S6:** `allocated_pages()`'s "printed by SHOW META" (true
   from BF-S3), and `catalog.cpp:1226` and `eviction.md:114`, which still
   name `EvictClean`.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S3 - the carrier and the mount-time reclaim - built 2026-10-07
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `805e6c9a`.
+
+**Code:**
+- **The carrier (BF-R2, BF-Q4).**
+  - `SysObjectRow::rel_id` is renamed `pending_roots`, at the same offset.
+    `PackPendingRoots` and `UnpackPendingRoots` pack the anchor into the
+    high half and the var-heap root into the low half by shift and mask.
+  - `Catalog::DropTable` reads the relation's `sys.tables` row before it
+    writes anything, and its retype stores the packed roots. A rollback
+    therefore restores 0 with the rest of the row.
+  - `Catalog::PendingReclaims` lists every tombstone whose word is nonzero.
+  - `Catalog::ClearPendingRoots` overwrites the word to 0, logged with
+    `kNoTxnId` and keeping the row's stamp, and moves no schema word.
+  - `sys.objects`' view keeps the column name `rel_id`. A live table, the
+    only kind it lists, reads 0 there.
+  - **Superblock 21**, with its version-list entry; 20 is refused.
+- **The reclaim (BF-R3, R4, R7, R8),** `server/page_reclaim.{hpp,cpp}`.
+  - `PageReclaimer::CollectAtMount(gate)` queues the pending tombstones.
+  - `Step(D)` does nothing for a job until `D` reaches the job's gate.
+    Then it walks the job, at most `kReclaimBatchPages` (64) page reads a
+    step:
+    - the anchor;
+    - the clustered tree by descent, plus its leaf chain, which reaches a
+      leaf a failed promotion left (BF-S1's Census D);
+    - every tree an anchor slot names (`AnchorIndexSlots`, new), plus its
+      right-sibling chain;
+    - a pre-SUS-1 heap chain;
+    - the var-heap chain.
+  - **Every page is checked** for the class its parent names, its level
+    included, and for its owner, which is the slot's index oid on an index
+    page. A page that fails the check is counted `reclaim_skipped` and is
+    neither freed nor descended through. A page already free is passed
+    over. A page a descent reaches twice refuses the job.
+  - **The plan frees children before parents:** every tree's leaves, then
+    each internal level in turn, with a `PersistMaps` after each level;
+    each chain tail-first, one sync a page (BF-Q18 (c)); the anchor last,
+    then a sync.
+  - Only then is the tombstone's word cleared. A deferred free ends the
+    step, and the next step asks again.
+  - A refused job is logged, counted `reclaim_refused` and left pending
+    for the next mount.
+  - A fault the pool refuses (`ResourceExhausted`) defers the walk to the
+    next step.
+  - A reused anchor reads as a completed reclaim, because the anchor is
+    freed after every other page.
+- **The gate for a tombstone a mount found pending** is the log's append
+  point once recovery returns. Every record that names the relation's
+  pages lies below it, and at `cores = 1` the completion checkpoint's redo
+  start reaches it.
+- **Expeditor.**
+  - It collects after the completion checkpoint and before any listener
+    binds.
+  - `ReclaimStep()` runs on core 0's `system` tick every 50 ms (BF-Q16
+    (a)), as one predicate and a return when nothing is owed.
+  - `D` is the checkpoint anchor's durable redo start.
+- **`SHOW META` (BF-R11)** prints `pages_allocated`, `pages_freed` and
+  `pages_reused` from a new `PageStore::allocation_counters()`, and, on
+  every core of an assembled instance, `reclaim_pending`,
+  `reclaim_deferred`, `reclaim_skipped` and `reclaim_refused`.
+  `reclaim_refused` is the fourth counter, beside BF-R11's three: a refused
+  walk stays pending (BF-S6's known-gaps line), and the count is how an
+  operator sees one.
+- **BF-R10.**
+  - A statement's bind checks that each relation's anchor and first page
+    still carry its oid (`StillOwned`, once per bind).
+  - `VerifyTupleAt` takes the expected relation's oid. It answers the new
+    miss `kNotThisRelation` unless the page is `kHeap` or `kBtreeLeaf`
+    carrying that oid. Every caller passes it: the probe memo, Waystone
+    replay, the inner build's btree and heap arms, the Cabin serve's two
+    phases, the reverse foreign-key Cabin path, and the optimizer's heal.
+  - The heap inner-build arm now goes through the verifier and refuses
+    `Corruption` on a miss: its location is this statement's own.
+  - `ReadTuple` refuses `Corruption` for a slot whose offset and length
+    leave the page, or whose payload is longer than its tuple.
+- **The texts this stage's code changed** are restated:
+  - `tuple_verify.hpp` and `trail_replay.hpp`'s "nothing can";
+  - `catalog.hpp`'s "Pages are NOT reclaimed";
+  - the drop's log line, now "its pages are reclaimed at the next mount".
+
+**Cells** (`tests/drop_table_reclaim_test.cpp`):
+- **BF-S1's five red cells are green.** `Settle` drives the reclaim tick,
+  where BF-S1 left a stated no-op. In the leak cell, five rounds now grow
+  the volume by less than one round's relation.
+- **The gate at `cores = 2`:** 32 steps after a two-core mount free
+  nothing, and a crash in the wait mounts.
+- **Cut anywhere:**
+  - A relation of two levels, with a var-heap chain and an index, is
+    dropped beside a live relation.
+  - Every point a crash can cut the reclaim is taken as a crash image:
+    after each free, after each sync, and on each side of the clear.
+  - Each image is mounted, and its mount finishes the reclaim: every page
+    of the ledger is free, the live relation is whole, nothing is refused,
+    and the index's pages are freed too.
+  - The cell runs twice. The second pass also flushes the map at every
+    free, as another core's checkpoint would.
+- **Reuse before the clear:** the freed ids go to a new relation before
+  the clear, and the crash comes after. The re-drive frees none of that
+  relation's pages, and its rows are whole.
+- **A relaxed drop crashed before its commit is durable** is a loser: its
+  word is restored, nothing is owed, and the relation is whole. The cell
+  asserts that recovery found the loser.
+- **A heap relation's chain** is walked from its anchor and freed (BF-Q8
+  (a): one cell, no crash matrix).
+- **`StillOwned`** has no cell that reaches it here: no statement of a
+  mount's run can reach a mount-found tombstone. BF-S5's in-run cells are
+  its killers.
+
+**Suite:** 3245 of 3245, plain, and 3245 of 3245 with
+`KDS_TEST_PAGE_LATCH=1`, which skips its usual three cells. BF-S1's five red
+cells are green. The waystone, index, cabin and inner-build contract suites
+are among the 3245, unchanged and passing.
+
+**Mutations**, each built and run three times against BF's cells:
+
+| mutation | killed by |
+|---|---|
+| the gate removed | the `cores = 2` gate cell |
+| the owner check removed (anchor, tree and chain) | the reuse-before-the-clear cell |
+| the tombstone cleared before the anchor's sync | the cut cell, at "after the clear" |
+| a chain freed head-first, a sync a page | the cut cell |
+| a chain freed head-first, one sync at its end | the cut cell's map-flushed pass |
+| the verifier's owner check removed | BF-S1's verifier cell |
+| `ReadTuple`'s bound removed | BF-S1's `ReadTuple` cell |
+| the bind's root check removed | **survives here**, as stated: no statement of a mount's run reaches a mount-found tombstone; BF-S5's in-run cells are its killers |
+
+**Not expressed as a mutation:**
+- **"The free run inside the drop".** Nothing in the drop frees, so there
+  is no line to move. The guards that would catch such a free are
+  `ARolledBackDropLeavesTheRelationWholeAcrossARestart` and the
+  relaxed-drop cell, because a drop that freed its own pages would leave a
+  rollback or a loser over freed pages.
+- **"A tree freed in one pass"** would survive every cell here, and the
+  reason is stated rather than hidden. On a volume of one map region, a map
+  flush writes the region's one page whole, and the plan frees children
+  before parents, so every flush lands a prefix of the plan. The per-level
+  syncs matter where a tree spans regions - a volume past 65,280 pages -
+  and no cell builds one.
+
+**Review:** (`critics-developer`, one pass).
+**Correctness:** sound. The gate, the walk - index oids
+discriminated by class, a missing var-heap, a re-drive's freed and reused
+pages, a reused anchor read as done - and the clear's stamp were each
+checked against the code.
+**Fixed by the review:**
+- a data race: `allocation_counters()` read `allocated_pages_` with no
+  latch, and `SHOW META` runs on any core; it is now read with the other two
+  under one map hold;
+- six comments the diff made false.
+
+**Taken as CLA proposed under §23:**
+- **BF-R10's walk check** is one root check per bind (`StillOwned` in the
+  step VM's `Bind`). The relation's anchor and its first page must still
+  carry its oid; otherwise the statement answers `NotFound`, "its page …
+  was reclaimed", rather than reading another relation's rows. That is
+  where every descent and walk starts. A per-page owner check inside the
+  btree descent, the chain walks and the var-heap fetch is **not built**:
+  each would take the relation's oid through an interface that does not
+  carry it today. Those reads are reached only from a bind this check has
+  passed, and from the verifier, which checks the owner itself.
+- **A refused fault** (`ResourceExhausted`, BE-R4) defers the walk, as
+  BF-R3 says, instead of refusing the job.
+- **The cut cell runs twice**, the second pass flushing the map at every
+  free, so a chain freed head-first with one sync at its end is caught.
+- **The reuse cell asserts `reclaim_skipped > 0`**, so the owner check is
+  exercised whatever ids the allocator hands out.
+- **The relaxed-drop cell** is rewritten to log the drop before its
+  unflushed relaxed commit, and asserts the loser it recovers. As first
+  written it never put the drop in the log, and so tested nothing.
+- The `by_link` test is kept in one place, and the heap root no longer
+  recurses.
+
+**Declined:**
+- dropping the `kClear` and `kRefused` phases and making `Step` return
+  `void`: a refused job stays in `jobs()` so a later step can read its
+  state, and `Step`'s status is what BF-S5's inbox drain returns through;
+- moving `ReclaimCounters` to a header of its own, which buys nothing at
+  four counters;
+- ending a step after each chain sync to spare core 0 the fsyncs. A chain
+  page costs a sync by BF-Q18 (c), and the batch bound already caps a step
+  at 64 of them.
+
+**Recorded rather than fixed:**
+- the cell gaps BF-R12 names that later stages own: a crash at `cores = 2`
+  once the gate has passed (BF-S4's two-core serving cell), a parked
+  `FlushMaps` (BF-S2's barrier cell is the mechanism's), and the Waystone
+  directory (BF-S2's zero-write and zero-slot cells);
+- the equal-sort-keys index bug, should it make two descents reach one
+  child, would refuse the reclaim - never free twice - which BF-S6's
+  known-gaps entry says;
+- `reclaim_refused` is the fourth reclaim counter beside BF-R11's three.
 
 **Overhead not measured;** BF-Q15 measures it at BF's close.

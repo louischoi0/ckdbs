@@ -1,4 +1,5 @@
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/page_reclaim.hpp"
 #include "kds/server/read_borrow.hpp"
 
 #include "kds/txn/lock_table.hpp"
@@ -1309,6 +1310,21 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     os << " map_regions=" << map.regions << " map_pages_resident=" << map.resident_pages
        << " map_coverage_ids=" << map.coverage_ids
        << " headerless_pages=" << (map.has_headerless ? 1 : 0);
+
+    // **DROP TABLE page reclamation** (BF-R11): the store's counts, beside
+    // the map's, and the reclaim's own where an instance runs one. A
+    // plateau in `pages_allocated` with `pages_reused` rising is what says
+    // a create-drop workload reuses rather than grows - the undo pages'
+    // precedent below.
+    const auto allocation = page_store_.allocation_counters();
+    os << " pages_allocated=" << allocation.allocated << " pages_freed=" << allocation.freed
+       << " pages_reused=" << allocation.reused;
+    if (reclaim_counters_ != nullptr) {
+        os << " reclaim_pending=" << reclaim_counters_->pending.load(std::memory_order_relaxed)
+           << " reclaim_deferred=" << reclaim_counters_->deferred.load(std::memory_order_relaxed)
+           << " reclaim_skipped=" << reclaim_counters_->skipped.load(std::memory_order_relaxed)
+           << " reclaim_refused=" << reclaim_counters_->refused.load(std::memory_order_relaxed);
+    }
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
     // live pages plateauing under a write-heavy loop is the feature, and
@@ -2695,7 +2711,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "dropped table " + stmt.table_name + " (oid " +
                                   std::to_string(oid.value()) +
-                                  "); pages orphaned pending reclamation");
+                                  "); its pages are reclaimed at the next mount");
         }
         return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
     });

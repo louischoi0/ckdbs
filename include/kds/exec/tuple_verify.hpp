@@ -51,13 +51,21 @@
 // of one page and is harmless anyway - a wrap collision merely readmits a
 // location to the id check.
 //
-// ---- What this deliberately does not check -------------------------------
+// ---- The class and owner check (BF-R10) ------------------------------------
 //
-// **That the page still belongs to the relation it was recorded from.**
-// Nothing asks a page which relation owns it, because nothing can. Both
-// callers check the relation against the *query* instead, which is
-// sufficient only while pages are never freed and reallocated between
-// relations - i.e. until `DROP TABLE` or page reuse exists.
+// **The page must still be a row page of the relation the location was
+// recorded for**: `kHeap` or `kBtreeLeaf`, carrying that relation's oid in
+// `owner_oid` (`page.md` §2a). A dropped relation's pages are freed and
+// handed out again (BF-R5, BF-R6), Keystone ids collide across relations by
+// design, and the epoch is 0 on most pages - so without this a location
+// remembered for a dropped relation, read on a page another relation now
+// owns, validates whenever that relation's row there carries the expected
+// pk. **It is defence, not the authority**: no reader reaches a freed page
+// (BF-R8's mount-time argument), and this turns a defect in that gate into
+// a miss rather than another relation's row. The header bytes are already
+// in hand, so it costs a branch.
+//
+// ---- What this deliberately does not check -------------------------------
 //
 // **Visibility.** MVCC is applied by the code that decodes the tuple,
 // exactly as it would be on the authoritative path. A verifier that filtered
@@ -83,6 +91,9 @@ enum class VerifyOutcome : std::uint8_t {
     // row, and it is the one the corrupted-trail contract test exists to
     // prove load-bearing.
     kPkMismatch,
+    // The page is not a row page of the expected relation (BF-R10): freed
+    // and reused, or never one. Checked before the epoch.
+    kNotThisRelation,
 };
 
 struct VerifiedTuple {
@@ -99,15 +110,16 @@ struct VerifiedTuple {
     bool ok() const noexcept { return outcome == VerifyOutcome::kOk; }
 };
 
-// Fetches `page_id` for read, compares its relayout epoch against
-// `recorded_epoch`, then reads `slot` and compares the tuple's Keystone id
-// against `expected_pk`.
+// Fetches `page_id` for read, checks it is a row page of `expected_owner`,
+// compares its relayout epoch against `recorded_epoch`, then reads `slot`
+// and compares the tuple's Keystone id against `expected_pk`.
 //
 // Never returns a Status: there is no failure here that is not a miss, and
 // giving one a Status would put a "the trail was corrupt" error in front of
 // a user whose query is perfectly answerable.
 VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint16_t slot,
-                            std::uint64_t expected_pk, std::uint32_t recorded_epoch);
+                            std::uint64_t expected_pk, std::uint32_t recorded_epoch,
+                            std::uint64_t expected_owner);
 
 // The epoch to stamp on a location being *written*: `page_id`'s current
 // relayout epoch, truncated to the entry formats' u32, and 0 for a page

@@ -216,7 +216,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 storage::PageRef held;
                 if (entry.hint_valid()) {
                     VerifiedTuple verified = VerifyTupleAt(store, entry.page_id, entry.slot,
-                                                           entry.pk, entry.page_epoch);
+                                                           entry.pk, entry.page_epoch, child.oid);
                     options.cabins->NoteHint(options.cabin_id, verified.ok());
                     if (verified.ok()) {
                         at_page = entry.page_id;

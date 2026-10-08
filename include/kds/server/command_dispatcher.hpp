@@ -150,6 +150,8 @@ class Scheduler;
 
 namespace kds::server {
 
+struct ReclaimCounters;  // page_reclaim.hpp
+
 // What the mount's recovery did (`server/mount_recovery.hpp`), reported by
 // SHOW META. Forward-declared rather than included: only the pointer is held
 // here, and the definition drags in the WAL and catalog headers that every
@@ -1648,6 +1650,13 @@ public:
     // instrument. `sink` must outlive this.
     void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
 
+    // The instance's reclaim counters (BF-R11), which `SHOW META` prints on
+    // every core; null - every hand-built dispatcher - prints none of the
+    // reclaim half. `counters` must outlive this.
+    void SetReclaimCounters(const ReclaimCounters* counters) noexcept {
+        reclaim_counters_ = counters;
+    }
+
     // **`SetAccessBatch` and `SetAccessStatsApplied` stood here and are
     // gone** (AT-S7). A peer had no way to write `sys.access_stats`, so it
     // folded its shapes into an `AccessBatch` and core 0 applied the fold;
@@ -2244,6 +2253,9 @@ private:
     // always did, and so that "identical replies with cabins on and off" is
     // a property of the structure rather than of the test data.
     stats::CabinStore* cabins_ = nullptr;
+
+    // `SetReclaimCounters`'; null outside an assembled instance.
+    const ReclaimCounters* reclaim_counters_ = nullptr;
 
     // The live assertions and their reservation bookkeeping (workplan
     // AST06/AST07): CREATE ASSERTION's build moves its LiveAssertion in

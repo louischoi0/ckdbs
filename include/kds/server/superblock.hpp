@@ -253,7 +253,17 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // operator's standing order of 2026-10-07, `raft-marks-2026-10-07.md` §11),
 // which retires BB-R11's mount check: no version-20 volume carries the
 // `sys.tables` byte it read set.
-inline constexpr std::uint32_t kSuperBlockVersion = 20;
+// 20 -> 21 (2026-10-07, BF-R2, BF-Q4): **a dropped relation's tombstone
+// carries the roots its reclaim walks from**
+// (`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`). The
+// `sys.objects` word at offset 24, written 0 for every table until now, is
+// `pending_roots` on a tombstone: the anchor and the var-heap root, packed,
+// written by the drop's retype and cleared once the reclaim is durable. A
+// version-20 volume's tombstones carry 0 there, which this build would read
+// as "nothing owed" and so leak their pages for good; refused with no
+// migration (`raft-marks-2026-10-07.md` §11), so every tombstone on a
+// mountable volume was written by a drop that recorded what it owes.
+inline constexpr std::uint32_t kSuperBlockVersion = 21;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

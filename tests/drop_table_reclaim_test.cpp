@@ -158,10 +158,18 @@ void CleanShutdownCheckpoint(Expeditor& db) {
     EXPECT_TRUE(db.Checkpoint().ok());
 }
 
-// **What a mount does with a pending reclaim before a cell looks.** Nothing
-// at `df741e3c`: no reclaim exists. BF-S3 drives core 0's reclaim tick here
-// until no tombstone is pending.
-void Settle(Expeditor& db) { (void)db; }
+// **What a mount does with a pending reclaim before a cell looks**: core
+// 0's reclaim tick (BF-R8), driven by hand until no tombstone is owed or one
+// is refused. BF-S1 wrote this as a no-op and the cells red against it.
+void Settle(Expeditor& db) {
+    for (int step = 0; step < 100000; ++step) {
+        if (db.reclaim_counters().pending.load() == 0 ||
+            db.reclaim_counters().refused.load() != 0) {
+            break;
+        }
+        ASSERT_TRUE(db.ReclaimStep().ok());
+    }
+}
 
 // A crash at this instant: the data file and the log copied as they are.
 // Nothing is synced first, so only what the store and the log have already
@@ -278,7 +286,8 @@ struct Dropped {
 
 // One round: create, fill, drop, and a clean shutdown. Returns what the
 // drop left behind.
-Dropped CreateFillDrop(const fs::path& dir, const std::string& table, int rows) {
+Dropped CreateFillDrop(const fs::path& dir, const std::string& table, int rows,
+                       const std::string& storage = "") {
     Dropped out;
     auto opened = Mount(dir, /*cores=*/1);
     EXPECT_TRUE(opened.ok()) << opened.status().message();
@@ -286,7 +295,7 @@ Dropped CreateFillDrop(const fs::path& dir, const std::string& table, int rows) 
     Expeditor& db = *opened.value();
     CurrentCoreGuard as(0);
     Settle(db);
-    Ok(db, "CREATE TABLE " + table + " (id int64, v varchar)");
+    Ok(db, "CREATE TABLE " + table + " (id int64, v varchar)" + storage);
     Fill(db, table, rows);
     out.oid = DescribeField(db, table, "oid");
     out.pages = PagesOf(db, out.oid);
@@ -338,6 +347,26 @@ TEST(DropTableReclaimTest, FiveCreateFillDropRoundsGrowTheVolumeByLessThanOneRou
         << allocated.back() << "; one round's relation holds " << round_pages;
 }
 
+TEST(DropTableReclaimTest, ADroppedHeapRelationsChainIsFreed) {
+    // BF-Q8 (a)'s one heap cell, and no crash matrix: only a test seam
+    // creates a heap relation since SUS-1 (`heap_suspension_env.cpp`). The
+    // anchor names the chain's head; the walk takes the chain by its links
+    // and frees it tail-first.
+    TempDir dir;
+    const Dropped dropped = CreateFillDrop(dir.path, "h", 2000, " HEAP");
+    ASSERT_GE(dropped.pages.size(), 4u);
+    auto opened = Mount(dir.path, /*cores=*/1);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    CurrentCoreGuard as(0);
+    Settle(db);
+    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
+    EXPECT_EQ(db.reclaim_counters().skipped.load(), 0u);
+    for (const PageId id : dropped.pages) {
+        EXPECT_FALSE(db.store().IsAllocated(id)) << "page " << id << " of the dropped heap";
+    }
+}
+
 TEST(DropTableReclaimTest, ANewRelationLandsOnIdsADroppedRelationHeld) {
     // Red at `df741e3c`: the cursor starts at 128 after a clean restart and
     // finds no cleared bit, so a new relation goes past every dropped page.
@@ -357,6 +386,227 @@ TEST(DropTableReclaimTest, ANewRelationLandsOnIdsADroppedRelationHeld) {
     std::set_intersection(dropped.pages.begin(), dropped.pages.end(), reused.begin(), reused.end(),
                           std::back_inserter(common));
     EXPECT_FALSE(common.empty()) << "no page of u is on an id t held";
+}
+
+// ---- BF-S3: the mount-time reclaim, its gate and its crash cuts -----------
+
+// A relation of two tree levels with a var-heap chain - values past the
+// inline width spill - beside a live relation the reclaim must not touch.
+// Dropped, and the instance shut down cleanly. Returns the ledger.
+struct Ledger {
+    Dropped dropped;
+    std::uint64_t keep_rows = 0;
+};
+Ledger TwoRelationsOneDropped(const fs::path& dir) {
+    Ledger out;
+    auto opened = Mount(dir, /*cores=*/1);
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    if (!opened.ok()) return out;
+    Expeditor& db = *opened.value();
+    CurrentCoreGuard as(0);
+    Ok(db, "CREATE TABLE keep (id int64, v varchar)");
+    Fill(db, "keep", 500);
+    out.keep_rows = 500;
+    Ok(db, "CREATE TABLE t (id int64, n int64, v varchar)");
+    for (int done = 0; done < 1500;) {
+        std::string sql = "INSERT INTO t VALUES ";
+        for (int k = 0; k < 100 && done < 1500; ++k, ++done) {
+            if (k > 0) sql += ", ";
+            sql += "(" + std::to_string(done) + ", 'row" + std::to_string(done) + "')";
+        }
+        Ok(db, sql);
+    }
+    // Past the inline width, so the values spill and the var-heap chain grows.
+    const std::string spill(300, 's');
+    for (int k = 0; k < 80; ++k) Ok(db, "INSERT INTO t VALUES (" + std::to_string(k) + ", '" + spill + "')");
+    Ok(db, "CREATE INDEX t_n ON t (n)");
+    out.dropped.oid = DescribeField(db, "t", "oid");
+    out.dropped.pages = PagesOf(db, out.dropped.oid);
+    Ok(db, "DROP TABLE t");
+    CleanShutdownCheckpoint(db);
+    return out;
+}
+
+// What a reclaim must leave, however a crash cut it: every page of the
+// dropped relation's ledger free once a mount has driven it to the end, the
+// live relation whole, and nothing refused.
+void ExpectReclaimedAndWhole(Expeditor& db, const Ledger& ledger, const std::string& where) {
+    Settle(db);
+    EXPECT_EQ(db.reclaim_counters().pending.load(), 0u) << where;
+    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u) << where;
+    for (const PageId id : ledger.dropped.pages) {
+        // An index page carries the index's oid, so the ledger holds the
+        // relation-owned pages; each must be free.
+        EXPECT_FALSE(db.store().IsAllocated(id)) << where << ": page " << id << " still allocated";
+    }
+    EXPECT_EQ(db.dispatcher().Dispatch("SELECT COUNT(*) FROM keep").response,
+              "count(*)\\n" + std::to_string(ledger.keep_rows))
+        << where;
+}
+
+TEST(DropTableReclaimGateTest, AMountAtTwoCoresFreesNothingBeforeEveryCoreHasPublished) {
+    // BF-R4's `cores > 1` arm, and the premise cell's other half: the
+    // completion checkpoint left `D` at the mount's anchor, so the reclaim
+    // must wait - and a crash in the wait must find a volume that mounts.
+    TempDir dir;
+    const PageId leaf = VolumeWithADroppedLeafInItsReplayRange(dir.path);
+    ASSERT_NE(leaf, kInvalidPageId);
+    TempDir cut;
+    {
+        auto opened = Mount(dir.path, /*cores=*/2);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        ASSERT_EQ(db.reclaim_counters().pending.load(), 1u);
+        for (int step = 0; step < 32; ++step) ASSERT_TRUE(db.ReclaimStep().ok());
+        EXPECT_TRUE(db.store().IsAllocated(leaf)) << "freed before every core published";
+        EXPECT_EQ(db.reclaim_counters().pending.load(), 1u);
+        EXPECT_TRUE(db.store().PersistMaps().ok());
+        CrashImage(dir.path, cut.path);
+    }
+    auto again = Mount(cut.path, /*cores=*/2);
+    EXPECT_TRUE(again.ok()) << "the crash in the wait refused the mount: "
+                            << again.status().message();
+}
+
+TEST(DropTableReclaimCrashTest, AReclaimCutAnywhereIsFinishedByTheNextMount) {
+    // Every cut a crash can make in a reclaim - after each free, after each
+    // map sync, after the tombstone's clear - taken as a crash image and
+    // mounted: the next mount drives the reclaim again and it ends with every
+    // page free, the live relation whole and nothing refused (BF-R7). The
+    // var-heap chain is freed tail-first, a sync a page, so a cut inside it
+    // leaves a prefix still linked from the root the tombstone names.
+    TempDir dir;
+    const Ledger ledger = TwoRelationsOneDropped(dir.path);
+    ASSERT_GE(ledger.dropped.pages.size(), 20u);
+
+    // Two passes over the same volume. The first takes each image as the
+    // reclaim left the device. The second also flushes the map at every free
+    // first - another core's checkpoint landing the map mid-plan - which is
+    // what shows a chain freed head-first with one sync at its end: its head
+    // reaches the device before its tail (the review's mutation).
+    TempDir images;
+    std::vector<std::pair<fs::path, std::string>> cuts;
+    TempDir again;
+    fs::copy(dir.path, again.path, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    for (const bool flush_maps : {false, true}) {
+        const fs::path volume = flush_maps ? again.path : dir.path;
+        auto opened = Mount(volume, /*cores=*/1);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        db.SetReclaimCutForTest([&, flush_maps, volume](const char* what) {
+            if (flush_maps && std::string(what) == "after a free") {
+                ASSERT_TRUE(db.store().PersistMaps().ok());
+            }
+            ASSERT_TRUE(db.wal().Flush().ok());
+            const fs::path image = images.path / std::to_string(cuts.size());
+            CrashImage(volume, image);
+            cuts.emplace_back(image, std::string(flush_maps ? "map-flushed " : "") + "cut " +
+                                         std::to_string(cuts.size()) + " (" + what + ")");
+        });
+        ExpectReclaimedAndWhole(db, ledger, "the run that cut");
+        db.SetReclaimCutForTest(nullptr);
+        EXPECT_GT(db.store().pages_freed(), ledger.dropped.pages.size())
+            << "the index's pages, which carry the index's oid, were not freed";
+    }  // both passes
+    ASSERT_GE(cuts.size(), ledger.dropped.pages.size());
+    for (const auto& [image, where] : cuts) {
+        auto mounted = Mount(image, /*cores=*/1);
+        ASSERT_TRUE(mounted.ok()) << where << ": the mount refused: " << mounted.status().message();
+        CurrentCoreGuard as(0);
+        ExpectReclaimedAndWhole(*mounted.value(), ledger, where);
+    }
+}
+
+TEST(DropTableReclaimCrashTest, APageReusedBeforeTheClearIsNotFreedByTheRedrive) {
+    // A crash after the frees and before the tombstone's clear, with the
+    // freed ids already handed to a new relation: the re-drive walks from the
+    // same roots, meets pages another owner holds, and frees none of them
+    // (BF-R3's owner check).
+    TempDir dir;
+    const Ledger ledger = TwoRelationsOneDropped(dir.path);
+    TempDir image;
+    std::uint64_t reuse_rows = 0;
+    {
+        auto opened = Mount(dir.path, /*cores=*/1);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        bool taken = false;
+        db.SetReclaimCutForTest([&](const char* what) {
+            if (taken || std::string(what) != "before the clear") return;
+            taken = true;
+            Ok(db, "CREATE TABLE u (id int64, v varchar)");
+            Fill(db, "u", 1500);
+            reuse_rows = 1500;
+            ASSERT_TRUE(db.Sync().ok());
+            CrashImage(dir.path, image.path);
+        });
+        Settle(db);
+        db.SetReclaimCutForTest(nullptr);
+        ASSERT_TRUE(taken);
+        ASSERT_GT(db.store().pages_reused(), 0u) << "u reused no freed id; the cell proves nothing";
+    }
+    auto mounted = Mount(image.path, /*cores=*/1);
+    ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    CurrentCoreGuard as(0);
+    ASSERT_EQ(db.reclaim_counters().pending.load(), 1u) << "the clear was not cut";
+    Settle(db);
+    EXPECT_GT(db.reclaim_counters().skipped.load(), 0u)
+        << "the re-drive met none of u's pages, so the owner check was not exercised";
+    EXPECT_EQ(db.reclaim_counters().pending.load(), 0u);
+    EXPECT_EQ(db.dispatcher().Dispatch("SELECT COUNT(*) FROM u").response,
+              "count(*)\\n" + std::to_string(reuse_rows));
+    for (const PageId id : PagesOf(db, DescribeField(db, "u", "oid"))) {
+        EXPECT_TRUE(db.store().IsAllocated(id)) << "u's page " << id << " was freed by the re-drive";
+    }
+}
+
+TEST(DropTableReclaimCrashTest, ARelaxedDropCrashedBeforeItsCommitIsDurableFreesNothing) {
+    // BF-R1: under relaxed durability the drop's commit is acknowledged before
+    // it is on the device. A crash there makes it a loser: the retype's undo
+    // restores the tombstone word to 0 with the row, and nothing is owed.
+    TempDir dir;
+    std::set<PageId> pages;
+    TempDir image;
+    {
+        Expeditor::Config config;
+        config.data_file = (dir.path / "kds.db").string();
+        config.wal_dir = (dir.path / "wal").string();
+        config.log_file = {};
+        config.cores = 1;
+        config.debug_text_port = 0;
+        config.checkpoint_interval_ns = 0;
+        config.wal_drain_interval_ns = 0;
+        config.durability = wal::DurabilityClass::kRelaxed;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Ok(db, "CREATE TABLE t (id int64, v varchar)");
+        Fill(db, "t", 1000);
+        pages = PagesOf(db, DescribeField(db, "t", "oid"));
+        ASSERT_TRUE(db.Sync().ok());
+        // The drop's records reach the log file, and its commit - relaxed,
+        // so acknowledged before it is written - does not.
+        Ok(db, "BEGIN");
+        Ok(db, "DROP TABLE t");
+        ASSERT_TRUE(db.wal().Flush().ok());
+        Ok(db, "COMMIT");
+        // The crash: what the device holds, the drop's commit not among it.
+        CrashImage(dir.path, image.path);
+    }
+    auto mounted = Mount(image.path, /*cores=*/1);
+    ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+    Expeditor& db = *mounted.value();
+    CurrentCoreGuard as(0);
+    EXPECT_GE(db.recovery().losers, 1u) << "the drop never reached the log; the cell tests nothing";
+    EXPECT_EQ(db.reclaim_counters().pending.load(), 0u);
+    Settle(db);
+    EXPECT_EQ(db.dispatcher().Dispatch("SELECT COUNT(*) FROM t").response, "count(*)\\n1000");
+    for (const PageId id : pages) EXPECT_TRUE(db.store().IsAllocated(id)) << "page " << id;
 }
 
 // ---- Red first: the defence checks (BF-R10) --------------------------------
@@ -379,8 +629,8 @@ PageId LeafHolding(storage::InMemoryPageStore& store, std::uint64_t owner, std::
 // verifier takes no owner at `df741e3c`; BF-R10 adds it, and passing
 // `owner` through is the one line BF-S3 changes here.
 exec::VerifiedTuple VerifyFor(storage::PageStore& store, PageId page, std::uint64_t pk,
-                              [[maybe_unused]] std::uint64_t owner) {
-    return exec::VerifyTupleAt(store, page, /*slot=*/0, pk, /*recorded_epoch=*/0);
+                              std::uint64_t owner) {
+    return exec::VerifyTupleAt(store, page, /*slot=*/0, pk, /*recorded_epoch=*/0, owner);
 }
 
 TEST(DropTableReclaimDefenceTest, TheVerifierMissesOnAnotherOwnersPage) {

@@ -24,7 +24,7 @@ std::array<std::byte, SysObjectRow::kOnDiskSize> SysObjectRow::Encode() const {
     std::memcpy(base + kOidOffset, &oid, sizeof(oid));
     std::memcpy(base + kNamespaceOidOffset, &namespace_oid, sizeof(namespace_oid));
     std::memcpy(base + kTypeOidOffset, &type_oid, sizeof(type_oid));
-    std::memcpy(base + kRelIdOffset, &rel_id, sizeof(rel_id));
+    std::memcpy(base + kPendingRootsOffset, &pending_roots, sizeof(pending_roots));
     std::memcpy(base + kNameOffset, name.data(), kCatalogNameMax);
     return buf;
 }
@@ -37,7 +37,7 @@ StatusOr<SysObjectRow> SysObjectRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.oid, base + kOidOffset, sizeof(row.oid));
     std::memcpy(&row.namespace_oid, base + kNamespaceOidOffset, sizeof(row.namespace_oid));
     std::memcpy(&row.type_oid, base + kTypeOidOffset, sizeof(row.type_oid));
-    std::memcpy(&row.rel_id, base + kRelIdOffset, sizeof(row.rel_id));
+    std::memcpy(&row.pending_roots, base + kPendingRootsOffset, sizeof(row.pending_roots));
     std::memcpy(row.name.data(), base + kNameOffset, kCatalogNameMax);
     return row;
 }

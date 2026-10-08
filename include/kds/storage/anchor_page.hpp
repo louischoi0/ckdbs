@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
@@ -57,6 +58,16 @@ void SetAnchorClusteredRoot(std::span<std::byte, kPageSize> page, PageId root);
 // ASan-demonstrated out-of-bounds read, and one branch over, a write
 // (this file's 3f07eda review, C1).
 
+// Every `{index_oid, root}` slot the anchor holds, in slot order - a
+// dropped index's and a rolled-back one's included, since no slot is ever
+// removed. What a dropped relation's reclaim walks from (BF-R3); Corruption
+// when the page's count is not a count.
+struct AnchorIndexSlot {
+    std::uint64_t index_oid = 0;
+    PageId root = kInvalidPageId;
+};
+StatusOr<std::vector<AnchorIndexSlot>> AnchorIndexSlots(std::span<const std::byte, kPageSize> page);
+
 // The root recorded for `index_oid`, kInvalidPageId when the anchor holds
 // no entry for it, or Corruption when the page's count is not a count.
 StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
@@ -72,7 +83,8 @@ StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
 // allocates the pages it would then record here. `CREATE INDEX` builds
 // the whole tree and seeds the anchor afterwards, so on a full table
 // every attempt allocated an index tree - 32 pages - and threw it away.
-// Nothing frees, so those pages are gone for the life of the database.
+// No anchor slot names a tree thrown away there, so no reclaim reaches it
+// (BF §0) and those pages are gone for the life of the database.
 // The storm that measured it, and its numbers, are in
 // `docs/inflight/known-gaps.md`; they are not restated here, so there is one
 // figure to keep true.

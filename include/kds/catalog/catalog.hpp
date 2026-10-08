@@ -561,7 +561,10 @@ public:
     // resolution's kTypeTable filter frees the name at once. Everything
     // the relation owns retires: its sys.tables row, every sys.columns /
     // sys.indexes / sys.cabins row and its child-side sys.fkeys rows.
-    // Pages are NOT reclaimed (DT1 - reclamation is gated elsewhere).
+    // **Pages are not touched here** (BF-R1): the retype records the
+    // relation's anchor and var-heap root in the tombstone's
+    // `pending_roots` (BF-R2), and the reclaim walks them once the drop's
+    // commit is past every replay (BF-R4) - never inside the drop.
     // The dropped cabin ids land in `dropped_cabins` for the caller's
     // in-memory CabinStore::Forget. RESTRICT checks (a referencing fk, an
     // assertion) are the dispatcher's, made *before* this call - this
@@ -580,6 +583,26 @@ public:
     Status DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
                       std::uint64_t trx_id = kBootstrapXid,
                       std::vector<CatalogRowChange>* written = nullptr);
+
+    // ---- Pending reclaims (BF-R2) ------------------------------------
+    //
+    // Every tombstone whose `pending_roots` is nonzero: a dropped relation
+    // whose pages a reclaim still owes. One scan of `sys.objects`. Read at
+    // mount, after recovery, where every drop is decided - a loser's retype
+    // was undone with its word - so no stamp is consulted.
+    struct PendingReclaim {
+        Oid oid = 0;
+        PendingRoots roots;
+    };
+    StatusOr<std::vector<PendingReclaim>> PendingReclaims();
+
+    // Overwrites `oid`'s tombstone word to 0 once its reclaim is durable
+    // (BF-R7): logged outside any transaction, as the mark retire is, and
+    // keeping the row's `trx_id` and `undo_ptr`, so the decided-tombstone
+    // reading of `CheckNameFree` and `CheckNamespaceEmpty` does not move.
+    // No schema word moves - no name lookup resolves a tombstone. NotFound
+    // when no tombstone carries `oid`.
+    Status ClearPendingRoots(Oid oid);
 
     // T3's contiguous id range (docs/inflight/in-progress/workplan-t3.md T3-3): one catalog
     // write bumps next_id by `count` and returns the first id - issuance
@@ -1103,10 +1126,9 @@ public:
     // reason: a catalog read has no snapshot to filter a mark against, so a
     // marked row would still be found by every lookup.
     //
-    // The index's **pages are not freed** - nothing frees a page in this
-    // engine yet - so a dropped index leaks its tree until page reclamation
-    // exists, exactly as a dropped Cabin's memory and a superseded var-heap
-    // value do.
+    // The index's **pages are not freed here** (BF-Q8): its anchor slot
+    // stays, so the tree is reclaimed with its relation once that is
+    // dropped (BF-R3), and leaks until then.
     // Transactional when given an id: the row is **delete-marked**
     // rather than retired and the change reported, so a rollback clears
     // the mark. Unlike `DROP TABLE` this is also *isolated* - there is no
@@ -1369,6 +1391,7 @@ private:
     // kUserOidStart - 1 if they carry none above it. Reads the pages; called
     // once per process, by the first GenerateUserOid().
     StatusOr<Oid> HighestIssuedUserOid();
+
     SysObjectRegistry sys_objects_;
     CatalogCache cache_;
     std::uint64_t catalog_version_ = 0;

@@ -565,6 +565,13 @@ public:
     // from the free list rather than the cursor. Both rise only.
     std::uint64_t pages_freed() const noexcept;
     std::uint64_t pages_reused() const noexcept;
+    // All three under one map hold: `SHOW META` calls this from any core,
+    // and `allocated_pages_` is written under the map latch only.
+    AllocationCounters allocation_counters() const noexcept override {
+        AssertNotUnderMapHold("allocation_counters");
+        LatchGuard map(map_latch());
+        return AllocationCounters{allocated_pages_, pages_freed_, pages_reused_};
+    }
 
     // Diagnostic log, null (discard) by default. Set after Open(), since
     // the store has to exist before a server has anything to log about;
