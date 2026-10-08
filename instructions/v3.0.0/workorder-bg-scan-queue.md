@@ -5,11 +5,13 @@ Written 2026-10-07 on `worktree-bg-scan-ring-order` from `cd8ca91e`
 
 - *"write the scan ring work order"*
 - **W1:** *"mark BG-Q0..Q8 as proposed"*
+- **W2** (2026-10-08): *"mark BG-Q9 as proposed"*
 
 **Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §24): BG-Q0..Q8 are
 marked as proposed, so BG-R1..R5 are rulings and BG-S1 is the next stage.
-**BG-Q9 is unmarked.** BG-S0's review added it after the word, and BG-S2
-does not start until it is marked.
+**BG-Q9 marked as proposed by W2** (`raft-marks-2026-10-08.md` §1): no
+floor under the queue, with §5's repeated-probe cell as the gate. Every item
+is marked.
 
 **Why this order exists.** BE closed on 2026-10-07 with two findings, and
 this order answers the second:
@@ -301,7 +303,7 @@ and the three comments that name it are deleted with `kScanRingFrames`.
 | BG-Q6 | **The bar for BG-S4.** A hot set of half the pool, read once, keeps at least 99 % of its leaf pages through a scan four times the pool; the OLTP A/B within its own run-to-run noise; §5's past-the-cap cells, the per-day probes included, no slower in B than in A | measurement | As written || **as proposed**, W1 |
 | BG-Q7 | **Order against BF.** BF deletes `EvictClean` and adds a discard eraser | sequencing | Either order. BG-R1's stale-entry rule needs no hook from any eraser, and BG-S1's census names the erasers at the tip of main || **as proposed**, W1 |
 | BG-Q8 | **The measurement** (§5), at BG's close, per `CLAUDE.md`'s Session Workflow step 3 | process | As written || **as proposed**, W1 |
-| BG-Q9 | **A floor under the queue.** When warm frames fill the rest of the pool, the queue holds about one reclaim batch (at most 64 frames), so a range repeated past that re-faults - §1.3's fourth cost back in a smaller form - and warm frames stop aging while the queue supplies. (a) No floor (BG-R5), measured by §5's repeated-probe cell before anything is added. (b) A floor as a function of the capacity (2Q's `Kin`, e.g. capacity / 4), below which the hand runs | design, **[quiet-wrong] if unmeasured** | (a), with the measurement as the gate: §5's per-day probes over a pool whose rest is warm decide it, and (b) is written only if they re-fault. A floor is a number; BG-R5 asks that none be added unmeasured | |
+| BG-Q9 | **A floor under the queue.** When warm frames fill the rest of the pool, the queue holds about one reclaim batch (at most 64 frames), so a range repeated past that re-faults - §1.3's fourth cost back in a smaller form - and warm frames stop aging while the queue supplies. (a) No floor (BG-R5), measured by §5's repeated-probe cell before anything is added. (b) A floor as a function of the capacity (2Q's `Kin`, e.g. capacity / 4), below which the hand runs | design, **[quiet-wrong] if unmeasured** | (a), with the measurement as the gate: §5's per-day probes over a pool whose rest is warm decide it, and (b) is written only if they re-fault. A floor is a number; BG-R5 asks that none be added unmeasured || **as proposed: (a)**, W2 |
 
 ## 5. Measurement
 
