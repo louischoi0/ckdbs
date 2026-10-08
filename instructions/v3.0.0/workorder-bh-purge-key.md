@@ -47,8 +47,23 @@ Written 2026-10-08 on `worktree-bh-purge-key` from `0446b3b0`
   - **BH-Q6:** no superblock bump, because no record kind is added.
 
   **BH-Q10..Q16 are new.** No word has seen them.
-- **BH is written, not opened.** BH-Q0 and every mark in §5 wait for the
-  operator's word.
+- **BH is opened on 2026-10-08, and every item carries CLA's proposal.**
+  The operator gave a standing go-ahead (`go-ahead-achieving-milestone`):
+  *"go ahead until achiving milestone, I will follow CLA proposal if
+  decision needed, keep going in this session"*, then *"GO AHEAD"*.
+  - BH-Q0..Q16 are **adopted under that word**, each as §5's proposal
+    states it. No item carries a per-item mark of the operator's own.
+  - Before adopting the two `[quiet-wrong]` items, CLA re-read their
+    premises against the tree at `37a7a9cd`:
+    - **BH-Q1 (a)** is W2's own direction.
+    - **BH-Q16 (a)** rests on the writers' skip and the insert's duplicate
+      check. `UPDATE`'s `apply` (`command_dispatcher.cpp:7600`) and
+      `DELETE`'s `qualifies` (`:9217`) skip a dead slot and any slot that
+      `Classify` answers `kNoVersion`. The insert's duplicate check runs
+      under the leaf's write hold (`btree.cpp:896-904`), where a retired
+      slot is keyless.
+    - Neither premise had moved, so neither proposal was revised.
+  - The adoptions are recorded in `raft-marks-2026-10-08.md` §5.
 
 **Where the specification is.** The specification W3 asks for is §2. It is
 written here and not under `docs/spec/`, because that bucket holds only
@@ -1027,29 +1042,31 @@ cannot be.
 
 ## 5. Items for the operator
 
-Every mark is empty. W3 directed the order to be written on the proposals
-of CLA's reply to W2 (the header's table), and opening it is a separate
-word.
+W3 directed the order to be written on the proposals of CLA's reply to W2
+(the header's table). Every mark below was **adopted on the operator's
+standing go-ahead of 2026-10-08** (`go-ahead-achieving-milestone`;
+`raft-marks-2026-10-08.md` §5). Each is CLA's proposal, and none is a
+per-item mark of the operator's own.
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BH-Q0 | **Open BH**, with BH-S0..S5 and BH-R1..R12 as written | process | Yes | — |
-| BH-Q1 | **K1's exception** (BH-R1). Reply points 7 and W2.<br>(a) `PURGE` is K1's one named exception; every other path, an engine-internal purge included, still owes a keyed tombstone.<br>(b) K1 is struck, and a deleted key is free at its delete's commit (W1 as first given) | invariant; **[quiet-wrong]** | (a), which is W2. (b) frees a key on every `DELETE`, so every view, Cabin and assertion path must be re-proved for every delete, where (a) proves it for one statement | — |
-| BH-Q2 | **A live key in the window** (PU3). Reply point 1: *"naming a live row is refused `InvalidArgument`"*.<br>(a) Any live key in the window refuses the statement.<br>(b) A window of one key refuses a live key, however it is spelled; a wider window passes over live keys | user-visible; **revises point 1** | (b). Under (a) a range over a relation with live and deleted keys interleaved could never run. Deciding by the folded window keeps `id = 5` and `id BETWEEN 5 AND 5` one statement | — |
-| BH-Q3 | **The wait on older readers** (PU5, BH-R5). Reply point 2: wait, then `TxnConflict` at the 1 s fault net.<br>(a) A polled wait bounded by `kPurgeHorizonWait`, a 1 s constant with no key, then `TxnConflict retryable=1`.<br>(b) Refuse at once, `TxnConflict retryable=1`.<br>(c) Bound it by `lock_wait_fault_net_ms`, re-scoped to cover a wait the engine cannot wake | design, user-visible; **revises point 2** | (a). It keeps point 2's wait and its second. (c) changes what the key means: it bounds a lost wake and logs its firing as a fault (§1.3), so one key would hold two quantities, and setting it to `0` for fast lock-fault detection would make every `PURGE` refuse while any older snapshot exists. Under OLTP load some statement's snapshot nearly always predates a `DELETE` that just committed, so (b) would refuse most `PURGE`s issued right after their `DELETE` | — |
-| BH-Q4 | **Inside an explicit transaction** (PU9). Reply point 3.<br>(a) Autocommit only; inside `BEGIN` refused `NotImplemented`, before `BeginWrite`, unpoisoned.<br>(b) Admitted, with an undo image so that a rollback restores the tombstone | scope | (a). (b) needs a new undo record, a restore through a slot the purge freed, and a re-proof of BH-R4 under a transaction that keeps writing. `NotImplemented` and not `Unsupported`, because (b) is buildable without changing the architecture | — |
-| BH-Q5 | **Atomicity** (PU6, BH-R6). Reply point 3: one record per key, no rollback.<br>(a) Judged whole before written; each key purged whole; a refusal while writing, or a crash, can leave the window partly purged; a refusal says how many keys it purged; a re-run finishes.<br>(b) All-or-nothing per statement, through a new record kind or undo images | design, user-visible; **revises point 3** | (a). The revision is the refusal: the review found three ways phase 2 can be refused after a write (§1.5), so a crash is not the only partial outcome. A partly-run `PURGE` leaves every key in a state the operator asked for, and the statement is idempotent. (b) adds a record kind (BH-Q6 (b)) for a maintenance statement | — |
-| BH-Q6 | **The format** (BH-R7). Reply point 3: *"a new record kind, so the superblock moves"*.<br>(a) Reuse `SLOT_RETIRE` and `VARHEAP_RELEASE` at `kNoTxnId`, whose purge envelopes already exist; no record kind is added; the superblock stays at 21.<br>(b) A new `BTREE_PURGE` kind; superblock 22 (BH-Q15) | format; **revises point 3** | (a). The survey found both purge envelopes already emitted and applied (§1.2). No on-disk meaning changes: an older engine reads a purged key as never placed, which is what BH means by it. So the standing order (`raft-marks-2026-10-07.md` §11) does not apply | — |
-| BH-Q7 | **The syntax** (PU1, PU10). Reply point 4.<br>(a) `PURGE FROM t WHERE` in PU1's six forms only, a text-matched head; no `WHERE` is `NotImplemented`.<br>(b) As (a), and `PURGE FROM t` with no `WHERE` purges every purgeable key | user-visible | (a). A whole-relation form is a sweep, and none was asked for. Refusing it is `NotImplemented`, so a later word can add it | — |
-| BH-Q8 | **Secondary-index entries** (BH-R9). Reply point 5.<br>(a) Left; reads re-check; the equal-sort-keys defect gains a path.<br>(b) Removed by the purge, re-proving AT-S15's leaf coverage | design | (a). §1.6 found every probe re-checks. (b) ends the premise AT-S15's coverage check stands on | — |
-| BH-Q9 | **Heap and system relations** (PU9). Reply point 6.<br>(a) A heap is `Unsupported`; a system relation is refused as `DELETE` refuses it.<br>(b) A heap is purged too | scope | (a). A heap refuses a named key below its mark because its chain grows only at its tail (§1.7). Freeing such a key would need a different chain, so this is the architecture and not a missing build. No new heap is created (SUS-1) | — |
-| BH-Q10 | **The role** (PU9). New.<br>(a) Admin: `RequiredRole`'s unclassified default.<br>(b) Read-write, beside `DELETE` | user-visible | (a). `PURGE` lifts an identity guarantee, and an admin session is the one that owns that decision | — |
-| BH-Q11 | **The tombstone's spills** (BH-R7). New.<br>(a) Released by the purge, after the retire, at `kNoTxnId`; a crash between leaks them, stated.<br>(b) Left, a stated leak per purged row | design | (a). Without it every purged row with a spill leaks for good (§1.4) | — |
-| BH-Q12 | **The reply** (PU7). New.<br>(a) `PURGED n` as `rows_affected`, and no counter.<br>(b) As (a), plus a `SHOW META` counter beside `catalog_marks_purged=` | user-visible | (a). The reply already carries the count | — |
-| BH-Q13 | **The duplicate text** (PU12). New. *"a Keystone id is bound once"* becomes *"PURGE frees its key"* | user-visible | Yes. The old text would be false, and the new one names the way out | — |
-| BH-Q14 | **The measurement** (§6), once at BH's close, per `CLAUDE.md`'s Session Workflow step 3. New | process | As written | — |
-| BH-Q15 | **The superblock number.** New. Only needed under BH-Q6 (b), since BF-S3 already took 21 | format | Moot under BH-Q6 (a). Under (b): 22, with 21 refused by the standing order | — |
-| BH-Q16 | **Locks** (BH-R4). New, raised by the review.<br>(a) The relation's `IS` and `IX` only; races settled by the leaf latch and the phase-2 skip; an undecided writer polled.<br>(b) As `DELETE`: `Tuple X` for one key and `Range X` for a wider window, held to the end, with the view re-minted after every lock wait | design; **[quiet-wrong]** | (a). Every writer already skips a resolved tombstone (§1.1), and the leaf latch orders an `INSERT` against the retire, so a row or range unit excludes nothing that could change the answer. (b) raises the relation's fence counter for every other writer, and hides a cycle from the wait-for graph: a reader holding the horizon waits on the range unit while the `PURGE` polls on its snapshot | — |
+| BH-Q0 | **Open BH**, with BH-S0..S5 and BH-R1..R12 as written | process | Yes | **Yes**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q1 | **K1's exception** (BH-R1). Reply points 7 and W2.<br>(a) `PURGE` is K1's one named exception; every other path, an engine-internal purge included, still owes a keyed tombstone.<br>(b) K1 is struck, and a deleted key is free at its delete's commit (W1 as first given) | invariant; **[quiet-wrong]** | (a), which is W2. (b) frees a key on every `DELETE`, so every view, Cabin and assertion path must be re-proved for every delete, where (a) proves it for one statement | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q2 | **A live key in the window** (PU3). Reply point 1: *"naming a live row is refused `InvalidArgument`"*.<br>(a) Any live key in the window refuses the statement.<br>(b) A window of one key refuses a live key, however it is spelled; a wider window passes over live keys | user-visible; **revises point 1** | (b). Under (a) a range over a relation with live and deleted keys interleaved could never run. Deciding by the folded window keeps `id = 5` and `id BETWEEN 5 AND 5` one statement | **(b)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q3 | **The wait on older readers** (PU5, BH-R5). Reply point 2: wait, then `TxnConflict` at the 1 s fault net.<br>(a) A polled wait bounded by `kPurgeHorizonWait`, a 1 s constant with no key, then `TxnConflict retryable=1`.<br>(b) Refuse at once, `TxnConflict retryable=1`.<br>(c) Bound it by `lock_wait_fault_net_ms`, re-scoped to cover a wait the engine cannot wake | design, user-visible; **revises point 2** | (a). It keeps point 2's wait and its second. (c) changes what the key means: it bounds a lost wake and logs its firing as a fault (§1.3), so one key would hold two quantities, and setting it to `0` for fast lock-fault detection would make every `PURGE` refuse while any older snapshot exists. Under OLTP load some statement's snapshot nearly always predates a `DELETE` that just committed, so (b) would refuse most `PURGE`s issued right after their `DELETE` | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q4 | **Inside an explicit transaction** (PU9). Reply point 3.<br>(a) Autocommit only; inside `BEGIN` refused `NotImplemented`, before `BeginWrite`, unpoisoned.<br>(b) Admitted, with an undo image so that a rollback restores the tombstone | scope | (a). (b) needs a new undo record, a restore through a slot the purge freed, and a re-proof of BH-R4 under a transaction that keeps writing. `NotImplemented` and not `Unsupported`, because (b) is buildable without changing the architecture | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q5 | **Atomicity** (PU6, BH-R6). Reply point 3: one record per key, no rollback.<br>(a) Judged whole before written; each key purged whole; a refusal while writing, or a crash, can leave the window partly purged; a refusal says how many keys it purged; a re-run finishes.<br>(b) All-or-nothing per statement, through a new record kind or undo images | design, user-visible; **revises point 3** | (a). The revision is the refusal: the review found three ways phase 2 can be refused after a write (§1.5), so a crash is not the only partial outcome. A partly-run `PURGE` leaves every key in a state the operator asked for, and the statement is idempotent. (b) adds a record kind (BH-Q6 (b)) for a maintenance statement | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q6 | **The format** (BH-R7). Reply point 3: *"a new record kind, so the superblock moves"*.<br>(a) Reuse `SLOT_RETIRE` and `VARHEAP_RELEASE` at `kNoTxnId`, whose purge envelopes already exist; no record kind is added; the superblock stays at 21.<br>(b) A new `BTREE_PURGE` kind; superblock 22 (BH-Q15) | format; **revises point 3** | (a). The survey found both purge envelopes already emitted and applied (§1.2). No on-disk meaning changes: an older engine reads a purged key as never placed, which is what BH means by it. So the standing order (`raft-marks-2026-10-07.md` §11) does not apply | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q7 | **The syntax** (PU1, PU10). Reply point 4.<br>(a) `PURGE FROM t WHERE` in PU1's six forms only, a text-matched head; no `WHERE` is `NotImplemented`.<br>(b) As (a), and `PURGE FROM t` with no `WHERE` purges every purgeable key | user-visible | (a). A whole-relation form is a sweep, and none was asked for. Refusing it is `NotImplemented`, so a later word can add it | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q8 | **Secondary-index entries** (BH-R9). Reply point 5.<br>(a) Left; reads re-check; the equal-sort-keys defect gains a path.<br>(b) Removed by the purge, re-proving AT-S15's leaf coverage | design | (a). §1.6 found every probe re-checks. (b) ends the premise AT-S15's coverage check stands on | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q9 | **Heap and system relations** (PU9). Reply point 6.<br>(a) A heap is `Unsupported`; a system relation is refused as `DELETE` refuses it.<br>(b) A heap is purged too | scope | (a). A heap refuses a named key below its mark because its chain grows only at its tail (§1.7). Freeing such a key would need a different chain, so this is the architecture and not a missing build. No new heap is created (SUS-1) | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q10 | **The role** (PU9). New.<br>(a) Admin: `RequiredRole`'s unclassified default.<br>(b) Read-write, beside `DELETE` | user-visible | (a). `PURGE` lifts an identity guarantee, and an admin session is the one that owns that decision | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q11 | **The tombstone's spills** (BH-R7). New.<br>(a) Released by the purge, after the retire, at `kNoTxnId`; a crash between leaks them, stated.<br>(b) Left, a stated leak per purged row | design | (a). Without it every purged row with a spill leaks for good (§1.4) | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q12 | **The reply** (PU7). New.<br>(a) `PURGED n` as `rows_affected`, and no counter.<br>(b) As (a), plus a `SHOW META` counter beside `catalog_marks_purged=` | user-visible | (a). The reply already carries the count | **(a)**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q13 | **The duplicate text** (PU12). New. *"a Keystone id is bound once"* becomes *"PURGE frees its key"* | user-visible | Yes. The old text would be false, and the new one names the way out | **Yes**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q14 | **The measurement** (§6), once at BH's close, per `CLAUDE.md`'s Session Workflow step 3. New | process | As written | **As written**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q15 | **The superblock number.** New. Only needed under BH-Q6 (b), since BF-S3 already took 21 | format | Moot under BH-Q6 (a). Under (b): 22, with 21 refused by the standing order | **Moot (BH-Q6 (a))**, adopted 2026-10-08 on the standing go-ahead |
+| BH-Q16 | **Locks** (BH-R4). New, raised by the review.<br>(a) The relation's `IS` and `IX` only; races settled by the leaf latch and the phase-2 skip; an undecided writer polled.<br>(b) As `DELETE`: `Tuple X` for one key and `Range X` for a wider window, held to the end, with the view re-minted after every lock wait | design; **[quiet-wrong]** | (a). Every writer already skips a resolved tombstone (§1.1), and the leaf latch orders an `INSERT` against the retire, so a row or range unit excludes nothing that could change the answer. (b) raises the relation's fence counter for every other writer, and hides a cycle from the wait-for graph: a reader holding the horizon waits on the range unit while the `PURGE` polls on its snapshot | **(a)**, adopted 2026-10-08 on the standing go-ahead |
 
 Four items, and two rules, are `[quiet-wrong]`, where a wrong choice turns
 a refusal into a wrong answer:
@@ -1197,3 +1214,11 @@ applying any of them.
 
 **Declined:** §0's rule list (S4), and `DISABLED_` for the red cells (H5),
 each for the reason above.
+
+### BH opened - 2026-10-08
+
+- **Where:** on `worktree-bh-purge-key` at `37a7a9cd`, on the operator's
+  standing go-ahead (`raft-marks-2026-10-08.md` §5).
+- **BH-Q0..Q16 are adopted as §5 proposes**, not marked per item. Before
+  adopting BH-Q1 and BH-Q16, CLA re-read their premises, which the header
+  states. Neither proposal was revised.

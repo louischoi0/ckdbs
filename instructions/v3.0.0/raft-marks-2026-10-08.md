@@ -40,3 +40,12 @@ words as typed in the session.
 | **Mark** | BH-S0: the order written on §3's seven proposals, with the specification as its §2 (PU1-PU12), and reviewed. Four proposals are revised by the survey and the review, each stated at its item: BH-Q2 (a range passes over a live key), BH-Q3 (the 1 s bound is BH's own constant, not the fault net), BH-Q5 (a refusal, not only a crash, can leave a window partly purged) and BH-Q6 (no record kind, so no superblock bump). BH-Q10..Q16 are new, and no word has seen them. **Not opened** |
 | **Does not settle** | BH-Q0..Q16; BH-S1's start |
 | **Recorded at** | `workorder-bh-purge-key.md`; `index.md`'s BH row |
+
+## 5. BH opened, every item adopted as CLA proposed
+
+| | |
+|---|---|
+| **Word** | *"go ahead until achiving milestone, I will follow CLA proposal if decision needed, keep going in this session"* (given as the `go-ahead-achieving-milestone` skill), then *"GO AHEAD"* |
+| **Mark** | **Adopted on the standing go-ahead, not marked per item:** BH-Q0 yes (BH opens); BH-Q1 (a) `[quiet-wrong]`; BH-Q2 (b); BH-Q3 (a); BH-Q4 (a); BH-Q5 (a); BH-Q6 (a); BH-Q7 (a); BH-Q8 (a); BH-Q9 (a); BH-Q10 (a); BH-Q11 (a); BH-Q12 (a); BH-Q13 yes; BH-Q14 as written; BH-Q15 moot under BH-Q6 (a); BH-Q16 (a) `[quiet-wrong]`. Before adopting them, CLA re-read the premises of the two `[quiet-wrong]` items at `37a7a9cd`, and neither had moved (the order's header) |
+| **Does not settle** | Any decision that surfaces mid-stage. Under the same word, each such decision is written into the order with CLA's proposal and adopted, never recorded as the operator's own mark. A push, a tag or a version still waits for the operator's word |
+| **Recorded at** | `workorder-bh-purge-key.md`'s header, §5's mark column and §7; `index.md`'s BH row |
