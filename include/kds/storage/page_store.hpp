@@ -319,6 +319,15 @@ public:
     };
     virtual MapResidency map_residency() const noexcept { return {}; }
 
+    // BF-R11's store half, for `SHOW META`: pages allocated now, pages
+    // `FreePage` has freed, and creations served from its free list rather
+    // than the cursor. Zero for a store that cannot free.
+    struct AllocationCounters {
+        std::uint64_t allocated = 0;
+        std::uint64_t freed = 0;
+        std::uint64_t reused = 0;
+    };
+    virtual AllocationCounters allocation_counters() const noexcept { return {}; }
     // The buffer pool's counters (BE-R2, `eviction.md` EV9), for `SHOW
     // META`. Monotonic since the store opened. A store with no pool answers
     // zeros.
@@ -406,11 +415,16 @@ public:
     // page redo has already written. Raising the floor past every id the
     // log names is what makes that impossible.
     //
-    // The cost is ids: every free id below the floor is skipped for the
-    // life of the instance. That is what a high-water mark means, and it is
-    // cheap here because nothing frees a page (page.md §5) and CreateNew()
-    // hands out the lowest free id, so there are almost no gaps below the
-    // mark to skip.
+    // The cost is ids: the cursor skips every clear bit below the floor for
+    // the rest of the run. That is what a high-water mark means, and it is
+    // cheap because CreateNew() hands out the lowest free id, so few gaps
+    // lie below the mark. **A clear bit below the floor is not proof that an
+    // id is free** - the log may name it - which is why a page freed during
+    // the run comes back through `DevicePageStore`'s free list rather than
+    // by lowering the cursor: the list holds only ids a reclaim checked and
+    // gated (BF-R6), and the floor does not gate it. After a crash the list
+    // is gone and the floor hides the run's frees below it until a clean
+    // restart.
     //
     // **The default refuses**, and does not quietly succeed. A store that
     // ignored the raise would let recovery report a repair that did not
@@ -422,6 +436,37 @@ public:
         return Status::Unsupported(
             "PageStore: this store cannot raise its allocation floor, so recovery cannot "
             "guarantee it will not re-issue a page id the log names");
+    }
+
+    // ---- Freeing a page (BF-R5) -----------------------------------------
+    //
+    // **Gives `page_id` back to the allocator**: its resident frame, dirty or
+    // not, is discarded and its allocation bit cleared, in one hold, and the
+    // id becomes one a later creation may hand out again. The caller owns
+    // the precondition, which nothing here can check: no record that names
+    // the page can be replayed again, and no reader can reach it
+    // (`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md` BF-R4,
+    // BF-R8, BF-R9). The page's bytes are dead once that holds, so writing a
+    // dirty frame back would cost I/O for nothing and could land over a
+    // reuse.
+    //
+    // `kDeferred` changes nothing: the frame is pinned, latched, claimed by a
+    // writeback, or a fault or a creation of the id is in flight, and the
+    // caller asks again later. `NotFound` is an id already free, which a
+    // re-driven reclaim reads as done. `Corruption` is an id no relation
+    // owns - the system range, a map page, a headerless page or a Bound
+    // Cabin page: a walk that reached one has read a page that is not the
+    // relation's.
+    //
+    // **The default refuses `NotImplemented`**, so a store that cannot free
+    // reports a leak rather than a free that never happened. Not
+    // `Unsupported`, as `RaiseAllocationFloor`'s default is: a store that
+    // cannot free is one a later release could teach to, with no change to
+    // the architecture (`status.hpp`'s test).
+    enum class FreeOutcome : std::uint8_t { kFreed, kDeferred };
+    virtual StatusOr<FreeOutcome> FreePage(PageId page_id) {
+        (void)page_id;
+        return Status::NotImplemented("PageStore: this store cannot free a page");
     }
 
 protected:

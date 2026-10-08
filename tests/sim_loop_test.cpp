@@ -894,9 +894,11 @@ TEST(SimCase, ACaseFileRoundTripsAndReplays) {
     EXPECT_TRUE(replayed.ok) << replayed.Summary(loaded.value().config);
     // Not the whole plan: this case's injections fail a log write, the log
     // fail-stops, and the iteration ends its ops there and restarts
-    // (`wal/stream.hpp`). Pinned, because the case is deterministic.
+    // (`wal/stream.hpp`). Pinned, because the case is deterministic: 115
+    // since BF-S4, whose `drop-table` op adds one to this seed's stream from
+    // a stream of its own (114 before).
     EXPECT_EQ(replayed.fail_stops, 1u);
-    EXPECT_EQ(replayed.ops_run, 114u);
+    EXPECT_EQ(replayed.ops_run, 115u);
 }
 
 TEST(SimCase, AMalformedCaseFileIsRefusedRatherThanGuessedAt) {

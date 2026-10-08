@@ -55,13 +55,13 @@ enum class RecordType : std::uint8_t {
     kHeapOverwrite = 6,    // in-place new version
     kHeapDeleteMark = 7,   // the DELETE of wal.md section 5.1
     kSlotRetire = 8,       // physical retirement, distinct from delete-mark
-    kAlloc = 9,            // SpaceManager allocation, precedes file extension
+    kAlloc = 9,            // reserved: emitted by nothing, refused at redo (BF-R4)
     kFullPageImage = 10,   // torn-page healing (section 10)
     kCheckpointBegin = 11,
     kCheckpointEnd = 12,
     kPad = 13,             // segment tail filler; carries no payload meaning
     kUndoWrite = 14,       // undo-page append: before-image + the chain link
-    kFree = 15,            // SpaceManager release, the counterpart of kAlloc
+    kFree = 15,            // reserved: emitted by nothing, refused at redo (BF-R4)
     // var-heap append: a spilled value's bytes and the slot they landed in
     // (docs/rules/rule-fixed-length-tuple.md section 5). Logged because a
     // var-heap value is *authoritative data* - losing one loses a committed
@@ -122,8 +122,9 @@ enum class RecordType : std::uint8_t {
     // build's log volume asks for one, and guessing its shape before a
     // builder exists is how a record nobody can write gets assigned.
     kAssertBuild = 21,
-    // Teardown (DROP ASSERTION): the directory forgets the assertion. The
-    // pages return through ordinary FREE records, not through this one.
+    // Teardown (DROP ASSERTION): the directory forgets the assertion. Its
+    // pages are not freed - no record and no reclaim frees a Bound Cabin
+    // page (`drop-table.md` DT1's stated leaks).
     kAssertDrop = 22,
     // ---- Clearing a delete-mark (RC05, 2026-08-11) ----------------------
     //

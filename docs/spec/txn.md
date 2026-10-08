@@ -500,6 +500,15 @@ instance-wide since AN-S2**: a reader on core 3 holding a snapshot from
 before core 0's commit keeps that commit's entry, and the undo it
 superseded, wherever the undo lives.
 
+**A dropped relation's reclaim is not a consumer of it** (`drop-table.md`
+DT1; `instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md` BF-R9).
+The horizon misses a statement that binds a dropped relation from a stale
+memo, because that statement's snapshot is minted after the drop. It also
+misses the unregistered check views, and one idle `BEGIN` would stop every
+reclaim for the life of the process. So the reclaim reads two other bounds:
+the durable redo start, for replay, and the statement epoch each core
+publishes at its statement head, for readers.
+
 Two purges consume it. The catalog delete-mark purge (`ddl-transactional.md`
 §5d) judges each mark's deleter by the two branches
 (`TransactionManager::ResolvedForEveryReader`). The **undo purge** settles a
@@ -793,8 +802,10 @@ runs under the session's borrow now.)
 - **It is a position, never a permission.** Visibility is the snapshot's
   and nothing here changes it. A borrow the table refuses leaves the reader
   holding nothing and reading on: a read is never refused and never waits
-  for a borrow, because it needs none to be correct - a dropped relation's
-  pages stay allocated and its oid is never reissued (`drop-table.md` DT1),
+  for a borrow, because it needs none to be correct - no page of a
+  dropped relation is freed while a statement that could have bound it
+  runs (the statement epoch, `drop-table.md` DT1) and its oid is never
+  reissued (DT2),
   every catalog row is an MVCC version the reader's view filters, and no
   DDL moves data (`alter.md`), so a plan compiled while a DDL's `X` stood
   reads a snapshot-consistent past. **What the bind-time ask therefore

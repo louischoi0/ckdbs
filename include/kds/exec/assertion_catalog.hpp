@@ -257,8 +257,9 @@ StatusOr<AssertionDdlResult> CreateAssertion(
 // `DROP ASSERTION`: the catalog row retired, `ASSERT_DROP` logged when
 // `wal` is attached (before the row goes - WAL before data), and the
 // catalog version bumped. Returns the dropped assertion's id so the caller
-// can evict its live directory; the entry pages are not reclaimed, because
-// page reclamation does not exist.
+// can evict its live directory; the entry pages are not reclaimed - a
+// dropped relation's reclaim is the only one, and it never frees a Bound
+// Cabin page (`drop-table.md` DT1's stated leaks).
 StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageStore& store,
                                       const parser::AssertionStmt& stmt, wal::WalManager* wal);
 

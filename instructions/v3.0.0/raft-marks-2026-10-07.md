@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20), `worktree-drop-table-page-reclaim` (§21-§22) and `worktree-bg-scan-ring-order` (§23-§24) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20), `worktree-drop-table-page-reclaim` (§21-§22, §25) and `worktree-bg-scan-ring-order` (§23-§24) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -225,3 +225,12 @@ is **verbatim**: the words as typed in the session.
 | **Mark** | **BG-Q0: yes** - BG opens with BG-S0..S4 and BG-R1..R5 as written. **BG-Q1 (a):** a scan queue the reclaim reads before the hand. **BG-Q2 (a):** the slot ring retired, its consumers on the queue. **BG-Q3:** promotion at the head, the counter kept. **BG-Q4:** `kRing` stays distinct from `kScan`. **BG-Q5:** no keys; `kds.scan_ring_frames` deleted from `eviction.md` §6. **BG-Q6:** BG-S4's bar as §4 states it after BG-S0's review. **BG-Q7:** either order against BF. **BG-Q8:** measured once at BG's close |
 | **Does not settle** | BG-Q9, the queue's floor, which BG-S0's review added after the word was given; BG-S2 waits for it. BG-S1's premise gate, where BG stops for a ruling |
 | **Recorded at** | the order's header (W1), §2's heading and §4; `index.md`'s BG row |
+
+## 25. BF run to its close
+
+| | |
+|---|---|
+| **Word** | *"go ahead dont stop until milestone, follow CLA proposal if decision needed"* |
+| **Mark** | BF-S1 to BF-S6 run in order on `worktree-drop-table-page-reclaim`, each through its review and the suite; every choice a stage raises taken as CLA proposes it. **BF-Q14 read under it:** BE has not started (BE-S1 is its next stage), so BF-S2 proceeds against the map-keyed frame table - BF-Q14's own fallback, (b) - and BE-R1's eraser list counts BF-R5's discard when BE resumes |
+| **Does not settle** | the push; BE's start; BB's close entry; BA's resumption |
+| **Recorded at** | the order's status line and §6, and the index row |

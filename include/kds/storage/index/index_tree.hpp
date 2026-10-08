@@ -171,9 +171,10 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layou
 //   ...              whatever the store reports when a page cannot be
 //                    allocated
 //
-// On failure pages may already have been allocated and are never linked in,
-// so nothing reaches them - the same bargain BtreeInsert and ChainInsert
-// strike, for the same missing free-page path.
+// On failure pages may already have been allocated, and none is freed here
+// - a free needs BF-R4's replay gate. A leaf a failed propagation leaves is
+// linked into the right-sibling chain, which a dropped relation's reclaim
+// follows; anything else it leaves is a stated leak (`drop-table.md` DT1).
 StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
                                         std::span<const std::byte> key, std::uint64_t pk,

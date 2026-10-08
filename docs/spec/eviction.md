@@ -124,6 +124,13 @@ place between sweeps:
 - usage == 0, dirty ⇒ queue for writeback (§4) once (a `queued` bit); do not
   reclaim.
 
+**A freed page's frame is discarded, dirty or not** (`page.md` §5,
+`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md` BF-R5). That
+is not the sweep but the free primitive, which erases the frame in the hold
+that clears the page's bit. It defers a pinned, latched or
+writeback-claimed frame. No replay names a freed page, so its recLSN guards
+nothing, and writing its dead bytes back could land them over a reuse.
+
 **Every walk is bounded** (BE-R2):
 - A batch reclaims `min(64, capacity / 16)` frames in at most 8 steps per
   frame, under one structure-latch hold, and the latch is released between
@@ -136,7 +143,8 @@ place between sweeps:
 
 The sweep runs in two contexts: the background watermark loop (§4) and a
 reservation at the limit. Both are the same code under the frame table's
-structure latch. **Two cores' sweeps do not race because both run under
+structure latch, and `FreePage` (which replaced `EvictClean` at BF) erases
+under it too. **Two cores' sweeps do not race because both run under
 that latch**, not because they share an event loop: one pool serves every
 core since AM-S2 step 3.
 

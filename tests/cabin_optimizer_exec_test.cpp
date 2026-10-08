@@ -278,9 +278,9 @@ TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingPks) {
     EXPECT_EQ(healed.size(), 2u) << "the dangling pk was not erased";
     for (std::size_t i = 0; i < healed.size(); ++i) {
         const stats::CabinEntry entry = healed.At(i);
-        exec::VerifiedTuple verified = exec::VerifyTupleAt(db.store(), entry.page_id,
-                                                           entry.slot, entry.pk,
-                                                           entry.page_epoch);
+        exec::VerifiedTuple verified =
+            exec::VerifyTupleAt(db.store(), entry.page_id, entry.slot, entry.pk,
+                                entry.page_epoch, heal.rel_oid);
         EXPECT_TRUE(verified.ok()) << "a healed hint still fails verification";
     }
 }

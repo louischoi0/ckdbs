@@ -84,9 +84,12 @@ StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog) {
     auto objects = catalog.ListTables();
     if (!objects.ok()) return objects.status();
 
+    // The fourth column keeps its name, `rel_id`: the word is
+    // `pending_roots` in code (BF-R2), and on a live table - the only kind
+    // listed here - it is 0, which is all `rel_id` ever showed.
     for (const catalog::SysObjectRow& object : objects.value()) {
         view.rows.push_back({Int(object.oid), Int(object.namespace_oid), Int(object.type_oid),
-                             Int(object.rel_id),
+                             Int(object.pending_roots),
                              Str(std::string(catalog::NameView(object.name)))});
     }
     return view;

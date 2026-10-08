@@ -40,6 +40,13 @@ void FreeMapAllocate(std::span<std::byte, kPageSize> page, std::uint32_t index) 
     byte = static_cast<std::byte>(static_cast<std::uint8_t>(byte) | BitMask(index));
 }
 
+void FreeMapRelease(std::span<std::byte, kPageSize> page, std::uint32_t index) noexcept {
+    if (index >= kFreeMapBitsPerPage) return;
+    std::byte& byte = page[ByteOffset(index)];
+    byte = static_cast<std::byte>(static_cast<std::uint8_t>(byte) &
+                                  static_cast<std::uint8_t>(~BitMask(index)));
+}
+
 std::optional<std::uint32_t> FreeMapFindFirstFree(std::span<const std::byte, kPageSize> page,
                                                   std::uint32_t from) noexcept {
     if (from >= kFreeMapBitsPerPage) return std::nullopt;

@@ -86,8 +86,8 @@
 // tail append exactly as heap_chain.cpp grows a heap: a full tail allocates
 // a page, the value is written into it, and only then is the link
 // published, because the link is what makes a page reachable. Per-relation
-// rather than instance-wide so a future DROP TABLE reclaims one chain
-// instead of sweeping a shared one.
+// rather than instance-wide so DROP TABLE's reclaim frees one chain, tail
+// first (BF-R7), instead of sweeping a shared one.
 //
 // Unlike a heap chain there is no min_key and no ordering property: values
 // are addressed only by the pointers in the tuples that own them, so a walk

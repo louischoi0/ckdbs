@@ -68,7 +68,8 @@ enum class RelayoutPlanKind : std::uint8_t {
 enum class RelayoutGate : std::uint8_t {
     kReaderHorizon = 1,   // the instance horizon feeds no user-heap purge, and no mover exists
     kOrderedBetween = 2,  // clustering breaks the property kRange pruning reads
-    kPageReuse = 3,       // a freed page reallocated across relations breaks trails
+    kPageReuse = 3,       // a mover's freed page reallocated across relations breaks trails
+                          // (answered for a dropped relation's pages only, BF-Q17)
 };
 
 const char* RelayoutPlanKindName(RelayoutPlanKind kind) noexcept;

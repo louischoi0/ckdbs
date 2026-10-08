@@ -29,7 +29,7 @@
 //     synced, which is what a power loss does. Capacity growth is durable
 //     on the same schedule, so a crash between EnsureCapacity() and Sync()
 //     correctly loses the extension - the case page.md section 14's
-//     ALLOC-before-extend ordering exists to survive.
+//     allocation floor exists to survive.
 //
 //  2. **Torn writes.** TearNextWrite(n) transfers only the first n bytes of
 //     the next write and drops the rest, leaving the tail as whatever was

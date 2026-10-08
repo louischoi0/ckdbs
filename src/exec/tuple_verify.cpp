@@ -1,16 +1,28 @@
 #include "kds/exec/tuple_verify.hpp"
 
 #include "kds/exec/row_codec.hpp"
+#include "kds/storage/page_header.hpp"
 
 namespace kds::exec {
 
 VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint16_t slot,
-                            std::uint64_t expected_pk, std::uint32_t recorded_epoch) {
+                            std::uint64_t expected_pk, std::uint32_t recorded_epoch,
+                            std::uint64_t expected_owner) {
     VerifiedTuple out;
 
     auto bytes = store.GetForRead(page_id);
     if (!bytes.ok()) {
         out.outcome = VerifyOutcome::kPageGone;
+        return out;
+    }
+
+    // BF-R10, before anything on the page is trusted: a row page of the
+    // relation the location was recorded for.
+    const std::uint8_t type = storage::RawPageType(bytes.value().bytes());
+    if ((type != static_cast<std::uint8_t>(PageType::kHeap) &&
+         type != static_cast<std::uint8_t>(PageType::kBtreeLeaf)) ||
+        storage::GetOwnerOid(bytes.value().bytes()) != expected_owner) {
+        out.outcome = VerifyOutcome::kNotThisRelation;
         return out;
     }
 

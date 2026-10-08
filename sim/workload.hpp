@@ -76,6 +76,12 @@ struct Op {
         // sorts, or refused as a duplicate or as exhausted (BD-R5) - the
         // oracle says which.
         kInsertNamed,
+        // DROP TABLE (BF, `instructions/v3.0.0/workorder-bf-drop-table-page-
+        // reclaim.md` BF-R12), inside a transaction and out of one. A
+        // dropped name is never created again; a fresh one takes its place,
+        // so the relation count holds and the next mount's reclaim has pages
+        // a later creation can reuse.
+        kDropTable,
     };
     Kind kind;
     std::string table;
@@ -129,6 +135,8 @@ private:
         // pk-targeted ops can still aim at the rows issued there.
         std::uint64_t high_base = 0;
         std::uint64_t high_inserted = 0;
+        // Dropped, or dropped by the open transaction: no op names it again.
+        bool dropped = false;
     };
 
     std::int64_t NextValue();
@@ -147,6 +155,11 @@ private:
     Op InsertNamed(Table& table);
     Op Update(const Table& table);
     Op Delete(Table& table);
+    // DROP TABLE of a live relation, never the last one. Drawn from its own
+    // stream (`drop_rng_`), so a seed's other ops are the ops it always drew.
+    Op Drop();
+    std::vector<std::size_t> LiveIndices() const;
+    void AddReplacement();
 
     Rng rng_;
     Profile profile_;
@@ -162,6 +175,12 @@ private:
     // Cabins are named by (table, column) and a second CREATE on the same
     // pair is an error, so the generator remembers what it declared.
     std::set<std::string> cabins_;
+
+    // The drops (BF-R12): their own stream, a budget of two an iteration,
+    // and the ones the open transaction made, which a rollback undoes.
+    Rng drop_rng_;
+    std::size_t drops_left_ = 2;
+    std::vector<std::size_t> txn_drops_;
 };
 
 }  // namespace kds::sim

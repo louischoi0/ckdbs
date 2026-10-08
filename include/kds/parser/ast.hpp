@@ -796,7 +796,7 @@ struct AlterStmt {
 
 // `DROP TABLE <name>` (docs/spec/drop-table.md). Catalog-scoped: the
 // relation becomes unreachable and its oid is tombstoned, never reissued
-// (DT2); pages orphan until reclamation exists (DT1).
+// (DT2); its pages are reclaimed after the commit (DT1).
 struct DropTableStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above

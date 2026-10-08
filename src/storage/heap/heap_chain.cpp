@@ -126,10 +126,11 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
     auto new_slot = new_page.value().InsertTuple(payload, trx_id);
     if (!new_slot.ok()) {
         // A tuple no empty page can hold. The page it was written into is
-        // left allocated and empty rather than freed: the store has no
-        // free-page path yet (page.md's SpaceManager), and an empty linked
-        // page is harmless where a dangling link would not be. It is not
-        // linked in below, so nothing reaches it.
+        // left allocated and empty rather than freed - a free needs BF-R4's
+        // replay gate - and an empty page is harmless where a dangling link
+        // would not be. It is not linked in below, so nothing reaches it,
+        // and no reclaim walk reaches an unlinked page, so it is a stated
+        // leak (`drop-table.md` DT1).
         return new_slot.status();
     }
 

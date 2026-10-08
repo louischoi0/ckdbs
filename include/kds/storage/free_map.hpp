@@ -17,9 +17,11 @@
 // They live together because the region size *is* the per-page coverage
 // constant - one file, one answer to "id -> (map page, bit)".
 //
-// The ALLOC/FREE WAL records remain page.md section 5's unbuilt work (D9
-// of docs/inflight/in-progress/workplan-multi-free-map.md); the map is unlogged and repaired
-// at recovery by RaiseAllocationFloor.
+// The map is unlogged: the ALLOC (9) and FREE (15) record kinds are
+// assigned and refused at redo, and recovery repairs a reverted map by
+// RaiseAllocationFloor. A bit is cleared only by `DevicePageStore::FreePage`,
+// once no record that names the page can be replayed again (BF-R4,
+// `instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`).
 //
 // Bit addressing is explicit shift/mask over the page body - a persisted
 // format, so no bitfields (invariant 5):
@@ -60,6 +62,8 @@ Status ValidateFreeMapPage(std::span<const std::byte, kPageSize> page,
 // backstop against a caller that forgot.
 bool FreeMapIsAllocated(std::span<const std::byte, kPageSize> page, std::uint32_t index) noexcept;
 void FreeMapAllocate(std::span<std::byte, kPageSize> page, std::uint32_t index) noexcept;
+// The inverse: clears the bit. The same out-of-range backstop.
+void FreeMapRelease(std::span<std::byte, kPageSize> page, std::uint32_t index) noexcept;
 
 // Lowest clear bit at or above `from`, or nullopt if this page has none.
 std::optional<std::uint32_t> FreeMapFindFirstFree(std::span<const std::byte, kPageSize> page,

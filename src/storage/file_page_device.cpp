@@ -180,7 +180,7 @@ Status FilePageDevice::EnsureCapacity(std::uint32_t nr_pages) {
     }
     if (nr_pages <= page_capacity_.load(std::memory_order_acquire)) {
         // Never shrinks: truncation is a recorded v1 non-goal (page.md
-        // section 14). This is also what makes replay of ALLOC records
+        // section 14). This is also what makes a repeated extension
         // idempotent. Lock-free, and it answers nearly every call: the
         // store asks on each allocation and the file grows an extent at a
         // time.
@@ -215,8 +215,8 @@ Status FilePageDevice::EnsureCapacity(std::uint32_t nr_pages) {
     const std::uint64_t new_bytes = target * kPageSize;
 
     // posix_fallocate, not ftruncate: page.md section 14 wants real block
-    // reservation, so that a write issued after its ALLOC record was logged
-    // cannot then fail with ENOSPC.
+    // reservation, so that a write to an allocated page cannot then fail
+    // with ENOSPC.
     const int rc = ::posix_fallocate(fd_.get(), static_cast<::off_t>(old_bytes),
                                      static_cast<::off_t>(new_bytes - old_bytes));
     if (rc != 0) {

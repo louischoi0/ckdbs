@@ -113,6 +113,13 @@ struct MountRecovery {
     // recomputed - `SHOW META` prints the pair only when they differ.
     wal::Lsn redo_start = 0;
     wal::Lsn redo_start_floored_from = 0;
+    // Where the scan ended - the stream's end, before undo appended its
+    // compensations. A dropped relation's tombstone this mount finds pending
+    // is reclaimed once the durable redo start reaches it (BF-R4): every
+    // record that names the relation's pages precedes the drop's commit,
+    // and no compensation names them, since the drop's `X` waited out every
+    // writer of the relation.
+    wal::Lsn scan_end = 0;
 
     // ---- What undo rolled back ----
     std::uint64_t transactions_rolled_back = 0;
@@ -234,12 +241,12 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
 // read per relation, no chain walks. That is what this does.
 //
 // The other half - rows whose relation the catalog lost - **cannot be computed
-// at all**: resolving a page to its relation needs a page->relation index,
-// `page.md` has none, and its absence is already the named blocker on page reuse
-// (`docs/spec/physical-optimizer.md` §6 gate 3). Building the set instead means
-// walking every page of every relation at every mount. So `SHOW META` reports
-// this number and states the other case in words; RC09's task entry carries the
-// full argument.
+// cheaply**: `page.md` §2a's `owner_oid` resolves a page to its relation, but
+// only by reading every allocated page, and a dropped relation's reclaim walks
+// only what its tombstone's roots reach, which is not this count's question.
+// Building the set means reading every page at every mount. So `SHOW META`
+// reports this number and states the other case in words; RC09's task entry
+// carries the full argument.
 //
 // Never fails the mount: an unreadable relation is what it is *reporting*, not
 // an error it hit. Returns the two counts, writes one log line per finding.

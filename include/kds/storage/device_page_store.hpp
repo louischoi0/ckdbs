@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -70,8 +71,9 @@
 // **A bounded pool** (eviction.md, BE): frames are slots in chunks that
 // never move, at most `buffer_pool_frames` of them, reclaimed by a CLOCK hand
 // in bounded batches; a full pool refuses a fill `ResourceExhausted`, only
-// outside a mutation's no-refuse window (page_store.hpp). The sections below
-// say what each lock protects.
+// outside a mutation's no-refuse window (page_store.hpp). A freed page's
+// frame is discarded by `FreePage` (BF-R5), dirty or not. The sections
+// below say what each lock protects.
 //
 // Not here, deliberately:
 //   - Dirty tracking is by which accessor the caller chose, not by what it
@@ -80,7 +82,7 @@
 //     calls Get() costs a needless write-back; a writer that calls
 //     GetForRead() loses its write. PageRef (page.md section 3) is what
 //     replaces the convention with a type.
-//   - One free-map page, so coverage is kFreeMapBitsPerPage ids; beyond
+//   - The free map is region-based (page.md section 5); beyond
 //     that is OutOfRange, not silently unmapped.
 //
 // ---- The WAL gate (page.md section 8, wal.md section 8-1) ---------------
@@ -357,19 +359,19 @@ public:
 
     // Writes dirty frames back in page-id order, which is file order
     // (page.md section 13), then the free map. Data pages go first so a
-    // crash between them can only orphan a page, never publish one whose
-    // bytes never landed. Not durable on its own - Sync() adds the fsync.
+    // crash between them can only orphan a page a set bit names, never
+    // publish one whose bytes never landed. A bit `FreePage` cleared needs
+    // no order: no replay names the id any more (BF-R4), and its frame is
+    // gone. Not durable on its own - Sync() adds the fsync.
     Status Flush();
     Status Sync() override;
 
-    // The two map pages written back if dirty, then the device synced - the
-    // maps alone, not the frames. It is what an extent grant needed before
-    // it left core 0 - a run of ids a peer would write into had to be
-    // allocated on the device first, or a crash freed the run for the next
-    // mount's allocator to hand out over committed rows. **That caller went
-    // at AW-S1b and the tests are what is left**: `Sync()` is what
-    // production reaches for, and this is the narrower operation a cell uses
-    // to construct "the claim is durable and the page is not" - the state
+    // The dirty map regions written back, then the device synced - the maps
+    // alone, not the frames. **The map sync a reclaim orders its frees by**
+    // (BF-R7): behind the map write barrier (`map_flush_latch_`), a call that
+    // returns has written and synced every region state copied before it
+    // began, on any core. It is also the narrower operation a cell uses to
+    // construct "the claim is durable and the page is not" - the state
     // `ResidentBytes`' all-zero arm answers `NotFound` for.
     Status PersistMaps();
 
@@ -572,22 +574,39 @@ public:
     // something else may have flushed them since the caller's snapshot.
     Status FlushPages(std::span<const PageId> page_ids);
 
-    // Drops these pages' frames so the next access re-reads them from the
-    // device. Ids that are not resident are skipped.
+    // **BF-R5's free, in one hold of the frame table then the free map**
+    // (the declared order). The resident frame - dirty or not - is erased,
+    // the bit cleared, `allocated_pages()` decremented, the region marked
+    // dirty and the id pushed onto the free list `CreateNew` asks first
+    // (BF-R6). `PageStore::FreePage` states the contract and the caller's
+    // precondition.
     //
-    // **This is what makes a peer's cache invalidation mean anything**
-    // (docs/inflight/in-progress/workplan-crosscore.md P6). A peer holds catalog pages this
-    // store faulted at some earlier moment; core 0 then does a DDL and
-    // flushes. Dropping the *catalog* cache is not enough - the next scan
-    // would read the same stale frame back and reach the same conclusion.
-    // The bytes have to go too.
+    // **Deferred**, changing nothing, while the frame is pinned, latched or
+    // claimed by a writeback (`Frame::writing`: a writeback holds raw
+    // `Frame*` pointers from its copy to its clean), or while a fault
+    // (`loading_`) or a `CreateAt` (`claiming_`) of the id is in flight.
+    // **Refused `Corruption`** below `first_new_page_id` (the system range
+    // `Open` was given), for a map id, a headerless id, and a resident
+    // `kCabinBound` frame; `NotFound` for an id already free.
     //
-    // Refuses with InvalidArgument if any named page is **dirty**:
-    // evicting a dirty frame silently discards a write. On a peer they
-    // never are - the pages it evicts are exactly the ones it may not
-    // write - so the check guards against this being called somewhere it
-    // does not belong rather than against normal operation.
-    Status EvictClean(std::span<const PageId> page_ids);
+    // **What this makes true, replacing "free-map bits are never cleared"**:
+    // no clear bit has a resident frame - the erase and the clear are one
+    // hold, and every accessor tests the bit under the frame table's hold
+    // before it serves a frame - and no id is handed out while a fault on
+    // it is in flight (the pop's `loading_` skip).
+    StatusOr<FreeOutcome> FreePage(PageId page_id) override;
+
+    // BF-R11's store half: pages `FreePage` has freed, and creations served
+    // from the free list rather than the cursor. Both rise only.
+    std::uint64_t pages_freed() const noexcept;
+    std::uint64_t pages_reused() const noexcept;
+    // All three under one map hold: `SHOW META` calls this from any core,
+    // and `allocated_pages_` is written under the map latch only.
+    AllocationCounters allocation_counters() const noexcept override {
+        AssertNotUnderMapHold("allocation_counters");
+        LatchGuard map(map_latch());
+        return AllocationCounters{allocated_pages_, pages_freed_, pages_reused_};
+    }
 
     // Diagnostic log, null (discard) by default. Set after Open(), since
     // the store has to exist before a server has anything to log about;
@@ -736,7 +755,7 @@ public:
     bool latch_armed() const noexcept { return latch_armed_; }
 
     // Test hooks: hold a resident frame's latch as if another core held it,
-    // with no pin, so the sweep's and EvictClean's latch refusals can be
+    // with no pin, so the sweep's and `FreePage`'s latch refusals can be
     // exercised before a second core can reach a frame (AM-S2). Absent
     // frame: NotFound. The word is read back by `latch_word_for_test`.
     Status LatchFrameForTest(PageId page_id, PinMode mode, std::uint32_t core);
@@ -757,6 +776,21 @@ public:
     // written back.
     void SetAfterWritebackCopyForTest(std::function<void(PageId)> hook) {
         after_writeback_copy_for_test_ = std::move(hook);
+    }
+
+    // **BF-S2's two seams**, set and cleared while nothing they name runs
+    // (read unsynchronised, as the hook above). The first runs on an armed
+    // fault after its id is published to `loading_` and the structure latch
+    // is dropped, before the device read: a cell parks a stale fault there
+    // to show the free list's pop skips its id. The second runs inside
+    // `FlushMaps` after the copy and before the write, holding the map write
+    // barrier: a cell parks one core's flush there to show another core's
+    // `PersistMaps` waits for its write.
+    void SetAfterFaultPublishedForTest(std::function<void(PageId)> hook) {
+        after_fault_published_for_test_ = std::move(hook);
+    }
+    void SetAfterMapCopyForTest(std::function<void()> hook) {
+        after_map_copy_for_test_ = std::move(hook);
     }
 
     // Pin accounting (MG04). Live pins across all frames, and the highest
@@ -780,11 +814,10 @@ public:
     // reclaiming before that runs would lose a write. `DirtyEvictionQueue()`
     // is what EVT03 will drain.
     //
-    // **Nothing calls this yet**, deliberately: `page.md` §3's first line is
-    // that raw spans are unsafe the moment eviction exists, and every caller
-    // still holds one, so enabling the sweep before the `PageRef` migration
-    // would be a use-after-free. It exists now so the pinned-class guarantee
-    // a Bound Cabin rests on is testable before that migration lands.
+    // Every accessor returns a pinned `PageRef`, which is what makes a sweep
+    // safe (`page.md` §3); its callers are named at `EvictColdFrames` below.
+    // A frame `FreePage` discarded is never a victim here: it is gone.
+    //
     // The CLOCK usage counter's ceiling (`docs/spec/eviction.md` EV1,
     // `[PROPOSED] 5`). A cap and not a free-running count: it bounds how
     // many sweep rotations a hot frame can survive, so a page that fell out
@@ -1113,6 +1146,47 @@ private:
     // `EnsureAddressable` or a throwing allocation does not strand an id.
     std::unordered_set<PageId> claiming_;
 
+    // ---- The free list (BF-R6) -------------------------------------------
+    //
+    // Ids `FreePage` cleared, which `CreateNew` hands out again ahead of the
+    // cursor. Under `map_latch_`. In memory only: a crash forgets it, and
+    // until a clean restart the floor hides any id below it from the cursor
+    // - the undo log's recycle list states the same loss (UP4). The cursor
+    // and the floor never move for it, because a clear bit below the floor
+    // can be an id the log names, while the list holds only ids a reclaim
+    // checked and gated.
+    //
+    // **Ordered, and asked by the cursor too** (BF-S2's review, B2). The
+    // cursor claims the lowest clear bit at or above it, and every id a
+    // mount's reclaim frees lies above a fresh mount's cursor - so without
+    // a skip the cursor would hand a listed id out past the pop's
+    // `loading_` test, and to a headerless create. `ClaimNextFreeIdLocked`
+    // passes over a listed id, and the pop takes the lowest first.
+    std::set<PageId> free_list_;
+    // `free_list_.size()`, stored under `map_latch_` and read without it, so
+    // a creation with nothing listed - the common case - takes no extra
+    // hold. A stale zero skips one pop; a stale nonzero costs one hold.
+    std::atomic<std::size_t> free_listed_{0};
+    void NoteFreeListSize() noexcept {
+        free_listed_.store(free_list_.size(), std::memory_order_relaxed);
+    }
+    // BF-R11's counters, under `map_latch_`.
+    std::uint64_t pages_freed_ = 0;
+    std::uint64_t pages_reused_ = 0;
+
+    // **The map write barrier** (BF-R5). `FlushMaps` copies the dirty
+    // regions under the map latch and writes the copies after it, so without
+    // this a `Sync` running between another core's copy and its write found
+    // every region clean and returned before that write landed. Held across
+    // `FlushMaps`' copy and write, it makes a `PersistMaps` or a `Sync` that
+    // returns cover every region state copied before it began - which is
+    // what a reclaim's "the cleared bits are durable" rests on (BF-R7). A
+    // plain mutex, outer to the map latch and never taken under it; it is
+    // held across device I/O, which is why it is not the map latch. Null
+    // unarmed, as the other two.
+    mutable Latch map_flush_latch_;
+    Latch* map_flush_latch() const noexcept { return latch_armed_ ? &map_flush_latch_ : nullptr; }
+
     // Debug: a public free-map reader must not be reached from inside the
     // *map* hold, because `Latch` is not recursive (`base/latch.hpp`) and a
     // second acquisition **hangs**, naming nothing. This aborts naming the
@@ -1183,7 +1257,11 @@ private:
     //
     // It also answers "who runs the map writeback when one store serves
     // every core" without a rule: N checkpointers each call this, the first
-    // to take the hold clears the flags, and the rest write nothing.
+    // copies and clears the flags, and **every later caller waits on the map
+    // write barrier until that copy is written** (BF-R5), so a returning
+    // `Sync` or `PersistMaps` covers every region state copied before it
+    // began. Before the barrier it need not have: a caller arriving between
+    // another's copy and write found nothing dirty and returned.
     StatusOr<std::size_t> FlushMaps();
 
     // Waits, through `gate`, for the log records of `page_ids` to be durable
@@ -1320,13 +1398,43 @@ private:
     class ReservedFrame;
     // Publishes `slot`, which `ReserveFrame` handed this caller and the
     // caller has filled, as `page_id`'s frame. A page already resident wins
-    // and `slot` goes back to the free list.
-    std::span<std::byte, kPageSize> InsertFrame(PageId page_id, ReservedFrame&& slot, bool dirty,
-                                                bool warm = true);
+    // and `slot` goes back to the free list - except under a create.
+    //
+    // **A create refuses to lose the race** (BF-R5): `kCreate` is the three
+    // `Create*` paths, whose id no other caller holds - so a frame already
+    // resident is a fault on an id a reclaim handed out again, reading the
+    // dead image, and the create answers `Corruption` rather than serve it.
+    enum class Inserting : std::uint8_t { kFault, kCreate };
+    StatusOr<std::span<std::byte, kPageSize>> InsertFrame(PageId page_id, ReservedFrame&& slot,
+                                                          bool dirty, Inserting why,
+                                                          bool warm = true);
     // The two creations' common tail: the slot they reserved before
     // claiming an id, zeroed and published dirty, since a brand-new page
     // exists only in its frame until it is written back.
-    std::span<std::byte, kPageSize> PublishFreshPage(PageId page_id, ReservedFrame&& slot);
+    StatusOr<std::span<std::byte, kPageSize>> PublishFreshPage(PageId page_id,
+                                                               ReservedFrame&& slot);
+
+    // The body of both `CreateNew*Unpinned`. A `headerless` create never
+    // pops the free list (BF-R6): a headerless page is unlogged and carries
+    // no checksum, so after a crash a reused id reads as its dead image
+    // rather than as the all-zero "never written" signature. Its id is also
+    // zeroed on the device and marked headerless **before its frame exists**
+    // (BF-S1's Census A, R1), so no writeback can stamp a checksum - child 1
+    // of a directory page - into it while it still reads as headered.
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewFrom(bool headerless);
+    // The headerless arm's zero-write and mark, run on a claimed id with no
+    // latch held and no frame inserted yet.
+    Status MarkHeaderlessBeforeInsert(PageId headerless_page);
+
+    // Pops the free list under both holds (BF-R6): the lowest listed id
+    // whose bit is still clear and which is neither resident nor in
+    // flight, claimed - bit set, counted - in the same hold.
+    // `kInvalidPageId` when none is ready.
+    PageId PopFreeListLocked();
+
+    // Undoes a claim whose create failed before its frame existed: the bit
+    // cleared and the count restored, a popped id back on the list.
+    void ReleaseClaim(PageId page_id, bool popped) noexcept;
 
     // ---- Slots (BE-R1) ---------------------------------------------------
     //
@@ -1462,7 +1570,7 @@ private:
     }
 
     // Creates this region's headerless bitmap if it has none yet. The one
-    // caller is CreateNewHeaderlessUnpinned - the moment the fact the
+    // caller is MarkHeaderlessBeforeInsert - the moment the fact the
     // bitmap records stops being "no".
     StatusOr<std::span<std::byte, kPageSize>> EnsureHeaderlessMap(PageId page_id);
 
@@ -1482,6 +1590,9 @@ private:
     bool latch_forced_ = false;
     // SetAfterWritebackCopyForTest's hook; empty outside a test.
     std::function<void(PageId)> after_writeback_copy_for_test_;
+    // BF-S2's seams; empty outside a test.
+    std::function<void(PageId)> after_fault_published_for_test_;
+    std::function<void()> after_map_copy_for_test_;
 
     // ---- AM-S2's structure latch --------------------------------------
     //
@@ -1491,9 +1602,10 @@ private:
     // M1 one pool serves one core (`page.md` §6). AM-S2 shares the pool, and
     // this is what a shared table runs under: the pin accounting (step 1),
     // the insert (2b), and **all three erasers** - `ReleaseScanSlot`,
-    // `EvictClean` and `EvictColdFrames`. What is still outside it is every
-    // *reader* of the table that is not one of those, which is step 3's
-    // list and is stated below rather than implied.
+    // `FreePage` (BF-R5, which replaced `EvictClean`) and
+    // `EvictColdFrames`. What is still outside it is every *reader* of the
+    // table that is not one of those, which is step 3's list and is stated
+    // below rather than implied.
     //
     // **Null where the store is not shared**, which is `LatchGuard`'s whole
     // shape and what keeps G2: at `cores = 1` the guard is a null test and
@@ -1638,18 +1750,22 @@ private:
     //
     // Release on the store, acquire on the load: a reader that sees `true`
     // sees the bitmap the writer installed before setting it. It never goes
-    // back to `false` - nothing removes a headerless page - so a stale
+    // back to `false` - nothing removes a headerless page, and `FreePage`
+    // refuses one `Corruption` - so a stale
     // `false` costs one extra pass through the latched path and never a
     // wrong answer in the other direction.
     std::atomic<bool> any_headerless_{false};
 
     // D8(a): the instance's allocated-page count, maintained rather than
     // swept. Seeded at mount - which already reads every region, so the
-    // seed is free - and moved by each of the sites that sets a free-map
-    // bit. O(1) at every print, where the sweep it replaced was O(regions)
+    // seed is free - moved up by each of the sites that sets a free-map
+    // bit and down by `FreePage` (BF-R5). O(1) at every print, where the sweep it replaced was O(regions)
     // and is printed at mount, at shutdown and by SHOW META.
     std::uint32_t allocated_pages_ = 0;
     PageId next_new_page_id_;
+    // `Open`'s `first_new_page_id`: the system range below it is never
+    // freed (BF-R5).
+    const PageId system_floor_;
 
     // First id that may ever be evicted; everything below is resident by
     // class (EV3).

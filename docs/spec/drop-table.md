@@ -1,22 +1,73 @@
 # DROP TABLE v1 — catalog-scoped, with the oid tombstone
 
 Decisions DT1-DT7. `DROP TABLE` removes the catalog's knowledge of a
-relation and reclaims no pages. It shares `docs/spec/alter.md` AL4's
-RESTRICT predicate, and its transactional behaviour is
-`docs/spec/ddl-transactional.md` §5a's.
+relation, and its pages go back to the allocator after the drop's commit,
+once no replay and no reader can reach them (DT1). It shares
+`docs/spec/alter.md` AL4's RESTRICT predicate, and its transactional
+behaviour is `docs/spec/ddl-transactional.md` §5a's.
 
-## DT1 — Catalog-scoped: the relation becomes unreachable, its pages orphan
+## DT1 — Catalog-scoped, and its pages reclaimed after the commit
 
-v1 removes the *catalog's* knowledge of the relation and reclaims no
-pages. The heap/btree chain, the var-heap chain, index pages and any
-Bound Cabin pages stay allocated and unreachable — leaked space, stated
-plainly. Returning a page to the free map is `physical-optimizer.md` §6
-gate 3 (a reallocated page breaks trail validation — per-relation Keystone
-ids collide at a reused slot), and any reuse needs a consumer of the
-reader horizon that no user-relation purge is (`txn.md` §4.1). A DROP that
-guessed at
-either would be the partial recovery `txn.md` §8 forbids, in different
-clothes.
+The drop itself writes catalog rows only. Its retype of the `sys.objects`
+row also records what the relation owes: the anchor page and the var-heap
+root, packed into the tombstone's `pending_roots`
+(`catalog/rows.hpp`; superblock 21). A rollback, or a loser undone at
+mount, restores the word to 0 with the rest of the row, so nothing is owed
+(`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md` BF-R1,
+BF-R2).
+
+**What is reclaimed** is what those roots reach (BF-R3,
+`server/page_reclaim.hpp`):
+- the anchor;
+- the clustered tree, by descent and by its leaf chain;
+- every tree an anchor slot names - a dropped or rolled-back index's
+  included, since no slot is ever removed;
+- the var-heap chain;
+- a pre-SUS-1 heap chain.
+
+Every page is checked for the class its parent names and for its owner -
+the relation's oid, or the slot's index oid. A page that fails is neither
+freed nor walked through, and is counted `reclaim_skipped`.
+
+**When**, both conditions together:
+- **No replay can name a page** (BF-R4): the durable redo start has passed
+  the drop's commit. No WAL record is added.
+- **No reader can reach a page.**
+  - A tombstone a mount found pending is freed on core 0's tick after that
+    mount's completion checkpoint (BF-R8). No statement of that run can
+    reach it: the name resolves `NotFound`, and every memo and cache is
+    built after the mount. At `cores = 1` that is at once; at `cores > 1`
+    it waits for every core's first checkpoint.
+  - A drop committed during the run is freed once every core's statement
+    epoch has passed the drop's commit (BF-R9). That is the end of every
+    statement whose memo could hold the relation, and a statement
+    publishes its epoch before it reads the schema word.
+
+**The order** frees children before parents: leaves, then each internal
+level, with a map sync after each; each chain tail-first, a sync per page;
+the anchor last. Only once those frees are durable is the tombstone's word
+cleared. A crash before the clear leaves the tombstone pending, and the
+next mount drives it again; the walk's owner check makes that re-drive
+idempotent (BF-R7). A freed id comes back through the store's free list
+(`page.md` §5), and the file never shrinks.
+
+**What stays leaked** is every page no root reaches:
+- pages left unlinked by a failed growth or split;
+- a failed `CREATE INDEX`'s tree;
+- a failed or rolled-back `CREATE TABLE`'s pages;
+- a refused catalog report's page;
+- a previous run's undo pages (UP4);
+- a dropped assertion's Bound Cabin chain;
+- Waystone pages.
+
+`docs/inflight/known-gaps.md` names each. A drop never frees Bound Cabin
+pages: DT3 refuses it while an assertion exists.
+
+**Gate 3 is answered for a dropped relation only**
+(`physical-optimizer.md` §6). A reused page that would validate a stale
+location is a miss, through the walk's owner check, the replay gate and
+BF-R10's checks on every remembered location. Gate 3 stays shut for a
+mover.
 
 ## DT2 — The oid tombstone: a dropped oid is never reissued
 
@@ -26,8 +77,8 @@ dropped relation's rows outright could hand its oid to the next CREATE,
 and a reissued oid falsifies "(oid, pk) is forever-unique": stale
 advisory structures (trails, access stats) keyed by the dead oid would
 validate against the new relation, and with the dead relation's pages
-still holding their bytes (DT1), a recorded location could serve a dead
-table's row as a live answer. So the `sys.objects` row is **retyped, not
+handed out again to another relation (DT1), a recorded location could
+serve a dead table's row as a live answer. So the `sys.objects` row is **retyped, not
 retired**: `type_oid` becomes `kTypeDroppedTable`, the row keeps its oid
 and name forever. Name resolution filters on `kTypeTable`, so the name
 frees for reuse immediately; the oid floor stands because the max-scan
@@ -67,10 +118,13 @@ name is read by resolution itself — no in-place exception), every other
 core re-reading at its next boundary through the schema version word
 (`catalog.md` CT2). `sys.*` relations are refused, ALTER's AL7 verbatim.
 
-In autocommit the drop **retires** its dependent rows. Inside an explicit
-transaction it **delete-marks** them instead and records the
-`sys.objects` retype's before-image, both on the transaction's trail, so
-`ROLLBACK` restores the relation and its rows. The drop is **atomic but
+Every production drop **delete-marks** its dependent rows and records the
+`sys.objects` retype's before-image, both on its transaction's trail, so
+`ROLLBACK` restores the relation and its rows. That includes an autocommit
+drop, which runs in the implicit transaction `BeginWrite` opens. The marks
+retire once settled, through the §5d purge or at the next mount. Only a
+drop at the bootstrap id retires outright, and only tests reach one (BF-Q12
+(a): the code governs, and this text was restated to it). The drop is **atomic but
 not isolated** — other sessions see it before it commits;
 `docs/spec/ddl-transactional.md` §5a says why.
 
@@ -97,8 +151,11 @@ meeting the clean error the post-park re-`Bind` gives it
 **What it does not buy, and DT5 is unchanged**: the drop is still not
 isolated. A read that *starts* after the drop has taken the relation takes
 no borrow at all — a refused read borrow leaves the reader holding nothing
-and reading on, because a reader needs no borrow to be correct (DT1: the
-pages stay allocated and the oid is never reissued). So the guarantee is
+and reading on. A fresh resolution answers `NotFound` once the drop's
+catalog write is made; the readers that read on are the ones whose memo
+predates the drop, and they stay correct because no page of the relation is
+freed while one of them runs (DT1's statement epoch) and the oid is never
+reissued (DT2). So the guarantee is
 "a positioned reader is not overtaken", never "no reader sees the drop
 before it commits".
 

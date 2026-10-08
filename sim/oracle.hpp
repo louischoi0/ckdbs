@@ -85,6 +85,27 @@ public:
     }
     bool HasTable(const std::string& table) const { return tables_.count(table) != 0; }
 
+    // **DROP TABLE** (BF-R12). Committed - by autocommit, or by the
+    // transaction's COMMIT - the relation leaves the checked set and is
+    // remembered with the rows it held, because a drop is acknowledged
+    // before it is durable: a crash before the next SYNC may bring it back,
+    // holding exactly those. A rollback keeps it. `indeterminate` is a drop
+    // answered with an error, whose outcome is unknown either way.
+    struct Dropped {
+        TableRows rows;
+        bool synced = false;
+        bool indeterminate = false;
+    };
+    void DropTable(const std::string& table, bool indeterminate = false) {
+        if (in_txn_) {
+            working_.erase(table);
+            txn_dropped_.push_back(table);
+            return;
+        }
+        Forget(table, indeterminate);
+    }
+    const std::map<std::string, Dropped>& dropped() const { return dropped_; }
+
     // ---- Transactions ---------------------------------------------------
 
     void Begin() {
@@ -93,6 +114,8 @@ public:
         in_txn_ = true;
     }
     void Commit() {
+        for (const std::string& table : txn_dropped_) Forget(table, /*indeterminate=*/false);
+        txn_dropped_.clear();
         tables_ = std::move(working_);
         working_.clear();
         touched_.clear();
@@ -101,16 +124,24 @@ public:
         in_txn_ = false;
     }
     void Rollback() {
+        txn_dropped_.clear();
         working_.clear();
         touched_.clear();
         pending_.clear();  // a rolled-back key is free again (W12)
         in_txn_ = false;
     }
     // The transaction's outcome is unknown — its COMMIT answered an error.
-    // Every row it touched stops being anyone's to assert on.
-    void Abandon() {
+    // Every row it touched stops being anyone's to assert on. When it was the
+    // COMMIT that erred, the drops it made may have committed with it: each
+    // is an indeterminate drop, as an errored autocommit drop is. (A ROLLBACK
+    // that erred cannot have committed one, and the stream names that
+    // relation again once its own ROLLBACK undoes the drop.)
+    void Abandon(bool commit_unknown = false) {
         for (const auto& [table, ids] : touched_) {
             for (const std::uint64_t id : ids) unchecked_[table].insert(id);
+        }
+        if (commit_unknown) {
+            for (const std::string& table : txn_dropped_) Forget(table, /*indeterminate=*/true);
         }
         Rollback();
     }
@@ -184,7 +215,10 @@ public:
         return indeterminate_.count(table) != 0 || unchecked_.count(table) != 0;
     }
 
-    void MarkSynced() { synced_ = tables_; }
+    void MarkSynced() {
+        synced_ = tables_;
+        for (auto& [table, drop] : dropped_) drop.synced = true;
+    }
 
     // The committed state. A transaction in flight is deliberately not
     // visible here: this is what a crash would leave and what the restart
@@ -234,6 +268,17 @@ private:
     std::map<std::string, std::set<std::uint64_t>> pending_;
     std::map<std::string, std::size_t> indeterminate_;
     std::map<std::string, std::set<std::uint64_t>> unchecked_;
+    std::map<std::string, Dropped> dropped_;
+    std::vector<std::string> txn_dropped_;
+
+    // The committed relation leaves the checked set, remembered with the
+    // rows it held.
+    void Forget(const std::string& table, bool indeterminate) {
+        auto it = tables_.find(table);
+        dropped_[table] = Dropped{it != tables_.end() ? it->second : TableRows{}, false,
+                                  indeterminate};
+        if (it != tables_.end()) tables_.erase(it);
+    }
 };
 
 }  // namespace kds::sim

@@ -518,7 +518,8 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
                                  check_view, wal);
     if (!build.ok()) {
         // The discard marker, then the caller's error. Pages and id leak -
-        // the backfill's precedent; nothing reclaims a page in this engine.
+        // the backfill's precedent: no reclaim walk reaches a chain no
+        // catalog row names (`drop-table.md` DT1's stated leaks).
         if (Status s = EmitAssertDrop(wal, assertion_id, kInvalidPageId); !s.ok()) return s;
         return build.status();
     }
