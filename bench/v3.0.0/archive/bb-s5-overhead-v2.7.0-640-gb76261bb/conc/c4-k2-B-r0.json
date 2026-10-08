@@ -1,0 +1,62 @@
+{
+ "label": "B",
+ "run": 0,
+ "shape": "eight",
+ "cores": 2,
+ "clients": 4,
+ "count": 2000,
+ "durability": "relaxed",
+ "server_cpus": "0,2",
+ "client_cpus": "4,5,6,7",
+ "wait_s": 95.0,
+ "host_before": {
+  "loadavg": "1.29 1.52 1.70 2/293 1178777",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "1.26 1.51 1.69 2/303 1178793",
+  "competing": []
+ },
+ "pid": 1178779,
+ "mount": {
+  "recovery_checkpoint_us": 2949.0
+ },
+ "rows": 8000,
+ "span_s": 0.1732,
+ "rows_per_s": 46184.6,
+ "p0_us": 37.9,
+ "p25_us": 56.4,
+ "p50_us": 70.6,
+ "p95_us": 97.3,
+ "p99_us": 127.8,
+ "max_us": 10455.4,
+ "refusals": 0,
+ "errors": 0,
+ "first_error": null,
+ "client_cpu_share": [
+  0.74,
+  0.73,
+  0.72,
+  0.96
+ ],
+ "client_cores": [
+  0.0,
+  0.0,
+  0.0,
+  1.0
+ ],
+ "counts": [
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000",
+  "count(*) 2000"
+ ],
+ "meta_delta": {
+  "wal_syncs": 0.0,
+  "wal_ring_full": 0.0,
+  "wal_ring_full_refusals": 0.0,
+  "sched_foreground_polled_us": 31025.0,
+  "sched_foreground_polls": 2002.0,
+  "sched_foreground_consumed_us": 31025.0
+ }
+}

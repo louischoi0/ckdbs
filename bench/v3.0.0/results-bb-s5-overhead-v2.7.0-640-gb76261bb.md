@@ -1,9 +1,17 @@
-# BB-S5 overhead - partial, deferred (v2.7.0-640-gb76261bb)
+# BB-S5 overhead (v2.7.0-640-gb76261bb)
 
-**Status: partial. The operator deferred the rest of the measurement on
-2026-10-07** to take other work first; this file states what had been
-measured when the run was stopped, and nothing here is a pass for a cell
-that did not run.
+**Status: BB closed on this measurement (BD-Q12 (b), the operator's word of
+2026-10-08, `raft-marks-2026-10-08.md` §6).** On 2026-10-07 the operator
+deferred the rest and this file was pushed in part at `dbeb876c`. The
+detached job kept running and finished every cell it had been given: C4's
+last four runs, C5, and pinned `cores = 2` C3 and C4. Those runs were
+recorded at BB's close on `worktree-bb-s5-close`, from the archive as the
+job left it. They were not run again. No wait breakdown was taken (below).
+
+**What this measures.** It measures BB's code, not the engine on `main`
+today. BD (`workorder-bd-sorted-leaf-named-keys.md`) later withdrew BB-R1,
+BB-R2 and BB-R3's below-mark refusal on a btree, so an insert no longer
+issues its id under the leaf's hold. BD-R10 waived BD's own measurement.
 
 - **A** = `bddd450c` (`v2.7.0-622-gbddd450c`), Release - BB's opening commit.
 - **B** = `b76261bb` (`v2.7.0-640-gb76261bb`), Release - BB's code at
@@ -12,12 +20,16 @@ that did not run.
   (`archive/bb-s5-overhead-v2.7.0-640-gb76261bb/serial-start.txt`).
 - Method: the AP-S5 file's (`tools/ap_overhead_benchmark.py`), driven by
   `tools/bb_overhead_benchmark.py` (serial), `tools/bb_concurrent_benchmark.py`
-  (C3/C4) and `tools/bb_orderby_benchmark.py` (C5, never run). Fresh server
-  and data file per (cell, run), arms alternating which goes first, a
-  repeated arm (`insert-again`) and a control arm (`ping`) for the noise
-  floor, `relaxed` durability, `/proc/loadavg` and competing processes before
-  and after each run. Raw JSON and logs: `archive/bb-s5-overhead-v2.7.0-640-gb76261bb/`.
-- Host: 8 CPUs, no build ran during the serial cells.
+  (C3/C4) and `tools/bb_orderby_benchmark.py` (C5). Each (cell, run) gets a
+  fresh server and data file, and the arms alternate which goes first. Each
+  cell has a repeated arm (`insert-again`, `limit-again`) and a control arm
+  (`ping`) for the noise floor. Durability is `relaxed`. `/proc/loadavg` and
+  competing processes are recorded before and after each run. Raw JSON and
+  logs: `archive/bb-s5-overhead-v2.7.0-640-gb76261bb/`.
+- Host: 8 CPUs. No build ran during the serial cells, C3 or C5. During C4
+  at `cores = 8`, another worktree's build and test run did: a `cmake
+  --build` across A's run 5, and a `ctest` across B's runs 5 and 6 (each
+  run's `host_before`/`host_after`).
 
 ## The `cores = 1` gate - C1, C1s, C2: no cost resolved
 
@@ -38,49 +50,107 @@ bootstrap 95% interval:
 | C2 | 10,000 | -0.05 | [-0.18, +0.12] | -0.10% | no |
 
 **At `cores = 1` the A/B resolves no cost of BB.** Every interval contains
-zero except C1s at 1,000 rows, where B is faster by 0.33 us - one cell of
-nine, unexplained, and not claimed as a gain. The control arm (`ping`), which
-BB does not touch, moves by -2.2 to +0.7 us across the same runs, so the
-noise floor is of that order. An unpinned series (`default`, 10 runs) was also
-taken: every interval straddles zero but is ~10x wider (up to +/-12 us) - it
-measures the scheduler, not the engine, and decides nothing.
+zero except C1s at 1,000 rows, where B is faster by 0.33 us. That is one
+cell of nine, unexplained, and not claimed as a gain. The control arm
+(`ping`), which BB does not touch, moves by -2.2 to +0.7 us across the same
+runs, so the noise floor is of that order. An unpinned series (`default`,
+10 runs) was also taken. Every interval there straddles zero but is ~10x
+wider (up to +/-12 us): it measures the scheduler, not the engine, and
+decides nothing.
 
 `recovery_checkpoint_us` on a fresh file ran 7.1-24.7 ms (median ~8.4 ms):
 no device stall flagged.
 
-## `cores = 8` - C3 complete, C4 partial
+## `cores > 1` - C3 and C4, 10 runs each
 
-Not pinned apart (reactors and 8 client processes share the 8 CPUs; BA-Q2's
-clean ceiling is `cores = 2`), so these are indicative only. Medians of the
-runs completed:
+Medians over runs; latencies in us. `cores = 2` is pinned: the server under
+`taskset -c 0,2` (core 1's reactor pins itself to CPU 1), four clients on
+CPUs 4-7, so C4 there inserts into four relations, not eight. The busiest
+client ran at a median 0.89-0.99 of its CPU, so the `cores = 2` rows are
+close to the driver's own ceiling. `cores = 8` is not pinned apart: the reactors and 8 client
+processes share the 8 CPUs, so those rows are indicative only. *spread* is
+the runs whose sessions landed on more than one core; the kernel's
+SO_REUSEPORT hash places them (BA's P11), so a run's shape varies.
 
-| Cell | runs | arm | rows/s | p0 | p25 | p50 | p95 | p99 | refusals |
-|---|---|---|---|---|---|---|---|---|---|
-| C3 one relation | 10 | A | 62,296 | 39.9 | 79.3 | 96.4 | 182.6 | 247.8 | 1.5 |
-| C3 | 10 | B | 63,041 | 36.9 | 80.3 | 95.2 | 178.2 | 246.9 | 0.0 |
-| C4 eight relations | 6 of 10 | A | 61,520 | 38.9 | 75.6 | 93.5 | 182.4 | 264.2 | 0.0 |
-| C4 | 6 of 10 | B | 63,429 | 40.2 | 74.9 | 90.7 | 173.8 | 246.2 | 0.0 |
+| Cell | cores | arm | rows/s | p0 | p25 | p50 | p95 | p99 | refusals | spread |
+|---|---|---|---|---|---|---|---|---|---|---|
+| C3 one relation | 2 | A | 45,160 | 39.5 | 64.0 | 74.0 | 100.3 | 123.3 | 0 | 8/10 |
+| C3 | 2 | B | 44,620 | 36.8 | 61.5 | 72.8 | 101.3 | 123.8 | 0 | 9/10 |
+| C4 four relations | 2 | A | 54,065 | 40.9 | 54.8 | 61.5 | 92.0 | 111.5 | 0 | 8/10 |
+| C4 | 2 | B | 49,548 | 39.5 | 60.1 | 69.8 | 94.5 | 123.6 | 0 | 9/10 |
+| C3 one relation | 8 | A | 62,296 | 39.9 | 79.3 | 96.4 | 182.6 | 247.8 | 1.5 | 10/10 |
+| C3 | 8 | B | 63,041 | 36.9 | 80.3 | 95.2 | 178.2 | 246.9 | 0 | 10/10 |
+| C4 eight relations | 8 | A | 62,297 | 35.8 | 74.4 | 90.8 | 177.1 | 250.3 | 0 | 10/10 |
+| C4 | 8 | B | 63,429 | 40.6 | 74.6 | 90.7 | 176.8 | 253.1 | 0 | 10/10 |
 
-B is not slower on either shape. C3's refusal median falls from 1.5 to 0
-(`TXN_CONFLICT retryable=1`, retried); with ten runs that is a direction,
-not a resolved difference. Latencies in us.
+Paired by run (B's run r minus A's run r), with a bootstrap 95% interval:
+
+| Cell | cores | dB-A p50 (us) | CI95 | dB-A rows/s | CI95 |
+|---|---|---|---|---|---|
+| C3 | 2 | -4.7 | [-7.7, +9.2] | +1,256 | [-7,451, +3,419] |
+| C4 | 2 | -0.7 | [-5.6, +15.3] | -3,749 | [-13,475, +2,386] |
+| C3 | 8 | -0.9 | [-10.2, +3.5] | -222 | [-3,061, +3,814] |
+| C4 | 8 | -1.7 | [-8.2, +9.5] | +2,357 | [-5,063, +7,457] |
+
+**No cell resolves a cost of BB at `cores > 1`.** Every paired interval
+contains zero. C4 at `cores = 2` is the one cell whose medians lean against
+B: p50 61.5 -> 69.8 us, and 54,065 -> 49,548 rows/s. Its paired median is
+-0.7 us, but its interval is the widest of the four (up to +15.3 us). It is
+recorded as unresolved, not as a pass, and the cause was not looked for: no
+wait breakdown was taken. C3's refusal median at `cores = 8` falls from 1.5
+to 0 (`TXN_CONFLICT retryable=1`, retried). With ten runs that is a
+direction, not a resolved difference. At `cores = 8`, C4's run 5 ran under
+the other worktree's build and test run on both arms, at a host load of about
+4 to 6 (A 21,478 rows/s, B 35,215), and B's run 6 under its test run. They
+are kept. Without runs 5 and 6 the paired p50 is -1.7 us [-7.1, +5.5] and
+the paired rows/s +2,357 [-1,637, +4,261]: still nothing resolved.
+
+## C5 - `ORDER BY <pk>` over a relation `kUnordered` at A
+
+`bb_u (id int64, v int64) BTREE`, 10,000 rows in 500-row batches of named
+keys. A loads them descending, so the relation turns `kUnordered` and its
+walk sorts each page. B loads the same keys ascending, because B refuses a
+key below the mark. 10 runs; per arm, medians of each run's percentiles:
+
+| arm | A p0 | p25 | p50 | p95 | p99 | B p0 | p25 | p50 | p95 | p99 | dB-A p50 | CI95 | % |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `LIMIT 100` | 252.8 | 257.9 | 261.2 | 276.5 | 301.9 | 249.1 | 254.7 | 257.8 | 271.8 | 289.1 | -3.4 | [-4.2, -3.3] | -1.32% |
+| `LIMIT 100` again | 252.3 | 257.7 | 261.2 | 277.9 | 302.1 | 249.4 | 255.0 | 258.1 | 273.8 | 295.1 | -3.1 | [-3.7, -2.9] | -1.21% |
+| full, 10,000 rows | 19,771 | 19,971 | 20,081 | 21,718 | 23,544 | 19,590 | 19,803 | 19,898 | 21,509 | 21,873 | -186 | [-209, -165] | -0.93% |
+| `ping` (control) | 38.4 | 40.9 | 41.3 | 52.8 | 60.2 | 38.7 | 40.8 | 41.2 | 52.0 | 60.5 | -0.1 | [-0.2, -0.0] | -0.24% |
+
+**What B gives back on this cell is resolved and small: about 1%.** That is
+3.4 us on `LIMIT 100` and 186 us over 10,000 rows. The two arms are loaded in
+opposite orders by construction, so the delta is BB-R10's walk together with
+whatever layout difference the two load orders leave; the cell does not
+split them. The first `LIMIT 100` reply and the first full reply were
+identical between A and B on every run (row set and order). On the first
+run B was also sent a descending pair on a probe relation (`500`, then
+`499`), and refused `499` as BB-R3 then did: *"primary key 499 is below
+relation 4003's high-water mark 501"*. BD has since withdrawn that refusal
+on a btree.
 
 ## Not executed
 
-- **C4's remaining runs** - the run was left going when the measurement was
-  deferred; this file reflects the six completed when it was written.
-- **C5** (`ORDER BY <pk>` over a relation `kUnordered` at A) - not executed.
-- No wait breakdown was taken for any cell, and no `SHOW META` comparison is
-  summarised here; the per-run `SHOW META` captures are in the archive.
+- **No wait breakdown** for any cell. The per-run `SHOW META` deltas
+  (`wal_syncs`, ring-full, foreground polls) are in each run's JSON and are
+  not summarised here.
+- **No pinned `cores = 8` cell.** The host has 8 CPUs, so the reactors and
+  the clients cannot be pinned apart.
 
 ## Insight
 
 BB moved the id issue under the leaf's (or tail's) exclusive hold. At one
-core that hold was already taken by the placement, so the issue, the borrow
-and the encode only moved inside a span that existed - which is why no cost
-resolves. The open question is the `cores > 1` shape, where the hold is now
-held longer; C3/C4 show no loss at 8 cores unpinned, and the clean answer
-waits for a pinned `cores = 2` cell when the measurement resumes.
+core the placement already took that hold, so the issue, the borrow and the
+encode only moved inside a span that existed. That is why no cost resolves
+there. At `cores > 1` the hold is now held longer, and no cell resolves a
+loss either. The one cell that leans against B is C4 at `cores = 2`, where
+the inserts share no leaf, so what BB changed that they still share is the
+`sys.tables` chain (the reason BB-R8 asked for the cell). A cost there would be
+what BB-S1's census priced (`ForFirstRow` holds each `sys.tables` chain page
+`X` up to the row). It is unresolved at ten runs. BA's census (BA-S2..S4)
+is where it gets a wait breakdown. The engine that census measures has BD's
+shape: BD-R6 took the issue back out from under the leaf.
 
 ## Raw analysis - pinned series
 

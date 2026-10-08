@@ -1,0 +1,10 @@
+c5-n10000-r0 load 0.88->0.97 same={'limit': True, 'full': True} limit p50 A=261.4 B=257.9 full p50 A=20059.5 B=19880.7 errs=0 probe=ERR primary key 499 is below relation 4003's high-water mark 501; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order
+c5-n10000-r1 load 0.97->0.97 same={'limit': True, 'full': True} limit p50 A=260.8 B=256.1 full p50 A=19910.0 B=19732.7 errs=0 probe=None
+c5-n10000-r2 load 0.97->1.05 same={'limit': True, 'full': True} limit p50 A=259.5 B=256.1 full p50 A=20014.6 B=19813.3 errs=0 probe=None
+c5-n10000-r3 load 1.05->1.05 same={'limit': True, 'full': True} limit p50 A=261.1 B=257.9 full p50 A=19955.5 B=19738.4 errs=0 probe=None
+c5-n10000-r4 load 1.05->1.04 same={'limit': True, 'full': True} limit p50 A=260.3 B=257.0 full p50 A=20060.8 B=19853.8 errs=0 probe=None
+c5-n10000-r5 load 1.04->1.04 same={'limit': True, 'full': True} limit p50 A=259.3 B=256.2 full p50 A=20101.7 B=19927.1 errs=0 probe=None
+c5-n10000-r6 load 1.04->1.03 same={'limit': True, 'full': True} limit p50 A=261.3 B=257.7 full p50 A=20109.3 B=19957.0 errs=0 probe=None
+c5-n10000-r7 load 1.03->1.03 same={'limit': True, 'full': True} limit p50 A=266.5 B=262.3 full p50 A=20109.3 B=19915.6 errs=0 probe=None
+c5-n10000-r8 load 1.03->1.02 same={'limit': True, 'full': True} limit p50 A=264.1 B=260.8 full p50 A=20159.9 B=20058.0 errs=0 probe=None
+c5-n10000-r9 load 1.02->1.02 same={'limit': True, 'full': True} limit p50 A=263.7 B=258.9 full p50 A=20323.4 B=20084.0 errs=0 probe=None

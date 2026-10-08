@@ -1855,8 +1855,8 @@ Status Expeditor::Start() {
             PinToCore(workers.back(), core->core_id(), &*logger_);
         }
         logger_->Info("expeditor", "running " + std::to_string(config_.cores) +
-                                       " cores; core 0 serves every statement until the "
-                                       "per-core catalog cache exists (workplan P6)");
+                                       " cores; every statement runs on the core its session "
+                                       "is on");
     }
     // **The stop signal, as an ordinary readable fd** (`server/stop_signal.hpp`).
     // Registered here rather than polled, so a `systemctl stop` or a Ctrl-C takes

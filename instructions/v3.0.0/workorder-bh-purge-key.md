@@ -25,7 +25,7 @@ Written 2026-10-08 on `worktree-bh-purge-key` from `0446b3b0`
 - **W2 replaced W1's direction.** K1 and `DELETE` stay as they are, and a
   separate statement frees a key. BH-Q1 is W2's direction.
 - **W3.** CLA's reply to W2 proposed seven points, recorded in
-  `raft-marks-2026-10-08.md` §3, and W3 directs that the order be written
+  `raft-marks-2026-10-08.md` §8, and W3 directs that the order be written
   on them. They map to §5's items as follows:
 
   | point in the reply | item |
@@ -63,7 +63,7 @@ Written 2026-10-08 on `worktree-bh-purge-key` from `0446b3b0`
       under the leaf's write hold (`btree.cpp:896-904`), where a retired
       slot is keyless.
     - Neither premise had moved, so neither proposal was revised.
-  - The adoptions are recorded in `raft-marks-2026-10-08.md` §5.
+  - The adoptions are recorded in `raft-marks-2026-10-08.md` §10.
 
 **Where the specification is.** The specification W3 asks for is §2. It is
 written here and not under `docs/spec/`, because that bucket holds only
@@ -1071,7 +1071,7 @@ cannot be.
 W3 directed the order to be written on the proposals of CLA's reply to W2
 (the header's table). Every mark below was **adopted on the operator's
 standing go-ahead of 2026-10-08** (`go-ahead-achieving-milestone`;
-`raft-marks-2026-10-08.md` §5). Each is CLA's proposal, and none is a
+`raft-marks-2026-10-08.md` §10). Each is CLA's proposal, and none is a
 per-item mark of the operator's own.
 
 | item | question | kind | CLA's proposal | mark |
@@ -1150,7 +1150,7 @@ not measured; measured at the milestone's close".
     a fill made with no pin (BH-R6, BH-Q5).
   - K1's own reasons name the hazard BH-R5 gates (§0).
 - **What stays open:** Census A and Census D, which are BH-S1's.
-- **Recorded with it:** the words in `raft-marks-2026-10-08.md` §2-§4, and
+- **Recorded with it:** the words in `raft-marks-2026-10-08.md` §7-§9, and
   the index row.
 - **No engine file moved, and no suite ran.**
 
@@ -1227,7 +1227,7 @@ applying any of them.
 **House rules:**
 
 - **H1 applied.** The header maps each point of the reply to its item and
-  marks BH-Q10..Q16 new. Raft-marks §4 says the same.
+  marks BH-Q10..Q16 new. Raft-marks §9 says the same.
 - **H2 applied** by this section.
 - **H3 applied** as §0's "What bounds BH", which BH-R12 carries to
   `known-gaps.md`.
@@ -1245,7 +1245,7 @@ each for the reason above.
 ### BH opened - 2026-10-08
 
 - **Where:** on `worktree-bh-purge-key` at `37a7a9cd`, on the operator's
-  standing go-ahead (`raft-marks-2026-10-08.md` §5).
+  standing go-ahead (`raft-marks-2026-10-08.md` §10).
 - **BH-Q0..Q16 are adopted as §5 proposes**, not marked per item. Before
   adopting BH-Q1 and BH-Q16, CLA re-read their premises, which the header
   states. Neither proposal was revised.
