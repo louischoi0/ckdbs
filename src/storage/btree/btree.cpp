@@ -591,6 +591,126 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
     return out;
 }
 
+// One keyed version of a leaf, copied out whole: a Tuple's `payload` is a
+// view into the page, and both callers reformat the page under it. The
+// delete mark travels with it - a delete-marked version carries its
+// deleter's `trx_id` and must arrive still marked, or a row some snapshot
+// was told is gone comes back.
+struct KeyedVersion {
+    std::uint64_t key;
+    std::uint64_t trx_id;
+    std::uint64_t undo_ptr;
+    bool deleted;
+    bool incoming;
+    std::vector<std::byte> bytes;
+};
+
+// Every keyed slot of `leaf`, in slot order - which is key order (BD-R1),
+// checked as it is read. A retired slot carries no key and is dropped.
+StatusOr<std::vector<KeyedVersion>> CollectKeyed(heap::PageView& leaf, PageId leaf_id) {
+    std::vector<KeyedVersion> out;
+    const std::uint16_t n = leaf.slot_count();
+    out.reserve(static_cast<std::size_t>(n) + 1);
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto key = SlotKeystoneId(leaf, i, n);
+        if (key.status().code() == StatusCode::kNotFound) continue;  // retired slot
+        if (!key.ok()) return key.status();
+        if (!out.empty() && out.back().key >= key.value()) {
+            return Status::Corruption("leaf " + std::to_string(leaf_id) + " holds key " +
+                                      std::to_string(key.value()) + " after key " +
+                                      std::to_string(out.back().key) +
+                                      "; a leaf's keyed slots ascend (BD-R1)");
+        }
+        auto tuple = leaf.ReadTuple(i);
+        if (!tuple.ok()) return tuple.status();
+        out.push_back({key.value(), tuple.value().trx_id, tuple.value().undo_ptr,
+                       tuple.value().deleted, /*incoming=*/false,
+                       std::vector<std::byte>(tuple.value().payload.begin(),
+                                              tuple.value().payload.end())});
+    }
+    return out;
+}
+
+// Whether the versions from `from` on fit one empty leaf. Always so for
+// SQL's rows, which are one size per relation (invariant 13); a guard for
+// the storage contract, whose callers may mix sizes.
+bool FitOneLeaf(const std::vector<KeyedVersion>& versions, std::size_t from) {
+    std::size_t need = 0;
+    for (std::size_t k = from; k < versions.size(); ++k) {
+        need += versions[k].bytes.size() + heap::kTupleHeaderOnDiskSize + heap::kSlotOnDiskSize;
+    }
+    return need <= heap::kNextPageIdOffset - (heap::kHeapHeaderOffset + heap::kHeaderSize);
+}
+
+// **A full leaf with retired slots is compacted before it is split** (BH-S5,
+// `instructions/v3.0.0/workorder-bh-purge-key.md`). Retired slots keep their
+// directory entries and bytes, so a leaf a rollback or a `PURGE` thinned can
+// be full with few keys or none - and splitting it is wrong twice over: a
+// leaf with no key below `id` would append a new leaf whose low key equals
+// its own (`id == min_key`, a separator the parent already holds), and one
+// with fewer than two keys has nothing to divide. So the leaf is rebuilt in
+// place - `min_key`, the sibling link and `grown_over` unchanged, every keyed
+// version back in key order, the incoming row where it sorts - when the
+// result fits; `std::nullopt` when there is nothing to drop or it would not,
+// and the split goes ahead. No parent changes. The page is logged as the
+// one image of a `BTREE_SPLIT`, which carries the row (BD-R12), and its
+// relayout epoch moves past every slot it renumbered (section 3.1a). A write
+// failing after the reformat would leave the page half rebuilt and unlogged,
+// as a divide's would; `FitOneLeaf` is asked first so none can.
+StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
+    Descent& descent, PageId leaf_id, std::uint64_t id, std::span<const std::byte> payload,
+    std::uint64_t trx_id) {
+    heap::PageView leaf(descent.leaf.bytes());
+    // Asked before anything is copied: every append split of a full leaf
+    // comes through here, and almost none has a retired slot to drop.
+    bool any_retired = false;
+    for (std::uint16_t i = 0, n = leaf.slot_count(); i < n && !any_retired; ++i) {
+        auto key = SlotKeystoneId(leaf, i, n);
+        if (key.status().code() == StatusCode::kNotFound) any_retired = true;
+        else if (!key.ok()) return key.status();
+    }
+    if (!any_retired) return std::optional<storage::InsertPlacement>{};
+    auto keyed = CollectKeyed(leaf, leaf_id);
+    if (!keyed.ok()) return keyed.status();
+    std::vector<KeyedVersion> merged = std::move(keyed.value());
+    const auto pos = std::lower_bound(merged.begin(), merged.end(), id,
+                                      [](const KeyedVersion& v, std::uint64_t k) {
+                                          return v.key < k;
+                                      });
+    merged.insert(pos, KeyedVersion{id, trx_id, /*undo_ptr=*/0, /*deleted=*/false,
+                                    /*incoming=*/true,
+                                    std::vector<std::byte>(payload.begin(), payload.end())});
+    if (!FitOneLeaf(merged, 0)) return std::optional<storage::InsertPlacement>{};
+
+    const std::uint64_t min_key = leaf.min_key();
+    const PageId next = leaf.next_page_id();
+    const std::uint64_t epoch = leaf.RelayoutEpoch();
+    const bool grown_over = leaf.grown_over();
+    const std::span<std::byte, kPageSize> bytes = AsPage(descent.leaf.bytes());
+    const std::uint64_t owner = storage::GetOwnerOid(bytes);
+    auto rebuilt = heap::PageView::CreateEmptyAs(bytes, min_key, PageType::kBtreeLeaf, owner);
+    if (!rebuilt.ok()) return rebuilt.status();
+    if (grown_over) rebuilt.value().MarkGrownOver();
+
+    storage::InsertPlacement out;
+    for (const KeyedVersion& v : merged) {
+        auto slot = rebuilt.value().InsertTuple(v.bytes, v.trx_id, v.undo_ptr);
+        if (!slot.ok()) return slot.status();
+        if (v.deleted) {
+            if (Status s = rebuilt.value().DeleteMark(slot.value(), v.trx_id); !s.ok()) return s;
+        }
+        if (v.incoming) {
+            out.page_id = leaf_id;
+            out.slot = slot.value();
+        }
+    }
+    rebuilt.value().set_next_page_id(next);
+    storage::SetRelayoutEpoch(bytes, epoch + 1);
+    out.Record(leaf_id, /*is_new_page=*/false, 0);
+    out.held.push_back(std::move(descent.leaf));
+    return std::optional<storage::InsertPlacement>{std::move(out)};
+}
+
 // ---- Dividing a full leaf (docs/spec/heap-and-tuple.md section 4.1) ------------
 //
 // Reached when an id sorts *inside* a full leaf - below one of its keys
@@ -633,19 +753,10 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
                                                        std::uint64_t trx_id,
                                                        std::uint64_t owner_oid) {
     // Every keyed version on the page, copied out whole before anything is
-    // written: a Tuple's `payload` is a view into the page, and the page is
-    // about to be reformatted under it. Slot order is key order (BD-R1), so
-    // the incoming row is merged in where it sorts and the vector stays
-    // sorted - no sort, and one cut.
-    struct Version {
-        std::uint64_t key;
-        std::uint64_t trx_id;
-        std::uint64_t undo_ptr;
-        bool deleted;
-        bool incoming;
-        std::vector<std::byte> bytes;
-    };
-    std::vector<Version> merged;
+    // written (`CollectKeyed`). Slot order is key order (BD-R1), so the
+    // incoming row is merged in where it sorts and the vector stays sorted -
+    // no sort, and one cut.
+    std::vector<KeyedVersion> merged;
     std::uint64_t old_min_key = 0;
     PageId old_next = kInvalidPageId;
     std::uint64_t old_epoch = 0;
@@ -658,46 +769,26 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
         old_epoch = leaf.RelayoutEpoch();
         old_grown_over = leaf.grown_over();
 
-        const std::uint16_t n = leaf.slot_count();
-        merged.reserve(static_cast<std::size_t>(n) + 1);
-        for (std::uint16_t i = 0; i < n; ++i) {
-            auto key = SlotKeystoneId(leaf, i, n);
-            if (key.status().code() == StatusCode::kNotFound) continue;  // retired slot
-            if (!key.ok()) return key.status();
-            if (!merged.empty() && merged.back().key >= key.value()) {
-                return Status::Corruption("leaf " + std::to_string(leaf_id) + " holds key " +
-                                          std::to_string(key.value()) + " after key " +
-                                          std::to_string(merged.back().key) +
-                                          "; a leaf's keyed slots ascend (BD-R1)");
-            }
-            auto tuple = leaf.ReadTuple(i);
-            if (!tuple.ok()) return tuple.status();
-            merged.push_back({key.value(), tuple.value().trx_id, tuple.value().undo_ptr,
-                              tuple.value().deleted, /*incoming=*/false,
-                              std::vector<std::byte>(tuple.value().payload.begin(),
-                                                     tuple.value().payload.end())});
-        }
+        auto keyed_versions = CollectKeyed(leaf, leaf_id);
+        if (!keyed_versions.ok()) return keyed_versions.status();
+        merged = std::move(keyed_versions.value());
     }
     const std::size_t keyed = merged.size();
     const auto pos = std::lower_bound(merged.begin(), merged.end(), id,
-                                      [](const Version& v, std::uint64_t k) { return v.key < k; });
+                                      [](const KeyedVersion& v, std::uint64_t k) {
+                                          return v.key < k;
+                                      });
     const std::size_t incoming_at = static_cast<std::size_t>(pos - merged.begin());
-    merged.insert(pos, Version{id, trx_id, /*undo_ptr=*/0, /*deleted=*/false, /*incoming=*/true,
-                               std::vector<std::byte>(payload.begin(), payload.end())});
+    merged.insert(pos, KeyedVersion{id, trx_id, /*undo_ptr=*/0, /*deleted=*/false,
+                                    /*incoming=*/true,
+                                    std::vector<std::byte>(payload.begin(), payload.end())});
 
     // Whether a run of versions fits an empty leaf. Always so for SQL's rows,
     // which are one size per relation (invariant 13) - the run is at most the
     // leaf's own keyed rows - and a guard for the storage contract, whose
     // callers may mix sizes.
-    const auto fits_one_leaf = [&](std::size_t from) {
-        std::size_t need = 0;
-        for (std::size_t k = from; k < merged.size(); ++k) {
-            need += merged[k].bytes.size() + heap::kTupleHeaderOnDiskSize + heap::kSlotOnDiskSize;
-        }
-        return need <= heap::kNextPageIdOffset - (heap::kHeapHeaderOffset + heap::kHeaderSize);
-    };
     std::size_t cut = 0;
-    if (old_next == kInvalidPageId && incoming_at > 0 && fits_one_leaf(incoming_at)) {
+    if (old_next == kInvalidPageId && incoming_at > 0 && FitOneLeaf(merged, incoming_at)) {
         cut = incoming_at;  // the rightmost leaf, at the insertion point
     } else {
         if (keyed < 2) {
@@ -917,6 +1008,14 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     }
 
     // ---- The leaf is full ------------------------------------------------
+    //
+    // First, room a rollback or a `PURGE` left behind (`CompactLeafAndInsert`).
+    {
+        auto compacted = CompactLeafAndInsert(descent, leaf_id, id, payload, trx_id);
+        if (!compacted.ok()) return compacted.status();
+        if (compacted.value().has_value()) return std::move(*compacted.value());
+    }
+
     //
     // Two shapes. When `id` sorts above every key in the leaf the growth is
     // an *append*: a fresh leaf, nothing moved, which is what a monotonic id

@@ -19,16 +19,16 @@ Decisions fixed here:
 
 - **K1 — Issue-once, with one named exception.** A Keystone id is bound
   to at most one committed tuple in the lifetime of a relation, **except
-  across a `PURGE` that freed it**. No other path rebinds it: not the
+  across a `PURGE` that freed it**. No other built path rebinds it: not the
   allocator, not delete-then-insert, not crash recovery, and not a purge
   the engine runs on its own. **An id is consumed when a tuple carrying it
   commits** (BD-R4): a committed key stays in its leaf, live and then
   delete-marked, and the delete-marked row is its tombstone - until a
   `PURGE` retires it. An id issued and burned without placement, or placed
   and rolled back, was never bound, and a named key may take it.
-  - **`PURGE` is the operator's statement** (BH-R1). It frees one
-    committed key at a time, visibly and logged, and only once no reader
-    can see the row it deleted (`heap-and-tuple.md` §4.1c, PU5). After it,
+  - **`PURGE` is the operator's statement** (BH-R1). It frees the deleted
+    keys of a pk window, each whole and in key order, visibly and logged,
+    and only once no reader can see the row each deleted (`heap-and-tuple.md` §4.1c, PU5). After it,
     an `INSERT` naming the key is judged as if the key had never been
     placed. The issue cursor never hands a purged key out (K3): only an
     `INSERT` that names it takes it again.

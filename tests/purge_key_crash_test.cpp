@@ -1,4 +1,5 @@
 #include "file_rig_crash.hpp"
+#include "tree_structure.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -378,6 +379,79 @@ TEST(PurgeKeySqlCrashTest, APurgedKeyPlacedAgainIsKeptCommittedAndUndoneUncommit
             EXPECT_TRUE(KeyIsFree(*mounted.value(), 5));
         }
     }
+}
+
+TEST(PurgeKeySqlCrashTest, ACompactedLeafSurvivesACrashAtEveryRecordAndStaysRouted) {
+    // BH-S5's fix: a full leaf of retired slots is rebuilt in place to take
+    // the row - one page image in one `BTREE_SPLIT`. A cut anywhere leaves
+    // the leaf as it was or as it became, never between, and every
+    // separator still bounds its subtree.
+    TempDir before;
+    TempDir after;
+    std::uint64_t low = 0;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CurrentCoreGuard as(0);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        Ok(d0, "CREATE TABLE t (id int64, s varchar(16)) BTREE");
+        std::string load = "INSERT INTO t VALUES ";
+        for (int id = 1; id <= 600; ++id) {
+            load += "(" + std::to_string(id) + ", 'v')" + (id < 600 ? ", " : "");
+        }
+        Ok(d0, load);
+        // The second leaf, emptied of keys: every row of it deleted and purged.
+        auto oid = rig->core(0).catalog().FindTableOidByName("t");
+        ASSERT_TRUE(oid.ok());
+        auto access = rig->core(0).catalog().InitTableAccess(oid.value());
+        ASSERT_TRUE(access.ok());
+        auto first = btree::BtreeLeftmostLeaf(rig->store(), access.value()->desc_page_id);
+        ASSERT_TRUE(first.ok());
+        PageId second = kInvalidPageId;
+        std::uint64_t high = 0;
+        {
+            auto page = rig->store().GetForRead(first.value());
+            ASSERT_TRUE(page.ok());
+            second = heap::PageView(page.value().bytes()).next_page_id();
+        }
+        ASSERT_NE(second, kInvalidPageId) << "600 rows did not fill a second leaf";
+        {
+            auto page = rig->store().GetForRead(second);
+            ASSERT_TRUE(page.ok());
+            heap::PageView leaf(page.value().bytes());
+            low = leaf.min_key();
+            const PageId third = leaf.next_page_id();
+            ASSERT_NE(third, kInvalidPageId) << "the second leaf is the last";
+            auto next = rig->store().GetForRead(third);
+            ASSERT_TRUE(next.ok());
+            high = heap::PageView(next.value().bytes()).min_key() - 1;
+        }
+        const std::string window =
+            " WHERE id BETWEEN " + std::to_string(low) + " AND " + std::to_string(high);
+        Ok(d0, "DELETE FROM t" + window);
+        Ok(d0, "PURGE FROM t" + window);
+        ASSERT_TRUE(rig->Snapshot(before.path).ok());
+        Ok(d0, "INSERT INTO t VALUES (" + std::to_string(low) + ", 'back')");
+        ASSERT_TRUE(rig->Snapshot(after.path).ok());
+    }
+    CutEverywhere(before.path, after.path, [&](Expeditor& db, bool committed,
+                                                const std::string& where) {
+        CurrentCoreGuard as(0);
+        const std::vector<std::uint64_t> at =
+            crash_rig::Ids(db.dispatcher(), "SELECT id FROM t WHERE id = " + std::to_string(low));
+        if (committed) {
+            EXPECT_EQ(at, std::vector<std::uint64_t>{low}) << where;
+        } else {
+            EXPECT_TRUE(at.empty()) << where << ": an uncommitted row survived";
+        }
+        auto oid = db.catalog().FindTableOidByName("t");
+        ASSERT_TRUE(oid.ok());
+        auto access = db.catalog().InitTableAccess(oid.value());
+        ASSERT_TRUE(access.ok());
+        testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(db.store(),
+                                                              access.value()->desc_page_id);
+        EXPECT_TRUE(KeyIsFree(db, low + 1)) << where;
+    });
 }
 
 }  // namespace

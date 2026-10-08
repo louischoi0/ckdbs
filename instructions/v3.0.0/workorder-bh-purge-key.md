@@ -209,8 +209,8 @@ key is free, and an `INSERT` that names it is placed.
 - **A refusal or a crash in the middle of a window leaves it partly
   purged.** Each key is whole, and a re-run finishes the window (BH-Q5).
 - **A crash between a retire and its release leaks that row's spills.**
-- **The leaf space a purge frees comes back only at a dividing split**,
-  never at an append split.
+- **The leaf space a purge frees comes back only when the leaf fills**, at
+  the compaction BH-S5 added before a split, or at a divide.
 - **A wide window collects every target before it writes**, so the target
   list grows with the window.
 - **A waiting `PURGE` re-walks its window from `lo` on every attempt**, so
@@ -1775,12 +1775,149 @@ wrongly.
     included, and `catalog.cpp:2078`'s stale *"what nothing purges"* with
     them.
   - **The bug entry** gains the purged-key path.
-  - **`known-gaps.md`:** the Keystone id entry is restated, and three
-    entries are added: what bounds `PURGE`, the horizon obligation every
-    future read view inherits, and Census D's accidental `DELETE` refusal.
+  - **`known-gaps.md`:** the Keystone id entry is restated, and two
+    entries are added: what bounds `PURGE`, which carries the horizon
+    obligation every future read view inherits, and Census D's accidental
+    `DELETE` refusal. Locks' "what still polls" names `PURGE`'s wait.
   - **`CLAUDE.md`:** invariant 11, and the Keystone id and Caller-supplied
     pk rows.
 - **The done-when grep**, widened as BH-S1 recorded, finds every remaining
   hit true. Each one is about oids, transaction ids, Cabin group ids,
   catalog ids, timers, index entries, persisted enum numbers, the lifetime
   budget or issued ids, or it is a sentence restated with the exception.
+
+### BH-S5's review - 2026-10-08
+
+One `critics-developer` pass over the text commit `04649133`, read against
+the code at `469e0b92`. Every PU10 message, §4.1c's claims, the manual's
+strings, `cabin.md`'s departure correction and `foreign-keys.md`'s F1
+reasoning were confirmed true.
+
+**One code bug, fixed:**
+
+- **An integer literal past 64 bits widened a `PURGE` window silently.**
+  The lexer wraps such a literal. So `id >= 18446744073709551616` folded
+  to `id >= 0` and freed every deleted key, and a literal in
+  `[2^63, 2^64)` read as negative and was refused with the wrong text.
+  `UPDATE` and `DELETE` were never exposed: their `CompileWhere`
+  coercion already refuses a wrapped literal before any pk is used.
+  `PURGE` judges its window without that step.
+- **Fix:** `PkLiteral` and the `BETWEEN` arm of `FoldPkWindow` treat a
+  wrapped literal as unreadable. `PURGE` then refuses it `InvalidArgument`
+  at the literal's byte, as outside the key space. A borrow skips it,
+  which leaves its window a superset, as for any unread conjunct.
+  `parser::IntLiteralWrapped` is now the one test, and `row_codec.cpp`'s
+  copy uses it. It costs a length test unless the literal has 19 digits or
+  more.
+- **Cells:** three rows join the PU10 table.
+
+**Text corrections, applied:**
+- `known-gaps.md`'s verified-at commit, and Locks' "what still polls";
+- `payload.hpp`'s list of `kNoTxnId` emitters;
+- `cabin.md`'s bare section numbers, and its bound-entry pk row;
+- `cabin_bound_page.hpp`'s comment;
+- `CLAUDE.md`'s Secondary indexes and Caller-supplied pk rows, and the
+  superblock wording;
+- K1's "no other built path" and "frees the deleted keys of a pk window";
+- `foreign-keys.md`'s antecedent;
+- this section's count of the entries `known-gaps.md` gained.
+
+**Listed for the owner, not changed:** `cabin.md` and `assertion.md`
+describe a bound entry's hint as verified and healed in place, and no
+assertion code reads a hint. That is outside BH, which leaves those rows'
+hint text as it found it.
+
+### BH-S5's close measurement, and the two defects it and the text review found - 2026-10-08
+
+- **Measured** by `ck-tester` in `build-release`, interleaved:
+  - **A** = `10593366` (`v2.7.0-706-g10593366`), the commit BH opened at;
+  - **B** = `04649133` (`v2.7.0-711-g04649133`).
+
+  `bench/v3.0.0/results-bh-close-v2.7.0-711-g04649133.md` and its archive
+  hold the numbers.
+- **Overhead.** No point statement regresses beyond noise: by-pk
+  `INSERT`, `SELECT`, `UPDATE` and `DELETE`, at `cores = 1` and 2, move
+  −0.6 to +0.3 µs at p50, against a 0.6 µs noise floor.
+  - **One scan series at `cores = 1`, 10,000 rows, read +13 %.** Three of
+    the four pairings of that shape read B faster, and the scan's diff is
+    comments only, so the results file attributes it to host or build
+    state. It is not explained.
+- **The cost of a purge:**
+  - **Per key:** one key per statement runs about 17.5 k keys/s under
+    `relaxed`, at about 56 µs p50. A 1,000-key window runs about 170 k
+    keys/s, at 5.7-6.2 µs per key.
+  - **Under `strict` or `group`:** about 715 statements/s, 95 % of it the
+    commit wait.
+  - **From a `DELETE`'s commit to a `PURGE` that succeeds:** 58 µs p50
+    idle, and 84-98 µs p50 under three concurrent readers. There were no
+    refusals in 360,000 samples.
+- **Defect 1, found by the measurement: a wholly purged leaf refused its
+  own low key.**
+  - **The cause:** retired slots keep their directory entries and bytes,
+    so a non-first leaf whose every slot was purged was full and held no
+    key. Naming its low key again split it as an append: a new leaf whose
+    low key equals the old one, a separator the parent already held. The
+    refusal stood for good, about one key per leaf in every multi-leaf
+    window.
+  - **A second shape:** a full leaf with one keyed slot among retired
+    ones, where an incoming key below it would divide. A divide needs two
+    keys, so it was refused `OutOfSpace`.
+  - **The fix:** `btree::CompactLeafAndInsert` runs before any split of a
+    full leaf. It is asked first by a copy-free scan for a retired slot,
+    and when there is one it rebuilds the leaf in place:
+    - `min_key`, the sibling link and `grown_over` are kept;
+    - every keyed version, delete marks included, goes back in key order;
+    - the incoming row is placed where it sorts;
+    - the relayout epoch moves past every renumbered slot.
+
+    It is logged as the one image of a `BTREE_SPLIT`. No parent changes.
+    `CollectKeyed`, `FitOneLeaf` and `KeyedVersion` were lifted out of
+    `SplitLeafAndInsert` so the two share the copy.
+  - **Cells, each killed with the compaction removed, twice:**
+    - `PurgeKeyTest.EveryKeyOfAWhollyPurgedLeafIsPlacedAgain`, refused
+      *"separator key 199 is already present"*;
+    - `PurgeKeyTest.APartlyPurgedLeafTakesKeysBelowItsLastOneDescending`,
+      refused *"full with fewer than two live tuples"*;
+    - `PurgeKeySqlCrashTest.ACompactedLeafSurvivesACrashAtEveryRecordAndStaysRouted`,
+      a cut at every record.
+- **Defect 2, found by BH-S5's text review: a literal past int64.** It
+  wrapped in the lexer, so `PURGE FROM t WHERE id >= 18446744073709551616`
+  folded to `id >= 0` and freed every deleted key (§7's BH-S5 review).
+  `parser::IntLiteralWrapped` now judges by value with `std::from_chars`,
+  so leading zeros are no wrap. `PkLiteral` and the fold's `BETWEEN` arm
+  treat a wrapped literal as unread, and `PURGE` refuses it.
+  `row_codec.cpp`'s coercion uses the same test, which also stops it
+  refusing a short literal with leading zeros (`d = 007`).
+- **Found and not fixed, outside BH:** the same wrap reaches `SELECT`,
+  `UPDATE` and `DELETE`. `WHERE id = 18446744073709551621` reads, and
+  deletes, row 5. It was reproduced and filed as
+  `docs/inflight/bugs/an-integer-literal-past-int64-in-a-where-compares-as-its-wrap.md`,
+  because the fix is a user-visible refusal on statements BH does not own.
+- **The engine-fix review** (`critics-developer`) found no correctness bug
+  in either fix. It confirmed:
+  - the one-image `BTREE_SPLIT`, its take-back and both undo paths;
+  - invariants 2-4, and holds on the leaf alone;
+  - the duplicate check runs before the compaction.
+
+  **Applied:**
+  - the `from_chars` form of the wrap test;
+  - a positive wrap (`2^64 + 5`) in place of the `2^63` row, which passed
+    before the fix too;
+  - the partly-purged descending cell;
+  - the half-rebuilt-page note;
+  - the debug line's text;
+  - `fits_one_leaf` inlined.
+
+  **Rejected:**
+  - **Merging the two collect-and-merge blocks and sharing the rebuild
+    loop.** The divide distributes the versions over two pages at a cut,
+    and the compaction writes one page. A shared loop would carry the
+    divide's two-page shape into the compaction.
+  - **A page-id check in the crash cell.** The compaction adds no page by
+    construction, and the separator check fails if a second leaf took the
+    same low key.
+- **The fixes postdate B**, so the measurement does not cover them.
+  - **The compaction** sits on a full leaf's path only, behind a copy-free
+    scan.
+  - **The literal test** costs a length check on each pk conjunct.
+  - **A re-measurement at the closing commit** is the next step.

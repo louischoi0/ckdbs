@@ -14,6 +14,8 @@
 #include "kds/server/session.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
+#include "kds/storage/btree/btree.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
@@ -345,6 +347,81 @@ TEST_F(PurgeKeyTest, AWindowPurgesEveryDeletedKeyAndPassesOverLiveOnes) {
     EXPECT_EQ(Run("PURGE FROM t WHERE id BETWEEN 1 AND 2"), "PURGED 1");
 }
 
+TEST_F(PurgeKeyTest, EveryKeyOfAWhollyPurgedLeafIsPlacedAgain) {
+    // BH's close measurement found it (`bench/v3.0.0/results-bh-close-*`):
+    // a non-first leaf whose every slot was purged is full of retired slots
+    // and holds no key, so naming its low key again split it as an append
+    // and promoted a separator its parent already held - refused, for good.
+    // A full leaf with retired slots is compacted first (BH-S5).
+    Ok("CREATE TABLE t (id int64, qty int64) BTREE", "CREATED");
+    std::string load = "INSERT INTO t VALUES ";
+    for (int id = 1; id <= 1000; ++id) {
+        load += "(" + std::to_string(id) + ", 1)" + (id < 1000 ? ", " : "");
+    }
+    Ok(load, "INSERTED");
+    Ok("DELETE FROM t WHERE id >= 1 AND id <= 1000", "DELETED 1000");
+    Ok("PURGE FROM t WHERE id BETWEEN 1 AND 1000", "PURGED 1000");
+    for (int id = 1; id <= 1000; ++id) {
+        const std::string again = Run("INSERT INTO t VALUES (" + std::to_string(id) + ", 2)");
+        ASSERT_TRUE(Placed(again)) << id << ": " << again;
+    }
+    const std::vector<std::uint64_t> walked = Ids(Run("SELECT * FROM t"));
+    ASSERT_EQ(walked.size(), 1000u);
+    EXPECT_TRUE(std::is_sorted(walked.begin(), walked.end()));
+    for (int id : {1, 167, 333, 500, 834, 1000}) {
+        EXPECT_EQ(Ids(Run("SELECT * FROM t WHERE id = " + std::to_string(id))),
+                  (std::vector<std::uint64_t>{static_cast<std::uint64_t>(id)}));
+    }
+}
+
+TEST_F(PurgeKeyTest, APartlyPurgedLeafTakesKeysBelowItsLastOneDescending) {
+    // The other shape a purge leaves: a full leaf with one keyed slot among
+    // retired ones. A key below it sorts inside the leaf, so it would divide
+    // - and a divide needs two keys, so it was refused `OutOfSpace`. The
+    // compaction takes it, and the keys go back in descending order.
+    Ok("CREATE TABLE t (id int64, qty int64) BTREE", "CREATED");
+    std::string load = "INSERT INTO t VALUES ";
+    for (int id = 1; id <= 600; ++id) {
+        load += "(" + std::to_string(id) + ", 1)" + (id < 600 ? ", " : "");
+    }
+    Ok(load, "INSERTED");
+    // The second leaf's keys, read off the tree: `[low, high]`.
+    auto oid = boot_->catalog.FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    auto first = btree::BtreeLeftmostLeaf(store_, access.value()->desc_page_id);
+    ASSERT_TRUE(first.ok());
+    std::uint64_t low = 0;
+    std::uint64_t high = 0;
+    {
+        auto page = store_.GetForRead(first.value());
+        ASSERT_TRUE(page.ok());
+        const PageId second = heap::PageView(page.value().bytes()).next_page_id();
+        ASSERT_NE(second, kInvalidPageId);
+        auto leaf = store_.GetForRead(second);
+        ASSERT_TRUE(leaf.ok());
+        low = heap::PageView(leaf.value().bytes()).min_key();
+        const PageId third = heap::PageView(leaf.value().bytes()).next_page_id();
+        ASSERT_NE(third, kInvalidPageId);
+        auto next = store_.GetForRead(third);
+        ASSERT_TRUE(next.ok());
+        high = heap::PageView(next.value().bytes()).min_key() - 1;
+    }
+    // Every key of it deleted and purged but its last.
+    const std::string window =
+        " WHERE id BETWEEN " + std::to_string(low) + " AND " + std::to_string(high - 1);
+    Ok("DELETE FROM t" + window, "DELETED");
+    Ok("PURGE FROM t" + window, "PURGED");
+    for (std::uint64_t id = high - 1; id >= low; --id) {
+        const std::string again = Run("INSERT INTO t VALUES (" + std::to_string(id) + ", 2)");
+        ASSERT_TRUE(Placed(again)) << id << ": " << again;
+    }
+    const std::vector<std::uint64_t> walked = Ids(Run("SELECT * FROM t"));
+    EXPECT_EQ(walked.size(), 600u);
+    EXPECT_TRUE(std::is_sorted(walked.begin(), walked.end()));
+}
+
 TEST_F(PurgeKeyTest, ALiveKeyIsRefusedInAWindowOfOneHoweverItIsSpelled) {
     // PU3, BH-Q2 (b): `id = 5` and `id BETWEEN 5 AND 5` are one statement.
     // `PURGE FROM t WHERE id = 5` puts the literal at byte 24.
@@ -395,6 +472,13 @@ TEST_F(PurgeKeyTest, EveryRefusalCarriesItsCodeAndByte) {
         {"PURGE FROM t WHERE DATE(ts) = DATE(ts)", StatusCode::kNotImplemented, 19},
         {"PURGE FROM t WHERE id = -7", StatusCode::kInvalidArgument, 24},
         {"PURGE FROM t WHERE id BETWEEN 1 AND -7", StatusCode::kInvalidArgument, 36},
+        // Past int64 the lexer wraps: 2^64 is 0 and 2^64 + 5 is 5, so a fold of
+        // the wrapped value would free every deleted key, or the wrong one
+        // (BH-S5's review).
+        {"PURGE FROM t WHERE id >= 18446744073709551616", StatusCode::kInvalidArgument, 25},
+        {"PURGE FROM t WHERE id = 18446744073709551621", StatusCode::kInvalidArgument, 24},
+        {"PURGE FROM t WHERE id BETWEEN 1 AND 18446744073709551621",
+         StatusCode::kInvalidArgument, 36},
     };
     for (const Case& c : cases) Refused(c.sql, c.code, c.byte);
     // None of them purged 5.

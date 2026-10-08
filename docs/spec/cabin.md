@@ -120,7 +120,7 @@ read-time key re-check filters. This buys four things:
    row now. A committed key names another row only after a `PURGE` freed
    it, and an engine-internal purge would leave a keyed tombstone (K1's
    purge obligation). A rolled-back insert's key, and a purged one, is
-   free and may be named again (W12, BD-R4, §4.1c);
+   free and may be named again (W12, BD-R4, `heap-and-tuple.md` §4.1c);
    a row found under it later is re-checked against the key column like
    any other, and the insert that placed it witnessed it itself (§5). So
    a dangling entry is droppable on sight.
@@ -322,7 +322,8 @@ class:
 - **Dangling entries** — pk not present in the clustered tree. A
   committed key names another row only after a `PURGE`, and a rolled-back
   or purged key named again is re-checked against the key column and
-  witnessed by its own insert (W12, BD-R4, §4.1c): droppable on sight, no
+  witnessed by its own insert (W12, BD-R4, `heap-and-tuple.md` §4.1c):
+  droppable on sight, no
   horizon reasoning - the purge itself did the horizon reasoning.
 - **Non-matching entries** — the tuple exists but no longer matches
   `v`. Droppable only past the same oldest-active horizon that undo
@@ -715,7 +716,7 @@ Bound, 32 B (`BoundCabinEntry`, `include/kds/storage/cabin_bound_page.hpp`,
 
 | Field | Width | Notes |
 |---|---|---|
-| pk | 40 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and it never names another row - a committed id is never rebound except by `PURGE`, which runs after `DELETE` wrote the row's departure, and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
+| pk | 40 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and names another row only after a `PURGE` freed it - harmless, because no bound entry's pk is resolved to read a row, and `DELETE` wrote the old row's departure first - and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
 | flags | 8 bit | includes the `RESERVED` bit for an in-flight entry (assertion §6) |
 | reserved | 16 bit | written 0, ignored |
 | location hint (page id / epoch / slot) | 64 bit | **advisory**, verified through the one verifier `exec/tuple_verify.hpp`; on failure fall back to a pk descent and heal in place |
@@ -764,7 +765,7 @@ with the group key in place of the value.
 | Removal | Any failure, cap, or pressure may un-observe a value at any time | Only `DROP ASSERTION` removes one, which tears the structure down and unpins its pages (`ASSERT_DROP`). `DROP TABLE` on a relation carrying an assertion is `Restrict` |
 | Restart | Every value reads as unobserved; traffic rebuilds | Replay restores headers and entries exactly; the constraint is enforceable immediately, with **no enforcement gap** |
 
-`DELETE` calls the observational class's write hook never, because removal
+`DELETE` never calls the observational class's write hook, because removal
 is forbidden (§5 — an older snapshot may still match through the undo
 chain). It **does** write the bound class's departure (`ReserveDelete`, AS11:
 check-free, maintenance only), so a deleted row's net contribution is 0 - and

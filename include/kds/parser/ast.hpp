@@ -1,5 +1,6 @@
 #pragma once
 
+#include <charconv>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -146,6 +147,19 @@ struct AstValue {
     // kParam arms, which quote the name in what they refuse.
     const std::string& param_name() const noexcept { return str_val; }
 };
+
+// **Whether an integer literal wrapped in the lexer** - its value is outside
+// int64, so `int_val` is not its value and must not answer a range question
+// (`token.hpp`'s digits() note). Judged from the digits by value, so leading
+// zeros are no wrap; a text shorter than 19 characters cannot hold one, so
+// the common case costs a length test.
+inline bool IntLiteralWrapped(const AstValue& v) {
+    if (v.type != ValueType::kInt || v.raw_int_text.size() < 19) return false;
+    std::int64_t value = 0;
+    const char* first = v.raw_int_text.data();
+    const char* last = first + v.raw_int_text.size();
+    return std::from_chars(first, last, value).ec == std::errc::result_out_of_range;
+}
 
 // A column as the statement names it: `x` or `a.x`. Deliberately not
 // called ColumnRef - that name belongs to the *compiled* reference V14

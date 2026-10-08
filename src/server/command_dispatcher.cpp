@@ -5744,7 +5744,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     if (placed.value().restructured() && logging(LogLevel::kDebug)) {
         log_->Debug(is_btree ? "btree" : "heap",
                     "relation of table oid " + std::to_string(oid) +
-                        " grew: new tuple page " + std::to_string(placed.value().page_id) +
+                        " restructured: the row's page " +
+                        std::to_string(placed.value().page_id) +
                         " min_key=" + std::to_string(row_id) + " pages_logged=" +
                         std::to_string(placed.value().changes().size()));
     }
@@ -5973,6 +5974,9 @@ std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAc
     if (cond.kind != parser::PredicateKind::kCompareValue) return std::nullopt;
     if (cond.rhs_kind != parser::RhsKind::kLiteral) return std::nullopt;
     if (cond.val.type != parser::ValueType::kInt) return std::nullopt;
+    // A literal past int64 wrapped in the lexer, so `int_val` is not its
+    // value: no window, rather than the one its wrap names (BH-S5's review).
+    if (parser::IntLiteralWrapped(cond.val)) return std::nullopt;
     // Negative ids do not exist (invariant 6 zero-extends the 40-bit id),
     // so a negative literal is a guaranteed miss - and casting it to
     // uint64 would probe an enormous pk instead.
@@ -8743,7 +8747,8 @@ CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
             if (cond.rhs_kind != parser::RhsKind::kLiteral ||
                 cond.val.type != parser::ValueType::kInt ||
                 cond.val_high.type != parser::ValueType::kInt || cond.val.int_val < 0 ||
-                cond.val_high.int_val < 0 ||
+                cond.val_high.int_val < 0 || parser::IntLiteralWrapped(cond.val) ||
+                parser::IntLiteralWrapped(cond.val_high) ||
                 !IEquals(cond.col.name,
                          catalog::NameView(access.schema.columns.front().name))) {
                 unread(cond);
@@ -9233,6 +9238,12 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
                           cond.kind == parser::PredicateKind::kBetween);
     if (on_pk && literal) {
         for (const parser::AstValue* v : {&cond.val, &cond.val_high}) {
+            if (parser::IntLiteralWrapped(*v)) {
+                return Status::InvalidArgument(
+                    "primary key literal " + v->raw_int_text +
+                    " is outside the Keystone id space [1, 1099511627775] (byte " +
+                    std::to_string(v->byte_offset) + ")");
+            }
             if (v->type == parser::ValueType::kInt && v->int_val < 0) {
                 return Status::InvalidArgument(
                     "primary key literal " + std::to_string(v->int_val) +

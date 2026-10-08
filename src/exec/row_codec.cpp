@@ -661,9 +661,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
     // those arms and not hoisted: a uint64 comparison legitimately carries
     // its upper half in the digits (`ValueAsUint64`), and the wide-decimal
     // arm reads the digits themselves.
-    const bool int_literal_wrapped =
-        val.type == parser::ValueType::kInt && !val.raw_int_text.empty() &&
-        val.raw_int_text != std::to_string(val.int_val);
+    const bool int_literal_wrapped = parser::IntLiteralWrapped(val);
 
     switch (col.type_val) {
         case catalog::kTypeValDate: {

@@ -668,7 +668,7 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   `docs/rules/keystoneid-invariant.md` K1, `heap-and-tuple.md` §4.1.
 
 - **What bounds `PURGE`** (BH, `instructions/v3.0.0/workorder-bh-purge-key.md`
-  §0), verified at `26766699`:
+  §0), verified at `469e0b92` (BH-S4):
   - **One open older snapshot blocks every `PURGE` of a key deleted after
     it.** An idle REPEATABLE READ session refuses each such `PURGE` at
     `exec::kPurgeHorizonWaitNs` (1 s), `TxnConflict retryable=1`.
@@ -684,8 +684,10 @@ which went with the bump (`heap-and-tuple.md` §4.1).
     leaks that row's spills**, which no sweep reclaims (the mount sweep
     covers `sys.assertions` only). Spills of versions older than the
     tombstone, in the undo chain's keeping, were already leaked before BH.
-  - **The leaf space a purge frees comes back only at a dividing split**,
-    never at an append split: a retired slot keeps its directory entry.
+  - **The leaf space a purge frees comes back only when the leaf fills**:
+    a retired slot keeps its directory entry until a full leaf is compacted
+    before it would split (`btree::CompactLeafAndInsert`, BH-S5) or
+    divided, so a thinned leaf holds its slots until an insert needs them.
   - **A wide window collects every target before it writes**, so its
     target list grows with the window.
   - **A purged version's secondary-index entries are never removed** (BH-Q8
@@ -730,7 +732,8 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   since AX-S2b, one found in another unit since AY-S2, and a first encounter
   with a holder between its decide and its release since AY-S3. What still
   polls is a refusal with no slot behind it - no lock table, a holder only
-  the header names, an assertion's group.
+  the header names, an assertion's group - and a `PURGE` waiting on a
+  deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c).
   Found by AT-S13's review, measured on `at-s13-prices` at `896af54`
   (2026-09-26) as a *refusal*: `CommandDispatcher::NoteBlockingWriter` parks
   only when `txn_->IsInFlight(trx)`, and until AX-S1 that walked **this

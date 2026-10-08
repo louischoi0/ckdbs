@@ -19,7 +19,8 @@ Decisions:
   CASCADE does not exist* (the referenced key is immutable), and a
   stored reference can dangle but names a different committed parent
   only after a `PURGE` freed the key - which needs the parent row deleted
-  and committed, so RESTRICT refused it while any child named it, and no
+  and committed, so RESTRICT refused the parent's `DELETE` while any child
+  named it, and no
   reader that could see such a child is left (`heap-and-tuple.md` §4.1c).
   A reference outside a declared foreign key points at the new row.
 - **F2 — Actions: RESTRICT / NO ACTION only.** The grammar is
