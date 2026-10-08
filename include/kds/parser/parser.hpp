@@ -100,6 +100,7 @@ private:
     StatusOr<InsertStmt> ParseInsert();
     StatusOr<UpdateStmt> ParseUpdate();
     StatusOr<DeleteStmt> ParseDelete();
+    StatusOr<PurgeStmt> ParsePurge();
 
     // `{CREATE | DROP} CABIN ON <table>(<column>)`, with the leading two
     // words already consumed. One production for both, since they differ

@@ -294,6 +294,20 @@ struct DispatchOutcome {
     };
     std::optional<LockWait> lock_wait = std::nullopt;
 
+    // **A `PURGE` judged a key it may not free yet** (BH PU4, PU5): its
+    // latest writer is undecided, or its committed deleter is still
+    // invisible to some reader. Nothing was written. `DispatchAsync` polls
+    // until the doubt clears, re-runs the statement whole, and refuses it
+    // `TxnConflict` at `exec::kPurgeHorizonWaitNs`; the synchronous path
+    // answers with that refusal at once, which is `response`. A poll,
+    // because no release or horizon advance kicks it (`known-gaps.md`).
+    struct PurgeWait {
+        std::uint64_t pk = 0;
+        std::uint64_t trx_id = 0;  // the writer waited for, or the deleter
+        bool horizon = false;      // waiting for every reader, not a decide
+    };
+    std::optional<PurgeWait> purge_wait = std::nullopt;
+
     // **AO-S3b: the walk stopped inside the statement and the scope is
     // still open.** `write_block` says which row and which holder; this
     // says the statement is *resumable* rather than re-runnable, which is
@@ -1080,6 +1094,30 @@ private:
     // still the one shape the cap can refuse once S6c propagates it.
     std::optional<txn::LockKey> DeclaredWriteBorrow(
         const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const;
+
+    // **The pk window an AND-list bounds** - the one recognizer of it (BH-R2),
+    // shared by `DeclaredWriteBorrow` and `PURGE`. `[lo, hi)` is folded from
+    // every conjunct that compares the pk with a non-negative integer literal
+    // in one of PU1's six forms; `bounded` says at least one did. `unfolded`
+    // is the first conjunct that did not, which the two callers answer in
+    // opposite ways and both soundly: a borrow skips it, because an AND-list
+    // only removes rows and the window is a superset of what is written; a
+    // `PURGE` refuses it, because skipping one would *widen* what it frees
+    // (`id > 0 AND id <> 5` would free 5).
+    struct PkWindow {
+        std::uint64_t lo = 0;
+        std::uint64_t hi = 0;
+        bool bounded = false;
+        const parser::Condition* unfolded = nullptr;
+    };
+    PkWindow FoldPkWindow(const catalog::TableAccess& access,
+                          const std::vector<parser::Condition>& where) const;
+
+    // Whether an already-resolved relation lives in the `sys` namespace
+    // (AF-P3: identity, not permission) - ALTER's refusal and `PURGE`'s
+    // (BH-Q17). A system relation is a bootstrap row visible to every view,
+    // so the walk is unfiltered.
+    StatusOr<bool> InSystemNamespace(catalog::Oid oid);
 
     // **The borrow a write takes, before the header it judges is
     // interpreted** (AO-S6a, on the operator's choice of 2026-09-08
@@ -1963,6 +2001,13 @@ private:
     // dropping its entry would break the superset invariant. The surplus is
     // subtracted at read time, which now includes the visibility predicate.
     DispatchOutcome HandleDelete(std::string_view line, Session& session);
+    // `PURGE FROM t WHERE <pk window>` (BH): one whole attempt - judge the
+    // window, then write it key by key - under an owned transaction of its
+    // own, so each re-drive after a wait begins with a fresh view (BH-R5)
+    // and holds no unit while it waits. A key still pending - an undecided
+    // writer, or a deleter some reader cannot see yet - is returned as
+    // `purge_wait` and nothing is written.
+    DispatchOutcome HandlePurge(std::string_view line, Session& session);
     // `resume_from` is where a parked walk of this statement stopped
     // (AO-S3b); an inactive cursor is a first run and starts at the head,
     // which is what every caller but `DispatchAsync`'s resume passes. Not

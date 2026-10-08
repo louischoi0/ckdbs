@@ -745,8 +745,8 @@ struct UpdateStmt {
 // `DELETE FROM <t> [WHERE ...]`.
 //
 // A **delete-mark**, never a physical removal: the tuple's bytes stay for
-// readers whose snapshot predates the deleter (docs/spec/txn.md section 4.3), and
-// physical retirement is a purge pass that does not exist. That is why there
+// readers whose snapshot predates the deleter (docs/spec/txn.md section 4.3),
+// and physical retirement is `PURGE`'s (`PurgeStmt` below). That is why there
 // is no column list and nothing to assign - a DELETE changes a slot flag and
 // a writer id, and nothing else.
 //
@@ -758,6 +758,21 @@ struct DeleteStmt {
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t table_byte_offset = 0;
     std::vector<Condition> where;  // empty = every row
+};
+
+// `PURGE FROM <t> WHERE <pk comparisons>` (BH,
+// `instructions/v3.0.0/workorder-bh-purge-key.md` PU1): retires, keyless,
+// the slot of every committed delete-marked row the window names once no
+// reader can see it, so the key may be named again. `DELETE`'s fields, and
+// the `WHERE` token's byte, which a conjunct with no position of its own
+// (a bare subquery) is refused at. `PURGE` is a head matched by text and
+// never a reserved word.
+struct PurgeStmt {
+    std::string table_name;
+    std::string schema;
+    std::uint32_t table_byte_offset = 0;
+    std::uint32_t where_byte_offset = 0;
+    std::vector<Condition> where;  // never empty: the parser refuses a bare PURGE
 };
 
 // `ALTER TABLE <t> RENAME TO <new>` and
@@ -944,8 +959,8 @@ struct AssertionStmt {
 };
 
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
-                               DeleteStmt, CabinStmt, IndexStmt, AssertionStmt, AlterStmt,
-                               DropTableStmt, NamespaceStmt>;
+                               DeleteStmt, PurgeStmt, CabinStmt, IndexStmt, AssertionStmt,
+                               AlterStmt, DropTableStmt, NamespaceStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

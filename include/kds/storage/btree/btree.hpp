@@ -150,8 +150,9 @@ struct LeafPosition {
 StatusOr<LeafPosition> SearchLeaf(heap::PageView& leaf, std::uint64_t id);
 
 // The duplicate a named key meets (BD-R5's first reason): *"duplicate primary
-// key k"*, or *"... k: a row with this key was deleted; a Keystone id is
-// bound once"* for a delete-marked row (BD-R4's tombstone).
+// key k"*, or *"... k: a row with this key was deleted; PURGE frees its
+// key"* for a delete-marked row (BD-R4's tombstone, which a `PURGE` retires;
+// BH-Q13).
 Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot, bool deleted);
 
 // Formats `page` as a brand-new relation's root: an empty leaf with

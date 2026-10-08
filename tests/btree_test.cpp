@@ -1779,7 +1779,9 @@ TEST(BtreeTest, ADuplicateKeyIsRefusedAndADeletedOneSaysItIsBoundOnce) {
     auto deleted = tree.Insert(3, kSmallFiller);
     ASSERT_FALSE(deleted.ok());
     EXPECT_EQ(deleted.status().code(), StatusCode::kAlreadyExists);
-    EXPECT_NE(deleted.status().message().find("a Keystone id is bound once"), std::string::npos)
+    EXPECT_NE(deleted.status().message().find(
+                  "a row with this key was deleted; PURGE frees its key"),
+              std::string::npos)
         << deleted.status().message();
     EXPECT_EQ(ScanAll(store, tree.root).size(), 3u);
 }

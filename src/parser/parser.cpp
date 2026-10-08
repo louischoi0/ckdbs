@@ -2110,6 +2110,34 @@ StatusOr<DeleteStmt> Parser::ParseDelete() {
     return stmt;
 }
 
+StatusOr<PurgeStmt> Parser::ParsePurge() {
+    // `DELETE`'s production, with a `WHERE` required (PU1, PU10): a bare
+    // `PURGE FROM t` would be a sweep of the relation, which nobody asked
+    // for and a later word could add - so it is declined, not wrong. Which
+    // conjuncts the statement admits is the dispatcher's question, asked of
+    // the relation's pk column; the grammar is `DELETE`'s, so the parse
+    // gives every byte a refusal there needs.
+    PurgeStmt stmt;
+    if (Status s = ExpectKeyword("FROM"); !s.ok()) return s;
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
+    const Token& peek = lexer_.Peek();
+    stmt.where_byte_offset = peek.byte_offset;
+    if (peek.type != TokenType::kIdent || !IEquals(peek.text, "WHERE")) {
+        return Status::NotImplemented("PURGE needs a WHERE naming the primary key; purging every "
+                                      "deleted key of a relation is not implemented (byte " +
+                                      std::to_string(peek.byte_offset) + ")");
+    }
+    auto where = ParseOptionalWhere(/*depth=*/0);
+    if (!where.ok()) return where.status();
+    stmt.where = std::move(where.value());
+
+    ConsumeOptionalSemicolon();
+    return stmt;
+}
+
 StatusOr<UpdateStmt> Parser::ParseUpdate() {
     UpdateStmt stmt;
 
@@ -2272,6 +2300,10 @@ StatusOr<Statement> Parser::Parse() {
         auto s = ParseDelete();
         if (!s.ok()) return s.status();
         stmt = std::move(s.value());
+    } else if (IEquals(tok.text, "PURGE")) {
+        auto s = ParsePurge();
+        if (!s.ok()) return s.status();
+        stmt = std::move(s.value());
     } else if (IEquals(tok.text, "ALTER")) {
         auto s = ParseAlter();
         if (!s.ok()) return s.status();
@@ -2288,7 +2320,7 @@ StatusOr<Statement> Parser::Parse() {
     } else {
         return Status::InvalidArgument(
             "unknown SQL keyword '" + std::string(tok.text) +
-            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)");
+            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE)");
     }
 
     // After a successful parse, only EOF may remain (a trailing semicolon

@@ -839,8 +839,8 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot, bool deleted) {
     if (deleted) {
         return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
-                                     ": a row with this key was deleted; a Keystone id is bound "
-                                     "once (page " +
+                                     ": a row with this key was deleted; PURGE frees its key "
+                                     "(page " +
                                      std::to_string(leaf_id) + " slot " + std::to_string(slot) +
                                      ")");
     }

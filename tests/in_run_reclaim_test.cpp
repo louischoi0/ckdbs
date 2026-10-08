@@ -194,6 +194,14 @@ TEST(InRunReclaimTest, ADescribeInFlightHoldsTheReclaim) {
     RunInFlightAtEverySeam({"DESCRIBE", "DESCRIBE t"});
 }
 
+TEST(InRunReclaimTest, APurgeInFlightHoldsTheReclaim) {
+    // BH-S3 (`workorder-bh-purge-key.md` §0, BF's neighbour): a `PURGE`
+    // walks and writes a relation's pages, so BF-S5's statement epoch must
+    // count it. A window over every key, all live, walks the whole
+    // relation and purges none.
+    RunInFlightAtEverySeam({"PURGE", "PURGE FROM t WHERE id BETWEEN 1 AND 300"});
+}
+
 TEST(InRunReclaimTest, AReverseForeignKeyWalkInFlightHoldsTheReclaim) {
     RunInFlightAtEverySeam({"reverse foreign-key walk", "DELETE FROM p WHERE id = 3"});
 }

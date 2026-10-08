@@ -7,6 +7,7 @@
 
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/functions.hpp"
+#include "kds/exec/purge_key.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
@@ -2918,12 +2919,10 @@ TEST_F(NamedKeyWaitTest, AnUndecidedInsertItsOwnWriterUpdatedIsStillWaitedOn) {
 // PU4 and PU5 (`instructions/v3.0.0/workorder-bh-purge-key.md` §2): a key
 // whose deleter some live reader cannot see yet, or whose latest writer is
 // in flight, is waited on, polled, and refused `TxnConflict` at
-// `kPurgeHorizonWait` (1 s). **Red at BH-S1**, committed red as BD-S1's
-// were: until BH-S3, `PURGE` is an unknown head and answers at once.
+// `kPurgeHorizonWait` (1 s). Committed red at BH-S1, green since BH-S3.
 class PurgeWaitTest : public LockDeadlockTest {
 protected:
-    // `kPurgeHorizonWait` and one tick past it; BH-S3 names the constant.
-    static constexpr std::uint64_t kPastTheBoundNs = 1'000'000'000 + 1;
+    static constexpr std::uint64_t kPastTheBoundNs = exec::kPurgeHorizonWaitNs + 1;
 
     void SetUp() override {
         LockDeadlockTest::SetUp();
@@ -2972,11 +2971,34 @@ TEST_F(PurgeWaitTest, AnOlderRepeatableReadReaderKeepsItsRowAndThePurgeIsRefused
     EXPECT_EQ(Local("INSERT INTO tb VALUES (5, 2)").rfind("INSERTED", 0), 0u);
 }
 
+TEST_F(PurgeWaitTest, AnUndecidedDeleteThatRollsBackWhileAPurgeWaitsLeavesTheKeyLive) {
+    // The rollback arm: the deleter's abort puts the row back, so the
+    // re-run meets a live key in a window of one and refuses it (PU3) -
+    // and the key stays the row it was. A purge that retired the slot under
+    // the undecided deleter would leave the rollback nothing to restore.
+    Session c;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("DELETE FROM tb WHERE id = 5", &c).response, "DELETED 1");
+
+    Session b;
+    Started purge = Start("PURGE FROM tb WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*purge.done) << "the purge answered over an undecided deleter: "
+                              << purge.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*purge.done) << "the purge never resumed after the deleter's rollback";
+    EXPECT_EQ(purge.out->status.code(), StatusCode::kInvalidArgument) << purge.out->response;
+    EXPECT_NE(Local("SELECT * FROM tb WHERE id = 5").find("5,1"), std::string::npos)
+        << "the rolled-back delete's row is gone";
+}
+
 TEST_F(PurgeWaitTest, AnUndecidedDeleteThatCommitsWhileAPurgeWaitsIsPurged) {
-    // The commit arm (BH-S0's review, finding 1): the `PURGE`'s own view is
-    // registered at its `Begin`, before the deleter commits, so without the
-    // re-mint before each judging pass it would hold the horizon below the
-    // deleter forever and be refused at the bound.
+    // The commit arm (BH-S0's review, finding 1): a `PURGE` whose own view
+    // were registered before the deleter commits, and kept, would hold the
+    // horizon below the deleter forever and be refused at the bound. Each
+    // attempt is a fresh owned transaction, so the one after the commit
+    // judges under a view minted after it.
     Session c;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
     ASSERT_EQ(dispatcher_->Dispatch("DELETE FROM tb WHERE id = 5", &c).response, "DELETED 1");
@@ -2991,6 +3013,91 @@ TEST_F(PurgeWaitTest, AnUndecidedDeleteThatCommitsWhileAPurgeWaitsIsPurged) {
     ASSERT_TRUE(*purge.done) << "the purge never resumed after the deleter's commit";
     EXPECT_EQ(purge.out->response, "PURGED 1");
     EXPECT_EQ(Local("INSERT INTO tb VALUES (5, 2)").rfind("INSERTED", 0), 0u);
+}
+
+TEST_F(PurgeWaitTest, AnUndecidedDeleterAtTheBoundIsRefusedRetryably) {
+    // PU10's bound row, for the writer arm: an undecided deleter that never
+    // decides ends the wait at `kPurgeHorizonWait`, not at the fault net.
+    Session c;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("DELETE FROM tb WHERE id = 5", &c).response, "DELETED 1");
+
+    Session b;
+    Started purge = Start("PURGE FROM tb WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*purge.done) << purge.out->response;
+    clock_.Advance(kPastTheBoundNs);
+    Pump();
+    ASSERT_TRUE(*purge.done) << "the wait outlived kPurgeHorizonWait";
+    EXPECT_EQ(purge.out->status.code(), StatusCode::kTxnConflict) << purge.out->response;
+    EXPECT_TRUE(purge.out->status.retryable()) << purge.out->response;
+    EXPECT_NE(purge.out->response.find("primary key 5"), std::string::npos)
+        << "the refusal does not name the key: " << purge.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(PurgeWaitTest, AnUndecidedInsertOfTheOneKeyIsWaitedOnAndJudgedByItsOutcome) {
+    // PU3/PU4: in a window of one key, a live row whose insert is undecided
+    // may yet roll back, so the purge waits - and answers by the outcome:
+    // committed, the key is live (refused); rolled back, it is absent
+    // (nothing to purge).
+    for (const char* decide : {"COMMIT", "ROLLBACK"}) {
+        SCOPED_TRACE(decide);
+        Session c;
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &c).response.rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO tb VALUES (7, 0)", &c)
+                      .response.rfind("INSERTED", 0),
+                  0u);
+        Session b;
+        Started purge = Start("PURGE FROM tb WHERE id = 7", b);
+        Pump();
+        ASSERT_FALSE(*purge.done) << purge.out->response;
+        ASSERT_EQ(dispatcher_->Dispatch(decide, &c).response.rfind(decide, 0), 0u);
+        Pump();
+        ASSERT_TRUE(*purge.done) << "the purge never resumed after the inserter decided";
+        if (std::string(decide) == "COMMIT") {
+            EXPECT_EQ(purge.out->status.code(), StatusCode::kInvalidArgument)
+                << purge.out->response;
+            ASSERT_EQ(Local("DELETE FROM tb WHERE id = 7"), "DELETED 1");
+            ASSERT_EQ(RunAsync("PURGE FROM tb WHERE id = 7", b).response, "PURGED 1");
+        } else {
+            EXPECT_EQ(purge.out->response, "PURGED 0");
+        }
+    }
+}
+
+TEST_F(PurgeWaitTest, ARerunThatMeetsADdlWaitsForItAndThenPurges) {
+    // BH-S3's review, C1: each attempt holds nothing while it waits, so a
+    // DDL can take the relation's `X` meanwhile - and the re-run then meets
+    // it, waits for it like any statement, and purges once it is gone,
+    // leaving no registration behind.
+    ASSERT_EQ(Local("CREATE INDEX ix ON tb (v)").rfind("CREATED", 0), 0u);
+    Session reader;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader)
+                  .response.rfind("BEGIN", 0),
+              0u);
+    ASSERT_NE(dispatcher_->Dispatch("SELECT * FROM tb WHERE id = 5", &reader).response.find("5,1"),
+              std::string::npos);
+    ASSERT_EQ(Local("DELETE FROM tb WHERE id = 5"), "DELETED 1");
+
+    Session b;
+    Started purge = Start("PURGE FROM tb WHERE id = 5", b);
+    Pump();
+    ASSERT_FALSE(*purge.done) << purge.out->response;
+
+    Session ddl;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &ddl).response.rfind("BEGIN", 0), 0u);
+    const std::string dropped = dispatcher_->Dispatch("DROP INDEX ix", &ddl).response;
+    ASSERT_EQ(dropped.rfind("DROPPED", 0), 0u) << "a waiting PURGE held the relation: " << dropped;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &reader).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_FALSE(*purge.done) << "the re-run ran under the DDL's X: " << purge.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &ddl).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*purge.done) << "the purge never resumed after the DDL";
+    EXPECT_EQ(purge.out->response, "PURGED 1");
+    EXPECT_EQ(locks_->EntryCount(), 0u) << "a wait's registration outlived it";
 }
 
 }  // namespace

@@ -9,6 +9,7 @@
 
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
+#include "kds/storage/btree/btree.hpp"
 #include "kds/storage/tagged_cell.hpp"  // varchar(N)'s bounds are the cell width's
 #include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
 #include "kds/sched/scheduler.hpp"       // SHOW META's group accounting (sched.md 4)
@@ -40,6 +41,7 @@
 #include "kds/exec/index_ddl.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/pagination.hpp"
+#include "kds/exec/purge_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
@@ -726,6 +728,38 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     sched::MonoTimeNs statement_deadline_ns = 0;
     co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns);
 
+    // ---- BH: a `PURGE` waits out a key it may not free yet (PU4, PU5) ----
+    //
+    // **Polled, and bounded by `kPurgeHorizonWaitNs`, not the fault net**
+    // (BH-Q3): an open older snapshot is the ordinary case, and nothing
+    // kicks this core when the horizon advances (`known-gaps.md`, "what
+    // still polls"). Each re-run is a whole attempt with a fresh owned
+    // transaction, so the attempt that finally writes judged under a view
+    // minted after the wait (BH-R5). At the bound the last attempt's
+    // refusal stands - the `TxnConflict` naming the key.
+    if (out->purge_wait.has_value() && txn_ != nullptr && clock_ != nullptr) {
+        const sched::MonoTimeNs deadline_ns = NowNs() + exec::kPurgeHorizonWaitNs;
+        while (out->purge_wait.has_value() && NowNs() < deadline_ns) {
+            const DispatchOutcome::PurgeWait wait = *out->purge_wait;
+            const std::function<bool()> cleared = [this, wait, deadline_ns] {
+                const bool settled = wait.horizon ? txn_->ResolvedForEveryReader(wait.trx_id)
+                                                  : !txn_->IsInFlight(wait.trx_id);
+                return settled || NowNs() >= deadline_ns;
+            };
+            co_await sched::WaitUntil{&cleared};
+            {
+                const MayParkScope parking(*this, /*allowed=*/true);
+                *out = DispatchAndStage(line, session);
+            }
+            // A re-run is a whole statement and can meet what any statement
+            // meets - a DDL that took the relation's `X` during the wait -
+            // so its own waits are waited out here, and their registrations
+            // dropped, before the purge's is asked again (BH-S3's review, C1).
+            co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns);
+        }
+        out->purge_wait.reset();
+    }
+
     // **The foreign-key probe park is gone with the probes** (AT-S5f).
     // What stood here was the one park that resumed by *re-entering* the
     // statement: a forward or reverse round was sent at the dispatch fork,
@@ -1257,6 +1291,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     }
     if (IEquals(cmd, "DELETE")) {
         return HandleDelete(Trim(line), session);
+    }
+    // Unclassified in `RequiredRole`, so admin's (BH-Q10): it lifts an
+    // identity guarantee, which is not a read-write session's decision.
+    if (IEquals(cmd, "PURGE")) {
+        return HandlePurge(Trim(line), session);
     }
     if (IEquals(cmd, "SYNC")) {
         return HandleSync();
@@ -2586,20 +2625,9 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     // nobody's to change - refused here so both forms share the answer,
     // and RenameTable's own guard is defense rather than the door.
     //
-    // Unfiltered, and filtering could not change it: this asks whether an
-    // **already-resolved** oid belongs to a system namespace, and every
-    // system relation is a bootstrap row visible to every view (DT3c).
-    auto tables = catalog_.ListTables();
-    if (!tables.ok()) {
-        return {ErrorReply(tables.status()), false, 0, tables.status()};
-    }
-    // An oid names one row, so the search **stops** at it rather than
-    // walking every relation in the instance to find nothing more.
-    const auto named = std::find_if(
-        tables.value().begin(), tables.value().end(),
-        [&](const catalog::SysObjectRow& row) { return row.oid == oid.value(); });
-    // AF-P3: identity, not permission (well_known.hpp).
-    if (named != tables.value().end() && catalog::IsSystemNamespace(named->namespace_oid)) {
+    auto system = InSystemNamespace(oid.value());
+    if (!system.ok()) return {ErrorReply(system.status()), false, 0, system.status()};
+    if (system.value()) {
         return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered", false};
     }
 
@@ -7362,6 +7390,14 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // The read view this UPDATE filters through. An UPDATE reads before
         // it writes, and it must not see a row a SELECT in the same
         // transaction would not - so it takes the snapshot the same way.
+        //
+        // **After `BeginWrite`, and the order is a correctness fact** (BH-S1,
+        // Census A row 4): an autocommit `snap` is a copy whose lease
+        // `SnapshotFor` drops before the walk, so what keeps the horizon at
+        // or below it - and a `PURGE` on another core off a row it can see
+        // - is the owned transaction `BeginWrite` registered first, which
+        // stays live until `EndWrite`. Taken the other way round, the walk
+        // would read at a snapshot no reader registration covers.
         auto snapshot = SnapshotFor(session);
         // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse (a
         // spent transaction-id lease on a peer did, until AT-S10b), and the
@@ -8669,6 +8705,97 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     return under.value();
 }
 
+StatusOr<bool> CommandDispatcher::InSystemNamespace(catalog::Oid oid) {
+    // Unfiltered, and filtering could not change it: this asks whether an
+    // **already-resolved** oid belongs to a system namespace, and every
+    // system relation is a bootstrap row visible to every view (DT3c).
+    auto tables = catalog_.ListTables();
+    if (!tables.ok()) return tables.status();
+    // An oid names one row, so the search **stops** at it rather than
+    // walking every relation in the instance to find nothing more.
+    const auto named =
+        std::find_if(tables.value().begin(), tables.value().end(),
+                     [&](const catalog::SysObjectRow& row) { return row.oid == oid; });
+    // AF-P3: identity, not permission (well_known.hpp).
+    return named != tables.value().end() && catalog::IsSystemNamespace(named->namespace_oid);
+}
+
+CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
+    const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
+    PkWindow w;
+    w.hi = kIdSpaceEnd;
+    // No pk to compare against: nothing folds, and a caller refusing what
+    // did not fold must see that (BH-S3's review, C4).
+    if (access.schema.columns.empty()) {
+        if (!where.empty()) w.unfolded = &where.front();
+        return w;
+    }
+    // The first conjunct the fold could not read, which a caller may refuse.
+    const auto unread = [&w](const parser::Condition& cond) {
+        if (w.unfolded == nullptr) w.unfolded = &cond;
+    };
+
+    for (const parser::Condition& cond : where) {
+        if (cond.kind == parser::PredicateKind::kBetween) {
+            // The one kind `PkLiteral` deliberately declines, because it
+            // carries two bounds rather than one. Its own guards, in the
+            // same order and for the same reasons.
+            if (cond.rhs_kind != parser::RhsKind::kLiteral ||
+                cond.val.type != parser::ValueType::kInt ||
+                cond.val_high.type != parser::ValueType::kInt || cond.val.int_val < 0 ||
+                cond.val_high.int_val < 0 ||
+                !IEquals(cond.col.name,
+                         catalog::NameView(access.schema.columns.front().name))) {
+                unread(cond);
+                continue;
+            }
+            // Inclusive at both ends (`ast.hpp`), and a range lock is half-open.
+            w.lo = std::max(w.lo, static_cast<std::uint64_t>(cond.val.int_val));
+            w.hi = std::min(w.hi, static_cast<std::uint64_t>(cond.val_high.int_val) + 1);
+            w.bounded = true;
+            continue;
+        }
+        const std::optional<std::uint64_t> v = PkLiteral(access, cond);
+        if (!v.has_value()) {
+            unread(cond);
+            continue;
+        }
+        switch (cond.op) {
+            case parser::CompareOp::kEq:
+                w.lo = std::max(w.lo, *v);
+                w.hi = std::min(w.hi, *v + 1);
+                w.bounded = true;
+                break;
+            case parser::CompareOp::kGt:
+                w.lo = std::max(w.lo, *v + 1);
+                w.bounded = true;
+                break;
+            case parser::CompareOp::kGte:
+                w.lo = std::max(w.lo, *v);
+                w.bounded = true;
+                break;
+            case parser::CompareOp::kLt:
+                w.hi = std::min(w.hi, *v);
+                w.bounded = true;
+                break;
+            case parser::CompareOp::kLte:
+                w.hi = std::min(w.hi, *v + 1);
+                w.bounded = true;
+                break;
+            // `kNeq` names no window, and the two null tests name no id at
+            // all. Left per-row rather than widened to the relation: a
+            // predicate that does not bound the pk is exactly the shape the
+            // mark leaves alone.
+            case parser::CompareOp::kNeq:
+            case parser::CompareOp::kIsNull:
+            case parser::CompareOp::kIsNotNull:
+                unread(cond);
+                break;
+        }
+    }
+    return w;
+}
+
 std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
     if (locks_ == nullptr || access.schema.columns.empty()) return std::nullopt;
@@ -8691,70 +8818,16 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
 
     // Otherwise, the pk window the conjuncts name - if they name one.
     //
-    // **The vector is an AND-list**, so a conjunct this loop skips can only
-    // remove rows from the set, never add one: the window derived from the
-    // pk conjuncts alone is a *superset* of what the statement writes, and
-    // a borrow over a superset covers every row written. That is what makes
-    // it sound to ignore `WHERE name = 'x'` sitting beside `WHERE id < 50`.
-    std::uint64_t lo = 0;
-    std::uint64_t hi = kIdSpaceEnd;
-    bool bounded = false;
-
-    for (const parser::Condition& cond : where) {
-        if (cond.kind == parser::PredicateKind::kBetween) {
-            // The one kind `PkLiteral` deliberately declines, because it
-            // carries two bounds rather than one. Its own guards, in the
-            // same order and for the same reasons.
-            if (cond.rhs_kind != parser::RhsKind::kLiteral) continue;
-            if (cond.val.type != parser::ValueType::kInt) continue;
-            if (cond.val_high.type != parser::ValueType::kInt) continue;
-            if (cond.val.int_val < 0 || cond.val_high.int_val < 0) continue;
-            if (!IEquals(cond.col.name,
-                         catalog::NameView(access.schema.columns.front().name))) {
-                continue;
-            }
-            // Inclusive at both ends (`ast.hpp`), and a range lock is half-open.
-            lo = std::max(lo, static_cast<std::uint64_t>(cond.val.int_val));
-            hi = std::min(hi, static_cast<std::uint64_t>(cond.val_high.int_val) + 1);
-            bounded = true;
-            continue;
-        }
-        const std::optional<std::uint64_t> v = PkLiteral(access, cond);
-        if (!v.has_value()) continue;
-        switch (cond.op) {
-            case parser::CompareOp::kEq:
-                lo = std::max(lo, *v);
-                hi = std::min(hi, *v + 1);
-                bounded = true;
-                break;
-            case parser::CompareOp::kGt:
-                lo = std::max(lo, *v + 1);
-                bounded = true;
-                break;
-            case parser::CompareOp::kGte:
-                lo = std::max(lo, *v);
-                bounded = true;
-                break;
-            case parser::CompareOp::kLt:
-                hi = std::min(hi, *v);
-                bounded = true;
-                break;
-            case parser::CompareOp::kLte:
-                hi = std::min(hi, *v + 1);
-                bounded = true;
-                break;
-            // `kNeq` names no window, and the two null tests name no id at
-            // all. Left per-row rather than widened to the relation: a
-            // predicate that does not bound the pk is exactly the shape the
-            // mark leaves alone.
-            case parser::CompareOp::kNeq:
-            case parser::CompareOp::kIsNull:
-            case parser::CompareOp::kIsNotNull:
-                break;
-        }
-    }
-
-    if (!bounded) return std::nullopt;
+    // **The vector is an AND-list**, so a conjunct the fold cannot read can
+    // only remove rows from the set, never add one: the window derived from
+    // the pk conjuncts alone is a *superset* of what the statement writes,
+    // and a borrow over a superset covers every row written. That is what
+    // makes it sound to ignore `WHERE name = 'x'` sitting beside
+    // `WHERE id < 50` - `unfolded` is `PURGE`'s question, not this one's.
+    const PkWindow window = FoldPkWindow(access, where);
+    const std::uint64_t lo = window.lo;
+    const std::uint64_t hi = window.hi;
+    if (!window.bounded) return std::nullopt;
     // An empty window writes nothing, so there is nothing to declare.
     if (lo >= hi) return std::nullopt;
     // **A window of one key stays per-row**, and this is not a
@@ -9117,6 +9190,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
         scope = opened.value();
         context = exec::StatementContextNow();
 
+        // After `BeginWrite`: `HandleUpdate`'s order, for its reason (Census A row 4).
         auto snapshot = SnapshotFor(session);
         if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
         snap = snapshot.value().snap;
@@ -9142,6 +9216,232 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
         return {ErrorReply(s), false, 0, s};
     }
     return out;
+}
+
+namespace {
+
+// PU10's conjunct rows: a negative literal on the pk is simply wrong, and
+// every other conjunct the fold could not read is a form nobody built. The
+// byte is the conjunct's function, column or literal - or, for a conjunct
+// with no position of its own (a bare subquery), the `WHERE` token.
+Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Condition& cond,
+                            std::uint32_t where_byte) {
+    const bool on_pk = !access.schema.columns.empty() &&
+                       IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name));
+    const bool literal = cond.rhs_kind == parser::RhsKind::kLiteral &&
+                         (cond.kind == parser::PredicateKind::kCompareValue ||
+                          cond.kind == parser::PredicateKind::kBetween);
+    if (on_pk && literal) {
+        for (const parser::AstValue* v : {&cond.val, &cond.val_high}) {
+            if (v->type == parser::ValueType::kInt && v->int_val < 0) {
+                return Status::InvalidArgument(
+                    "primary key literal " + std::to_string(v->int_val) +
+                    " is negative, and no key is below 1 (byte " + std::to_string(v->byte_offset) +
+                    ")");
+            }
+            if (cond.kind != parser::PredicateKind::kBetween) break;
+        }
+    }
+    const std::uint32_t at = cond.lhs_fn.has_value() ? cond.lhs_fn->byte_offset
+                             : !cond.col.name.empty() ? cond.col.byte_offset
+                                                      : where_byte;
+    return Status::NotImplemented(
+        "PURGE admits only comparisons of the primary key with an integer literal (=, <, <=, >, "
+        ">=, BETWEEN); this conjunct is not one (byte " +
+        std::to_string(at) + ")");
+}
+
+}  // namespace
+
+DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& session) {
+    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
+
+    // PU9, BH-Q4: autocommit only, refused before anything opens, so the
+    // transaction it meets is not poisoned.
+    if (session.in_explicit_txn()) {
+        return refuse(Status::NotImplemented(
+            "PURGE inside a transaction is not implemented; run it in autocommit (byte 0)"));
+    }
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) return refuse(parsed.status());
+    if (!std::holds_alternative<parser::PurgeStmt>(parsed.value())) {
+        return {"ERR expected a PURGE statement", false};
+    }
+    const auto& stmt = std::get<parser::PurgeStmt>(parsed.value());
+    const std::string at_name = " (byte " + std::to_string(stmt.table_byte_offset) + ")";
+
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto oid = catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
+    if (!oid.ok()) return refuse(oid.status());
+    // BH-Q17, before the heap check - every system relation is a catalog
+    // heap chain - and before anything calls `InitTableAccess`, which has
+    // no columns for one: the qualifier check is the first that does. The
+    // catalog's marks are the engine's own purge.
+    auto system = InSystemNamespace(oid.value());
+    if (!system.ok()) return refuse(system.status());
+    if (system.value()) {
+        return refuse(Status::Unsupported("'" + stmt.table_name +
+                                          "' is a system relation; PURGE frees keys of user "
+                                          "relations only" +
+                                          at_name));
+    }
+    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                   stmt.table_byte_offset,
+                                                   view.has_value() ? &*view : nullptr);
+        !s.ok()) {
+        return refuse(s);
+    }
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
+    auto access = catalog_.InitTableAccess(oid.value());
+    if (!access.ok()) return refuse(access.status());
+    const catalog::TableAccess& ta = *access.value();
+    // BH-Q9: a heap admits a named key only at or above its mark, because
+    // its chain grows only at its tail - so a key below it cannot be freed.
+    if (ta.clustered_type != catalog::ClusteredType::kBtree) {
+        return refuse(Status::Unsupported("'" + stmt.table_name +
+                                          "' is a heap relation, whose chain grows only at its "
+                                          "tail; PURGE frees keys of btree relations only" +
+                                          at_name));
+    }
+
+    // PU1: the one recognizer of the window, refusing what it cannot read
+    // rather than skipping it (BH-R2), clamped to the key space.
+    const PkWindow window = FoldPkWindow(ta, stmt.where);
+    if (window.unfolded != nullptr) {
+        return refuse(PurgeConjunctRefusal(ta, *window.unfolded, stmt.where_byte_offset));
+    }
+    const std::uint64_t lo = std::max(window.lo, catalog::kFirstRowId);
+    const std::uint64_t hi = std::min(window.hi, kIdSpaceEnd);
+    if (lo >= hi) return {"PURGED 0", false, 0};  // names no key
+
+    // **An owned transaction per attempt** (BH-R5): a re-run after a wait
+    // begins afresh, so the view it registers never predates the deleter
+    // it waited for, and between attempts it holds nothing - no view to
+    // keep the horizon down, no `IX` to keep a DDL out.
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return refuse(opened.status());
+    WriteScope scope = opened.value();
+    // `purged` keys are written whatever the decide does - their records
+    // are no transaction's - so a commit that fails after them still says
+    // how many (PU6).
+    const auto partly = [](const Status& s, std::uint64_t purged) {
+        return s.WithMessage(s.message() + "; this PURGE purged " + std::to_string(purged) +
+                             " key(s) of its window before it, and running it again finishes "
+                             "the window");
+    };
+    const auto ended = [&](DispatchOutcome out, std::uint64_t purged = 0) {
+        const Status verdict = out.status.ok() && out.response.rfind("ERR", 0) != 0
+                                   ? Status::OK()
+                                   : (out.status.ok() ? Status::InvalidArgument(out.response)
+                                                      : out.status);
+        if (Status s = EndWrite(session, scope, verdict); !s.ok() && verdict.ok()) {
+            return refuse(purged == 0 ? s : partly(s, purged));
+        }
+        return out;
+    };
+
+    // BH-R4: the relation's `IX` and no row or range unit. Held to the end
+    // of the attempt, through the last spill release, because `CREATE
+    // INDEX`'s backfill and an assertion build are safe only while their
+    // `X` keeps this out (Census A).
+    if (std::optional<Status> held =
+            BorrowOrWait(scope, txn::LockKey::Relation(ta.oid), RepeatableReadWait::kCapable)) {
+        return ended(refuse(*held));
+    }
+
+    // ---- Phase 1: judge the whole window, writing nothing (BH-R6) ------
+    //
+    // BH-R3: a target is a delete-marked slot whose deleter is decided and
+    // resolved for every reader. A slot whose latest writer is in flight,
+    // or whose deleter some reader cannot see yet, is a wait (PU4, PU5) -
+    // the first one found ends the walk, since the attempt re-runs whole.
+    struct Target {
+        std::uint64_t pk;
+        std::uint64_t deleter;
+    };
+    std::vector<Target> targets;
+    std::optional<DispatchOutcome::PurgeWait> pending;
+    bool one_key_live = false;
+    const bool one_key = hi - lo == 1;
+    auto first = btree::BtreeSeekLeaf(page_store_, ta.desc_page_id, lo);
+    if (!first.ok()) return ended(refuse(first.status()));
+    Status walked = btree::BtreeVisitFrom(
+        page_store_, first.value(), storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;  // a retired slot: absent
+                }
+                return tuple.status();
+            }
+            auto pk = exec::RowKeystoneId(tuple.value().payload);
+            if (!pk.ok()) return pk.status();
+            if (pk.value() < lo) return storage::VisitControl::kContinue;
+            if (pk.value() >= hi) return storage::VisitControl::kStop;
+            const std::uint64_t trx = tuple.value().trx_id;
+            const bool in_flight = txn_ != nullptr && txn_->IsInFlight(trx);
+            if (tuple.value().deleted) {
+                if (in_flight) {
+                    pending = DispatchOutcome::PurgeWait{pk.value(), trx, /*horizon=*/false};
+                    return storage::VisitControl::kStop;
+                }
+                if (txn_ != nullptr && !txn_->ResolvedForEveryReader(trx)) {
+                    pending = DispatchOutcome::PurgeWait{pk.value(), trx, /*horizon=*/true};
+                    return storage::VisitControl::kStop;
+                }
+                targets.push_back({pk.value(), trx});
+                return storage::VisitControl::kContinue;
+            }
+            // PU3, BH-Q2: a live key refuses a window of one key - once its
+            // writer has decided, since an undecided insert may yet roll
+            // back - and a wider window passes over it.
+            if (one_key) {
+                if (in_flight) {
+                    pending = DispatchOutcome::PurgeWait{pk.value(), trx, /*horizon=*/false};
+                } else {
+                    one_key_live = true;
+                }
+                return storage::VisitControl::kStop;
+            }
+            return storage::VisitControl::kContinue;
+        });
+    if (!walked.ok()) return ended(refuse(walked));
+    if (one_key_live) {
+        const std::uint32_t at = stmt.where.front().val.byte_offset;
+        return ended(refuse(Status::InvalidArgument(
+            "primary key " + std::to_string(lo) +
+            " is live; PURGE frees only a key whose row was deleted (byte " + std::to_string(at) +
+            ")")));
+    }
+    if (pending.has_value()) {
+        const std::string why =
+            pending->horizon
+                ? "a snapshot older than its DELETE's commit is still open"
+                : "its latest writer, transaction " + std::to_string(pending->trx_id) +
+                      ", has not decided";
+        DispatchOutcome out = ended(refuse(Status::TxnConflict(
+            "PURGE cannot free primary key " + std::to_string(pending->pk) + " yet: " + why +
+            "; nothing was purged, and running it again once that ends will")));
+        out.purge_wait = pending;
+        return out;
+    }
+
+    // ---- Phase 2: each key whole, in key order (BH-R6, BH-R7) ----------
+    //
+    // Drain mode, as a rollback's: a pass that is not one row's mutation and
+    // holds no latch between its keys. A refusal now keeps every key already
+    // purged - each is whole - and says so (PU6, BH-Q5).
+    std::uint64_t purged = 0;
+    {
+        const storage::DrainOnPressure drain(page_store_);  // the keys, not the decide
+        for (const Target& t : targets) {
+            auto one = exec::PurgeKey(page_store_, wal_, ta, t.pk, t.deleter);
+            if (!one.ok()) return ended(refuse(partly(one.status(), purged)));
+            if (one.value() == exec::PurgeOutcome::kPurged) ++purged;
+        }
+    }
+    return ended({"PURGED " + std::to_string(purged), false, purged}, purged);
 }
 
 DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope& scope,

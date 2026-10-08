@@ -141,7 +141,9 @@ key is free, and an `INSERT` that names it is placed.
   exclusive latch, and the purge skips any slot that is no longer the
   tombstone it judged.
 - **BH-R5.** The horizon gate, `[quiet-wrong]`:
-  - the purge's own view is re-minted before every judging pass;
+  - each judging pass is a whole attempt under a fresh owned transaction,
+    so the purge's own view is minted after whatever it waited for, and
+    between attempts it holds nothing;
   - older readers are waited on, polled and bounded by
     `kPurgeHorizonWait`, then the statement is refused `TxnConflict`;
   - Census A shows that every view able to read a superseded user row is
@@ -211,8 +213,10 @@ key is free, and an `INSERT` that names it is placed.
   never at an append split.
 - **A wide window collects every target before it writes**, so the target
   list grows with the window.
-- **A `PURGE` waiting at the bound delays a DDL on its relation** for as
-  long, since it holds the relation's `IX` (BH-R4).
+- **A waiting `PURGE` re-walks its window from `lo` on every attempt**, so
+  a wide window with keys pending costs a walk per poll. Between attempts
+  it holds nothing: a DDL during the wait proceeds, and the re-run waits
+  for it.
 - **The audit claim carries the exception** (§0).
 
 ## 1. Survey at `0446b3b0`
@@ -633,19 +637,23 @@ defect can refuse it `AlreadyExists` (BH-R9).
 - **An absent key** — never placed, rolled back, or already purged — is not
   a refusal. It purges nothing, so a `PURGE` can be run again.
 
-**PU4 — Undecided writers.** When a key's latest writer is in flight — an
-insert, an update or a delete — `PURGE` waits for that writer's decide and
-judges the outcome. The wait is polled, under PU5's bound.
+**PU4 — Undecided writers.** When a delete-marked key's deleter is in
+flight, or the one key of a one-key window has an in-flight latest writer,
+`PURGE` waits for that writer's decide and judges the outcome. A wider
+window passes over a live row whatever its writer's state, since no
+outcome of it is purgeable. The wait is polled, under PU5's bound.
 
 **PU5 — Older readers.**
 
 - A delete-marked key whose deleter some live reader cannot yet see is
   waited on, polled.
-- At `kPurgeHorizonWait` (1 s, a constant with no configuration key) the
-  statement is refused `TxnConflict retryable=1`, naming the key and the
-  reason, and nothing is purged.
-- The `PURGE`'s own view never holds the wait: it is re-minted before
-  every judging pass (BH-R5).
+- At `kPurgeHorizonWait` (`exec::kPurgeHorizonWaitNs`, 1 s, a constant
+  with no configuration key) the statement is refused
+  `TxnConflict retryable=1`, naming the key and the reason, and nothing is
+  purged.
+- The `PURGE`'s own view never holds the wait: each attempt is a fresh
+  owned transaction, ended before the wait, whose view is minted at its
+  `Begin` (BH-R5).
 
 **PU6 — Judged whole, then written key by key.**
 
@@ -684,7 +692,7 @@ touched, except the last three. Every byte travels in the text as
 | a system relation | `Unsupported` (BH-Q17; Census D found `DELETE` refuses one only by accident) | the name |
 | a heap relation | `Unsupported` | the name |
 | no `WHERE` | `NotImplemented` | past the name |
-| a conjunct outside PU1's six forms: another column, `<>`, `IS [NOT] NULL`, `IN`, a function, a subquery, a column-to-column comparison | `NotImplemented` | the conjunct's column, function or literal; a bare subquery's is the `WHERE` token |
+| a conjunct outside PU1's six forms: another column, `!=`, `IS [NOT] NULL`, `IN`, a function, a subquery, a column-to-column comparison | `NotImplemented` | the conjunct's column, function or literal; a bare subquery's is the `WHERE` token |
 | a negative literal, or one past 64 bits | `InvalidArgument` | the literal |
 | a window of one live key | `InvalidArgument` | the literal |
 | an older reader or an undecided writer at the bound | `TxnConflict retryable=1` | none; the key is named |
@@ -766,9 +774,9 @@ rebound except by `PURGE`"*.
 - **The window has one recognizer.** It is built from `PkLiteral` and
   `DeclaredWriteBorrow`'s fold, and never from a second recognizer for the
   same question.
-  - `DeclaredWriteBorrow` skips conjuncts it cannot fold, `<>` among them,
+  - `DeclaredWriteBorrow` skips conjuncts it cannot fold, `!=` among them,
     which is sound for a lock. `PURGE` refuses them instead (PU10), because
-    a skipped conjunct would widen the purge: `id > 0 AND id <> 5` would
+    a skipped conjunct would widen the purge: `id > 0 AND id != 5` would
     purge 5.
   - `PkLiteral` turns a negative literal into a miss. The window builder
     tells a miss from a negative literal, so the second is refused
@@ -830,12 +838,18 @@ wake.
   REPEATABLE READ reader that began before the `DELETE` and reads the row
   after the `PURGE`.
 - **The `PURGE`'s own view.** Its owned transaction registers a view at
-  `Begin` (§1.3). That view is re-minted before every judging pass, as a
-  READ COMMITTED statement boundary re-mints, so it never predates a
-  deleter the `PURGE` waited for.
+  `Begin` (§1.3). **Each judging pass is a whole attempt under a fresh
+  owned transaction**, ended before any wait, so the view never predates
+  a deleter the `PURGE` waited for and nothing is held between attempts.
+  (BH-S0 wrote a re-mint of one transaction's view. BH-S3 built the
+  per-attempt form, which autocommit-only makes possible (BH-Q4), and its
+  review judged it sound and better: no in-place re-mint, no `IS` or `IX`
+  held across the wait, and the name re-resolved after it.)
   - The `PURGE` reads no row through that view: it judges slots by their
     deleter's state.
-  - BH-R11's commit-arm cell kills the mutation that skips the re-mint.
+  - BH-R11's commit-arm cell pins it. Keeping one transaction across the
+    wait cannot be written as a mutation, since no transaction outlives
+    an attempt.
 - **The wait polls.** It belongs to the class `known-gaps.md` calls *"a
   refusal with no slot behind it"*, re-asked at each re-drive and bounded
   by `kPurgeHorizonWait`, a 1 s constant with no key (BH-Q3).
@@ -858,12 +872,12 @@ wake.
 
 **Phase 1, judging. Nothing is written.**
 
-1. Take BH-R4's units.
-2. Re-mint the view (BH-R5), then walk the window under shared holds.
-   Collect each target as `(k, deleter)`, and each pending key: an
-   in-flight writer, or a deleter not yet resolved.
-3. While any key is pending, wait as PU4 and PU5 say, then re-judge the
-   pending keys from step 2.
+1. Begin the attempt's owned transaction (BH-R5) and take BH-R4's units.
+2. Walk the window under shared holds. Collect each target as
+   `(k, deleter)`; the first pending key - an in-flight writer, or a
+   deleter not yet resolved - ends the attempt.
+3. On a pending key, end the transaction, wait as PU4 and PU5 say, and run
+   the attempt again whole.
 
 Any refusal in this phase leaves the relation untouched.
 
@@ -961,7 +975,7 @@ and BH-R11 carries a cell per row.
 - an absent key purges nothing, twice;
 - a live key is refused under `id = 5` and under `id BETWEEN 5 AND 5`
   alike, and passed over in a wider window;
-- `id > 0 AND id <> 5` is refused, and 5 stays a tombstone;
+- `id > 0 AND id != 5` is refused, and 5 stays a tombstone;
 - each row of PU10's table, with its code and byte;
 - inside `BEGIN`, the refusal does not poison the transaction;
 - a heap relation built by the test seam is refused;
@@ -976,8 +990,8 @@ and BH-R11 carries a cell per row.
   across a `PURGE` attempt, and the `PURGE` is refused at the bound;
 - the same reader ends, and the `PURGE` then succeeds;
 - **an undecided `DELETE` commits while a `PURGE` waits on it, and the
-  `PURGE` succeeds** — the commit arm, which the `PURGE`'s own view would
-  block without the re-mint;
+  `PURGE` succeeds** — the commit arm, which a `PURGE` whose own view
+  outlived the wait would block;
 - an undecided `DELETE` rolls back while a `PURGE` waits on it, and the
   key stays live;
 - a named `INSERT` racing a `PURGE` on another core: refused before the
@@ -1005,14 +1019,16 @@ and BH-R11 carries a cell per row.
 **Mutations, each repeated:**
 
 - the horizon check removed;
-- the re-mint skipped, killed by the commit-arm cell;
-- the deleter's commit check removed;
+- the owned transaction kept across the wait - not writable as a
+  mutation, because no transaction outlives an attempt (BH-R5);
+- an in-flight deleter judged a target (the order's "deleter's commit
+  check removed": the commit is the deleter's no longer being in flight);
 - the live check removed, which retires a live row;
 - the phase-2 skip turned into a retire, killed by the re-judge cell;
 - the release before the retire;
 - the release omitted;
 - `DELETE`'s departure written, killed by the assertion cell;
-- `<>` folded instead of refused;
+- `!=` folded instead of refused;
 - the record's envelope given the statement's transaction id.
 
 Each mutation is killed by a cell, or listed at BH-S4 with the reason it
@@ -1042,7 +1058,7 @@ cannot be.
 | BH-S0 | **The order** | <ul><li>This file</li><li>Its `critics-developer` review (§7)</li><li>The words recorded in `raft-marks-2026-10-08.md`</li><li>The index row</li></ul> | S |
 | BH-S1 | **The census, and red first** | <ul><li>**Census A** (BH-R5): every unregistered view, the `PURGE`'s own included, and every spill-decoding site, each shown safe across a `PURGE` on another core or listed for BH-S3 to register or reorder.</li><li>**Census B** (§1.6): one cell per consumer, through a test-only seam that retires a committed tombstone keyless and re-places its key with different values: index probes on the old key, the new key, a range and a join; a Cabin serve, the foreign-key reverse check through a Cabin, and the inner build; assertion `COUNT` and `SUM` against a recount; a Waystone replay. **Expected green.** A red one stops BH at this row for a ruling.</li><li>**Census C** (§1.9): BH-R12's grep, run, with every hit classed.</li><li>**Census D:** how `DELETE` refuses a system relation, which PU10 follows.</li><li>**Red at BH-S0's commit**, committed red as BD-S1's were (§1.8): `PURGE` after `DELETE`, then the named `INSERT`, expecting it placed; the REPEATABLE READ reader's cell; the commit-arm cell.</li><li>**Guard, green and kept green:** BD-S1's `ADeletedKeyNamedAgainIsAlreadyExists`.</li></ul> | M |
 | BH-S2 | **The primitive** (BH-R3, BH-R6 phase 2, BH-R7) | <ul><li>**Code:** the btree-level find and verify, handing back the held slot; the caller decodes the spills, retires the slot and logs `exec::LogSlotRetire` at `kNoTxnId` under the hold, then `txn::ReleaseVarHeapSlot` at `kNoTxnId` for each copied spill. A verify mismatch is a skip. No caller from SQL yet.</li><li>**Cells:** a purged key re-placed at the storage level; a live slot, an undecided deleter and a re-placed key, each skipped or refused as BH-R3 says; the crash cells of BH-R11 at the storage level; redo applied twice; a loser re-insert after a purge undone at mount.</li><li>**Mutations, each repeated:** the skip turned into a retire; the release before the retire; the release omitted; the envelope given a transaction id.</li><li>**The suite green**, except the red cells BH-S1 committed, and the waystone, index, cabin and inner-build contract suites byte-identical.</li></ul> | M |
-| BH-S3 | **The statement** (BH-R2, BH-R4, BH-R5, BH-R6 phase 1, BH-R8, PU10) | <ul><li>**Opened only once Census A has no row open.**</li><li>**Code:** the arm, `ParsePurge`, the dispatch route, the window from the one recognizer, every refusal in PU10, the relation units, the re-mint, the polled wait under `kPurgeHorizonWait`, phase 1, the phase-2 loop under `DrainOnPressure`, the reply with its count, and the duplicate text (BH-Q13). The `PURGE` counted in BF-S5's statement epoch, with a cell: a drop's reclaim waits for a `PURGE` in flight on its relation.</li><li>**Green:** BH-S1's red cells, and BH-R11's SQL and lock cells.</li><li>**Mutations, each repeated:** the horizon check removed; the re-mint skipped; the deleter's commit check removed; the live check removed; `DELETE`'s departure written; `<>` folded.</li><li>**The suite green**, also under `KDS_TEST_PAGE_LATCH=1`.</li></ul> | L |
+| BH-S3 | **The statement** (BH-R2, BH-R4, BH-R5, BH-R6 phase 1, BH-R8, PU10) | <ul><li>**Opened only once Census A has no row open.**</li><li>**Code:** the arm, `ParsePurge`, the dispatch route, the window from the one recognizer, every refusal in PU10, the relation units, the attempt's owned transaction, the polled wait under `kPurgeHorizonWait`, phase 1, the phase-2 loop under `DrainOnPressure`, the reply with its count, and the duplicate text (BH-Q13). The `PURGE` counted in BF-S5's statement epoch, with a cell: a drop's reclaim waits for a `PURGE` in flight on its relation.</li><li>**Green:** BH-S1's red cells, and BH-R11's SQL and lock cells.</li><li>**Mutations, each repeated:** the horizon check removed; the owned transaction kept across the wait (not writable, BH-R5); an in-flight deleter judged a target; the live check removed; `DELETE`'s departure written; `!=` folded.</li><li>**The suite green**, also under `KDS_TEST_PAGE_LATCH=1`.</li></ul> | L |
 | BH-S4 | **The sim and the rigs** (BH-R11) | <ul><li>the `kPurge` op, both forms, with the oracle's `consumed_` and `pending_` rules;</li><li>the two-core cells;</li><li>the crash cells at the SQL level;</li><li>`scripts/sim.sh` green;</li><li>each of BH-S2's and BH-S3's mutations killed from the sim or a rig, or listed in this row with the reason it cannot be.</li></ul> | M |
 | BH-S5 | **The close** | <ul><li>A row per stage, and what bounds BH.</li><li>**The measurement** (§6).</li><li>**The text** (BH-R12), its grep included: K1 and its reasons, invariant 11, `heap-and-tuple.md` §4.1c, `namespace.md`, `cabin.md`, `assertion.md`, `foreign-keys.md`, the manual, the bug entry, `payload.hpp`'s comment.</li><li>**`known-gaps.md`**, as BH-R12 lists.</li><li>**`CLAUDE.md`'s** invariant 11, Keystone id row and Caller-supplied pk row.</li></ul> | M |
 
@@ -1104,7 +1120,7 @@ not measured; measured at the milestone's close".
   - A statement that is not a `PURGE` gains one text compare in the
     parser's head chain and one in `DispatchInner`.
   - A running `PURGE` holds the relation's `IX` and no row unit, so it
-    blocks no DML. It delays a DDL on its relation for as long as it waits.
+    blocks no DML. A waiting one holds nothing.
 - **The cost of a purge:**
   - keys purged per second, one key per statement and 1,000 keys per
     window, at `cores = 1` and `cores = 2`;
@@ -1486,3 +1502,143 @@ the code:
 **Noted, not changed:** `BtreeHoldTombstone` reads any `NotFound` as a
 skip, including a missing root. That is unreachable while the relation's
 `IX` and BF's statement epoch keep a drop out.
+
+### BH-S3 — the statement - 2026-10-08
+
+- **Where:** on `worktree-bh-purge-key` from `bbc7aa3e`. Census A had no
+  open row; its one open row was closed at BH-S1.
+- **Code:**
+  - **The parser.** `PurgeStmt` and `ParsePurge` require a `WHERE`; a bare
+    `PURGE` is `NotImplemented` at the byte past the name. `PURGE` joins
+    the unknown-head list.
+  - **The route.** `DispatchInner` routes `PURGE`, and `RequiredRole`
+    leaves it admin's.
+  - **One recognizer for the window.** `FoldPkWindow` is extracted from
+    `DeclaredWriteBorrow`, which keeps its rules. The fold records the
+    first conjunct it cannot read: the borrow skips it, and `PURGE`
+    refuses it.
+  - **The system check.** `InSystemNamespace` is extracted from ALTER's
+    refusal and serves both.
+  - **`HandlePurge`, one attempt per run.** In order:
+    1. **Autocommit only** (`NotImplemented` at byte 0).
+    2. **A system relation** is `Unsupported` at the name (BH-Q17). The
+       check runs before `CheckRelationQualifier`, because that is the
+       first call to `InitTableAccess`, which has no columns for a system
+       relation.
+    3. **A heap** is `Unsupported`.
+    4. **The conjunct refusals** (PU10).
+    5. **The window**, clamped to `[1, 2^40)`.
+    6. **A fresh owned transaction**, then the relation's `IX` through
+       `BorrowOrWait`, held through the last spill release.
+    7. **Phase 1** walks the window, in the judgment rule below.
+    8. **Phase 2**, in drain mode, runs `exec::PurgeKey` per target. A
+       refusal, including a failed commit after phase 2, carries the count
+       purged before it.
+  - **Phase 1's judgment:**
+    - a delete-marked slot with an in-flight deleter is a wait;
+    - one that `ResolvedForEveryReader` rejects is a horizon wait;
+    - one that both pass is a target;
+    - a live key in a window of one is refused, or waited on while its
+      writer is in flight.
+  - **The wait.** `DispatchOutcome::PurgeWait` and a polled loop in
+    `DispatchAsync`, bounded by `exec::kPurgeHorizonWaitNs`. Each re-run
+    is a whole attempt and goes back through `AwaitStatementWaits`. The
+    synchronous path answers with the refusal at once.
+  - **The duplicate text** (BH-Q13).
+  - **Census A row 4's ordering**, pinned by a comment at both write
+    handlers.
+- **The per-attempt transaction is a revision of BH-R5's text.** BH-S0
+  wrote a re-mint of one owned view. Each judging pass is a fresh owned
+  transaction instead, ended before the wait. **What it changes:**
+  - BH-R5's re-mint follows from the fresh `Begin`;
+  - nothing is held across a wait;
+  - the name is re-resolved after it;
+  - a DDL during the wait proceeds.
+
+  The cost is a re-walk of the window per poll, which goes to §0's "What
+  bounds BH". **Where it is recorded:** CLA's proposal, under the standing
+  go-ahead. PU4, PU5, BH-R5, BH-R6, BH-R11, §0, §6 and this stage's row
+  now say what the code does. The review below judged it sound.
+- **Cells:**
+  - **The consumers, through the statement** (the seam is deleted): index,
+    Cabin, the foreign-key reverse check through a Cabin, the inner build,
+    assertion `COUNT` and `SUM` (BH-R8's cell), and Waystone.
+  - **SQL:**
+    - a purged key placed again;
+    - an absent key, run twice, and windows outside the key space;
+    - a window that purges deleted keys and passes over live ones;
+    - a live key refused under `=`, `BETWEEN 5 AND 5` and `>= 5 AND < 6`;
+    - `!=` refused, with 5 still the tombstone;
+    - each PU10 row with its code and byte;
+    - inside `BEGIN`, refused and not poisoning;
+    - a read-write session refused.
+  - **`PurgeWaitTest`:**
+    - the older reader, refused at the bound and then purged;
+    - the commit arm and the rollback arm;
+    - an undecided deleter at the bound;
+    - an undecided insert of the one key, both outcomes;
+    - a re-run meeting a DDL during the wait, waiting for it and then
+      purging.
+  - **`InRunReclaimTest.APurgeInFlightHoldsTheReclaim`**, at all three
+    epoch seams.
+- **Mutations, each run twice, each killed:**
+
+  | mutation | killed by |
+  |---|---|
+  | the horizon check removed | the older-reader cell |
+  | an in-flight deleter judged a target | the commit-arm and rollback-arm cells |
+  | the live check removed | the live-key cell and the rollback-arm cell |
+  | `!=` folded instead of refused | the `!=` cell and the PU10 cell |
+  | the re-run's own waits not awaited (the review's C1, mutated after the fix) | the DDL cell |
+
+  **Two are listed, not run.** Keeping the owned transaction across the
+  wait cannot be written, because no transaction outlives an attempt.
+  Writing `DELETE`'s departure has no code in `PURGE` to mutate: writing
+  one would mean decoding the tombstone into a frame. The assertion cell
+  through the statement pins its absence.
+- **The suite** (Debug, `ctest -j8`) on this stage's reviewed tree: 3303/3305 plain, 3304/3305 under `KDS_TEST_PAGE_LATCH=1`. Every run failed the environmental `TcpServerListenTest`. The plain run also failed `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`, at 21.5 s under the `-j8` load. That cell writes no `PURGE`, passed 10/10 alone, and passed in the latch run: the load flake memory records for it. Overhead not measured; measured at the milestone's close.
+- **Moved to BH-S4:**
+  - PU10's "refusal while writing" row, which needs a fault seam;
+  - the re-judge cell, because one core runs both phases with no yield
+    between them. BH-S2's `ASlotThatIsNotTheJudgedTombstoneIsSkipped`
+    covers the skip at the storage level.
+
+### BH-S3's review - 2026-10-08
+
+One `critics-developer` pass. **One correctness bug, fixed:**
+
+- **C1.** A re-run inside the purge loop could come back with a
+  relation-lock wait, for a DDL that took the relation's `X` during the
+  wait. Nothing waited on it, and its registration was never dropped.
+  - **Fix:** each re-run goes back through `AwaitStatementWaits`.
+  - **Cell:** `PurgeWaitTest.ARerunThatMeetsADdlWaitsForItAndThenPurges`,
+    killed with the fix removed.
+
+**Minor, applied:**
+- **C3.** A commit failure after phase 2 dropped the purged count.
+- **C4.** `FoldPkWindow` failed open on an empty schema.
+- **C5.** The synchronous refusal said "waited".
+
+**The judgment, checked sound:**
+- a delete-mark with no deleter in flight is a committed deleter's, since
+  an abort compensates before it retires the id;
+- the purge's own transaction writes no delete-mark;
+- a READ COMMITTED view holds the horizon only to its next statement
+  boundary.
+
+**The per-attempt deviation** was judged sound and better. Its text
+changes are made above.
+
+**Cells added from the review:** T1 (the DDL cell), T2 (an undecided
+deleter at the bound), T3 (an undecided insert of the one key), and the
+rollback arm now asserting its status. T4 and T5 moved to BH-S4, as above.
+
+**Simplifications:**
+- **Applied:** the re-run joins `AwaitStatementWaits` rather than a second
+  loop (with C1), and drain mode is scoped to the phase-2 loop.
+- **Rejected:**
+  - **`ended`'s unreachable `InvalidArgument(out.response)` branch.** It
+    is the file's verdict idiom, and a refusal that ever arrives as a bare
+    `ERR` string keeps a code.
+  - **Hoisting the per-slot `txn_ != nullptr` test.** It removes no line
+    and makes nothing clearer.

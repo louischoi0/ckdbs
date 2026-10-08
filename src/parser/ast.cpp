@@ -11,6 +11,7 @@ const char* StatementTypeName(const Statement& stmt) {
             if constexpr (std::is_same_v<T, SelectStmt>) return "SELECT";
             if constexpr (std::is_same_v<T, UpdateStmt>) return "UPDATE";
             if constexpr (std::is_same_v<T, DeleteStmt>) return "DELETE";
+            if constexpr (std::is_same_v<T, PurgeStmt>) return "PURGE";
             if constexpr (std::is_same_v<T, CabinStmt>) {
                 return s.drop ? "DROP CABIN" : "CREATE CABIN";
             }
