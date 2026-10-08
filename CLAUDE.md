@@ -97,7 +97,9 @@ five rules a run is invalid without. **`docs/inflight/` reopened on
 `instructions/` took the plans, so this holds only what a plan is not.
 **`docs/conceptnotes/` opened on 2026-09-08 on the operator's word**
 (as `docs/blueprint/`, renamed 2026-09-26), with CN-1: concept notes,
-which are neither built, nor a rule, nor a gap in what is built. Four buckets under `docs/`, one rule each:
+which are neither built, nor a rule, nor a gap in what is built.
+**`docs/pending/` opened on 2026-10-08 on the operator's word**: questions
+the operator raised and deferred. Five buckets under `docs/`, one rule each:
 
 - **`docs/spec/`** — what is confirmed and implemented. The authoritative
   specifications; when this file and a spec conflict, the spec wins.
@@ -117,6 +119,11 @@ which are neither built, nor a rule, nor a gap in what is built. Four buckets un
   licenses no code; when one is taken up, the work order cites it and
   becomes the authority. Its own `README.md` carries the rule and the
   header every note must have.
+- **`docs/pending/`** — a question the operator raised and deferred for
+  later discussion: what prompted it, the tree as read, the options. It
+  decides nothing; on the operator's ruling the entry is deleted and the
+  ruling goes to the document that owns the question. Its own `README.md`
+  carries the rule.
 
 A closed workplan is deleted, not archived: the spec that owns the
 subsystem carries everything durable. The plans closed before 2026-08-26
