@@ -34,6 +34,8 @@ How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
 | BI11 | T2 transactions | A load is one implicit transaction: `C_LOAD_BEGIN` runs the session's `BEGIN`, `C_LOAD_END` commits, `C_LOAD_ABORT` (or connection loss mid-load) rolls back. Cross-core: the load runs on the core its session is on, whole, as every transaction does since AT-S6 (`crosscore.md` CC3); it ran on the target relation's home core until AT-S9 retired home cores |
 | BI13 | Observability | `S_COMPLETE` tag `LOAD` (or `ABORT`) with `rows_affected` |
 | BI14 | Resume / dedup | **None.** A load has no resume token, `chunk_seq` must arrive strictly increasing from 0, and the engine deduplicates nothing — replaying chunks after a crash duplicates rows. Restart-safety is the client's (truncate-and-reload) |
+| BI15 | T2 keys | **Every column is announced and encoded, the pk first** (field 0, `kFieldFlagKeystone`). Per row, a **NULL pk field** asks the engine to issue the id and a value names it — T1's per-row arity, spelled on a fixed-width row. One chunk may mix the two. The pk is never NULL in a relation, so the NULL has no second reading. A named key is admitted or refused exactly as on T1, and the refusal reaches the client with its code (`AlreadyExists`, `OutOfRange`) |
+| BI16 | T2 types | **Every storable type loads**, and a NULL in a nullable column. Each field is transliterated into the value shape the storage gate already validates (`exec::EncodeRow`) — never a second gate: a decimal goes over as its literal text so its precision is checked, a date and a timestamp as their decoded integers so their range is, a bool as the byte sent so anything but 0 or 1 is refused. A fixed-width field of another length is refused, never interpreted |
 
 ---
 
@@ -153,8 +155,8 @@ absent the bit, the frames are unknown types under `protocol.md` §4's rule.
 | Frame | Payload | Notes |
 |---|---|---|
 | `C_LOAD_BEGIN` | `{relation str, flags u16, declared_rows u64}` | `declared_rows` 0 = unknown; informational, never enforced. `flags` reserved 0 |
-| `S_LOAD_READY` | `{load_id u64, window u16, max_chunk_bytes u32, field_count u16, fields: …}` | field descriptors are `S_ROW_DESC` fields for the columns **after the pk** — the schema the client must encode, stated by the server so drift is impossible |
-| `C_LOAD_CHUNK` | `{load_id u64, chunk_seq u32, row_count u16, rows…}` | rows in D5 encoding per the announced fields; `chunk_seq` starts at 0, strictly increasing |
+| `S_LOAD_READY` | `{load_id u64, window u16, max_chunk_bytes u32, field_count u16, fields: …}` | field descriptors are `S_ROW_DESC` fields for **every column, the pk first** — the schema the client must encode, stated by the server so drift is impossible (BI15) |
+| `C_LOAD_CHUNK` | `{load_id u64, chunk_seq u32, row_count u16, rows…}` | rows in D5 encoding per the announced fields; a NULL pk field takes an issued id, a value names it (BI15); `chunk_seq` starts at 0, strictly increasing |
 | `S_LOAD_ACK` | `{load_id u64, chunk_seq u32, rows_accepted u64}` | cumulative count; the window advances |
 | `C_LOAD_END` | `{load_id u64}` | → `S_COMPLETE {tag "LOAD", rows_affected}` after the transaction's commit |
 | `C_LOAD_ABORT` | `{load_id u64}` | rolls back → `S_COMPLETE {tag "ABORT", rows_affected}` |
@@ -164,10 +166,14 @@ One active load per connection. A load session is modal: between
 anything else is a protocol error, answered with `S_ERROR`, and the load
 is dead — chunks already accepted are unwound with its transaction (BI4).
 
-**Storable wire types.** The 8-byte integer family and `varchar`. A
-relation with a `decimal` column, or a NULL in any field, is refused —
-the relation at `C_LOAD_BEGIN`, the NULL at the row — rather than at row
-40,000.
+**Storable wire types.** Every one (BI16): `int8`/`int16`/`int32`/`int64`,
+`uint64`, `bool`, `date`, `timestamp`, `decimal`, `decimal128`, `char(N)`
+and `varchar`, each in the D5 width `S_ROW_DESC` announces, and NULL as
+the `-1` length. No relation is refused at `C_LOAD_BEGIN` for its types.
+What a value may be is the storage gate's answer, the same one a T1 row
+gets: a NULL in a `NOT NULL` column, a decimal past its precision, a date
+out of range or a bool that is not 0 or 1 fails its row, and the load,
+with the chunk and row in the message.
 
 ### 3.2 Flow control (BI7)
 
@@ -267,6 +273,9 @@ and for a million.
 - **Assertion accumulation**: a statement violating a group bound only in
   aggregate fails at the correct row ordinal; the same rows split across
   two statements behave per plain admission.
+- **T2 keys and types** (BI15, BI16): one chunk carrying every storable
+  type, a NULL, issued and named keys mixed, reads back value for value;
+  a refused row kills the load with the storage gate's own code.
 - **Atomicity**: mid-statement and mid-chunk failure leaves zero rows,
   including var-heap spills and index entries, across all durability
   classes.

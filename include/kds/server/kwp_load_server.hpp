@@ -68,8 +68,8 @@ private:
         std::string relation;
         std::uint32_t next_seq = 0;      // strictly increasing from 0
         std::uint64_t rows_accepted = 0; // cumulative, echoed in every ACK
-        std::size_t field_count = 0;     // post-pk columns the client encodes
-        std::vector<std::uint32_t> type_vals;  // per field, schema order
+        // What S_LOAD_READY announced: every column, the pk as field 0.
+        std::vector<wire::FieldDescription> fields;
     };
 
     struct Connection {
