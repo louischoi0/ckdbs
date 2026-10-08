@@ -245,7 +245,7 @@ StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, Pa
 // relation dirty behind it; kWrite is required of any visitor that
 // overwrites or delete-marks, and passing kRead from one of those loses
 // the write.
-// `fetcher`, when given and `access` is kRead, routes the page fetches
+// `fetcher`, when given and `access` is not kWrite, routes the page fetches
 // through it - ring mode for a bulk scan (docs/spec/eviction.md §5,
 // workplan EVT06), so the walk reuses a few frames cyclically instead of
 // flooding the pool. Null is the ordinary path, byte-identical to before

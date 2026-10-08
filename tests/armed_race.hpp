@@ -25,7 +25,7 @@ inline std::unique_ptr<storage::DevicePageStore> ArmedStore(
     auto made = storage::MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
     EXPECT_TRUE(made.ok()) << made.status().message();
     device = std::move(made.value());
-    auto store = storage::DevicePageStore::Open(*device, first_new_page_id);
+    auto store = storage::DevicePageStore::Open(*device, ::kds::storage::FrameCapacity{4096}, first_new_page_id);
     EXPECT_TRUE(store.ok()) << store.status().message();
     store.value()->SetLatchArmed(true, /*concurrent_pinners=*/16);
     return std::move(store.value());

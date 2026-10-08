@@ -552,7 +552,7 @@ TEST(BoundCabinTest, AdoptingAGroupIdRefusesToDisagreeWithTheDirectory) {
 TEST(BoundCabinPinningTest, TheSweepNeverReclaimsABoundCabinPageEvenUnpinned) {
     auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
     ASSERT_TRUE(device.ok());
-    auto opened = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    auto opened = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
     ASSERT_TRUE(opened.ok());
     std::unique_ptr<storage::DevicePageStore> store = std::move(opened.value());
 

@@ -94,6 +94,7 @@ struct TempDir {
 // asks for, so a cut lands where the cell put it.
 StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& dir, std::uint32_t cores) {
     Expeditor::Config config;
+    config.buffer_pool_frames = 4096;  // required (BE-R3)
     config.data_file = (dir / "kds.db").string();
     config.wal_dir = (dir / "wal").string();
     config.log_file = {};
@@ -533,6 +534,7 @@ TEST(DropTableReclaimCrashTest, ARelaxedDropCrashedBeforeItsCommitIsDurableFrees
     TempDir image;
     {
         Expeditor::Config config;
+        config.buffer_pool_frames = 4096;  // required (BE-R3)
         config.data_file = (dir.path / "kds.db").string();
         config.wal_dir = (dir.path / "wal").string();
         config.log_file = {};
@@ -637,6 +639,7 @@ TEST(DropTableReclaimServingTest, ATwoCoreMountReclaimsOnceEveryCoreHasCheckpoin
     }
 
     Expeditor::Config config;
+    config.buffer_pool_frames = 4096;  // required (BE-R3)
     config.data_file = (dir.path / "kds.db").string();
     config.wal_dir = (dir.path / "wal").string();
     config.log_file = {};

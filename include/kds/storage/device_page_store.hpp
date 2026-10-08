@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -67,9 +68,14 @@
 // falls through to the authoritative path. A database with no waystone
 // directory pays one reserved page for the bitmap and nothing else.
 //
+// **A bounded pool** (eviction.md, BE): frames are slots in chunks that
+// never move, at most `buffer_pool_frames` of them, reclaimed by a CLOCK hand
+// in bounded batches; a full pool refuses a fill `ResourceExhausted`, only
+// outside a mutation's no-refuse window (page_store.hpp). A freed page's
+// frame is discarded by `FreePage` (BF-R5), dirty or not. The sections
+// below say what each lock protects.
+//
 // Not here, deliberately:
-//   - Eviction is the CLOCK sweep below, armed by a frame budget, and a
-//     freed page's frame is discarded by `FreePage` (BF-R5).
 //   - Dirty tracking is by which accessor the caller chose, not by what it
 //     actually wrote: Get() marks the frame dirty, GetForRead() leaves it
 //     alone, and both hand out the same raw mutable span. A reader that
@@ -176,10 +182,14 @@
 //     1b, one page at a time and released before the gate, so no frame of
 //     its own is latched across the wait - waiting for a foreign exclusive
 //     holder on a flush, trying once and skipping in the background drain
-//     (`WriteBack`'s `HeldFrames`). A fault does not reach WriteBack: its
-//     sweep (`EvictColdFramesLocked`) only queues a dirty frame, and every
-//     WriteBack caller holds no page latch. One wired would be sound only
-//     in `kSkip`, and only if it skipped a frame its own core holds:
+//     (`WriteBack`'s `HeldFrames`). An ordinary fault does not reach
+//     WriteBack: its sweep (`SweepLocked`, at a fill's reservation) only
+//     queues a dirty frame, and every WriteBack caller holds no page latch.
+//     **Drain mode is the one fault path that does** (BE-Q11: recovery, a
+//     rollback, the assertion loops), and only on a thread holding no pin,
+//     in `kSkip` - the one shape that is sound, because a writeback is sound
+//     from the fault path only in `kSkip`, and only if it skips a frame its
+//     own core holds:
 //     neither the writer thread nor core 0's inline sync takes a page
 //     latch, but a shared try re-enters this core's own exclusive hold
 //     (`page_latch.hpp`'s `Next`), so the writeback could copy a page
@@ -279,6 +289,14 @@ inline constexpr PageId kHeaderlessMapPageId = 2;
 static_assert(kFreeMapPageId == FreeMapPageIdFor(0));
 static_assert(kHeaderlessMapPageId == HeaderlessMapPageIdFor(0));
 
+// How many frames a pool may hold - the store's one size, required at
+// `Open` (BE-R3). A type of its own so a call that names only a first page
+// id, as every `Open` did before the capacity was required, does not compile
+// into a pool of that many frames.
+struct FrameCapacity {
+    std::size_t frames = 0;
+};
+
 class DevicePageStore final : public PageStore {
 public:
     // `device` must outlive the store. A device with no pages, or one whose
@@ -288,7 +306,12 @@ public:
     //
     // `first_new_page_id` is where CreateNew() starts looking; pick a value
     // above any id that gets CreateAt'ed.
+    //
+    // `capacity` is the pool's ceiling: resident frames, fills in flight
+    // included, never exceed it (BE-R1, BE-R3). Zero is `InvalidArgument` -
+    // there is no unbounded pool.
     static StatusOr<std::unique_ptr<DevicePageStore>> Open(PageDevice& device,
+                                                           FrameCapacity capacity,
                                                            PageId first_new_page_id = 1);
 
     StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override;
@@ -365,9 +388,9 @@ public:
     //
     // Ascending contiguous runs are coalesced into one WritePageRun of at
     // most kWritebackRunPages, through a bounded copy into scratch -
-    // best-effort, never a correctness property (§4). The copy exists
-    // because frames are separate heap allocations; the zero-copy run
-    // arrives with page.md §9's preallocated slab, not here.
+    // best-effort, never a correctness property (§4). The copy is what
+    // freezes the bytes and their page_lsn together (AM-S3), and it would
+    // be needed anyway: consecutive page ids sit in unrelated slots.
     //
     // Each page is copied under its page latch, shared (AT-S8, step 1b), so
     // what goes out is never half of another core's write, and each frame is
@@ -408,17 +431,30 @@ public:
     // needed", exactly as §4 words it. Returns how many it wrote.
     StatusOr<std::size_t> DrainDirtyEvictionQueue();
 
-    // §4's watermark loop: sweep rotations (each followed by a drain, so
-    // queued dirt becomes reclaimable on the next lap) until the free
-    // reserve - `pool_frames` minus resident frames - meets `watermark`,
-    // or a full rotation reclaims nothing and drains nothing. Returns
-    // frames reclaimed.
+    // §4's watermark loop, on the writeback tick (BE-R2). When the pool's
+    // free count - the capacity less the slots in use and the open windows'
+    // promises - is below `low` (capacity / 16, `eviction.md`'s
+    // `free_watermark`), it reclaims in bounded batches until the count
+    // reaches `high` (capacity / 8), at most one deficit per call. The latch
+    // is released between batches, and the dirty queue is drained between
+    // them, so queued dirt becomes reclaimable on the hand's next visit. It
+    // stops early as `ReclaimWalk` says. Returns frames reclaimed.
     //
-    // The pool size and watermark are **parameters, not fields**: no
-    // bounded pool exists yet (EVT02's unbuilt half), so this layer owns
-    // the loop's shape and EVT02/EVT04 will own its numbers. Nothing calls
-    // it in production until then - the same stance the sweep itself takes.
-    std::size_t MaintainFreeReserve(std::size_t pool_frames, std::size_t watermark);
+    // **Its caller holds no page latch**, which is what makes the drain's
+    // `WriteBack(kSkip)` sound here and nowhere on the fault path (the
+    // header's "Held across a durability wait" bullet).
+    std::size_t MaintainFreeReserve();
+
+    // BE-R2's numbers, each a function of the budget so none is a second
+    // name for it (BE-Q5). The batch is 64 frames, or budget / 16 when that
+    // is smaller - so a pool of a few hundred frames does not empty a
+    // quarter of itself per batch; a batch walks at most `8 * batch` slots
+    // per latch hold.
+    static constexpr std::size_t kReclaimBatch = 64;
+    static constexpr std::size_t kBatchStepsPerFrame = 8;
+    std::size_t ReclaimBatch() const noexcept {
+        return std::clamp<std::size_t>(capacity_ / 16, 1, kReclaimBatch);
+    }
 
     // ---- Scan ring (docs/spec/eviction.md §5, EVT06) --------------------
     //
@@ -659,21 +695,37 @@ public:
     // changes no result and no cell (`AttachWakers`, AU-S1b).
     PageId first_evictable_page_id() const noexcept { return first_evictable_page_id_; }
 
-    // ---- The frame budget: what arms the sweep (MG06) -------------------
+    // ---- The capacity (BE-R3) ------------------------------------------
     //
-    // How many frames may stay resident. 0 - the default - means unbounded,
-    // which is exactly the pre-eviction behaviour; a nonzero budget makes
-    // every fault that pushes residency past it run the CLOCK sweep for the
-    // excess, inline, on the faulting path (EV5's on-demand trigger). The
-    // page just faulted is never its own victim: its usage counter was just
-    // bumped, and the sweep decrements before it reclaims.
-    //
-    // In debug builds `KDS_TEST_FRAME_BUDGET` in the environment overrides
-    // an unset budget at Open() - which is how MG05 runs the entire suite
-    // under brutal eviction pressure without threading a knob through every
-    // fixture.
-    void SetFrameBudget(std::size_t frames) noexcept { frame_budget_ = frames; }
-    std::size_t frame_budget() const noexcept { return frame_budget_; }
+    // How many frames the pool may hold, fixed at `Open` (`eviction.md` §7:
+    // no runtime resize). In debug builds `KDS_TEST_FRAME_BUDGET` in the
+    // environment can only **lower** it, and never below
+    // `kWorkingMinimumFrames` - which is how MG05 runs the whole suite under
+    // eviction pressure without threading a knob through every fixture,
+    // and why that run is the floor (BE-R3).
+    std::size_t frame_capacity() const noexcept { return capacity_; }
+
+    // The working minimum of BE-Q6's mount floor: frames beyond the
+    // resident-class pages that a statement needs to run at all.
+    static constexpr std::size_t kWorkingMinimumFrames = 256;
+
+    // BE-R4: walks a full pool retries before it refuses (`eviction.md`'s
+    // `evict_retry_budget`, a constant since BE-Q5).
+    static constexpr std::size_t kRefuseRetries = 8;
+
+    // Resident frames of a pinned class (EV3) - never reclaimed, so what
+    // the mount floor counts (BE-R3).
+    std::size_t resident_class_frames() const;
+
+    // **BE-Q6's mount floor**, asked once the volume is mounted: the
+    // resident-class frames now resident plus `kWorkingMinimumFrames`. A
+    // configured capacity below it is refused `InvalidArgument`, naming both
+    // numbers, because a pool its own pinned pages exhaust would refuse
+    // every statement. A capacity only the debug override lowered below it
+    // is raised to it instead (BE-R3's clamp). A snapshot: Bound Cabin pages
+    // grow after mount, and one that cannot get a slot is refused like any
+    // creation. Mount-time only - before any peer shares the store.
+    Status ApplyMountFloor();
 
     // ---- The page latch's switch (AM-S1) ---------------------------------
     //
@@ -776,11 +828,9 @@ public:
 
     // **Takes the structure latch** (AM-S2 step 3's eraser half). Every
     // caller outside this class reaches it with the latch not held - the
-    // eviction cells, and `MaintainFreeReserve`, whose loop must drop it
-    // between rotations because the drain in between does device I/O.
-    // The fault path's inline sweep does *not* come through here: it runs
-    // inside `InsertFrame`, under the hold that insert already has, and
-    // calls the `Locked` body directly.
+    // eviction cells. The bounded batches (BE-R2) - a reservation's and
+    // `MaintainFreeReserve`'s - call the `Locked` body under holds of
+    // their own, one batch per hold.
     std::size_t EvictColdFrames(std::size_t budget);
 
     // Pages the sweep found dirty at usage zero, in the order it found them
@@ -800,7 +850,7 @@ public:
     // How many frames currently hold at least one pin. Test and §11
     // observability: an unbalanced pin shows up here as a number that never
     // returns to its floor.
-    std::size_t pinned_frames() const noexcept;
+    std::size_t pinned_frames() const;
 
     // The per-operation pin ceiling (MG04, `docs/workplan-pageref.md` §7's
     // open decision, given a first value here). Derivation, from the MG03
@@ -869,17 +919,29 @@ private:
     // the frame. `mark_dirty` is the only thing Get and GetForRead differ
     // in.
     StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
-                                                      bool bump_usage);
+                                                      FetchHeat heat);
 
+    // **A resident page's frame**, held in the page table's node (BE-R1, as
+    // restated at BE's close): the lookup that finds a page has its frame in
+    // the same allocation, so a hit costs one hash probe and no second
+    // cache line - the cost a frame held in its slot added (`workorder-be-
+    // bounded-pool.md` §6, BE-S6). Node references survive the table's
+    // rehashing, so a `Frame*` is good for as long as the page is resident;
+    // the bytes it points at sit in a slot that never moves.
     struct Frame {
-        std::unique_ptr<Page> bytes;
+        // The page's bytes, in its slot. Set at publish and never re-pointed.
+        Page* bytes = nullptr;
+        PageId page_id = kInvalidPageId;
+        // The slot `bytes` sits in, which the erasers give back.
+        std::uint32_t slot = 0;
         bool dirty = false;
-        // The page latch word (page_latch.hpp), sitting in the padding
-        // after `dirty` so the frame's size does not move. A plain integer
-        // rather than a `std::atomic` so `Frame` stays movable (the table
-        // moves it in); every access goes through `std::atomic_ref`, and
-        // only when the store is armed - unarmed it stays 0 for the frame's
-        // whole life.
+        // On the dirty eviction queue already (BE-R1): the sweep's test,
+        // which was a `std::find` over the queue per dirty victim.
+        bool queued = false;
+        // The page latch word (page_latch.hpp). A plain integer rather than
+        // a `std::atomic`, as it was while the table moved frames in; every
+        // access goes through `std::atomic_ref`, and only when the store is
+        // armed - unarmed it stays 0 for the frame's whole life.
         std::uint32_t latch = 0;
         // First log record to dirty this frame since it was last written
         // back; 0 when nothing logged touched it. See StampPageLsn().
@@ -897,7 +959,8 @@ private:
         // step 1 put pin *accounting* under the structure latch, so an
         // atomic here would be redundant with it. **Every mutation is now
         // latched**: the last unlatched one was `ResidentBytes`' inline-sweep
-        // guard pin, and step 3 moved that inside `InsertFrame`'s own hold.
+        // guard pin, which went when the sweep moved to the reservation
+        // (BE-S2), before any frame of the fill exists.
         //
         // A frame with pins > 0 is never a victim, at any pressure (EV4
         // answers OutOfSpace instead of waiting), and all three erasers read
@@ -948,8 +1011,9 @@ private:
     // not, and grew the frame 32 -> 40 bytes at AT-S8 step 1b - 8 bytes per
     // 8 KiB page. A 16-bit generation would have fitted the padding and can
     // wrap inside one device write on a hot page, which is the one failure
-    // the field exists to rule out.
-    static_assert(sizeof(Frame) == 40, "Frame grew; say why beside this assert");
+    // the field exists to rule out. `page_id`, `queued` and `slot` (BE-R1)
+    // took padding and four bytes: 40 -> 48, still under 0.6% of the page.
+    static_assert(sizeof(Frame) == 48, "Frame grew; say why beside this assert");
     static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(Frame),
                   "std::atomic_ref needs the word aligned inside the frame");
 
@@ -1211,10 +1275,10 @@ private:
 
     // `mark_dirty` is false only for a read-only fetch: a frame faulted in
     // by a reader has not been modified, so it enters the map clean and
-    // nothing writes it back. `bump_usage` is false only for a ring fetch
-    // (§5: a scan's touch must not look like heat).
+    // nothing writes it back. `heat` is how the fetch counts (`FetchHeat`):
+    // `kScan` and `kRing` fault cold, and `kRing` alone never bumps a hit.
     StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
-                                                            bool bump_usage = true);
+                                                            FetchHeat heat = FetchHeat::kWarm);
 
     // Whether the device holds nothing for `page_id` - not addressable, or
     // every byte zero: a page allocated in the map and never written. What
@@ -1257,7 +1321,7 @@ private:
     // recorded obligation). See the definition for what this does and does
     // not yet close.
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                         bool for_read, bool bump_usage) override;
+                                                         bool for_read, FetchHeat heat) override;
 
     // `FetchPinned`'s whole body, plus the one answer the scan ring needs
     // and no other caller does: **did this call fault the page in, or find
@@ -1276,7 +1340,7 @@ private:
     // arm inserted nothing and this still says faulted, because the
     // question it answers is "did this call take the branch that loads".
     StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
-                                                          bool for_read, bool bump_usage,
+                                                          bool for_read, FetchHeat heat,
                                                           bool* faulted);
 
     // The create half of the same pair. See the definition for why its
@@ -1331,23 +1395,24 @@ private:
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }
-    // `sweep` runs MG06's inline reclaim **inside this call's own latch
-    // hold**, which is the only place it can run without a window: the
-    // frame it must protect is the one just inserted, and a hold that ends
-    // at the insert leaves that frame unprotected for the instant before
-    // the sweep re-takes the latch. Only `ResidentBytes`' miss path passes
-    // it - the create paths never swept and still do not, since a create
-    // that evicted would be a behaviour change nobody asked for.
+    class ReservedFrame;
+    // Publishes `slot`, which `ReserveFrame` handed this caller and the
+    // caller has filled, as `page_id`'s frame. A page already resident wins
+    // and `slot` goes back to the free list - except under a create.
     //
     // **A create refuses to lose the race** (BF-R5): `kCreate` is the three
     // `Create*` paths, whose id no other caller holds - so a frame already
     // resident is a fault on an id a reclaim handed out again, reading the
     // dead image, and the create answers `Corruption` rather than serve it.
     enum class Inserting : std::uint8_t { kFault, kCreate };
-    StatusOr<std::span<std::byte, kPageSize>> InsertFrame(PageId page_id,
-                                                          std::unique_ptr<Page> bytes, bool dirty,
-                                                          Inserting why, bool warm = true,
-                                                          bool sweep = false);
+    StatusOr<std::span<std::byte, kPageSize>> InsertFrame(PageId page_id, ReservedFrame&& slot,
+                                                          bool dirty, Inserting why,
+                                                          bool warm = true);
+    // The two creations' common tail: the slot they reserved before
+    // claiming an id, zeroed and published dirty, since a brand-new page
+    // exists only in its frame until it is written back.
+    StatusOr<std::span<std::byte, kPageSize>> PublishFreshPage(PageId page_id,
+                                                               ReservedFrame&& slot);
 
     // The body of both `CreateNew*Unpinned`. A `headerless` create never
     // pops the free list (BF-R6): a headerless page is unlogged and carries
@@ -1371,10 +1436,118 @@ private:
     // cleared and the count restored, a popped id back on the list.
     void ReleaseClaim(PageId page_id, bool popped) noexcept;
 
-    // The sweep body, with the structure latch **already held**. Split from
-    // the public entry point because the two callers differ in exactly that:
-    // `InsertFrame` has the hold, everyone else needs it taken.
-    std::size_t EvictColdFramesLocked(std::size_t budget);
+    // ---- Slots (BE-R1) ---------------------------------------------------
+    //
+    // **A slot is reserved before it is filled** - before a miss's device
+    // read, and before a creation claims its id - so the slots in use, which
+    // the capacity bounds, include every fill in flight (BE-R1). Under the
+    // limit it takes a slot; at it, it reclaims in bounded batches (BE-R2)
+    // with the structure latch released between them, until a batch frees
+    // one or the walk ends (`ReclaimWalk`). Then BE-R4: in drain mode the
+    // dirty queue is written back and the walk runs again; otherwise the
+    // walk is retried `kRefuseRetries` times, and the fill is refused
+    // `ResourceExhausted` - or, inside a window whose share is spent, the
+    // instance is stopped (`FailStop`). Nothing on this path writes back
+    // outside drain mode, and nothing waits.
+    //
+    // **The limit**: outside a window, the capacity less every open
+    // window's unspent share; inside one with share left, the capacity. A
+    // window's fill spends its share as it goes, so `in use + promised`
+    // never exceeds the capacity and a window with share left always finds
+    // a slot.
+    StatusOr<std::uint32_t> ReserveFrame();
+    // Logs and aborts: a fill inside a window that the pool cannot serve.
+    [[noreturn]] void FailStop() const;
+    // Gives a slot back to the free list - a reserved slot never published
+    // (a failed read, a lost race) or a released frame's - poisoning its
+    // bytes in debug builds. Latch held.
+    void ReturnSlotLocked(std::uint32_t slot) noexcept;
+    // **The erasers' one tail**: unmaps a published, unpinned frame and frees
+    // its slot. Latch held, and the frame's refusals already asked by the
+    // caller.
+    void ReleaseFrameLocked(Frame& frame) noexcept;
+    // A slot's page bytes, and the page it holds (`kInvalidPageId` while free
+    // or reserved: the hand skips those).
+    Page& SlotPage(std::size_t index) noexcept {
+        return *reinterpret_cast<Page*>(chunks_[index / kFrameChunk].pages.get() +
+                                        (index % kFrameChunk) * kSlotStride);
+    }
+    // **A slot is a page and one cache line** (BE's close): pages laid at an
+    // exact 8 KiB stride map their headers and slot directories - what every
+    // walk reads first - onto the same few cache sets, and evict each other.
+    // Measured on a resident 64k-page pool: 33.5 ns a hit at 8 KiB stride
+    // against 23 ns for pages `malloc`ed one at a time, whose allocator
+    // header broke the stride by accident. One line of padding breaks it on
+    // purpose, for 0.8% of the pool's memory.
+    static constexpr std::size_t kSlotStride = kPageSize + 64;
+    PageId& SlotOwner(std::size_t index) noexcept {
+        return chunks_[index / kFrameChunk].owners[index % kFrameChunk];
+    }
+    static constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;
+    // Returns a reserved slot to the free list unless `InsertFrame` took
+    // it, so every early return between a reservation and its publish -
+    // a failed read, a checksum refusal, a throw - gives it back.
+    class ReservedFrame {
+    public:
+        ReservedFrame(DevicePageStore& store, std::uint32_t slot) noexcept
+            : store_(store), slot_(slot) {}
+        ~ReservedFrame() {
+            if (slot_ == kNoSlot) return;
+            LatchGuard structure(store_.structure_latch());
+            store_.ReturnSlotLocked(slot_);
+        }
+        ReservedFrame(const ReservedFrame&) = delete;
+        ReservedFrame& operator=(const ReservedFrame&) = delete;
+
+        std::span<std::byte, kPageSize> bytes() const noexcept {
+            return std::span<std::byte, kPageSize>(store_.SlotPage(slot_));
+        }
+
+    private:
+        friend class DevicePageStore;
+        DevicePageStore& store_;
+        std::uint32_t slot_;
+    };
+
+    // `IsPinnedClass` for a frame the caller already holds, so the sweep
+    // asks it per step without a second lookup.
+    bool IsPinnedClassFrame(const Frame& frame) const noexcept;
+
+    // The sweep body, with the structure latch **already held**: reclaims
+    // up to `want` frames, walking at most `max_steps` slots from the hand.
+    // `EvictColdFrames` asks for full laps; the bounded batches (BE-R2) ask
+    // for `ReclaimBatch()` frames in `kBatchStepsPerFrame` times as many
+    // steps.
+    struct SweepResult {
+        std::size_t reclaimed = 0;
+        std::size_t steps = 0;
+        bool progressed = false;  // a usage counter came down: a later batch may reclaim
+    };
+    SweepResult SweepLocked(std::size_t want, std::size_t max_steps);
+    // One inline batch (BE-R2) at the reservation's or a window's limit,
+    // booked in the inline counters. Latch held.
+    SweepResult InlineBatchLocked();
+    std::size_t SlotCountLocked() const noexcept { return slot_count_; }
+    std::size_t SlotsInUseLocked() const noexcept {
+        return SlotCountLocked() - free_slots_.size();
+    }
+    // **What bounds a reclaim loop that drops the latch between batches**
+    // (BE-R2), shared by the reservation and `MaintainFreeReserve`. It stops
+    // after one lap in which no batch freed, cleaned or lowered anything -
+    // a pool that another lap cannot change - and, whatever happens, after
+    // `kClockUsageCap + 1` laps in all: other cores' hits can keep raising
+    // counters this loop lowers, so "progress" alone need never end.
+    struct ReclaimWalk {
+        std::size_t idle = 0;
+        std::size_t total = 0;
+        bool Done(const SweepResult& batch, bool progressed, std::size_t slots) noexcept {
+            total += batch.steps;
+            idle = progressed ? 0 : idle + batch.steps;
+            return batch.steps == 0 || idle >= slots || total >= slots * (kClockUsageCap + 1);
+        }
+    };
+    // Pops a free slot, adding a chunk when there is none.
+    std::uint32_t TakeSlotLocked();
     Status EnsureAddressable(PageId page_id);
 
     // The two bitmaps covering `page_id`, read-only, answering as an empty
@@ -1518,31 +1691,18 @@ private:
     // The page ids a fault is in flight for, and the only reason the miss
     // path can drop the structure latch before the device read.
     //
-    // **A set of ids rather than a flag on `Frame`, because of where the
-    // bytes live.** `EnsureResident` reads into a standalone
-    // `unique_ptr<Page>` and calls `InsertFrame` only afterwards, so there
-    // is no frame to mark while the read runs - a placeholder frame would
-    // have to be invented, with invalid bytes that every other reader of the
-    // table would then have to be taught to skip. An id here is invisible to
-    // all of them.
+    // **A set of ids rather than a flag on `Frame`.** The read fills a
+    // reserved slot that is not in the table until `InsertFrame` publishes
+    // it (BE-R1), so a second fault cannot find it by id - and making it
+    // findable would put a slot with unread bytes in front of every other
+    // reader of the table. An id here is invisible to all of them.
     //
-    // **What it buys is one thing, and the second thing it was written to
-    // buy stopped being true when the erasers took the latch.** What it buys
-    // is the dedup: a second core missing the same page **waits** instead of
-    // issuing a duplicate read whose `InsertFrame` would race the first.
-    //
-    // What it no longer buys - and the note is here because the argument was
-    // load-bearing and is now inverted - is cover for the inline sweep. That
-    // sweep used to run *after* `InsertFrame` returned and outside every
-    // hold, taking a hand-pin on the fresh frame that raced any latched pin
-    // on the same counter; keeping a second core off the frame through
-    // `loading_` was how that race was survived. The sweep runs inside
-    // `InsertFrame`'s own hold now (`InsertFrame`'s `sweep`), so there is no
-    // unlatched increment to race and no window in which the fresh frame is
-    // unprotected. The deadlock that shape was avoiding is avoided by
-    // `EvictColdFramesLocked` instead, which is the honest place for it:
-    // `base/latch.hpp` is not recursive, so a body that may be reached with
-    // the hold already taken has to say so in its name.
+    // **What it buys is the dedup**: a second core missing the same page
+    // **waits** instead of reserving a second slot and issuing a duplicate
+    // read whose `InsertFrame` would race the first. The cover it once gave
+    // an inline sweep that ran outside every hold went when the sweep moved
+    // under the latch, and since BE-S2 the sweep runs at the reservation,
+    // before any frame of this fill exists.
     std::unordered_set<PageId> loading_;
     // Broadcast when a load finishes, either way. Waiters re-check their own
     // page and sleep again if it was not theirs: loads are rare against
@@ -1622,13 +1782,16 @@ private:
     // an accurate record of what a sweep *would* have had cleaned.
     std::vector<PageId> dirty_eviction_queue_;
 
-    // The clock hand: where the next sweep resumes. An id rather than an
-    // iterator, because `frames_` rehashes and an iterator would not
-    // survive it - the sweep re-finds its position by ordering, which is
-    // O(n log n) per pass over an unordered_map and is why the frame table
-    // becomes open-addressed at EV05 (page.md §16-7).
-    PageId clock_hand_ = 0;
-    std::size_t frame_budget_ = 0;  // 0 = unbounded (pre-eviction behaviour)
+    // The clock hand (BE-R1): the slot index the next sweep step visits,
+    // advancing modulo the slots that exist. One step is one slot, O(1);
+    // the sort that re-found an id-valued hand per sweep is gone with it.
+    std::size_t clock_hand_ = 0;
+    std::size_t capacity_ = 0;  // set once, at Open
+    // What `Open` was asked for, before the debug override lowered it.
+    std::size_t configured_capacity_ = 0;
+    // Frames promised to open no-refuse windows and not yet spent, under
+    // the structure latch.
+    std::size_t window_promised_ = 0;
     std::size_t live_pins_ = 0;
     // The source of every `Frame::dirty_gen` (AT-S8 step 1b), under the
     // structure latch.
@@ -1640,7 +1803,66 @@ private:
     std::size_t pin_ceiling_ = kPinCeiling;
     std::size_t pin_high_water_ = 0;
 
+    // ---- The slot array (BE-R1) -----------------------------------------
+    //
+    // Chunks of `kFrameChunk` slots, each with one allocation of page bytes
+    // that never moves while the store lives, and the id each slot holds -
+    // what the hand walks. The chunk vector itself may reallocate; a chunk's
+    // arrays do not, so every span survives growth. Allocated with
+    // `make_unique_for_overwrite`: a slot's bytes cost the process nothing
+    // until a page is read or built into it. Slots are kept once allocated -
+    // the capacity bounds them, and what is resident within them.
+    struct FrameChunk {
+        std::unique_ptr<std::byte[]> pages;  // `kSlotStride` apart
+        std::unique_ptr<PageId[]> owners;
+    };
+    std::vector<FrameChunk> chunks_;
+    // Slots that exist: whole chunks, and a last one cut at the configured
+    // capacity (`TakeSlotLocked` says why not `capacity_`).
+    std::size_t slot_count_ = 0;
+    // Free slots, popped from the back. A reserved slot is on neither this
+    // list nor the table.
+    std::vector<std::uint32_t> free_slots_;
+    // The page table: each resident page's frame. Every structural change -
+    // publish, unmap - is under the structure latch.
     std::unordered_map<PageId, Frame> frames_;
+
+public:
+    // Slots per chunk: 1,024, about 8 MiB of padded pages (BE-R1, BE-Q5). The
+    // unit the array grows by and nothing else.
+    static constexpr std::size_t kFrameChunk = 1024;
+
+    // The array's census, for cells and `SHOW META`: slots that exist, and
+    // how many of them are free. Every slot is free, reserved or resident,
+    // so with no fill in flight `slots == free + resident_pages()`.
+    struct FrameSlots {
+        std::size_t slots = 0;
+        std::size_t free = 0;
+    };
+    FrameSlots frame_slots() const {
+        LatchGuard structure(structure_latch());
+        return FrameSlots{SlotCountLocked(), free_slots_.size()};
+    }
+
+    PoolCounters pool_counters() const override;
+
+    Status BeginNoRefuseWindow(std::size_t frames) override;
+    void EndNoRefuseWindow() noexcept override;
+    void BeginDrainOnPressure() noexcept override;
+    void EndDrainOnPressure() noexcept override;
+
+private:
+    // BE-R2's counters (`PoolCounters`). Relaxed atomics: the hit path
+    // counts outside the structure latch on an unarmed store's raw
+    // accessors, and a gauge needs no order.
+    struct Counter {
+        std::atomic<std::uint64_t> value{0};
+        void Add(std::uint64_t n = 1) noexcept { value.fetch_add(n, std::memory_order_relaxed); }
+        std::uint64_t Load() const noexcept { return value.load(std::memory_order_relaxed); }
+    };
+    Counter hits_, misses_, reclaimed_inline_, reclaimed_background_, batches_inline_,
+        batches_background_, batches_partial_, batch_steps_, batch_steps_background_,
+        dirty_queued_, dirty_drained_, refused_;
 };
 
 }  // namespace kds::storage

@@ -1352,6 +1352,23 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " reclaim_skipped=" << reclaim_counters_->skipped.load(std::memory_order_relaxed)
            << " reclaim_refused=" << reclaim_counters_->refused.load(std::memory_order_relaxed);
     }
+    // The buffer pool (BE-R2, `eviction.md` EV9): its budget and what it
+    // holds, then what reclaim has cost. `pool_batch_steps` over
+    // `pool_batches_inline` is the inline walk's mean, which BE-R2 bounds;
+    // it and `pool_batch_steps_background` over `pool_slots` are the
+    // hand's laps (BG-S1).
+    const auto pool = page_store_.pool_counters();
+    os << " pool_budget=" << pool.budget << " pool_resident=" << pool.resident
+       << " pool_slots=" << pool.slots << " pool_hits=" << pool.hits
+       << " pool_misses=" << pool.misses << " pool_reclaimed_inline=" << pool.reclaimed_inline
+       << " pool_reclaimed_background=" << pool.reclaimed_background
+       << " pool_batches_inline=" << pool.batches_inline
+       << " pool_batches_background=" << pool.batches_background
+       << " pool_batches_partial=" << pool.batches_partial
+       << " pool_batch_steps=" << pool.batch_steps
+       << " pool_batch_steps_background=" << pool.batch_steps_background
+       << " pool_dirty_queued=" << pool.dirty_queued
+       << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused;
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
     // live pages plateauing under a write-heavy loop is the feature, and
@@ -5015,6 +5032,18 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         return std::span<const std::vector<std::byte>>(payloads);
     };
 
+    // **The no-refuse window, sized to the fill** (BE-Q11). The carved fill
+    // places every row before the undo loop and the page images below fetch
+    // again, so a refusal after it would orphan the batch. Its share covers
+    // the pages the rows can fill - each tuple with its 20-byte header, two
+    // pages per page's worth for the tail's growth and the images'
+    // re-fetches - plus one row's window for the undo pages. A full pool
+    // refuses here, with nothing placed.
+    const std::size_t fill_pages =
+        stmt.rows.size() * (std::size_t{ta.layout.row_size} + 20) / kPageSize + 1;
+    auto window = storage::NoRefuseWindow::Open(page_store_,
+                                                storage::kWindowFrames + 2 * fill_pages);
+    if (!window.ok()) return {ErrorReply(window.status()), false, 0, window.status()};
     auto filled = heap::ChainAppendCarved(page_store_, ta.desc_page_id, carve, WriterId(scope),
                                           ta.oid, &ta.heap_tail_hint);
     if (!filled.ok()) {
@@ -5334,6 +5363,19 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     };
 
     const bool is_btree = ta.clustered_type == catalog::ClusteredType::kBtree;
+
+    // ---- The no-refuse window (BE-Q11) -----------------------------------
+    //
+    // From here the row writes pages - its spills, its leaf, the indexes,
+    // the reservation, the undo record, a root's re-publish - and fetches
+    // or creates more after each write. A full pool may refuse only here,
+    // before the first of them: past this line a refusal would leave a
+    // placed row with no undo record (`docs/inflight/bugs/a-fetch-refused-
+    // after-a-page-write-leaves-the-mutation-half-done.md`). Closed when
+    // this function returns, with the row's trail entry written.
+    auto window = storage::NoRefuseWindow::Open(page_store_);
+    if (!window.ok()) return window.status();
+
     std::optional<StatusOr<storage::InsertPlacement>> attempt;
     if (explicit_key) {
         const txn::LockKey key_unit = txn::LockKey::Tuple(ta.oid, supplied_id);
@@ -7734,6 +7776,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // poisoned - the AS9 resolution, decided 2026-08-09: uniform with
         // every other write failure, because "open and usable" cannot be
         // promised once a multi-row statement has partly happened.
+        //
+        // **The no-refuse window opens first** (BE-Q11): the assertion
+        // reservation below is this row's first write, then its spills, and
+        // the undo record, the overwrite, the indexes and an index root's
+        // re-publish each fetch or create after one. A full pool refuses
+        // here, with nothing of this row written; earlier rows are on the
+        // trail. Closed when this row's visit returns.
+        auto window = storage::NoRefuseWindow::Open(page_store_);
+        if (!window.ok()) return window.status();
         if (asserted) {
             std::uint64_t reserver = 0;
             if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),

@@ -9,6 +9,7 @@
 #include "kds/base/status.hpp"
 #include "kds/base/current_core.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "frame_budget_override.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
@@ -77,6 +78,9 @@ using testing_race::ArmedStore;
 // as unallocated. That is the answer the writeback path and the WAL gate
 // both read.
 TEST(FreeMapRaceTest, RegionCreationAndReadsAgreeUnderConcurrency) {
+    // Creates more dirty pages in one burst than the debug floor holds with
+    // no checkpoint between - BE-R4's refusal, not this cell's subject.
+    const WithoutFrameBudgetOverride full_capacity;
     std::unique_ptr<MemoryPageDevice> device;
     auto store = ArmedStore(device);
     ASSERT_NE(store, nullptr);
@@ -192,6 +196,9 @@ TEST(FreeMapRaceTest, RegionCreationAndReadsAgreeUnderConcurrency) {
 // **Mutation:** `insert_or_assign` for `try_emplace` - 8 of 8 runs fail,
 // reporting 13 to 46 placed ids reading unallocated.
 TEST(FreeMapRaceTest, EveryCoreCreatingOneRegionAtOnceLeavesOneRegion) {
+    // Creates more dirty pages in one burst than the debug floor holds with
+    // no checkpoint between - BE-R4's refusal, not this cell's subject.
+    const WithoutFrameBudgetOverride full_capacity;
     std::unique_ptr<MemoryPageDevice> device;
     auto store = ArmedStore(device);
     ASSERT_NE(store, nullptr);

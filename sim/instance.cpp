@@ -37,7 +37,9 @@ Status SimInstance::Boot() {
     if (!wal.ok()) return wal.status();
     wal_ = std::move(wal.value());
 
-    auto store = storage::DevicePageStore::Open(*page_device_, server::kFirstUserPageId);
+    auto store = storage::DevicePageStore::Open(
+        *page_device_, storage::FrameCapacity{options_.buffer_pool_frames},
+        server::kFirstUserPageId);
     if (!store.ok()) return store.status();
     store_ = std::move(store.value());
     store_->SetWalGate(wal_.get());
@@ -64,6 +66,9 @@ Status SimInstance::Boot() {
     wal::Lsn reclaim_gate = 0;
 
     undo_.emplace(*store_, wal_.get());
+    // Recovery in drain mode, as the expeditor runs it (BE-Q11).
+    std::optional<storage::DrainOnPressure> mount_drain;
+    mount_drain.emplace(*store_);
     if (!options_.skip_recovery) {
         // The harness bootstraps a real database and recovers the same
         // volume the bootstrap wrote (AR0 M0). It used to hand the topology
@@ -99,6 +104,7 @@ Status SimInstance::Boot() {
     // is a full instance, and the null-persist path is the socket-free
     // tests' — ids reissued across a restart would be *this harness's*
     // fault, not the engine's.
+    mount_drain.reset();
     trx_ids_.emplace(boot_->superblock, [this] { return PersistSuperBlock(); });
     txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get());
 

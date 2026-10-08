@@ -1,3 +1,4 @@
+#include "frame_budget_override.hpp"
 #include "file_rig_crash.hpp"
 #include "two_core_rig.hpp"
 
@@ -511,6 +512,10 @@ TEST(SortedLeafCrashTest, AMidLeafRowPlacedAndNeverLoggedIsTakenBackBeforeTheNex
 }
 
 TEST(SortedLeafCrashTest, ALogCutInsideAnInternalNodesDivideLeavesTheTreeWhole) {
+    // Fills thousands of wide rows through a rig that runs no writeback tick,
+    // so at the debug floor the pool fills with dirty pages and a row's
+    // window is refused - BE-R4's refusal, not this cell's subject.
+    const WithoutFrameBudgetOverride full_capacity;
     // BD-R12's third shape: a separator sorting inside a full internal node
     // divides it. Rows of about 4 KB put two in a leaf, so 1,400 ascending
     // rows fill a root of 678 children and grow a level over it; a key

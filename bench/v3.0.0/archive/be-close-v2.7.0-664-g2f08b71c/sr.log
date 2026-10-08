@@ -1,0 +1,15 @@
+== B start 14:06:09 load 0.55 1.18 2.98
+big4 load 51.16 s errs 0 rss max 138.8828125
+B {'hot_pages': 1024, 'warm_passes': 1, 'warm': [{'seconds': 0.0747, 'misses': 1121.0, 'hits': 5031.0}], 'before': {'seconds': 0.0713, 'misses': 815.0, 'hits': 11270.0}, 'scan': {'seconds': 0.59, 'misses': 64848.0}, 'after': {'seconds': 0.0702, 'misses': 814.0, 'hits': 8560.0}, 'after2': {'seconds': 0.0651, 'misses': 0.0, 'hits': 9374.0}}
+B {'hot_pages': 8192, 'warm_passes': 1, 'warm': [{'seconds': 0.596, 'misses': 9104.0, 'hits': 42283.0}], 'before': {'seconds': 0.507, 'misses': 0.0, 'hits': 51379.0}, 'scan': {'seconds': 0.57, 'misses': 62420.0}, 'after': {'seconds': 0.5484, 'misses': 7510.0, 'hits': 43869.0}, 'after2': {'seconds': 0.5156, 'misses': 0.0, 'hits': 51379.0}}
+B {'hot_pages': 8192, 'warm_passes': 3, 'warm': [{'seconds': 0.5935, 'misses': 9104.0, 'hits': 42283.0}, {'seconds': 0.5092, 'misses': 0.0, 'hits': 51379.0}, {'seconds': 0.5073, 'misses': 0.0, 'hits': 51379.0}], 'before': {'seconds': 0.538, 'misses': 0.0, 'hits': 51379.0}, 'scan': {'seconds': 0.56, 'misses': 60343.0}, 'after': {'seconds': 0.5495, 'misses': 8243.0, 'hits': 43136.0}, 'after2': {'seconds': 0.5159, 'misses': 0.0, 'hits': 51379.0}}
+B {'hot_pages': 12288, 'warm_passes': 1, 'warm': [{'seconds': 1.0416, 'misses': 13200.0, 'hits': 64343.0}], 'before': {'seconds': 0.8226, 'misses': 0.0, 'hits': 77535.0}, 'scan': {'seconds': 0.57, 'misses': 63340.0}, 'after': {'seconds': 0.8289, 'misses': 12824.0, 'hits': 64711.0}, 'after2': {'seconds': 0.773, 'misses': 0.0, 'hits': 77535.0}}
+== B end 14:07:13
+== A start 14:07:13 load 1.19 1.23 2.88
+big4 load 50.85 s errs 0 rss max 602.83984375
+A {'hot_pages': 1024, 'warm_passes': 1, 'warm': [{'seconds': 0.0747, 'misses': None, 'hits': None}], 'before': {'seconds': 0.0708, 'misses': None, 'hits': None}, 'scan': {'seconds': 23.56, 'misses': None}, 'after': {'seconds': 0.3935, 'misses': None, 'hits': None}, 'after2': {'seconds': 0.0666, 'misses': None, 'hits': None}}
+A {'hot_pages': 8192, 'warm_passes': 1, 'warm': [{'seconds': 0.7319, 'misses': None, 'hits': None}], 'before': {'seconds': 0.5063, 'misses': None, 'hits': None}, 'scan': {'seconds': 33.36, 'misses': None}, 'after': {'seconds': 4.5687, 'misses': None, 'hits': None}, 'after2': {'seconds': 0.508, 'misses': None, 'hits': None}}
+A {'hot_pages': 8192, 'warm_passes': 3, 'warm': [{'seconds': 0.5951, 'misses': None, 'hits': None}, {'seconds': 0.5091, 'misses': None, 'hits': None}, {'seconds': 0.5141, 'misses': None, 'hits': None}], 'before': {'seconds': 0.5088, 'misses': None, 'hits': None}, 'scan': {'seconds': 34.55, 'misses': None}, 'after': {'seconds': 4.5447, 'misses': None, 'hits': None}, 'after2': {'seconds': 0.5154, 'misses': None, 'hits': None}}
+A {'hot_pages': 12288, 'warm_passes': 1, 'warm': [{'seconds': 0.8864, 'misses': None, 'hits': None}], 'before': {'seconds': 0.7603, 'misses': None, 'hits': None}, 'scan': {'seconds': 34.56, 'misses': None}, 'after': {'seconds': 7.5836, 'misses': None, 'hits': None}, 'after2': {'seconds': 0.7692, 'misses': None, 'hits': None}}
+== A end 14:10:36
+done

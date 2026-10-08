@@ -88,26 +88,14 @@
 
 namespace kds::server {
 
-// Refuses a nonzero instance frame budget that would give some core a
-// share of zero - the message says why. Zero total stays legal and means
-// unbounded by request. A free function beside the config for the same
-// reason CheckCoreCount is one: testable without a server.
-Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
-
-// EV4 (docs/spec/eviction.md §6), under the operator invariant of
-// 2026-08-24: the key is an instance total and every core's share is
-// equal - `frames / min(cores, hardware cores)` as ratified, which is
-// `frames / cores` on every instance that exists, because Expeditor::Open
-// refuses to boot when `cores` exceeds the detectable hardware count and
-// falls back to `cores` when the count is undetectable. The min() is
-// therefore not carried as a parameter - its hardware arm can never be
-// selected, and if it ever were, share * cores would exceed the total,
-// the exact overcommit the invariant forbids. The remainder (at most
-// cores-1 frames, ~504 KiB at the 64-core cap) is undistributed -
-// equality is the invariant, and a remainder seat would break it. Never
-// 0 for a nonzero total that passed CheckFrameBudget; `cores` must be
-// nonzero (CheckCoreCount owns that).
-std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept;
+// The pool's ceiling, checked at both doors (BE-R3): a config file without
+// `buffer_pool_frames`, a `0`, and a server started with no config at all -
+// whose `Config` carries the 0 it was built with - are each refused
+// `InvalidArgument`. The key is required and has no default (operator
+// ruling, `raft-marks-2026-10-07.md` §14). A free function beside the
+// config for the same reason `CheckCoreCount` is one: testable without a
+// server.
+Status CheckBufferPoolFrames(std::size_t frames);
 
 class Expeditor {
 public:
@@ -123,12 +111,12 @@ public:
         // reaches it.
         bool force_listener_handoff = false;
 
-        // Resident-frame budget for the **whole instance**, divided evenly
-        // per core with the remainder to core 0 (docs/spec/eviction.md §6
-        // EV4 - built 2026-08-24; docs/workplan-pageref.md MG06); 0 =
-        // unbounded. The sweep arms only on a core whose share is nonzero,
-        // and a nonzero total below `cores` is refused at boot
-        // (CheckFrameBudget) rather than rounded to an unbounded share.
+        // The buffer pool's maximum, in 8 KiB frames, for the whole instance:
+        // one pool every core shares (`eviction.md` §6). **Required**, with
+        // no default - the 0 here is "not given", which `Open` refuses
+        // (`CheckBufferPoolFrames`) - and it must cover the volume's
+        // resident-class pages plus `DevicePageStore::kWorkingMinimumFrames`,
+        // which `Open` checks once the volume is mounted (BE-Q6).
         std::size_t buffer_pool_frames = 0;
 
         // **The borrow cap, per transaction** (AO-R10, AR2 E2; the

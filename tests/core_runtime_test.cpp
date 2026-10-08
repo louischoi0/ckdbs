@@ -71,7 +71,7 @@ protected:
         ASSERT_TRUE(device.ok()) << device.status().message();
         device_ = std::move(device.value());
 
-        auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
         ASSERT_TRUE(store.ok()) << store.status().message();
         core0_store_ = std::move(store.value());
 
@@ -163,6 +163,9 @@ protected:
         // ring (both gone since AT-S6/AT-S10d); what does now is that every
         // core reads every other core's commits locally.
         c.visibility = &visibility_;
+        // Required wherever a cell opens a store of the runtime's own
+        // (BE-R3); ignored where one is shared.
+        c.buffer_pool_frames = 4096;
         c.schema_word = &schema_word_;
         c.oid_sequence = &oid_sequence_;
         c.mark_counter = &pending_marks_;
@@ -1072,19 +1075,20 @@ TEST_F(CoreRuntimeTest, APeerOnASharedPoolTakesNoBudgetOfItsOwn) {
     // never reached a peer before 2026-08-24: only core 0's store was
     // budgeted, so every peer pool ran unbounded whatever the operator
     // configured, and the fix passed a per-core share through
-    // `CoreRuntime::Config`. AM-S2 step 3 made the whole number core 0's
-    // and `Expeditor` passes 0 to every peer, because handing one pool a
-    // fraction of itself is what a share would now mean.
+    // `CoreRuntime::Config`. AM-S2 step 3 made the whole number core 0's,
+    // and since BE-S4 the capacity is fixed when the one pool is opened: a
+    // peer's `buffer_pool_frames` sizes only a store of its own, and is
+    // ignored where the pool is shared.
     //
     // So the contract is that the field is **ignored on a borrowed pool**
     // (`core_runtime.hpp`), and the cell asks a store whose budget it knows
     // for a number the config tried to change.
-    const std::uint32_t before = core0_store_->frame_budget();
+    const std::uint32_t before = core0_store_->frame_capacity();
     CoreRuntime::Config config = ConfigFor(1);
     config.buffer_pool_frames = before + 8;
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    EXPECT_EQ(peer.value()->store().frame_budget(), before)
+    EXPECT_EQ(peer.value()->store().frame_capacity(), before)
         << "a peer re-budgeted the instance's pool from its own config";
 }
 

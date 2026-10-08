@@ -9,9 +9,11 @@ Written 2026-10-07 on `worktree-pool-budget-required` from `e352eac0`
 - *"작업 지시서를 작성하고 handoff를 준비해줘"*
 - **W1:** *"push it, and mark BE-Q0..Q10 as proposed"*
 
-**Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §16): BE-Q0..Q10
-are marked as proposed, so BE-R1..R5 are rulings and BE-S1 is the next
-stage. The ruling itself is marked (`raft-marks-2026-10-07.md` §14) and
+**Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §16), and **every
+stage built the same day**, BE-S1 through BE-S6 (§6). **Its close carries a
+measured regression on resident scans (+2.5-3.7 %) and a partial scan
+resistance**, both stated in BE-S6's row and in `known-gaps.md`; the merge
+waits on the operator's reading of them. The ruling itself is marked (`raft-marks-2026-10-07.md` §14) and
 recorded in `eviction.md` §6 as not built.
 
 **BE is not part of AR0 §8's chain.** It answers an incident outside the
@@ -527,3 +529,601 @@ read.
   site;
 - the EV6 gap is restated rather than deleted;
 - BA-R5's partitions are named in BE-R1 and BE-Q9.
+
+### BE-S1 — the census and the premise, 2026-10-07
+
+Run on `worktree-pool-budget-required` at `e4b107af`
+(`v2.7.0-659-ge4b107af`). No engine file moved. The stage adds
+`bench/pool_sweep_bench.cpp` (`kds_pool_sweep_bench`, under
+`KDS_BUILD_BENCH`) and one `docs/inflight/bugs/` entry.
+
+**Premise: it holds, so BE goes on.** `kds_pool_sweep_bench` reads the
+pages of a `2 × budget` file in order through `GetForRead` on one unarmed
+`DevicePageStore`, `build-release`. It samples the first 2,000 misses past
+the budget. "Below" means a fault into a pool with room; "past" means a
+fault that pays the inline sweep.
+
+| budget | below p50 / p99 | past p0 / p25 / p50 / p90 / p99 / max | the whole half, extrapolated |
+|---|---|---|---|
+| 16,384 | 5.4 / 10.0 µs | 162 / 225 / 266 / 291 / 332 / 1,237 µs | 4.2 s |
+| 65,536 | 5.6 / 10.9 µs | 792 / 890 / 980 / 1,062 / 1,371 / 4,619 µs | 64 s |
+| 131,072 | 5.6 / 9.8 µs | 1,960 / 2,156 / 2,222 / 2,353 / 3,119 / 9,241 µs | 294 s |
+
+- At 131,072 frames the engine pays 2.2 ms per miss. That is 30% of §1.2's
+  standalone 7.5 ms, against the stop line of 10%.
+- The cost grows about linearly with the resident count over this range
+  (×3.7 for ×4 frames, ×2.3 for ×2): every miss copies, sorts and re-finds
+  the table.
+- A miss past the budget costs about 400 times one below it.
+- RSS after the 131,072 run was 1,042 MiB, the budget's 1,024 MiB plus the
+  process.
+- **The 786,432 cell was not run.** It needs about 6 GiB for the pool. The
+  host had about 4 GiB available because xrock's `kds_server` (restarted at
+  11:48 UTC with `buffer_pool_frames = 1450000`) and its loader held the
+  rest. The loader also used about one of the eight CPUs throughout, so
+  every figure above was taken next to it. The order of magnitude is what
+  the gate asks, and the loader cannot move it.
+
+**Census A: every `frames_` site at `e4b107af`.** The slot form is what
+BE-S2 changes it to: the table maps `PageId → Frame*` into chunked slots,
+so every lookup gains one pointer hop and keeps its shape.
+
+| kind | sites (`device_page_store.cpp` unless named) | slot form |
+|---|---|---|
+| insert | `InsertFrame` `:620` (lost race), `:662` (`try_emplace`) | publish a reserved slot; a lost race returns it to the free list |
+| erase | `ReleaseScanSlot` `:808/:828`, `EvictClean` `:1794/:1822`, sweep `:2573/:2617` | one tail: unmap, poison, reset, push free |
+| walk | `Flush` `:1727`, `DirtyPageIds` `:1763`, `DirtyPagesWithRecLsn` `:1775`, `pinned_frames` `:2529`, the sweep's sorted copy `:2556-2558` | the map for the first four (O(resident), per checkpoint); the sweep walks slots from the hand and the sort is deleted |
+| lookup | `ResidentBytes` `:722`, `ClaimNamedIdLocked` `:1021`, `StampPageLsn` `:1254`, `AwaitWalGate` `:1346`, `AwaitWritebackClaim` `:1386`, `WriteBack` `:1492/:1510/:1522`, `FetchAndPin` `:1923/:1987`, `PinResidentAndRelease` `:2069`, `CreatePinned` `:2128/:2140`, `PinFrame` `:2197`, `UnpinFrame` `:2362`, `MarkFrameDirty` `:2438`, the three test hooks `:2443/:2457/:2467`, `IsPinnedClass` `:2498` | `it->second->` for `it->second.`; `WriteBack`'s `Frame*` across its phases stays valid, because a slot never moves |
+| field | the sweep trigger `:690/:693`, the sweep's empty test `:2547`, `MaintainFreeReserve` `:1697`, the log line `:2625`, the header's `resident_pages()` `:766` | `frames_.size()` is the resident count, unchanged |
+
+`pinned_frames` walks the table unlatched, a gap that predates BE. It is
+read only by cells, and BE-S2 latches it when it touches the line.
+
+**Census B: refusals after a write. This is what BE-S4 has to answer.**
+A read-only census found 27 sites where a fetch or a creation follows a
+page write in one mutation. Twenty are safe: their error leaves nothing
+that rollback or recovery cannot undo. Seven groups are not, and each one
+is reachable **today** on a device error, before any cap.
+`docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`
+lists them, worst first:
+- an `INSERT` refused between placing its row and writing its undo. This
+  leaves an orphan row that becomes visible past the floor, missing some or
+  all of its index entries;
+- a refused rollback compensation;
+- an index split torn after the leaf divides;
+- a root re-publish refused after the new root is built;
+- the bulk fill's three sites;
+- var-heap growth before its undo;
+- the assertion commit and abort loops.
+
+Census B also found two things that are not a crash and not a refusal
+after a write:
+- recovery redo reads any non-`Corruption` fetch error as "page absent"
+  on a `PAGE_INIT` or full-image record and re-creates the page; on any
+  other record it refuses the mount (`redo.cpp:335-368`);
+- `command_dispatcher.cpp:7933`'s comment says the pending set is untouched,
+  and that is false.
+
+**What this does to BE-R4, and CLA's proposal (BE-Q11).** BE-Q4 (a)'s
+refusal is safe only where no write of the mutation precedes it. Census B
+shows that "the fault refuses" reaches seven unsafe groups. So BE-S4 gates
+the refusal:
+- **A no-refuse window, per row and explicit.** An RAII guard opens at the
+  first page write of each Census B group, for example the row's placement.
+  It closes when the trail covers that write (`NoteInsert`,
+  `NoteOverwrite`), because from there `Abort` can undo it. Outside every
+  window, a fault or creation may be refused (BE-R4). Inside one, it may
+  not.
+- **The window is per task, and no window holds a suspension point.** The
+  guard is a thread-local depth, which is sound only because a task cannot
+  interleave with another on its reactor without suspending. The suspend
+  audit (`exec::InstallSuspendAudit`) records a park inside a window, as it
+  records one under a pin. BE-S4 confirms this for each window it opens.
+- **The reserve is carved inside the cap**, so the pool never exceeds it.
+  Only a fault inside a window draws on it. Ordinary reservations stop at
+  `cap - reserve`. The reserve is `kWindowReserveFrames` (proposed 64,
+  eight times `kPinCeiling`) multiplied by the instance's core count,
+  because every core can be inside a window at once.
+- **An exhausted reserve fail-stops the store.** Returning an error into a
+  half-done mutation is exactly what the window exists to prevent, so the
+  answer is the one `wal.md` gives a write it cannot complete. The cost:
+  one row's mutation that needs more than 64 frames that cannot be
+  reclaimed, beyond the cap, stops the instance.
+- **Recovery is not a mutation.** A mount pass (redo and undo) holds no
+  page latch between records, and the log it replays is durable. So a
+  reservation on the mount thread that finds nothing reclaimable drains
+  the dirty queue through `WriteBack` and retries, and the cap holds at
+  mount too.
+- **Writers outside a statement need their own census in BE-S4:** access
+  statistics and Waystone trails written by reads, the delete-mark purge,
+  Cabin and assertion builds, and DDL page creation. Each one is either
+  shown to refuse before its first write or given a window.
+
+BE-S1's review replaced the first draft of this rule. That draft keyed the
+window to "the thread has dirtied a page since its statement began".
+That made the window a whole statement where the danger lasts one row, so
+one large `UPDATE` under pressure could fail-stop the instance. It also
+used a thread-local flag that coroutines interleave across, and a single
+reserve shared by every core.
+
+The alternative, fixing each of the seven groups to undo what it wrote, is
+the order of a milestone, and it does not close the device-error half any
+better. W1 marked BE-Q0..Q10 as proposed and told CLA to follow its
+proposals where a decision is needed. BE-Q11 is taken on that word and
+recorded as such, not as a mark.
+
+**The suite at `e4b107af`, Debug, `-j8`:**
+- plain: 3191/3192;
+- under `KDS_TEST_FRAME_BUDGET=64`: 3191/3192.
+
+The one failure is the same cell both times:
+`TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`
+binds port 25432, which xrock's running `kds_server` holds (`ss -ltnp`).
+That is the environment, not the tree. So a 64-frame budget breaks nothing
+**while it is soft**. What a hard cap breaks is BE-S4's to find.
+
+**Not measured; measured at the milestone's close.**
+
+### BE-S2 — the slot array, 2026-10-07
+
+Built at `0da17f9f` on `worktree-pool-budget-required`.
+- Frames live in chunks of `kFrameChunk` (1,024) slots. Each chunk's page
+  bytes are one `make_unique_for_overwrite` allocation that never moves.
+- The table maps `PageId → Frame*`, and a free list hands out slots.
+- A miss and a creation reserve their slot before filling it, through a
+  `ReservedFrame` guard that returns the slot on every early exit.
+- The hand is a slot index that keeps its place between sweeps, and the
+  sort is deleted.
+- A `queued` bit replaces the `std::find`.
+- The three erasers share one tail, `ReleaseFrameLocked`, which poisons the
+  slot in debug builds and, under ASan, poisons it until it is reused.
+- `Frame` grows from 40 to 48 bytes (`page_id`, `queued`).
+
+**Its review found four defects, fixed in the BE-S3 commit. Three
+suggestions were applied and two declined:**
+- **A new cell failed under `KDS_TEST_FRAME_BUDGET=64`.**
+  `ASpanSurvivesTheArraysGrowth` inherited the override's budget, so the
+  array never grew. **`0da17f9f`'s message claims "3191/3192 under a
+  64-frame budget" for the suite as it was before the cells existed. For
+  the cells it added, the claim is false.** The cell now sets its own
+  budget.
+- **The budget counted only published frames**, so concurrent fills each
+  saw room. The budget now bounds the slots in use, which include every
+  reserved fill (BE-S3's `SlotsInUseLocked`), as BE-R1 requires.
+- **Creations past an all-dirty pool walked six laps each.** BE-S3 bounds
+  them (below).
+- **The order's "a lost `loading_` race returns its slot" cell was not
+  there.** A loser of the `loading_` race reserves nothing in this design.
+  So the cell is the slot census on `ConcurrentMissesOnOnePageIssueOneDeviceRead`,
+  where eight faulters per round use one slot. `InsertFrame`'s lost-race
+  arm is reachable only by an unlatched race on the raw `*Unpinned`
+  accessors, which would be undefined behaviour on the table, so no cell
+  drives it. **This is recorded as a gap, not claimed as covered.** A
+  census on the failed-fill (`NotFound`) path and on `EvictClean` was added
+  instead.
+- **Applied:**
+  - `InsertFrame` takes the `ReservedFrame&&`, so a throwing `emplace`
+    gives the slot back;
+  - the two creations share `PublishFreshPage`;
+  - the sweep asks `IsPinnedClassFrame(frame)`, so it does no second lookup
+    per step;
+  - a dead null test was deleted;
+  - the stale comments it listed were rewritten. The header's
+    `loading_`/`unique_ptr<Page>` text, `FetchAndPin`'s, and the
+    "references into an `unordered_map`" lines all described a table that
+    is gone.
+- **Declined:**
+  - **Moving `kFrameChunk`/`frame_slots()` into the first public block** is
+    cosmetic.
+  - **A FIFO free list** would keep a freed slot poisoned longer. It is
+    declined because LIFO reuse keeps the hot slots' cache lines warm, and
+    the debug poison already catches a stale read on reuse.
+
+`docs/spec/page.md` §6 and §9 still say frames are separate heap
+allocations. BE-S6 restates them, as the order says, and until then they
+describe the engine before `0da17f9f`.
+
+### BE-S3 — bounded batches and the background, 2026-10-07
+
+Built on `worktree-pool-budget-required` from `0da17f9f`.
+
+**Code:**
+- **Reservation.** Under the budget, `ReserveFrame` takes a slot. At the
+  budget it reclaims one bounded batch per structure-latch hold, releasing
+  the latch between batches:
+  - `ReclaimBatch()` frames, which is 64, or budget / 16 when that is
+    smaller;
+  - in at most `kBatchStepsPerFrame` (8) steps per frame.
+- **`MaintainFreeReserve()`** reads the budget: `low` = budget / 16 and
+  `high` = budget / 8. It runs on the 50 ms writeback tick before the
+  drain, as bounded batches with a drain between them.
+- **`SHOW META`** prints `pool_budget`, `pool_resident`, `pool_slots`,
+  hits, misses, inline and background reclaims, inline batches, partial
+  batches, steps, queued, drained and refused. The counters are
+  `PageStore::pool_counters()`, zeros for a store with no pool.
+
+**A deviation from BE-R2 as written, and why.** BE-R2 says "a partial batch
+is still progress, and an empty one goes to BE-R4". That would refuse
+falsely. When the pool first fills, every frame is at usage ≥ 1, and no
+512-step batch finds a victim until a whole lap has brought the counters
+down. Eight empty batches (BE-R4's retry bound) would then refuse a fault
+in a pool that is entirely clean and reclaimable. So:
+- A batch that lowers a usage counter counts as progress.
+- A reservation gives up only after **one whole lap with nothing freed and
+  nothing lowered**. That means every frame is pinned, latched,
+  resident-class or dirty, and another lap cannot change it.
+- The step bound still bounds every latch hold. **Every walk is also
+  bounded by `kClockUsageCap + 1` laps in all** (`ReclaimWalk`, shared by
+  the reservation and the tick). This was added by the stage's review: with
+  the latch dropped between batches, other cores' hits can keep raising
+  the counters a walk lowers, so "a batch lowered something" alone need
+  never end.
+- On one core, a reservation walks about two laps at most. The cell
+  `NoBatchWalksPastItsBoundOverAnAllDirtyPool` explains the second lap: a
+  creation enters warm, and lowering the previous fill's counter restarts
+  the idle lap once.
+- Under BE-S3 the give-up still grows the array, because the budget is
+  soft. BE-S4 turns it into BE-R4's retries and refusal.
+
+**The batch scales below 1,024 frames.** A fixed 64 would take a quarter of
+a 256-frame pool per batch. `budget / 16` is a function of the one
+quantity the operator sets, so BE-Q5 holds.
+
+**Cells:**
+- `NoBatchWalksPastItsBoundOverAnAllDirtyPool`: steps per batch never pass
+  the bound, nothing is reclaimed from an all-dirty pool, and each fill
+  walks at most two laps.
+- `MaintainFreeReserveRestoresTheWatermarkThroughDirt`, rewritten for the
+  no-argument loop:
+  - from a free count of 0 with every frame dirty, the loop queues, drains
+    and reclaims to `high` in more than one batch (`batches_background`,
+    one per latch hold);
+  - with every frame pinned, it ends rather than spins.
+- `AScanOnOneCoreLosesNoWriteFromAnother`, armed:
+  - core 1 scans four times the budget and runs the background loop, while
+    core 0 writes each of 256 pages once;
+  - every write reads back through a fresh store after a sync.
+  - **Its first version wrote a few hot pages every round and survived the
+    mutant "reclaim dirty frames".** Those pages never cooled to usage
+    zero, so the hand never offered them. In the rewrite each page is
+    written once and cools under the scan, so the mutant fails it ("written
+    pages lost their write"). It was green 20 times out of 20 unmutated.
+- **The premise cell re-run** (`kds_pool_sweep_bench`, `build-release`,
+  the whole `2 × 131,072` pass, no sample), next to the same xrock load as
+  BE-S1:
+
+| | below p50 / p99 | past p0 / p25 / p50 / p90 / p99 / max | past total |
+|---|---|---|---|
+| BE-S1, `e4b107af` | 5.6 / 9.8 µs | 1,960 / 2,156 / 2,222 / 2,353 / 3,119 / 9,241 µs | 294 s (extrapolated) |
+| BE-S3 | 5.1 / 9.1 µs | 2.1 / 2.4 / 2.5 / 2.8 / 5.2 / 2,891 µs | 0.34 s |
+
+  - Per-miss p99 falls by a factor of 600, almost three orders of
+    magnitude, so the done condition holds.
+  - A miss past the budget is now cheaper than one below it, because it
+    reuses a slot whose memory is already mapped.
+  - The 2.9 ms maximum is the first reservation past the budget walking one
+    lap of warm frames.
+  - RSS after the pass was 1,042 MiB, the same as BE-S1.
+
+**BE-S3's review found two loops that could fail to end, plus one older
+defect. All three are fixed:**
+- **C1.** A reservation could spin while other cores kept the pool warm.
+  It is now bounded by `ReclaimWalk`'s total.
+- **C2.** One tick's `MaintainFreeReserve` could hold core 0's reactor
+  while peers took freed slots. It now does at most one deficit
+  (`high`) of reclaim per call, within the same total bound.
+- **C3, from BE-S2.** If a chunk's `push_back` threw, `free_frames_` was
+  left pointing into the dead chunk. The chunk is now pushed first.
+
+**Also taken from the review:**
+- `SlotCountLocked()` replaces seven spellings of
+  `chunks_.size() * kFrameChunk`.
+- `batches_background` is counted, so the "across several holds" claim
+  has a witness.
+- The watermark cell's no-budget line now sets its own budget. Before,
+  it passed under `KDS_TEST_FRAME_BUDGET` only by coincidence.
+- Three stale comments that named `EvictColdFramesLocked` or placed the
+  sweep inside `InsertFrame` were corrected.
+
+**What has no cell, stated rather than implied:**
+- **C1's bound.** A two-core cell that warmed every frame while the other
+  core faulted survived the mutant "no total bound". The warming thread
+  cannot re-touch a lap's worth of frames between the hand's visits, so
+  the spin never formed. Forcing it needs a seam between batches, so the
+  cell was deleted rather than kept as a pass that proves nothing. The
+  bound is argued, not tested.
+- **`AScanOnOneCoreLosesNoWriteFromAnother` does not cover a drain under
+  the writer's own hold.** Its writer releases before draining.
+- **`pool_refused` is printed and stays 0 until BE-S4 writes it.**
+
+**Known costs while the budget is soft:**
+- With the budget at or below the resident-class pages, every fill walks
+  one idle lap before it grows the array.
+- At `cores = 1`, a long write transaction past the budget does the same,
+  because the tick cannot run. BE-S4's mount floor removes the first case;
+  the second is BE-R4's stated cost.
+
+### BE-S4 — the hard cap, 2026-10-07
+
+Built on `worktrees/pool-budget-required` from `8ef588e0`.
+
+**The key, at both doors (BE-R3).**
+- `Expeditor::Config::ApplyFile` refuses a file without
+  `buffer_pool_frames`, and refuses a 0.
+- `Expeditor::Open` refuses a 0, so a server started with no `--config` is
+  refused too, because its `Config` carries the 0 it was built with.
+- Each refusal is `InvalidArgument` and names the key (BE-Q3), through one
+  `CheckBufferPoolFrames`.
+- `CheckFrameBudget`, `FrameBudgetShare`, the peer's share and the
+  peer-budget overwrite in `Expeditor::Start` are deleted. The one pool is
+  opened at the whole value.
+- `kds.conf.sample` carries the key uncommented, with an example
+  (131,072 frames = 1 GiB) and its arithmetic.
+
+**The store (BE-R3, BE-Q2 (b)).**
+- `DevicePageStore::Open` takes a required `FrameCapacity`, a type of its
+  own so that an old `Open(device, first_id)` call fails to compile rather
+  than becoming a pool of that many frames. 0 is refused.
+- `SetFrameBudget` and `frame_budget()` are deleted. `frame_capacity()`
+  reads the capacity.
+- The slot array grows in chunks cut at the capacity, so the pool cannot
+  pass it structurally.
+- All the `Open` call sites carry a capacity: 58 in `src/`, `tests/`,
+  `sim/` and `bench/`. The order counted 51 at `e352eac0`.
+- **`CoreRuntime::Config::buffer_pool_frames` is re-scoped, not deleted.**
+  The order deletes it, but a runtime that opens a store of its own (a
+  fixture's) needs a capacity for it. A second key for the same quantity
+  is what BE-Q5 forbids, so the field became that store's required
+  capacity and is ignored where the pool is shared, which is every
+  production core.
+- **The sim chooses a capacity per seed:** 512, 1,024 or 8,192 frames.
+- **The debug override** `KDS_TEST_FRAME_BUDGET` only lowers the capacity,
+  and never below `kWorkingMinimumFrames`.
+
+**The mount floor (BE-Q6).** `DevicePageStore::ApplyMountFloor()` runs after
+the completion checkpoint. The floor is:
+- every id below the resident limit, faulted or not;
+- plus the Bound Cabin pages resident now;
+- plus 256.
+
+A configured capacity below the floor is refused `InvalidArgument`, naming
+both numbers. A capacity that only the override lowered is raised to the
+floor.
+
+**The refusal (BE-R4) and where it may happen (BE-Q11, taken on W1).**
+- A reservation's limit is the capacity, less every open window's unspent
+  share.
+- At the limit it reclaims in bounded walks (BE-S3) and retries
+  `kRefuseRetries` (8) times. Then it is refused `ResourceExhausted`,
+  naming the capacity and how many frames are resident, pinned and dirty.
+  Nothing on that path writes back or waits.
+- A creation reserves its slot **before it claims an id**, so a refused
+  creation claims nothing.
+- **Windows:** `NoRefuseWindow::Open(store, frames)` promises a share of
+  the capacity. That is the refusal point, with nothing written. Inside the
+  window, fills spend the share, and a fill past the share that the pool
+  cannot serve fail-stops the process (`FailStop`).
+- **Windows are opened at:**
+  - each `INSERT` row, before its spills and placement and through the
+    root re-publish;
+  - each `UPDATE` row, before its spills;
+  - the carved bulk fill, sized to its pages.
+- **Drain mode:** `DrainOnPressure` covers mount recovery (`Expeditor::Open`
+  and the sim), `TransactionManager::Abort`, and the assertion `CommitTxn`
+  and `AbortTxn` loops. On a thread holding no pin, a reservation in drain
+  mode writes the dirty queue back and walks again before it would refuse.
+- **The suspend audit** records a park inside a window, as it records one
+  under a pin.
+
+**Deviations from the order as written, each with its reason:**
+- **The windows are BE-Q11's, which the order did not contain.** Census B
+  found that BE-Q4 (a)'s refusal reaches seven groups of sites that a
+  refusal leaves half done.
+- **The reserve is promised when a window opens, not drawn from a
+  standing pool.** BE-S1's draft opened windows per row, and a long
+  `INSERT` at `cores = 1` could fill the pool with dirty frames and fail-stop
+  on the reserve. Promising the share at the open makes that case a
+  refusal, at the one point where a refusal is safe.
+- **Drain mode extends BE-Q11's recovery arm to rollback and the assertion
+  loops.** Each holds no pin between its steps, and a refusal inside any of
+  them is permanent damage (Census B #11-#13). BE-Q4 (a)'s "nothing writes
+  back on the fault path" still holds for every fill outside drain mode.
+
+**Cells:**
+- `ExpeditorConfigTest.BufferPoolFramesIsRequiredAndNonzero`: a missing
+  key, 0, and both doors. It kills the mutant "a 0 accepted".
+- `ExpeditorTest.APoolBelowTheVolumesFloorIsRefusedAtMountNamingBothNumbers`:
+  the floor minus one is refused, naming 383 and 384; the floor mounts; a
+  0 is refused.
+- `BoundedPoolTest.AFaultIntoAPoolOfPinnedFramesIsRefusedAndThePoolNeverGrows`:
+  every frame pinned, the fault refused, the slots exactly the capacity, and
+  one released pin lets the fault through. It kills the mutant "the cap
+  check dropped".
+- `SlotArrayTest.AFullDirtyPoolRefusesTheNextFillAfterBoundedWalks`: the
+  bulk create past the cap is refused and never grows the pool, with each
+  walk bounded. It kills the mutant "the creation's reservation skipped".
+- `BoundedPoolTest.AWindowIsRefusedWhenThePoolCannotPromiseItsShare`.
+- `BoundedPoolTest.AnInsertRefusedForAFullPoolLeavesNoRowBehind`, through
+  the sim harness: wide rows fill a 512-frame pool inside `BEGIN` until a
+  row's window is refused ("buffer pool full ... another mutation's 64
+  frames"). After `ROLLBACK` the relation holds exactly its 3 committed
+  rows, and again after a crash and a reboot's recovery. **With
+  `InsertOneRow`'s window deleted the cell fails**: the count query
+  itself errors.
+
+**What has no cell, stated rather than implied:**
+- The `UPDATE` and carved-fill windows.
+- Drain mode under `Abort` or recovery at the cap.
+- `FailStop`.
+- The census's writers outside a statement (access statistics, Waystone
+  trails, the purge, Cabin and assertion builds, DDL page creation). Each
+  of these meets the ordinary refusal before its first write, as Census B
+  classified them (SAFE), and no cell drives one into a full pool.
+- A rollback compensation refused while its thread holds a pin. Drain mode
+  cannot run there, so it would meet the refusal, which is Census B's #11
+  damage. No path into `Abort` that holds a pin was found, but nothing
+  enforces that either.
+
+**Cells that opt out of the floor.** Under the override, four cells dirty
+more pages in one burst than the 256-frame floor holds with no checkpoint
+between, which is BE-R4's refusal working as ruled:
+- `AllocRaceTest.ConcurrentCreatesNeverHandTwoCallersTheSameId`;
+- the two `FreeMapRaceTest` region cells;
+- `BtreeRaceTest.TwoCoresPromotingIntoOneParentLeaveEverySeparatorOverItsSubtree`.
+
+Each holds `WithoutFrameBudgetOverride` (`tests/frame_budget_override.hpp`)
+with the reason beside it. So do the `SlotArrayTest` cells, whose capacity
+is their subject. Every other cell runs at the floor.
+
+**The suite:** 3203/3203 plain, under `KDS_TEST_FRAME_BUDGET=64` (the floor, 256) and armed. **The sim corpus** (`scripts/sim.sh 8`, Debug binary): 266 runs, 0 failures, every seed now under a cap.
+
+**BE-S4's review found one defect and fixed it.**
+- **B1.** `TakeSlotLocked` cut each chunk at the current capacity. A
+  capacity that the debug override lowered and the mount floor then raised
+  left a short chunk that was not the last one (for example 256 then 128).
+  `SlotAt`'s `index / kFrameChunk` then read past it. Chunks are now cut at
+  the configured capacity, which never moves. No cell catches a read past
+  the end without ASan.
+
+**Applied from the review:**
+- **B2.** The `UPDATE` window now opens above the assertion reservation.
+  That reservation is the row's first write, and the comment that said
+  "nothing of this row written" was false.
+- **B3.** `Expeditor::Open` asks the floor right after `SetResidentLimit`
+  as well as after the mount. A pool below the system pages was refused
+  with a pool-full message from inside the mount; it now gets the floor's
+  numbers.
+- The window's reclaim walk is `InlineBatchLocked`, shared with the
+  reservation. Before, the window's copy booked only one counter.
+- `FailStop` lost its always-invalid page argument.
+- Two debug asserts were added: a second store's window opened on a thread
+  that already has one, and a pin released on a thread that never took it.
+- The stale wording in the store's header and in a `CoreRuntime` cell was
+  rewritten. `eviction.md`'s and `known-gaps.md`'s are BE-S6's.
+
+**Suite after the review:** 3203/3203 plain, at the floor, and armed.
+
+### BE-S5 — cold scans, 2026-10-07
+
+Built on `worktree-pool-budget-required` from `52c1a8fa`.
+
+**Code:**
+- `PageAccess::kScan` is added.
+- `FetchHeat` (`kWarm`, `kScan`, `kRing`) replaces `FetchPinned`'s
+  `bool bump_usage` all the way down to `InsertFrame`. That splits the
+  flag's two answers, warm on a fault and bump on a hit, as BE-R5 asks.
+  `kScan` faults cold and bumps a hit; the ring is unchanged (cold, never
+  bumped).
+- `PageStore::Fetch(id, access)` names the accessor each `PageAccess`
+  means. It replaces the four visitors' own spellings of the choice (the
+  btree leaf, the heap chain page, the index leaf, the catalog chain), and
+  `GetForRead` is now `Fetch(id, kRead)`.
+- `RunWalkStep` passes `kScan` for the outermost walk only
+  (`index == 0 && parent_ == nullptr`, named `outermost`). Nested inner
+  walks, `UPDATE`/`DELETE` sub-chains (their runner has a parent), the
+  reverse foreign-key walk and the assertion builds stay `kRead`.
+
+**Cells:**
+- `ColdScanTest.AHotWorkingSetSurvivesAScanFourTimesThePool`: a 32-page hot
+  set, read five times, stays entirely resident under a scan four times a
+  256-frame pool. With `kScan` entering warm, 0 of 32 stay.
+- `ColdScanTest.AScannedPageIsTheFirstVictimAndAReadPageIsNot`: one reclaim
+  takes the cold page, not the warm one. This is the shape a nested walk
+  keeps.
+- `ColdScanTest.AScannedPageItTouchesAgainWarmsLikeAnyHit`: added by the
+  review. It kills the mutant "a `kScan` hit does not bump".
+- `ColdScanTest.ARepeatedRangeUnderThePoolHitsOnItsSecondPass`: a range
+  scanned twice reads the device 0 times the second time. This is xrock's
+  per-day probe shape, which the declined ring would have re-faulted.
+- `BoundedPoolTest.ASelectLargerThanThePoolLeavesTheWorkingSetResident`:
+  added by the review, through the sim. After a clean restart, a small
+  table is read five times, then a `COUNT(*)` scans a table about twice the
+  512-frame pool, then the small table is read again with 0 device reads.
+  **With the walk passing `kRead` it reads 9 pages back.** A first version
+  scanned right after the load and failed unmutated: the load's own warm
+  frames had the hand lapping the hot set down before any cold frame was
+  reclaimable. That is CLOCK's answer to a pool warmed by writes, whatever
+  the scan's heat, so the cell now restarts first and the row says so.
+
+**The review found no defect.** Applied from it:
+- the two cells above;
+- `GetForRead` folded into `Fetch`;
+- the predicate named `outermost`;
+- six stale comments: the ring's "left warm at usage 1" race note,
+  `InsertFrame`'s "a ring fetch starts cold", `ResidentBytes`' heat line,
+  and `heap_chain`'s two branch notes.
+
+Not applied: a `kScan` loser of `InsertFrame`'s lost race does not bump.
+That path is effectively unreachable outside the ring (AM-S2-P F-1), and
+the fault did happen.
+
+**The waystone, index, cabin and inner-build contract suites** are part of
+the suite, which is 3208/3208 plain, at the floor and armed. Their
+results are byte-identical, since they compare configurations and none of
+them failed. Heat changes residency, never a result.
+
+**Not measured; measured at the milestone's close.**
+
+### BE-S6 — the close, 2026-10-07
+
+**The measurement** (§5) is
+`bench/v3.0.0/results-be-close-v2.7.0-665-geef442cf.md`. A is `e4b107af`;
+B is `eef442cf`. `ck-tester` ran most of it on `2f08b71c` and stopped on a
+rate limit before writing the file. CLA finished the run and wrote it. In
+brief:
+- **Past the cap:** one `COUNT(*)` at a 65,536-frame cap takes 74.0 s → 1.3 s,
+  and the per-day probes take 300 s → 1.43 s. RSS is 1,199 MB → 503 MB at a
+  512 MiB cap. A miss costs 2,285 µs → 2.5 µs at p50. No load was refused.
+- **Point statements are flat or better.**
+- **`SHOW META` is +7 µs**, which is its longer reply (BE-S3's `pool_*`
+  fields; the neighbouring-stage bisection puts it there).
+- **Resident scans are +2.5-3.7 %.**
+
+**The close changed code, and why.** The first overhead run measured
+resident scans 3.5-4.5 % slower. The bisection placed the cost at BE-S2,
+and a hit microbenchmark found its larger part:
+- The slab laid pages at an exact 8 KiB stride, aliasing every page's
+  header onto the same cache sets: 33.5 ns a hit against A's 23.3 ns.
+- `eef442cf` pads each slot by 64 bytes and puts the `Frame` back in the
+  page table's node, with the hand finding a slot's frame by its owner id:
+  24.0-24.4 ns a hit. With the frame left in its slot it was 25.4-25.8 ns,
+  so the node won.
+- Its review found no defect. Applied: two comments that now gave the wrong
+  reason a `Frame*` stays valid, a debug assert on the sweep's lookup, and
+  three smaller comment fixes.
+- Declined: renaming `ReserveFrame`/`ReservedFrame` to their slot names,
+  which is cosmetic churn across reviewed code; and 64-byte alignment of
+  the slab, since the measured result holds with the allocator's.
+- The sweep was measured after the change: 2.5 µs per miss past the
+  budget, unchanged.
+
+**Not closed by it:**
+- **A resident scan is still 2.5-3.7 % slower than A.** That is about
+  270 ns per page, which the store's hit path, now within 1 ns of A, does
+  not account for. Not attributed; `perf` is locked out on this host.
+- **BE-R5's scan resistance is partial.** A hot set of half the pool, read
+  once or three times, is 92 % re-faulted after a scan four times the pool.
+  The hand still laps the hot frames eight times. BE-Q7 says that is the
+  case for the scan ring's own order.
+
+Both are `known-gaps.md` entries (Eviction).
+
+**Text:** the restatements BE-S6's row lists are done:
+- `eviction.md` §3.1-§3.3, §4, §6 and the EV5/EV8/EV9/EV10 rows;
+- `page.md` §6, §7, §9 and §11;
+- the store's lock-protocol header, at `2f08b71c`;
+- `CLAUDE.md`'s row and `README.md`;
+- `known-gaps.md`: the two `e352eac0` entries and the EV8 entry deleted,
+  and EV6 restated.
+
+The doc review checked every claim against the code and made 12
+corrections. The largest: both specs said the fault path never writes
+back, which drain mode makes false.
+
+**The suite** at `eef442cf`: 3208/3208 plain, at the floor and armed. This
+was run before the comment and debug-assert edits that followed the
+review; the store's 79 cells were re-run after them.
+
+**BE is closed with a measured regression stated rather than resolved.**
+CLAUDE.md's Session Workflow stops the merge on a measured regression, so
+the push waits on the operator's reading of the two findings above.

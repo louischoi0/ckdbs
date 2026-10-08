@@ -58,6 +58,10 @@ struct SimInstanceOptions {
     std::uint64_t wal_segment_bytes = 64ull * 1024;
     std::uint32_t extent_pages = 64;
     std::uint32_t initial_pages = 64;
+    // The buffer pool's maximum (BE-Q2): the harness runs under a real cap,
+    // chosen per seed (`loop.cpp`'s `InstanceOptions`), so eviction runs on
+    // every seed rather than in a mode no server has.
+    std::size_t buffer_pool_frames = 1024;
     wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
 
     // **A fault injection, and the only reason it exists**: boot without the

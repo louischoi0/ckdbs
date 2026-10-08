@@ -1,0 +1,8 @@
+setup: 262144 pages written in 13.0 s
+budget=131072 pages=262144 resident=131072 rss_before=6700 KiB rss_after=1076140 KiB
+below  n=131072  p0=3.7 p25=5.0 p50=5.2 p90=6.8 p99=9.8 max=1047.5 mean=5.7 us  total=0.749 s
+past   n=131072  p0=2.1 p25=2.4 p50=2.5 p90=2.9 p99=5.1 max=2575.4 mean=2.7 us  total=0.349 s
+setup: 262144 pages written in 13.1 s
+budget=131072 pages=262144 resident=131072 rss_before=6700 KiB rss_after=1076140 KiB
+below  n=131072  p0=3.7 p25=5.0 p50=5.1 p90=6.5 p99=9.4 max=1033.9 mean=5.6 us  total=0.739 s
+past   n=131072  p0=2.1 p25=2.4 p50=2.5 p90=2.8 p99=4.7 max=2489.5 mean=2.6 us  total=0.346 s

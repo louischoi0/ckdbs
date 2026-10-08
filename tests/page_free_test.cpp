@@ -60,7 +60,7 @@ protected:
     // the old one has synced.
     void Reopen() {
         store_.reset();
-        auto store = DevicePageStore::Open(*device_, kFirstNew);
+        auto store = DevicePageStore::Open(*device_, FrameCapacity{4096}, kFirstNew);
         ASSERT_TRUE(store.ok()) << store.status().message();
         store_ = std::move(store.value());
     }

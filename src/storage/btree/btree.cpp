@@ -1163,8 +1163,7 @@ StatusOr<PageId> BtreeVisitLeafPage(
     storage::PageStore& store, PageId leaf_id, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn) {
-    auto bytes = access == storage::PageAccess::kWrite ? store.Get(leaf_id)
-                                                       : store.GetForRead(leaf_id);
+    auto bytes = store.Fetch(leaf_id, access);
     if (!bytes.ok()) return bytes.status();
     if (Status s = RequireType(bytes.value().bytes(), leaf_id, PageType::kBtreeLeaf); !s.ok()) {
         return s;

@@ -104,19 +104,13 @@ stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
     return config;
 }
 
-Status CheckFrameBudget(std::size_t frames, std::uint32_t cores) {
-    if (frames != 0 && frames < cores) {
+Status CheckBufferPoolFrames(std::size_t frames) {
+    if (frames == 0) {
         return Status::InvalidArgument(
-            "buffer_pool_frames " + std::to_string(frames) + " is below cores " +
-            std::to_string(cores) +
-            "; the budget is an instance total divided per core, and a share of zero means "
-            "unbounded, not tiny - raise the budget or drop the key");
+            "buffer_pool_frames is required and must be nonzero: it is the buffer pool's "
+            "maximum in 8 KiB frames, and there is no unbounded pool (eviction.md section 6)");
     }
     return Status::OK();
-}
-
-std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept {
-    return frames / cores;
 }
 
 std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfigKeys() {
@@ -187,16 +181,17 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         if (!v.ok()) return v.status();
         wal_dir = std::move(v.value());
     }
-    if (file.Has("buffer_pool_frames")) {
-        // MG06: how many frames may stay resident across the **whole
-        // instance** - divided evenly per core, remainder to core 0
-        // (eviction.md §6 EV4; Open() refuses a nonzero total below
-        // `cores`, CheckFrameBudget). 0 (the default) is unbounded, the
-        // exact pre-eviction behaviour. Nonzero arms the CLOCK sweep on
-        // the fault path (spec-eviction EV5's on-demand trigger).
+    // The buffer pool's maximum (BE-R3): **required**. A file without it is
+    // refused here rather than run with some pool the operator did not
+    // choose, and a 0 is refused as the "unbounded" it used to mean.
+    if (!file.Has("buffer_pool_frames")) {
+        return CheckBufferPoolFrames(0);
+    }
+    {
         auto v = file.GetUint("buffer_pool_frames");
         if (!v.ok()) return v.status();
         buffer_pool_frames = static_cast<std::size_t>(v.value());
+        if (Status s = CheckBufferPoolFrames(buffer_pool_frames); !s.ok()) return s;
     }
     if (file.Has("max_locks_per_txn")) {
         // AO-R10's cap, one entry per unit a transaction borrows. A cap of
@@ -687,7 +682,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // cores does not run slower - it runs one reactor's whole workload
     // behind another's, with no preemption to break the tie.
     if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
-    if (Status s = CheckFrameBudget(config.buffer_pool_frames, config.cores); !s.ok()) return s;
+    if (Status s = CheckBufferPoolFrames(config.buffer_pool_frames); !s.ok()) return s;
     const unsigned hardware_cores = std::thread::hardware_concurrency();
     // 0 means "not detectable" - not "no cores". Skipping the check is the
     // only honest response; refusing would make the server unstartable on a
@@ -703,7 +698,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     auto device = storage::FilePageDevice::Open(config.data_file);
     if (!device.ok()) return device.status();
 
-    auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
+    auto store = storage::DevicePageStore::Open(
+        *device.value(), storage::FrameCapacity{config.buffer_pool_frames}, kFirstUserPageId);
     if (!store.ok()) return store.status();
     // **EV3's floor, which core 0's store never had** (AM-S2). Everything
     // below `kFirstUserPageId` is a fixed system structure - the superblock,
@@ -715,15 +711,12 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // volume's layout, not of a core's arrangement, and this is the one
     // install site since AW-S1b took the other.
     store.value()->SetResidentLimit(kFirstUserPageId);
+    // BE-Q6's floor, asked once now - its system-page half is known before
+    // the mount, so a pool too small to bootstrap or recover is refused with
+    // the floor's numbers rather than a pool-full refusal from inside the
+    // mount - and again after it, when the Bound Cabin pages are resident.
+    if (Status s = store.value()->ApplyMountFloor(); !s.ok()) return s;
 
-    // Only when the config asks for one. Zero means "unbounded", which is
-    // already what Open() left unless the debug `KDS_TEST_FRAME_BUDGET`
-    // override set a budget - and setting zero here would silently undo
-    // that override on every server-path store, which is exactly the set
-    // MG05's poisoner run needs under pressure.
-    if (config.buffer_pool_frames != 0) {
-        store.value()->SetFrameBudget(FrameBudgetShare(config.buffer_pool_frames, config.cores));
-    }
 
     // Built here rather than in the initializer list because the members
     // below take references into it, which only become stable once the
@@ -878,6 +871,13 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // every core's records. The `wal_dir` and per-core anchor vector that
     // used to go in here were the cross-stream prepared resolver's (R6-4),
     // and it left at AM-S4(d); the prepare itself went with 2PC at AT-S6.
+    // **Recovery runs in drain mode** (BE-Q11): it is not a row's mutation,
+    // it holds no page latch between records, and the log it replays is
+    // durable - so at the cap it writes dirty frames back and goes on,
+    // where a refusal would refuse the mount. Held through the completion
+    // checkpoint below, which ends the pass.
+    std::optional<storage::DrainOnPressure> mount_drain;
+    mount_drain.emplace(*expeditor->store_);
     auto recovered = RecoverCoreAtMount(
         /*core_id=*/0, expeditor->database_->superblock.wal_anchor(0), *expeditor->log_device_,
         *expeditor->store_, *expeditor->undo_log_, &*expeditor->wal_, &*expeditor->logger_,
@@ -1103,6 +1103,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         !s.ok()) {
         return s;
     }
+    mount_drain.reset();
+    // BE-Q6, once the mount has made resident everything that stays.
+    if (Status s = expeditor->store_->ApplyMountFloor(); !s.ok()) return s;
 
     // **DROP TABLE page reclamation, collected** (BF-R8): after the
     // completion checkpoint, which is what moves `D` past this mount's scan
@@ -1684,20 +1687,8 @@ Status Expeditor::Start() {
         // stream against core 0's watermark and could write it out ahead of
         // the record that describes it. `SuperBlock::Decode` now refuses
         // such a volume, which is what AM-S2 step 3's own comment said this
-        // branch was waiting for.
-        //
-        // **And the one pool takes the whole budget** (EV4). `Open` above
-        // applied core 0's *share* - `buffer_pool_frames / cores` - because
-        // there were `cores` frame tables to divide the instance total
-        // between. Sharing leaves one, so the division would shrink the
-        // operator's configured pool by a factor of `cores` and nothing
-        // downstream would restore it: the peers pass 0 below precisely
-        // because this line is what applies the total. Nonzero only, for
-        // `Open`'s reason - writing 0 would undo the debug
-        // `KDS_TEST_FRAME_BUDGET` override the store may be carrying.
-        if (config_.buffer_pool_frames != 0) {
-            store_->SetFrameBudget(config_.buffer_pool_frames);
-        }
+        // branch was waiting for. The one pool was opened at the whole
+        // `buffer_pool_frames` (`Open`, BE-R3); nothing divides it.
 
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             // **No extent for a core that borrows the pool** (AM-S2 step 3).
@@ -1731,11 +1722,6 @@ Status Expeditor::Start() {
             // replaces, so a page faulted on one core is served from the
             // frame another core loaded.
             core_config.shared_store = store_.get();
-            // **The division is what sharing removes** (EV4). Splitting the
-            // instance total N ways was standing in for a pool that could
-            // not be shared; the whole number went on that pool above, so
-            // passing a share here would hand one pool a fraction of itself.
-            core_config.buffer_pool_frames = 0;
             // This peer's own anchor, copied out of the superblock core 0
             // decoded. A peer's `SuperBlock` member is a default-constructed
             // one whose anchor slots are all zero, and a peer's checkpointer
@@ -1956,14 +1942,15 @@ Status Expeditor::Start() {
                           "ms, switch " + (config_.cabin_optimizer ? "on" : "off"));
     }
 
-    // EVT03's background writeback: drains spec-eviction §4's dirty queue -
-    // pages a sweep found dirty at usage zero and queued instead of
-    // reclaiming. One bounded batch per tick is the cooperative-yield
-    // boundary. The queue fills when the fault path's inline sweep meets a
-    // dirty frame under `buffer_pool_frames`; with the pool unbounded (0)
-    // the sweep never runs and this task finds nothing. The watermark loop
-    // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
-    // it real numbers; a cadence key follows with EVT04's protocol.
+    // EVT03's background writeback and BE-R2's watermark loop. The loop
+    // reclaims in bounded batches when the pool's free count falls below
+    // budget / 16, draining the dirty queue between batches, so a fault
+    // finds a free slot instead of paying for the reclaim itself. The drain
+    // after it writes whatever the inline sweeps queued since the last
+    // tick. Both run here because the tick holds no page latch, which
+    // `WriteBack(kSkip)` needs (`device_page_store.hpp`). At `cores = 1` a
+    // long statement holds the reactor and this does not run, which is why
+    // the inline path is bounded on its own (BE-R2).
     constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]
     // **DROP TABLE page reclamation** (BF-R8, BF-Q16 (a)): one bounded step
     // per tick on core 0's `system` group, a predicate and a return when no
@@ -1979,6 +1966,7 @@ Status Expeditor::Start() {
     });
 
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
+        (void)store_->MaintainFreeReserve();
         auto drained = store_->DrainDirtyEvictionQueue();
         if (!drained.ok() && logger_->enabled(LogLevel::kWarn)) {
             logger_->Warn("expeditor", "writeback drain failed: " + drained.status().message());

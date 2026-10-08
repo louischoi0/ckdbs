@@ -1,0 +1,131 @@
+{
+ "rows": 10000,
+ "run": 7,
+ "tag": "n10000-r7",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "1.35 3.36 2.86 1/270 1671995",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "1671252 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791373691947-2054p9.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build-release -j8 --target kds_pool_sweep_bench 2>&1 | grep -E '\"'\"'error|Built target'\"'\"'; bash /tmp/claude-1000/-home-cdkbs-ckdbs-docs/a992a7e0-0a04-47e0-8459-44f70c81fd3d/scratchpad/final_ab.sh' < /dev/null && pwd -P >| /tmp/claude-7f2f-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.35 3.36 2.86 1/276 1672002",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "1671252 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791373691947-2054p9.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build-release -j8 --target kds_pool_sweep_bench 2>&1 | grep -E '\"'\"'error|Built target'\"'\"'; bash /tmp/claude-1000/-home-cdkbs-ckdbs-docs/a992a7e0-0a04-47e0-8459-44f70c81fd3d/scratchpad/final_ab.sh' < /dev/null && pwd -P >| /tmp/claude-7f2f-cwd"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 8021.0,
+  "B": 31702.0
+ },
+ "count_be_a": {
+  "A": "count(*) 10000",
+  "B": "count(*) 10000"
+ },
+ "rss_hwm_kb": {
+  "A": 75100,
+  "B": 75168
+ },
+ "pool_end": {
+  "A": {},
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 79.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 107807.0,
+   "pool_misses": 79.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "scan-all": {
+    "phase": "scan-all",
+    "detail": "",
+    "ops": 360,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.410946,
+    "qps": 876.0,
+    "mean_us": 1141.1,
+    "p0_us": 1109.4,
+    "p25_us": 1120.0,
+    "p50_us": 1124.5,
+    "p95_us": 1199.3,
+    "p99_us": 1668.0,
+    "max_us": 1739.0,
+    "p90_us": 1161.1,
+    "p999_us": 1739.0
+   },
+   "scan-all-again": {
+    "phase": "scan-all-again",
+    "detail": "",
+    "ops": 360,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.406962,
+    "qps": 884.6,
+    "mean_us": 1130.0,
+    "p0_us": 1109.4,
+    "p25_us": 1119.1,
+    "p50_us": 1123.7,
+    "p95_us": 1160.5,
+    "p99_us": 1265.8,
+    "max_us": 1371.6,
+    "p90_us": 1145.3,
+    "p999_us": 1371.6
+   }
+  },
+  "B": {
+   "scan-all": {
+    "phase": "scan-all",
+    "detail": "",
+    "ops": 360,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.418264,
+    "qps": 860.7,
+    "mean_us": 1161.4,
+    "p0_us": 1133.0,
+    "p25_us": 1148.7,
+    "p50_us": 1153.9,
+    "p95_us": 1197.2,
+    "p99_us": 1346.8,
+    "max_us": 1496.1,
+    "p90_us": 1178.4,
+    "p999_us": 1496.1
+   },
+   "scan-all-again": {
+    "phase": "scan-all-again",
+    "detail": "",
+    "ops": 360,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.41678,
+    "qps": 863.8,
+    "mean_us": 1157.3,
+    "p0_us": 1135.2,
+    "p25_us": 1147.9,
+    "p50_us": 1152.4,
+    "p95_us": 1181.5,
+    "p99_us": 1241.4,
+    "max_us": 1345.8,
+    "p90_us": 1171.7,
+    "p999_us": 1345.8
+   }
+  }
+ }
+}

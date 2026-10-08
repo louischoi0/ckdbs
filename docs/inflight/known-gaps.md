@@ -12,78 +12,62 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Eviction
 
-- **`buffer_pool_frames` is optional and `0` means unbounded; the operator
-  ruled both out on 2026-10-07** (`eviction.md` §6): the key is required,
-  `0` is an error, and the value is the pool's maximum. Verified at
-  `0b9f7aa9`: `expeditor.cpp:190-199` reads the key only `if
-  (file.Has(...))`, both `Config` structs default it to `0`
-  (`expeditor.hpp:130`, `core_runtime.hpp:134`), `expeditor.cpp:724`,
-  `:1680` and `core_runtime.cpp:191` apply a budget only when it is
-  nonzero, and `kds.conf.sample:85` documents `0` as unbounded. Unset, a
-  read-only scan grows the pool to the volume's size, which OOM-killed an
-  xrock load on an 11.3 GB volume on 2026-10-07. The sample's comment and
-  `expeditor.cpp:690`/`:725` still carry EV4's struck `total / cores`
-  share, which `:1681` overwrites with the total. Owned by
-  `docs/spec/eviction.md` (§6).
+- **A resident scan is 2.5-3.7 % slower than before BE, and the rest of
+  the cause is not found.** Measured at `eef442cf`
+  (`bench/v3.0.0/results-be-close-v2.7.0-665-geef442cf.md`):
+  - a full scan of 100,000 resident rows takes +274 µs at p50;
+  - `range100` at 10,000 rows takes +28 µs.
 
-- **EV5 is not built, and the one sweep production reaches sorts the
-  whole frame table per miss.** Verified at `0b9f7aa9`: the frame table is
-  a `std::unordered_map<PageId, Frame>` (`device_page_store.hpp:1529`) with
-  no free list. `EvictColdFramesLocked` copies every resident id into a
-  vector and `std::sort`s it to find the clock hand, under the structure
-  latch; in production it is reached only from `InsertFrame`'s `sweep`
-  arm, for the excess - one frame past the budget. `MaintainFreeReserve`
-  (`device_page_store.cpp:1684`), the watermark sweep, has no caller
-  outside tests (`expeditor.cpp:1945` defers it), and the 50 ms writeback
-  tick (`:1947-1948`) drains dirty frames but reclaims none. A
-  standalone `-O2` copy of the sort loop measured 7.5 ms at 131,072 frames
-  and 89.9 ms at 786,432 (not measured in the engine), so a scan larger
-  than the pool pays one such sort per page. Owned by
-  `docs/spec/eviction.md` (EV5, §3.1, §3.2).
+  The neighbouring-stage bisection places it at BE-S2's slot array. Its
+  larger part, cache-set aliasing from an exact 8 KiB slot stride, is fixed
+  at BE's close. The rest is about 270 ns per page, and the store's hit
+  path, within 1 ns of `e4b107af` on a microbenchmark, does not account for
+  it. Owned by `docs/spec/eviction.md` (§3.1).
 
-- **EV6's ring is not used by the executor.** Verified at `0b9f7aa9`:
-  `OpenScanRing`'s only callers are `relayout_planner.cpp:255` and
-  `cabin_optimizer_exec.cpp:140`; range and aggregate scans fault through
-  the ordinary pool, warm. Owned by `docs/spec/eviction.md` (EV6, §5).
+- **The cold scan protects only a hot set touched more often than the scan
+  laps the pool.** Measured at `2f08b71c` (the same results file, §3): a
+  hot set of half a 16,384-frame pool, read once or three times, is 92 %
+  re-faulted after a scan four times the pool. The scan drives about eight
+  laps of the hand, and each lap lowers every hot counter. BE-Q7 names this
+  the case for the scan ring's own order, which is not written. Owned by
+  `docs/spec/eviction.md` (EV6, §3.1).
 
-- **EV8's exhaustion protocol is not built, and `eviction.md` describes it
-  as though it were.** Verified at `dd0bfe9` and re-verified at `a140e8d`:
-  nothing in the tree reads `kds.evict_retry_budget`, and no path returns
-  `ResourceExhausted` for a full pool. The occurrences in `src/` belong to
-  other subsystems - the lock table's, the row codec's, the sort's, the
-  aggregate's and the lease services' among them - and `src/storage/`
-  returns it in one place only, `anchor_page.cpp`'s slot cap, which is not
-  the pool. **The scan ring's own retry was the fourth name on that list
-  until 2026-09-06 and is gone**: `PinForScan`'s eight attempts and its
-  `ResourceExhausted` left with the ring's port to the `loading_` protocol
-  at `6cbd6f8` (AM-S2-P S-P1), so a ring fault waits for the loader like
-  every other accessor. §3.3 spells out
-  a three-step protocol (yield, retry to a budget, then a truthful statement
-  error naming the core and pool size) and EV8's row promises "no waiting,
-  ever" with occurrences counted. None of that exists.
+- **The executor does not scan through EV6's ring, by decision.** Verified
+  at `2f08b71c`: `OpenScanRing`'s only callers are `relayout_planner.cpp`
+  and `cabin_optimizer_exec.cpp`. A `SELECT`'s outermost walk faults cold
+  instead (BE-R5, `eviction.md` §3.1), which keeps a scan larger than the
+  pool from displacing the working set without the ring's costs
+  (`workorder-be-bounded-pool.md` §1.6). What the ring would still add - a
+  scan's residency bounded to its slots rather than to the pool - is not
+  measured. Owned by `docs/spec/eviction.md` (EV6, §5, §7).
 
-  **What the code does instead**: `buffer_pool_frames` is a *soft* target.
-  `InsertFrame` sweeps for the excess when a fault takes the pool past it
-  (`device_page_store.cpp`, the `sweep` arm), and if the sweep reclaims
-  nothing - every candidate pinned, dirty, or resident by class - the insert
-  proceeds anyway and the pool grows past its budget. So an undersized pool
-  is not a visible, countable, truthful signal; it is memory growth. That is
-  a different operational answer from the one an operator reading
-  `eviction.md` §3.3 would expect, and it is the one they get.
+- **Three of BE's rules are argued, not tested.** Verified at `2f08b71c`:
+  - **The reclaim walk's total bound** of `kClockUsageCap + 1` laps, which
+    ends a reservation that other cores' hits keep warm. A two-core cell
+    could not form the spin, and forcing it needs a seam between batches.
+  - **`FailStop`**: a window that outgrows its share in a full pool.
+  - **Drain mode under recovery and `Abort` at the cap.** It is reached
+    only through `BoundedPoolTest.AnInsertRefusedForAFullPoolLeavesNoRowBehind`'s
+    rollback and reboot, which may not fill the pool while they run.
 
-  **Found while sizing AM-S3**, whose ruling AM-R6 says to "keep the budget
-  and the truthful error, and count the cross-core case separately" - a
-  narrowing of something that is not there. The premise AM-R6 argues from is
-  false in the same way: it says the retry budget "stops being a
-  statement-local fact" under a shared pool, and there is no retry budget.
-  What *is* newly true under sharing is that a frame a statement waits on
-  may be held by another core's task, which matters exactly when an
-  exhaustion path exists to be distorted by it.
+  The `UPDATE` and carved-fill windows also have no cell of their own. Owned
+  by `docs/spec/eviction.md` (§3.2, §3.3).
 
-  Owned by `docs/spec/eviction.md` (EV8, §3.3, and the
-  `kds.evict_retry_budget` row in §7's settings table) and by
-  `instructions/v3.0.0/workorder-am-m1-shared-pool.md` AM-R6, which needs
-  re-scoping onto a stage that builds EV8 first.
+- **A rollback compensation that meets a full pool while its thread holds
+  a pin is refused, and that leaves the write un-undone.** Verified at
+  `2f08b71c`: drain mode writes back only when the thread holds no pin
+  (`DevicePageStore::ReserveFrame`), because a writeback's shared try
+  re-enters the thread's own exclusive hold. No path into
+  `TransactionManager::Abort` holding a pin was found, and nothing
+  enforces that either. The damage is Census B's #11
+  (`docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`).
+  Owned by `docs/spec/eviction.md` (§3.3) and `docs/spec/txn.md`.
+
+- **Writers outside a statement meet the ordinary refusal.** Verified at
+  `2f08b71c`: access statistics, Waystone trails, the delete-mark purge,
+  Cabin and assertion builds, and DDL page creation open no window. Census
+  B classified each as refusing before its first write. No cell drives one
+  into a full pool. Owned by `docs/spec/eviction.md` (§3.3).
 
 ## Testing
 
@@ -311,7 +295,7 @@ statement about an engine that no longer exists; re-verify or strike it.
   are the cells that build such a log. Retiring the type is a format
   decision of its own. Owner: `docs/spec/wal.md` §5.2.
 
-- **Three cuts AM-S4(d) made possible and did not take.** Named by that
+- **Two cuts AM-S4(d) made possible and did not take.** Named by that
   stage's `critics-developer` pass, verified by it by trace and exhaustive
   grep, and deferred because the operator called for the push before they
   could be made and verified on their own:
@@ -323,16 +307,7 @@ statement about an engine that no longer exists; re-verify or strike it.
      the last syntactic path to null when `share_pool ? store_.get() :
      nullptr` became `store_.get()`. The one cell touching the budget field
      asserts it is *ignored*.
-  2. **`FrameBudgetShare`** (`expeditor.cpp`, declared in its header). Its
-     only non-test call divides a total that nothing keeps divided: at one
-     core the share is the total, and above one `Start()` overwrites it
-     with the total. **One behavioural residue the reviewer did not test**:
-     core 0's mount pass — recovery plus the completion checkpoint — runs
-     on `total/cores` frames before `Start()` restores the total. The
-     budget is an eviction target rather than a hard cap, so this is a
-     warm-up cost and not a refusal, but the claim is untested and should
-     be measured or pinned before the function goes.
-  3. **`SuperBlock::wal_anchors()` and `MountAnchorOf`'s loop.** Only slot
+  2. **`SuperBlock::wal_anchors()` and `MountAnchorOf`'s loop.** Only slot
      0 can be non-zero — `SetWalAnchor` refuses every other unconditionally
      and `Decode` refuses the volumes that could carry an old one — so
      `MountAnchorOf` collapses to `wal_anchor(0)` and the vector accessor
@@ -341,8 +316,9 @@ statement about an engine that no longer exists; re-verify or strike it.
      declaration; cutting it means deciding the canary is not worth a pass
      over 64 entries once per mount.
 
-  All three are dead code this stage *created*, which is the class AM-R4
-  warns about: a field nothing writes and nothing reads is worse than no
+  A third, `FrameBudgetShare`, was deleted at BE-S4 with the per-core
+  share it computed. Both remaining are dead code this stage *created*,
+  which is the class AM-R4 warns about: a field nothing writes and nothing reads is worse than no
   field, because the next reader assumes it means something. Owner:
   whichever stage next opens `core_runtime.cpp` — AM-S3 touches the same
   file.

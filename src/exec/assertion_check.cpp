@@ -694,6 +694,9 @@ Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManag
 
 Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* wal,
                                     std::uint64_t txn_id) {
+    // Drain mode (BE-Q11): the pending list is taken before the loop, so a
+    // settle refused for a full pool part-way would drift the totals.
+    const storage::DrainOnPressure drain(store);
     // Batched per (assertion, page), the physiological unit ASSERT_COMMIT
     // describes. Built under the latch, settled outside it: a commit moves
     // no header, so its records need no atomicity against a snapshot, and
@@ -761,6 +764,7 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
 
 Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* wal,
                                    std::uint64_t txn_id) {
+    const storage::DrainOnPressure drain(store);  // as `CommitTxn`'s
     std::vector<Reservation> reservations;
     {
         const LatchGuard guard(latch_.get());

@@ -13,10 +13,12 @@ Wire shapes implemented here (authoritative sources in the tree):
             auth u8 + name str(u16-len)                (kwp_types.hpp)
   C_LOAD_BEGIN = relation str + flags u16 + declared_rows u64
   S_LOAD_READY = load_id u64 + window u16 + max_chunk u32 + field_count u16
-                 + row description (skipped here)
+                 + row description (skipped here); every column, the pk
+                 first (BI15)
   C_LOAD_CHUNK = load_id u64 + chunk_seq u32 + row_count u16 + row batch
   row batch    = row_count u16 + rows; each field {len i32 LE, bytes},
-                 int64 = 8-byte LE                     (wire/row_codec)
+                 int64 = 8-byte LE, NULL = len -1      (wire/row_codec)
+                 a NULL pk field asks the engine to issue the id
   S_LOAD_ACK   = load_id u64 + chunk_seq u32 + rows_accepted u64
   S_COMPLETE   = tag Text (u32-prefixed) + rows u64
 Capability bit 16 (BULK_LOAD) must be set in C_HELLO.
@@ -121,12 +123,13 @@ class KwpConnection:
 
 
 def encode_chunk_rows(start, count):
-    """The D5 batch for rows [start, start+count): 4 int64 fields per row,
-    values (i, 2i, 3i, 5i) - Part III's exact rows."""
+    """The D5 batch for rows [start, start+count): a NULL pk - the engine
+    issues each id - then 4 int64 fields, values (i, 2i, 3i, 5i) - Part
+    III's exact rows."""
     out = bytearray(struct.pack("<H", count))
-    pack = struct.Struct("<IqIqIqIq").pack
+    pack = struct.Struct("<iIqIqIqIq").pack
     for i in range(start, start + count):
-        out += pack(8, i, 8, 2 * i, 8, 3 * i, 8, 5 * i)
+        out += pack(-1, 8, i, 8, 2 * i, 8, 3 * i, 8, 5 * i)
     return bytes(out)
 
 
@@ -137,8 +140,8 @@ def run_load(kwp, table, total_rows, chunk_rows, window, phase_name):
     if ftype != S_LOAD_READY:
         sys.exit(f"FATAL: expected S_LOAD_READY, got frame type {ftype}")
     load_id, srv_window, max_chunk, field_count = struct.unpack_from("<QHIH", payload)
-    if field_count != 4:
-        sys.exit(f"FATAL: server announced {field_count} fields, expected 4")
+    if field_count != 5:
+        sys.exit(f"FATAL: server announced {field_count} fields, expected 5")
     window = min(window, srv_window)
 
     # Frames pre-encoded outside the clock, as every driver here does.

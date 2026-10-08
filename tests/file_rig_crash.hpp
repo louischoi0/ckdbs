@@ -64,6 +64,7 @@ inline StatusOr<std::unique_ptr<Expeditor>> Mount(const std::filesystem::path& s
     config.data_file = (snapshot / "kds.db").string();
     config.wal_dir = (snapshot / "wal").string();
     config.log_file = {};
+    config.buffer_pool_frames = 4096;  // required (BE-R3)
     config.cores = 2;
     config.debug_text_port = 0;
     return Expeditor::Open(config, /*now_unix_seconds=*/2000);

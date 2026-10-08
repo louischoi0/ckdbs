@@ -10,6 +10,7 @@
 
 #include "kds/base/current_core.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "frame_budget_override.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
 // **Page allocation with more than one thread in it** (AM-S2).
@@ -43,9 +44,12 @@ namespace kds::storage {
 namespace {
 
 TEST(AllocRaceTest, ConcurrentCreatesNeverHandTwoCallersTheSameId) {
+    // Creates more dirty pages in one burst than the debug floor holds with
+    // no checkpoint between - BE-R4's refusal, not this cell's subject.
+    const WithoutFrameBudgetOverride full_capacity;
     auto device = MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
     ASSERT_TRUE(device.ok()) << device.status().message();
-    auto store = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    auto store = DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
     ASSERT_TRUE(store.ok()) << store.status().message();
     // Armed, because an unarmed store's `LatchGuard` is a null test: the
     // question here only exists where the store is shared, and a store is

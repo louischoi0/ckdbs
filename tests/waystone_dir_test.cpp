@@ -390,7 +390,7 @@ TEST(WaystoneDirDeviceTest, InteriorPagesAreHeaderlessAndSurviveAFlushIntact) {
     auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/16, /*initial_pages=*/0);
     ASSERT_TRUE(device.ok()) << device.status().message();
 
-    auto opened = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/128);
+    auto opened = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/128);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     auto& store = *opened.value();
 
@@ -415,7 +415,7 @@ TEST(WaystoneDirDeviceTest, InteriorPagesAreHeaderlessAndSurviveAFlushIntact) {
     // Reopened from the device, which re-reads and re-verifies every page
     // it is asked for: a checksum stamped over child 1 would show up here
     // as either Corruption or a mangled link.
-    auto reopened = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/128);
+    auto reopened = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/128);
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
 
     auto found = LookupWaystonePage(*reopened.value(), root.value(), 1, Key(kArgHash));

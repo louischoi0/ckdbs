@@ -1,7 +1,7 @@
 # Ratification marks — 2026-10-07
 
 **The operator's words of 2026-10-07**, recorded by CLA on
-`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20) and `worktree-drop-table-page-reclaim` (§21-§23) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
+`worktree-wal-recycling` (§1-§6), `worktree-bd-sorted-leaf-named-keys` (§7-§13, §17), `worktree-pool-budget-required` (§14-§16), `worktree-keep-btree-leaf-slots` (§18-§20), `worktree-drop-table-page-reclaim` (§21-§22, §25) and `worktree-bg-scan-ring-order` (§23-§24) (`v2.7.0-*`; the v3.0.0 tag is not cut). All of it
 is **verbatim**: the words as typed in the session.
 
 ---
@@ -207,7 +207,26 @@ is **verbatim**: the words as typed in the session.
 | **Does not settle** | BF-S1's start; BF-S1's premise gate on BF-R4's `cores > 1` arm, where BF stops and the operator rules; the push |
 | **Recorded at** | the order's header (W1), §2's heading, §4 and §6; `index.md`'s BF row |
 
-## 23. BF run to its close
+## 23. BG's order written
+
+| | |
+|---|---|
+| **Word** | *"write the scan ring work order"* |
+| **Mark** | `workorder-bg-scan-queue.md` is written as BG-S0 on `worktree-bg-scan-ring-order` from `cd8ca91e`, reviewed, and not opened. It answers BE's close finding of partial scan resistance, the case BE-Q7 named. No engine file moves |
+| **Reading** | "The scan ring" read as the order BE-Q7 said would follow, not as a fixed mechanism. BG-Q1 puts the operator's words - (b), the slot ring for executor scans - beside CLA's proposal (a), a scan queue inside the store |
+| **Does not settle** | BG-Q0..Q8 |
+| **Recorded at** | the order's header and §6, and `index.md`'s BG row |
+
+## 24. BG opened, BG-Q0..Q8 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"mark BG-Q0..Q8 as proposed"* |
+| **Mark** | **BG-Q0: yes** - BG opens with BG-S0..S4 and BG-R1..R5 as written. **BG-Q1 (a):** a scan queue the reclaim reads before the hand. **BG-Q2 (a):** the slot ring retired, its consumers on the queue. **BG-Q3:** promotion at the head, the counter kept. **BG-Q4:** `kRing` stays distinct from `kScan`. **BG-Q5:** no keys; `kds.scan_ring_frames` deleted from `eviction.md` §6. **BG-Q6:** BG-S4's bar as §4 states it after BG-S0's review. **BG-Q7:** either order against BF. **BG-Q8:** measured once at BG's close |
+| **Does not settle** | BG-Q9, the queue's floor, which BG-S0's review added after the word was given; BG-S2 waits for it. BG-S1's premise gate, where BG stops for a ruling |
+| **Recorded at** | the order's header (W1), §2's heading and §4; `index.md`'s BG row |
+
+## 25. BF run to its close
 
 | | |
 |---|---|

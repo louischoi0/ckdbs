@@ -39,6 +39,19 @@ namespace kds::storage {
 enum class PageAccess {
     kRead,   // the visitor will not write through the page
     kWrite,  // the visitor may modify tuples in place
+    // A read, for the outermost read walk of a SELECT (BE-R5): a page it
+    // faults in enters cold, so a scan larger than the pool does not
+    // displace the working set; a page it finds resident warms as any hit.
+    kScan,
+};
+
+// How a fetch counts toward its frame's CLOCK usage (`eviction.md` §3.1).
+// Two answers, where a flag gave one: whether a fault enters warm, and
+// whether a hit bumps.
+enum class FetchHeat : std::uint8_t {
+    kWarm,  // a fault enters at usage 1, a hit bumps: every ordinary fetch
+    kScan,  // a fault enters at usage 0, a hit bumps: `PageAccess::kScan` (BE-R5)
+    kRing,  // a fault enters at usage 0, a hit never bumps: the scan ring (§5)
 };
 
 // How a bulk sequential reader fetches pages (docs/spec/eviction.md §5,
@@ -175,13 +188,11 @@ public:
     // directly above three accessors that still did create-then-pin
     // inline - which is worse than not claiming it, because a reader
     // checking the seam would have stopped here.
-    // `bump_usage` is the scan ring's (AM-R8a): the ring pins the page it
-    // hands out and must still not register as heat
-    // (`docs/spec/eviction.md` section 5). Every other caller passes true,
-    // and a store with no reclaim has no counter to bump.
+    // `heat` says how the fetch counts toward the frame's usage
+    // (`FetchHeat`); a store with no reclaim has no counter to bump.
     virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
                                                                  bool for_read,
-                                                                 bool /*bump_usage*/) {
+                                                                 FetchHeat /*heat*/) {
         auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
         PinFrame(page_id, mode);
@@ -192,7 +203,19 @@ public:
     // mutation. Fails with NotFound if page_id was never created.
     StatusOr<PageRef> Get(PageId page_id) {
         auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false,
-                                 /*bump_usage=*/true);
+                                 FetchHeat::kWarm);
+        if (!bytes.ok()) return bytes.status();
+        return PageRef(this, page_id, bytes.value());
+    }
+
+    // The accessor a page walk's `PageAccess` names, so a visitor does not
+    // spell the mapping itself: `kWrite` is `Get`, `kRead` is `GetForRead`,
+    // and `kScan` is `GetForRead` with a fault entering cold (BE-R5).
+    StatusOr<PageRef> Fetch(PageId page_id, PageAccess access) {
+        if (access == PageAccess::kWrite) return Get(page_id);
+        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
+                                 access == PageAccess::kScan ? FetchHeat::kScan
+                                                             : FetchHeat::kWarm);
         if (!bytes.ok()) return bytes.status();
         return PageRef(this, page_id, bytes.value());
     }
@@ -201,12 +224,7 @@ public:
     // are still mutable and the promise is by contract, not by type
     // (GetForReadUnpinned's note); a read fetch that turns out to write
     // calls MarkDirty() on the handle.
-    StatusOr<PageRef> GetForRead(PageId page_id) {
-        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
-                                 /*bump_usage=*/true);
-        if (!bytes.ok()) return bytes.status();
-        return PageRef(this, page_id, bytes.value());
-    }
+    StatusOr<PageRef> GetForRead(PageId page_id) { return Fetch(page_id, PageAccess::kRead); }
 
     // **The create half of the fetch-and-pin pair** (AM-S2). Same obligation
     // as `FetchPinned` and the same default - create, then pin - so a store
@@ -310,6 +328,61 @@ public:
         std::uint64_t reused = 0;
     };
     virtual AllocationCounters allocation_counters() const noexcept { return {}; }
+    // The buffer pool's counters (BE-R2, `eviction.md` EV9), for `SHOW
+    // META`. Monotonic since the store opened. A store with no pool answers
+    // zeros.
+    struct PoolCounters {
+        std::uint64_t budget = 0;         // frames the pool may hold
+        std::uint64_t resident = 0;       // frames holding a page now
+        std::uint64_t slots = 0;          // slots that exist
+        std::uint64_t hits = 0;
+        std::uint64_t misses = 0;         // device reads and creations
+        std::uint64_t reclaimed_inline = 0;
+        std::uint64_t reclaimed_background = 0;
+        std::uint64_t batches_inline = 0;
+        std::uint64_t batches_background = 0;
+        std::uint64_t batches_partial = 0;  // inline batches that freed less than asked
+        std::uint64_t batch_steps = 0;      // slots the inline batches walked
+        // Slots the tick's batches walked. With `batch_steps`, every step the
+        // hand takes in a running server - over `slots`, its laps (BG-S1).
+        std::uint64_t batch_steps_background = 0;
+        std::uint64_t dirty_queued = 0;     // dirty victims queued for writeback
+        std::uint64_t dirty_drained = 0;    // queued pages the drain wrote clean
+        std::uint64_t refused = 0;          // reservations refused at the cap
+    };
+    virtual PoolCounters pool_counters() const { return {}; }
+
+    // ---- Where a full pool may refuse (BE-R4, BE-Q11) -------------------
+    //
+    // A pool at its cap with nothing reclaimable refuses a fault or a
+    // creation `ResourceExhausted`. That is safe only where the mutation
+    // has written nothing yet: a refusal after a page write leaves the
+    // write with nothing that undoes it (`docs/inflight/bugs/a-fetch-refused-
+    // after-a-page-write-leaves-the-mutation-half-done.md`). So each
+    // mutation that writes and then fetches opens a **no-refuse window**
+    // before its first write. Opening it takes a share of the pool for the
+    // window, and **that** is where a full pool refuses. Inside, fills draw
+    // on the share, and a mutation that outgrows it stops the instance
+    // rather than return an error into a half-done write. Windows nest; the
+    // outermost one holds the share. Per thread, and sound because no window
+    // holds a suspension point: every window is opened and closed inside one
+    // synchronous call.
+    //
+    // **Drain mode** is for the passes that are not a row's mutation and
+    // hold no page latch between their steps - recovery's redo and undo, a
+    // rollback, an assertion's commit and abort loops. At the cap, a fill on
+    // such a thread holding no pin writes the dirty queue back and retries,
+    // which is sound there and nowhere else (`device_page_store.hpp`'s
+    // durability-wait bullet), instead of being refused.
+    //
+    // A store with no pool does nothing for either.
+    virtual Status BeginNoRefuseWindow(std::size_t frames) {
+        (void)frames;
+        return Status::OK();
+    }
+    virtual void EndNoRefuseWindow() noexcept {}
+    virtual void BeginDrainOnPressure() noexcept {}
+    virtual void EndDrainOnPressure() noexcept {}
 
     // ---- The raw seam: protected since MG06 ----------------------------
     //
@@ -533,5 +606,51 @@ inline void PageRef::Release() noexcept {
 inline void PageRef::MarkDirty() noexcept {
     if (store_ != nullptr) store_->MarkFrameDirty(page_id_);
 }
+
+// The window's share, in frames (BE-Q11): what one row's mutation is
+// allowed to fault or create after its first write - eight times
+// `kPinCeiling`'s per-operation bound, so a clustered split, an index
+// split per index, an undo page and a spill fit with room to spare.
+inline constexpr std::size_t kWindowFrames = 64;
+
+// A no-refuse window, held for one mutation (`PageStore`'s note). `Open`
+// is the refusal point: it fails `ResourceExhausted` when the pool cannot
+// promise the share, and the caller has written nothing yet.
+class NoRefuseWindow {
+public:
+    [[nodiscard]] static StatusOr<NoRefuseWindow> Open(PageStore& store,
+                                                       std::size_t frames = kWindowFrames) {
+        if (Status s = store.BeginNoRefuseWindow(frames); !s.ok()) return s;
+        return NoRefuseWindow(&store);
+    }
+    NoRefuseWindow(NoRefuseWindow&& other) noexcept : store_(std::exchange(other.store_, nullptr)) {}
+    NoRefuseWindow& operator=(NoRefuseWindow&&) = delete;
+    NoRefuseWindow(const NoRefuseWindow&) = delete;
+    ~NoRefuseWindow() {
+        if (store_ != nullptr) store_->EndNoRefuseWindow();
+    }
+
+private:
+    explicit NoRefuseWindow(PageStore* store) noexcept : store_(store) {}
+    PageStore* store_;
+};
+
+// Whether this thread is inside a no-refuse window on any store - what the
+// executor's suspend audit asks, since no window may hold a suspension point.
+bool NoRefuseWindowOpenOnThisThread() noexcept;
+
+// Drain mode for the life of the guard (`PageStore`'s note).
+class DrainOnPressure {
+public:
+    explicit DrainOnPressure(PageStore& store) noexcept : store_(store) {
+        store_.BeginDrainOnPressure();
+    }
+    ~DrainOnPressure() { store_.EndDrainOnPressure(); }
+    DrainOnPressure(const DrainOnPressure&) = delete;
+    DrainOnPressure& operator=(const DrainOnPressure&) = delete;
+
+private:
+    PageStore& store_;
+};
 
 }  // namespace kds::storage

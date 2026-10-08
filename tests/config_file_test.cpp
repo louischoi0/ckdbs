@@ -21,6 +21,13 @@ ConfigFile ParseOk(std::string_view text) {
     return config.ok() ? std::move(config.value()) : ConfigFile{};
 }
 
+// A file for `Expeditor::Config::ApplyFile`, which refuses one without the
+// required `buffer_pool_frames` (BE-R3): the cells below are about their own
+// keys, so each file gets the pool line ahead of its text.
+ConfigFile WithPool(const std::string& text) {
+    return ParseOk("buffer_pool_frames = 4096\n" + text);
+}
+
 TEST(ConfigFileTest, ParsesKeyValueLines) {
     ConfigFile config = ParseOk("data_file = kds.db\nport = 15432\n");
 
@@ -124,7 +131,7 @@ TEST(ExpeditorConfigTest, DefaultsAreUsedForKeysTheFileOmits) {
     Expeditor::Config config;
     const std::string default_data_file = config.data_file;
 
-    ASSERT_TRUE(config.ApplyFile(ParseOk("port = 6000\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("port = 6000\n")).ok());
     EXPECT_EQ(config.port, 6000);
     EXPECT_EQ(config.data_file, default_data_file) << "an omitted key must leave the default";
     EXPECT_EQ(config.log_file, "kdb.log");
@@ -133,7 +140,7 @@ TEST(ExpeditorConfigTest, DefaultsAreUsedForKeysTheFileOmits) {
 TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {
     Expeditor::Config config;
     ASSERT_TRUE(config
-                    .ApplyFile(ParseOk("data_file = /srv/kds/main.db\n"
+                    .ApplyFile(WithPool("data_file = /srv/kds/main.db\n"
                                        "port = 6543\n"
                                        "wal_dir = /srv/kds/wal\n"
                                        "checkpoint_interval_ms = 250\n"
@@ -152,7 +159,7 @@ TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {
 
 TEST(ExpeditorConfigTest, AnUnknownKeyRefusesTheWholeFile) {
     Expeditor::Config config;
-    Status s = config.ApplyFile(ParseOk("port = 6000\nchekpoint_interval_ms = 100\n"));
+    Status s = config.ApplyFile(WithPool("port = 6000\nchekpoint_interval_ms = 100\n"));
 
     EXPECT_FALSE(s.ok());
     EXPECT_NE(s.message().find("chekpoint_interval_ms"), std::string::npos) << s.message();
@@ -162,13 +169,13 @@ TEST(ExpeditorConfigTest, AnUnknownKeyRefusesTheWholeFile) {
 
 TEST(ExpeditorConfigTest, AnOutOfRangePortIsRejected) {
     Expeditor::Config config;
-    EXPECT_FALSE(config.ApplyFile(ParseOk("port = 70000\n")).ok());
-    EXPECT_FALSE(config.ApplyFile(ParseOk("port = 0\n")).ok());
+    EXPECT_FALSE(config.ApplyFile(WithPool("port = 70000\n")).ok());
+    EXPECT_FALSE(config.ApplyFile(WithPool("port = 0\n")).ok());
 }
 
 TEST(ExpeditorConfigTest, AnUnknownLogLevelIsRejected) {
     Expeditor::Config config;
-    Status s = config.ApplyFile(ParseOk("log_level = chatty\n"));
+    Status s = config.ApplyFile(WithPool("log_level = chatty\n"));
     EXPECT_FALSE(s.ok());
     EXPECT_NE(s.message().find("chatty"), std::string::npos) << s.message();
 }
@@ -197,7 +204,7 @@ TEST(ExpeditorConfigTest, LogPathJoinsDirAndFile) {
 
 TEST(ExpeditorConfigTest, ZeroCheckpointIntervalKeepsItsDisabledMeaning) {
     Expeditor::Config config;
-    ASSERT_TRUE(config.ApplyFile(ParseOk("checkpoint_interval_ms = 0\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("checkpoint_interval_ms = 0\n")).ok());
     EXPECT_EQ(config.checkpoint_interval_ns, 0u);
 }
 
@@ -207,7 +214,7 @@ TEST(ExpeditorConfigTest, TlsKeysParseAndDefaultOff) {
     Expeditor::Config config;
     EXPECT_FALSE(config.tls) << "TLS is opt-in";
     ASSERT_TRUE(config
-                    .ApplyFile(ParseOk("tls = on\n"
+                    .ApplyFile(WithPool("tls = on\n"
                                        "tls_cert_file = /etc/kds/server.crt\n"
                                        "tls_key_file = /etc/kds/server.key\n"))
                     .ok());
@@ -220,38 +227,38 @@ TEST(ExpeditorConfigTest, TlsOnWithoutBothFilesIsRejected) {
     // A tls = on that could never handshake refuses at load - the same
     // moment a typo'd key does - not at the first connection.
     Expeditor::Config config;
-    Status s = config.ApplyFile(ParseOk("tls = on\ntls_cert_file = /x.crt\n"));
+    Status s = config.ApplyFile(WithPool("tls = on\ntls_cert_file = /x.crt\n"));
     EXPECT_FALSE(s.ok());
     EXPECT_NE(s.message().find("tls_key_file"), std::string::npos) << s.message();
 
     Expeditor::Config bare;
-    EXPECT_FALSE(bare.ApplyFile(ParseOk("tls = on\n")).ok());
+    EXPECT_FALSE(bare.ApplyFile(WithPool("tls = on\n")).ok());
 }
 
 TEST(ExpeditorConfigTest, AuthKeysParseAndDefaultOff) {
     Expeditor::Config config;
     EXPECT_FALSE(config.auth_scram) << "auth is opt-in";
     ASSERT_TRUE(config
-                    .ApplyFile(ParseOk("auth = scram\n"
+                    .ApplyFile(WithPool("auth = scram\n"
                                        "users_file = /etc/kds/users\n"))
                     .ok());
     EXPECT_TRUE(config.auth_scram);
     EXPECT_EQ(config.users_file, "/etc/kds/users");
 
     Expeditor::Config off;
-    ASSERT_TRUE(off.ApplyFile(ParseOk("auth = off\n")).ok());
+    ASSERT_TRUE(off.ApplyFile(WithPool("auth = off\n")).ok());
     EXPECT_FALSE(off.auth_scram);
 }
 
 TEST(ExpeditorConfigTest, AuthRefusesBooleansAndMissingUsersFile) {
     // Named methods only: "on" would leave *which* method unstated.
     Expeditor::Config config;
-    Status s = config.ApplyFile(ParseOk("auth = on\n"));
+    Status s = config.ApplyFile(WithPool("auth = on\n"));
     EXPECT_FALSE(s.ok());
     EXPECT_NE(s.message().find("'off' or 'scram'"), std::string::npos) << s.message();
 
     Expeditor::Config bare;
-    Status s2 = bare.ApplyFile(ParseOk("auth = scram\n"));
+    Status s2 = bare.ApplyFile(WithPool("auth = scram\n"));
     EXPECT_FALSE(s2.ok());
     EXPECT_NE(s2.message().find("users_file"), std::string::npos) << s2.message();
 }
@@ -261,7 +268,7 @@ TEST(ExpeditorConfigTest, AuthRefusesAnOpenKwpPort) {
     // would be an ungated door on a guarded server, so the combination
     // refuses at load until KWP P07 exists.
     Expeditor::Config config;
-    Status s = config.ApplyFile(ParseOk("auth = scram\n"
+    Status s = config.ApplyFile(WithPool("auth = scram\n"
                                         "users_file = /etc/kds/users\n"
                                         "kwp_port = 15433\n"));
     EXPECT_FALSE(s.ok());
@@ -292,7 +299,7 @@ TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     EXPECT_EQ(config.aggregate_max_distinct, 1048576u);
 
     ASSERT_TRUE(config
-                    .ApplyFile(ParseOk("aggregate_max_groups = 128\n"
+                    .ApplyFile(WithPool("aggregate_max_groups = 128\n"
                                        "aggregate_max_distinct = 256\n"))
                     .ok());
     EXPECT_EQ(config.aggregate_max_groups, 128u);
@@ -305,9 +312,9 @@ TEST(ExpeditorConfigTest, PhysicalOptimizerParsesOffAndShadowDefaultingToShadow)
     Expeditor::Config config;
     EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kShadow);
 
-    ASSERT_TRUE(config.ApplyFile(ParseOk("physical_optimizer = off\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("physical_optimizer = off\n")).ok());
     EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kOff);
-    ASSERT_TRUE(config.ApplyFile(ParseOk("physical_optimizer = SHADOW\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("physical_optimizer = SHADOW\n")).ok());
     EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kShadow);
 }
 
@@ -316,13 +323,13 @@ TEST(ExpeditorConfigTest, PhysicalOptimizerOnIsRefusedNamingAllThreeGates) {
     // must name what is missing, not what word to try next - all three of
     // §6's gates.
     Expeditor::Config config;
-    Status on = config.ApplyFile(ParseOk("physical_optimizer = on\n"));
+    Status on = config.ApplyFile(WithPool("physical_optimizer = on\n"));
     ASSERT_EQ(on.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(on.message().find("reader horizon"), std::string::npos) << on.message();
     EXPECT_NE(on.message().find("ordered-between"), std::string::npos) << on.message();
     EXPECT_NE(on.message().find("page reuse"), std::string::npos) << on.message();
 
-    Status typo = config.ApplyFile(ParseOk("physical_optimizer = onn\n"));
+    Status typo = config.ApplyFile(WithPool("physical_optimizer = onn\n"));
     EXPECT_EQ(typo.code(), StatusCode::kInvalidArgument);
 }
 
@@ -332,18 +339,18 @@ TEST(ExpeditorConfigTest, DecayHalfLifeParsesSecondsAndCarriesTheProposedDefault
     // else. Nothing may depend on the number, only on the rule.
     EXPECT_EQ(config.decay_half_life_ns, 600'000'000'000ULL);
 
-    ASSERT_TRUE(config.ApplyFile(ParseOk("decay_half_life = 2\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("decay_half_life = 2\n")).ok());
     EXPECT_EQ(config.decay_half_life_ns, 2'000'000'000ULL);
 }
 
 TEST(ExpeditorConfigTest, DecayHalfLifeRefusesZeroAndTheSecondsToNsOverflow) {
     Expeditor::Config config;
 
-    Status zero = config.ApplyFile(ParseOk("decay_half_life = 0\n"));
+    Status zero = config.ApplyFile(WithPool("decay_half_life = 0\n"));
     EXPECT_EQ(zero.code(), StatusCode::kInvalidArgument) << zero.message();
 
     // One past UINT64_MAX / 1e9: accepting it would wrap the ns value.
-    Status wide = config.ApplyFile(ParseOk("decay_half_life = 18446744074\n"));
+    Status wide = config.ApplyFile(WithPool("decay_half_life = 18446744074\n"));
     EXPECT_EQ(wide.code(), StatusCode::kInvalidArgument) << wide.message();
 }
 
@@ -361,7 +368,7 @@ TEST(ExpeditorConfigTest, CabinOptimizerParsesItsFamilyAndDefaultsOff) {
     EXPECT_EQ(config.cabin_optimizer_cooldown_half_lives, 128u);
 
     ASSERT_TRUE(config
-                    .ApplyFile(ParseOk("cabin_optimizer = on\n"
+                    .ApplyFile(WithPool("cabin_optimizer = on\n"
                                        "cabin_optimizer_page_budget = 128\n"
                                        "cabin_optimizer_theta_create_pct = 400\n"
                                        "cabin_optimizer_theta_drop_pct = 25\n"
@@ -391,7 +398,7 @@ TEST(ExpeditorConfigTest, TheAmortWindowAndTheCooldownAreIndependent) {
     // otherwise an operator lengthening the amortization to admit
     // marginal shapes also doubles how long a dead Cabin lingers.
     Expeditor::Config config;
-    ASSERT_TRUE(config.ApplyFile(ParseOk("cabin_optimizer_amort_windows = 4\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("cabin_optimizer_amort_windows = 4\n")).ok());
     EXPECT_EQ(config.CabinOptimizerSettings().cooldown_half_lives, 128u)
         << "the cooldown followed the amortization window";
 
@@ -400,7 +407,7 @@ TEST(ExpeditorConfigTest, TheAmortWindowAndTheCooldownAreIndependent) {
     // case that wants it.
     Expeditor::Config shorter;
     ASSERT_TRUE(shorter
-                    .ApplyFile(ParseOk("cabin_optimizer_amort_windows = 64\n"
+                    .ApplyFile(WithPool("cabin_optimizer_amort_windows = 64\n"
                                        "cabin_optimizer_cooldown_half_lives = 8\n"))
                     .ok());
     const stats::CabinOptimizerConfig assembled = shorter.CabinOptimizerSettings();
@@ -412,7 +419,7 @@ TEST(ExpeditorConfigTest, CabinOptimizerRefusesAZeroAmortWindow) {
     // T_amort divides the build cost: over zero half-lives every Cabin is
     // free, which is create-everything wearing a configuration's clothes.
     Expeditor::Config config;
-    Status zero = config.ApplyFile(ParseOk("cabin_optimizer_amort_windows = 0\n"));
+    Status zero = config.ApplyFile(WithPool("cabin_optimizer_amort_windows = 0\n"));
     EXPECT_EQ(zero.code(), StatusCode::kInvalidArgument) << zero.message();
 
     // A zero *cooldown* is accepted, deliberately: it means no time
@@ -420,28 +427,28 @@ TEST(ExpeditorConfigTest, CabinOptimizerRefusesAZeroAmortWindow) {
     // coherent, unlike a zero window, which prices every Cabin free.
     Expeditor::Config no_patience;
     EXPECT_TRUE(
-        no_patience.ApplyFile(ParseOk("cabin_optimizer_cooldown_half_lives = 0\n")).ok());
+        no_patience.ApplyFile(WithPool("cabin_optimizer_cooldown_half_lives = 0\n")).ok());
 }
 
 TEST(ExpeditorConfigTest, CabinOptimizerRefusesABrokenHysteresisGap) {
     // The one cross-key rule: theta_drop < 100 < theta_create, or the
     // anti-thrash gap the whole rule table stands on does not exist.
     Expeditor::Config config;
-    Status inverted = config.ApplyFile(ParseOk("cabin_optimizer_theta_drop_pct = 150\n"));
+    Status inverted = config.ApplyFile(WithPool("cabin_optimizer_theta_drop_pct = 150\n"));
     EXPECT_EQ(inverted.code(), StatusCode::kInvalidArgument) << inverted.message();
 
     Expeditor::Config config2;
     Status low_create =
-        config2.ApplyFile(ParseOk("cabin_optimizer_theta_create_pct = 90\n"));
+        config2.ApplyFile(WithPool("cabin_optimizer_theta_create_pct = 90\n"));
     EXPECT_EQ(low_create.code(), StatusCode::kInvalidArgument) << low_create.message();
 
     Expeditor::Config config3;
-    Status zero_budget = config3.ApplyFile(ParseOk("cabin_optimizer_page_budget = 0\n"));
+    Status zero_budget = config3.ApplyFile(WithPool("cabin_optimizer_page_budget = 0\n"));
     EXPECT_EQ(zero_budget.code(), StatusCode::kInvalidArgument) << zero_budget.message();
 
     Expeditor::Config config4;
     Status zero_confirm =
-        config4.ApplyFile(ParseOk("cabin_optimizer_confirm_snapshots = 0\n"));
+        config4.ApplyFile(WithPool("cabin_optimizer_confirm_snapshots = 0\n"));
     EXPECT_EQ(zero_confirm.code(), StatusCode::kInvalidArgument) << zero_confirm.message();
 }
 
@@ -449,7 +456,7 @@ TEST(ExpeditorConfigTest, ZeroGroupsIsAcceptedAndMeansRefuseEveryFold) {
     // The same shape `cabin_max_values = 0` has: a coherent way to switch
     // the behaviour off per instance while leaving the grammar in place.
     Expeditor::Config config;
-    ASSERT_TRUE(config.ApplyFile(ParseOk("aggregate_max_groups = 0\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("aggregate_max_groups = 0\n")).ok());
     EXPECT_EQ(config.aggregate_max_groups, 0u);
 }
 
@@ -459,14 +466,14 @@ TEST(ExpeditorConfigTest, CoresParsesAndDefaultsToOne) {
     Expeditor::Config config;
     EXPECT_EQ(config.cores, 1u);
 
-    ASSERT_TRUE(config.ApplyFile(ParseOk("cores = 4\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("cores = 4\n")).ok());
     EXPECT_EQ(config.cores, 4u);
 }
 
 TEST(ExpeditorConfigTest, ZeroCoresIsRefused) {
     // A database with no reactor is not a configuration, it is a typo.
     Expeditor::Config config;
-    Status s = config.ApplyFile(ParseOk("cores = 0\n"));
+    Status s = config.ApplyFile(WithPool("cores = 0\n"));
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(config.cores, 1u) << "a refused value must not be half-applied";
 }
@@ -476,7 +483,7 @@ TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) 
     // core_id, so a core above it has nowhere to publish a checkpoint from.
     Expeditor::Config config;
     Status s = config.ApplyFile(
-        ParseOk("cores = " + std::to_string(kMaxWalCores + 1) + "\n"));
+        WithPool("cores = " + std::to_string(kMaxWalCores + 1) + "\n"));
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
 }
@@ -490,14 +497,14 @@ TEST(ExpeditorConfigTest, ARetiredKeyIsRefusedByNameWithWhatReplacedIt) {
     // asserted by the words only its own message has.
     Expeditor::Config config;
 
-    Status listeners = config.ApplyFile(ParseOk("peer_listeners = on\n"));
+    Status listeners = config.ApplyFile(WithPool("peer_listeners = on\n"));
     EXPECT_EQ(listeners.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(listeners.message().find("every core accepts on the port"), std::string::npos)
         << listeners.message();
     EXPECT_EQ(listeners.message().find("unknown config key"), std::string::npos)
         << listeners.message();
 
-    Status in_doubt = config.ApplyFile(ParseOk("in_doubt_ceiling_ms = 100\n"));
+    Status in_doubt = config.ApplyFile(WithPool("in_doubt_ceiling_ms = 100\n"));
     EXPECT_EQ(in_doubt.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(in_doubt.message().find("lock_wait_fault_net_ms"), std::string::npos)
         << in_doubt.message();
@@ -506,11 +513,11 @@ TEST(ExpeditorConfigTest, ARetiredKeyIsRefusedByNameWithWhatReplacedIt) {
     // owns one; `range_size_ids` armed insert spreading, which went with
     // range ownership. The cells that pinned their shipped defaults and
     // their spellings went with them.
-    Status placement = config.ApplyFile(ParseOk("placement = namespace\n"));
+    Status placement = config.ApplyFile(WithPool("placement = namespace\n"));
     EXPECT_EQ(placement.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(placement.message().find("nothing to place"), std::string::npos)
         << placement.message();
-    Status range_size = config.ApplyFile(ParseOk("range_size_ids = 65536\n"));
+    Status range_size = config.ApplyFile(WithPool("range_size_ids = 65536\n"));
     EXPECT_EQ(range_size.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(range_size.message().find("insert spreading"), std::string::npos)
         << range_size.message();
@@ -522,47 +529,37 @@ TEST(ExpeditorConfigTest, ARetiredKeyIsRefusedByNameWithWhatReplacedIt) {
     }
 }
 
-TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal) {
-    // The operator invariant of 2026-08-24: every core's share is *equal*
-    // (no remainder seat for core 0 - equality is the invariant), nonzero
-    // for any total CheckFrameBudget admits, and cores * share never
-    // exceeds the total, so the key keeps meaning the whole pool. The
-    // undistributed remainder is bounded by the divisor. Swept over every
-    // (total, cores) boundary shape up to 8 cores.
-    for (std::uint32_t cores = 1; cores <= 8; ++cores) {
-        for (std::size_t total : {std::size_t{cores}, std::size_t{cores} + 1,
-                                  std::size_t{cores} * 7 - 1, std::size_t{cores} * 7,
-                                  std::size_t{1024}}) {
-            ASSERT_TRUE(CheckFrameBudget(total, cores).ok());
-            const std::size_t share = FrameBudgetShare(total, cores);
-            EXPECT_GT(share, 0u) << "total " << total << " cores " << cores;
-            EXPECT_LE(share * cores, total) << "total " << total << " cores " << cores;
-            EXPECT_LT(total - share * cores, static_cast<std::size_t>(cores))
-                << "total " << total << " cores " << cores;
-        }
+TEST(ExpeditorConfigTest, BufferPoolFramesIsRequiredAndNonzero) {
+    // BE-R3, the operator's ruling of 2026-10-07: the key is the pool's
+    // maximum, required, with no default, and 0 is an error rather than
+    // "unbounded". Each refusal names the key.
+    {
+        Expeditor::Config config;
+        Status s = config.ApplyFile(ParseOk("cores = 1\n"));
+        EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+        EXPECT_NE(s.message().find("buffer_pool_frames"), std::string::npos) << s.message();
+        EXPECT_NE(s.message().find("required"), std::string::npos) << s.message();
     }
-
-}
-
-TEST(ExpeditorConfigTest, AFrameBudgetBelowTheCoreCountIsRefusedNamingBothNumbers) {
-    // The failure this prevents is inverted, not just wrong: 3 frames over
-    // 4 cores gives some core a share of 0, and 0 means *unbounded* - so a
-    // tiny budget would arm no sweep at all on that core.
-    Status s = CheckFrameBudget(3, 4);
-    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(s.message().find("3"), std::string::npos) << s.message();
-    EXPECT_NE(s.message().find("4"), std::string::npos) << s.message();
-
-    // Zero total stays legal and means unbounded by request; equality and
-    // above divide into nonzero shares everywhere.
-    EXPECT_TRUE(CheckFrameBudget(0, 4).ok());
-    EXPECT_TRUE(CheckFrameBudget(4, 4).ok());
-    EXPECT_TRUE(CheckFrameBudget(9, 4).ok());
+    {
+        Expeditor::Config config;
+        Status s = config.ApplyFile(ParseOk("buffer_pool_frames = 0\n"));
+        EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+        EXPECT_NE(s.message().find("buffer_pool_frames"), std::string::npos) << s.message();
+    }
+    {
+        Expeditor::Config config;
+        ASSERT_TRUE(config.ApplyFile(ParseOk("buffer_pool_frames = 2048\n")).ok());
+        EXPECT_EQ(config.buffer_pool_frames, 2048u);
+    }
+    // The door a server started with no config file meets: a `Config` it
+    // built carries 0.
+    EXPECT_EQ(CheckBufferPoolFrames(0).code(), StatusCode::kInvalidArgument);
+    EXPECT_TRUE(CheckBufferPoolFrames(1).ok());
 }
 
 TEST(ExpeditorConfigTest, ExactlyTheCeilingIsAccepted) {
     Expeditor::Config config;
-    ASSERT_TRUE(config.ApplyFile(ParseOk("cores = " + std::to_string(kMaxWalCores) + "\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("cores = " + std::to_string(kMaxWalCores) + "\n")).ok());
     EXPECT_EQ(config.cores, kMaxWalCores);
 }
 
@@ -573,12 +570,12 @@ TEST(ExpeditorConfigTest, TcpKeepaliveDefaultsOnAndRefusesWhatTheKernelWouldNot)
     EXPECT_EQ(config.tcp_keepalive_s, kDefaultTcpKeepaliveS);
     EXPECT_EQ(kDefaultTcpKeepaliveS, 60u);
 
-    ASSERT_TRUE(config.ApplyFile(ParseOk("tcp_keepalive_s = 0\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("tcp_keepalive_s = 0\n")).ok());
     EXPECT_EQ(config.tcp_keepalive_s, 0u);
-    ASSERT_TRUE(config.ApplyFile(ParseOk("tcp_keepalive_s = 32767\n")).ok());
+    ASSERT_TRUE(config.ApplyFile(WithPool("tcp_keepalive_s = 32767\n")).ok());
     EXPECT_EQ(config.tcp_keepalive_s, kMaxTcpKeepaliveS);
 
-    Status past = config.ApplyFile(ParseOk("tcp_keepalive_s = 32768\n"));
+    Status past = config.ApplyFile(WithPool("tcp_keepalive_s = 32768\n"));
     EXPECT_EQ(past.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(past.message().find("MAX_TCP_KEEPIDLE"), std::string::npos) << past.message();
     EXPECT_EQ(config.tcp_keepalive_s, kMaxTcpKeepaliveS) << "a refused value changes nothing";

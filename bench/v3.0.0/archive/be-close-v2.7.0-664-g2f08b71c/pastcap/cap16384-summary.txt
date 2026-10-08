@@ -1,0 +1,46 @@
+===== B cap 16384 datafile MiB 770 idle rss 12.7 load 0.53 1.48 3.92 1/270 1641291 -> 1.36 1.49 3.72 1/271 1641388
+load_big2 rows 1769472 s 25.81 rows/s 68561 errs 0 retried 0 stmt p0/25/50/90/99/max us [6851, 7778, 8077, 11627, 390363, 954973] rss min/max/last [13, 138, 138] hwm 138 samples 258
+   pool_end {'pool_budget': 16384.0, 'pool_resident': 14924.0, 'pool_slots': 16384.0, 'pool_hits': 12457688.0, 'pool_misses': 32838.0, 'pool_reclaimed_background': 17914.0, 'pool_batches_background': 612.0, 'pool_dirty_queued': 15.0, 'pool_dirty_drained': 15.0} refused 0.0
+   trace [[0.0, 14], [3.1, 54], [7.1, 93], [11.2, 131], [14.7, 137], [18.7, 138], [22.3, 138]]
+load_big4 rows 3538944 s 49.65 rows/s 71284 errs 0 retried 0 stmt p0/25/50/90/99/max us [7100, 7637, 7845, 10865, 386360, 893105] rss min/max/last [138, 139, 139] hwm 139 samples 496
+   pool_end {'pool_budget': 16384.0, 'pool_resident': 14981.0, 'pool_slots': 16384.0, 'pool_hits': 37409646.0, 'pool_misses': 98473.0, 'pool_reclaimed_background': 83492.0, 'pool_batches_background': 2303.0, 'pool_dirty_queued': 53.0, 'pool_dirty_drained': 53.0} refused 0.0
+   trace [[0.0, 138], [3.2, 138], [7.0, 138], [10.9, 138], [14.9, 138], [18.3, 138], [21.8, 138], [25.4, 138], [28.9, 138], [32.7, 138], [36.5, 138], [40.4, 138]]
+2a 0.322 count(*),min(v),max(v)\n1769472,0,999 {'pool_resident': 14320.0, 'pool_slots': 15360.0, 'pool_hits': 13.0, 'pool_misses': 32769.0, 'pool_reclaimed_inline': 16448.0, 'pool_reclaimed_background': 2001.0, 'pool_batches_inline': 257.0, 'pool_batches_background': 32.0, 'pool_batch_steps': 16479.0} resident_after 14336.0
+p2b_probes_pass1 days 432 s 0.36 errs 0 lat p0/25/50/90/99/max us [797, 815, 820, 844, 899, 920] {'pool_resident': 1986.0, 'pool_hits': 3391.0, 'pool_misses': 32817.0, 'pool_reclaimed_inline': 16768.0, 'pool_reclaimed_background': 14063.0, 'pool_batches_inline': 262.0, 'pool_batches_background': 224.0, 'pool_batch_steps': 17020.0}
+p2c_probes_pass2 days 432 s 0.35 errs 0 lat p0/25/50/90/99/max us [794, 813, 818, 830, 910, 951] {'pool_resident': 46.0, 'pool_hits': 3880.0, 'pool_misses': 32327.0, 'pool_reclaimed_inline': 18240.0, 'pool_reclaimed_background': 14041.0, 'pool_batches_inline': 285.0, 'pool_batches_background': 224.0, 'pool_batch_steps': 19055.0}
+hot first_probe_us n 20 [643, 660, 812, 833, 861, 861]
+hot repeat_probe_us n 80 [592, 599, 607, 617, 748, 748]
+hot pool {'pool_resident': -1510.0, 'pool_hits': 7411.0, 'pool_misses': 964.0, 'pool_reclaimed_inline': 448.0, 'pool_reclaimed_background': 2026.0, 'pool_batches_inline': 7.0, 'pool_batches_background': 32.0, 'pool_batch_steps': 468.0}
+rss_part2 {'samples': 11, 'min_mib': 12.8046875, 'max_mib': 142.62109375, 'last_mib': 142.62109375, 'vmhwm_mib': 142.62109375}
+pool_after_part2 {'pool_budget': 16384.0, 'pool_resident': 14858.0, 'pool_slots': 16384.0, 'pool_hits': 14708.0, 'pool_misses': 98893.0, 'pool_reclaimed_inline': 51904.0, 'pool_reclaimed_background': 32131.0, 'pool_batches_inline': 811.0, 'pool_batches_background': 512.0, 'pool_batch_steps': 53022.0}
+p3 warm0 p50/p99 70.4 93.1 sum_s 0.0744 {'pool_hits': 5031.0, 'pool_misses': 1121.0, 'pool_reclaimed_inline': 0.0}
+p3 warm1 p50/p99 68.8 98.3 sum_s 0.0722 {'pool_hits': 11270.0, 'pool_misses': 815.0, 'pool_reclaimed_inline': 0.0}
+p3 warm2 p50/p99 62.3 85.4 sum_s 0.0656 {'pool_hits': 9374.0, 'pool_misses': 0.0, 'pool_reclaimed_inline': 0.0}
+p3 before_scan p50/p99 62.7 104.4 sum_s 0.0662 {'pool_hits': 9374.0, 'pool_misses': 0.0, 'pool_reclaimed_inline': 0.0}
+p3 after_scan p50/p99 62.7 78.0 sum_s 0.0653 {'pool_hits': 9374.0, 'pool_misses': 0.0, 'pool_reclaimed_inline': 0.0}
+p3 after_scan_pass2 p50/p99 62.3 80.1 sum_s 0.0651 {'pool_hits': 9374.0, 'pool_misses': 0.0, 'pool_reclaimed_inline': 0.0}
+p3 scan 0.599 {'pool_resident': 12384.0, 'pool_slots': 14336.0, 'pool_hits': 1031.0, 'pool_misses': 64512.0, 'pool_reclaimed_inline': 50091.0, 'pool_reclaimed_background': 2037.0, 'pool_batches_inline': 793.0, 'pool_batches_background': 32.0, 'pool_batches_partial': 12.0, 'pool_batch_steps': 57888.0} resident_after 14336.0
+p3 rss {'samples': 11, 'min_mib': 12.39453125, 'max_mib': 142.671875, 'last_mib': 142.671875}
+===== A cap 16384 datafile MiB 770 idle rss 12.4 load 1.01 1.38 3.43 1/278 1641565 -> 1.38 1.42 3.17 1/268 1641765
+load_big2 rows 1769472 s 25.61 rows/s 69095 errs 0 retried 0 stmt p0/25/50/90/99/max us [7200, 7840, 8074, 11315, 396702, 876639] rss min/max/last [13, 308, 308] hwm 308 samples 256
+   pool_end {} refused None
+   trace [[0.0, 14], [3.3, 57], [7.3, 100], [11.2, 144], [14.7, 187], [18.6, 231], [22.3, 275]]
+load_big4 rows 3538944 s 51.08 rows/s 69285 errs 0 retried 0 stmt p0/25/50/90/99/max us [7341, 7842, 8083, 11753, 389465, 868088] rss min/max/last [308, 896, 896] hwm 897 samples 510
+   pool_end {} refused None
+   trace [[0.0, 308], [3.2, 351], [7.0, 395], [10.9, 438], [15.0, 482], [18.6, 525], [22.2, 569], [25.9, 612], [29.9, 656], [33.6, 700], [37.7, 744], [41.7, 788]]
+2a 6.802 count(*),min(v),max(v)\n1769472,0,999 {} resident_after None
+p2b_probes_pass1 days 432 s 12.79 errs 0 lat p0/25/50/90/99/max us [13019, 15424, 31259, 48908, 55066, 57103] {}
+p2c_probes_pass2 days 432 s 16.73 errs 0 lat p0/25/50/90/99/max us [21931, 34112, 37879, 44994, 50385, 55222] {}
+hot first_probe_us n 20 [632, 660, 30627, 36766, 38758, 38758]
+hot repeat_probe_us n 80 [588, 601, 613, 695, 710, 710]
+hot pool {}
+rss_part2 {'samples': 368, 'min_mib': 12.7734375, 'max_mib': 142.6875, 'last_mib': 142.6875, 'vmhwm_mib': 142.6875}
+pool_after_part2 {}
+p3 warm0 p50/p99 70.7 96.9 sum_s 0.075 {}
+p3 warm1 p50/p99 68.8 96.5 sum_s 0.0721 {}
+p3 warm2 p50/p99 62.1 80.2 sum_s 0.0649 {}
+p3 before_scan p50/p99 62.4 78.6 sum_s 0.0651 {}
+p3 after_scan p50/p99 62.6 77.6 sum_s 0.0651 {}
+p3 after_scan_pass2 p50/p99 62.3 77.1 sum_s 0.0648 {}
+p3 scan 23.672 {} resident_after None
+p3 rss {'samples': 241, 'min_mib': 12.72265625, 'max_mib': 142.9453125, 'last_mib': 142.9453125}

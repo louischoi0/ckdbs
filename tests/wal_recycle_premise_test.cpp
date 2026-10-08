@@ -310,7 +310,7 @@ StatusOr<std::vector<char>> RecoverCopy(const fs::path& image, const fs::path& c
     {
         auto device = storage::FilePageDevice::Open(copy.string());
         if (!device.ok()) return device.status();
-        auto store = storage::DevicePageStore::Open(*device.value(), server::kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, server::kFirstUserPageId);
         if (!store.ok()) return store.status();
         auto redo = Redo(log, 0, *store.value(), a);
         if (!redo.ok()) return redo.status();
@@ -537,7 +537,7 @@ TEST(WalRecyclePremiseRigTest, AfterRecyclingTheMountRecoversBecauseRedoIsFloore
     {
         auto device = storage::FilePageDevice::Open((image / "kds.db").string());
         ASSERT_TRUE(device.ok());
-        auto store = storage::DevicePageStore::Open(*device.value(), server::kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, server::kFirstUserPageId);
         ASSERT_TRUE(store.ok());
         auto unfloored = Redo(*log.value(), 0, *store.value(), a.value());
         ASSERT_FALSE(unfloored.ok());
@@ -551,7 +551,7 @@ TEST(WalRecyclePremiseRigTest, AfterRecyclingTheMountRecoversBecauseRedoIsFloore
     ASSERT_FALSE(ec);
     auto device = storage::FilePageDevice::Open((image / "mounted.db").string());
     ASSERT_TRUE(device.ok());
-    auto store = storage::DevicePageStore::Open(*device.value(), server::kFirstUserPageId);
+    auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, server::kFirstUserPageId);
     ASSERT_TRUE(store.ok());
     auto report = RecoverCore(*log.value(), 0, *store.value(), start);
     ASSERT_TRUE(report.ok()) << report.status().message();
@@ -569,6 +569,7 @@ StatusOr<std::unique_ptr<server::Expeditor>> MountImage(const fs::path& image) {
     config.data_file = (image / "kds.db").string();
     config.wal_dir = (image / "wal").string();
     config.log_file = {};
+    config.buffer_pool_frames = 4096;  // required (BE-R3)
     config.cores = 2;
     config.debug_text_port = 0;
     return server::Expeditor::Open(config, /*now_unix_seconds=*/2000);

@@ -30,7 +30,7 @@ protected:
         auto device = MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
         ASSERT_TRUE(device.ok()) << device.status().message();
         device_ = std::move(device.value());
-        auto store = DevicePageStore::Open(*device_, /*first_new_page_id=*/16);
+        auto store = DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
         ASSERT_TRUE(store.ok()) << store.status().message();
         store_ = std::move(store.value());
         // Armed, or none of this is under test: unarmed the structure latch
@@ -244,6 +244,12 @@ TEST_F(PinProtocolTest, ConcurrentMissesOnOnePageIssueOneDeviceRead) {
     EXPECT_EQ(reads, kRounds) << "eight concurrent faults per round over " << kRounds
                               << " rounds issued " << reads
                               << " device reads; the loading set is what makes that one each";
+    // **And every slot comes home** (BE-R1). A fault reserves its slot only
+    // once it holds the page's loading entry, so the seven that wait each
+    // round reserve nothing; a reservation stranded by any of them would
+    // show here as a slot neither free nor resident.
+    const DevicePageStore::FrameSlots slots = store_->frame_slots();
+    EXPECT_EQ(slots.slots, slots.free + store_->resident_pages());
 
     // **What this cell does not assert**, stated rather than left to be
     // discovered: that a hit on a *different* page proceeds while this read

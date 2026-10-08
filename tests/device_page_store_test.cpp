@@ -27,7 +27,7 @@ std::unique_ptr<MemoryPageDevice> MakeDevice(std::uint32_t extent_pages = 8,
 }
 
 std::unique_ptr<DevicePageStore> OpenStore(PageDevice& device, PageId first_new_page_id = 128) {
-    auto opened = DevicePageStore::Open(device, first_new_page_id);
+    auto opened = DevicePageStore::Open(device, ::kds::storage::FrameCapacity{4096}, first_new_page_id);
     EXPECT_TRUE(opened.ok()) << opened.status().message();
     return opened.ok() ? std::move(opened.value()) : nullptr;
 }
@@ -273,7 +273,7 @@ TEST(DevicePageStoreTest, OpenRejectsACorruptedFreeMap) {
     ASSERT_TRUE(
         device->WritePage(kFreeMapPageId, std::span<const std::byte, kPageSize>(free_map)).ok());
 
-    auto opened = DevicePageStore::Open(*device);
+    auto opened = DevicePageStore::Open(*device, ::kds::storage::FrameCapacity{4096});
     EXPECT_FALSE(opened.ok());
     EXPECT_EQ(opened.status().code(), StatusCode::kCorruption);
 }
@@ -820,7 +820,7 @@ TEST(FreeMapRegionTest, ATornMapPageRefusesTheMountRatherThanServingIt) {
                                   std::span<const std::byte, kPageSize>(corrupt))
                     .ok());
 
-    auto opened = DevicePageStore::Open(*device, 128);
+    auto opened = DevicePageStore::Open(*device, ::kds::storage::FrameCapacity{4096}, 128);
     EXPECT_FALSE(opened.ok());
     EXPECT_EQ(opened.status().code(), StatusCode::kCorruption);
 }

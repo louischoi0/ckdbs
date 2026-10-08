@@ -1147,7 +1147,7 @@ protected:
         ASSERT_TRUE(manager.ok()) << manager.status().message();
         wal_ = std::move(manager.value());
 
-        auto store = storage::DevicePageStore::Open(*page_device_, server::kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*page_device_, ::kds::storage::FrameCapacity{4096}, server::kFirstUserPageId);
         ASSERT_TRUE(store.ok()) << store.status().message();
         store_ = std::move(store.value());
         store_->SetWalGate(wal_.get());

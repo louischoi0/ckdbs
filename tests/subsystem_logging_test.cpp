@@ -211,7 +211,7 @@ TEST(SubsystemLoggingTest, FrameExhaustionIsLoggedAtWarn) {
 TEST(SubsystemLoggingTest, PageStoreLogsAllocationAndWriteBack) {
     auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8);
     ASSERT_TRUE(device.ok()) << device.status().message();
-    auto store = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/128);
+    auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/128);
     ASSERT_TRUE(store.ok()) << store.status().message();
     CapturedLog log;
     store.value()->SetLogger(log.get());
@@ -232,7 +232,7 @@ TEST(SubsystemLoggingTest, ChecksumFailureIsLoggedAsCorruption) {
     ASSERT_TRUE(device.ok()) << device.status().message();
 
     {
-        auto store = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/128);
+        auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/128);
         ASSERT_TRUE(store.ok()) << store.status().message();
         auto page = store.value()->CreateAt(4);
         ASSERT_TRUE(page.ok()) << page.status().message();
@@ -250,7 +250,7 @@ TEST(SubsystemLoggingTest, ChecksumFailureIsLoggedAsCorruption) {
             ->WritePage(4, std::span<const std::byte, kPageSize>(raw))
             .ok());
 
-    auto store = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/128);
+    auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/128);
     ASSERT_TRUE(store.ok()) << store.status().message();
     CapturedLog log(LogLevel::kError);
     store.value()->SetLogger(log.get());

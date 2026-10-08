@@ -73,16 +73,22 @@ inline_cell_width = 64
 # block, so overcommitting them serializes whole workloads behind each other.
 cores = 1
 
-# Resident-frame budget for the whole instance's buffer pools, in 8 KiB
-# pages (docs/spec/eviction.md §6, EV4). Every core takes an *equal* share
-# - total / cores, the small remainder undistributed (operator invariant
-# 2026-08-24; the ratified min(cores, hardware cores) divisor collapses to
-# cores because boot refuses overcommit) - and a core past its share
-# evicts cold clean frames on fault (docs/spec/page.md §3). 0 (the
-# default) is unbounded. A nonzero value below `cores` is refused at boot:
-# an integer share of zero would mean unbounded on that core, the opposite
-# of a small budget's intent.
-# buffer_pool_frames = 0
+# The buffer pool's maximum, in 8 KiB frames, for the whole instance: one
+# pool every core shares (docs/spec/eviction.md section 6). **Required** -
+# a config without it, a 0, and a server started with no config are each
+# refused at boot - and a ceiling: resident pages never exceed it, a scan
+# larger than the pool reclaims in bounded batches as it goes, and a
+# statement that needs more frames than the pool can free is refused
+# `ResourceExhausted`. Size it to the memory the server may hold for pages;
+# a volume smaller than the pool is held whole.
+#
+# The floor: the volume's resident-class pages (the 128 system pages, plus
+# every Bound Cabin page) plus a working minimum of 256 frames. A value
+# below it is refused at mount, naming both numbers.
+#
+# Example: 131072 frames = 131072 x 8 KiB = 1 GiB of page memory, plus
+# about 48 bytes of frame metadata per frame (6 MiB) and the page table.
+buffer_pool_frames = 131072
 
 # Per-transaction borrow cap (AO-R10, AR2-R4): entries in the lock table,
 # one per relation a transaction writes and one per row. Its value is

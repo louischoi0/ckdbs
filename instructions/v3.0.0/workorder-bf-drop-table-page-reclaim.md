@@ -11,7 +11,7 @@ Written 2026-10-07 on `worktree-drop-table-page-reclaim` from `bc144dbf`
 are marked as proposed, so BF-R1..R13 are rulings. The order's writing is
 recorded at §21.
 
-**Run to its close on W2** (`raft-marks-2026-10-07.md` §23): *"go ahead dont
+**Run to its close on W2** (`raft-marks-2026-10-07.md` §25): *"go ahead dont
 stop until milestone, follow CLA proposal if decision needed"*. Each stage's
 row in §6 says where it stands. **BF-S1 is built:** the censuses, the
 premise, which held, and the red cells. **BF-S2 is built:** the free
@@ -1334,7 +1334,7 @@ answer. BF-S1 starts on its own word; nothing here starts it.
 ### BF-S1 - the census, and red first - built 2026-10-07
 
 - **Where:** on `worktree-drop-table-page-reclaim` from `df741e3c`
-  (`v2.7.0-669-gdf741e3c`), on the word of `raft-marks-2026-10-07.md` §23:
+  (`v2.7.0-669-gdf741e3c`), on the word of `raft-marks-2026-10-07.md` §25:
   *"go ahead dont stop until milestone, follow CLA proposal if decision
   needed"*. The suite at `df741e3c` was 3223 of 3223 before the stage.
 - **The cells** are `tests/drop_table_reclaim_test.cpp`. Each drives an
@@ -1487,7 +1487,7 @@ end:**
 - The var-heap chain has no backward link, so BF-Q18 (c)'s tail-first free
   collects the chain forward and frees it in reverse.
 
-**Decisions taken under §23, each CLA's proposal:**
+**Decisions taken under §25, each CLA's proposal:**
 - **BF-Q14 (b).** BE has not started (BE-S1 is its next stage), so BF-S2
   runs against the map-keyed frame table, and BE-R1's eraser list counts
   BF-R5's discard when BE resumes.
@@ -1535,7 +1535,7 @@ BF-S2). Two were declined:
 ### BF-S2 - the primitive and the allocator - built 2026-10-07
 
 - **Where:** on `worktree-drop-table-page-reclaim` from `970feb5f`, run
-  against the map-keyed frame table under BF-Q14 (b) (§23).
+  against the map-keyed frame table under BF-Q14 (b) (§25).
 - **Nothing calls `FreePage` in production yet.** BF-S3 adds the reclaim.
 
 **Code:**
@@ -1632,7 +1632,7 @@ cells pass five runs over with the bound in place.
   checksum over child 1. The gap predates BF; R1's zero-write had widened
   it to a device read, a write and an fsync. The id is now marked
   headerless before the insert (`MarkHeaderlessBeforeInsert`).
-- **B2, taken as CLA proposed under §23:** the cursor skips listed ids, and
+- **B2, taken as CLA proposed under §25:** the cursor skips listed ids, and
   the list became an ordered set.
 - **B3, noted:** between a claim and its insert, `FreePage` could free a
   just-claimed id. Only a reclaim's precondition rules that out - BF-R3
@@ -1802,7 +1802,7 @@ checked against the code.
   under one map hold;
 - six comments the diff made false.
 
-**Taken as CLA proposed under §23:**
+**Taken as CLA proposed under §25:**
 - **BF-R10's walk check** is one root check per bind (`StillOwned` in the
   step VM's `Bind`). The relation's anchor and its first page must still
   carry its oid; otherwise the statement answers `NotFound`, "its page …
@@ -1952,7 +1952,7 @@ windows, and no statement in the sim races a bind against a free.
   linking to a freed page. A census walk counts it now, and a walk the pool
   refused returns `ResourceExhausted` instead of a partial result.
 
-**Taken as CLA proposed under §23:**
+**Taken as CLA proposed under §25:**
 - **The census checks itself independently.** Its ledger came from the
   reclaim's own walk, so a walk that missed a tree would have missed it in
   both. An owner scan of every allocated page now fails a fault-free run on
@@ -2117,7 +2117,7 @@ dead line:
 **Fixed by the review:**
 - `EnqueueCommittedDrop` raised `pending` after releasing the inbox latch, so a drain could make it wrap to 2^64-1. It now adds under the latch.
 
-**Taken as CLA proposed under §23** (CLA's own choice among the reviewer's proposals):
+**Taken as CLA proposed under §25** (CLA's own choice among the reviewer's proposals):
 - Gap 1: the fkey cell did not test the `IS`. The child's fkey row is visible at once, so the drop's first RESTRICT ask refuses. The window has no seam, so the cell now asserts that the open child transaction holds the parent's `IS` (`borrows().Holds(LockKey::Relation(parent))`), then checks the end-to-end refusal.
 - Gap 2: no cell had a published old word. The seam is now `SetEpochSeamForTest(EpochSeam, hook)` with `kBeforePublish`/`kAfterPublish`, and each Census B path runs at both. A mutant where `AllAtLeast` checks only `kEntering` was added.
 - Gap 3: the child's parent `IS` was taken after `CreateTable` wrote rows. It is now taken right after the parent is resolved, before `InitTableAccess` and before any write. The residual window, a drop that commits between the lookup and the grant, is stated in code: the pages stay held by the epoch, and a later bind is refused by BF-R10.

@@ -250,7 +250,7 @@ protected:
     // and tears them all down - one process lifetime.
     template <typename Body>
     void Boot(Body&& body) {
-        auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
         ASSERT_TRUE(store.ok()) << store.status().message();
         auto boot = bootstrap::BootstrapDatabase(*store.value(), 1000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
@@ -349,7 +349,7 @@ TEST_F(KeystoneIdWalCrashTest, ACrashReissuesIdsThatTheDurableLogStillClaims) {
     {
         auto wal_mgr = wal::WalManager::Open(log_device_.get(), clock_, /*core_id=*/0);
         ASSERT_TRUE(wal_mgr.ok()) << wal_mgr.status().message();
-        auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
         ASSERT_TRUE(store.ok());
         store.value()->SetWalGate(wal_mgr.value().get());
         auto boot = bootstrap::BootstrapDatabase(*store.value(), 1000);
@@ -374,7 +374,7 @@ TEST_F(KeystoneIdWalCrashTest, ACrashReissuesIdsThatTheDurableLogStillClaims) {
     ASSERT_EQ(logged, (std::vector<std::uint64_t>{1, 2, 3}));
     device_->Crash();
 
-    auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+    auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
     ASSERT_TRUE(store.ok());
     auto boot = bootstrap::BootstrapDatabase(*store.value(), 2000);
     ASSERT_TRUE(boot.ok());
@@ -406,7 +406,7 @@ TEST_F(KeystoneIdWalCrashTest, ASyncedShutdownLeavesTheSequenceAboveEveryLoggedI
     {
         auto wal_mgr = wal::WalManager::Open(log_device_.get(), clock_, /*core_id=*/0);
         ASSERT_TRUE(wal_mgr.ok());
-        auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
         ASSERT_TRUE(store.ok());
         store.value()->SetWalGate(wal_mgr.value().get());
         auto boot = bootstrap::BootstrapDatabase(*store.value(), 1000);
@@ -429,7 +429,7 @@ TEST_F(KeystoneIdWalCrashTest, ASyncedShutdownLeavesTheSequenceAboveEveryLoggedI
     ASSERT_EQ(logged, (std::vector<std::uint64_t>{1, 2, 3}));
     device_->Crash();
 
-    auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+    auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
     ASSERT_TRUE(store.ok());
     auto boot = bootstrap::BootstrapDatabase(*store.value(), 2000);
     ASSERT_TRUE(boot.ok());

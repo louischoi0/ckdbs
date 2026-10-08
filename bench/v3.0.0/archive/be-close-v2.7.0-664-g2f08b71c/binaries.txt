@@ -1,0 +1,8 @@
+A kds_server  04457269258b85b7b1f2209543d8fef62a98448c3b36f228ff95b4ac5d70f860  (e4b107af, built 2026-10-07 13:49:02 UTC from an archive export of the commit)
+B kds_server  c7b1b0b1ce1c4f20ebc8a7ec6bec815de08be75b364c5d42a364c55a9e02b2a9  (2f08b71c, built 2026-10-07 13:48:12 UTC, worktree build-release)
+A kds_pool_sweep_bench: bench/pool_sweep_bench.cpp as of 54057595 (engine files identical to e4b107af) built against the e4b107af engine
+B kds_pool_sweep_bench sha256 ac95e906c30126517e3b09ddf093dd9beea5426d3df6636ba1e6bd4bb5451c95
+0c8e4f28911fa04d58db33700a0bb05109ecfbd69b130bcc7f32c25cccbb11bb  /home/cdkbs/bench-runs/be-close/bin/kds_pool_sweep_bench-A
+ac95e906c30126517e3b09ddf093dd9beea5426d3df6636ba1e6bd4bb5451c95  /home/cdkbs/bench-runs/be-close/bin/kds_pool_sweep_bench-B
+04457269258b85b7b1f2209543d8fef62a98448c3b36f228ff95b4ac5d70f860  /home/cdkbs/bench-runs/be-close/bin/kds_server-A
+c7b1b0b1ce1c4f20ebc8a7ec6bec815de08be75b364c5d42a364c55a9e02b2a9  /home/cdkbs/bench-runs/be-close/bin/kds_server-B

@@ -311,7 +311,7 @@ private:
             if (!device.ok()) return device.status();
             device_ = std::move(device.value());
         }
-        auto store = storage::DevicePageStore::Open(*device_, kFirstUserPageId);
+        auto store = storage::DevicePageStore::Open(*device_, ::kds::storage::FrameCapacity{4096}, kFirstUserPageId);
         if (!store.ok()) return store.status();
         store_ = std::move(store.value());
         // EV3's floor, `Expeditor::Open`'s one install site.

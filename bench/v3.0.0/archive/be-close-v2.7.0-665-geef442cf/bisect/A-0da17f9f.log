@@ -1,0 +1,6 @@
+n10000-r0 load 2.39->2.36 errs=0 insert:A=48.2/B=48.5 insert-again:A=48.8/B=49.0 select-pk:A=64.3/B=63.7 update-pk:A=50.6/B=50.4 range100:A=762.1/B=798.3 ping:A=38.5/B=38.2
+n10000-r1 load 2.36->2.38 errs=0 insert:A=49.0/B=48.8 insert-again:A=49.1/B=48.9 select-pk:A=64.8/B=65.0 update-pk:A=51.9/B=51.4 range100:A=774.1/B=805.7 ping:A=38.4/B=38.1
+n10000-r2 load 2.38->2.27 errs=0 insert:A=49.5/B=49.4 insert-again:A=49.4/B=49.4 select-pk:A=63.5/B=64.3 update-pk:A=51.6/B=50.9 range100:A=770.8/B=808.6 ping:A=38.6/B=38.6
+n10000-r3 load 2.27->2.15 errs=0 insert:A=49.2/B=49.2 insert-again:A=49.2/B=49.2 select-pk:A=64.0/B=63.1 update-pk:A=51.7/B=50.1 range100:A=763.9/B=905.5 ping:A=38.0/B=37.6
+n10000-r4 load 2.15->2.04 errs=0 insert:A=48.9/B=48.9 insert-again:A=49.0/B=49.0 select-pk:A=64.0/B=64.2 update-pk:A=50.7/B=51.4 range100:A=759.0/B=797.7 ping:A=37.8/B=37.8
+n10000-r5 load 2.04->1.96 errs=0 insert:A=49.0/B=49.0 insert-again:A=49.3/B=49.1 select-pk:A=63.8/B=63.1 update-pk:A=51.5/B=51.0 range100:A=757.6/B=791.5 ping:A=38.1/B=38.3

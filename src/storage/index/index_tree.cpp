@@ -587,8 +587,7 @@ Status IndexVisitFrom(
                                       " pages; the sibling links are cyclic or corrupt");
         }
 
-        auto bytes = access == storage::PageAccess::kWrite ? store.Get(current)
-                                                           : store.GetForRead(current);
+        auto bytes = store.Fetch(current, access);
         if (!bytes.ok()) return bytes.status();
         if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexLeaf); !s.ok()) {
             return s;

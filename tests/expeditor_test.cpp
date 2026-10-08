@@ -168,6 +168,7 @@ protected:
         config.data_file = (dir_ / "kds.db").string();
         config.wal_dir = (dir_ / "wal").string();
         config.log_file = {};  // no log file: the suite's output is the test's
+        config.buffer_pool_frames = 4096;  // required (BE-R3)
         config.cores = cores;
         const FreePorts ports = TwoFreeLoopbackPorts();
         // Checked, because `debug_text_port = 0` means *no text listener*
@@ -379,6 +380,38 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // The shutdown tail cleared them, so a caller that asks afterwards sees
     // an instance with no cores rather than dangling ones.
     EXPECT_TRUE(db.cores().empty());
+}
+
+TEST_F(ExpeditorTest, APoolBelowTheVolumesFloorIsRefusedAtMountNamingBothNumbers) {
+    // BE-Q6: the floor is the volume's 128 system pages plus a working
+    // minimum of 256 frames. A pool below it would refuse every statement, so
+    // the mount refuses it while the operator is still at the config; a pool
+    // at the floor mounts. And a server with no `buffer_pool_frames` at all -
+    // the 0 a `Config` is built with - is refused before anything opens.
+    const std::size_t floor = kFirstUserPageId + storage::DevicePageStore::kWorkingMinimumFrames;
+    {
+        Expeditor::Config config = ConfigAt(/*cores=*/1);
+        config.buffer_pool_frames = floor - 1;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_FALSE(opened.ok());
+        EXPECT_EQ(opened.status().code(), StatusCode::kInvalidArgument);
+        EXPECT_NE(opened.status().message().find(std::to_string(floor - 1)), std::string::npos)
+            << opened.status().message();
+        EXPECT_NE(opened.status().message().find(std::to_string(floor)), std::string::npos)
+            << opened.status().message();
+    }
+    {
+        Expeditor::Config config = ConfigAt(/*cores=*/1);
+        config.buffer_pool_frames = 0;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_FALSE(opened.ok());
+        EXPECT_NE(opened.status().message().find("buffer_pool_frames"), std::string::npos)
+            << opened.status().message();
+    }
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.buffer_pool_frames = floor;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
 }
 
 TEST_F(ExpeditorTest, AtOneCoreTheDispatcherHoldsTheInstancesLockTable) {
