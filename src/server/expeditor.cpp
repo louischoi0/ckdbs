@@ -1959,10 +1959,9 @@ Status Expeditor::Start() {
     // EVT03's background writeback: drains spec-eviction §4's dirty queue -
     // pages a sweep found dirty at usage zero and queued instead of
     // reclaiming. One bounded batch per tick is the cooperative-yield
-    // boundary. **Idle today by construction**: the queue only fills when
-    // the sweep runs, and nothing calls the sweep until the PageRef
-    // migration lands - so this registration is the task existing ahead of
-    // its work, the same stance the sweep itself takes. The watermark loop
+    // boundary. The queue fills when the fault path's inline sweep meets a
+    // dirty frame under `buffer_pool_frames`; with the pool unbounded (0)
+    // the sweep never runs and this task finds nothing. The watermark loop
     // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
     // it real numbers; a cadence key follows with EVT04's protocol.
     constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]

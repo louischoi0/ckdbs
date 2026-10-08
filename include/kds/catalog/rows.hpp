@@ -424,8 +424,9 @@ struct SysIndexRow {
     Oid table_oid;
 
     // The index tree's root (storage/index/index_tree.hpp). Allocated
-    // eagerly at CREATE INDEX and **never moved by growth** - a root split
-    // publishes a new root here through this row, which is why the id may
+    // eagerly at CREATE INDEX and **never moved by growth**: a root split
+    // publishes its new root in the relation's anchor slot for the index
+    // (`Catalog::UpdateIndexRoot`), not in this row, which is why the id may
     // live on a cached TableAccess at all (catalog_cache.hpp's rule).
     PageId root_page_id;
 

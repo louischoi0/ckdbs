@@ -241,12 +241,12 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
 // read per relation, no chain walks. That is what this does.
 //
 // The other half - rows whose relation the catalog lost - **cannot be computed
-// at all**: resolving a page to its relation needs a page->relation index,
-// `page.md` has none, and its absence is already the named blocker on page reuse
-// (`docs/spec/physical-optimizer.md` §6 gate 3). Building the set instead means
-// walking every page of every relation at every mount. So `SHOW META` reports
-// this number and states the other case in words; RC09's task entry carries the
-// full argument.
+// cheaply**: `page.md` §2a's `owner_oid` resolves a page to its relation, but
+// only by reading every allocated page, and a dropped relation's reclaim walks
+// only what its tombstone's roots reach, which is not this count's question.
+// Building the set means reading every page at every mount. So `SHOW META`
+// reports this number and states the other case in words; RC09's task entry
+// carries the full argument.
 //
 // Never fails the mount: an unreadable relation is what it is *reporting*, not
 // an error it hit. Returns the two counts, writes one log line per finding.

@@ -2240,8 +2240,8 @@ StatusOr<Statement> Parser::Parse() {
             stmt = std::move(s.value());
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "TABLE")) {
             // docs/spec/drop-table.md DT6: catalog-scoped, oid tombstoned,
-            // pages orphaned - the refusals live in the dispatcher, which
-            // is the layer that can name a blocker.
+            // pages reclaimed after the commit (DT1) - the refusals live in
+            // the dispatcher, which is the layer that can name a blocker.
             lexer_.Next();
             DropTableStmt drop;
             if (Status s = ParseQualifiedName(drop.schema, drop.table_name, &drop.byte_offset);

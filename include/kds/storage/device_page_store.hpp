@@ -68,16 +68,15 @@
 // directory pays one reserved page for the bitmap and nothing else.
 //
 // Not here, deliberately:
-//   - No eviction. Everything touched stays resident, as InMemoryPageStore
-//     already did. Clock eviction needs PageRef (page.md section 3) and
-//     the frame-reclamation policy is an open decision in CLAUDE.md.
+//   - Eviction is the CLOCK sweep below, armed by a frame budget, and a
+//     freed page's frame is discarded by `FreePage` (BF-R5).
 //   - Dirty tracking is by which accessor the caller chose, not by what it
 //     actually wrote: Get() marks the frame dirty, GetForRead() leaves it
 //     alone, and both hand out the same raw mutable span. A reader that
 //     calls Get() costs a needless write-back; a writer that calls
 //     GetForRead() loses its write. PageRef (page.md section 3) is what
 //     replaces the convention with a type.
-//   - One free-map page, so coverage is kFreeMapBitsPerPage ids; beyond
+//   - The free map is region-based (page.md section 5); beyond
 //     that is OutOfRange, not silently unmapped.
 //
 // ---- The WAL gate (page.md section 8, wal.md section 8-1) ---------------
@@ -763,11 +762,10 @@ public:
     // reclaiming before that runs would lose a write. `DirtyEvictionQueue()`
     // is what EVT03 will drain.
     //
-    // **Nothing calls this yet**, deliberately: `page.md` §3's first line is
-    // that raw spans are unsafe the moment eviction exists, and every caller
-    // still holds one, so enabling the sweep before the `PageRef` migration
-    // would be a use-after-free. It exists now so the pinned-class guarantee
-    // a Bound Cabin rests on is testable before that migration lands.
+    // Every accessor returns a pinned `PageRef`, which is what makes a sweep
+    // safe (`page.md` §3); its callers are named at `EvictColdFrames` below.
+    // A frame `FreePage` discarded is never a victim here: it is gone.
+    //
     // The CLOCK usage counter's ceiling (`docs/spec/eviction.md` EV1,
     // `[PROPOSED] 5`). A cap and not a free-running count: it bounds how
     // many sweep rotations a hot frame can survive, so a page that fell out
@@ -1431,9 +1429,10 @@ private:
     // M1 one pool serves one core (`page.md` §6). AM-S2 shares the pool, and
     // this is what a shared table runs under: the pin accounting (step 1),
     // the insert (2b), and **all three erasers** - `ReleaseScanSlot`,
-    // `FreePage` (BF-R5, which replaced `EvictClean`) and `EvictColdFrames`. What is still outside it is every
-    // *reader* of the table that is not one of those, which is step 3's
-    // list and is stated below rather than implied.
+    // `FreePage` (BF-R5, which replaced `EvictClean`) and
+    // `EvictColdFrames`. What is still outside it is every *reader* of the
+    // table that is not one of those, which is step 3's list and is stated
+    // below rather than implied.
     //
     // **Null where the store is not shared**, which is `LatchGuard`'s whole
     // shape and what keeps G2: at `cores = 1` the guard is a null test and

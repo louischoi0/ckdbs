@@ -22,9 +22,10 @@
 // The build runs before the `sys.assertions` row exists, so an assertion is
 // published complete or not at all. A failure leaves an unreachable page
 // chain and a burned row id, and no catalog row - `index_ddl.cpp`'s
-// precedent exactly, and K3 makes the id free. Nothing reclaims the pages,
-// because page reclamation does not exist in this engine; the leak is
-// bounded by how often a CREATE fails.
+// precedent exactly, and K3 makes the id free. Nothing reclaims the pages -
+// a dropped relation's reclaim walks a relation's roots and never a Bound
+// Cabin chain (`drop-table.md` DT1's stated leaks); the leak is bounded by
+// how often a CREATE fails.
 //
 // ---- The cutover, and why the membership protocol is trivially met --------
 //

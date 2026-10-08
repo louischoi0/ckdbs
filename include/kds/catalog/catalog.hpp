@@ -938,7 +938,8 @@ public:
     // as a failing statistic on every statement and a failing `SHOW ACCESS`,
     // for the life of the file. Discarding is sound on invariant 8's terms -
     // a deleted trail costs performance and never a result - and the growth
-    // pages it drops are leaked, since nothing reclaims a page.
+    // pages it drops are leaked: no reclaim walk reaches a catalog
+    // relation's discarded chain (`drop-table.md` DT1's stated leaks).
     StatusOr<bool> ResetAccessStatsIfDamaged();
 
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();

@@ -106,12 +106,19 @@ The sweep hand walks the frame array circularly:
   list;
 - usage == 0, dirty ⇒ schedule for writeback (§4); do not reclaim yet.
 
+**A freed page's frame is discarded, dirty or not** (`page.md` §5,
+`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md` BF-R5). That
+is not the sweep but the free primitive, which erases the frame in the hold
+that clears the page's bit. It defers a pinned, latched or
+writeback-claimed frame. No replay names a freed page, so its recLSN guards
+nothing, and writing its dead bytes back could land them over a reuse.
+
 The sweep runs in two contexts: the background watermark task (EV5 primary)
 and the on-demand fallback inside an allocating step (EV5 fallback) — the
 same code path invoked from two places. **Two cores' sweeps do not race
 because both run under the frame table's structure latch** (`page.md` §6;
-`EvictColdFramesLocked`, and since AM-S2 `EvictColdFrames` and
-`EvictClean`), not because they share an event loop: one pool serves every
+`EvictColdFramesLocked`, since AM-S2 `EvictColdFrames`, and since BF
+`FreePage`, which replaced `EvictClean`), not because they share an event loop: one pool serves every
 core since AM-S2 step 3, and "both execute on the owning core's event loop"
 was the per-core pool's argument.
 

@@ -335,8 +335,8 @@ No relayout is enacted: `SHOW RELAYOUT` reports every candidate plan with its pr
 Never violated, never "temporarily" bypassed.
 
 1. Page size is 8192 bytes; page ids are `uint32_t`; `0xFFFFFFFF` is reserved as invalid.
-2. A heap page's `min_key` is immutable after creation.
-3. No tuple with `id < min_key(page)` is ever placed in that page, including by relayout.
+2. A heap page's `min_key` is immutable after creation, until the page is freed. A page id reused after a dropped relation's reclaim is a new creation, its `min_key` fixed again by that creation (`drop-table.md` DT1).
+3. No tuple with `id < min_key(page)` is ever placed in that page, including by relayout - for the life of the page, which a free ends.
 4. Tuples within a heap page are unordered by contract. A btree leaf is sorted by placement: every keyed slot ascends by Keystone id, live and delete-marked alike, whatever order rows arrive in and at every core count, because a row takes the slot index its key sorts to (BD-R1, BD-R2); a retired slot carries no key and sits anywhere. Readers rely on it through the `ORDER BY <pk>` elision, the Cabin serve's pk sort and the index step's sort (§4.1).
 5. The Keystone column is exactly `id:40 | flags:8 | reserved:16`.
 6. The Keystone word is read and written atomically as a `uint64_t`; on-disk encoding uses explicit shift/mask, never compiler bitfields.

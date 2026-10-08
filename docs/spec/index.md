@@ -636,8 +636,10 @@ the access statistics, which is that function's only consumer.
 of `UpdateRelationDescPage` and for the same reason: the storage layer has no
 catalog, so it reports a new root and something above it writes one down.
 `DropIndex` **retires** the row rather than delete-marking it (a catalog read
-has no snapshot to filter a mark against) and **frees no page**: a dropped
-index's tree is never reclaimed.
+has no snapshot to filter a mark against) and **frees no page at its own
+commit** (BF-Q8 (b) declined): the anchor slot still names the tree, which is
+reclaimed with its relation when that relation is dropped (`drop-table.md`
+DT1). A failed `CREATE INDEX`'s tree, which no slot names, stays leaked.
 
 `TableAccess` carries `index_mask` plus a `std::vector<IndexRef>`, built at
 `InitTableAccess()` on the same pattern as `cabin_mask` / `cabin_ids` — the

@@ -20,12 +20,12 @@
 // structure that has to agree with the device. Two records of the same
 // fact is one record too many.
 //
-// Ownership / concurrency: this SuperBlock is owned exclusively by the
-// single master server thread (src/server). Per rules.md #3
-// (thread-per-core, shared-nothing; cross-core communication uses explicit
-// message/queue interfaces), other cores never touch an instance directly.
-// That single-writer property is what lets every method below be a plain
-// non-atomic read or write.
+// Ownership / concurrency: one SuperBlock for the instance, which every core
+// writes - an anchor publish, a transaction-id carve - under the superblock
+// latch (`Expeditor`'s, `rules.md` §3). The methods below are plain
+// non-atomic reads and writes because every concurrent caller holds that
+// latch (null where one thread writes page 0), not because one thread owns
+// the object.
 //
 // Persistence: this file only does in-memory state plus encode/decode to
 // a raw kPageSize buffer (same field-wise memcpy, no reinterpret_cast,

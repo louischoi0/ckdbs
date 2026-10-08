@@ -2714,13 +2714,13 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // would make a client wait to be told something the catalog knew
         // at once.
         //
-        // What this buys is stated in `drop-table.md` DT8 rather than
+        // What this buys is stated in `drop-table.md` DT7 rather than
         // implied here: a reader **already positioned** in the relation
         // finishes its statement against a live schema instead of meeting
         // the post-park re-bind's clean error. It does not make the drop
-        // isolated - a read that starts after this grant takes no borrow
-        // and reads on under DT1, which is `ddl-transactional.md` §5a
-        // unchanged.
+        // isolated - a read refused its borrow reads on, safe because the
+        // pages are not freed while it runs (DT1's statement epoch), which
+        // is `ddl-transactional.md` §5a unchanged.
         if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
             held.has_value()) {
             return {ErrorReply(*held), false, 0, *held};

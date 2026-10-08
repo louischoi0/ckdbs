@@ -180,8 +180,12 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 //                  allocated
 //
 // On failure nothing is reported as structural, but pages *may* already
-// have been allocated (an allocation with no free-page path to undo it,
-// same as ChainInsert). They are never linked in, so nothing reaches them.
+// have been allocated, and none is freed here - a free needs BF-R4's replay
+// gate. The new leaf a failed promotion leaves is linked into the leaf
+// chain on a dividing split and reached by no descent; an append split's
+// new leaf, and any internal node the promotion created, are reached by
+// neither. A dropped relation's reclaim follows the leaf chain, so it frees
+// the first; the rest is a stated leak (`drop-table.md` DT1).
 StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
                                                 std::uint64_t id,
                                                 std::span<const std::byte> payload,

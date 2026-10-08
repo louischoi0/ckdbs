@@ -295,8 +295,9 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 - **A refused catalog report on a new page spends one reserved page.** The
   page is left allocated, empty and unlinked. The catalog range is pages
-  16..127, and nothing frees a page (`page.md` §5). This predates AZ-S1:
-  the page used to hold the row. **No owner.**
+  16..127, below the system floor `FreePage` refuses, and no reclaim walk
+  reaches an unlinked page (`page.md` §5, `drop-table.md` DT1). This
+  predates AZ-S1: the page used to hold the row. **No owner.**
 
 - **`PAGE_HANDOFF` is neither written nor read, and its record type
   stays.** Verified at AT-S9, 2026-09-24. Its reader was the receiving
@@ -793,8 +794,10 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   protocol). **What stays open is the
   direction, and it is a correction to AR0-5 §8 rather than a gap**: the
   ask is a non-blocking `TryAcquire`, so a reader arriving while a DDL holds
-  `X` is refused and reads on - sound by DT1, catalog MVCC and catalog-only
-  DDL, not by the lock (`read_borrow.hpp`; `workorder-at-m3-uniformity.md`
+  `X` is refused and reads on - sound by catalog MVCC, catalog-only DDL and,
+  for a drop, the statement epoch that holds its pages' reclaim until every
+  statement that could have bound the relation has ended (`drop-table.md`
+  DT1), not by the lock (`read_borrow.hpp`; `workorder-at-m3-uniformity.md`
   AT-7 item 10, AT-0 item 10).
 
 - **`CompileWhere` resolves an UPDATE's or DELETE's subquery relations
@@ -808,6 +811,64 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   argument at each site and changes a refusal for a shape that works today,
   so it is recorded rather than applied. Owner: `docs/spec/ddl-transactional.md`
   DT3c.
+
+## Page reclamation
+
+What BF (`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`)
+leaves, each verified on `worktree-drop-table-page-reclaim` at `f2de416c`. A
+dropped relation's pages are reclaimed (`drop-table.md` DT1); these are the
+pages and the cases it does not reach.
+
+- **Pages no root reaches stay leaked.** A reclaim frees what a tombstone's
+  roots reach, so these stay allocated for the life of the volume:
+  - a page left unlinked by a failed heap growth, btree split or var-heap
+    growth;
+  - a failed `CREATE INDEX`'s tree, which no anchor slot names;
+  - a failed or rolled-back `CREATE TABLE`'s pages, which no tombstone
+    names;
+  - a refused catalog report's page (WAL, above);
+  - a previous run's undo pages (UP4, `txn.md` §4.1);
+  - a dropped assertion's Bound Cabin chain;
+  - Waystone pages.
+- **At `cores > 1`, a reclaim waits for every core's first checkpoint.**
+  The durable redo start does not move until every core has published, so
+  with `checkpoint_interval_ms = 0` nothing a mount found is freed until a
+  clean shutdown's checkpoints. This is BF-R4's stated cost, and BF-S1's
+  premise cell is what showed the arm is needed.
+- **A crash forgets the free list.** After a crash the allocation floor
+  hides the run's freed ids below it for the next run; a clean restart
+  finds them again. The undo log's recycle list states the same loss.
+- **A drop committed during a run is freed at the next checkpoints, not at
+  once.** Its gate is the durable redo start past its commit, which takes
+  a checkpoint that finds the dropped relation's dirty frames written back
+  - about two cadence intervals.
+- **A refused reclaim stays pending.** A reclaim refused - a page reached
+  twice by the walk, an unreadable page, a failed free or map sync - leaves
+  the tombstone owing for the rest of the run. It is driven again at the
+  next mount, and each refusal is counted `reclaim_refused`. The equal-sort-keys index bug
+  (`bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`),
+  if it ever makes two descents reach one child, lands here: a refusal,
+  never a page freed twice.
+- **`SHOW PAGE` of a reused id shows its new owner's bytes.** It reads any
+  page id a client names.
+- **BF-R10's per-page owner checks inside a descent, a chain walk and a
+  var-heap fetch are not built.** The check is made once per bind instead:
+  a relation's anchor and first page must still carry its oid. The
+  verifier also checks every remembered location. Neither is the
+  authority, which is the replay gate and the statement epoch.
+- **An orphan Cabin set lives until a restart.** A probe compiled before a
+  drop may bank a set of the dropped relation's locations after it; only a
+  stale memo naming that `cabin_id` can reach it, and the statement epoch
+  covers that.
+- **A tree freed in one pass would pass every cell.** On a volume of one
+  map region, a map flush writes the region's one page whole, so the
+  per-level syncs matter only to a tree spanning regions - past 65,280
+  pages - and no cell builds one.
+- **A root growth's anchor publish is logged after its split**
+  (`bugs/a-root-growths-anchor-publish-is-logged-after-its-split.md`).
+  Where that cut stands, a reclaim walks from the grown-over root: the
+  leaf chain reaches every leaf, and the new root and its right half's
+  internal nodes leak.
 
 ## Decisions the revision has not taken
 

@@ -136,7 +136,7 @@ decision elsewhere (`docs/spec/physical-optimizer.md` §6):
 |---|---|---|
 | `compact` | drop delete-marked tuples past the reader horizon, reclaim pages | **Gate 1 — reader horizon**: readers are registered per core (`docs/spec/txn.md` §4.1), but the horizon feeds only the undo purge and the catalog's delete-mark purge — no purge of a user relation's delete marks and no mover exist; a mover that guessed a horizon instead of consuming it would be partial recovery in different clothes |
 | `cluster` | co-locate a hot set on fewer pages | **Gate 2 — ordered-between**: it would break the between-pages ordering `kRange` tail pruning reads; the legal form is `[OPEN]`, to be chosen from shadow data |
-| `defrag` | rewrite a chain onto contiguous page ids | **Gate 3 — cross-relation page reuse**: a reallocated page can hold a colliding per-relation Keystone id at a recorded slot, and `PAGE_INIT` resets the epoch, so trail validation would pass wrongly |
+| `defrag` | rewrite a chain onto contiguous page ids | **Gate 3 — cross-relation page reuse**: a reallocated page can hold a colliding per-relation Keystone id at a recorded slot, and `PAGE_INIT` resets the epoch, so trail validation would pass wrongly. **Answered for a dropped relation's pages only** - the verifier checks a page's owner, so a reused page is a miss - and **still shut for a mover**, whose relation is live |
 
 The report is the deliverable: it turns "should a gate be opened" from
 taste into a number per relation on a live workload. First real-workload

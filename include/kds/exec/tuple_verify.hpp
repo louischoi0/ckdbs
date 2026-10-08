@@ -38,10 +38,10 @@
 // real comparison - landed *here*, once, so both callers got it at once,
 // which was the whole argument for this file existing. The recorded epoch
 // comes in from the caller's entry; the page's current epoch is read off
-// the fetched bytes; a mismatch is a miss like every other outcome. Until
-// a mover exists every comparison is between two zeros - the check is real
-// and its inputs are constant, which the hand-bumped-epoch contract tests
-// pin from both suites.
+// the fetched bytes; a mismatch is a miss like every other outcome. A btree
+// leaf division bumps its page's epoch (`btree.cpp`), so the check fires in
+// production on a renumbered slot; the hand-bumped-epoch contract tests pin
+// it from both suites.
 //
 // R4's pairing rule holds in both directions: the epoch never *accepts* a
 // location on its own (the Keystone-id check below still runs on an epoch

@@ -119,9 +119,10 @@ public:
     // design ceiling, OutOfSpace if the underlying store cannot reserve the
     // blocks.
     //
-    // Crash-safe ordering is the caller's (page.md section 14): the ALLOC
-    // WAL record goes first, then this, then first use. Extension is
-    // idempotent, which is what makes replay of that order safe.
+    // Crash-safe ordering is the caller's (page.md section 14): no record
+    // precedes an extension, and a crash between it and first use leaves
+    // pages the allocation floor re-absorbs at recovery. Extension is
+    // idempotent.
     virtual Status EnsureCapacity(std::uint32_t nr_pages) = 0;
 
     // Makes every previously written page - and the device's own size

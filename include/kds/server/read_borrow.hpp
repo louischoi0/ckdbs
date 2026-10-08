@@ -27,13 +27,15 @@
 // **A read borrow never refuses a read and never makes one wait.** Every
 // ask is a non-queueing `TryAcquire`; a refused ask leaves the reader
 // holding nothing on that relation and reading on. That is sound because
-// the reader needs no borrow to be correct: `drop-table.md` DT1 leaves a
-// dropped relation's pages allocated and its oid never reissued, every
-// catalog row is an MVCC version the reader's view filters, and no DDL
-// moves data (`alter.md`) - so a plan compiled while a DDL's `X` stood
-// reads a snapshot-consistent past, never a torn present. It is also what
-// keeps a reader out of the wait-for graph, which is why a DDL waiting for
-// one cannot be in a cycle through it (AO-S6e-b's section).
+// the reader needs no borrow to be correct: no page of a dropped relation
+// is freed while a statement that could have bound it still runs - the
+// statement epoch it published at its head (`drop-table.md` DT1, BF-R9) -
+// and the oid is never reissued (DT2); every catalog row is an MVCC version
+// the reader's view filters, and no DDL moves data (`alter.md`) - so a plan
+// compiled while a DDL's `X` stood reads a snapshot-consistent past, never a
+// torn present. It is also what keeps a reader out of the wait-for graph,
+// which is why a DDL waiting for one cannot be in a cycle through it
+// (AO-S6e-b's section).
 //
 // **So the defence the bind-time ask gives is one-directional, and it is
 // stated as such.** Once the `IS` is *granted*, no DDL can take the

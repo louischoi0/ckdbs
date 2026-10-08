@@ -1965,8 +1965,10 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                           PendingRoots* owed_out) {
     // Transactional only when a caller supplies an id (DT5). Without one
     // this is the path that always existed: retype, then **retire** the
-    // dependents outright, which no rollback can put back - and which is
-    // right for autocommit, where there is no rollback to serve.
+    // dependents outright, which no rollback can put back. No production
+    // drop takes it - autocommit runs in an implicit transaction and
+    // delete-marks like an explicit one - so only a bootstrap-id caller,
+    // which is a test, retires (BF-Q12 (a)).
     const bool transactional = trx_id != kBootstrapXid;
     auto note = [written](const CatalogRowChange& change) {
         if (written != nullptr) written->push_back(change);
@@ -3257,9 +3259,10 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
     //
     // The walk is the detector: a torn page fails its checksum on fault and
     // a broken chain fails the walk, and either answers the same way. The
-    // chain's growth pages are **not** reclaimed - nothing reclaims a page
-    // in this engine - so a discard leaks them, which is the cost stated
-    // rather than discovered.
+    // chain's growth pages are **not** reclaimed - no reclaim walk reaches
+    // a catalog relation's discarded chain (`drop-table.md` DT1's stated
+    // leaks) - so a discard leaks them, which is the cost stated rather
+    // than discovered.
     // **The walk is the detector, and it is the ordinary one**: a torn page
     // fails its checksum on fault and a broken link fails the traversal, so
     // `ChainVisit` answering non-OK *is* the damage report. Writing a second

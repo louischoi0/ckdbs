@@ -105,8 +105,8 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 // (workplan-ddl-transactional.md DT5): the catalog row is stamped with
 // the creating transaction and its address reported, so a rollback can
 // retire it. Defaulted to the autocommit path. A failure after the tree is
-// built leaks it, which is the bargain every allocation in this engine
-// strikes while there is no free-page path.
+// built leaks it: no anchor slot names the tree, so no reclaim walk reaches
+// it (`drop-table.md` DT1's stated leaks).
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt,
                                      std::uint64_t trx_id = catalog::kBootstrapXid,
@@ -116,9 +116,9 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
-// **Frees no page.** Nothing frees a page in this engine, so a dropped index
-// leaks its tree exactly as a dropped Cabin leaks its sets and a superseded
-// var-heap value leaks its bytes.
+// **Frees no page at its own commit** (BF-Q8 (b) declined): the anchor slot
+// still names the tree, which is reclaimed with its relation when that
+// relation is dropped (`drop-table.md` DT1).
 // As above, but a drop **delete-marks** its `sys.indexes` row rather than
 // retiring it when transactional, so a rollback clears the mark. Unlike
 // `DROP TABLE` this is isolated too - there is no in-place retype here
