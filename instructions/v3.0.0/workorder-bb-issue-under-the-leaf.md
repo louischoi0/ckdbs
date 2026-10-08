@@ -33,6 +33,10 @@ proposal and recorded at the stage that raised it. The close carries a
 constraint sharper than BB-Q7: no cost BB-R8 resolves is landed as a deferral
 (§6). BB cuts no tag.
 
+**Closed 2026-10-08** at BB-S5 on `worktree-bb-s5-close`
+(`raft-marks-2026-10-08.md` §2): on the measurement it has, with BA's rows
+rebased by BD-S6. BA is no longer paused (§6, "BB-S5 - the close").
+
 ## 0. What BB is
 
 **Defect A** (`docs/inflight/bugs/order-by-pk-is-elided-over-a-btree-leaf-two-cores-filled-out-of-order.md`):
@@ -1420,3 +1424,81 @@ far as it got, and defer the rest.
   (`workorder-ba-parallelism.md`, drafted and unreviewed, left out of this
   push), the close entry with what BB carries, `index.md`'s BB row and BA's
   resumption. BA stays paused until BB closes.
+
+### BB-S5 - the close, 2026-10-08
+
+Written on `worktree-bb-s5-close` from `65a28553`, on the operator's
+*"close entry 작성 진행"* (`raft-marks-2026-10-08.md` §2). BB closes on the
+measurement it has (BD-Q12 (b)). It does not rebase BA, because BD-S6 did.
+BB cuts no tag.
+
+- **A row per stage**:
+  - BB-S0: the order (`eeeff079`, review `e58c3b73`), opened `03530ccd`.
+  - BB-S1: the latch-order census, no inversion (`681fcd32`, review
+    `89424fd4`).
+  - BB-S2: defect A red first (`169072d7`, review `9e58dfd6`).
+  - BB-S3: the btree arms (`1b5d252e`, review `e242e242`).
+  - BB-S3b: `kUnordered` deleted (`be2bb128`, review `e675eede`).
+  - BB-S4: the heap arm (`36c44fe0`, review `b76261bb`).
+  - BB-S5: the measurement, pushed in part at `dbeb876c` and completed in
+    this entry.
+- **The measurement**
+  (`bench/v3.0.0/results-bb-s5-overhead-v2.7.0-640-gb76261bb.md`, A
+  `bddd450c` against B `b76261bb`):
+  - **`cores = 1`** (C1, C1s, C2, pinned): no cost of BB resolves.
+  - **`cores = 2` (pinned) and `cores = 8`** (C3, C4): no cost resolves in
+    any paired interval. C4 at `cores = 2` leans against B on its medians
+    (p50 61.5 -> 69.8 us) and is recorded as unresolved, not as a pass.
+  - **C5**, `ORDER BY <pk>` over a relation `kUnordered` at A: B is about
+    1% faster (-3.4 us on `LIMIT 100`, -186 us over 10,000 rows), with
+    identical replies. The arms load in opposite orders by construction, so
+    BB-R10's walk and the layout are not split.
+  - The `cores = 2` cells ran close to the driver's ceiling (busiest client
+    0.89-0.99 of a CPU), and C4 there is four relations, not eight. C4 at
+    `cores = 8` kept three runs taken during another worktree's build and
+    test run; without them nothing resolves either.
+  - The job finished C4's last four runs, C5 and the `cores = 2` cells
+    after `dbeb876c` was pushed. They are recorded here from the archive and
+    were not run again.
+  - **Not executed:** a wait breakdown for any cell.
+  - Under the close's constraint (§6, "BB started whole"), nothing resolved
+    a cost, so nothing is landed as a deferral. The C4 `cores = 2` lean goes
+    to BA's census, which takes the wait breakdown BB did not.
+- **What BB carries, as the engine stands after BD** (BD withdrew BB-R1,
+  BB-R2, BB-R3's below-mark refusal and BB-R12's `OutOfRange` arm on a
+  btree, and BB-R11 with superblock 20; `workorder-bd-sorted-leaf-named-keys.md`
+  header):
+  - **`kUnordered` is deleted** (BB-R10). No relation is ever out of key
+    order, and `DESCRIBE` carries no `key_order=`. The `sys.tables` byte is
+    written 0 and read by nothing since BB-R11's check went with superblock
+    20.
+  - **BB-R4's latch order**: user page, `sys.tables` chain page, lock-table
+    partition latch, WAL. It is declared in `page.md` §6, `txn.md` §5 and
+    `rules.md` §3, with AR2-R2 amended to its intent.
+  - **BB-R5**, as BD-R6 restates it. **BB-R6's sweep check**, as BD-R9
+    extends it.
+  - **The heap arm (BB-R7)**, untouched by BD (BD-Q4 (a)): a heap row's id
+    is fixed under the hold of the tail it lands on, the tail is held as the
+    tail, and the orphaned page is closed.
+  - **BB-S2's rig cells and seam** (`tests/issue_under_the_leaf_rig_test.cpp`),
+    reshaped by BD-S3 and kept.
+- **What bounds it**, open in `docs/inflight/`:
+  - `bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`
+    (BB-S1): two `UPDATE`s or `DELETE`s with subqueries on two cores can
+    hang both reactors. Not reproduced, not fixed.
+  - `known-gaps.md`, *"Two concurrent `CREATE ASSERTION`s can place
+    `sys.assertions` rows out of issue order"* (BB-R9, BB-Q5: system
+    relations out).
+- **Closed since the stage that recorded it**:
+  - `two-cores-growing-one-var-heap-chain-can-leak-a-page.md` (BB-S1's
+    review), fixed at `90edce34`.
+  - BB-S3b's older-volume gap: a volume an engine before `1b5d252e` wrote at
+    `cores > 1` no longer mounts (superblock 20, BD-S2 `62470f56`).
+- **Declined and still declined**:
+  - BB-S3b's review S1: deleting the clustered tree's middle divide.
+  - BB-S3b's review S2: the walk's resume mark as a slot number.
+  - BB-S4's review: folding `ChainInsert` into `ChainInsertNamed`, and
+    dropping `PlaceOnTail`'s second check.
+- **BA resumes**: its rows were rebased against BD at BD-S6
+  (`workorder-ba-parallelism.md`, "BA rebased on BD"). BA's next stage,
+  BA-S2, waits for its own word.

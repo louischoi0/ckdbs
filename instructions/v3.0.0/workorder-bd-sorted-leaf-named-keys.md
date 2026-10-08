@@ -59,7 +59,8 @@ On every relation, BB-R11's mount check goes with superblock 20 (BD-R8).
 **BB and BA.** BD is not part of AR0 §8's chain. BB is not closed: BB-S5's
 rebase of BA is drafted and unreviewed, and BA is paused until BB closes.
 By BD-Q12 (b), BB closes on the measurement it has, and BD-S6 rebases BA
-once, against BD (§5).
+once, against BD (§5). **BB closed 2026-10-08 and BA resumed**
+(`raft-marks-2026-10-08.md` §2).
 
 ## 0. What BD is
 

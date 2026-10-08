@@ -1,0 +1,204 @@
+{
+ "rows": 10000,
+ "run": 0,
+ "wait_s": 0.0,
+ "host_before": {
+  "loadavg": "0.88 1.28 1.59 1/284 1179128",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "0.97 1.29 1.59 2/295 1179141",
+  "competing": []
+ },
+ "probe_B_descending_reply": "ERR primary key 499 is below relation 4003's high-water mark 501; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order",
+ "same_reply_AB": {
+  "limit": true,
+  "full": true
+ },
+ "reply_bytes": {
+  "A": {
+   "limit": 760,
+   "full": 115196
+  },
+  "B": {
+   "limit": 760,
+   "full": 115196
+  }
+ },
+ "mount": {
+  "A": 5818.0,
+  "B": 5416.0
+ },
+ "arms": {
+  "A": {
+   "limit": {
+    "phase": "limit",
+    "detail": "",
+    "ops": 1200,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.316658,
+    "qps": 3789.6,
+    "mean_us": 263.5,
+    "p0_us": 252.0,
+    "p25_us": 258.2,
+    "p50_us": 261.4,
+    "p95_us": 274.8,
+    "p99_us": 298.0,
+    "max_us": 345.0
+   },
+   "limit-again": {
+    "phase": "limit-again",
+    "detail": "",
+    "ops": 1200,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.316214,
+    "qps": 3794.9,
+    "mean_us": 263.2,
+    "p0_us": 251.8,
+    "p25_us": 257.6,
+    "p50_us": 261.1,
+    "p95_us": 276.6,
+    "p99_us": 290.2,
+    "max_us": 321.0
+   },
+   "full": {
+    "phase": "full",
+    "detail": "",
+    "ops": 120,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 2.447038,
+    "qps": 49.0,
+    "mean_us": 20390.5,
+    "p0_us": 19771.8,
+    "p25_us": 19971.1,
+    "p50_us": 20059.5,
+    "p95_us": 21765.4,
+    "p99_us": 26266.9,
+    "max_us": 28588.9
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 1200,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.051838,
+    "qps": 23148.9,
+    "mean_us": 43.0,
+    "p0_us": 39.7,
+    "p25_us": 41.0,
+    "p50_us": 41.4,
+    "p95_us": 51.5,
+    "p99_us": 59.8,
+    "max_us": 70.1
+   }
+  },
+  "B": {
+   "limit": {
+    "phase": "limit",
+    "detail": "",
+    "ops": 1200,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.31277,
+    "qps": 3836.7,
+    "mean_us": 260.3,
+    "p0_us": 247.4,
+    "p25_us": 254.8,
+    "p50_us": 257.9,
+    "p95_us": 272.5,
+    "p99_us": 290.9,
+    "max_us": 545.2
+   },
+   "limit-again": {
+    "phase": "limit-again",
+    "detail": "",
+    "ops": 1200,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.312687,
+    "qps": 3837.7,
+    "mean_us": 260.2,
+    "p0_us": 249.2,
+    "p25_us": 254.8,
+    "p50_us": 258.1,
+    "p95_us": 273.4,
+    "p99_us": 291.0,
+    "max_us": 387.2
+   },
+   "full": {
+    "phase": "full",
+    "detail": "",
+    "ops": 120,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 2.405328,
+    "qps": 49.9,
+    "mean_us": 20042.9,
+    "p0_us": 19590.4,
+    "p25_us": 19792.3,
+    "p50_us": 19880.7,
+    "p95_us": 21410.3,
+    "p99_us": 21646.5,
+    "max_us": 21826.0
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 1200,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.051662,
+    "qps": 23228.1,
+    "mean_us": 42.9,
+    "p0_us": 40.0,
+    "p25_us": 40.9,
+    "p50_us": 41.2,
+    "p95_us": 51.1,
+    "p99_us": 58.9,
+    "max_us": 174.3
+   }
+  }
+ },
+ "engine": {
+  "A": {
+   "limit": {
+    "polls": 1212.0,
+    "us": 40011.0
+   },
+   "limit-again": {
+    "polls": 1212.0,
+    "us": 40353.0
+   },
+   "full": {
+    "polls": 132.0,
+    "us": 206352.0
+   },
+   "ping": {
+    "polls": 1212.0,
+    "us": 11163.0
+   }
+  },
+  "B": {
+   "limit": {
+    "polls": 1212.0,
+    "us": 36163.0
+   },
+   "limit-again": {
+    "polls": 1212.0,
+    "us": 36301.0
+   },
+   "full": {
+    "polls": 132.0,
+    "us": 182742.0
+   },
+   "ping": {
+    "polls": 1212.0,
+    "us": 11058.0
+   }
+  }
+ }
+}
