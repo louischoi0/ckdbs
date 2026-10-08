@@ -172,7 +172,7 @@ also count skips.
 
 ## The fix
 
-- **Not scheduled.** The checkpointer already has
+- **Not scheduled at `7e020891`.** The checkpointer already has
   `Start`/`Step`/`Complete`. Two candidates:
   - take one step per reactor turn instead of all of them, as
     `pages_per_step` intends;
@@ -183,6 +183,13 @@ also count skips.
   dirtied while the steps were spread out. Either candidate changes how
   long a run takes to reach its anchor, and that is the operator's
   decision.
+- **Ordered 2026-10-08, not opened:**
+  `instructions/v3.0.0/workorder-bi-checkpoint-off-the-reactor.md`. The
+  operator took the first candidate, one `Step` per task with a yield
+  between (BI-R1). Of the second, the operator took the syncs only: the
+  log gate's wait and the data-file sync go to a thread, with the task
+  parked (BI-R2). The page writes stay on the reactor, and the publish's
+  whole-store writeback is BI-Q5.
 
 ## Related
 
