@@ -384,7 +384,8 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
                 continue;
             }
             VerifiedTuple verified =
-                VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch);
+                VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch,
+                              access.value()->oid);
             if (verified.ok()) {
                 rebuilt.push_back(entry);
                 continue;

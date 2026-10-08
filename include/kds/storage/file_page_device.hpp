@@ -21,8 +21,8 @@
 //
 // Growth is extent-granular and sparse-friendly (page.md sections 5 and
 // 14): EnsureCapacity() rounds up to a whole extent and reserves real
-// blocks via posix_fallocate, so a later write cannot fail for lack of
-// space after the ALLOC record was already logged. The extent size is
+// blocks via posix_fallocate, so a later write to an allocated page cannot
+// fail for lack of space. The extent size is
 // still an open decision (page.md section 17), so it is a constructor
 // parameter with a documented proposed default rather than a baked-in
 // constant. Growth *batching* (growing several extents at once under

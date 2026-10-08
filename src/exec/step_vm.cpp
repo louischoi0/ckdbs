@@ -1,3 +1,4 @@
+#include "kds/storage/page_header.hpp"
 #include "kds/exec/step_vm.hpp"
 
 #include "kds/sched/coro.hpp"
@@ -303,8 +304,31 @@ private:
         for (const Step& step : steps) {
             auto access = catalog_.InitTableAccess(step.rel_oid);
             if (!access.ok()) return access.status();
+            if (Status s = StillOwned(*access.value()); !s.ok()) return s;
             bound_.push_back(Bound{access.value()});
             schemas_.push_back(&access.value()->schema);
+        }
+        return Status::OK();
+    }
+
+    // **BF-R10's walk check, once per bind**: the relation's anchor and its
+    // first page still carry its oid. A memo that outlived a drop's reclaim -
+    // a defect in BF-R8/R9's gate, which is the authority - meets a freed or
+    // reused page here, and the statement answers that the relation is gone
+    // rather than reading another relation's rows. Every walk and descent
+    // starts from these two pages. A system relation has no anchor and is
+    // never dropped.
+    Status StillOwned(const catalog::TableAccess& access) {
+        if (access.anchor_page_id == kInvalidPageId) return Status::OK();
+        for (const PageId page : {access.anchor_page_id, access.desc_page_id}) {
+            auto bytes = store_.GetForRead(page);
+            const bool owned =
+                bytes.ok() && storage::GetOwnerOid(bytes.value().bytes()) == access.oid;
+            if (!owned) {
+                return Status::NotFound("relation oid " + std::to_string(access.oid) +
+                                        " no longer exists: its page " + std::to_string(page) +
+                                        " was reclaimed");
+            }
         }
         return Status::OK();
     }
@@ -569,7 +593,8 @@ private:
                 // renumbers the slot and bumps the epoch (btree.hpp
                 // `Location`).
                 VerifiedTuple verified =
-                    VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_);
+                    VerifyTupleAt(store_, memo_page_, memo_slot_, key.value(), memo_epoch_,
+                                  access.oid);
                 if (verified.ok()) {
                     ++stats_.For(step.step_id).probe_memo_hits;
                     co_return AcceptTupleAt(steps, index, step, access, memo_page_,
@@ -658,7 +683,7 @@ private:
         // Verified against the derived `key`, not an entry pk - the
         // location carries none - which is rule 0's second hold.
         VerifiedTuple verified =
-            VerifyTupleAt(store_, at->page_id, at->slot, key, at->page_epoch);
+            VerifyTupleAt(store_, at->page_id, at->slot, key, at->page_epoch, access.oid);
         if (!verified.ok()) {
             ++step_stats.trail_misses;
             co_return Status::OK();
@@ -1166,7 +1191,8 @@ private:
         // a bucketed row shifts it - the statement's own writes are not the
         // only ones any more. `VerifyTupleAt` reads the slot's pk against
         // the entry's; a miss descends for the pk, as the Cabin serve does.
-        // A heap page never shifts and keeps the bare read.
+        // A heap page never shifts, so its miss has no pk to fall back on
+        // and is refused (BF-R10, below).
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
         PageId last_page = kInvalidPageId;
         for (const stats::CabinEntry& entry : bucket) {
@@ -1177,8 +1203,8 @@ private:
                 last_page = entry.page_id;
             }
             if (is_btree) {
-                VerifiedTuple verified =
-                    VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch);
+                VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk,
+                                                       entry.page_epoch, access.oid);
                 if (verified.ok()) {
                     if (Status s = AcceptTupleAt(steps, index, step, access, entry.page_id,
                                                  *verified.page, entry.slot);
@@ -1203,11 +1229,19 @@ private:
                 }
                 continue;
             }
-            auto bytes = store_.GetForRead(entry.page_id);
-            if (!bytes.ok()) co_return bytes.status();
-            heap::PageView page(bytes.value().bytes());
-            if (Status s =
-                    AcceptTupleAt(steps, index, step, access, entry.page_id, page, entry.slot);
+            // Through the verifier as the btree arm is (BF-R10): the location
+            // is this statement's own, from the walk that built the bucket, so
+            // a miss is not a stale hint to fall back from but a page that
+            // changed class or owner under the statement - refused.
+            VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk,
+                                                   entry.page_epoch, access.oid);
+            if (!verified.ok()) {
+                co_return Status::Corruption("inner build: page " + std::to_string(entry.page_id) +
+                                             " slot " + std::to_string(entry.slot) +
+                                             " no longer holds the row its walk bucketed");
+            }
+            if (Status s = AcceptTupleAt(steps, index, step, access, entry.page_id,
+                                         *verified.page, entry.slot);
                 !s.ok()) {
                 co_return s;
             }
@@ -1542,8 +1576,8 @@ private:
             if (entry.hint_valid()) {
                 NoteFetch();
                 ++step_stats.pages_fetched;
-                VerifiedTuple verified =
-                    VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch);
+                VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk,
+                                                       entry.page_epoch, access.oid);
                 if (verified.ok()) {
                     ++step_stats.cabin_hint_hits;
                     cabins_->NoteHint(key.cabin_id, /*ok=*/true);
@@ -1637,7 +1671,8 @@ private:
             if (stopped_) break;
             NoteFetch();
             ++step_stats.pages_fetched;
-            VerifiedTuple verified = VerifyTupleAt(store_, at.page_id, at.slot, at.pk, at.epoch);
+            VerifiedTuple verified =
+                VerifyTupleAt(store_, at.page_id, at.slot, at.pk, at.epoch, access.oid);
             if (verified.ok()) {
                 if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id,
                                              *verified.page, at.slot);

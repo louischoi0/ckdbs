@@ -371,8 +371,10 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     auto new_slot = PageAppend(Fixed(new_bytes), value);
     if (!new_slot.ok()) {
         // A value no empty page can hold. The allocated page is left
-        // unlinked rather than freed - the store has no free-page path yet
-        // - so nothing reaches it. Same choice heap_chain.cpp makes.
+        // unlinked rather than freed - a free needs BF-R4's replay gate -
+        // so nothing reaches it: no reclaim walk reaches an unlinked page,
+        // so it is a stated leak (`drop-table.md` DT1). Same choice
+        // heap_chain.cpp makes.
         return new_slot.status();
     }
 

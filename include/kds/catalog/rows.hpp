@@ -33,13 +33,21 @@ struct SysObjectRow {
     Oid oid;
     Oid namespace_oid;
     Oid type_oid;
-    Oid rel_id;
+    // **Two meanings, one word** (BF-R2, superblock 21). On a live row it is
+    // 0 - it was `rel_id`, written 0 for every table and read by nothing. On
+    // a `kTypeDroppedTable` tombstone it is what the drop still owes: the
+    // relation's anchor page and var-heap root, packed by `PackPendingRoots`
+    // and written by the drop's retype, so a rollback restores 0 with the
+    // rest of the row. A tombstone whose word is nonzero is a pending
+    // reclaim; the reclaim overwrites it to 0 once its frees are durable
+    // (BF-R7). Explicit shift and mask, never a bitfield (invariant 6).
+    std::uint64_t pending_roots;
     Name name;
 
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kTypeOidOffset = 16;
-    static constexpr std::size_t kRelIdOffset = 24;
+    static constexpr std::size_t kPendingRootsOffset = 24;
     static constexpr std::size_t kNameOffset = 32;
     static constexpr std::size_t kOnDiskSize = kNameOffset + kCatalogNameMax;
 
@@ -50,7 +58,23 @@ struct SysObjectRow {
 static_assert(offsetof(SysObjectRow, oid) == SysObjectRow::kOidOffset);
 static_assert(offsetof(SysObjectRow, namespace_oid) == SysObjectRow::kNamespaceOidOffset);
 static_assert(offsetof(SysObjectRow, type_oid) == SysObjectRow::kTypeOidOffset);
-static_assert(offsetof(SysObjectRow, rel_id) == SysObjectRow::kRelIdOffset);
+static_assert(offsetof(SysObjectRow, pending_roots) == SysObjectRow::kPendingRootsOffset);
+
+// The roots a tombstone owes (BF-R2): the anchor in the high half, the
+// var-heap root in the low. `kInvalidPageId` - no var-heap - is carried as
+// itself, and an anchor is never 0 (a user page sits at or above 128), so a
+// packed word is never the 0 that means "nothing owed".
+struct PendingRoots {
+    PageId anchor = kInvalidPageId;
+    PageId varheap = kInvalidPageId;
+};
+inline constexpr std::uint64_t PackPendingRoots(PendingRoots roots) noexcept {
+    return (static_cast<std::uint64_t>(roots.anchor) << 32) | roots.varheap;
+}
+inline constexpr PendingRoots UnpackPendingRoots(std::uint64_t word) noexcept {
+    return PendingRoots{static_cast<PageId>(word >> 32),
+                        static_cast<PageId>(word & 0xFFFF'FFFFull)};
+}
 static_assert(offsetof(SysObjectRow, name) == SysObjectRow::kNameOffset);
 
 // ---- sys.tables -----------------------------------------------------------
@@ -400,8 +424,9 @@ struct SysIndexRow {
     Oid table_oid;
 
     // The index tree's root (storage/index/index_tree.hpp). Allocated
-    // eagerly at CREATE INDEX and **never moved by growth** - a root split
-    // publishes a new root here through this row, which is why the id may
+    // eagerly at CREATE INDEX and **never moved by growth**: a root split
+    // publishes its new root in the relation's anchor slot for the index
+    // (`Catalog::UpdateIndexRoot`), not in this row, which is why the id may
     // live on a cached TableAccess at all (catalog_cache.hpp's rule).
     PageId root_page_id;
 

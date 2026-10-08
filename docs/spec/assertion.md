@@ -759,8 +759,11 @@ and the protocol is not built.
 
 ### 8.3 DROP
 
-`DROP ASSERTION` removes the catalog row, tears down the Bound Cabin
-(`ASSERT_DROP`), and unpins its pages. `DROP TABLE` on a relation with
+`DROP ASSERTION` removes the catalog row and tears down the Bound Cabin
+(`ASSERT_DROP`). It touches no page: the Bound Cabin chain stays allocated,
+and its frames resident, until a restart - a stated leak
+(`drop-table.md` DT1's list; a dropped relation's reclaim never frees a
+Bound Cabin page). `DROP TABLE` on a relation with
 assertions fails with `Restrict`.
 
 ---

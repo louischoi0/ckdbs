@@ -8,8 +8,21 @@ Written 2026-10-07 on `worktree-drop-table-page-reclaim` from `bc144dbf`
 - **W1:** *"BF-Q0..Q 제안대로 마킹해줘"* - mark BF-Q0..Q as proposed.
 
 **Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §22): BF-Q0..Q18
-are marked as proposed, so BF-R1..R13 are rulings and BF-S1 is the next
-stage. The order's writing is recorded at §21.
+are marked as proposed, so BF-R1..R13 are rulings. The order's writing is
+recorded at §21.
+
+**Run to its close on W2** (`raft-marks-2026-10-07.md` §25): *"go ahead dont
+stop until milestone, follow CLA proposal if decision needed"*. Each stage's
+row in §6 says where it stands. **BF-S1 is built:** the censuses, the
+premise, which held, and the red cells. **BF-S2 is built:** the free
+primitive, the free list and the map write barrier, with no caller yet. **BF-S3 is built:** the carrier, the
+gate, the walk and the mount-time reclaim. **BF-S4 is built:** the sim's drop op,
+its owner census, and the two-core rigs. **BF-S5 is built:** the statement
+epoch, the commit arms and the reclaimer's inbox, so a drop committed in
+the run is freed in the run, and BF-Q11 (a)'s second RESTRICT ask and the
+child's parent `IS`. **BF is closed (BF-S6, 2026-10-08)** with the text
+restated; its overhead measurement was waived by the operator and not
+executed.
 
 - BF-S0 moved no file under `src/`, `include/` or `tests/`, and no suite
   ran.
@@ -1317,3 +1330,864 @@ Five of the marks are on `[quiet-wrong]` surfaces - BF-Q1, BF-Q2, BF-Q9,
 BF-Q11 and BF-Q17 - where a wrong choice turns a refusal into a wrong
 answer. BF-S1 starts on its own word; nothing here starts it.
 
+
+### BF-S1 - the census, and red first - built 2026-10-07
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `df741e3c`
+  (`v2.7.0-669-gdf741e3c`), on the word of `raft-marks-2026-10-07.md` §25:
+  *"go ahead dont stop until milestone, follow CLA proposal if decision
+  needed"*. The suite at `df741e3c` was 3223 of 3223 before the stage.
+- **The cells** are `tests/drop_table_reclaim_test.cpp`. Each drives an
+  `Expeditor` without `Start()`, and every mount is `Expeditor::Open`.
+
+**The warm-up premise holds, so BF does not stop here.**
+`DropTableReclaimPremiseTest.AClearedBitRefusesTheNextMountUntilEveryCoreHasPublished`
+builds a volume whose log, from its anchor on, names a dropped relation's leaf
+by a record that is not its creation. It then mounts the volume, copies what a
+crash right after the completion checkpoint leaves, clears the leaf's bit in
+that copy's map page (the bytes edited and the checksum restamped, no store
+code touched), and mounts the copy. The `cores = 2` instance is an
+`Expeditor` opened at two cores and never started, not §3's `TwoCoreRig`
+(`file_rig_crash.hpp`): no peer reactor runs, so no peer can publish
+before the cut, and the mount is production's. Five runs, with no cadence
+checkpoint:
+- at `cores = 2` every second mount is refused, naming the leaf;
+- at `cores = 1` every second mount succeeds.
+
+BF-R4's `cores > 1` arm stands as written.
+
+**Red at `df741e3c`, each for the reason it names:**
+- `ADroppedRelationsPagesAreFreeAfterTheNextMount`: every page of the dropped
+  relation is still allocated after a clean restart.
+- `FiveCreateFillDropRoundsGrowTheVolumeByLessThanOneRound`: 55 pages after
+  round 1 and 223 after round 5, where one round's relation holds 40. The
+  other 8 are pages no relation owns - among them the undo pages a run leaves
+  behind (UP4) - which BF does not reclaim. Not counted page by page.
+- `ANewRelationLandsOnIdsADroppedRelationHeld`: no page of the new relation
+  lands on an id the dropped one held.
+- `TheVerifierMissesOnAnotherOwnersPage`: `VerifyTupleAt` answers `kOk` for a
+  location that names another owner's page.
+- `ReadTupleRefusesASlotThatLeavesThePage`: a slot at offset 8184 is read past
+  the page.
+
+**The suite on BF-S1's tree: 3225 of 3230.** The five failures are exactly
+these cells, and the one disabled cell is the existing
+`HeapSuspensionIsLifted`.
+
+**Green and kept green:** `ARolledBackDropLeavesTheRelationWholeAcrossARestart`.
+`sim_loop_test.cpp`'s two drop cells (`:490`, `:589`) are unchanged.
+
+**Census A - every page-creating path** (read at `df741e3c`):
+- Every logged path's first record that names the new page is a `PAGE_INIT`,
+  a `FULL_PAGE_IMAGE` or a `BTREE_SPLIT` image, and redo creates the page on
+  `NotFound` for all three (`redo.cpp:420-453`, `:538-559`). These paths are
+  the undo log, CREATE TABLE's three pages, catalog growth, every btree and
+  index split, the index build, var-heap growth and Bound Cabin growth. **No
+  logged path is red.**
+- The Bound Cabin path is logged, which corrects §1.2's "unlogged".
+- `LogCatPageInit` is right and `redo.cpp:443-447`'s comment is stale
+  (BF-S6).
+- **R1, red: `CreateNewHeaderless` from the cursor is not a never-written
+  id.** After a clean restart the cursor starts at 128 and finds the bits
+  BF cleared, and a headerless read skips both the all-zero test and the
+  checksum. A directory interior on a reused id would therefore follow the
+  dead image's bytes as child ids, and BF-R6's "cursor only" does not cover
+  it. **CLA's proposal, taken:** BF-R5's zero-write fallback, scoped to the
+  headerless create. When the claimed id's device bytes are not all zero,
+  zeros are written and synced before the headerless bit is set. It costs
+  one device read per directory-interior creation.
+- **R2:** the Waystone target page is unlogged and comes from `CreateNew`,
+  so it may pop the free list. That is benign: a reader checks the page type
+  and key, and the writer formats the page unconditionally
+  (`waystone_page.cpp:129-132`).
+- **A1, the neighbour of R1:** a never-written directory interior reads as
+  zeros, and zero is a page id - the superblock - where `kEmptyDirSlot` is
+  `0xFFFFFFFF`. That holds before BF, and R1's zero-write reaches the same
+  state. **CLA's proposal, taken in BF-S2:** the directory walk treats a
+  child id below the first user page as an empty slot.
+- **A2 - is there a window between the checkpoint's dirty-table snapshot and
+  its `CHECKPOINT_BEGIN` append?** Settled, no defect
+  (`checkpointer.cpp:147-183`).
+  - A core appends a record, stamps its page and checkpoints on one
+    thread, so none of its own records falls in its own window.
+  - A record `L` another core appends in that window, on a page the
+    snapshot saw clean, is bounded by that core: its latest checkpoint
+    either began before `L`, so its redo start is below `L`, or began after
+    `L`'s stamp, so its snapshot holds the page at a recLSN at or below `L`
+    or the page was written back after `L`.
+  - The publish folds the minimum over every core's latest redo start and
+    raises it to the highest anchor encoded before (BC-R1,
+    `superblock_checkpoint_anchor.cpp:94-99`). Each earlier anchor was
+    folded under the same bound, so the raise never lifts the anchor past
+    an `L` whose page still needs it.
+
+**Census B - who reaches a relation's pages without holding its `IS` to the
+end:**
+- **A tombstone a mount found is reached by no reader path**
+  (`expeditor.cpp:893`, `:913`; `catalog.cpp:1412`, `:2121`, `:2202`), as
+  BF-R8 argues.
+- **§1.9 item 2, settled: every resume passes `Revalidate` before it
+  re-binds.** `DispatchAndStage` begins with it (`command_dispatcher.cpp:780`),
+  and every entry and re-run reaches it. The executor cannot park
+  (`step_vm.cpp:166-175`). The one page id held across a park is a mid-walk
+  `UPDATE` or `DELETE` cursor, which its relation `IX` fences.
+- **For BF-R9:** one slot per core, published at `:780` and cleared when
+  `DispatchAndStage` returns, is enough.
+- **One red, for BF-R9 only: the KWP load endpoint**
+  (`kwp_load_server.cpp:312-318`, `:462`) reads outside `DispatchAndStage`.
+  It is safe while the reclaim runs on core 0's tick, because the load
+  server runs on core 0's reactor and both handlers are synchronous. **CLA's
+  proposal, taken in BF-S5:** both handlers publish the core's slot.
+- **An orphan Cabin set** banked by a probe compiled before the drop is
+  reachable only through a stale memo naming its `cabin_id`, which BF-R9
+  covers, and it lives until restart. BF-S6 states it.
+
+**Census C - every code premise resting on "nothing frees a page":**
+- About sixty sentences, each classified: false under BF, still true, or
+  already false at `df741e3c`.
+- The store's are restated in BF-S2. The ones whose code BF-S3 changes are
+  restated there, and the rest at BF-S6.
+- Already false before BF: the `ALLOC`-before-extend texts
+  (`file_page_device.cpp`, `page_device.hpp`, `memory_page_device.hpp`,
+  `payload.hpp:449-451`); `allocated_pages()`'s "printed by SHOW META"; the
+  `PersistMaps` durability claim; `command_dispatcher.cpp:2660`'s DT8;
+  `mount_recovery.hpp:236-239`'s "no owner index"; `btree.hpp:182-184` and
+  `index_tree.hpp:174-176`'s "never linked in"; `record.hpp:125-126`'s
+  "FREE records".
+
+**Census D - what an anchor names, and what a walk reaches:**
+- A committed `DROP INDEX`, a rolled-back `CREATE INDEX` and a rolled-back
+  `DROP INDEX` all leave the anchor slot naming a live tree. The slot is
+  never removed, and `ANCHOR_UPDATE` is redo-only.
+- A failed `CREATE INDEX` leaves no durable slot in any arm, so its tree is
+  §0's stated leak.
+- Every page class carries its type and an owner:
+  - the relation's oid on clustered, var-heap, anchor and heap pages;
+  - the index's oid on index pages, which come from another sequence, so
+    the class has to discriminate;
+  - 0 on everything else.
+- An internal node records its `level`, which is what "the class the parent
+  says" checks.
+- **Found:** a dividing leaf whose promotion fails is linked into the leaf
+  chain and reached by no descent (`btree.cpp:772-773` against `:792`;
+  `index_tree.cpp:454-455`). **CLA's proposal, taken:** BF-R3's walk also
+  follows the clustered leaf chain and the index leaves' right-sibling chain
+  from the leftmost leaf, into the same visited set and under the same owner
+  check, so those pages are reclaimed rather than leaked.
+- **Found, outside BF, and reproduced:** a root growth publishes the anchor
+  in an `ANCHOR_UPDATE` after its split record. A log cut between the two
+  leaves the anchor naming the grown-over root. Point lookups then miss every
+  committed row the split moved: 197 of 198 in a cell where the root leaf
+  divides, 680 of 1358 in one where an internal root divides. The repro is on
+  `worktree-agent-a6378d577b6230ab1` at `c4115721`, and the entry is
+  `docs/inflight/bugs/a-root-growths-anchor-publish-is-logged-after-its-split.md`.
+  For BF it is a leak, never a wrong free: from a grown-over root, the
+  descent misses the new root's right half, and the leaf-chain arm still
+  reaches every leaf.
+- The var-heap chain has no backward link, so BF-Q18 (c)'s tail-first free
+  collects the chain forward and frees it in reverse.
+
+**Decisions taken under §25, each CLA's proposal:**
+- **BF-Q14 (b).** BE has not started (BE-S1 is its next stage), so BF-S2
+  runs against the map-keyed frame table, and BE-R1's eraser list counts
+  BF-R5's discard when BE resumes.
+- R1's zero-write.
+- A1's empty-slot reading.
+- BF-R3's leaf-chain arm.
+- BF-R9's slot shape, and the load endpoint's publication.
+
+**Review** (`critics-developer`, one pass over the cells and this row):
+four defects, each fixed in the cells and each re-run.
+1. The "clean shutdown" was not clean. An `Expeditor` that is never started
+   runs no shutdown checkpoint, and a bare `Checkpoint()` keeps the redo
+   start at the oldest dirty page's recLSN. The next mount therefore replayed
+   the whole round, and its high-water repair lifted the floor over every
+   dropped page. `CleanShutdownCheckpoint` now syncs the store, then
+   checkpoints, as `CoreRuntime::ShutdownCheckpoint` does.
+2. The verifier cell could not have turned green correctly, because the
+   call carried no owner. `VerifyFor` now passes one: owner 77 must verify,
+   which is green today and stays green, and owner 88 must miss, which is
+   red today.
+3. The premise cell's refusal check matched any substring of the message.
+   It now matches redo's own `names page <leaf>,`.
+4. The `ReadTuple` cell now checks that the word it edits is the tuple's
+   offset before it relies on it.
+
+The review also corrected this row:
+- A2's argument now names BC-R1's floor and the gap between an append and
+  its stamp.
+- The rig the cells use is stated: an `Expeditor` opened at two cores and
+  never started, where §3's row named `TwoCoreRig`.
+- The 8 pages beyond the relation are no longer called undo pages without
+  a count.
+
+Three proposals were taken: the leak cell's rename, its missing direct
+includes, and switching `ClearMapBit` to BF-S2's `FreeMapRelease` (done at
+BF-S2). Two were declined:
+- the cells' helpers stay local rather than moving into a new shared
+  header, because `file_rig_crash.hpp` pulls in `two_core_rig.hpp`;
+- `AllocatedPages`' scan bound stays a margin over the allocated count,
+  because the store has no high-water accessor and BF does not add one for
+  a test.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S2 - the primitive and the allocator - built 2026-10-07
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `970feb5f`, run
+  against the map-keyed frame table under BF-Q14 (b) (§25).
+- **Nothing calls `FreePage` in production yet.** BF-S3 adds the reclaim.
+
+**Code:**
+- **The seam.** `PageStore::FreePage`, whose default refuses
+  `NotImplemented`, and `FreeOutcome {kFreed, kDeferred}`.
+- **`DevicePageStore::FreePage`.** One hold, frame table then map:
+  - It discards the frame, dirty or not, and poisons it in debug builds.
+  - It clears the bit (`FreeMapRelease`, new in the codec), decrements
+    `allocated_pages_`, marks the region dirty and lists the id.
+  - It defers on a pin, a page latch, a writeback claim, a fault in flight
+    (`loading_`) or a `CreateAt` in flight (`claiming_`).
+  - It refuses `Corruption` below `Open`'s `first_new_page_id`, for a map
+    id, for a headerless id and for a resident `kCabinBound` frame. An id
+    already free answers `NotFound`.
+- **The free list** (BF-R6). It is an ordered set under the map latch,
+  popped lowest first by `CreateNew` ahead of the cursor, under both holds,
+  and the pop skips an id that is resident or has a fault in flight.
+  - `CreateAt` takes a listed id off the list.
+  - The cursor passes over a listed id. This was the review's B2: every id
+    a clean mount's reclaim frees lies above that mount's cursor.
+  - `CreateNewHeaderless` never pops. Since the review's B1, it marks its
+    id headerless before any frame exists.
+  - On a claimed id whose device bytes are not all zero, it writes and
+    syncs zeros first. This is R1's zero-write: after a clean restart the
+    cursor does find the bits BF cleared.
+- **`InsertFrame` refuses a create that finds a frame already resident**,
+  with `Corruption`. It is defence, and its return type became `StatusOr`.
+- **The map write barrier.** `map_flush_latch_` is held across
+  `FlushMaps`' copy and write, outer to the map latch and null unarmed.
+  `PersistMaps` is the map sync, and its comment now says so.
+- **`EvictClean` is deleted.** Its callers moved:
+  - `am_s2_pin_protocol_test`'s rounds now use the sweep, and count a page
+    still resident afterwards as the failure;
+  - the two eviction cells reopen a store over the same device;
+  - the two refusal cells became `FreePage` deferral cells.
+- **A1:** the Waystone directory walk reads a child id of 0 as an empty
+  slot (`waystone_dir.cpp`'s `LoadChild`).
+- **Census C's store sentences are restated:** `page_store.hpp`'s floor
+  cost, `high_water.hpp`'s, the hit path's "never cleared", `CreateNew`'s
+  "clear one instruction ago", `WriteBack`'s dirty-frame premise,
+  `CreatePinned`'s, `FlushPages`' and `Flush`'s ordering notes,
+  `FlushMaps`' "the rest write nothing", the eraser lists, and
+  `free_map.hpp`'s unbuilt `ALLOC`/`FREE`.
+- BF-S1's `ClearMapBit` now uses `FreeMapRelease`.
+- **Two test seams:** `SetAfterFaultPublishedForTest` and
+  `SetAfterMapCopyForTest`.
+
+**Cells** (`tests/page_free_test.cpp`, 11):
+- a freed id has no frame, and its next create returns a zeroed page;
+- a dirty frame is discarded and never written back;
+- a pinned, latched or writeback-claimed frame defers the free and changes
+  nothing;
+- a fault in flight defers it;
+- the four refusals, and `NotFound` for a second free;
+- the list is asked ahead of the cursor;
+- the cursor passes over a listed id above it;
+- a headerless create never takes a listed id, and after a restart zeroes
+  the dead image it lands on;
+- a pop skips an id whose fault is parked between its `loading_` publish
+  and its read;
+- a `PersistMaps` returns only after another thread's parked `FlushMaps`
+  copy is written;
+- a directory slot reading zero is empty.
+
+**Suite:** 3235 of 3240, plain, and 3235 of 3240 with
+`KDS_TEST_PAGE_LATCH=1`. In both, the five failures are exactly BF-S1's red
+cells, which BF-S3 turns green. The armed run also skips its three usual
+cells.
+
+**Mutations**, each built and run five times against `PageFreeTest`, plain:
+
+| mutation | killed by |
+|---|---|
+| the frame left resident | the freed-id cell, the dirty-discard cell, the list cell |
+| a pinned frame erased | the held-frame cell (plain; under the latch census the latch's own deferral covers it, so it runs plain) |
+| the list skipped | the freed-id cell, the pop cell |
+| the headerless refusal dropped | the refusal cell |
+| `CreateNewHeaderless` allowed to pop | the headerless cell, the cursor cell |
+| `FreePage`'s in-flight deferral dropped | the fault-in-flight cell |
+| the cursor takes a listed id | the cursor cell |
+| the pop's `loading_` skip dropped | the pop cell |
+| the map write barrier removed | the `PersistMaps` cell |
+| the headerless zero-write dropped | the headerless cell |
+| a zero directory slot read as page 0 | the directory cell |
+
+All eleven are killed. The first hung rather than failed, because its fault
+seam never fired. The cells' waits are now bounded at ten seconds
+(`SpinUntil`), so a seam that never fires fails its cell, and all eleven
+cells pass five runs over with the bound in place.
+
+**Review** (`critics-developer`, one pass):
+- **B1, fixed by the review.** The headerless create inserted its frame
+  before setting the headerless bit, so a writeback in the gap stamped a
+  checksum over child 1. The gap predates BF; R1's zero-write had widened
+  it to a device read, a write and an fsync. The id is now marked
+  headerless before the insert (`MarkHeaderlessBeforeInsert`).
+- **B2, taken as CLA proposed under §25:** the cursor skips listed ids, and
+  the list became an ordered set.
+- **B3, noted:** between a claim and its insert, `FreePage` could free a
+  just-claimed id. Only a reclaim's precondition rules that out - BF-R3
+  reaches only a dropped relation's checked pages - and BF-S3 keeps it so.
+- **Cell gaps, closed:** the deferral on a fault in flight, and the
+  cursor's listed-id skip.
+- **Also from the review:** text fixes (`PopFreeListLocked`'s doc,
+  `EnsureHeaderlessMap`'s caller, two `EvictClean` mentions) and the
+  cell's rename.
+- **Declined:** none.
+- **Noted as cost:** a zero-write holds the parent directory page's latch
+  across an fsync, on a reused id only.
+- **Left to BF-S6:** `allocated_pages()`'s "printed by SHOW META" (true
+  from BF-S3), and `catalog.cpp:1226` and `eviction.md:114`, which still
+  name `EvictClean`.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S3 - the carrier and the mount-time reclaim - built 2026-10-07
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `805e6c9a`.
+
+**Code:**
+- **The carrier (BF-R2, BF-Q4).**
+  - `SysObjectRow::rel_id` is renamed `pending_roots`, at the same offset.
+    `PackPendingRoots` and `UnpackPendingRoots` pack the anchor into the
+    high half and the var-heap root into the low half by shift and mask.
+  - `Catalog::DropTable` reads the relation's `sys.tables` row before it
+    writes anything, and its retype stores the packed roots. A rollback
+    therefore restores 0 with the rest of the row.
+  - `Catalog::PendingReclaims` lists every tombstone whose word is nonzero.
+  - `Catalog::ClearPendingRoots` overwrites the word to 0, logged with
+    `kNoTxnId` and keeping the row's stamp, and moves no schema word.
+  - `sys.objects`' view keeps the column name `rel_id`. A live table, the
+    only kind it lists, reads 0 there.
+  - **Superblock 21**, with its version-list entry; 20 is refused.
+- **The reclaim (BF-R3, R4, R7, R8),** `server/page_reclaim.{hpp,cpp}`.
+  - `PageReclaimer::CollectAtMount(gate)` queues the pending tombstones.
+  - `Step(D)` does nothing for a job until `D` reaches the job's gate.
+    Then it walks the job, at most `kReclaimBatchPages` (64) page reads a
+    step:
+    - the anchor;
+    - the clustered tree by descent, plus its leaf chain, which reaches a
+      leaf a failed promotion left (BF-S1's Census D);
+    - every tree an anchor slot names (`AnchorIndexSlots`, new), plus its
+      right-sibling chain;
+    - a pre-SUS-1 heap chain;
+    - the var-heap chain.
+  - **Every page is checked** for the class its parent names, its level
+    included, and for its owner, which is the slot's index oid on an index
+    page. A page that fails the check is counted `reclaim_skipped` and is
+    neither freed nor descended through. A page already free is passed
+    over. A page a descent reaches twice refuses the job.
+  - **The plan frees children before parents:** every tree's leaves, then
+    each internal level in turn, with a `PersistMaps` after each level;
+    each chain tail-first, one sync a page (BF-Q18 (c)); the anchor last,
+    then a sync.
+  - Only then is the tombstone's word cleared. A deferred free ends the
+    step, and the next step asks again.
+  - A refused job is logged, counted `reclaim_refused` and left pending
+    for the next mount.
+  - A fault the pool refuses (`ResourceExhausted`) defers the walk to the
+    next step.
+  - A reused anchor reads as a completed reclaim, because the anchor is
+    freed after every other page.
+- **The gate for a tombstone a mount found pending** is the log's append
+  point once recovery returns. Every record that names the relation's
+  pages lies below it, and at `cores = 1` the completion checkpoint's redo
+  start reaches it.
+- **Expeditor.**
+  - It collects after the completion checkpoint and before any listener
+    binds.
+  - `ReclaimStep()` runs on core 0's `system` tick every 50 ms (BF-Q16
+    (a)), as one predicate and a return when nothing is owed.
+  - `D` is the checkpoint anchor's durable redo start.
+- **`SHOW META` (BF-R11)** prints `pages_allocated`, `pages_freed` and
+  `pages_reused` from a new `PageStore::allocation_counters()`, and, on
+  every core of an assembled instance, `reclaim_pending`,
+  `reclaim_deferred`, `reclaim_skipped` and `reclaim_refused`.
+  `reclaim_refused` is the fourth counter, beside BF-R11's three: a refused
+  walk stays pending (BF-S6's known-gaps line), and the count is how an
+  operator sees one.
+- **BF-R10.**
+  - A statement's bind checks that each relation's anchor and first page
+    still carry its oid (`StillOwned`, once per bind).
+  - `VerifyTupleAt` takes the expected relation's oid. It answers the new
+    miss `kNotThisRelation` unless the page is `kHeap` or `kBtreeLeaf`
+    carrying that oid. Every caller passes it: the probe memo, Waystone
+    replay, the inner build's btree and heap arms, the Cabin serve's two
+    phases, the reverse foreign-key Cabin path, and the optimizer's heal.
+  - The heap inner-build arm now goes through the verifier and refuses
+    `Corruption` on a miss: its location is this statement's own.
+  - `ReadTuple` refuses `Corruption` for a slot whose offset and length
+    leave the page, or whose payload is longer than its tuple.
+- **The texts this stage's code changed** are restated:
+  - `tuple_verify.hpp` and `trail_replay.hpp`'s "nothing can";
+  - `catalog.hpp`'s "Pages are NOT reclaimed";
+  - the drop's log line, now "its pages are reclaimed at the next mount".
+
+**Cells** (`tests/drop_table_reclaim_test.cpp`):
+- **BF-S1's five red cells are green.** `Settle` drives the reclaim tick,
+  where BF-S1 left a stated no-op. In the leak cell, five rounds now grow
+  the volume by less than one round's relation.
+- **The gate at `cores = 2`:** 32 steps after a two-core mount free
+  nothing, and a crash in the wait mounts.
+- **Cut anywhere:**
+  - A relation of two levels, with a var-heap chain and an index, is
+    dropped beside a live relation.
+  - Every point a crash can cut the reclaim is taken as a crash image:
+    after each free, after each sync, and on each side of the clear.
+  - Each image is mounted, and its mount finishes the reclaim: every page
+    of the ledger is free, the live relation is whole, nothing is refused,
+    and the index's pages are freed too.
+  - The cell runs twice. The second pass also flushes the map at every
+    free, as another core's checkpoint would.
+- **Reuse before the clear:** the freed ids go to a new relation before
+  the clear, and the crash comes after. The re-drive frees none of that
+  relation's pages, and its rows are whole.
+- **A relaxed drop crashed before its commit is durable** is a loser: its
+  word is restored, nothing is owed, and the relation is whole. The cell
+  asserts that recovery found the loser.
+- **A heap relation's chain** is walked from its anchor and freed (BF-Q8
+  (a): one cell, no crash matrix).
+- **`StillOwned`** has no cell that reaches it here: no statement of a
+  mount's run can reach a mount-found tombstone. BF-S5's in-run cells are
+  its killers.
+
+**Suite:** 3245 of 3245, plain, and 3245 of 3245 with
+`KDS_TEST_PAGE_LATCH=1`, which skips its usual three cells. BF-S1's five red
+cells are green. The waystone, index, cabin and inner-build contract suites
+are among the 3245, unchanged and passing.
+
+**Mutations**, each built and run three times against BF's cells:
+
+| mutation | killed by |
+|---|---|
+| the gate removed | the `cores = 2` gate cell |
+| the owner check removed (anchor, tree and chain) | the reuse-before-the-clear cell |
+| the tombstone cleared before the anchor's sync | the cut cell, at "after the clear" |
+| a chain freed head-first, a sync a page | the cut cell |
+| a chain freed head-first, one sync at its end | the cut cell's map-flushed pass |
+| the verifier's owner check removed | BF-S1's verifier cell |
+| `ReadTuple`'s bound removed | BF-S1's `ReadTuple` cell |
+| the bind's root check removed | **survives here**, as stated: no statement of a mount's run reaches a mount-found tombstone; BF-S5's in-run cells are its killers |
+
+**Not expressed as a mutation:**
+- **"The free run inside the drop".** Nothing in the drop frees, so there
+  is no line to move. The guards that would catch such a free are
+  `ARolledBackDropLeavesTheRelationWholeAcrossARestart` and the
+  relaxed-drop cell, because a drop that freed its own pages would leave a
+  rollback or a loser over freed pages.
+- **"A tree freed in one pass"** would survive every cell here, and the
+  reason is stated rather than hidden. On a volume of one map region, a map
+  flush writes the region's one page whole, and the plan frees children
+  before parents, so every flush lands a prefix of the plan. The per-level
+  syncs matter where a tree spans regions - a volume past 65,280 pages -
+  and no cell builds one.
+
+**Review:** (`critics-developer`, one pass).
+**Correctness:** sound. The gate, the walk - index oids
+discriminated by class, a missing var-heap, a re-drive's freed and reused
+pages, a reused anchor read as done - and the clear's stamp were each
+checked against the code.
+**Fixed by the review:**
+- a data race: `allocation_counters()` read `allocated_pages_` with no
+  latch, and `SHOW META` runs on any core; it is now read with the other two
+  under one map hold;
+- six comments the diff made false.
+
+**Taken as CLA proposed under §25:**
+- **BF-R10's walk check** is one root check per bind (`StillOwned` in the
+  step VM's `Bind`). The relation's anchor and its first page must still
+  carry its oid; otherwise the statement answers `NotFound`, "its page …
+  was reclaimed", rather than reading another relation's rows. That is
+  where every descent and walk starts. A per-page owner check inside the
+  btree descent, the chain walks and the var-heap fetch is **not built**:
+  each would take the relation's oid through an interface that does not
+  carry it today. Those reads are reached only from a bind this check has
+  passed, and from the verifier, which checks the owner itself.
+- **A refused fault** (`ResourceExhausted`, BE-R4) defers the walk, as
+  BF-R3 says, instead of refusing the job.
+- **The cut cell runs twice**, the second pass flushing the map at every
+  free, so a chain freed head-first with one sync at its end is caught.
+- **The reuse cell asserts `reclaim_skipped > 0`**, so the owner check is
+  exercised whatever ids the allocator hands out.
+- **The relaxed-drop cell** is rewritten to log the drop before its
+  unflushed relaxed commit, and asserts the loser it recovers. As first
+  written it never put the drop in the log, and so tested nothing.
+- The `by_link` test is kept in one place, and the heap root no longer
+  recurses.
+
+**Declined:**
+- dropping the `kClear` and `kRefused` phases and making `Step` return
+  `void`: a refused job stays in `jobs()` so a later step can read its
+  state, and `Step`'s status is what BF-S5's inbox drain returns through;
+- moving `ReclaimCounters` to a header of its own, which buys nothing at
+  four counters;
+- ending a step after each chain sync to spare core 0 the fsyncs. A chain
+  page costs a sync by BF-Q18 (c), and the batch bound already caps a step
+  at 64 of them.
+
+**Recorded rather than fixed:**
+- the cell gaps BF-R12 names that later stages own: a crash at `cores = 2`
+  once the gate has passed (BF-S4's two-core serving cell), a parked
+  `FlushMaps` (BF-S2's barrier cell is the mechanism's), and the Waystone
+  directory (BF-S2's zero-write and zero-slot cells);
+- the equal-sort-keys index bug, should it make two descents reach one
+  child, would refuse the reclaim - never free twice - which BF-S6's
+  known-gaps entry says;
+- `reclaim_refused` is the fourth reclaim counter beside BF-R11's three.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S4 - the sim and the rigs - built 2026-10-08
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `f41ac53d`.
+
+**The sim (BF-R12):**
+- **A `drop-table` op.** It runs inside a transaction (3% of its ops) and
+  out of one (2% of the stream). It is drawn from a stream of its own
+  (`drop_rng_`), so every other op of a seed is the op it always drew. It
+  never drops the last live relation and takes at most two relations an
+  iteration. A committed drop's name is never created again; a fresh name
+  takes its place, so the next mount's reclaim has pages a later creation
+  reuses.
+- **The oracle forgets a relation at its committed drop.** An autocommit
+  drop and a transaction's `COMMIT` both remove it from the checked set,
+  and the oracle remembers what the relation held. A rollback keeps it. A
+  drop answered with an error is unknown either way.
+- **Reconciling a dropped relation.** It stays gone on a clean stop, and
+  in every mode once a `SYNC` followed it. Without that `SYNC`, a crash may
+  bring it back, because a drop is acknowledged before it is durable; then
+  it holds rows it held, or rows the oracle has as unknown.
+- **One anchor object per boot**, so `D` behaves as production's
+  (`sim/instance.cpp`).
+- **The mount's reclaim** is collected after the completion checkpoint and
+  stepped once after every op, as core 0's tick runs it. A seed's crash can
+  therefore land in the middle of a reclaim, and a creation can reuse a
+  freed id before the clear. A reboot settles it before the harness reads.
+- **The census** (`ReconcileDrops`):
+  - **The ledger.** Every committed drop is ledgered at its commit with
+    every page its roots reach and that page's owner, using the reclaim's
+    own walk, run read-only (`PageReclaimer::ReachFrom`).
+  - **An owner scan, independent of that walk.** After the reboot's
+    reclaim, no allocated page may still carry a reclaimed relation's oid,
+    or one of its indexes', unless a crash undid the drop. A ledgered page
+    fails in every mode. An unledgered one fails a fault-free run, and is
+    counted `census_leaks` under faults, where a failed growth or split may
+    leave it.
+  - **Nothing is left pending,** and nothing is refused.
+  - **Live relations.** Every live relation's walk skips no page - a
+    `NotFound` link included - and no page is reached from two of them.
+
+**What the sim found, and what was fixed:**
+- **The gate was the wrong LSN.** It had been the log's append point after
+  recovery's undo. A loser's compensations stamp pages, and their recLSNs
+  hold the completion checkpoint's redo start below that point, so the
+  reclaim waited for a checkpoint that a mount runs only on its cadence: 15
+  of 190 sim runs ended still owing pages. BF-R4 names the right bound, the
+  end of the recovery scan (`MountRecovery::scan_end`), and that is the gate
+  now. No compensation names a dropped relation's page, because the drop's
+  `X` waited out every writer of the relation.
+- **A create that fails after its claim kept its bit.** An injected growth
+  refusal after the cursor's claim left an id allocated with no page ever
+  written there, which reads "allocated but never written" for good.
+  `ReleaseClaim` now clears the bit and restores the count. It puts a
+  popped id back on the list, steps the cursor back if nothing claimed
+  after it, and otherwise lists the id. The order predates BF; the sim's
+  new drop stream reached it. Its cell is
+  `ACreateThatFailsAfterItsClaimGivesTheClaimBack`.
+- `sim_loop_test`'s pinned `ops_run` for one deterministic case moved from
+  114 to 115: one drop op in that seed's stream.
+
+**The rigs:**
+- **A free on one thread against creations on another** (`page_free_test`):
+  400 frees racing 400 creations. Every created id is unique and live,
+  every free lands, and the allocated count closes.
+- **A two-core mount's reclaim while serving**
+  (`DropTableReclaimServingTest`):
+  - A started instance at `cores = 2`, with a 100 ms cadence, takes
+    writes through its text port until the tombstone it found is freed -
+    once every core has checkpointed.
+  - Every page of the dropped relation is free after the stop, and every
+    row written is there.
+- **A miss parked between its `loading_` publish and its read, while its
+  id is freed and popped**, is BF-S2's cell.
+
+**`scripts/sim.sh`:** 190 runs, 0 failures.
+
+**BF-S3's mutations, killed from the sim or a rig:**
+
+Each was run against the sim (114 runs) and the two rigs: **all seven
+survive BF-S4**, and each is killed by a BF-S3 cell instead. The sim's
+crashes land at op boundaries, so no seed crashes inside a reclaim's
+windows, and no statement in the sim races a bind against a free.
+
+| mutation | why the sim and the rigs cannot kill it | killed by |
+|---|---|---|
+| the gate removed | a mount's reclaim runs after the completion checkpoint, and no replay or compensation names a dropped relation's page, because the drop's `X` waited out its writers | the `cores = 2` gate cell |
+| the owner check removed | no seed crashes after a freed id is reused and before the clear, so no re-drive meets another relation's page | the reuse-before-the-clear cell |
+| the tombstone cleared before the anchor's sync | no seed crashes between the clear and the sync | the cut cell, at "after the clear" |
+| a chain freed head-first | no seed crashes inside a chain's free run, and a one-region map flush writes the whole region | the cut cell and its map-flushed pass |
+| the verifier's owner check removed | the sim never verifies a page that another relation reuses | BF-S1's verifier cell |
+| `ReadTuple`'s bound removed | no page in the sim holds a slot that leaves the page | BF-S1's `ReadTuple` cell |
+| the bind's root check removed | no statement of a mount's run reaches a tombstone that the mount found | BF-S5's in-run cells |
+
+**Review:** (`critics-developer`, one pass).
+**Fixed by the review:**
+- **B1:** a transaction's drop oids outlived a transaction the loop rolled
+  back - a poisoned statement, or an errored `COMMIT`/`ROLLBACK` - so a
+  later `COMMIT` ledgered a drop that never happened.
+- **B2:** an errored `COMMIT` kept its drops as live relations, though it
+  may have committed. They are now indeterminate drops, and the oracle's
+  three copies of the forgetting share one `Forget()`.
+- **B3:** the census walk passed over a page that read `NotFound` - right
+  for a re-drive, wrong for a census, which exists to find a live relation
+  linking to a freed page. A census walk counts it now, and a walk the pool
+  refused returns `ResourceExhausted` instead of a partial result.
+
+**Taken as CLA proposed under §25:**
+- **The census checks itself independently.** Its ledger came from the
+  reclaim's own walk, so a walk that missed a tree would have missed it in
+  both. An owner scan of every allocated page now fails a fault-free run on
+  any page still carrying a reclaimed relation's oid or one of its index
+  oids that the ledger does not hold. Under faults such a page is a failed
+  growth's or split's, and is counted `census_leaks`.
+- **The sim steps the reclaim between ops**, as core 0's tick does,
+  instead of running it to the end inside the boot. A seed's crash can land
+  in the middle of a reclaim, and a creation can take a freed id before
+  the clear. The reboot after a crash still settles the reclaim before
+  anything is read.
+- `ReleaseClaim` lists an id the cursor has already passed.
+- The workload's one live-index helper, and `ReclaimCounters::Reset`.
+
+**Declined:**
+- holding a returned relation to its synced rows: only "rows it held" is
+  checked, and the synced subset is a stronger claim than BF owes;
+- returning (page, owner) pairs from `ReachFrom`: the ledger's second read
+  costs a census, not a statement.
+
+**Recorded rather than fixed:** a reclaim treats an allocated page that
+was never written (`NotFound`) as already free, so its bit stays set - a
+leak, not a wrong free. Such a page has no owner to check, and it is one of
+DT1's stated leaks.
+
+**Noted:**
+- the oracle's "acknowledged before durable" is conservative for the
+  sim's `kGroup`, whose DDL may already wait for durability. The lenient
+  arm then goes unused, and costs nothing.
+- **What the sim could not kill of BF-S3's mutations** is in the table
+  above, with its reason. Those mutations' killers are BF-S3's crash and
+  defence cells.
+
+**Suite:** 3248 of 3248, plain, and 3248 of 3248 with `KDS_TEST_PAGE_LATCH=1`.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+
+### BF-S5 - reclaim within the run - built 2026-10-08
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `535313c0`, opened
+  by BF-Q1 (b) and BF-Q9 (b) (§22).
+
+**Code:**
+- **The statement epoch** (`server/statement_epoch.hpp`, BF-R9). There is
+  one slot per core, a cache line each, owned by `Expeditor` and handed to
+  every core's dispatcher.
+  - `DispatchAndStage` opens a `StatementEpochScope`. It stores
+    `kEntering` and issues a `seq_cst` fence, then revalidates the
+    catalog, then publishes the word the cache was revalidated at. The slot
+    goes idle when the statement returns.
+  - Only the outermost of nested heads publishes.
+  - The KWP load endpoint's two handlers, which bind outside
+    `DispatchAndStage`, take a scope each (BF-S1's Census B). They now also
+    revalidate, which they did not before.
+  - The Cabin optimizer's tick takes no slot. It runs on core 0's reactor,
+    the same one the reclaim's tick runs on, so the two cannot interleave
+    (BF-Q16 (a), Census B's fourth unsettled item).
+- **The commit arms.** A drop records what it owes once its catalog write
+  succeeds: its oid and roots, keyed by its transaction.
+  - `EndDdlScopeById` queues the drop with the reclaimer at its
+    transaction's commit, at the commit LSN EndWrite or `COMMIT`
+    acknowledged.
+  - The word is read after the commit's move.
+  - It forgets the drop at any other ending.
+  - `Catalog::DropTable` hands back the roots it wrote through a
+    `PendingRoots* owed` out-parameter, so the dispatcher does not scan
+    `PendingReclaims()` again.
+- **The reclaimer's inbox.** `EnqueueCommittedDrop` is thread-safe and is
+  drained by `Step` on core 0. A job's gate is the commit LSN + 1. Its epoch
+  check runs once, before the walk reads a page: every slot is idle or at
+  the drop's word. The tick steps while `reclaim_pending` is nonzero.
+- **BF-Q11 (a).**
+  - `DROP TABLE` asks its two RESTRICT predicates again under the relation
+    `X`.
+  - A child's `CREATE TABLE` takes its parent's `IS` with each foreign
+    key it declares, held to its decide. The `IS` is taken right after the
+    parent is looked up, before `InitTableAccess` and before any write. The
+    remaining window, a drop that commits between the lookup and the grant,
+    is stated in code: the epoch still holds the pages, and BF-R10 refuses a
+    later bind.
+
+**Cells** (`tests/in_run_reclaim_test.cpp`, two dispatchers over one store
+on the test's thread):
+- a drop committed in the run is freed in the run;
+- a drop rolled back with nothing queued frees nothing, and the relation is
+  whole;
+- the relation is in flight on core 1 across the drop's commit on core 0,
+  with the seam (`SetEpochSeamForTest(EpochSeam, hook)`) dropping the
+  relation, running the reclaim and handing the freed ids to a new relation
+  at one of three points in core 1's statement head: `kAfterRead` (inside
+  `Catalog::Revalidate`, just after it reads the word - the point that tells
+  a publish before the read from one after it), `kBeforePublish` (after the
+  revalidate, slot still `kEntering`) and `kAfterPublish` (the old word
+  published). The reclaim waits, and the statement answers without a
+  `Corruption`. One cell for each path, each run at all three points:
+  - a stale-memo read;
+  - `DESCRIBE`;
+  - the reverse foreign-key walk of a parent `DELETE`;
+- `AChildsOpenCreateHoldsItsParentsIntention`: the open child transaction
+  holds the parent's `IS` (asserted on the lock table, since the window
+  has no seam), and after its commit the drop is refused naming the
+  foreign key;
+- `AForeignKeyCreatedBeforeTheDropsExclusiveStillRefusesIt`: a child
+  committed at `SetBeforeDropExclusiveForTest`, between the drop's first
+  RESTRICT ask and its `X`, is refused by the second ask;
+- `ABindPastAGateDefectIsRefusedByTheRootCheck`: core 1 is left out of the
+  epochs, so the reclaim frees `t` and a new relation takes its pages under
+  core 1's memo; the bind is refused by BF-R10's root check ("was
+  reclaimed"). It is the only cell that reaches `StillOwned`, which answers
+  only when the gate is wrong.
+
+**Suite:** 3255 of 3256 plain, and 3254 of 3256 with `KDS_TEST_PAGE_LATCH=1`.
+Neither failure is BF's:
+- `TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`
+  fails in both passes, and 10 of 10 when run alone. An unrelated
+  `kds_server` on the host listens on the test's hard-coded port 25432
+  (`bind() failed: Address already in use`). BF touches no code it reaches.
+- `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense` failed
+  once in the latch-armed pass at `-j8`: one insert was refused
+  `TXN_CONFLICT retryable=1` after the descent's five attempts, 82 s into a
+  loaded run. It passed 6 of 6 alone, latch-armed, and it passed in the
+  latch-armed pass on the same code before the kill cells' test-only seams
+  were added. The rig takes no crash, so the open root-growth bug
+  (`a-root-growths-anchor-publish-is-logged-after-its-split.md`) is not
+  its shape.
+
+**Mutations**, each built and run three times against BF's cells:
+
+| Mutation | Result | Killed by |
+|---|---|---|
+| the epoch predicate ignored | killed | `ADescribeInFlightHoldsTheReclaim` |
+| the publish moved after the read | killed, once the `kAfterRead` seam existed | `ADescribeInFlightHoldsTheReclaim` at `kAfterRead` |
+| the predicate reads `kEntering` only | killed | `ADescribeInFlightHoldsTheReclaim` at `kAfterPublish` |
+| the queue filled before the decide | killed | `ADropRolledBackWithItsReclaimQueuedFreesNothing` |
+| the RESTRICT check not asked again under `X` | killed, once its seam existed | `AForeignKeyCreatedBeforeTheDropsExclusiveStillRefusesIt` |
+| a foreign key's creation takes no parent `IS` | killed | `AChildsOpenCreateHoldsItsParentsIntention` |
+| the bind's root check removed (BF-S3's survivor) | killed, once the gate-defect cell existed | `ABindPastAGateDefectIsRefusedByTheRootCheck` |
+
+The first run had three survivors, and each named a missing cell, not a
+dead line:
+- **The publish order**: both seams fired after `Enter` and `Revalidate`
+  alike, so swapping the two lines changed nothing a seam could see. The
+  `kAfterRead` seam sits between the read and what follows it.
+- **The second RESTRICT ask**: a child's fkey row is visible at once, so the
+  first ask already refused. No cell put a child between the asks.
+- **The root check**: the epoch keeps a stale bind's pages allocated, so no
+  correct gate ever lets a bind reach a freed page. Only a cell that leaves
+  a core out of the epochs, a gate defect by construction, reaches it. The
+  order's claim that BF-S5's in-run cells would kill it (BF-S4's table) held
+  only after that cell was added.
+
+**Review:** (`critics-developer`, one pass, on `drop-table-page-reclaim` from `535313c0`; returned 04:59 UTC.)
+**Correctness:** sound.
+- The memory-ordering argument closes: the commit's schema-word bump comes before the enqueue on the same thread; the inbox mutex orders the enqueue before the drain; the drain comes before `AllAtLeast`'s seq_cst fence; [atomics.order] p4.4 rules out a statement reading the old word while the reclaimer reads the slot from before its `kEntering`.
+- The queued word is above the drop's write bump, because an autocommit drop also goes through `MarkHoldsDdl`.
+- Every outside entry is covered: `Dispatch`/`DispatchAsync` reach `DispatchAndStage`, and `ExecuteInsert` is reached only from the load chunk handler, which takes a scope.
+- Queueing happens only on the two commit sites, and every ending erases the entry.
+- `PendingReclaims` is never stale (DT2: no oid is reissued). `core_id_` is always in range. "Passed once is passed for good" is sound.
+- If `Revalidate` throws, the slot is left at `kEntering`. This fails safe (it blocks reclaims) and is left as is.
+
+**Fixed by the review:**
+- `EnqueueCommittedDrop` raised `pending` after releasing the inbox latch, so a drain could make it wrap to 2^64-1. It now adds under the latch.
+
+**Taken as CLA proposed under §25** (CLA's own choice among the reviewer's proposals):
+- Gap 1: the fkey cell did not test the `IS`. The child's fkey row is visible at once, so the drop's first RESTRICT ask refuses. The window has no seam, so the cell now asserts that the open child transaction holds the parent's `IS` (`borrows().Holds(LockKey::Relation(parent))`), then checks the end-to-end refusal.
+- Gap 2: no cell had a published old word. The seam is now `SetEpochSeamForTest(EpochSeam, hook)` with `kBeforePublish`/`kAfterPublish`, and each Census B path runs at both. A mutant where `AllAtLeast` checks only `kEntering` was added.
+- Gap 3: the child's parent `IS` was taken after `CreateTable` wrote rows. It is now taken right after the parent is resolved, before `InitTableAccess` and before any write. The residual window, a drop that commits between the lookup and the grant, is stated in code: the pages stay held by the epoch, and a later bind is refused by BF-R10.
+- Gap 4: `statement_epoch.hpp` now states why the Cabin tick takes no slot (it runs synchronously on core 0's reactor, as the reclaim tick does).
+- Gap 5: corrected `page_reclaim.hpp`'s "which jobs exist" and threading text, `command_dispatcher.hpp`'s `BorrowRelationForDdl` caller text (already stale before BF), and the drop's info log.
+- Cut 1: `Catalog::DropTable` takes `PendingRoots* owed` and returns the roots it wrote. The dispatcher's extra `PendingReclaims()` scan, and its silent skip, are deleted.
+- Cut 2: `tests/reclaim_census.hpp` (Fill, DescribeField, AllocatedPages, PagesOf) is shared by both reclaim test files. This also replaces the in-run copy's fixed 4096-page range.
+- Cut 3: `FinishDdlStatement` uses `committed = !failed && ended.ok()`.
+
+**Declined:** none.
+
+**The kill cells' review** (`critics-developer`, a second pass over the
+seams and cells the first mutation run asked for; returned 06:15 UTC):
+correctness sound, no edit made.
+- Taken: the statement head passed `Revalidate` a non-empty hook on every
+  statement, so "empty in production" was untrue. The hook is now built
+  only while a seam is set.
+- Taken: the root-check cell did not state its premise. It now asserts
+  that the new relation owns `t`'s anchor and descriptor page, the two
+  pages `StillOwned` reads. Exact equality of the page sets was too strong,
+  because the new relation took all but one of `t`'s pages.
+- Declined: naming the seam by a parameter instead of a ternary, and a
+  shared fire-once hook helper. Each saves a few lines in a test and
+  changes nothing it proves.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S6 - the close - closed 2026-10-08
+
+- **Where:** on `worktree-drop-table-page-reclaim`. The text landed at
+  `c2ce15c3`; BF's code is final at `f2de416c` (BF-S5), and BF-S6 moved no
+  line of it, only comments.
+
+**The stages:**
+
+| Stage | Commit | What landed |
+|---|---|---|
+| BF-S0 | `df741e3c` | the order, reviewed, BF-Q0..Q18 proposed |
+| BF-S1 | `970feb5f` | the censuses, the premise (it held), five red cells; the root growth's log cut filed |
+| BF-S2 | `805e6c9a` | `FreePage`, the free list, the map write barrier; `EvictClean` deleted |
+| BF-S3 | `f41ac53d` | the tombstone's roots (superblock 21), the replay gate, the owner-checked walk, the mount-time reclaim, BF-R10's defence checks |
+| BF-S4 | `535313c0` | the sim's drop op and owner census, the two-core rigs; the gate moved to the recovery scan's end |
+| BF-S5 | `f2de416c` | the statement epoch, reclaim within the run, BF-Q11 (a) |
+| BF-S6 | `c2ce15c3` | the text (BF-R13) |
+
+**What BF carries:** a dropped relation's pages go back to the allocator
+once no replay and no reader can reach them: at mount for a tombstone the
+mount finds, and within the run for a drop committed there, under the
+statement epoch. `drop-table.md` DT1 states what is reclaimed;
+`known-gaps.md` "Page reclamation" states what is not - the pages no root
+reaches, the `cores > 1` wait for every core's first checkpoint, the free
+list a crash forgets, the in-run gate's delay, a refused reclaim's
+re-drive, `SHOW PAGE` of a reused id, and the per-page checks not built.
+
+**Review:** `critics-developer` on the text: nine wording fixes, three of
+them false statements (a refused reclaim's re-drive, a rolled-back
+`CREATE INDEX`'s tree, the superblock latch's citation). Its one open item,
+`expeditor.cpp`'s "nothing calls the sweep", was restated by CLA.
+
+**Suite:** at `c2ce15c3`, 3255 of 3256 plain and 3255 of 3256 with
+`KDS_TEST_PAGE_LATCH=1`. The one failure,
+`TcpServerListenTest.ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne`,
+is an unrelated `kds_server` on the host holding the test's hard-coded
+port 25432.
+
+**The measurement (BF-Q15) was not executed.** The operator waived it on
+2026-10-08 (*"measurement 스킵하고 다음 단계 ㄱㄱ"*, "skip the measurement,
+go to the next step") while `ck-tester` was mid-run. The run was stopped
+and its partial output discarded unread, so nothing from it is reported.
+**BF closes with its overhead unmeasured**: what BF adds to every page
+creation (the free-list check, BF-R6), to every statement head (two stores
+and a fence, BF-R9) and to every bind (two owner reads, BF-R10) has no
+number, and no regression claim is made either way.

@@ -884,6 +884,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         &expeditor->clock_);
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
+    // BF-R4's gate for a tombstone this mount finds pending: where the scan
+    // ended. Not the append point after undo - a compensation's recLSN
+    // holds the completion checkpoint's redo start below that, and no
+    // compensation names a dropped relation's page.
+    expeditor->reclaim_gate_ = expeditor->recovery_.scan_end;
 
     // RV3 D3a: redo just mutated catalog pages under a catalog constructed
     // above it. Nothing reads a catalog row between construction and here
@@ -1102,6 +1107,22 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // BE-Q6, once the mount has made resident everything that stays.
     if (Status s = expeditor->store_->ApplyMountFloor(); !s.ok()) return s;
 
+    // **DROP TABLE page reclamation, collected** (BF-R8): after the
+    // completion checkpoint, which is what moves `D` past this mount's scan
+    // at `cores = 1`, and before any listener binds. Executed on core 0's
+    // system tick, never here, so a mount does not grow by what was dropped.
+    expeditor->reclaimer_.emplace(expeditor->database_->catalog, *expeditor->store_,
+                                  expeditor->reclaim_counters_, &*expeditor->logger_);
+    if (Status s = expeditor->reclaimer_->CollectAtMount(expeditor->reclaim_gate_); !s.ok()) {
+        return s;
+    }
+    expeditor->dispatcher_->SetReclaimCounters(&expeditor->reclaim_counters_);
+    // Reclaim within the run (BF-R9): every core publishes its statement
+    // epoch, and a committed drop is queued from whichever core committed it.
+    expeditor->statement_epochs_.emplace(expeditor->config_.cores);
+    expeditor->dispatcher_->SetStatementEpochs(&*expeditor->statement_epochs_);
+    expeditor->dispatcher_->SetReclaimQueue(&*expeditor->reclaimer_);
+
     // PHY01's collector, wired to both feeders: every core's dispatcher
     // touches S1/S2 per successful SELECT, the one Cabin store forwards S3
     // from its counting sites. One construction site, the config's clock
@@ -1202,6 +1223,12 @@ OptimizerSurface Expeditor::Optimizer() {
     }
     surface.view_latch = config_.cores > 1 ? &cabin_view_latch_ : nullptr;
     return surface;
+}
+
+Status Expeditor::ReclaimStep() {
+    // `D` is the anchor's durable redo start, 0 until the completion
+    // checkpoint publishes - the safe direction (BF-R4).
+    return reclaimer_->Step(checkpoint_anchor_->durable_redo_start(), &*statement_epochs_);
 }
 
 Status Expeditor::Checkpoint() {
@@ -1774,6 +1801,9 @@ Status Expeditor::Start() {
                 !s.ok()) {
                 return s;
             }
+            core.value()->dispatcher().SetReclaimCounters(&reclaim_counters_);
+            core.value()->dispatcher().SetStatementEpochs(&*statement_epochs_);
+            core.value()->dispatcher().SetReclaimQueue(&*reclaimer_);
             cores_.push_back(std::move(core.value()));
         }
 
@@ -1922,6 +1952,19 @@ Status Expeditor::Start() {
     // long statement holds the reactor and this does not run, which is why
     // the inline path is bounded on its own (BE-R2).
     constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]
+    // **DROP TABLE page reclamation** (BF-R8, BF-Q16 (a)): one bounded step
+    // per tick on core 0's `system` group, a predicate and a return when no
+    // tombstone is owed. A failed step is logged and the next tick retries.
+    constexpr sched::MonoTimeNs kReclaimIntervalNs = 50'000'000;  // 50 ms, the drain's
+    scheduler.SubmitEvery(kReclaimIntervalNs, [this] {
+        // Pending, not `jobs()`: a drop committed in the run waits in the
+        // reclaimer's inbox until a step drains it.
+        if (reclaim_counters_.pending.load(std::memory_order_relaxed) == 0) return;
+        if (Status s = ReclaimStep(); !s.ok() && logger_->enabled(LogLevel::kWarn)) {
+            logger_->Warn("reclaim", "reclaim step failed: " + s.message());
+        }
+    });
+
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
         (void)store_->MaintainFreeReserve();
         auto drained = store_->DrainDirtyEvictionQueue();

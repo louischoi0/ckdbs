@@ -379,6 +379,9 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
         return;
     }
 
+    // A statement head (BF-R9): the load binds outside `DispatchAndStage`,
+    // so it publishes this core's epoch and revalidates the catalog itself.
+    const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);
     auto& catalog = dispatcher_->catalog();
     auto oid = catalog.FindTableOidByName(begin.value().relation);
     if (!oid.ok()) {
@@ -438,6 +441,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
 }
 
 void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& frame) {
+    const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);  // BF-R9
     const auto fail_load = [&](const Status& status) {
         SendError(conn, status);
         (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);

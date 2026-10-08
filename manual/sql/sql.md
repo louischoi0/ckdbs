@@ -24,8 +24,8 @@ dispatcher's own commands):
 | Session | `PING`, `SYNC`, `STOP` |
 
 `DROP TABLE` and `ALTER TABLE` exist and are **catalog-only** (see their
-sections): a drop tombstones the oid and orphans the pages — no space is
-reclaimed — and a rename edits a label. The catalog is append-only apart
+sections): a drop tombstones the oid and its pages are reclaimed after it
+commits, and a rename edits a label. The catalog is append-only apart
 from those, `DROP CABIN`, `DROP INDEX` and `DROP ASSERTION`.
 
 ---
@@ -263,10 +263,24 @@ DROP TABLE <name>
 
 **Catalog-scoped**: the relation becomes unreachable, its name frees
 immediately, and its oid is tombstoned — never reissued — so stale
-advisory structures keyed by the dead oid can never mis-attribute. The
-pages **orphan** (heap chain, var-heap, index pages): no space is
-reclaimed, deliberately, until the free-map-reuse and reader-horizon
-decisions land.
+advisory structures keyed by the dead oid can never mis-attribute.
+
+**Its pages are reclaimed after the drop commits**: the tree, every index
+tree, the var-heap chain and the anchor go back to the allocator, and a
+later `CREATE` reuses their ids. The file never shrinks. Two conditions
+gate the free:
+- **Durability.** No page is freed before the log's redo start has moved
+  past the drop's commit. That is at the next checkpoint or two, and at a
+  mount with more than one core it waits for every core's first
+  checkpoint.
+- **Readers.** No page is freed while a statement that could still read the
+  relation is running.
+
+A drop that rolls back frees nothing. A crash in the middle of a reclaim is
+finished by the next mount. `SHOW META` reports `pages_allocated`,
+`pages_freed`, `pages_reused` and `reclaim_pending`, and the pages no
+structure of the relation reaches - a failed split's, a failed
+`CREATE INDEX`'s - stay allocated.
 
 - **It waits for a statement already reading or writing the relation**
   (2026-09-09). A scan that is already walking finishes against a live
@@ -989,10 +1003,9 @@ they were before the split.
   it is honest about its class: an index is "a Cabin that observed
   everything", append-only, verified at read. `UNIQUE` is refused because it
   would turn a read accelerator into a constraint that can fail writes.
-- **No space reclamation, and no data-moving `ALTER`.** `DROP TABLE`
-  exists but is catalog-scoped (DT1): the pages orphan, because returning
-  them to the free map is gated on trail-validation and reader-horizon
-  decisions owned elsewhere. `ALTER TABLE` is renames only (AL1). The
+- **No file shrinking, and no data-moving `ALTER`.** A dropped relation's
+  pages are reclaimed and reused (DT1), but the file never shrinks and no
+  `VACUUM` moves live rows. `ALTER TABLE` is renames only (AL1). The
   RESTRICT predicates (assertions, referencing fkeys) now have their
   callers in both.
 - **No `SELECT *` across a join**, no duplicate FROM bindings, no

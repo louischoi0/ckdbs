@@ -7,10 +7,16 @@ namespace kds::stats {
 
 namespace {
 
+// **A slot reading 0 is an empty one** (BF-S1's Census A, A1). An interior
+// page is unlogged, so after a crash that left its frame unwritten it reads
+// as the device's zeros - a never-written id, or one `CreateDirPage` zeroed
+// over a reclaimed page's dead image (`CreateNewHeaderlessUnpinned`). Zero
+// is the superblock's id and never a directory child, so it means no child
+// rather than a walk into page 0, which `WriteTrail` would then format.
 PageId LoadChild(std::span<const std::byte, kPageSize> page, std::size_t index) {
     PageId child;
     std::memcpy(&child, page.data() + index * sizeof(PageId), sizeof(PageId));
-    return child;
+    return child == 0 ? kEmptyDirSlot : child;
 }
 
 void StoreChild(std::span<std::byte, kPageSize> page, std::size_t index, PageId child) {

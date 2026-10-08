@@ -29,6 +29,8 @@
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "kds/server/page_reclaim.hpp"
+#include "kds/server/statement_epoch.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/kwp_load_server.hpp"
 #include "kds/server/tcp_server.hpp"
@@ -603,6 +605,15 @@ public:
     // deterministically instead of waiting on wall time.
     Status Checkpoint();
 
+    // **One step of DROP TABLE page reclamation** (BF-R8): at most
+    // `kReclaimBatchPages` frees, gated on the durable redo start. What core
+    // 0's system tick calls, exposed so a test drives it deterministically.
+    Status ReclaimStep();
+    void SetReclaimCutForTest(std::function<void(const char*)> hook) {
+        reclaimer_->SetCutForTest(std::move(hook));
+    }
+    const ReclaimCounters& reclaim_counters() const noexcept { return reclaim_counters_; }
+
     const SuperBlock& superblock() const noexcept { return database_->superblock; }
     catalog::Catalog& catalog() noexcept { return database_->catalog; }
     storage::DevicePageStore& store() noexcept { return *store_; }
@@ -863,6 +874,19 @@ private:
     // peer from outliving the anchor it holds.
     std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
     std::optional<SuperBlockCheckpointAnchor> checkpoint_anchor_;
+
+    // DROP TABLE page reclamation (BF-R8): the tombstones this mount found
+    // pending, collected after the completion checkpoint, and the counters
+    // every core's `SHOW META` prints.
+    ReclaimCounters reclaim_counters_;
+    std::optional<PageReclaimer> reclaimer_;
+    // BF-R9's statement-epoch slots, one per core.
+    std::optional<StatementEpochs> statement_epochs_;
+    // Where the mount's recovery scan ended (BF-R4): every record that names
+    // a pending tombstone's pages lies below it, so once the durable redo
+    // start reaches it no mount can replay one. Set once `RecoverCoreAtMount`
+    // returns, before anything reads it.
+    wal::Lsn reclaim_gate_ = 0;
 
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 

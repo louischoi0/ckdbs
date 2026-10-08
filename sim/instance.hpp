@@ -31,6 +31,8 @@
 #include "kds/base/status.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/server/page_reclaim.hpp"
+#include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/session.hpp"
@@ -165,6 +167,17 @@ public:
     // as a client sees them.
     std::string Execute(std::string_view sql);
 
+    // **DROP TABLE page reclamation, as a mount runs it** (BF-R8): the
+    // tombstones this boot found pending, freed before the harness reads.
+    // Null after a boot that skipped recovery.
+    server::PageReclaimer* reclaimer() { return reclaimer_ ? &*reclaimer_ : nullptr; }
+    // One bounded step, as core 0's tick runs it (`Expeditor::ReclaimStep`);
+    // and every job driven to its end, which the harness owes a reboot
+    // before it reads the volume.
+    Status ReclaimStep();
+    Status SettleReclaim();
+    const server::ReclaimCounters& reclaim_counters() const noexcept { return reclaim_counters_; }
+
     server::CommandDispatcher& dispatcher() { return *dispatcher_; }
     server::Session& session() { return session_; }
     storage::DevicePageStore& store() { return *store_; }
@@ -222,6 +235,13 @@ private:
     std::optional<server::CommandDispatcher> dispatcher_;
     server::Session session_;
     server::MountRecovery recovery_;
+    // **One anchor object per boot** (BF-R12), as `Expeditor` holds one:
+    // its durable redo start is the `D` a reclaim is gated on, and a fresh
+    // object per checkpoint started it over at 0.
+    std::optional<server::SuperBlockCheckpointAnchor> anchor_;
+    server::ReclaimCounters reclaim_counters_;
+    std::optional<server::PageReclaimer> reclaimer_;
+    wal::Lsn reclaim_gate_ = 0;
 };
 
 }  // namespace kds::sim

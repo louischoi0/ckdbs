@@ -186,6 +186,14 @@ struct SimVerdict {
     // Documented-gap bookkeeping — reported, not failed (see above).
     std::size_t gated_missing_rows = 0;
     std::size_t unlogged_ddl_lost_tables = 0;
+    // BF-R12: drops the stream committed, dropped relations a crash before
+    // their SYNC brought back, and pages the census checked after a reclaim.
+    std::size_t drops = 0;
+    std::size_t drops_restored = 0;
+    std::size_t census_pages = 0;
+    // Pages of a reclaimed relation still allocated and reached by no walk,
+    // under faults: a failed growth's or split's (a stated leak).
+    std::size_t census_leaks = 0;
 
     // Recycling (BC-S4): mid-run checkpoints, advances the recycler was
     // handed, and segments removed. A run where these stay 0 recovered from

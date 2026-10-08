@@ -446,9 +446,10 @@ StatusOr<DecodedUndoWrite> DecodeUndoWrite(std::span<const std::byte> in);
 
 // ---- ALLOC / FREE --------------------------------------------------------
 //
-// A run of pages starting at the envelope's page_id. ALLOC is logged before
-// the file is extended (wal.md section 5.2), which is what makes replay of a
-// crash mid-growth safe.
+// The codec of two reserved record types: a run of pages starting at the
+// envelope's page_id. Nothing emits either, and redo refuses both: the free
+// map is unlogged, a crash mid-growth is made safe by the allocation floor
+// (`high_water.hpp`), and a page is freed without a record (BF-R4).
 
 struct PageRunPayload {
     std::uint32_t nr_pages;
@@ -806,9 +807,9 @@ StatusOr<DecodedAssertRollback> DecodeAssertRollback(std::span<const std::byte> 
 
 // ---- ASSERT_DROP ---------------------------------------------------------
 //
-// Teardown: replay forgets everything held for the assertion. The pages
-// return through ordinary FREE records; the envelope's page_id names the
-// cabin root as a diagnostic and replay does not touch it.
+// Teardown: replay forgets everything held for the assertion. Its pages are
+// not freed (`drop-table.md` DT1's stated leaks); the envelope's page_id
+// names the cabin root as a diagnostic and replay does not touch it.
 
 struct AssertDropPayload {
     std::uint64_t assertion_id;

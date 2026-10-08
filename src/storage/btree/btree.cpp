@@ -970,9 +970,10 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     auto new_slot = new_leaf.value().InsertTuple(payload, trx_id);
     if (!new_slot.ok()) {
         // A tuple no empty leaf can hold. The page stays allocated and
-        // unlinked rather than freed - the store has no free-page path yet
-        // (page.md's SpaceManager), and an unreachable empty page is
-        // harmless where a dangling link would not be.
+        // unlinked rather than freed: an unreachable empty page is harmless
+        // where a dangling link would not be, and freeing it here would
+        // need BF-R4's replay gate. No reclaim walk reaches an unlinked
+        // page, so it is a stated leak (`drop-table.md` DT1).
         return new_slot.status();
     }
     out.page_id = new_leaf_id;

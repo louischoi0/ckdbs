@@ -181,7 +181,6 @@ TEST_F(PinProtocolTest, ConcurrentMissesOnOnePageIssueOneDeviceRead) {
 
     constexpr int kFaulters = 8;
     constexpr int kRounds = 200;
-    const std::array<PageId, 1> victims{id};
 
     std::atomic<int> failures{0};
     // Counted, never asserted inside the loop: a bail-out mid-round leaves
@@ -219,9 +218,11 @@ TEST_F(PinProtocolTest, ConcurrentMissesOnOnePageIssueOneDeviceRead) {
     for (int r = 0; r < kRounds; ++r) {
         while (arrived.load() != kFaulters * (r + 1)) std::this_thread::yield();
         // Evicted with every faulter parked, so the next round is a genuine
-        // miss for all of them. `EvictClean` is the path with no dirty bytes
-        // to write back, which is what a freshly synced page is.
-        if (!store_->EvictClean(victims).ok()) ++evict_failures;
+        // miss for all of them. The sweep, over every frame: the page is
+        // clean and unpinned, and `kClockUsageCap + 1` laps walk any usage
+        // down to a reclaim (`EvictClean` stood here until BF-R5 deleted it).
+        (void)store_->EvictColdFrames(store_->resident_pages());
+        if (store_->latch_word_for_test(id).ok()) ++evict_failures;  // still resident
         device_->ClearTrace();
         round.store(r + 1, std::memory_order_release);
         while (finished.load() != kFaulters * (r + 1)) std::this_thread::yield();
@@ -294,7 +295,6 @@ TEST_F(PinProtocolTest, TwoRingsFaultingOnePageIssueOneDeviceRead) {
 
     constexpr int kScanners = 2;
     constexpr int kRounds = 200;
-    const std::array<PageId, 1> victims{id};
 
     std::atomic<int> failures{0};
     std::atomic<int> arrived{0};
@@ -337,7 +337,8 @@ TEST_F(PinProtocolTest, TwoRingsFaultingOnePageIssueOneDeviceRead) {
     int reads = 0;
     for (int r = 0; r < kRounds; ++r) {
         while (arrived.load() != kScanners * (r + 1)) std::this_thread::yield();
-        if (!store_->EvictClean(victims).ok()) ++evict_failures;
+        (void)store_->EvictColdFrames(store_->resident_pages());
+        if (store_->latch_word_for_test(id).ok()) ++evict_failures;  // still resident
         device_->ClearTrace();
         round.store(r + 1, std::memory_order_release);
         while (finished.load() != kScanners * (r + 1)) std::this_thread::yield();

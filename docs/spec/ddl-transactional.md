@@ -115,8 +115,10 @@ Built, and what each gets:
   `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, index and assertion
   names, and a column's cabin).
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
-  §5a is the whole argument. In autocommit it retires its dependent rows;
-  inside a transaction it delete-marks them.
+  §5a is the whole argument. Every production drop delete-marks its
+  dependent rows, autocommit's implicit transaction included; a drop at
+  the bootstrap id retires them, and only tests reach one (BF-Q12 (a): the
+  code governs, and this sentence said autocommit retires).
 - **`CREATE INDEX`** — atomic and isolated, exactly as `CREATE TABLE`,
   on every core: it takes the relation `X` and builds where its session is
   (§5e).
@@ -172,9 +174,9 @@ Two smaller facts:
 - **The sweep loop's termination.** It runs until nothing matches, which
   a retired slot satisfies by disappearing and a delete-marked one does
   not, so the transactional path skips rows already marked.
-- **A committed transactional drop leaves its marked rows on the page**,
-  where autocommit's retire reclaims the slot; §5c and §5d retire them
-  later. Both read as gone, so the difference is space rather than
+- **A committed drop leaves its marked rows on the page**, autocommit's
+  included; §5c and §5d retire them later. Both read as gone, so the
+  difference is space rather than
   meaning.
 
 ### Which reads filter, and which deliberately do not
@@ -338,8 +340,9 @@ rollback clears its own marks synchronously, so no aborted transaction's
 mark survives to be asked about.
 
 **Why at DDL resolution and nowhere hotter.** DDL resolution is the only
-event that creates or settles a mark (autocommit DDL retires directly,
-leaving none), it is rare enough that a catalog page sweep costs nothing
+event that creates or settles a mark (an autocommit DDL's implicit
+transaction creates and settles its own in one statement), it is rare
+enough that a catalog page sweep costs nothing
 worth measuring, and the core is between resolutions there — so no
 unregistered synchronous view is live, which is the exemption `txn.md`
 §4.1's registration rule leans on. A mark whose deleter has not cleared
@@ -417,8 +420,9 @@ AX-S1 - would not.
 
 **Atomic and isolated, on every core.** A `CREATE INDEX` backfills with no
 concurrent writer, so the finished index holds every row, and nothing names
-it until its commit; a rollback orphans the tree as a dropped index's
-pages orphan. A `DROP INDEX` inside a transaction is admitted: a writer on
+it until its commit; a rollback leaves the tree in its anchor slot, as a
+dropped index's stays, and both are reclaimed with their relation
+(`drop-table.md` DT1). A `DROP INDEX` inside a transaction is admitted: a writer on
 another core resolves the relation with the index still in it (§5b, since
 AX-S2), and in any case writes nothing until the drop decides, and the
 decide moves the word before it releases, so the writer re-resolves and

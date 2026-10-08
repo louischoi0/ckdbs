@@ -61,6 +61,20 @@ void SetAnchorClusteredRoot(std::span<std::byte, kPageSize> page, PageId root) {
     StoreField<std::uint32_t>(page, kAnchorClusteredRootOffset, root);
 }
 
+StatusOr<std::vector<AnchorIndexSlot>> AnchorIndexSlots(
+    std::span<const std::byte, kPageSize> page) {
+    auto nr = EntryCount(page);
+    if (!nr.ok()) return nr.status();
+    std::vector<AnchorIndexSlot> out;
+    out.reserve(nr.value());
+    for (std::size_t i = 0; i < nr.value(); ++i) {
+        out.push_back(AnchorIndexSlot{
+            LoadField<std::uint64_t>(page, EntryOffset(i)),
+            LoadField<std::uint32_t>(page, EntryOffset(i) + sizeof(std::uint64_t))});
+    }
+    return out;
+}
+
 StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
                                  std::uint64_t index_oid) {
     auto nr = EntryCount(page);

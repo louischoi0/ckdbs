@@ -485,7 +485,8 @@ Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
         auto placed = fresh.value().InsertTuple(encoded, trx_id);
         if (!placed.ok()) {
             // A row no empty page can hold. The page stays allocated and
-            // unlinked rather than freed - there is no free-page path - and
+            // unlinked rather than freed - a reserved catalog id is never
+            // freed (`FreePage` refuses below the first user page) - and
             // nothing reaches it, which is the same trade heap_chain makes.
             // A report refused below leaves the page the same way.
             return placed.status();
@@ -524,7 +525,7 @@ void Catalog::InitWellKnownObjects() {
         obj.oid = oid;
         obj.namespace_oid = oid;  // a namespace's own namespace is itself
         obj.type_oid = kTypeNamespace;
-        obj.rel_id = 0;
+        obj.pending_roots = 0;
         SetName(obj.name, name);
         sys_objects_.Register(obj);
     };
@@ -533,7 +534,7 @@ void Catalog::InitWellKnownObjects() {
         obj.oid = oid;
         obj.namespace_oid = kNamespaceSys;
         obj.type_oid = oid;  // a type object's type is itself
-        obj.rel_id = 0;
+        obj.pending_roots = 0;
         SetName(obj.name, name);
         sys_objects_.Register(obj);
     };
@@ -848,6 +849,41 @@ StatusOr<Oid> Catalog::HighestIssuedUserOid() {
     return highest;
 }
 
+StatusOr<std::vector<Catalog::PendingReclaim>> Catalog::PendingReclaims() {
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    if (!objects.ok()) return objects.status();
+    std::vector<PendingReclaim> out;
+    for (const SysObjectRow& row : objects.value()) {
+        if (row.type_oid != kTypeDroppedTable || row.pending_roots == 0) continue;
+        out.push_back(PendingReclaim{row.oid, UnpackPendingRoots(row.pending_roots)});
+    }
+    return out;
+}
+
+Status Catalog::ClearPendingRoots(Oid oid) {
+    auto cleared = ForFirstRow<SysObjectRow>(
+        store_, kCatalogPageObjects,
+        [&](SysObjectRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.type_oid != kTypeDroppedTable || row.oid != oid) return false;
+            row.pending_roots = 0;
+            const auto encoded = row.Encode();
+            // Outside any transaction, with the row's own stamp kept: the
+            // `AllocateRowIdRange` shape (BF-R2).
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
+                                           wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            return true;
+        });
+    if (!cleared.ok()) return cleared.status();
+    if (!cleared.value()) {
+        return Status::NotFound("no tombstone carries oid " + std::to_string(oid));
+    }
+    return Status::OK();
+}
+
 StatusOr<Oid> Catalog::GenerateUserOid() {
     if (oid_sequence_ != nullptr) {
         // **The instance's sequence** (AT-S5b), seeded by whichever catalog
@@ -922,9 +958,10 @@ void Catalog::BumpWord() {
     if (cache_built_at_ == prev) cache_built_at_ = prev + 1;
 }
 
-void Catalog::Revalidate() {
+void Catalog::Revalidate(const std::function<void()>& after_read) {
     if (schema_word_ == nullptr) return;
     const std::uint64_t now = schema_word_->load(std::memory_order_acquire);
+    if (after_read) after_read();
     if (now == cache_built_at_) return;
     cache_.Invalidate();
     cache_built_at_ = now;
@@ -1061,7 +1098,7 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     row.oid = oid;
     row.namespace_oid = namespace_oid;
     row.type_oid = type_oid;
-    row.rel_id = 0;
+    row.pending_roots = 0;
     SetName(row.name, name);
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageObjects, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysObjectsTable;
@@ -1923,18 +1960,29 @@ Status Catalog::DropNamespace(Oid namespace_oid, std::uint64_t trx_id,
 }
 
 Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
-                          std::uint64_t trx_id, std::vector<CatalogRowChange>* written) {
+                          std::uint64_t trx_id, std::vector<CatalogRowChange>* written,
+                          PendingRoots* owed_out) {
     // Transactional only when a caller supplies an id (DT5). Without one
     // this is the path that always existed: retype, then **retire** the
-    // dependents outright, which no rollback can put back - and which is
-    // right for autocommit, where there is no rollback to serve.
+    // dependents outright, which no rollback can put back. No production
+    // drop takes it - autocommit runs in an implicit transaction and
+    // delete-marks like an explicit one - so only a bootstrap-id caller,
+    // which is a test, retires (BF-Q12 (a)).
     const bool transactional = trx_id != kBootstrapXid;
     auto note = [written](const CatalogRowChange& change) {
         if (written != nullptr) written->push_back(change);
     };
     // 1. The tombstone (DT2): retype, never retire. The row is the oid
     //    floor's evidence, and a reissued oid could serve a dead table's
-    //    row as a live answer through a stale advisory structure.
+    //    row as a live answer through a stale advisory structure. **It also
+    //    carries what the drop owes** (BF-R2): the anchor and the var-heap
+    //    root, read here, before anything is written, from the `sys.tables`
+    //    row the sweep below retires - the only other copy, and one the
+    //    purge or the mount removes long before a reclaim can run.
+    auto owed = GetSysTableRow(table_oid);
+    if (!owed.ok()) return owed.status();
+    const std::uint64_t pending_roots = PackPendingRoots(
+        PendingRoots{owed.value().anchor_page_id, owed.value().varheap_page_id});
     PageId retyped_page = kInvalidPageId;
     CatalogRowChange retype_change;
     auto retyped = ForFirstRow<SysObjectRow>(
@@ -1961,6 +2009,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
             change.prior_image.assign(before.begin(), before.end());
 
             row.type_oid = kTypeDroppedTable;
+            row.pending_roots = pending_roots;
             const auto encoded = row.Encode();
             // The undo record first (hook contract, catalog.hpp): the
             // prior image is the only copy a crash leaves of these bytes.
@@ -2101,6 +2150,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     }
 
     BumpVersion("drop table");
+    if (owed_out != nullptr) *owed_out = UnpackPendingRoots(pending_roots);
     return Status::OK();
 }
 
@@ -3208,9 +3258,10 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
     //
     // The walk is the detector: a torn page fails its checksum on fault and
     // a broken chain fails the walk, and either answers the same way. The
-    // chain's growth pages are **not** reclaimed - nothing reclaims a page
-    // in this engine - so a discard leaks them, which is the cost stated
-    // rather than discovered.
+    // chain's growth pages are **not** reclaimed - no reclaim walk reaches
+    // a catalog relation's discarded chain (`drop-table.md` DT1's stated
+    // leaks) - so a discard leaks them, which is the cost stated rather
+    // than discovered.
     // **The walk is the detector, and it is the ordinary one**: a torn page
     // fails its checksum on fault and a broken link fails the traversal, so
     // `ChainVisit` answering non-OK *is* the damage report. Writing a second

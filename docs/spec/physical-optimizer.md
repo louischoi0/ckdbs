@@ -153,7 +153,9 @@ Any relayout of a heap relation operates under exactly these rules.
   to preserve — a different feature.
 - Return a retired page to the free map (§6, gate 3). Retired pages are
   **quarantined** — held out of every allocator. A quarantine leaks; the
-  leak is the honest price and is bounded by how much relayout runs.
+  leak is the honest price and is bounded by how much relayout runs. A
+  dropped relation's pages are the one class the engine frees
+  (`drop-table.md` DT1), and a mover's retired pages are not that class.
 
 ---
 
@@ -203,10 +205,20 @@ three gates, as facts about today's engine:
 3. **Cross-relation page reuse.** Trail validation checks `rel_oid` and the
    Keystone id at the recorded `(page_id, slot)`, ids are issued per
    relation, and `PAGE_INIT` writes epoch 0 — so a page freed from relation
-   A and reallocated to B could validate a stale trail entry. `page.md`
-   §2a's `owner_oid` makes a retired page provably orphaned when its oid
-   resolves to a tombstone, but a page written before §2a reads owner 0
-   permanently, so retired pages are quarantined (§4), never reused.
+   A and reallocated to B could validate a stale trail entry. **Answered
+   for a dropped relation's pages** (`drop-table.md` DT1,
+   `instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md` BF-Q17
+   (a)):
+   - the reclaim frees only pages its owner walk checked;
+   - it frees nothing before no replay can name a page;
+   - the one verifier checks the page's class and `owner_oid` against the
+     location's relation, so a reused page is a miss (BF-R10).
+
+   **Still shut for a mover**, whose relation is live and whose retired
+   pages are quarantined (§4), never reused. Every mountable volume's user
+   pages carry `owner_oid` (superblock 21 refuses older volumes), so the
+   old "a page written before §2a reads owner 0" case describes no
+   mountable volume.
 
 The decisions that would open a gate are not recorded here.
 

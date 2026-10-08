@@ -15,13 +15,17 @@ since AT-S17**: how a name is taken so that two cores cannot both take it
 A statement holds a relation `IS` on every relation it binds, taken by
 the compiler between the name and the schema (AT-S1). **`DROP TABLE` takes
 the relation `X`** (`drop-table.md` DT7), and while a statement's `IS` is
-granted the drop waits for the statement to end. That is the lock's whole
-reach, and `txn.md` §5 owns it: every other DDL is catalog-only and takes
-no relation lock — a rename, an index or assertion build commits under a
-bound statement's `IS` — and the foreign-key check family declares
-nothing (`txn.md` §5, AT-S1's stated omission). Under those, as under a
-refused `IS`, what makes a statement's answer right is `drop-table.md`
-DT1, catalog MVCC and the absence of data-moving DDL, never the word.
+granted the drop waits for the statement to end. `CREATE INDEX`, `DROP INDEX` and a `CREATE ASSERTION`'s build take
+it too, since AT-S5e (`ddl-transactional.md` §5e, §5f), and a child's
+`CREATE TABLE` takes its parent's `IS` for each foreign key it declares
+(BF-Q11 (a)). That is the lock's reach, and `txn.md` §5 owns it: a rename
+is catalog-only and takes no relation lock, and the foreign-key check
+family declares only D9(a)'s parent `IS` and `S` (`foreign-keys.md`).
+Under those, as under a refused `IS`, what makes a statement's answer
+right is catalog MVCC, the absence of data-moving DDL and - for a dropped
+relation - the statement epoch that holds its pages' reclaim until every
+statement that could have bound it has ended (`drop-table.md` DT1), never
+the word.
 **The order this file exists to state**: the lock is the argument where it
 reaches, the word is the fast path everywhere, and nobody removes the lock
 because the word "covers it".

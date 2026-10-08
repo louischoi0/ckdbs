@@ -814,8 +814,11 @@ from a 2-core host. The census re-measures the hand-off's p50 and p99, under
   after a compare-and-swap of its pin count from 0 to a sentinel, so a
   concurrent fetch either pins first or misses. EV4 (a pinned frame is never
   a victim) then holds by that compare-and-swap rather than by the latch.
-- **`IsAllocated` leaves the hit path**, because nothing frees a page
-  (`page.md:130`). It stays on the miss and create paths.
+- **`IsAllocated` leaves the hit path**, because no clear bit has a
+  resident frame: the one free primitive erases a page's frame in the hold
+  that clears its bit (`page.md` §5, BF-R5; the reason this bullet gave,
+  "nothing frees a page", BF made false). It stays on the miss and create
+  paths.
 - **This re-opens AM-S2's decision** that pin accounting lives under the
   structure latch (`device_page_store.hpp:801-805`): BA-Q5.
 

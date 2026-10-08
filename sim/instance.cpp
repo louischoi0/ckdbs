@@ -63,6 +63,7 @@ Status SimInstance::Boot() {
     // Whether this boot owes the two steps that have to follow the dispatcher
     // (see below). A local: both the set and the read are inside this function.
     const bool run_recovery_tail = !options_.skip_recovery;
+    wal::Lsn reclaim_gate = 0;
 
     undo_.emplace(*store_, wal_.get());
     // Recovery in drain mode, as the expeditor runs it (BE-Q11).
@@ -79,6 +80,9 @@ Status SimInstance::Boot() {
             wal_.get(), /*log=*/nullptr, /*clock=*/nullptr);
         if (!recovered.ok()) return recovered.status();
         recovery_ = recovered.value();
+        // BF-R4's gate for a tombstone this boot finds pending, as
+        // `Expeditor::Open` takes it: where the recovery scan ended.
+        reclaim_gate = recovery_.scan_end;
         // RV3 D3a, exactly as the expeditor does it: redo mutated catalog
         // pages, so whatever the cache holds predates them.
         boot_->catalog.DropCache();
@@ -129,6 +133,13 @@ Status SimInstance::Boot() {
             boot_->superblock.wal_anchor(0).checkpoint_lsn, dispatcher_->assertions(),
             recovery_, /*log=*/nullptr);
         if (Status s = RunCheckpoint(); !s.ok()) return s;
+        // The mount-time reclaim (BF-R8), collected after the completion
+        // checkpoint and driven to its end here - the harness has no tick,
+        // and what a later statement may find is a reclaimed volume. A
+        // refused job is the harness's to report (`reclaim_refused`).
+        reclaimer_.emplace(boot_->catalog, *store_, reclaim_counters_, /*log=*/nullptr);
+        if (Status s = reclaimer_->CollectAtMount(reclaim_gate); !s.ok()) return s;
+        reclaim_gate_ = reclaim_gate;
     }
     return Status::OK();
 }
@@ -147,11 +158,34 @@ void SimInstance::Recycle(wal::Lsn durable_redo_start) {
     wal_->RecycleBelow(durable_redo_start);
 }
 
+Status SimInstance::ReclaimStep() {
+    if (!reclaimer_.has_value() || reclaim_counters_.pending.load() == 0) return Status::OK();
+    return reclaimer_->Step(anchor_->durable_redo_start());
+}
+
+Status SimInstance::SettleReclaim() {
+    if (!reclaimer_.has_value()) return Status::OK();
+    // A gate the completion checkpoint did not open will not open by
+    // stepping: the harness runs no cadence checkpoint here.
+    if (reclaimer_->jobs() != 0 && anchor_->durable_redo_start() < reclaim_gate_) {
+        return Status::IoError("the redo start " + std::to_string(anchor_->durable_redo_start()) +
+                                " never reached the reclaim's gate " +
+                                std::to_string(reclaim_gate_));
+    }
+    while (reclaimer_->jobs() != 0 && reclaim_counters_.refused.load() == 0) {
+        if (Status s = reclaimer_->Step(anchor_->durable_redo_start()); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
 Status SimInstance::RunCheckpoint() {
     storage::PageStoreCheckpointTarget target(*store_);
-    server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
-    anchor.SetRecycler([this](wal::Lsn d) { Recycle(d); });
-    return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
+    // The boot's one anchor, built at its first checkpoint (BF-R12).
+    if (!anchor_.has_value()) {
+        anchor_.emplace(boot_->superblock, *store_);
+        anchor_->SetRecycler([this](wal::Lsn d) { Recycle(d); });
+    }
+    return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, *anchor_,
                                            /*log=*/nullptr, /*clock=*/nullptr,
                                            /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
 }
@@ -160,6 +194,9 @@ void SimInstance::TearDown() {
     // Reverse of Boot(). The session first: it may hold a pointer into the
     // transaction manager it sits above.
     session_ = server::Session();
+    reclaimer_.reset();
+    reclaim_counters_.Reset();
+    anchor_.reset();
     dispatcher_.reset();
     trail_recorder_.reset();
     cabin_store_.reset();

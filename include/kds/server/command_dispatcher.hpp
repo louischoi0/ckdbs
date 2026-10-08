@@ -150,6 +150,10 @@ class Scheduler;
 
 namespace kds::server {
 
+struct ReclaimCounters;  // page_reclaim.hpp
+class PageReclaimer;     // page_reclaim.hpp
+class StatementEpochs;   // statement_epoch.hpp
+
 // What the mount's recovery did (`server/mount_recovery.hpp`), reported by
 // SHOW META. Forward-declared rather than included: only the pointer is held
 // here, and the definition drags in the WAL and catalog headers that every
@@ -1114,11 +1118,13 @@ private:
     // is a reactor to park on, leaves `lock_wait_` set so `DispatchAsync`
     // waits for the holder to release and runs the statement again.
     //
-    // One caller, `DROP TABLE`: AR2 §3's DDL row names `CREATE`, `ALTER`
-    // and `CREATE INDEX` too, and none of them takes this - the drop is the
-    // only one whose census fate AO-S6e owed.
+    // `DROP TABLE`, the index DDL and an assertion's build take the relation
+    // `X`; `CREATE TABLE` takes each referenced parent's `IS` through `mode`
+    // (BF-Q11 (a)), so a parent's drop and a child's declaration exclude
+    // each other.
     std::optional<Status> BorrowRelationForDdl(txn::Transaction* holder, catalog::Oid oid,
-                                               bool poisons = true);
+                                               bool poisons = true,
+                                               txn::LockMode mode = txn::LockMode::kExclusive);
 
     // `mode` is the unit's: `X` for a writer's row, range or fence, `S` for
     // a foreign key's parent row (D9(a), AY-S5). The intention asked above
@@ -1222,7 +1228,11 @@ private:
     // EndDdlScope's core, keyed by id: the session-based wrapper serves
     // explicit COMMIT/ROLLBACK, this serves an implicit DDL transaction
     // whose resolution EndWrite performed.
-    void EndDdlScopeById(std::uint64_t txn_id);
+    //
+    // `committed_lsn` is the commit's LSN on a commit arm and `kNoLsn` on
+    // every other: a drop the transaction made is queued for reclamation
+    // only on the first (BF-R9), and forgotten on either.
+    void EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed_lsn = wal::kNoLsn);
 
     // The view a statement resolves relation names under
     // (workplan-ddl-transactional.md DT3c), or `nullopt` for "see
@@ -1273,7 +1283,7 @@ private:
     // is the normal state and the one `ViewFor` optimises for. Entries
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
-    void EndDdlScope(const Session& session);
+    void EndDdlScope(const Session& session, wal::Lsn committed_lsn = wal::kNoLsn);
     // Delete-marked catalog rows retired since mount by the horizon-gated
     // purge EndDdlScope runs (ddl-transactional.md §5d). SHOW META
     // prints it beside `catalog_marks_finalized`, whose count is the
@@ -1647,6 +1657,58 @@ public:
     // collects nothing, which is every configuration that does not want the
     // instrument. `sink` must outlive this.
     void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
+
+    // The instance's reclaim counters (BF-R11), which `SHOW META` prints on
+    // every core; null - every hand-built dispatcher - prints none of the
+    // reclaim half. `counters` must outlive this.
+    void SetReclaimCounters(const ReclaimCounters* counters) noexcept {
+        reclaim_counters_ = counters;
+    }
+
+    // **Reclaim within the run** (BF-R9): the instance's statement-epoch
+    // slots, which every statement head on this core publishes into, and
+    // the reclaimer a committed drop is queued with. Null - every
+    // hand-built dispatcher - publishes nothing and queues nothing, so a
+    // drop is reclaimed at the next mount (BF-R8). Both must outlive this.
+    void SetStatementEpochs(StatementEpochs* epochs) noexcept { epochs_ = epochs; }
+    void SetReclaimQueue(PageReclaimer* reclaimer) noexcept { reclaim_queue_ = reclaimer; }
+
+    // **A statement head** (BF-R9): publishes `kEntering` in this core's
+    // slot, revalidates the catalog, then publishes the word the cache was
+    // revalidated at; the slot goes idle when the scope ends. A nested head
+    // - a statement run from inside another's - leaves the outer one's
+    // publication standing. Every `DispatchAndStage` is one; the KWP load
+    // endpoint's two handlers, which bind outside it, take one each.
+    class StatementEpochScope {
+    public:
+        explicit StatementEpochScope(CommandDispatcher& dispatcher);
+        ~StatementEpochScope();
+        StatementEpochScope(const StatementEpochScope&) = delete;
+        StatementEpochScope& operator=(const StatementEpochScope&) = delete;
+
+    private:
+        CommandDispatcher& d_;
+    };
+
+    // **A seam in the statement head** (BF-R12), at one of three points:
+    // inside `Revalidate`, just after it reads the word - the point that
+    // tells "published before the read" from "after" -, between
+    // `Revalidate` and the publish - the window a reclaim must treat as a
+    // statement holding an old memo, seen as `kEntering` - or after the
+    // publish, where the slot holds the word that memo was built at. Set
+    // and cleared while no statement runs; empty in production.
+    enum class EpochSeam { kAfterRead, kBeforePublish, kAfterPublish };
+    void SetEpochSeamForTest(EpochSeam at, std::function<void()> hook) {
+        epoch_seam_at_ = at;
+        epoch_seam_for_test_ = std::move(hook);
+    }
+
+    // **A seam in `DROP TABLE`** (BF-Q11 (a)), between its first RESTRICT
+    // ask and its `X` request: a foreign key created there must still
+    // refuse the drop, through the second ask. Empty in production.
+    void SetBeforeDropExclusiveForTest(std::function<void()> hook) {
+        before_drop_exclusive_for_test_ = std::move(hook);
+    }
 
     // **`SetAccessBatch` and `SetAccessStatsApplied` stood here and are
     // gone** (AT-S7). A peer had no way to write `sys.access_stats`, so it
@@ -2244,6 +2306,26 @@ private:
     // always did, and so that "identical replies with cabins on and off" is
     // a property of the structure rather than of the test data.
     stats::CabinStore* cabins_ = nullptr;
+
+    // `SetReclaimCounters`'; null outside an assembled instance.
+    const ReclaimCounters* reclaim_counters_ = nullptr;
+    // BF-R9's two, null outside an assembled instance.
+    StatementEpochs* epochs_ = nullptr;
+    PageReclaimer* reclaim_queue_ = nullptr;
+    // Statement heads open on this core: only the outermost publishes.
+    int epoch_depth_ = 0;
+    EpochSeam epoch_seam_at_ = EpochSeam::kBeforePublish;
+    std::function<void()> epoch_seam_for_test_;
+    std::function<void()> before_drop_exclusive_for_test_;
+    // **What an open transaction's drops owe** (BF-R9): recorded when the
+    // drop's catalog write succeeds, queued by `EndDdlScopeById` at the
+    // transaction's commit, and forgotten at its other endings.
+    struct OwedDrop {
+        std::uint64_t txn_id = 0;
+        catalog::Oid oid = 0;
+        catalog::PendingRoots roots;
+    };
+    std::vector<OwedDrop> owed_drops_;
 
     // The live assertions and their reservation bookkeeping (workplan
     // AST06/AST07): CREATE ASSERTION's build moves its LiveAssertion in

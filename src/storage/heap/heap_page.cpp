@@ -238,6 +238,18 @@ StatusOr<PageView::Tuple> PageView::ReadTuple(std::uint16_t slot_idx) const {
     if ((slot.flags & kSlotFlagDead) != 0 || slot.length == 0) {
         return Status::NotFound("slot is dead");
     }
+    // **The slot must lie inside the page, header and payload both**
+    // (BF-R10). A page this store hands out is one the slot directory
+    // describes, but a stale location on a reused id can name a page of
+    // another class - a var-heap or an index page - whose bytes read as a
+    // directory entry pointing anywhere. Corruption, never a read past the
+    // frame.
+    if (slot.length < kTupleHeaderOnDiskSize ||
+        static_cast<std::size_t>(slot.offset) + slot.length > kPageSize) {
+        return Status::Corruption("heap page: slot " + std::to_string(slot_idx) + " at offset " +
+                                  std::to_string(slot.offset) + " length " +
+                                  std::to_string(slot.length) + " leaves the page");
+    }
 
     const std::byte* tuple_base = page_.data() + slot.offset;
     Tuple t{};
@@ -248,6 +260,10 @@ StatusOr<PageView::Tuple> PageView::ReadTuple(std::uint16_t slot_idx) const {
     std::uint16_t data_len;
     std::memcpy(&data_len, tuple_base + kTupleDataLenOffset, sizeof(data_len));
 
+    if (static_cast<std::size_t>(data_len) + kTupleHeaderOnDiskSize > slot.length) {
+        return Status::Corruption("heap page: slot " + std::to_string(slot_idx) +
+                                  " carries a payload longer than its tuple");
+    }
     t.payload = std::span<const std::byte>(tuple_base + kTupleHeaderOnDiskSize, data_len);
     return t;
 }

@@ -441,10 +441,12 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             ++stats.pages_created;
         } else {
             // Named, because "page id not found" alone says nothing about
-            // which record described a page nobody has - and this refusal is
-            // reachable through RV3's unlogged catalog (a relation's pages are
-            // created by DDL without a PAGE_INIT, so a crash can lose the page
-            // while the log still holds writes to it).
+            // which record described a page nobody has. Every logged
+            // creation's first record is a PAGE_INIT or a page image (BF-S1's
+            // Census A, CREATE TABLE's three pages included), so this is
+            // reached by a page whose bit a reclaim cleared while the log
+            // still named it - which BF-R4's gate exists to rule out - or by
+            // damage.
             return got.status().WithContext(
                 std::string("redo: ") + RecordTypeName(record.type()) + " at lsn " +
                 std::to_string(record.header.lsn) + " names page " + std::to_string(page_id) +
@@ -563,9 +565,9 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         const Applier applier = ApplierFor(record.type());
         if (applier == nullptr) {
             // wal.md §5.2: an unknown type during replay is a hard error,
-            // never skipped. ALLOC/FREE land here too - they are assigned
-            // and emitted by nothing (page.md §5's SpaceManager is unbuilt),
-            // so one in a stream means the stream was written by something
+            // never skipped. ALLOC/FREE land here too - both are reserved and
+            // emitted by nothing, a page being freed without a record (BF-R4)
+            // - so one in a stream means the stream was written by something
             // this build does not know.
             return Status::Corruption("redo: no applier for record type " +
                                       std::string(RecordTypeName(record.type())) + " at lsn " +

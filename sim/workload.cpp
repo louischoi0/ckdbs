@@ -33,6 +33,7 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kRollback: return "rollback";
         case Op::Kind::kCreateCabin: return "create-cabin";
         case Op::Kind::kInsertNamed: return "insert-named";
+        case Op::Kind::kDropTable: return "drop-table";
     }
     return "unknown";
 }
@@ -42,13 +43,14 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
          {Op::Kind::kCreateTable, Op::Kind::kInsert, Op::Kind::kSelectPk,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kUpdate,
           Op::Kind::kDelete, Op::Kind::kBegin, Op::Kind::kCommit, Op::Kind::kRollback,
-          Op::Kind::kCreateCabin, Op::Kind::kInsertNamed}) {
+          Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
 }
 
-Workload::Workload(Rng rng, Profile profile) : rng_(std::move(rng)), profile_(profile) {
+Workload::Workload(Rng rng, Profile profile)
+    : rng_(std::move(rng)), profile_(profile), drop_rng_(rng_.Fork("drop")) {
     // 1-3 tables, each independently heap or btree. Decided up front so
     // the table set is stable however many ops are drawn.
     const std::size_t count = 1 + rng_.Below(3);
@@ -91,7 +93,44 @@ std::string Workload::NextName() {
     return out;
 }
 
-Workload::Table& Workload::PickTableMutable() { return tables_[rng_.Below(tables_.size())]; }
+Workload::Table& Workload::PickTableMutable() {
+    // A run with nothing dropped draws exactly as it always did.
+    const std::vector<std::size_t> live = LiveIndices();
+    if (live.size() == tables_.size()) return tables_[rng_.Below(tables_.size())];
+    return tables_[live[rng_.Below(live.size())]];
+}
+
+// The tables no drop has taken. Every one has been created: `Next()` emits
+// a CREATE for each before any other op.
+std::vector<std::size_t> Workload::LiveIndices() const {
+    std::vector<std::size_t> live;
+    for (std::size_t i = 0; i < tables_.size(); ++i) {
+        if (!tables_[i].dropped) live.push_back(i);
+    }
+    return live;
+}
+
+// A fresh name in a dropped one's place, created by the next `Next()`.
+void Workload::AddReplacement() {
+    tables_.push_back(Table{"t" + std::to_string(tables_.size()), drop_rng_.Chance(50), 0});
+}
+
+Op Workload::Drop() {
+    const std::vector<std::size_t> live = LiveIndices();
+    const std::size_t index = live[drop_rng_.Below(live.size())];
+    tables_[index].dropped = true;
+    --drops_left_;
+    if (in_txn_) {
+        txn_drops_.push_back(index);
+    } else {
+        AddReplacement();
+    }
+    Op op;
+    op.kind = Op::Kind::kDropTable;
+    op.table = tables_[index].name;
+    op.sql = "DROP TABLE " + op.table;
+    return op;
+}
 
 const Workload::Table& Workload::PickTable() { return PickTableMutable(); }
 
@@ -272,11 +311,25 @@ Op Workload::Next() {
                 }
             }
             txn_named_.clear();
+            // A committed drop's name gets its replacement; a rolled-back
+            // one is live again.
+            for (const std::size_t index : txn_drops_) {
+                if (commit) {
+                    AddReplacement();
+                } else {
+                    tables_[index].dropped = false;
+                    ++drops_left_;
+                }
+            }
+            txn_drops_.clear();
             return op;
         }
         --txn_ops_left_;
+        if (drops_left_ != 0 && LiveIndices().size() >= 2 && drop_rng_.Chance(3)) return Drop();
         return DataOp();
     }
+
+    if (drops_left_ != 0 && LiveIndices().size() >= 2 && drop_rng_.Chance(2)) return Drop();
 
     // 85 data ops, 4 syncs, 3 Cabin declarations and 8 transaction starts
     // per hundred rolls. Three of the data ops were `CREATE PATTERN` until

@@ -1,4 +1,6 @@
 #include "sim/loop.hpp"
+#include "kds/storage/page_header.hpp"
+#include "kds/server/page_reclaim.hpp"
 
 #include <algorithm>
 #include <array>
@@ -127,6 +129,13 @@ struct Iteration {
     // the generator would then apply a whole transaction's writes to an
     // oracle the engine never opened one for.
     bool txn_open = false;
+
+    // **The census's ledger** (BF-R12): each committed drop's oid, with every
+    // page its roots reached at the commit and that page's owner, taken by
+    // the reclaim's own walk. The open transaction's drops wait for its
+    // COMMIT.
+    std::map<std::uint64_t, std::vector<std::pair<PageId, std::uint64_t>>> ledger;
+    std::vector<std::uint64_t> txn_drop_oids;
 
     bool faults_on() const { return config.faults != FaultProfile::kNone; }
 };
@@ -293,9 +302,10 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
         // it did not know was open, writing to an oracle that thinks it is
         // committing. So the client does what the engine tells it to.
         if (it.txn_open) {
-            it.oracle.Abandon();
+            it.oracle.Abandon(/*commit_unknown=*/op.kind == Op::Kind::kCommit);
             it.instance.Execute("ROLLBACK");  // no-op if it really did end
             it.txn_open = false;
+            it.txn_drop_oids.clear();  // unknown, so never ledgered
         }
         it.trace.Note("txn abandoned at op " + std::to_string(op_index));
         return;
@@ -323,6 +333,10 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
             for (const std::uint64_t id : it.oracle.Matching(op.table, PredicateOf(op))) {
                 it.oracle.NoteUnchecked(op.table, id);
             }
+            break;
+        case Op::Kind::kDropTable:
+            // Unknown either way, and the stream names the relation no more.
+            it.oracle.DropTable(op.table, /*indeterminate=*/true);
             break;
         default:
             break;
@@ -398,6 +412,41 @@ bool CheckNamedInsert(Iteration& it, const Op& op, const std::string& reply,
     }
     ++it.verdict.ops_run;
     return true;
+}
+
+// The oid a `DROPPED TABLE <name> oid=<n>` reply names, or 0.
+std::uint64_t DroppedOid(const std::string& reply) {
+    const std::size_t at = reply.find(" oid=");
+    return at == std::string::npos ? 0 : std::strtoull(reply.c_str() + at + 5, nullptr, 10);
+}
+
+// A committed drop's ledger entry: what its tombstone's roots reach now,
+// with each page's owner. Nothing when this boot runs no reclaim.
+void LedgerDrop(Iteration& it, std::uint64_t oid) {
+    server::PageReclaimer* reclaimer = it.instance.reclaimer();
+    if (reclaimer == nullptr || oid == 0) return;
+    auto pending = it.instance.catalog().PendingReclaims();
+    if (!pending.ok()) {
+        Fail(it, "the drop of oid " + std::to_string(oid) + " left no readable tombstone: " +
+                     pending.status().message());
+        return;
+    }
+    for (const catalog::Catalog::PendingReclaim& owed : pending.value()) {
+        if (owed.oid != oid) continue;
+        auto reach = reclaimer->ReachFrom(owed.oid, owed.roots);
+        if (!reach.ok()) {
+            Fail(it, "the dropped relation oid " + std::to_string(oid) +
+                         " could not be walked: " + reach.status().message());
+            return;
+        }
+        auto& entry = it.ledger[oid];
+        for (const PageId page : reach.value().pages) {
+            auto bytes = it.instance.store().GetForRead(page);
+            entry.emplace_back(page, bytes.ok() ? storage::GetOwnerOid(bytes.value().bytes()) : 0);
+        }
+        return;
+    }
+    Fail(it, "the drop of oid " + std::to_string(oid) + " committed and owes nothing");
 }
 
 bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
@@ -496,6 +545,11 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             it.oracle.Commit();
             it.txn_open = false;
             ++it.verdict.transactions;
+            for (const std::uint64_t oid : it.txn_drop_oids) {
+                ++it.verdict.drops;
+                LedgerDrop(it, oid);
+            }
+            it.txn_drop_oids.clear();
             break;
         case Op::Kind::kRollback:
             if (reply.rfind("ROLLBACK ", 0) != 0) {
@@ -504,6 +558,7 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             }
             it.oracle.Rollback();
             it.txn_open = false;
+            it.txn_drop_oids.clear();
             ++it.verdict.transactions;
             break;
         case Op::Kind::kSelectPk:
@@ -533,6 +588,19 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             }
             it.oracle.MarkSynced();
             break;
+        case Op::Kind::kDropTable:
+            if (reply.rfind("DROPPED TABLE", 0) != 0) {
+                Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
+                return false;
+            }
+            it.oracle.DropTable(op.table);
+            if (it.txn_open) {
+                it.txn_drop_oids.push_back(DroppedOid(reply));
+            } else {
+                ++it.verdict.drops;
+                LedgerDrop(it, DroppedOid(reply));
+            }
+            break;
     }
     ++it.verdict.ops_run;
     return true;
@@ -548,6 +616,7 @@ void CloseOpenTransaction(Iteration& it) {
     if (!it.txn_open) return;
     const std::string reply = it.instance.Execute("ROLLBACK");
     it.txn_open = false;
+    it.txn_drop_oids.clear();
     if (IsErr(reply)) {
         it.oracle.Abandon();
     } else {
@@ -669,6 +738,125 @@ void Reconcile(Iteration& it) {
     }
 }
 
+// **The dropped relations, and the census** (BF-R12), after the reboot's
+// reclaim has run to its end.
+//
+// A committed drop stays gone - in every mode once a SYNC followed it, and
+// on a clean stop always. Without that SYNC a crash may bring it back, its
+// commit not on the device: then it holds what it held, or nothing the
+// oracle never saw.
+//
+// The census, three ways:
+// - **the ledger**: every page a dropped relation's roots reached at its
+//   commit is free now, or another owner's (a reuse);
+// - **an owner scan, independent of the walk**: no allocated page still
+//   carries a reclaimed relation's oid, or one of its indexes' - which is
+//   what catches a walk that never reached a tree, since the ledger came
+//   from that same walk. Under faults a failed growth or split may leave such
+//   a page unlinked, a stated leak (`drop-table.md` DT1), so it is counted
+//   there and a failure only in a fault-free run;
+// - **every live relation's walk** refuses no page, and no page is reached
+//   from two of them.
+// A relation a crash brought back is skipped, its drop undone.
+void ReconcileDrops(Iteration& it) {
+    const SimMode mode = it.config.mode;
+    for (const auto& [table, drop] : it.oracle.dropped()) {
+        const std::string reply = it.instance.Execute("SELECT * FROM " + table);
+        if (IsErr(reply)) continue;
+        if (!drop.indeterminate && (mode == SimMode::kClean || drop.synced)) {
+            Fail(it, "after restart, the dropped relation '" + table + "' is back");
+            return;
+        }
+        std::set<std::string> held;
+        for (const auto& [id, row] : drop.rows) held.insert(Oracle::Render(id, row));
+        for (const std::string& row : RowsOf(reply)) {
+            if (held.count(row) != 0 || it.oracle.Ignorable(table, row)) continue;
+            Fail(it, "after restart, the dropped relation '" + table +
+                         "' came back holding a row it never held: '" + row + "'");
+            return;
+        }
+        ++it.verdict.drops_restored;
+    }
+
+    server::PageReclaimer* reclaimer = it.instance.reclaimer();
+    if (reclaimer == nullptr) return;
+    if (it.instance.reclaim_counters().refused.load() != 0) {
+        Fail(it, "the mount's reclaim refused a dropped relation");
+        return;
+    }
+    auto pending = it.instance.catalog().PendingReclaims();
+    if (!pending.ok()) {
+        Fail(it, "census: " + pending.status().message());
+        return;
+    }
+    if (!pending.value().empty()) {
+        Fail(it, "after the mount's reclaim, " + std::to_string(pending.value().size()) +
+                     " dropped relation(s) still owe pages");
+        return;
+    }
+    // The owners a reclaim must have cleared: each ledgered drop that was
+    // not undone - a `sys.tables` row is back only for a drop a crash undid -
+    // with every owner its pages carried, its indexes' included.
+    std::map<std::uint64_t, std::uint64_t> reclaimed_owners;  // owner -> the drop's oid
+    std::set<PageId> ledgered;
+    for (const auto& [oid, pages] : it.ledger) {
+        if (it.instance.catalog().GetSysTableRow(oid).ok()) continue;  // undone
+        for (const auto& [page, owner] : pages) {
+            reclaimed_owners.emplace(owner, oid);
+            ledgered.insert(page);
+        }
+    }
+    storage::DevicePageStore& store = it.instance.store();
+    const std::uint32_t capacity = it.instance.page_device().page_capacity();
+    for (PageId page = server::kFirstUserPageId; page < capacity; ++page) {
+        if (!store.IsAllocated(page) || storage::IsMapPageId(page) || store.IsHeaderless(page)) {
+            continue;
+        }
+        auto bytes = store.GetForRead(page);
+        if (!bytes.ok()) continue;  // the integrity sweep reports an unreadable page
+        const auto owner = reclaimed_owners.find(storage::GetOwnerOid(bytes.value().bytes()));
+        if (owner == reclaimed_owners.end()) continue;
+        ++it.verdict.census_pages;
+        if (ledgered.count(page) != 0) {
+            Fail(it, "census: page " + std::to_string(page) + " of the dropped relation oid " +
+                         std::to_string(owner->second) + " is still allocated after its reclaim");
+            return;
+        }
+        if (!it.faults_on()) {
+            Fail(it, "census: page " + std::to_string(page) + " carries the dropped relation oid " +
+                         std::to_string(owner->second) +
+                         "'s owner, is still allocated, and its reclaim's walk never reached it");
+            return;
+        }
+        ++it.verdict.census_leaks;
+    }
+    std::map<PageId, std::string> reached;
+    for (const auto& [table, rows] : it.oracle.tables()) {
+        (void)rows;
+        auto oid = it.instance.catalog().FindTableOidByName(table);
+        if (!oid.ok()) continue;  // a lost CREATE, which Reconcile has counted
+        auto row = it.instance.catalog().GetSysTableRow(oid.value());
+        if (!row.ok()) continue;
+        auto reach = reclaimer->ReachFrom(
+            oid.value(), catalog::PendingRoots{row.value().anchor_page_id,
+                                               row.value().varheap_page_id});
+        if (!reach.ok() || reach.value().skipped != 0) {
+            Fail(it, "census: the live relation '" + table + "' does not walk clean: " +
+                         (reach.ok() ? std::to_string(reach.value().skipped) + " page(s) refused"
+                                     : reach.status().message()));
+            return;
+        }
+        for (const PageId page : reach.value().pages) {
+            auto [at, inserted] = reached.emplace(page, table);
+            if (!inserted) {
+                Fail(it, "census: page " + std::to_string(page) + " is reached from both '" +
+                             at->second + "' and '" + table + "'");
+                return;
+            }
+        }
+    }
+}
+
 // The three advisory switches for one iteration: whatever the config
 // pinned, or a seeded draw. Drawing them is the point — the oracle does
 // not know they exist, so every iteration is also a test that they
@@ -724,6 +912,11 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             it.trace.Note("armed " + ScheduledFault{i, kind}.Describe());
         }
         const bool op_ok = ExecuteOp(it, entry.op, i);
+        // **The reclaim's tick, between statements** (BF-R8): one bounded
+        // step after every op, so a mount's reclaim runs while the stream
+        // creates - freed ids reused before the clear - and a crash the seed
+        // places can land in the middle of it.
+        if (op_ok && !it.instance.log_stopped()) (void)it.instance.ReclaimStep();
         if (it.faults_on()) {
             const std::uint64_t fired =
                 InjectionsFired(it.instance.page_device(), it.instance.log_device());
@@ -838,6 +1031,12 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
         Fail(it, "reboot failed: " + s.message());
         return false;
     }
+    // What the mount owes, freed before anything reads the volume - the
+    // run's tick would have, given time.
+    if (Status s = it.instance.SettleReclaim(); !s.ok()) {
+        Fail(it, "the mount's reclaim did not finish: " + s.message());
+        return false;
+    }
 
     const IntegrityReport report =
         CheckInstance(it.instance.store(), it.instance.page_device(), it.instance.catalog());
@@ -847,6 +1046,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     }
 
     Reconcile(it);
+    ReconcileDrops(it);
     record_recycling();
     return verdict.ok;
 }
@@ -974,6 +1174,7 @@ bool SameOutcome(const Op& op, const std::string& bare, const std::string& full)
     switch (op.kind) {
         case Op::Kind::kCreateTable:
         case Op::Kind::kCreateCabin:
+        case Op::Kind::kDropTable:  // its reply names an oid the features move
             return IsErr(bare) == IsErr(full);
         case Op::Kind::kInsert:
             return ParseInsertedId(bare) == ParseInsertedId(full);

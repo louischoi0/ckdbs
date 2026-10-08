@@ -20,12 +20,12 @@
 // structure that has to agree with the device. Two records of the same
 // fact is one record too many.
 //
-// Ownership / concurrency: this SuperBlock is owned exclusively by the
-// single master server thread (src/server). Per rules.md #3
-// (thread-per-core, shared-nothing; cross-core communication uses explicit
-// message/queue interfaces), other cores never touch an instance directly.
-// That single-writer property is what lets every method below be a plain
-// non-atomic read or write.
+// Ownership / concurrency: one SuperBlock for the instance, which every core
+// writes - an anchor publish, a transaction-id carve - under the superblock
+// latch (`Expeditor`'s, `rules.md` §3). The methods below are plain
+// non-atomic reads and writes because every concurrent caller holds that
+// latch (null where one thread writes page 0), not because one thread owns
+// the object.
 //
 // Persistence: this file only does in-memory state plus encode/decode to
 // a raw kPageSize buffer (same field-wise memcpy, no reinterpret_cast,
@@ -253,7 +253,17 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // operator's standing order of 2026-10-07, `raft-marks-2026-10-07.md` §11),
 // which retires BB-R11's mount check: no version-20 volume carries the
 // `sys.tables` byte it read set.
-inline constexpr std::uint32_t kSuperBlockVersion = 20;
+// 20 -> 21 (2026-10-07, BF-R2, BF-Q4): **a dropped relation's tombstone
+// carries the roots its reclaim walks from**
+// (`instructions/v3.0.0/workorder-bf-drop-table-page-reclaim.md`). The
+// `sys.objects` word at offset 24, written 0 for every table until now, is
+// `pending_roots` on a tombstone: the anchor and the var-heap root, packed,
+// written by the drop's retype and cleared once the reclaim is durable. A
+// version-20 volume's tombstones carry 0 there, which this build would read
+// as "nothing owed" and so leak their pages for good; refused with no
+// migration (`raft-marks-2026-10-07.md` §11), so every tombstone on a
+// mountable volume was written by a drop that recorded what it owes.
+inline constexpr std::uint32_t kSuperBlockVersion = 21;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //
