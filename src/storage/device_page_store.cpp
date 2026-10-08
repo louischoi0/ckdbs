@@ -1243,6 +1243,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
         LatchGuard alloc(map_latch());
         page_id = PopFreeListLocked();
     }
+    const bool popped = page_id != kInvalidPageId;
     // FM3/FM5: the search crosses regions, and creates the next one when it
     // runs off the end of the last. **Every core's allocation since
     // AW-S1b**: a peer used to take its id from a run core 0 had reserved
@@ -1278,9 +1279,20 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // the bit), so the in-use test `CreateAtUnpinned` makes is not repeated
     // here; a fault that races the insert below on a reused id is what
     // `InsertFrame`'s create refusal answers.
-    if (Status s = EnsureAddressable(page_id); !s.ok()) return s;
+    // **A create that fails after its claim gives the claim back.** Left
+    // set, the bit is an allocated id no page will ever be written at - a
+    // read answers "allocated but never written" for the life of the
+    // volume. Found by BF-S4's sim through an injected growth refusal; the
+    // order predates BF.
+    if (Status s = EnsureAddressable(page_id); !s.ok()) {
+        ReleaseClaim(page_id, popped);
+        return s;
+    }
     if (headerless) {
-        if (Status s = MarkHeaderlessBeforeInsert(page_id); !s.ok()) return s;
+        if (Status s = MarkHeaderlessBeforeInsert(page_id); !s.ok()) {
+            ReleaseClaim(page_id, popped);
+            return s;
+        }
     }
     auto bytes = std::make_unique<Page>();
     bytes->fill(std::byte{0});
@@ -1293,6 +1305,31 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     auto inserted = InsertFrame(page_id, std::move(bytes), /*dirty=*/true, Inserting::kCreate);
     if (!inserted.ok()) return inserted.status();
     return std::make_pair(page_id, inserted.value());
+}
+
+void DevicePageStore::ReleaseClaim(PageId page_id, bool popped) noexcept {
+    AssertNotUnderMapHold("ReleaseClaim");
+    LatchGuard map(map_latch());
+    MapRegion* pages = MutableRegion(FreeMapRegionOf(page_id));
+    if (pages == nullptr) return;  // the claim found it; regions are never removed
+    FreeMapRelease(std::span<std::byte, kPageSize>(pages->free_map), FreeMapBitIndexOf(page_id));
+    pages->dirty = true;
+    --allocated_pages_;
+    if (popped) {
+        // Back on the list it came from; the cursor passes over it there.
+        --pages_reused_;
+        free_list_.insert(page_id);
+        NoteFreeListSize();
+    } else if (next_new_page_id_ == page_id + 1) {
+        // The cursor's own claim, with nothing claimed after it: the cursor
+        // steps back, so the next create finds the id again. It was at or
+        // above the floor when claimed, so this never lowers past it.
+        next_new_page_id_ = page_id;
+    } else {
+        // Another claim moved the cursor past it: the list hands it out.
+        free_list_.insert(page_id);
+        NoteFreeListSize();
+    }
 }
 
 StatusOr<PageStore::FreeOutcome> DevicePageStore::FreePage(PageId page_id) {

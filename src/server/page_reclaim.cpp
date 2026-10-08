@@ -134,7 +134,12 @@ bool PageReclaimer::VisitOne(Job& job, const Visit& visit) {
     if (!ref.ok()) {
         // Already free: a re-drive meeting what an earlier pass freed. Its
         // children went first (BF-R7), so there is nothing below it to find.
-        if (ref.status().code() == StatusCode::kNotFound) return true;
+        // A census walk has no earlier pass: there it is a link to a page
+        // that is not there, and counts.
+        if (ref.status().code() == StatusCode::kNotFound) {
+            if (job.census) Skip(job, visit.page, "is not allocated, or was never written");
+            return true;
+        }
         if (ref.status().code() == StatusCode::kResourceExhausted) {
             job.stalled = true;
             return true;
@@ -326,8 +331,31 @@ bool PageReclaimer::FreeSome(Job& job, std::size_t& budget) {
     return true;
 }
 
+StatusOr<PageReclaimer::Reach> PageReclaimer::ReachFrom(catalog::Oid oid,
+                                                        catalog::PendingRoots roots) {
+    Job job;
+    job.oid = oid;
+    job.roots = roots;
+    job.census = true;
+    job.frontier.push_back(Visit{roots.anchor, Expect::kAnchor, oid, kAnyLevel});
+    std::size_t budget = static_cast<std::size_t>(-1);
+    if (!WalkSome(job, budget)) return Status::Corruption(job.refusal);
+    // A refused fault leaves the visit on the frontier: not the whole reach.
+    if (!job.frontier.empty()) {
+        return Status::ResourceExhausted("the walk met a refused fault at page " +
+                                         std::to_string(job.frontier.back().page));
+    }
+    Reach out;
+    out.pages.assign(job.seen.begin(), job.seen.end());
+    std::sort(out.pages.begin(), out.pages.end());
+    out.skipped = job.skipped;
+    return out;
+}
+
 void PageReclaimer::Refuse(Job& job, const std::string& why) {
     job.phase = Phase::kRefused;
+    job.refusal = why;
+    if (job.census) return;
     counters_.refused.fetch_add(1, std::memory_order_relaxed);
     if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
         log_->Warn("reclaim", "dropped relation oid=" + std::to_string(job.oid) +
@@ -335,7 +363,9 @@ void PageReclaimer::Refuse(Job& job, const std::string& why) {
     }
 }
 
-void PageReclaimer::Skip(const Job& job, PageId page, const std::string& why) {
+void PageReclaimer::Skip(Job& job, PageId page, const std::string& why) {
+    ++job.skipped;
+    if (job.census) return;
     counters_.skipped.fetch_add(1, std::memory_order_relaxed);
     if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
         log_->Warn("reclaim", "dropped relation oid=" + std::to_string(job.oid) + ": page " +

@@ -884,9 +884,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         &expeditor->clock_);
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
-    // BF-R4's gate for a tombstone this mount finds pending: the log's
-    // append point with the scan and its undo done.
-    expeditor->reclaim_gate_ = expeditor->wal_->appended_lsn();
+    // BF-R4's gate for a tombstone this mount finds pending: where the scan
+    // ended. Not the append point after undo - a compensation's recLSN
+    // holds the completion checkpoint's redo start below that, and no
+    // compensation names a dropped relation's page.
+    expeditor->reclaim_gate_ = expeditor->recovery_.scan_end;
 
     // RV3 D3a: redo just mutated catalog pages under a catalog constructed
     // above it. Nothing reads a catalog row between construction and here

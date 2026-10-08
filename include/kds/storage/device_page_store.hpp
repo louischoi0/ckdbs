@@ -1369,6 +1369,10 @@ private:
     // `kInvalidPageId` when none is ready.
     PageId PopFreeListLocked();
 
+    // Undoes a claim whose create failed before its frame existed: the bit
+    // cleared and the count restored, a popped id back on the list.
+    void ReleaseClaim(PageId page_id, bool popped) noexcept;
+
     // The sweep body, with the structure latch **already held**. Split from
     // the public entry point because the two callers differ in exactly that:
     // `InsertFrame` has the hold, everyone else needs it taken.

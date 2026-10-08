@@ -891,10 +891,10 @@ private:
     // every core's `SHOW META` prints.
     ReclaimCounters reclaim_counters_;
     std::optional<PageReclaimer> reclaimer_;
-    // The log's append point when recovery finished (BF-R4): every record
-    // that names a pending tombstone's pages lies below it, so once the
-    // durable redo start reaches it no mount can replay one. Set once
-    // `RecoverCoreAtMount` returns, before anything reads it.
+    // Where the mount's recovery scan ended (BF-R4): every record that names
+    // a pending tombstone's pages lies below it, so once the durable redo
+    // start reaches it no mount can replay one. Set once `RecoverCoreAtMount`
+    // returns, before anything reads it.
     wal::Lsn reclaim_gate_ = 0;
 
     std::vector<std::unique_ptr<CoreRuntime>> cores_;

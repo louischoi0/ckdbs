@@ -113,6 +113,13 @@ struct MountRecovery {
     // recomputed - `SHOW META` prints the pair only when they differ.
     wal::Lsn redo_start = 0;
     wal::Lsn redo_start_floored_from = 0;
+    // Where the scan ended - the stream's end, before undo appended its
+    // compensations. A dropped relation's tombstone this mount finds pending
+    // is reclaimed once the durable redo start reaches it (BF-R4): every
+    // record that names the relation's pages precedes the drop's commit,
+    // and no compensation names them, since the drop's `X` waited out every
+    // writer of the relation.
+    wal::Lsn scan_end = 0;
 
     // ---- What undo rolled back ----
     std::uint64_t transactions_rolled_back = 0;

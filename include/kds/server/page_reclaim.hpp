@@ -73,6 +73,13 @@ struct ReclaimCounters {
     std::atomic<std::uint64_t> deferred{0};  // frees a held frame deferred
     std::atomic<std::uint64_t> skipped{0};   // pages BF-R3's check refused
     std::atomic<std::uint64_t> refused{0};   // jobs refused, left pending
+
+    void Reset() noexcept {
+        pending = 0;
+        deferred = 0;
+        skipped = 0;
+        refused = 0;
+    }
 };
 
 class PageReclaimer {
@@ -96,6 +103,19 @@ public:
 
     // Jobs this run still holds, refused ones included.
     std::size_t jobs() const noexcept { return jobs_.size(); }
+
+    // **The walk alone, freeing nothing** (BF-R12): every page `roots`
+    // reach for relation `oid`, by the same descent, links and checks a
+    // reclaim makes, with the count of pages the check refused - a link to a
+    // page that is free or never written among them. The sim's
+    // census ledgers a drop with it, and asks it of every live relation:
+    // a live relation's walk skips nothing and shares no page with another.
+    // Not gated, and not counted in `ReclaimCounters`.
+    struct Reach {
+        std::vector<PageId> pages;
+        std::uint64_t skipped = 0;
+    };
+    StatusOr<Reach> ReachFrom(catalog::Oid oid, catalog::PendingRoots roots);
 
     // **The crash-cut seam**: runs at every point a crash can cut a reclaim
     // - after each free, after each map sync, and on each side of the
@@ -145,6 +165,11 @@ private:
         std::vector<std::vector<PageId>> levels;
         std::vector<std::vector<PageId>> chains;
         bool anchor_live = false;
+        // Pages BF-R3's check refused, this job's own count.
+        std::uint64_t skipped = 0;
+        // A walk for `ReachFrom`: nothing here reaches the counters.
+        bool census = false;
+        std::string refusal;
         // The last visit met a refused fault (BE-R4's `ResourceExhausted`):
         // put back, and the step ends.
         bool stalled = false;
@@ -164,7 +189,7 @@ private:
     // Frees up to `budget` pages; false when the job refused.
     bool FreeSome(Job& job, std::size_t& budget);
     void Refuse(Job& job, const std::string& why);
-    void Skip(const Job& job, PageId page, const std::string& why);
+    void Skip(Job& job, PageId page, const std::string& why);
 
     catalog::Catalog& catalog_;
     storage::DevicePageStore& store_;

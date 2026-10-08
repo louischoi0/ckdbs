@@ -24,6 +24,8 @@
 // the calling thread, and a mount is `Expeditor::Open`, production's own.
 
 #include <algorithm>
+#include <thread>
+#include <chrono>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +41,9 @@
 #include <utility>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -607,6 +612,122 @@ TEST(DropTableReclaimCrashTest, ARelaxedDropCrashedBeforeItsCommitIsDurableFrees
     Settle(db);
     EXPECT_EQ(db.dispatcher().Dispatch("SELECT COUNT(*) FROM t").response, "count(*)\\n1000");
     for (const PageId id : pages) EXPECT_TRUE(db.store().IsAllocated(id)) << "page " << id;
+}
+
+// ---- BF-S4: a mount-found reclaim at two cores, while serving --------------
+
+// Two loopback ports nobody holds: the KWP port and the debug text port
+// `STOP` is reachable on (`protocol.md` §12).
+std::pair<std::uint16_t, std::uint16_t> TwoFreePorts() {
+    std::uint16_t out[2] = {0, 0};
+    int fds[2] = {-1, -1};
+    for (int i = 0; i < 2; ++i) {
+        fds[i] = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fds[i] < 0) break;
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+        if (::bind(fds[i], reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) break;
+        socklen_t len = sizeof(addr);
+        if (::getsockname(fds[i], reinterpret_cast<sockaddr*>(&addr), &len) != 0) break;
+        out[i] = ntohs(addr.sin_port);
+    }
+    for (const int fd : fds) {
+        if (fd >= 0) ::close(fd);
+    }
+    return {out[0], out[1]};
+}
+
+int ConnectLoopback(std::uint16_t port) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) return fd;
+    ::close(fd);
+    return -1;
+}
+
+std::string SendLine(int fd, const std::string& line) {
+    const std::string out = line + "\n";
+    if (::write(fd, out.data(), out.size()) < 0) return "ERR write failed";
+    std::string response;
+    char buf[512];
+    while (response.find('\n') == std::string::npos) {
+        const ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        response.append(buf, static_cast<std::size_t>(n));
+    }
+    if (!response.empty() && response.back() == '\n') response.pop_back();
+    return response;
+}
+
+TEST(DropTableReclaimServingTest, ATwoCoreMountReclaimsOnceEveryCoreHasCheckpointedWhileServing) {
+    // BF-R12's rig cell: the tombstone a two-core mount found is freed on
+    // core 0's tick once every core's cadence checkpoint has moved `D` past
+    // the mount (BF-R4's `cores > 1` arm), while a client writes another
+    // relation through the text port the whole time.
+    TempDir dir;
+    const Dropped dropped = CreateFillDrop(dir.path, "t", 1000);
+    ASSERT_FALSE(dropped.pages.empty());
+    {
+        auto opened = Mount(dir.path, /*cores=*/1);  // a live relation to serve
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        CurrentCoreGuard as(0);
+        Ok(*opened.value(), "CREATE TABLE live (id int64, v varchar)");
+        CleanShutdownCheckpoint(*opened.value());
+    }
+
+    Expeditor::Config config;
+    config.data_file = (dir.path / "kds.db").string();
+    config.wal_dir = (dir.path / "wal").string();
+    config.log_file = {};
+    config.cores = 2;
+    config.checkpoint_interval_ns = 100'000'000;  // 100 ms: the warm-up ends quickly
+    const auto [port, text_port] = TwoFreePorts();
+    ASSERT_NE(port, 0);
+    ASSERT_NE(text_port, 0);
+    config.port = port;
+    config.debug_text_port = text_port;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    EXPECT_EQ(db.reclaim_counters().pending.load(), 1u);
+    ASSERT_TRUE(db.Start().ok());
+    const int client = ConnectLoopback(text_port);
+    ASSERT_GE(client, 0);
+    Status ran = Status::OK();
+    std::thread reactor([&] { ran = db.RunUntilStopped(); });
+
+    int written = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (db.reclaim_counters().pending.load() != 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        const std::string reply = SendLine(client, "INSERT INTO live VALUES ('w')");
+        EXPECT_FALSE(StartsWith(reply, "ERR")) << reply;
+        ++written;
+    }
+    EXPECT_EQ(db.reclaim_counters().pending.load(), 0u) << "the reclaim never ran";
+    EXPECT_EQ(db.reclaim_counters().refused.load(), 0u);
+    const std::string counted = SendLine(client, "SELECT COUNT(*) FROM live");
+    EXPECT_EQ(counted, "count(*)\\n" + std::to_string(written));
+    (void)SendLine(client, "STOP");
+    ::close(client);
+    reactor.join();
+    EXPECT_TRUE(ran.ok()) << ran.message();
+    opened.value().reset();
+
+    auto again = Mount(dir.path, /*cores=*/1);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    CurrentCoreGuard as(0);
+    for (const PageId id : dropped.pages) {
+        EXPECT_FALSE(again.value()->store().IsAllocated(id)) << "page " << id;
+    }
+    EXPECT_EQ(again.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM live").response,
+              "count(*)\\n" + std::to_string(written));
 }
 
 // ---- Red first: the defence checks (BF-R10) --------------------------------

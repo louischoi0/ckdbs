@@ -16,7 +16,8 @@ stop until milestone, follow CLA proposal if decision needed"*. Each stage's
 row in §6 says where it stands. **BF-S1 is built:** the censuses, the
 premise, which held, and the red cells. **BF-S2 is built:** the free
 primitive, the free list and the map write barrier, with no caller yet. **BF-S3 is built:** the carrier, the
-gate, the walk and the mount-time reclaim.
+gate, the walk and the mount-time reclaim. **BF-S4 is built:** the sim's drop op,
+its owner census, and the two-core rigs.
 
 - BF-S0 moved no file under `src/`, `include/` or `tests/`, and no suite
   ran.
@@ -1837,5 +1838,149 @@ checked against the code.
   child, would refuse the reclaim - never free twice - which BF-S6's
   known-gaps entry says;
 - `reclaim_refused` is the fourth reclaim counter beside BF-R11's three.
+
+**Overhead not measured;** BF-Q15 measures it at BF's close.
+
+### BF-S4 - the sim and the rigs - built 2026-10-08
+
+- **Where:** on `worktree-drop-table-page-reclaim` from `f41ac53d`.
+
+**The sim (BF-R12):**
+- **A `drop-table` op.** It runs inside a transaction (3% of its ops) and
+  out of one (2% of the stream). It is drawn from a stream of its own
+  (`drop_rng_`), so every other op of a seed is the op it always drew. It
+  never drops the last live relation and takes at most two relations an
+  iteration. A committed drop's name is never created again; a fresh name
+  takes its place, so the next mount's reclaim has pages a later creation
+  reuses.
+- **The oracle forgets a relation at its committed drop.** An autocommit
+  drop and a transaction's `COMMIT` both remove it from the checked set,
+  and the oracle remembers what the relation held. A rollback keeps it. A
+  drop answered with an error is unknown either way.
+- **Reconciling a dropped relation.** It stays gone on a clean stop, and
+  in every mode once a `SYNC` followed it. Without that `SYNC`, a crash may
+  bring it back, because a drop is acknowledged before it is durable; then
+  it holds rows it held, or rows the oracle has as unknown.
+- **One anchor object per boot**, so `D` behaves as production's
+  (`sim/instance.cpp`).
+- **The mount's reclaim** is collected after the completion checkpoint and
+  stepped once after every op, as core 0's tick runs it. A seed's crash can
+  therefore land in the middle of a reclaim, and a creation can reuse a
+  freed id before the clear. A reboot settles it before the harness reads.
+- **The census** (`ReconcileDrops`):
+  - **The ledger.** Every committed drop is ledgered at its commit with
+    every page its roots reach and that page's owner, using the reclaim's
+    own walk, run read-only (`PageReclaimer::ReachFrom`).
+  - **An owner scan, independent of that walk.** After the reboot's
+    reclaim, no allocated page may still carry a reclaimed relation's oid,
+    or one of its indexes', unless a crash undid the drop. A ledgered page
+    fails in every mode. An unledgered one fails a fault-free run, and is
+    counted `census_leaks` under faults, where a failed growth or split may
+    leave it.
+  - **Nothing is left pending,** and nothing is refused.
+  - **Live relations.** Every live relation's walk skips no page - a
+    `NotFound` link included - and no page is reached from two of them.
+
+**What the sim found, and what was fixed:**
+- **The gate was the wrong LSN.** It had been the log's append point after
+  recovery's undo. A loser's compensations stamp pages, and their recLSNs
+  hold the completion checkpoint's redo start below that point, so the
+  reclaim waited for a checkpoint that a mount runs only on its cadence: 15
+  of 190 sim runs ended still owing pages. BF-R4 names the right bound, the
+  end of the recovery scan (`MountRecovery::scan_end`), and that is the gate
+  now. No compensation names a dropped relation's page, because the drop's
+  `X` waited out every writer of the relation.
+- **A create that fails after its claim kept its bit.** An injected growth
+  refusal after the cursor's claim left an id allocated with no page ever
+  written there, which reads "allocated but never written" for good.
+  `ReleaseClaim` now clears the bit and restores the count. It puts a
+  popped id back on the list, steps the cursor back if nothing claimed
+  after it, and otherwise lists the id. The order predates BF; the sim's
+  new drop stream reached it. Its cell is
+  `ACreateThatFailsAfterItsClaimGivesTheClaimBack`.
+- `sim_loop_test`'s pinned `ops_run` for one deterministic case moved from
+  114 to 115: one drop op in that seed's stream.
+
+**The rigs:**
+- **A free on one thread against creations on another** (`page_free_test`):
+  400 frees racing 400 creations. Every created id is unique and live,
+  every free lands, and the allocated count closes.
+- **A two-core mount's reclaim while serving**
+  (`DropTableReclaimServingTest`):
+  - A started instance at `cores = 2`, with a 100 ms cadence, takes
+    writes through its text port until the tombstone it found is freed -
+    once every core has checkpointed.
+  - Every page of the dropped relation is free after the stop, and every
+    row written is there.
+- **A miss parked between its `loading_` publish and its read, while its
+  id is freed and popped**, is BF-S2's cell.
+
+**`scripts/sim.sh`:** 190 runs, 0 failures.
+
+**BF-S3's mutations, killed from the sim or a rig:**
+
+Each was run against the sim (114 runs) and the two rigs: **all seven
+survive BF-S4**, and each is killed by a BF-S3 cell instead. The sim's
+crashes land at op boundaries, so no seed crashes inside a reclaim's
+windows, and no statement in the sim races a bind against a free.
+
+| mutation | why the sim and the rigs cannot kill it | killed by |
+|---|---|---|
+| the gate removed | a mount's reclaim runs after the completion checkpoint, and no replay or compensation names a dropped relation's page, because the drop's `X` waited out its writers | the `cores = 2` gate cell |
+| the owner check removed | no seed crashes after a freed id is reused and before the clear, so no re-drive meets another relation's page | the reuse-before-the-clear cell |
+| the tombstone cleared before the anchor's sync | no seed crashes between the clear and the sync | the cut cell, at "after the clear" |
+| a chain freed head-first | no seed crashes inside a chain's free run, and a one-region map flush writes the whole region | the cut cell and its map-flushed pass |
+| the verifier's owner check removed | the sim never verifies a page that another relation reuses | BF-S1's verifier cell |
+| `ReadTuple`'s bound removed | no page in the sim holds a slot that leaves the page | BF-S1's `ReadTuple` cell |
+| the bind's root check removed | no statement of a mount's run reaches a tombstone that the mount found | BF-S5's in-run cells |
+
+**Review:** (`critics-developer`, one pass).
+**Fixed by the review:**
+- **B1:** a transaction's drop oids outlived a transaction the loop rolled
+  back - a poisoned statement, or an errored `COMMIT`/`ROLLBACK` - so a
+  later `COMMIT` ledgered a drop that never happened.
+- **B2:** an errored `COMMIT` kept its drops as live relations, though it
+  may have committed. They are now indeterminate drops, and the oracle's
+  three copies of the forgetting share one `Forget()`.
+- **B3:** the census walk passed over a page that read `NotFound` - right
+  for a re-drive, wrong for a census, which exists to find a live relation
+  linking to a freed page. A census walk counts it now, and a walk the pool
+  refused returns `ResourceExhausted` instead of a partial result.
+
+**Taken as CLA proposed under §23:**
+- **The census checks itself independently.** Its ledger came from the
+  reclaim's own walk, so a walk that missed a tree would have missed it in
+  both. An owner scan of every allocated page now fails a fault-free run on
+  any page still carrying a reclaimed relation's oid or one of its index
+  oids that the ledger does not hold. Under faults such a page is a failed
+  growth's or split's, and is counted `census_leaks`.
+- **The sim steps the reclaim between ops**, as core 0's tick does,
+  instead of running it to the end inside the boot. A seed's crash can land
+  in the middle of a reclaim, and a creation can take a freed id before
+  the clear. The reboot after a crash still settles the reclaim before
+  anything is read.
+- `ReleaseClaim` lists an id the cursor has already passed.
+- The workload's one live-index helper, and `ReclaimCounters::Reset`.
+
+**Declined:**
+- holding a returned relation to its synced rows: only "rows it held" is
+  checked, and the synced subset is a stronger claim than BF owes;
+- returning (page, owner) pairs from `ReachFrom`: the ledger's second read
+  costs a census, not a statement.
+
+**Recorded rather than fixed:** a reclaim treats an allocated page that
+was never written (`NotFound`) as already free, so its bit stays set - a
+leak, not a wrong free. Such a page has no owner to check, and it is one of
+DT1's stated leaks.
+
+**Noted:**
+- the oracle's "acknowledged before durable" is conservative for the
+  sim's `kGroup`, whose DDL may already wait for durability. The lenient
+  arm then goes unused, and costs nothing.
+- **What the sim could not kill of BF-S3's mutations** is in the table
+  above, with its reason. Those mutations' killers are BF-S3's crash and
+  defence cells.
+
+**Suite:** 3248 of 3248, plain, and 3248 of 3248 with `KDS_TEST_PAGE_LATCH=1`.
 
 **Overhead not measured;** BF-Q15 measures it at BF's close.

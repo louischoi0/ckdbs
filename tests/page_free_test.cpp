@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -354,6 +355,35 @@ TEST_F(PageFreeTest, ADirectorySlotThatReadsZeroIsEmpty) {
     EXPECT_GE(made.value(), kFirstNew) << "a fresh page, linked where the zero stood";
 }
 
+TEST_F(PageFreeTest, ACreateThatFailsAfterItsClaimGivesTheClaimBack) {
+    // Found by BF-S4's sim: an injected growth refusal after the cursor's
+    // claim left the bit set with no page ever written there - an id that
+    // read "allocated but never written" for good. The claim goes back,
+    // and the next create finds the id again.
+    PageId last = MakePage(std::byte{1});  // the first extent exists
+    Status refused = Status::OK();
+    std::uint32_t allocated = 0;
+    for (int i = 0; i < 64; ++i) {
+        allocated = store_->allocated_pages();
+        device_->FailNextGrow(Status::IoError("injected growth refusal"));
+        auto created = store_->CreateNew();
+        device_->ClearInjections();
+        if (!created.ok()) {
+            refused = created.status();
+            break;
+        }
+        last = created.value().first;
+        created.value().second.Release();
+    }
+    ASSERT_FALSE(refused.ok()) << "no create needed the device to grow";
+    ASSERT_NE(last, kInvalidPageId);
+    EXPECT_FALSE(store_->IsAllocated(last + 1)) << "the failed claim kept its bit";
+    EXPECT_EQ(store_->allocated_pages(), allocated);
+    auto again = store_->CreateNew();
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(again.value().first, last + 1) << "the cursor did not find the released id";
+}
+
 TEST_F(PageFreeTest, APersistMapsReturnsOnlyAfterAnotherCoresCopiedMapIsWritten) {
     // Without the barrier the second caller finds every region clean - the
     // first copied and cleared them - syncs nothing new, and returns while
@@ -393,6 +423,47 @@ TEST_F(PageFreeTest, APersistMapsReturnsOnlyAfterAnotherCoresCopiedMapIsWritten)
     std::array<std::byte, kPageSize> map{};
     ASSERT_TRUE(device_->ReadPage(FreeMapPageIdFor(id), std::span<std::byte, kPageSize>(map)).ok());
     EXPECT_FALSE(FreeMapIsAllocated(std::span<const std::byte, kPageSize>(map), FreeMapBitIndexOf(id)));
+}
+
+TEST_F(PageFreeTest, FreesOnOneThreadAgainstCreatesOnAnotherNeverHandOutAnIdTwice) {
+    // BF-R12's first rig cell, at the store: one thread frees what a ledger
+    // holds while another creates. Every id created is unique among the live
+    // ones, every free lands, and the allocated count closes.
+    store_->SetLatchArmed(true, /*concurrent_pinners=*/2);
+    constexpr int kPages = 400;
+    std::vector<PageId> to_free;
+    for (int i = 0; i < kPages; ++i) to_free.push_back(MakePage(std::byte{1}, /*sync=*/false));
+    ASSERT_TRUE(store_->Sync().ok());
+    const std::uint32_t before = store_->allocated_pages();
+
+    std::atomic<bool> go{false};
+    std::vector<PageId> created;
+    std::thread creator([&] {
+        while (!go) std::this_thread::yield();
+        for (int i = 0; i < kPages; ++i) {
+            auto made = store_->CreateNew();
+            ASSERT_TRUE(made.ok()) << made.status().message();
+            created.push_back(made.value().first);
+        }
+    });
+    std::size_t freed = 0;
+    go = true;
+    for (const PageId id : to_free) {
+        for (;;) {
+            auto out = store_->FreePage(id);
+            ASSERT_TRUE(out.ok()) << out.status().message();
+            if (out.value() == FreeOutcome::kFreed) break;
+            std::this_thread::yield();  // a create's frame on a just-popped id
+        }
+        ++freed;
+    }
+    creator.join();
+
+    std::set<PageId> unique(created.begin(), created.end());
+    EXPECT_EQ(unique.size(), created.size()) << "an id was handed out twice";
+    for (const PageId id : created) EXPECT_TRUE(store_->IsAllocated(id));
+    EXPECT_EQ(store_->allocated_pages(), before - freed + created.size());
+    EXPECT_EQ(store_->pages_freed(), freed);
 }
 
 }  // namespace
