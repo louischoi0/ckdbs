@@ -182,6 +182,10 @@ struct SimVerdict {
     std::size_t named_placed = 0;
     std::size_t named_duplicate = 0;
     std::size_t named_exhausted = 0;
+    // PURGEs checked (BH-R11), and the keys they were checked to free: what
+    // shows a purged key's later named INSERT can be placed at all.
+    std::size_t purges = 0;
+    std::size_t purged_keys = 0;
 
     // Documented-gap bookkeeping — reported, not failed (see above).
     std::size_t gated_missing_rows = 0;

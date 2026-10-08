@@ -41,7 +41,8 @@
 //
 // The judging - a committed deleter, resolved for every reader - is
 // BH-S3's, so a deleter still in flight is not a cell here: the primitive
-// trusts the caller's judgment and checks only the slot's identity.
+// trusts the caller's judgment and checks only the slot's identity. The
+// statement's own crash cells, at the end, are BH-S4's.
 
 namespace kds::server {
 namespace {
@@ -301,6 +302,82 @@ TEST(PurgeKeyStorageTest, ALoserInsertOfAPurgedKeyIsUndoneAtMount) {
     CurrentCoreGuard as(0);
     EXPECT_EQ(MountedIds(*mounted.value()), std::vector<std::uint64_t>{9});
     EXPECT_TRUE(KeyIsFree(*mounted.value(), 5));
+}
+
+// ---- The statement, crashed (BH-S4) ----------------------------------------
+
+TEST(PurgeKeySqlCrashTest, ACrashInsideARangedPurgeFreesAPrefixOfItsKeysInKeyOrder) {
+    // BH-R6: phase 2 writes key by key in key order, each whole, so a crash
+    // anywhere inside the statement leaves its window purged up to some key
+    // and untouched after it - never a hole. With the commit record in, all
+    // of it.
+    TempDir before;
+    TempDir after;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CurrentCoreGuard as(0);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        Ok(d0, "CREATE TABLE t (id int64, s varchar(16)) BTREE");
+        for (int id : {5, 6, 7, 9}) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(id) + ", '" + kLong + "')");
+        }
+        for (int id : {5, 6, 7}) Ok(d0, "DELETE FROM t WHERE id = " + std::to_string(id));
+        ASSERT_TRUE(rig->Snapshot(before.path).ok());
+        ASSERT_EQ(d0.Dispatch("PURGE FROM t WHERE id BETWEEN 5 AND 8").response, "PURGED 3");
+        ASSERT_TRUE(rig->Snapshot(after.path).ok());
+    }
+    int partial = 0;  // cuts that freed some keys and not all: the cell's point
+    CutEverywhere(before.path, after.path, [&](Expeditor& db, bool committed,
+                                                const std::string& where) {
+        CurrentCoreGuard as(0);
+        EXPECT_EQ(MountedIds(db), std::vector<std::uint64_t>{9}) << where;
+        bool bound_seen = false;
+        int freed = 0;
+        for (std::uint64_t key : {5, 6, 7}) {
+            const bool free = KeyIsFree(db, key);
+            EXPECT_FALSE(free && bound_seen) << where << ": key " << key
+                                             << " is free after a bound one - a hole";
+            bound_seen = bound_seen || !free;
+            freed += free ? 1 : 0;
+            if (committed) EXPECT_TRUE(free) << where << ": committed, and " << key << " is bound";
+        }
+        if (freed > 0 && freed < 3) ++partial;
+    });
+    EXPECT_GT(partial, 0) << "no cut landed inside the window, so no prefix was tested";
+}
+
+TEST(PurgeKeySqlCrashTest, APurgedKeyPlacedAgainIsKeptCommittedAndUndoneUncommitted) {
+    // BH-R11's crash cell after a re-insert of the purged key: committed, the
+    // new row survives the crash; undecided, it is undone by key and the key
+    // is free again - the tombstone does not come back either way.
+    for (const bool commit : {true, false}) {
+        SCOPED_TRACE(commit ? "committed" : "undecided");
+        TempDir image;
+        {
+            auto rig = OpenFileRig();
+            ASSERT_NE(rig, nullptr);
+            CurrentCoreGuard as(0);
+            const Loaded l = Load(*rig);
+            ASSERT_EQ(l.d0->Dispatch("PURGE FROM t WHERE id = 5").response, "PURGED 1");
+            Session s;
+            Ok(*l.d0, "BEGIN", &s);
+            Ok(*l.d0, "INSERT INTO t VALUES (5, '" + kLong + "')", &s);
+            if (commit) Ok(*l.d0, "COMMIT", &s);
+            ASSERT_TRUE(rig->Snapshot(image.path).ok());
+            if (!commit) Ok(*l.d0, "ROLLBACK", &s);
+        }
+        auto mounted = Mount(image.path);
+        ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+        CurrentCoreGuard as(0);
+        if (commit) {
+            EXPECT_EQ(MountedIds(*mounted.value()), (std::vector<std::uint64_t>{5, 9}));
+            EXPECT_FALSE(KeyIsFree(*mounted.value(), 5));
+        } else {
+            EXPECT_EQ(MountedIds(*mounted.value()), std::vector<std::uint64_t>{9});
+            EXPECT_TRUE(KeyIsFree(*mounted.value(), 5));
+        }
+    }
 }
 
 }  // namespace

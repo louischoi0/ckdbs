@@ -9427,6 +9427,8 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
         return out;
     }
 
+    if (purge_seam_for_test_) purge_seam_for_test_();
+
     // ---- Phase 2: each key whole, in key order (BH-R6, BH-R7) ----------
     //
     // Drain mode, as a rollback's: a pass that is not one row's mutation and

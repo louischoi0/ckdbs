@@ -726,7 +726,7 @@ TEST(SimWorkload, TheGeneratedStreamCoversEveryV2Shape) {
     for (const Op::Kind kind :
          {Op::Kind::kInsert, Op::Kind::kUpdate, Op::Kind::kDelete, Op::Kind::kSelectPk,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kBegin,
-          Op::Kind::kCommit, Op::Kind::kRollback, Op::Kind::kCreateCabin}) {
+          Op::Kind::kCommit, Op::Kind::kRollback, Op::Kind::kCreateCabin, Op::Kind::kPurge}) {
         EXPECT_GT(seen[kind], 0) << "the stream never generates " << OpKindName(kind);
     }
 

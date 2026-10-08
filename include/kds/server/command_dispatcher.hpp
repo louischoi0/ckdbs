@@ -1741,6 +1741,15 @@ public:
         epoch_seam_for_test_ = std::move(hook);
     }
 
+    // **A seam in `PURGE`** (BH-S4), between its judging and its writing:
+    // what another core does there is the race PU12 settles under the
+    // leaf's latch - a named `INSERT`, another `PURGE`, a purge and a
+    // re-insert of the judged key. Set and cleared while no statement runs;
+    // empty in production.
+    void SetPurgeSeamForTest(std::function<void()> hook) {
+        purge_seam_for_test_ = std::move(hook);
+    }
+
     // **A seam in `DROP TABLE`** (BF-Q11 (a)), between its first RESTRICT
     // ask and its `X` request: a foreign key created there must still
     // refuse the drop, through the second ask. Empty in production.
@@ -2362,6 +2371,7 @@ private:
     EpochSeam epoch_seam_at_ = EpochSeam::kBeforePublish;
     std::function<void()> epoch_seam_for_test_;
     std::function<void()> before_drop_exclusive_for_test_;
+    std::function<void()> purge_seam_for_test_;
     // **What an open transaction's drops owe** (BF-R9): recorded when the
     // drop's catalog write succeeds, queued by `EndDdlScopeById` at the
     // transaction's commit, and forgotten at its other endings.

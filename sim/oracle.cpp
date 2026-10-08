@@ -99,6 +99,49 @@ Oracle::NamedOutcome Oracle::Named(const std::string& table, std::uint64_t key) 
     return NamedOutcome::kPlaced;
 }
 
+// The keys of `[lo, hi]` a committed tuple bound and no live row carries -
+// what a purge of the window frees - and, with `unknown`, the ones whose
+// fate is not known either, which a purge may also have freed.
+std::vector<std::uint64_t> Oracle::MaybeFreed(const std::string& table, std::uint64_t lo,
+                                              std::uint64_t hi, bool unknown) const {
+    std::vector<std::uint64_t> keys;
+    const auto bound = consumed_.find(table);
+    if (bound == consumed_.end()) return keys;
+    const auto live = tables_.find(table);
+    for (auto it = bound->second.lower_bound(lo); it != bound->second.end() && *it <= hi; ++it) {
+        const bool is_live = live != tables_.end() && live->second.count(*it) != 0;
+        if (!is_live || (unknown && IsUnchecked(table, *it))) keys.push_back(*it);
+    }
+    return keys;
+}
+
+Oracle::PurgeExpect Oracle::ExpectPurge(const std::string& table, std::uint64_t lo,
+                                        std::uint64_t hi) const {
+    PurgeExpect expect;
+    const auto unchecked = unchecked_.find(table);
+    if (indeterminate_.count(table) != 0 ||
+        (unchecked != unchecked_.end() &&
+         unchecked->second.lower_bound(lo) != unchecked->second.upper_bound(hi))) {
+        expect.checkable = false;
+    }
+    const auto live = tables_.find(table);
+    if (lo == hi && live != tables_.end() && live->second.count(lo) != 0) {
+        expect.live = true;
+        return expect;
+    }
+    expect.keys = MaybeFreed(table, lo, hi, /*unknown=*/false);
+    return expect;
+}
+
+void Oracle::NotePurgeUnknown(const std::string& table, std::uint64_t lo, std::uint64_t hi) {
+    // Moved, not copied: a key still in `consumed_` would read as a sure
+    // duplicate to `Named`, which asks it first.
+    for (const std::uint64_t key : MaybeFreed(table, lo, hi, /*unknown=*/true)) {
+        unchecked_[table].insert(key);
+        consumed_[table].erase(key);
+    }
+}
+
 bool Oracle::IsUnchecked(const std::string& table, std::uint64_t id) const {
     const auto it = unchecked_.find(table);
     return it != unchecked_.end() && it->second.count(id) != 0;

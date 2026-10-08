@@ -665,6 +665,10 @@ outcome of it is purgeable. The wait is polled, under PU5's bound.
   leave some of the window's keys purged and the rest not.
 - **A refusal while writing keeps its code**, and its text says how many
   keys it purged first and that a re-run finishes the window.
+- **A refusal between a key's retire and its spill release** purges that
+  key with its spills from the refused one on leaked - the gap a crash
+  between the two records leaves - and its text says so, naming the key
+  (BH-S4).
 
 **PU7 — The reply.** `PURGED n`, where `n` is the number of keys this
 statement purged. It reaches KWP as `rows_affected`.
@@ -1642,3 +1646,109 @@ rollback arm now asserting its status. T4 and T5 moved to BH-S4, as above.
     `ERR` string keeps a code.
   - **Hoisting the per-slot `txn_ != nullptr` test.** It removes no line
     and makes nothing clearer.
+
+### BH-S4 — the sim and the rigs - 2026-10-08
+
+- **Where:** on `worktree-bh-purge-key` from `26766699`.
+- **The sim.**
+  - **The op.** `Op::Kind::kPurge`, in both forms: one key, or
+    `BETWEEN lo AND hi`. It is drawn outside a transaction only, on a
+    btree only, from its own label-stable `purge_rng_` fork, so no
+    committed seed's existing stream draws differently. A named `INSERT`
+    names purged keys again.
+  - **The oracle.**
+    - `ExpectPurge` gives the keys a purge frees: every key a committed
+      tuple bound that no live row carries. A window of one live key gets
+      the refusal instead.
+    - `ApplyPurge` erases the freed keys from `consumed_`. An acknowledged
+      `PURGE` is durable: the synchronous path waits for its commit under
+      the sim's `group` durability.
+    - `NotePurgeUnknown` makes every key an errored or unknowable purge
+      could have freed an unchecked key. A named `INSERT` of it is then
+      either outcome.
+  - **The loop** checks the count or the refusal, absorbs an injected
+    error, and reports `purges=` and `purged_keys=`.
+  - **Coverage.** `scripts/sim.sh` passed 190/190 runs; after the review's redraw, five seeds checked 2-34 purges freeing 1-8 keys each. Before it, one seed checked
+    29 purges freeing 7 keys; a fault seed checked 4 with errors absorbed.
+- **The two-core cells** (`tests/purge_key_rig_test.cpp`, `TwoCoreRig`).
+  Core 1's `PURGE` runs core 0's statement through a test seam
+  (`SetPurgeSeamForTest`) between its two phases:
+  - a named `INSERT` there is refused as the tombstone's duplicate, and
+    placed after the purge;
+  - a second `PURGE` there frees the key, and core 1's counts nothing;
+  - a purge and a re-insert there leave a live row that core 1 skips. This
+    is the re-judge cell, and it **killed the phase-2-skip-to-retire
+    mutation**, run twice.
+- **The crash cells at the SQL level** (`PurgeKeySqlCrashTest`, file rig):
+  - a ranged `PURGE` cut at every record frees a key-order prefix of its
+    window, never a hole, and all of it once the commit survives. The cell
+    counts its partial cuts, so it cannot pass vacuously;
+  - a purged key placed again survives a crash once committed, and an
+    undecided one is undone by key.
+- **The refusal while writing** (PU10's row, moved from BH-S3):
+  `PurgeKeyTest.ARefusalWhileWritingKeepsTheKeysItPurgedAndSaysHowMany`.
+  The fixture's store is now `testing_race::ActOnFetchStore`, which gains
+  `FailFetch`. Its var-heap page refuses the second key's spill release,
+  and this exposed a reporting gap: the key whose release was refused was
+  already retired, but the refusal counted it among the keys not purged.
+  `exec::PurgeKey`'s refusal now names that key as purged with its spills
+  leaked, and PU6 says so.
+- **The mutations of BH-S2 and BH-S3** are each killed by a cell: BH-S2's
+  on the file rig, BH-S3's on the lock family's served path. The two
+  listed at BH-S3 stay listed, for the reasons given there.
+- **The suite** (Debug, `ctest -j8`) on this stage's reviewed tree, BH-S5's comment-only edits beside it: 3311/3312, the
+  environmental `TcpServerListenTest` alone. The sim corpus passed
+  190/190. Overhead not measured; measured at the milestone's close.
+
+### BH-S4's review - 2026-10-08
+
+One `critics-developer` pass. **Two sim bugs, fixed:**
+
+- **C1. An unknown purge left its keys as sure duplicates.**
+  `NotePurgeUnknown` copied the keys to `unchecked_` and left them in
+  `consumed_`, which `Named` asks first. So a fault run, or one with an
+  errored `INSERT` outstanding, could fail when a later named `INSERT`
+  placed such a key. It now moves them, and it counts a live-but-unchecked
+  key among what a purge may have freed. `MaybeFreed` is the one walk both
+  callers share.
+- **C2. `CheckPurge` never counted its op.**
+
+**The seed stream (W1).** The first draw inserted purges as extra ops, which
+moved every later op of every seed, and with them each op-indexed fault and
+crash (the H9 pin's among them).
+- **Now a purge takes a `DELETE`'s place**, after that `DELETE` drew from
+  the main stream. Every seed keeps its op count and positions; only some
+  deletes become purges.
+- **The replaced `DELETE`'s key is popped** from the deleted-keys list,
+  since it never ran.
+- **Sampled coverage after the change:** five seeds checked 2-34 purges,
+  freeing 1-8 keys each.
+
+**Coverage list (W3).** `SimWorkload.TheGeneratedStreamCoversEveryV2Shape`
+now lists `kPurge`.
+
+**Cell T1, added:**
+`PurgeKeyRigTest.AKeyRedeletedByAnotherDeleterBetweenThePhasesIsSkipped`.
+Between the phases the key is purged, placed again and deleted again, so
+its tombstone belongs to a deleter phase 1 never judged. It is the cell
+that kills a verify of the delete flag alone.
+
+**Mutations (T2).** The live check removed, run through the sim, failed
+seeds 11 and 7 twice each (`expected the live-key refusal, got PURGED 0`).
+The sim cannot reach these, each killed by a cell (BH-S3):
+- the horizon check, because the sim drives one session with no older
+  reader;
+- an in-flight deleter judged a target, because the sim never purges
+  inside a transaction and runs no second session;
+- `!=` folded, because the generator writes only the six admitted forms.
+
+**Simplifications, applied:**
+- `CheckPurge`'s two absorb-or-fail arms fold into one `legal` expression;
+- `IsLiveKeyRefusal` sits beside `IsDuplicateRefusal`;
+- `ParsePurged` sits beside `ParseInsertedId`;
+- the doc comment `CheckPurge` displaced from `CheckNamedInsert` is back
+  over it.
+
+**Accepted as they stand:** the refusal-while-writing cell depends on the
+var-heap page's second fetch being key 2's. That fails loudly, never
+wrongly.

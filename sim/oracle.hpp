@@ -171,6 +171,27 @@ public:
     enum class NamedOutcome : std::uint8_t { kPlaced, kDuplicate, kExhausted, kEither };
     NamedOutcome Named(const std::string& table, std::uint64_t key) const;
 
+    // **What a `PURGE` of `[lo, hi]` must answer** (BH PU2, PU3), in
+    // autocommit: the keys it frees - every key a committed tuple once
+    // carried that no live row carries now - or, for a window of one live
+    // key, the refusal. `checkable` is false where an unknown could change
+    // either: an unchecked key in the window, or an errored INSERT whose
+    // row may sit in it.
+    struct PurgeExpect {
+        bool checkable = true;
+        bool live = false;  // one-key window, live: refused
+        std::vector<std::uint64_t> keys;
+    };
+    PurgeExpect ExpectPurge(const std::string& table, std::uint64_t lo, std::uint64_t hi) const;
+    // An acknowledged purge: its keys are free again, so a named INSERT of
+    // one is placed (the oracle's whole change for BH).
+    void ApplyPurge(const std::string& table, const std::vector<std::uint64_t>& keys) {
+        for (const std::uint64_t key : keys) consumed_[table].erase(key);
+    }
+    // A purge whose outcome is unknown - it errored, or the window held an
+    // unknown: each key it could have freed may be free or bound.
+    void NotePurgeUnknown(const std::string& table, std::uint64_t lo, std::uint64_t hi);
+
     // Rows the predicate matches, which is what the engine's `UPDATED <n>`
     // / `DELETED <n>` is compared against.
     std::size_t ApplyUpdate(const std::string& table, const Predicate& where,
@@ -252,6 +273,8 @@ private:
     }
 
     bool IsUnchecked(const std::string& table, std::uint64_t id) const;
+    std::vector<std::uint64_t> MaybeFreed(const std::string& table, std::uint64_t lo,
+                                          std::uint64_t hi, bool unknown) const;
 
     std::map<std::string, TableRows> tables_;
     std::map<std::string, TableRows> synced_;

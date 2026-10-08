@@ -34,6 +34,7 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kCreateCabin: return "create-cabin";
         case Op::Kind::kInsertNamed: return "insert-named";
         case Op::Kind::kDropTable: return "drop-table";
+        case Op::Kind::kPurge: return "purge";
     }
     return "unknown";
 }
@@ -43,14 +44,18 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
          {Op::Kind::kCreateTable, Op::Kind::kInsert, Op::Kind::kSelectPk,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kUpdate,
           Op::Kind::kDelete, Op::Kind::kBegin, Op::Kind::kCommit, Op::Kind::kRollback,
-          Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable}) {
+          Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable,
+          Op::Kind::kPurge}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
 }
 
 Workload::Workload(Rng rng, Profile profile)
-    : rng_(std::move(rng)), profile_(profile), drop_rng_(rng_.Fork("drop")) {
+    : rng_(std::move(rng)),
+      profile_(profile),
+      drop_rng_(rng_.Fork("drop")),
+      purge_rng_(rng_.Fork("purge")) {
     // 1-3 tables, each independently heap or btree. Decided up front so
     // the table set is stable however many ops are drawn.
     const std::size_t count = 1 + rng_.Below(3);
@@ -182,6 +187,8 @@ Op Workload::InsertNamed(Table& table) {
             key = 1 + rng_.Below(table.inserted + 1);  // below the mark
         } else if (roll < 60) {
             key = 1 + rng_.Below(table.inserted * 3 + 20);
+        } else if (roll < 68 && !table.purged.empty()) {
+            key = pick(table.purged);
         } else if (roll < 75 && !table.deleted.empty()) {
             key = pick(table.deleted);
         } else if (roll < 92 && !table.rolled_back.empty()) {
@@ -246,11 +253,55 @@ Op Workload::Delete(Table& table) {
     return op;
 }
 
+// A key a PURGE names: a deleted one mostly, sometimes any key the table
+// may hold - live, never placed, or past the end - all from `purge_rng_`,
+// so the main stream draws what it always drew.
+Op Workload::Purge(Table& table) {
+    const auto guess = [&] { return 1 + purge_rng_.Below(table.inserted + 3); };
+    const std::uint64_t roll = purge_rng_.Below(100);
+    std::uint64_t lo = 0;
+    std::uint64_t hi = 0;
+    if (roll < 55 && !table.deleted.empty()) {
+        lo = hi = table.deleted[purge_rng_.Below(table.deleted.size())];
+    } else if (roll < 85) {
+        lo = guess();
+        hi = lo + purge_rng_.Below(64);
+    } else {
+        lo = hi = guess();
+    }
+    for (const std::uint64_t k : table.deleted) {
+        if (k >= lo && k <= hi && table.purged.size() < 64) table.purged.push_back(k);
+    }
+    Op op;
+    op.kind = Op::Kind::kPurge;
+    op.table = table.name;
+    op.lo = lo;
+    op.hi = hi;
+    op.sql = "PURGE FROM " + table.name + " WHERE " +
+             (lo == hi ? "id = " + std::to_string(lo)
+                       : "id BETWEEN " + std::to_string(lo) + " AND " + std::to_string(hi));
+    return op;
+}
+
 Op Workload::DataOp() {
     const std::uint64_t roll = rng_.Below(100);
     if (roll < 42) return Insert(PickTableMutable());
     if (roll < 57) return Update(PickTable());
-    if (roll < 64) return Delete(PickTableMutable());
+    if (roll < 64) {
+        // **A PURGE takes a DELETE's place, after the DELETE drew** (BH-S4):
+        // the main stream draws what it always drew and every later op keeps
+        // its position, so a seed's op-indexed faults and crashes land where
+        // they did (the H9 pin's among them). Autocommit only (BH-Q4), btree
+        // only (BH-Q9).
+        Table& table = PickTableMutable();
+        Op del = Delete(table);
+        if (in_txn_ || !table.btree || !purge_rng_.Chance(60)) return del;
+        // The DELETE never runs, so its key is no deleted key to name again.
+        if (del.by_pk && !table.deleted.empty() && table.deleted.back() == del.key) {
+            table.deleted.pop_back();
+        }
+        return Purge(table);
+    }
     if (roll < 79) {
         const Table& table = PickTable();
         Op op;
@@ -330,6 +381,7 @@ Op Workload::Next() {
     }
 
     if (drops_left_ != 0 && LiveIndices().size() >= 2 && drop_rng_.Chance(2)) return Drop();
+
 
     // 85 data ops, 4 syncs, 3 Cabin declarations and 8 transaction starts
     // per hundred rolls. Three of the data ops were `CREATE PATTERN` until

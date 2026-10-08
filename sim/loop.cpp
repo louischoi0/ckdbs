@@ -68,6 +68,9 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
                std::to_string(named_duplicate) + "/" + std::to_string(named_exhausted) +
                "(placed/dup/exhausted)";
     }
+    if (purges != 0) {
+        out += " purges=" + std::to_string(purges) + " purged_keys=" + std::to_string(purged_keys);
+    }
     if (checkpoints != 0) {
         out += " checkpoints=" + std::to_string(checkpoints) + " recycles=" +
                std::to_string(recycles) + " segments_recycled=" + std::to_string(segments_recycled) +
@@ -328,6 +331,9 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
         case Op::Kind::kInsertNamed:
             it.oracle.NoteUnchecked(op.table, op.key);
             break;
+        case Op::Kind::kPurge:
+            it.oracle.NotePurgeUnknown(op.table, op.lo, op.hi);
+            break;
         case Op::Kind::kUpdate:
         case Op::Kind::kDelete:
             for (const std::uint64_t id : it.oracle.Matching(op.table, PredicateOf(op))) {
@@ -349,6 +355,50 @@ bool IsDuplicateRefusal(const std::string& reply) {
 }
 bool IsExhaustedRefusal(const std::string& reply) {
     return IsErr(reply) && reply.find("outside the Keystone id space") != std::string::npos;
+}
+
+// The refusal a window of one live key gets (PU3).
+bool IsLiveKeyRefusal(const std::string& reply) {
+    return IsErr(reply) && reply.find("is live; PURGE frees only") != std::string::npos;
+}
+
+// **A PURGE's answer** (BH PU2, PU3, PU7): `PURGED n` with exactly the keys
+// the oracle says it frees, or - a window of one live key - the refusal.
+// Where an unknown could change the answer, any well-formed answer is taken
+// and every key the window could have freed becomes unknown. An injected
+// I/O error is absorbed; the live refusal and a well-formed count are never
+// I/O outcomes, so a wrong one fails with faults on too.
+bool CheckPurge(Iteration& it, const Op& op, const std::string& reply, std::size_t op_index) {
+    const Oracle::PurgeExpect expect = it.oracle.ExpectPurge(op.table, op.lo, op.hi);
+    const bool refused_live = IsLiveKeyRefusal(reply);
+    const std::optional<std::uint64_t> purged = ParsePurged(reply);
+    const bool legal = !expect.checkable ? purged.has_value() || refused_live
+                       : expect.live     ? refused_live
+                                         : purged == expect.keys.size();
+    if (!legal) {
+        if (IsErr(reply) && it.faults_on() && !refused_live) {
+            AbsorbError(it, op, op_index);
+            ++it.verdict.ops_run;
+            return true;
+        }
+        const std::string want = !expect.checkable ? std::string("PURGED n or the live refusal")
+                                 : expect.live     ? std::string("the live-key refusal")
+                                                   : "PURGED " + std::to_string(expect.keys.size());
+        Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: expected " + want +
+                     ", got " + reply);
+        return false;
+    }
+    ++it.verdict.ops_run;
+    if (!expect.checkable) {
+        it.oracle.NotePurgeUnknown(op.table, op.lo, op.hi);
+        ++it.verdict.counts_skipped;
+        return true;
+    }
+    ++it.verdict.writes_checked;
+    ++it.verdict.purges;
+    it.verdict.purged_keys += expect.keys.size();
+    it.oracle.ApplyPurge(op.table, expect.keys);
+    return true;
 }
 
 // **A named key's INSERT, checked against the oracle** (BD-R9,
@@ -481,6 +531,7 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
     }
 
     if (op.kind == Op::Kind::kInsertNamed) return CheckNamedInsert(it, op, reply, op_index);
+    if (op.kind == Op::Kind::kPurge) return CheckPurge(it, op, reply, op_index);
 
     if (IsErr(reply) && it.faults_on()) {
         AbsorbError(it, op, op_index);
@@ -581,6 +632,8 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             break;
         case Op::Kind::kInsertNamed:
             break;  // `CheckNamedInsert`, above
+        case Op::Kind::kPurge:
+            break;  // `CheckPurge`, above
         case Op::Kind::kSync:
             if (reply != "OK synced") {
                 Fail(it, "op " + std::to_string(op_index) + " [SYNC]: " + reply);
@@ -1068,6 +1121,8 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     named_placed += other.named_placed;
     named_duplicate += other.named_duplicate;
     named_exhausted += other.named_exhausted;
+    purges += other.purges;
+    purged_keys += other.purged_keys;
     checkpoints += other.checkpoints;
     recycles += other.recycles;
     segments_recycled += other.segments_recycled;

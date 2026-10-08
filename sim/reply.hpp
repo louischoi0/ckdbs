@@ -52,6 +52,12 @@ inline std::optional<std::uint64_t> ParseInsertedId(std::string_view reply) {
     return ParseField(reply, " id=");
 }
 
+// "PURGED <n>" -> the keys a PURGE freed (BH PU7).
+inline std::optional<std::uint64_t> ParsePurged(std::string_view reply) {
+    if (reply.rfind("PURGED ", 0) != 0) return std::nullopt;
+    return ParseField(reply, "PURGED ");
+}
+
 // The full placement an INSERTED reply reports — what the corruption tests
 // use to find a tuple's bytes without re-deriving the engine's placement.
 struct InsertedAt {

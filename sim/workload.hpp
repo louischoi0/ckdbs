@@ -82,14 +82,19 @@ struct Op {
         // so the relation count holds and the next mount's reclaim has pages
         // a later creation can reuse.
         kDropTable,
+        // PURGE (BH, `instructions/v3.0.0/workorder-bh-purge-key.md`): frees
+        // the deleted keys of `[lo, hi]`, inclusive, on a btree, in
+        // autocommit only. `lo == hi` is the one-key form, which refuses a
+        // live key; a wider window passes over one.
+        kPurge,
     };
     Kind kind;
     std::string table;
     std::string sql;
     // Semantic fields the oracle needs to build its expectation.
     std::uint64_t key = 0;       // kSelectPk, kInsertNamed; kUpdate/kDelete when by_pk
-    std::uint64_t lo = 0;        // kSelectRange
-    std::uint64_t hi = 0;        // kSelectRange
+    std::uint64_t lo = 0;        // kSelectRange, kPurge
+    std::uint64_t hi = 0;        // kSelectRange, kPurge
     std::int64_t v = 0;          // kInsert(Named), kFilterScan; kUpdate's new v
     std::string name;            // kInsert(Named); kUpdate's new name
     bool btree = false;          // kCreateTable
@@ -124,6 +129,9 @@ private:
         // duplicate for good, a rolled-back one is free (W12).
         std::vector<std::uint64_t> deleted;
         std::vector<std::uint64_t> rolled_back;
+        // Keys a PURGE named, which a named INSERT names again (BH-R11): free
+        // if the purge freed them, a duplicate if not - the oracle decides.
+        std::vector<std::uint64_t> purged;
         // Inside a transaction a named key is drawn from here, descending:
         // below 2^39 no issue reaches (issues start low and jump above the
         // first such key), so it is always free there - a refusal inside a
@@ -158,6 +166,9 @@ private:
     // DROP TABLE of a live relation, never the last one. Drawn from its own
     // stream (`drop_rng_`), so a seed's other ops are the ops it always drew.
     Op Drop();
+    // PURGE of a btree relation's deleted keys, outside a transaction, in a
+    // DELETE's place. Drawn from its own stream (`purge_rng_`).
+    Op Purge(Table& table);
     std::vector<std::size_t> LiveIndices() const;
     void AddReplacement();
 
@@ -179,6 +190,7 @@ private:
     // The drops (BF-R12): their own stream, a budget of two an iteration,
     // and the ones the open transaction made, which a rollback undoes.
     Rng drop_rng_;
+    Rng purge_rng_;
     std::size_t drops_left_ = 2;
     std::vector<std::size_t> txn_drops_;
 };

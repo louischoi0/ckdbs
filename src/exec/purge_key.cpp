@@ -39,7 +39,16 @@ StatusOr<PurgeOutcome> PurgeKey(storage::PageStore& store, wal::WalManager* wal,
 
     for (const auto& [page_id, slot] : spills) {
         auto released = txn::ReleaseVarHeapSlot(store, wal, wal::kNoTxnId, page_id, slot);
-        if (!released.ok()) return released.status();
+        // **The key is purged already** - its retire is logged - so a
+        // refusal here says so rather than read as the key's: its spills
+        // from this one on leak, the gap a crash between the two records
+        // leaves (BH-R7).
+        if (!released.ok()) {
+            return released.status().WithMessage(
+                released.status().message() + "; primary key " + std::to_string(id) +
+                " is purged, and its spill at page " + std::to_string(page_id) + " slot " +
+                std::to_string(slot) + " and any after it are not released");
+        }
         // In-process the slot was written by the row's own insert or
         // update, so its absence is a defect, not a crash (the outcome's
         // own rule in `varheap_release.hpp`).

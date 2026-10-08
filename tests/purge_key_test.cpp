@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "act_on_fetch_store.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/server/role.hpp"
 #include "kds/server/session.hpp"
@@ -109,7 +110,10 @@ protected:
             << sql << " -> " << out.response;
     }
 
-    storage::InMemoryPageStore store_{kFirstUserPageId};
+    // Every fetch through a store that can refuse one (`FailFetch`), for the
+    // refusal-while-writing cell.
+    storage::InMemoryPageStore backing_{kFirstUserPageId};
+    testing_race::ActOnFetchStore store_{backing_};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<txn::TrxIdSequence> ids_;
     std::optional<txn::UndoLog> undo_;
@@ -395,6 +399,39 @@ TEST_F(PurgeKeyTest, EveryRefusalCarriesItsCodeAndByte) {
     for (const Case& c : cases) Refused(c.sql, c.code, c.byte);
     // None of them purged 5.
     EXPECT_EQ(Run("PURGE FROM t WHERE id = 5"), "PURGED 1");
+}
+
+TEST_F(PurgeKeyTest, ARefusalWhileWritingKeepsTheKeysItPurgedAndSaysHowMany) {
+    // PU6, PU10's "refusal while writing": the window was judged whole, and
+    // the refusal comes from a key's own write - here the var-heap page
+    // refusing the second key's spill release, after that key's retire. Each
+    // key before it is purged whole, the refused one is purged with its
+    // spill leaked, and the text says both; the rest are untouched, and a
+    // re-run finishes the window.
+    Ok("CREATE TABLE t (id int64, s varchar(16)) BTREE", "CREATED");
+    const std::string spilled(100, 'x');
+    for (int id : {1, 2, 3}) {
+        Ok("INSERT INTO t VALUES (" + std::to_string(id) + ", '" + spilled + "')", "INSERTED");
+        Ok("DELETE FROM t WHERE id = " + std::to_string(id), "DELETED 1");
+    }
+    auto oid = boot_->catalog.FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    store_.FailFetch(access.value()->varheap_page_id, 2);
+
+    const DispatchOutcome refused = d_->Dispatch("PURGE FROM t WHERE id BETWEEN 1 AND 3");
+    EXPECT_EQ(refused.status.code(), StatusCode::kIoError) << refused.response;
+    EXPECT_NE(refused.response.find("primary key 2 is purged"), std::string::npos)
+        << refused.response;
+    EXPECT_NE(refused.response.find("purged 1 key(s) of its window before it"), std::string::npos)
+        << refused.response;
+
+    EXPECT_TRUE(Placed(Run("INSERT INTO t VALUES (1, 'a')")));
+    EXPECT_TRUE(Placed(Run("INSERT INTO t VALUES (2, 'b')")));
+    EXPECT_NE(Run("INSERT INTO t VALUES (3, 'c')").find("PURGE frees its key"), std::string::npos)
+        << "a key the refused purge never reached was freed";
+    EXPECT_EQ(Run("PURGE FROM t WHERE id BETWEEN 1 AND 3"), "PURGED 1");
 }
 
 TEST_F(PurgeKeyTest, InsideATransactionItIsRefusedAndPoisonsNothing) {
