@@ -12,13 +12,14 @@ order and gates none.
 §4): BA-Q14 is marked (b), and `workorder-bb-issue-under-the-leaf.md` takes
 defect A in BA-S1b's place. BA resumes at BB's close (BB-S5).
 **Resumed 2026-10-08**: BB closed (`raft-marks-2026-10-08.md` §6), and BD-S6
-had rebased these rows (§6, "BA rebased on BD"). BA-S2 waits for its own
-word.
+had rebased these rows (§6, "BA rebased on BD"). BA-S2 waited for its own
+word (given 2026-10-09, below).
 **Opened 2026-10-09** (`raft-marks-2026-10-09.md` §1), on the operator's
 *"BA 중단된 작업부터 진행해줘 BA를 마무리하려고해"*: BA-Q0..Q13 were reviewed
 one by one and marked in §4, eight of them in wording restated to the tree
-at `d43845a0` (§1.14). Stages run from BA-S2 in §5's order. A question a
-stage raises goes back to the operator.
+at `d43845a0` (§1.14). Stages run from BA-S2 in §5's order without a word
+per stage, and a question a stage raises is settled by CLA's proposal,
+recorded as adopted (`raft-marks-2026-10-09.md` §2).
 
 **Where the items came from.** The starting point was
 `bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`, plus a
@@ -1071,7 +1072,8 @@ BA-Q11.
 
 ## 3. Stages
 
-Each stage waits for its own word. BA-Q1 says which also wait for the
+Since 2026-10-09 no stage waits for its own word (`raft-marks-2026-10-09.md`
+§2). BA-Q1 says which wait for the
 census.
 
 | stage | what | exit | size |
@@ -1135,7 +1137,8 @@ census.
    - S11 before S14: both touch the insert path in `command_dispatcher.cpp`.
    - S15 after S10: the read borrow's scope across a suspension.
 5. **BA-S17 last.** The overhead is measured once over the whole change,
-   from the commit BA opens at to the commit that closes it.
+   from the commit BA opened at, `d43845a0` (`raft-marks-2026-10-09.md` §2),
+   to the commit that closes it. BA-S1's and BA-S1c's code is outside it.
 
 ## 6. Row status
 
@@ -1466,3 +1469,8 @@ followed (`raft-marks-2026-10-09.md` §1). Before marking, every item was
 re-read at `c47fbeff`: §1.14 records what moved. §4 carries the marks; eight
 items (Q1, Q5, Q8, Q9, Q10, Q11, Q12, Q13) were marked in wording restated
 to the tree. BA-S2 is the next stage.
+
+**Run to its close** (`raft-marks-2026-10-09.md` §2): the operator let
+BA-S2..S17 run without a word per stage, a stage's question settled by CLA's
+proposal and recorded as adopted under that go-ahead
+(go-ahead-achieving-milestone), and set the close's A to `d43845a0`.
