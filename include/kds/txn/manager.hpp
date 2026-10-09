@@ -2,12 +2,14 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "kds/base/contention.hpp"
 #include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/instance_visibility.hpp"
@@ -617,16 +619,25 @@ public:
     class CeilingWait {
     public:
         explicit CeilingWait(const TransactionManager& manager) noexcept
-            : visibility_(*manager.visibility_), core_(manager.core_) {
+            : visibility_(*manager.visibility_),
+              core_(manager.core_),
+              start_(std::chrono::steady_clock::now()) {
             visibility_.EnterCeilingWait(core_);
         }
-        ~CeilingWait() { visibility_.LeaveCeilingWait(core_); }
+        // BA-R0's ceiling count: one wait and its length, timed from the
+        // registration, which every waiter takes before it reads the ceiling.
+        ~CeilingWait() {
+            visibility_.LeaveCeilingWait(core_);
+            Contention::Add(Tally::kCeilingWaits);
+            Contention::Add(Tally::kCeilingWaitNs, NsSince(start_));
+        }
         CeilingWait(const CeilingWait&) = delete;
         CeilingWait& operator=(const CeilingWait&) = delete;
 
     private:
         InstanceVisibility& visibility_;
         std::uint32_t core_;
+        std::chrono::steady_clock::time_point start_;
     };
 
     // ---- Reader registration (docs/workplan-reader-registration.md) -----

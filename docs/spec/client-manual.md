@@ -112,6 +112,7 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `wal_drain_interval_us` | — | `1000` | How often the WAL drain runs. Bounds a `relaxed` commit's loss window; a tick with nothing staged does no I/O. `0` disables it. |
 | `inline_cell_width` | — | `64` | How many bytes a variable-width value (`varchar`) occupies inside a tuple (`docs/spec/heap-and-tuple.md` §3.3), unless the column declared its own width as `varchar(N)` (`docs/spec/types.md` §2b). A longer value still stores fine — it spills to the var-heap and the cell holds a pointer — so this is a **performance** knob, not a limit: raising it keeps more values in the tuple at the cost of padding every short one. Read **once**, at the bootstrap of a new database, and pinned into the superblock; every later mount validates the running value against the pinned one and refuses to start on a disagreement, naming both. Changing it for existing data is a rebuild, which is `Unsupported` — there is no migration. Legal range 16..4096. |
 | `cores` | — | `1` | How many reactor cores this instance runs. **Not pinned since AT-S9**: the superblock records the count, and a mount under a different one records the new count and logs the change rather than refusing - nothing on disk names a core any more, and one stream publishes the anchor's slot 0 alone. A value above 1 spawns that many pinned reactor threads, which **share one WAL stream**: core 0 owns the log and every peer appends through it. (A volume written with one stream per core, before AR0 M0, no longer mounts at all — there is no migration.) Bounded above by 64 (the superblock's WAL anchor slots, indexed by `core_id`) and by the machine's reported core count — pinned reactors never block, so overcommitting them serializes whole workloads behind each other. |
+| `reactor_cpus` | — | *(absent)* | The CPU each reactor is pinned to, core 0 first: `0,2` puts reactor 0 on CPU 0 and reactor 1 on CPU 2 (BA-S2). It must name exactly `cores` distinct CPUs, each one the machine reports, or the server refuses to start. Absent, a peer reactor `k` runs on CPU `k` and core 0 runs unpinned - which, on a host numbering SMT siblings adjacently, puts reactors 0 and 1 on one physical core. A measurement at `cores > 1` names the map it ran under. |
 | `indexes` | — | `on` | Whether a secondary index may be **read** (`docs/spec/index.md` §12.3). Off makes a statement on an indexed column take the walk it would have taken had the index not existed. It does **not** change the compiled plan — `ANALYZE` still reports `IndexProbe`, and the switch steers the branch inside that step — so replies are byte-identical either way and the difference is work, not planning. **There is deliberately no key for index maintenance**: an index that stops being maintained is *wrong* rather than slow, and a config key that can produce a wrong answer is not a config key. Turning the write cost off is `DROP INDEX`. |
 | `physical_optimizer` | — | `shadow` | `off` or `shadow` (`docs/spec/physical-optimizer.md` R3). Shadow costs nothing at rest — the planner is pull-only, computed when `SHOW RELAYOUT` asks — which is why on-by-default is safe where a background optimizer would not be; `off` makes `SHOW RELAYOUT` answer a one-line disabled notice. **`on` is refused at startup naming §6's three gates** — compact blocked on the reader horizon, cluster on ordered-between pruning, defrag on cross-relation page reuse. |
 | `cabin_optimizer` | — | `off` | Part II of `docs/spec/physical-optimizer.md`: the background controller over Observational Cabins. **Off by default, experimental** — the opposite default from `physical_optimizer`, because a controller that acts is not a report. `SET CABIN_OPTIMIZER ON\|OFF` flips it at runtime (non-destructive both ways), and `SHOW META` reports it. The consumer is the controller's cadence task, which reads it at every batch boundary — before a tick's snapshot, between actions, and between a build's pages — so an `off` lands mid-build and the build discards cleanly. `SHOW CABIN_OPTIMIZER` is the view. |
@@ -380,6 +381,30 @@ still holds), `wal_segments_removed` and `wal_remove_failures`. A failed
 removal refuses nothing; the log is only larger than it needs to be. The
 recovery block prints `recovery_redo_start` and
 `recovery_redo_start_recomputed` only when redo's floor raised the start.
+
+**`SHOW META` gained a `contention` block at BA-S2**
+(`instructions/v3.0.0/workorder-ba-parallelism.md` BA-R0;
+`include/kds/base/contention.hpp`). Unlike the WAL block it is the
+instance's, summed over every core when read, so it reads the same from any
+session. Per latch kind - `other`, `frame_table`, `free_map`, `free_map_flush`, `window`,
+`lock_partition`, `lock_wait_for`, `wal_stream`, `wal_sync_gate`,
+`assertion_dir`, `optimizer`, `superblock`, `cabin_partition`,
+`cabin_stats`, `handoff` - `contention_<kind>_waits` and `contention_<kind>_wait_us`
+count only the acquisitions that found the latch held, and the time they
+waited. Beside them: `contention_page_latch_waits` and
+`contention_page_latch_spin_turns`; `contention_syncs_inline` (a sync run on
+the owning core's reactor) and `contention_syncs_writer` (the writer
+thread's); `contention_drain_passes_pending`; `contention_ceiling_waits` and
+`contention_ceiling_wait_us` (a statement waiting for another core's commit
+marker, BA-S1c); `contention_carves`, `contention_checkpoint_runs`,
+`contention_carve_longest_us` and `contention_checkpoint_longest_us`; and
+one `contention_refused_<site>` per site a stale descent is refused
+`TXN_CONFLICT` at (`btree_descend`, `btree_parent`, `btree_secure`,
+`btree_lookup`, `index_descend`, `index_parent`, `index_secure`). Every
+field is printed at every core count; at `cores = 1` only the latches that
+are armed there (the window, the superblock, the WAL sync gate, the Cabin
+store's) can move, and only if another thread takes them - the sync gate
+does, since the WAL writer thread syncs through it beside the reactor.
 
 **A failed log write stops the instance's writes** (`docs/spec/wal.md`
 §6-5). Once the log device refuses a write or a sync, every statement that writes is

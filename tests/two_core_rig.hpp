@@ -448,7 +448,7 @@ private:
     std::optional<SuperBlockCheckpointAnchor> fold_anchor_;  // BC-S1: page 0's own
     wal::CheckpointGate checkpoint_gate_;          // AT-S8: one for both cores
     exec::AssertionEnforcer assertions_{/*shared=*/true};  // AT-S5d: one for both cores
-    Latch superblock_latch_;  // AT-S10b: the one ceiling both cores carve from
+    Latch superblock_latch_{LatchKind::kSuperblock};  // AT-S10b: the one ceiling both cores carve from
     std::array<std::thread, 2> threads_;
     // Last, so they die first: every runtime borrows everything above.
     std::array<std::unique_ptr<CoreRuntime>, 2> cores_;

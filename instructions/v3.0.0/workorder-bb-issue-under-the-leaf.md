@@ -1428,7 +1428,7 @@ far as it got, and defer the rest.
 ### BB-S5 - the close, 2026-10-08
 
 Written on `worktree-bb-s5-close` from `65a28553`, on the operator's
-*"close entry 작성 진행"* (`raft-marks-2026-10-08.md` §6). BB closes on the
+*"go ahead and write the close entry"* (`raft-marks-2026-10-08.md` §6). BB closes on the
 measurement it has (BD-Q12 (b)). It does not rebase BA, because BD-S6 did.
 BB cuts no tag.
 

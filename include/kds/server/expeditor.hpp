@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -96,6 +97,16 @@ namespace kds::server {
 // config for the same reason `CheckCoreCount` is one: testable without a
 // server.
 Status CheckBufferPoolFrames(std::size_t frames);
+
+// `reactor_cpus`' spelling (BA-S2): CPU numbers separated by commas, spaces
+// around each allowed. Refuses an empty item or a number that is not a u32.
+StatusOr<std::vector<std::uint32_t>> ParseReactorCpus(std::string_view text);
+
+// `reactor_cpus` against the core count: empty passes; otherwise exactly
+// `cores` CPUs, no CPU twice, and none at or above `hardware_cpus` when that
+// is known (non-zero). Free for the reason `CheckBufferPoolFrames` is.
+Status CheckReactorCpus(const std::vector<std::uint32_t>& cpus, std::uint32_t cores,
+                        unsigned hardware_cpus);
 
 class Expeditor {
 public:
@@ -479,6 +490,13 @@ public:
         // this engine's cooperative, never-blocking task model survives.
         std::uint32_t cores = 1;
 
+        // **The CPU each reactor is pinned to** (BA-S2, BA-R0's host map):
+        // reactor k runs on `reactor_cpus[k]`, core 0 included. Empty keeps
+        // the default - peer k on CPU k, core 0 unpinned - which puts
+        // reactors 0 and 1 on one physical core's SMT siblings on a host
+        // that numbers siblings adjacently. When given it names exactly
+        // `cores` distinct CPUs, each one this machine has.
+        std::vector<std::uint32_t> reactor_cpus;
 
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to
         // wherever the process runs"; the two are joined into one path, so
@@ -796,7 +814,7 @@ private:
     // it is never held across device I/O and nothing reached from a sync
     // takes it. The gate is not a latch: a failed attempt skips, so it
     // orders against nothing.
-    Latch superblock_latch_;
+    Latch superblock_latch_{LatchKind::kSuperblock};
 
     // **The optimizer surface's shared state** (AT-S8, `OptimizerSurface`):
     // the `CABIN_OPTIMIZER` switch every core's `SET` flips and the cadence
@@ -808,8 +826,8 @@ private:
     // `SHOW CABIN_OPTIMIZER` on a peer sleeps that peer's reactor for a
     // build (`known-gaps.md`); a reader never holds it across I/O.
     std::atomic<bool> cabin_optimizer_on_{false};
-    Latch optimizer_signals_latch_;
-    Latch cabin_view_latch_;
+    Latch optimizer_signals_latch_{LatchKind::kOptimizer};
+    Latch cabin_view_latch_{LatchKind::kOptimizer};
     wal::CheckpointGate checkpoint_gate_;
 
     std::optional<txn::TrxIdSequence> trx_ids_;

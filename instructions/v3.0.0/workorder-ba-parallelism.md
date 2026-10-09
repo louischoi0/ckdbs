@@ -15,7 +15,7 @@ defect A in BA-S1b's place. BA resumes at BB's close (BB-S5).
 had rebased these rows (§6, "BA rebased on BD"). BA-S2 waited for its own
 word (given 2026-10-09, below).
 **Opened 2026-10-09** (`raft-marks-2026-10-09.md` §1), on the operator's
-*"BA 중단된 작업부터 진행해줘 BA를 마무리하려고해"*: BA-Q0..Q13 were reviewed
+*"continue BA from the work that was stopped; I want to finish BA"*: BA-Q0..Q13 were reviewed
 one by one and marked in §4, eight of them in wording restated to the tree
 at `d43845a0` (§1.14). Stages run from BA-S2 in §5's order without a word
 per stage, and a question a stage raises is settled by CLA's proposal,
@@ -687,8 +687,10 @@ section wins over §0 and §1.1-§1.13 until a stage restates them:
   - Drain passes spent with a commit pending (§1.7's spin).
   - Time new snapshots spent capped below a held marker (defect B).
   - Carves and the longest one; checkpoint runs and the longest one.
-  - Refusals by site, at the six `TxnConflict` sites of §1.9: `btree.cpp:232`,
-    `:524` and `:549`, and `index_tree.cpp:195`, `:254` and `:279`.
+  - Refusals by site, at the `TxnConflict` sites of §1.9 - seven at
+    `d43845a0`, BtreeLookup's bounded re-descent being the seventh: the
+    btree's descend, parent, secure and lookup, and the index tree's descend,
+    parent and secure.
 - **How it is counted.** Try the lock first, and count and time only the
   contended branch. Counters are per core and summed when read, so the
   instrument adds no shared cache line. `SHOW META` prints them.
@@ -1463,8 +1465,8 @@ back out from under the leaf. BA-S2 waits for its own word.
 
 ### BA opened - 2026-10-09
 
-On `worktree-ba-open-marks` from `d43845a0`, on the operator's *"BA 중단된
-작업부터 진행해줘 BA를 마무리하려고해"* and the item-by-item review that
+On `worktree-ba-open-marks` from `d43845a0`, on the operator's *"continue BA
+from the work that was stopped; I want to finish BA"* and the item-by-item review that
 followed (`raft-marks-2026-10-09.md` §1). Before marking, every item was
 re-read at `c47fbeff`: §1.14 records what moved. §4 carries the marks; eight
 items (Q1, Q5, Q8, Q9, Q10, Q11, Q12, Q13) were marked in wording restated
@@ -1474,3 +1476,73 @@ to the tree. BA-S2 is the next stage.
 BA-S2..S17 run without a word per stage, a stage's question settled by CLA's
 proposal and recorded as adopted under that go-ahead
 (go-ahead-achieving-milestone), and set the close's A to `d43845a0`.
+
+### BA-S2 - the counters, built 2026-10-09
+
+On `worktree-ba-open-marks` from `7b3b9732`.
+
+- **The instrument** (`include/kds/base/contention.hpp`). Each core has one
+  cache-line-aligned block, summed when read. `kds::Latch` became a class
+  over `std::mutex` that carries its `rules.md` §3 row as a `LatchKind`. Its
+  `lock` tries first, and only a failed try reads the clock and records the
+  wait. Every `Latch` row is tagged, plus `CabinStore`'s two raw mutexes, the
+  WAL sync gate (`sync_mutex_`) and the free map's flush latch. The flush
+  latch has a kind of its own because it is held across device I/O. An
+  uncontended acquisition costs what it did before.
+- **The tallies.**
+  - Page-latch waits and their spin turns (`AcquirePageLatch`).
+  - Syncs inline (the owning manager's arm) against syncs by the writer
+    thread.
+  - Drain passes taken with a group commit staged (`DrainOnce`).
+  - BA-S1c's ceiling waits and their length (`CeilingWait`).
+  - Carves and checkpoint runs, each with its longest (`StallTimer`). The
+    checkpoint is counted on `RunGated`, the periodic path.
+  - Refusals at seven `TxnConflict` descent sites, not the six BA-R0
+    listed: `BtreeLookup`'s bounded re-descent is the seventh.
+- **`SHOW META`** prints a `contention_*` block summed over every core
+  (`client-manual.md`). It is the one visible change at `cores = 1`, where
+  only the always-armed latches can move.
+- **The host map.** The new key `reactor_cpus` pins reactor k, core 0
+  included, to the k-th CPU listed. It must name exactly `cores` distinct
+  CPUs that the machine has, or the server is refused at boot. No existing
+  setting expressed CPU placement, so this is a new key and not a re-scope.
+- **Cells** (`tests/contention_counters_test.cpp`, plus the BA-S1c rig
+  cells).
+  - **Forced deterministically** by holding the real latch from a second
+    thread: every kind on a bare `Latch`, the frame table, the free map, the
+    window, a lock partition, the wait-for latch, a carve on the superblock
+    latch, and a page latch's spin.
+  - **On the two-core rig:** the stream latch, the writer's syncs and the
+    drain passes, from both cores inserting into one relation. Rounds are
+    repeated until the counts move, bounded at ten. The ceiling waits come
+    from BA-S1c's rig cells, which now assert the count.
+  - **Unit cells:** an owning manager's inline sync, and a checkpoint run.
+- **Not forced by any cell:**
+  - the seven refusal sites (no cell reaches them deterministically; each
+    count sits on its site's final return);
+  - the assertion directory, optimizer, Cabin and handoff latches (each is
+    tagged at its declaration, and the bare-`Latch` cell proves the
+    counting for every kind).
+- **Found on the way, a census fact:** ten rounds of two cores inserting
+  400 rows each into one relation never contended the window latch or a
+  lock partition.
+
+**The review** (`critics-developer`): no code bug found.
+- **Applied:**
+  - the free map's flush latch split into its own kind (`free_map_flush`),
+    so its I/O waits do not land on the bitmap latch;
+  - the handoff inbox latch tagged (`handoff`);
+  - `NsSince` replacing three copies of the duration conversion;
+  - `static_assert`s on the three name tables;
+  - `Latch::kind()` and `Contention::kSlots` deleted as unused;
+  - `RunGated`'s temporary removed;
+  - the latch cells' hold raised from 50 ms to 200 ms against a contender
+    that is not scheduled in time under `ctest -j8`;
+  - two documentation fixes, applied by the reviewer: the sync gate moves at
+    `cores = 1` too, and `HoldWhile`'s comment.
+- **Kept as is:** a ceiling lift that lands between `UncoveredCommit`'s
+  check and the registration counts a wait of about 0 ns. It is still the
+  event BA-R0 asks about.
+
+Overhead not measured; measured at the milestone's close (BA-S17, A =
+`d43845a0`).

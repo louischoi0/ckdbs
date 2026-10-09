@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "kds/base/contention.hpp"
 #include "kds/storage/heap/heap_chain.hpp"  // kMaxChainPages: one cycle guard, not two
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
@@ -229,6 +230,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
     // `Revalidate()` drops the memo and the fill re-reads the anchor), so
     // the code does not change - the message stops naming a cause it cannot
     // tell (AT-S5c's review, C5).
+    Contention::Add(Tally::kRefusalBtreeDescend);
     return Status::TxnConflict("btree descent for key " + std::to_string(key) + " from page " +
                                std::to_string(root) + " gave up after " +
                                std::to_string(kMaxDescentRestarts + 1) +
@@ -447,6 +449,7 @@ StatusOr<storage::PageRef> FetchParent(storage::PageStore& store,
             return std::move(parent.value());
         }
     }
+    Contention::Add(Tally::kRefusalBtreeParent);
     return Status::TxnConflict(
         "btree insert of key " + std::to_string(key) + " could not find the parent of page " +
         std::to_string(child) + ": the path its descent recorded from root " +
@@ -472,6 +475,7 @@ StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descen
                                 ? heap::PageView(descent.leaf.bytes()).grown_over()
                                 : InternalView(out.held[out.count - 1].bytes()).grown_over();
     if (grown_over) {
+        Contention::Add(Tally::kRefusalBtreeSecure);
         return Status::TxnConflict(
             "btree insert of key " + std::to_string(key) + " would grow a level over page " +
             std::to_string(descent.path[0]) + ", which is no longer the root: another core grew "
@@ -1189,6 +1193,7 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
         // `PromoteSeparator`, so the parent already carries the separator
         // that routes the second attempt correctly.
     }
+    Contention::Add(Tally::kRefusalBtreeLookup);
     return Status::TxnConflict("lookup of primary key " + std::to_string(id) + " from page " +
                                std::to_string(root) + " gave up after " +
                                std::to_string(kMaxDescentRestarts + 1) +

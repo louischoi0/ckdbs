@@ -1,6 +1,10 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <mutex>
+
+#include "kds/base/contention.hpp"
 
 // The latch AR0's revised G1 admits beside the ring indices
 // (`instructions/v3.0.0/ar0-architecture-revision.md` §3), and the shape
@@ -49,7 +53,31 @@
 
 namespace kds {
 
-using Latch = std::mutex;
+// **A `std::mutex` that knows which row of `rules.md` §3 it is** (BA-S2).
+// `lock` tries first; only a failed try reads the clock and records the wait
+// under the latch's kind (`contention.hpp`), so an uncontended acquisition is
+// the same single atomic operation it was. BasicLockable and Lockable, so
+// `std::unique_lock<Latch>` and `std::condition_variable_any` work over it.
+class Latch {
+public:
+    constexpr Latch() noexcept = default;
+    constexpr explicit Latch(LatchKind kind) noexcept : kind_(kind) {}
+    Latch(const Latch&) = delete;
+    Latch& operator=(const Latch&) = delete;
+
+    void lock() {
+        if (mutex_.try_lock()) return;
+        const auto start = std::chrono::steady_clock::now();
+        mutex_.lock();
+        Contention::LatchWait(kind_, NsSince(start));
+    }
+    bool try_lock() noexcept { return mutex_.try_lock(); }
+    void unlock() noexcept { mutex_.unlock(); }
+
+private:
+    std::mutex mutex_;
+    LatchKind kind_ = LatchKind::kOther;
+};
 
 #ifndef NDEBUG
 namespace detail {

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "kds/base/common.hpp"
+#include "kds/base/latch.hpp"
 #include "kds/parser/ast.hpp"
 
 namespace kds::stats {
@@ -555,7 +556,7 @@ private:
     // create or drop one. An *append* is not a set and does not go through
     // here - it moves `entries` alone.
     struct Partition {
-        mutable std::mutex latch;
+        mutable Latch latch{LatchKind::kCabinPartition};
         std::unordered_map<CabinKey, std::shared_ptr<CabinEntrySet>, CabinKeyHash> observed;
         std::unordered_map<CabinKey, std::uint8_t, CabinKeyHash> sightings;
         // Keys past the per-value entry cap - see NoteEntryCapRefusal.
@@ -604,7 +605,7 @@ private:
     // The counters, under their own latch rather than a partition's: they
     // are the instance's totals and every partition writes them, so folding
     // them into one partition would make that partition every core's.
-    mutable std::mutex stats_latch_;
+    mutable Latch stats_latch_{LatchKind::kCabinStats};
 
     CabinLimits limits_;
     std::array<Partition, kPartitions> partitions_;

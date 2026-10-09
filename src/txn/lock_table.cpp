@@ -66,10 +66,10 @@ LockTable::LockTable(std::uint32_t core_count, std::size_t max_locks_per_txn)
     // what compiles out. `LatchGuard(nullptr)` is then two predictable
     // branches, `base/latch.hpp`'s stated shape for exactly this.
     if (core_count > 1) {
-        wait_latch_ = std::make_unique<Latch>();
+        wait_latch_ = std::make_unique<Latch>(LatchKind::kLockWaitFor);
         latches_.reserve(partitions_.size());
         for (std::size_t i = 0; i < partitions_.size(); ++i) {
-            latches_.push_back(std::make_unique<Latch>());
+            latches_.push_back(std::make_unique<Latch>(LatchKind::kLockPartition));
             partitions_[i].latch = latches_.back().get();
         }
     }

@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "kds/base/contention.hpp"
+
 namespace kds::txn {
 
 StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
@@ -12,6 +14,9 @@ StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
         return Status::InvalidArgument("a transaction-id block of 0 ids was asked for");
     }
 
+    // BA-R0's carve count and longest carve: the latched raise and the
+    // persist, which is the whole stall a carve puts on its reactor.
+    const StallTimer stall(Tally::kCarves, Longest::kCarveNs);
     std::uint64_t first = 0;
     std::uint64_t ceiling = 0;
     {

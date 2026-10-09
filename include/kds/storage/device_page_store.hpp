@@ -758,6 +758,10 @@ public:
     // with no pin, so the sweep's and `FreePage`'s latch refusals can be
     // exercised before a second core can reach a frame (AM-S2). Absent
     // frame: NotFound. The word is read back by `latch_word_for_test`.
+    // The structure and free-map latches, null unarmed: what BA-S2's cells
+    // hold to make a fetch wait under each kind (`base/contention.hpp`).
+    Latch* StructureLatchForTest() const noexcept { return structure_latch(); }
+    Latch* MapLatchForTest() const noexcept { return map_latch(); }
     Status LatchFrameForTest(PageId page_id, PinMode mode, std::uint32_t core);
     Status UnlatchFrameForTest(PageId page_id, std::uint32_t core);
     StatusOr<std::uint32_t> latch_word_for_test(PageId page_id) const;
@@ -1184,7 +1188,7 @@ private:
     // plain mutex, outer to the map latch and never taken under it; it is
     // held across device I/O, which is why it is not the map latch. Null
     // unarmed, as the other two.
-    mutable Latch map_flush_latch_;
+    mutable Latch map_flush_latch_{LatchKind::kFreeMapFlush};
     Latch* map_flush_latch() const noexcept { return latch_armed_ ? &map_flush_latch_ : nullptr; }
 
     // Debug: a public free-map reader must not be reached from inside the
@@ -1655,7 +1659,7 @@ private:
     // which a latch does not change. This is the standard reason a mutex is
     // mutable, and the alternative was to un-const three accessors whose
     // callers correctly treat them as reads.
-    mutable Latch frames_latch_;
+    mutable Latch frames_latch_{LatchKind::kFrameTable};
     Latch* structure_latch() const noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
 
     // ---- The free map's latch, and the order (AM-S3) ---------------------
@@ -1683,7 +1687,7 @@ private:
     // creation *inserts* into while other cores are inside `find` - and
     // every `MapRegion` in it, including the lazily installed
     // `headerless_map` pointer and the `dirty` flag.
-    mutable Latch map_latch_;
+    mutable Latch map_latch_{LatchKind::kFreeMap};
     Latch* map_latch() const noexcept { return latch_armed_ ? &map_latch_ : nullptr; }
 
     // ---- AM-S2 step 2b: the loading set ---------------------------------
@@ -1709,7 +1713,7 @@ private:
     // hits, so spurious wakes are cheaper than a condition variable per
     // frame - which would also make `Frame` non-movable, and the table
     // moves frames in.
-    std::condition_variable loading_done_;
+    std::condition_variable_any loading_done_;
     // See SetStampSuppressed. Off everywhere but inside a single-stream
     // mount pass.
     bool stamp_suppressed_ = false;

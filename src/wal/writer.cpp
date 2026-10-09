@@ -1,5 +1,7 @@
 #include "kds/wal/writer.hpp"
 
+#include "kds/base/contention.hpp"
+
 #include <utility>
 
 namespace kds::wal {
@@ -127,6 +129,7 @@ void WalWriter::Run() {
                                                        std::memory_order_relaxed)) {
                 }
                 syncs_.fetch_add(1, std::memory_order_relaxed);
+                Contention::Add(Tally::kSyncsWriter);
             } else {
                 // The watermark stays where it was: a failed sync proves
                 // nothing about what reached the platter. Recorded so a

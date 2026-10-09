@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
 namespace kds::wal {
@@ -267,6 +268,7 @@ Status WalManager::Sync() {
         ++stats_.flushes;
     }
     ++stats_.syncs;
+    Contention::Add(Tally::kSyncsInline);
     last_sync_ns_ = clock_.Now();
 
     // Debug rather than Trace: a sync is a durability point, and there is
@@ -435,6 +437,8 @@ Status WalManager::DrainOnce() {
     // as a failure on every tick, for the life of the process
     // (`wal/stream.hpp`'s fail-stop).
     if (stream_->stopped()) return Status::OK();
+    // BA-R0's drain count: a pass taken while a group commit waits on it.
+    if (HasPendingGroupCommits()) Contention::Add(Tally::kDrainPassesPending);
     // **First, close what somebody else's sync already made durable.**
     // Under a shared stream this core's commit records can reach the
     // platter on another core's sync or the writer's, and the batch

@@ -68,7 +68,7 @@ Status WalStream::FailStop(const Status& cause) {
 }
 
 Status WalStream::SyncDevice() {
-    std::lock_guard<std::mutex> guard(sync_mutex_);
+    std::lock_guard<Latch> guard(sync_mutex_);
     if (stopped()) return StoppedStatus();
     if (Status s = device_->Sync(); !s.ok()) return FailStop(s);
     return Status::OK();

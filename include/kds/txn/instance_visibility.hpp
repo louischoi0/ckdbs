@@ -590,6 +590,9 @@ public:
     std::size_t Reclaim();
 
     std::size_t window_size() const;
+    // The window latch: what BA-S2's cell holds to make a reader wait under
+    // its kind (`base/contention.hpp`).
+    Latch& WindowLatchForTest() const noexcept { return window_latch_; }
 
     const CoreVisibilitySlot& slot(std::uint32_t core) const noexcept { return slots_[core]; }
 
@@ -617,7 +620,7 @@ private:
     // Monotone: a core never detaches.
     std::atomic<std::uint32_t> slots_in_use_{0};
 
-    mutable Latch window_latch_;
+    mutable Latch window_latch_{LatchKind::kWindow};
     std::unordered_map<std::uint64_t, std::uint64_t> window_;
 
     // Amortises `Reclaim`'s O(window) pass: it runs when the window reaches

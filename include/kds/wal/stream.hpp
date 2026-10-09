@@ -309,11 +309,11 @@ private:
     // by `Sync` and the writer thread; nothing holding it takes the latch,
     // so the order is latch -> sync_mutex_ -> the device's `segments_mutex_`
     // (`FileLogDevice::Sync` copies its descriptors).
-    std::mutex sync_mutex_;
+    Latch sync_mutex_{LatchKind::kWalSyncGate};
 
     // `latch_` points at `latch_storage_` when shared and is null when not
     // (spin_latch.hpp: a null guard costs one branch and no atomic).
-    Latch latch_storage_;
+    Latch latch_storage_{LatchKind::kWalStream};
     Latch* latch_ = nullptr;
 
     // Preallocated so writing a segment header never allocates.

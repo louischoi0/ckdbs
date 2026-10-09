@@ -5,6 +5,7 @@
 
 #include "kds/txn/lock_table.hpp"
 
+#include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
 #include "kds/exec/type_literals.hpp"
@@ -1709,6 +1710,24 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // the relation's owner; nothing is another core's now.
         os << " recovery_assertions_enforcing=" << recovery_->assertions_enforcing
            << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered;
+    }
+    // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
+    // instance's, summed over every core when read - unlike the WAL block
+    // above, which is this core's. Every latch kind is printed, `other`
+    // included, so a latch no row describes still shows its waits; each
+    // count is the contended acquisitions only.
+    const Contention::Snapshot contention = Contention::Read();
+    for (std::size_t i = 0; i < kLatchKindCount; ++i) {
+        os << " contention_" << kLatchKindNames[i] << "_waits=" << contention.waits[i]
+           << " contention_" << kLatchKindNames[i] << "_wait_us=" << contention.wait_ns[i] / 1000;
+    }
+    for (std::size_t i = 0; i < kTallyCount; ++i) {
+        const bool ns = i == static_cast<std::size_t>(Tally::kCeilingWaitNs);
+        os << " contention_" << kTallyNames[i] << "="
+           << (ns ? contention.tallies[i] / 1000 : contention.tallies[i]);
+    }
+    for (std::size_t i = 0; i < kLongestCount; ++i) {
+        os << " contention_" << kLongestNames[i] << "=" << contention.longest_ns[i] / 1000;
     }
     return {os.str(), false};
 }

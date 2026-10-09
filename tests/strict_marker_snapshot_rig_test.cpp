@@ -27,6 +27,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/contention.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
@@ -131,6 +132,9 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
                core0_slot.pending_commit_bound.load() != txn::kUnboundedBound;
     })) << "core 0's strict commit never reached its sync";
 
+    // BA-S2's ceiling count, read before the statement that waits.
+    const Contention::Snapshot before = Contention::Read();
+
     // Core 1 commits `relaxed` and is acknowledged.
     relaxed.go.store(true, std::memory_order_release);
     ASSERT_TRUE(KickUntil(*rig, 1, [&] { return relaxed.done.load() >= select; }))
@@ -162,6 +166,11 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
     EXPECT_TRUE(StartsWith(Response(strict, 0), "INSERTED")) << Response(strict, 0);
     // No waiter outlives its statement.
     EXPECT_EQ(peer_slot.ceiling_waiters.load(), 0u);
+    // **And the wait is counted** (BA-S2): one statement waited, for at
+    // least the time this thread held the gate after it registered.
+    const Contention::Snapshot after = Contention::Read();
+    EXPECT_GE(after.of(Tally::kCeilingWaits) - before.of(Tally::kCeilingWaits), 1u);
+    EXPECT_GT(after.of(Tally::kCeilingWaitNs), before.of(Tally::kCeilingWaitNs));
 }
 
 // **Mutations**, each run repeatedly (BA-S1c): the bound never recorded -
