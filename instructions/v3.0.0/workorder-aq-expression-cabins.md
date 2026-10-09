@@ -1,8 +1,8 @@
 # Work order AQ — expression and predicate Cabins, `expr_id`, cover serving
 
 Written 2026-10-06 on `worktree-aq-s0-order` from `740d954a`
-(`v2.7.0-615-g740d954a`), on the operator's *"먼저 AQ에 대한 작업지시서를
-작성해줘"*: AR1 §14's second order. AR1 is ratified
+(`v2.7.0-615-g740d954a`), on the operator's *"first, write the work order
+for AQ"*: AR1 §14's second order. AR1 is ratified
 (`raft-marks-2026-09-29.md` §5), AP is closed
 (`workorder-ap-function-catalog-fetch-id.md` §6, AP-S5), and AY-Q11 made AQ
 its own letter.
@@ -330,7 +330,7 @@ changed. The letter itself is AQ-Q0's.
 
 ### AQ opened, and §4 marked - 2026-10-06
 
-On *"CLA 제안대로 진행하고 main에 push해줘"*, every §4 item was marked as
+On *"proceed as CLA proposed and push to main"*, every §4 item was marked as
 proposed (`raft-marks-2026-10-06.md` §2), and the order landed on `main`.
 
 - **Open, each on its own word:** AQ-S1 to AQ-S5.

@@ -1,6 +1,6 @@
 ---
 name: go-ahead-achieving-milestone
-description: Work the current milestone stage after stage, in this session, until it closes — adopting CLA's own proposal wherever a decision is needed, because the operator has said in advance to follow it. Use when the operator says "go ahead until the milestone is done", "keep going, I'll follow your proposal", "마일스톤 끝날 때까지 진행해줘", or invokes /go-ahead-achieving-milestone. It still stops before any push, tag or version.
+description: Work the current milestone stage after stage, in this session, until it closes — adopting CLA's own proposal wherever a decision is needed, because the operator has said in advance to follow it. Use when the operator says "go ahead until the milestone is done", "keep going, I'll follow your proposal", or invokes /go-ahead-achieving-milestone. It still stops before any push, tag or version.
 ---
 
 # go-ahead-achieving-milestone

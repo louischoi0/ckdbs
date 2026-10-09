@@ -192,8 +192,9 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 - **Every document is synced in English** (operator, 2026-10-07), whatever
   language the instruction came in: specs, work orders, rules, `docs/inflight/`
   entries, bench files, commit messages and code comments. A Korean
-  instruction still gets a Korean reply; the operator's own words may be
-  quoted verbatim, and the text around the quote is English.
+  instruction still gets a Korean reply. **A quotation is translated too**
+  (operator, 2026-10-09): the operator's words are recorded in English, in
+  quotation marks, and no Korean text enters the tree.
 - Nothing new is reserved lightly: keywords hash as identifiers, and
   `kFingerprintVersion` moves only per `fingerprint.hpp`'s bump rule (the
   golden corpus pins it).

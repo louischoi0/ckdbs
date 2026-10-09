@@ -1,35 +1,37 @@
 # Work order BD — a named key lands where it sorts: every btree leaf kept in key order by placement, and no high-water-mark refusal
 
 Written 2026-10-07 on `worktree-bd-sorted-leaf-named-keys` from `bf8ea937`
-(`v2.7.0-652-gbf8ea937`), on the operator's words below. All are verbatim,
-from one session, and recorded in `raft-marks-2026-10-07.md` §7-§13, §17 and §18.
+(`v2.7.0-652-gbf8ea937`), on the operator's words below. All are from one
+session, translated into English, and recorded in `raft-marks-2026-10-07.md` §7-§13, §17 and §18.
 
 **The operator's words**, numbered so the rest of this order can cite them:
 
-- **W1:** *"kUnordered를 삭제하면서도 high water mark 오류가 발생하지 않도록 하는
-  방법이 있지 않니?"*
-- **W2:** *"순서를 어기는 삽입이 왜 필요하지? 낮은 key를 가진 leaf를 삽입할때 항상
-  끝쪽이 아닌 알맞은 순서에 넣으면 되잖아"*
-- **W3:** *"kUnordered를 삭제하면서, 별도 플래그를 두지 않으면서, btree를 항상
-  정렬되게 유지하면서도 high water mark 오류는 없어야해."*
-- **W4:** *"(a)를 선택할거야."* CLA had offered two options:
+- **W1:** *"isn't there a way to delete kUnordered and still have no high
+  water mark error?"*
+- **W2:** *"why is an insert that breaks the order needed at all? when
+  inserting a lower key into a leaf, just put it in its proper place rather
+  than always at the end"*
+- **W3:** *"while deleting kUnordered, without a separate flag, and keeping
+  the btree always sorted, there must be no high water mark error."*
+- **W4:** *"I will choose (a)."* CLA had offered two options:
   - (a) shift the slot directory and change what addresses a slot;
   - (b) keep slot numbers fixed and add a key-order array to the leaf.
-- **W5:** *"해당 Invariant 변경에 대한 작업 지시서를 작성해줘, 추가로 named_pk
-  삽입이 pk때문에 실패하는 이유는 2가지 뿐이어야해. 중복되거나, 소진되었거나."*
-- **W6:** *"tombstone을 사용하는 것은 CLA제안에 따라서 구성"*
-- **W7:** *"(a)로 진행해"*. This is the reading of W5's two reasons (BD-Q3).
-- **W8:** *"high water mark (pk=100을 먼저 쓰면 pk=99 삽입이 안되는 현상이 있으면
-  안돼"*
-- **W9:** *"superblock 하위호환성은 필요없어. 내가 따로 말하기전까진 이러한 사항을
-  항상 반영해"*. This is a standing order.
-- **W10:** *"BB-R1 은 삭제해. 성능 측정은 skip"*
-- **W11:** *"작업 지시서만 작성해서 push해"*
-- **W12:** *"롤백된 아이디는 당연히 재사용되어야해"*
-- **W13:** *"BD-Q4, Q8, Q9 제안대로 마킹해줘"*
-- **W14:** *"리뷰 끝나면 반영해서 push해"*
-- **W15:** *"Q10, Q11, Q12 제안대로 마킹해줘"*
-- **W16:** *"BD-Q0 열어줘, 워크트리는 keep-btree-leaf-slots로"*
+- **W5:** *"write the work order for this invariant change; also, a named_pk
+  insert must fail because of its pk for only 2 reasons: a duplicate, or
+  exhaustion."*
+- **W6:** *"build the use of tombstones as CLA proposes"*
+- **W7:** *"go with (a)"*. This is the reading of W5's two reasons (BD-Q3).
+- **W8:** *"high water mark (there must be no case where writing pk=100
+  first makes inserting pk=99 fail"*
+- **W9:** *"superblock backward compatibility is not needed. Until I say
+  otherwise, always apply this"*. This is a standing order.
+- **W10:** *"delete BB-R1. skip the performance measurement"*
+- **W11:** *"write only the work order and push"*
+- **W12:** *"a rolled-back id must of course be reusable"*
+- **W13:** *"mark BD-Q4, Q8, Q9 as proposed"*
+- **W14:** *"when the review is done, apply it and push"*
+- **W15:** *"mark Q10, Q11, Q12 as proposed"*
+- **W16:** *"open BD-Q0, with the worktree named keep-btree-leaf-slots"*
 
 **Status: closed 2026-10-07 at BD-S6 (W16, §19 of `raft-marks-2026-10-07.md`); not pushed.**
 

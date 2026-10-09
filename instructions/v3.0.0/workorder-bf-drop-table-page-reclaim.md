@@ -1,11 +1,10 @@
 # Work order BF — DROP TABLE page reclamation: a dropped relation's pages go back to the allocator once no replay and no reader can reach them
 
 Written 2026-10-07 on `worktree-drop-table-page-reclaim` from `bc144dbf`
-(`v2.7.0-668-gbc144dbf`), on the operator's word, verbatim:
+(`v2.7.0-668-gbc144dbf`), on the operator's word:
 
-- *"다음으로 drop table 페이지 회수 기능에 대한 작업 지시서"* - next, the work
-  order for DROP TABLE page reclamation.
-- **W1:** *"BF-Q0..Q 제안대로 마킹해줘"* - mark BF-Q0..Q as proposed.
+- *"next, the work order for DROP TABLE page reclamation"*.
+- **W1:** *"mark BF-Q0..Q as proposed"*.
 
 **Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §22): BF-Q0..Q18
 are marked as proposed, so BF-R1..R13 are rulings. The order's writing is
@@ -2184,8 +2183,8 @@ is an unrelated `kds_server` on the host holding the test's hard-coded
 port 25432.
 
 **The measurement (BF-Q15) was not executed.** The operator waived it on
-2026-10-08 (*"measurement 스킵하고 다음 단계 ㄱㄱ"*, "skip the measurement,
-go to the next step") while `ck-tester` was mid-run. The run was stopped
+2026-10-08 (*"skip the measurement and go to the next
+step"*) while `ck-tester` was mid-run. The run was stopped
 and its partial output discarded unread, so nothing from it is reported.
 **BF closes with its overhead unmeasured**: what BF adds to every page
 creation (the free-list check, BF-R6), to every statement head (two stores

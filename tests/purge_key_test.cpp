@@ -296,7 +296,8 @@ TEST_F(PurgeKeyTest, CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident) {
 // ---- The statement ---------------------------------------------------------
 
 TEST_F(PurgeKeyTest, APurgedKeyIsNamedAgainAndPlaced) {
-    // W2: "pk 정보 자체를 purge하는 다른 api ... 이 경우 재삽입이 가능함".
+    // W2: "another API that purges the pk information itself ... in this
+    // case re-insertion is possible".
     Ok("CREATE TABLE t (id int64, qty int64) BTREE", "CREATED");
     Ok("INSERT INTO t VALUES (5, 1)", "INSERTED");
     Ok("INSERT INTO t VALUES (9, 1)", "INSERTED");

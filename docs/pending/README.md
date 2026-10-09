@@ -1,7 +1,7 @@
 # `docs/pending/`
 
 **Pending discussions.** Opened 2026-10-08 on the operator's word
-(*"일단 나중에 논의할 내용으로 pending상태로 내용을 기록해줘 디렉토리 분리해서"*).
+(*"for now, record it as pending, as something to discuss later, in a separate directory"*).
 
 A pending entry records a question the operator has raised and deferred:
 what prompted it, what the tree does today, the options on the table and

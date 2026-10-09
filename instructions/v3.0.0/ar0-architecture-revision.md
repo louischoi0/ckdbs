@@ -337,7 +337,7 @@ The three levels do not stand alike:
 - **So the condition cannot be evaluated yet, and one half of it has no
   answer in either document.** If AN-D4 is declined, RR and RC survive as
   **per-core** levels — what the engine ships at `f027a3c` and what
-  `crosscore.md` §5 states. **Does a per-core RR satisfy "지원 가능"?** The
+  `crosscore.md` §5 states. **Does a per-core RR satisfy "supportable"?** The
   mark does not say and CLA will not guess; it is the question that decides
   whether D1 stands or returns for re-decision. AN-D9 carries the
   mechanism; the question lives here.

@@ -1,10 +1,9 @@
 # Ratification — operator mark of 2026-09-08 on AS-Q6
 
-2026-09-08, operator (chat session, in Korean): *"[decision] [AS-Q6]:
-드라이버를 바꾸고 f6ed10c도 같은 드라이버로 재측정해 새 기준선 수립 당분간
-measure는 BTREE only로 진행한다"* — change the drivers, re-measure `f6ed10c`
-with the same drivers to establish a new baseline, and for the time being
-measurement proceeds BTREE only. Recorded by CLA on `as-q6-drivers-btree`
+2026-09-08, operator (chat session, given in Korean, recorded in
+English): *"[decision] [AS-Q6]: change the drivers, re-measure f6ed10c with
+the same drivers too and establish a new baseline; for the time being,
+measurement proceeds BTREE only"*. Recorded by CLA on `as-q6-drivers-btree`
 against `bc1040e`. Nothing here is code.
 
 ## What it marks
