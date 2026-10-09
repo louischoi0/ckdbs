@@ -1,0 +1,68 @@
+{
+ "engine": "pg",
+ "shape": "trade",
+ "durability": "off",
+ "cores": null,
+ "sessions": 1,
+ "run": 0,
+ "seconds": 8.0,
+ "warmup": 2.0,
+ "server_cpus": "0",
+ "client_cpus": "4,5,6,7",
+ "wait_s": 20.0,
+ "host_before": {
+  "loadavg": "5.97 5.45 4.43 1/304 2261068",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "5.20 5.30 4.39 1/291 2261099",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "statements": 110420,
+ "span_s": 7.9998,
+ "statements_per_s": 13802.8,
+ "p25_us": 65.7,
+ "p50_us": 70.8,
+ "p95_us": 84.3,
+ "p99_us": 97.4,
+ "p0_us": 49.4,
+ "max_us": 3668.4,
+ "by_kind": {
+  "write": {
+   "statements": 110420,
+   "p0_us": 49.4,
+   "p25_us": 65.7,
+   "p50_us": 70.8,
+   "p95_us": 84.3,
+   "p99_us": 97.4
+  }
+ },
+ "by_client": [
+  {
+   "core": null,
+   "statements": 110420,
+   "p50_us": 70.8,
+   "p99_us": 97.4
+  }
+ ],
+ "refusals": 0,
+ "errors": 0,
+ "first_error": null,
+ "client_cpu_share": [
+  0.26
+ ],
+ "client_bound": false,
+ "session_cores": [
+  null
+ ],
+ "meta_delta": {},
+ "meta_longest": {},
+ "meta_session_core": null,
+ "bin_sha256": null,
+ "data_device": "/dev/root ext4",
+ "setup_meta": {}
+}

@@ -1,0 +1,68 @@
+{
+ "engine": "pg",
+ "shape": "insert1",
+ "durability": "off",
+ "cores": null,
+ "sessions": 1,
+ "run": 2,
+ "seconds": 8.0,
+ "warmup": 2.0,
+ "server_cpus": "0",
+ "client_cpus": "4,5,6,7",
+ "wait_s": 0.0,
+ "host_before": {
+  "loadavg": "1.96 2.08 3.18 1/283 2266154",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.91 2.06 3.15 1/301 2266201",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "statements": 138822,
+ "span_s": 8.0,
+ "statements_per_s": 17352.8,
+ "p25_us": 53.2,
+ "p50_us": 53.7,
+ "p95_us": 68.3,
+ "p99_us": 82.0,
+ "p0_us": 44.4,
+ "max_us": 2250.6,
+ "by_kind": {
+  "write": {
+   "statements": 138822,
+   "p0_us": 44.4,
+   "p25_us": 53.2,
+   "p50_us": 53.7,
+   "p95_us": 68.3,
+   "p99_us": 82.0
+  }
+ },
+ "by_client": [
+  {
+   "core": null,
+   "statements": 138822,
+   "p50_us": 53.7,
+   "p99_us": 82.0
+  }
+ ],
+ "refusals": 0,
+ "errors": 0,
+ "first_error": null,
+ "client_cpu_share": [
+  0.31
+ ],
+ "client_bound": false,
+ "session_cores": [
+  null
+ ],
+ "meta_delta": {},
+ "meta_longest": {},
+ "meta_session_core": null,
+ "bin_sha256": null,
+ "data_device": "/dev/root ext4",
+ "setup_meta": {}
+}

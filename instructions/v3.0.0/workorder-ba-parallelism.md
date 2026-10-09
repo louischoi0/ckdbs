@@ -1635,3 +1635,88 @@ The cell then passed 32 of 32 under the same load. The finding went to
 `known-gaps.md`'s existing entry for the IdAllocation cell (Testing), not
 to `bugs/`: no engine defect is shown.
 Overhead not measured; measured at the milestone's close.
+
+### BA-S4 - the census, run 2026-10-09
+
+On `worktree-ba-open-marks` at `c390a624` (`v2.7.0-725-gc390a624`):
+`bench/v3.0.0/results-ba-s4-census-v2.7.0-725-gc390a624.md`, with its
+archive. 1,125 runs: KDS 675, PostgreSQL 18.6 450. No cell failed, and no
+run had an error.
+
+**Material, so these fix stages open** (BA-Q1):
+- **BA-S7** - P7, commit durability.
+  - On the write shapes (trade, insert1, insertN), `group` at
+    `cores = 2` and 16 sessions runs at 1,656-3,558 statements/s, against
+    4,918-4,977 at `cores = 1`. PostgreSQL `on` runs at 4,857-5,325.
+    `recent` does not fall (6,033 to 6,325).
+  - `strict` stays at 650-770 statements/s on the write shapes, whatever
+    the session count.
+  - The sync gate's waits reach 55 % of `cores` x span. The sum includes
+    any the WAL writer thread took, since it counts into core 0's slot.
+  - The snapshot ceiling (defect B) reaches 39 % at `strict`.
+  - The drain took 2.2 billion passes with a commit staged.
+- **BA-S12** - P6, the WAL append: 10.0 % in a clean cell.
+- **BA-S13** - P12: carves up to 2.2 s and checkpoints up to 3.1 s,
+  maxima over each server's life, setup and warm-up included. The carve
+  half only (below).
+- **BA-S14** - P9: 20 refusals.
+- **BA-S15** - exempt from the census (BA-Q1).
+
+**Not material, so these stages do not open:**
+- **BA-S5 (P3), BA-S6 (P8), BA-S8 (P1), BA-S9 (P2) and BA-S10 (P4):** each
+  item is below 1 % of `cores` x span in every clean cell, and below 2 %
+  in every cell.
+
+**Not shown material, because the census cannot measure them, so these
+stages do not open (BA-Q1). Neither is shown immaterial:**
+- **BA-S11 (P5):** page 7 has no latch of its own, and the page-latch
+  counters do not name a page. `insert1` and `insertN` both pay page 7,
+  so their gap prices the leaf, not page 7.
+- **BA-S16 (P11):** no balanced arm was run. In the proxy, the runs with a
+  session on every core were faster by over 10 % in 8 of 30 cells and
+  slower in 3, with one or two runs per arm and no spread to test
+  against. BA-S17's re-run reads it again once BA-S7 removes the
+  confound.
+
+**BA-R4's premise does not hold in this configuration, and the census
+cannot say why.**
+- `group` at `cores = 2`: core 0's sessions see a p50 of 11-43 ms and a
+  p99 of 1.3-1.6 s, and complete 16-44 statements in 8 s against a peer's
+  2,800-2,900. A peer's sessions see about 2.4 ms and 10 ms.
+- The core-0 arm holds the inline sync, the waits on the sync gate behind
+  the writer's peer syncs, and any carve or checkpoint core 0 ran. The
+  counters split none of them. At `cores = 1`, with no writer syncing,
+  `group` matches PostgreSQL. The arm the premise names, a hand-off from
+  every core, was not run.
+- `strict`: the two arms cost about the same, 14-18 ms at the p50. A peer
+  blocks its reactor on the writer's condition variable.
+
+**Adopted on the operator's standing go-ahead of 2026-10-09**
+(go-ahead-achieving-milestone; `raft-marks-2026-10-09.md` §2). Each is
+CLA's proposal; none is the operator's own mark.
+- **The matrix's runs and length:** 3 runs per cell, 8 s each after 2 s of
+  warm-up. BA-R0 named the axes, not these.
+- **The load bound.** Each run waits for a 1-min load at or below 6, not
+  1.5. The census's own runs held the 1-min average above 1.5 between
+  cells, which would have made the census about 10 hours long. A
+  competing build is still recorded per run, as rule 4 asks. The first
+  54 runs (18 cells), taken under the 1.5 bound, were kept: the restart
+  skipped complete cells.
+- **The client-bound mark** is recomputed in the analysis. It marks a run
+  in which any one client CPU was over 80 % busy with the clients pinned
+  to it, which the driver's per-client mark missed. Marked: `point` at 8
+  and 16 sessions at `cores` 2 and 4, `recent` `relaxed` at `cores = 4`
+  16 sessions, and eight PostgreSQL cells on CPUs 0,2,4,6.
+- **P5 and P11**, read as above. P5 cannot be separated from the leaf by
+  the `insert1`/`insertN` pair. P11 is read through the kernel's own
+  placement varying between runs, since the driver opens no balanced
+  arm. Both are "not shown", not "immaterial".
+- **BA-S13 takes the carve, and the checkpoint half waits for BI-Q1.** The
+  operator gave the checkpoint's shape in BI (BI-R1 and BI-R2,
+  `raft-marks-2026-10-08.md` §3-§4). Whether BA-R10's checkpoint
+  paragraph moves to BI is BI-Q1, which is unmarked and is not this
+  milestone's to mark. So BA does not build a second design for it. BA's
+  close carries the checkpoint half as a stop: it waits for the operator's
+  mark on BI-Q1.
+
+No code changed in this stage. The suite is unchanged from `c390a624`.
