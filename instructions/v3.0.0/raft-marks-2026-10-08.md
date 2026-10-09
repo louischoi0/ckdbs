@@ -63,7 +63,7 @@
 
 | | |
 |---|---|
-| **Word** | *"no: under the invariant, a pk value errors only when it is a duplicate or when all of 2^40-1 is exhausted, so inserting with an already-deleted pk key value must be allowed"* |
+| **Word** | *"no: under the invariant, a pk value fails only when it is a duplicate or when all of 2^40-1 is exhausted, so inserting with an already-deleted pk key value must be allowed"* |
 | **Mark** | None. CLA answered with the conflict: K1 (`keystoneid-invariant.md:18-29`), invariant 11 and BD-R4 make a deleted key a duplicate for the life of its relation, and lifting that for every `DELETE` re-opens the hazard K1's first reason names. No file was written on this word |
 | **Does not settle** | Anything: §8 replaced its direction |
 | **Recorded at** | `workorder-bh-purge-key.md`'s header (W1) |

@@ -3,7 +3,7 @@
 **The operator's words of 2026-10-02**, recorded by CLA on
 `worktree-az-q3-release-any-failed-check` from `2e8d213`
 (`v2.7.0-571-g2e8d213`; the v3.0.0 tag is not cut - `raft-marks-2026-09-26.md`
-§4, Q3). All of it is **verbatim**: the words as typed in the session.
+§4, Q3). Every word is recorded **in English**, translated where it was typed in Korean.
 
 ---
 

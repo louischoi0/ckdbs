@@ -3,7 +3,7 @@
 Written 2026-10-08 on `worktree-bh-purge-key` from `0446b3b0`
 (`v2.7.0-691-g0446b3b0`), on the operator's words:
 
-- **W1:** *"no: under the invariant, a pk value errors only when it
+- **W1:** *"no: under the invariant, a pk value fails only when it
   is a duplicate or when all of 2^40-1 is exhausted, so inserting with an
   already-deleted pk key value must be allowed"*.
 - **W2:** *"then, instead of discarding the rule, how about writing
