@@ -85,6 +85,22 @@ statement about an engine that no longer exists; re-verify or strike it.
     told apart from a writer that stopped.
   - **Owner: none.** The bound was not widened, since no cause has been
     observed.
+  - **Reproduced on 2026-10-09** (BA-S3, `worktree-ba-open-marks` at
+    `2f8f7c42`). It failed 2 of 4 plain `-j8` suites that day. Under the
+    `-j8` suite plus eight concurrent copies of the cell, 9 of 80 runs failed
+    there and 10 of 72 at the base `d43845a0`, so BA-S2 did not change the
+    rate.
+  - **A sibling cell answers "slow or stopped" for its own shape: slow.**
+    BA-S2's `ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+    drives the same rig, both cores inserting into one relation, and prints
+    each writer's progress when its bound expires. Under the same load, 14
+    of 32 runs expired. Every expired run had both writers part-way, at 52
+    to 400 of 400 rows after 20 s, with core 0 committing `strict` against a
+    real log file. That points at the host's device syncs and oversubscribed
+    CPUs, not at a lost wake. The IdAllocation cell still prints no
+    progress, so this is a reading by analogy for it, not an observation.
+    The sibling now commits `relaxed` and `group` only, with fewer rows and a
+    longer bound.
 
 - **An expeditor's `Start()` failed once under `-j8` and did not
   reproduce.** On `ay-s2-containment-wake` at `33b9433`, one full Debug

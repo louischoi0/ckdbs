@@ -1518,8 +1518,10 @@ On `worktree-ba-open-marks` from `7b3b9732`.
     from BA-S1c's rig cells, which now assert the count.
   - **Unit cells:** an owning manager's inline sync, and a checkpoint run.
 - **Not forced by any cell:**
-  - the seven refusal sites (no cell reaches them deterministically; each
-    count sits on its site's final return);
+  - the seven refusal sites one by one. No cell reaches a given site
+    deterministically, and each count sits on its site's final return. Since
+    BA-S3, the two-core insert cell proves their sum against the refusals
+    its writers retried;
   - the assertion directory, optimizer, Cabin and handoff latches (each is
     tagged at its declaration, and the bare-`Latch` cell proves the
     counting for every kind).
@@ -1546,3 +1548,90 @@ On `worktree-ba-open-marks` from `7b3b9732`.
 
 Overhead not measured; measured at the milestone's close (BA-S17, A =
 `d43845a0`).
+
+### BA-S3 - the driver and its PostgreSQL twin, built 2026-10-09
+
+On `worktree-ba-open-marks` from `2f8f7c42`. The tool is
+`tools/ba_census.py`, one file for both engines.
+
+- **Shapes:** `point`, `trade` (scenario 0's two `INSERT`s and two pk
+  `UPDATE`s, each client trading among its own accounts), `insert1`,
+  `insertN`, and `recent`. `recent` is an `INSERT`, then a pk read up to 300
+  ids behind it, with its reads and writes reported as separate
+  distributions.
+- **Equal work on both engines.**
+  - The pk: KDS omits it, PostgreSQL uses an identity column.
+  - Durability: KDS `relaxed`, `group` and `strict`; PostgreSQL
+    `synchronous_commit` `off` and `on`.
+- **Pinning.**
+  - KDS: `--server-cpus` is written as BA-S2's `reactor_cpus`.
+  - PostgreSQL: the postmaster and every process it has already forked are
+    re-pinned with `taskset -pc`. The cluster is the one the driver is
+    connected to, read from its `data_directory`.
+- **The client-bound mark:** a client that used more than 80 % of one CPU
+  over the measured span.
+- **What the JSON records.** For KDS, the delta of every numeric `SHOW
+  META` field over the measured span. The `*_longest_us` fields are maxima
+  and are recorded as read. Each run also records the server binary's
+  sha256 and the data file's device.
+- **bench/README.md's rules:**
+  - every server runs from one copy of `--bin`;
+  - ports have no default;
+  - a KDS port that something already answers on is refused.
+- **`--help`** documents the shapes, the pinning and the client-bound mark.
+  It also says that `sched_*` describes only the control session's core, so
+  BA-S4 divides an item's summed wait by `cores` times the span.
+- **The dry run** (`--dry-run`, on the Debug build): every shape at
+  `cores = 1`, one session, one second, on KDS and on PostgreSQL 18.6. Every
+  cell ran with no error. No number is claimed.
+- **PostgreSQL's cluster.** `~/pg-bench` would not start: `pg_ctl` reports
+  its control file corrupt. Its `pg.json` names PostgreSQL 17.10 and the
+  binaries are 18.6, which is the likely cause, not checked. It is not this
+  milestone's and is left untouched. BA runs its own cluster under
+  `~/pg-bench-ba` on port 15434, made by `tools/pg_setup.sh init` with
+  defaults.
+
+**The review** (`critics-developer`).
+- **Five bugs, fixed by the reviewer:**
+  - a `--pg-data` default that would have pinned the broken cluster; the
+    data directory now comes from the server;
+  - PostgreSQL's startup-forked processes were never pinned;
+  - cleanup ran on the success path only;
+  - a client could fail with a `NameError` when one unit outlasted the
+    span;
+  - a statement still refused after its retries was not counted as an
+    error.
+- **The reviewer also added:** the maxima reported as read, the binary's
+  hash, the device, and the port check.
+- **CLA applied:**
+  - every server runs from a copy of the binary;
+  - ports are required;
+  - per-kind distributions;
+  - setup rows loaded in batches of 200, not one sync each at `strict`;
+  - one error classifier per backend, with SQLSTATE matched as a prefix;
+  - `core()` deleted for `meta_all`;
+  - the `"RECENT"` placeholder replaced by a holder the generator reads;
+  - the silent port rewrite removed;
+  - a dead assignment removed.
+- **Kept as is:**
+  - `accounts` has three payload columns against scenario 0's five; the
+    same on both engines.
+  - The `df -T` parsing now repeated in five tools; one helper in
+    `bench_common.py` belongs to a tools clean-up, not this stage.
+
+**Suite.** `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
+timed out at its 20 s bound in two of four full runs on this tree. CLA
+reproduced it under load: 9 of 80 runs failed at `2f8f7c42`, and 10 of 72
+at the base `d43845a0`, built for the comparison. So BA-S2 did not cause
+it. BA-S2's own two-core insert cell expired under the same load, and its
+progress print showed both writers part-way (52 to 400 of 400 rows after
+20 s, with `strict` against a real log). The host was slow, not stopped.
+The cell now commits `relaxed` and `group` only, with 200 rows and a 60 s
+bound. It also retries a retryable `TXN_CONFLICT`, which the faster runs
+then met: a stale descent and a root grown over (P9). It asserts that the
+seven refusal sites counted at least as many as its writers retried, so
+the refusal tallies are now proved on the rig where the race fires them.
+The cell then passed 32 of 32 under the same load. The finding went to
+`known-gaps.md`'s existing entry for the IdAllocation cell (Testing), not
+to `bugs/`: no engine defect is shown.
+Overhead not measured; measured at the milestone's close.

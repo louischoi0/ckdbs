@@ -202,7 +202,7 @@ TEST(ContentionCountersTest, ACheckpointRunCountsAndKeepsItsLength) {
 
 // Both reactors write one relation at once - the census's monotonic-insert
 // shape on two cores - and the latches every insert takes are contended:
-// the frame table and the stream. Core 0 commits `strict`, core 1 `group`
+// the frame table and the stream. Core 0 commits `relaxed`, core 1 `group`
 // (its drain and the writer). Repeated rounds, bounded, until each count
 // has moved: contention is a race, and a round that happens to interleave
 // none of one latch is not a failure.
@@ -213,6 +213,9 @@ struct Script {
     std::atomic<bool> go{false};
     std::atomic<std::size_t> done{0};
     std::vector<DispatchOutcome> outs;
+    // Retryable refusals seen and retried (a stale descent, P9): each one is
+    // a count at one of the seven refusal sites.
+    std::atomic<std::uint64_t> refusals{0};
 };
 
 sched::Coro RunScript(CommandDispatcher& d, Script& s) {
@@ -220,10 +223,23 @@ sched::Coro RunScript(CommandDispatcher& d, Script& s) {
     co_await sched::WaitUntil{&s.go_pred};
     s.outs.resize(s.lines.size());
     for (std::size_t i = 0; i < s.lines.size(); ++i) {
-        co_await d.DispatchAsync(s.lines[i], s.session, &s.outs[i]);
+        for (int attempt = 0; attempt < 50; ++attempt) {
+            co_await d.DispatchAsync(s.lines[i], s.session, &s.outs[i]);
+            if (s.outs[i].response.find("retryable=1") == std::string::npos) break;
+            s.refusals.fetch_add(1, std::memory_order_relaxed);
+        }
         s.done.store(i + 1, std::memory_order_release);
     }
     co_return Status::OK();
+}
+
+std::uint64_t RefusalTallies(const Contention::Snapshot& c) {
+    std::uint64_t n = 0;
+    for (std::size_t t = static_cast<std::size_t>(Tally::kRefusalBtreeDescend);
+         t <= static_cast<std::size_t>(Tally::kRefusalIndexSecure); ++t) {
+        n += c.tallies[t];
+    }
+    return n;
 }
 
 TEST(ContentionCountersTest, TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes) {
@@ -247,8 +263,11 @@ TEST(ContentionCountersTest, TwoCoresInsertingIntoOneRelationContendWhatAnInsert
         return true;
     };
 
+    std::uint64_t refusals_seen = 0;
     constexpr int kRounds = 10;
-    constexpr int kRows = 400;
+    // Few enough rows that a loaded host's device syncs fit the bound below
+    // (`known-gaps.md`, Testing: the IdAllocation cell's timeout).
+    constexpr int kRows = 200;
     for (int round = 0; round < kRounds && !moved(); ++round) {
         std::unique_ptr<TwoCoreRig> rig = OpenRig();
         ASSERT_NE(rig, nullptr);
@@ -256,11 +275,11 @@ TEST(ContentionCountersTest, TwoCoresInsertingIntoOneRelationContendWhatAnInsert
         CommandDispatcher& d1 = rig->core(1).dispatcher();
         ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response,
                                "CREATED"));
-        Session strict;
-        strict.set_durability(wal::DurabilityClass::kStrict);
+        Session relaxed;
+        relaxed.set_durability(wal::DurabilityClass::kRelaxed);
         Session group;
         group.set_durability(wal::DurabilityClass::kGroup);
-        Script s0{&strict};
+        Script s0{&relaxed};
         Script s1{&group};
         for (int i = 0; i < kRows; ++i) {
             s0.lines.push_back("INSERT INTO t VALUES (" + std::to_string(i) + ")");
@@ -277,16 +296,21 @@ TEST(ContentionCountersTest, TwoCoresInsertingIntoOneRelationContendWhatAnInsert
         rig->Start();
         s0.go.store(true, std::memory_order_release);
         s1.go.store(true, std::memory_order_release);
-        ASSERT_TRUE(Within(20000ms, [&] {
+        ASSERT_TRUE(Within(60000ms, [&] {
             return s0.done.load() == s0.lines.size() && s1.done.load() == s1.lines.size();
-        })) << "the writes never finished";
+        })) << "the writes never finished: core 0 at " << s0.done.load() << ", core 1 at "
+            << s1.done.load() << " of " << kRows;
         for (const Script* s : {&s0, &s1}) {
             for (const DispatchOutcome& out : s->outs) {
                 ASSERT_FALSE(StartsWith(out.response, "ERR")) << out.response;
             }
+            refusals_seen += s->refusals.load();
         }
     }
     const Contention::Snapshot after = Contention::Read();
+    // A retryable refusal a writer saw is a count at one of the seven sites -
+    // at least as many, since another cell in this process may add more.
+    EXPECT_GE(RefusalTallies(after) - RefusalTallies(before), refusals_seen);
     for (LatchKind k : kinds) {
         EXPECT_GT(after.waits_of(k), before.waits_of(k))
             << kLatchKindNames[static_cast<std::size_t>(k)];
