@@ -1891,3 +1891,81 @@ On `worktree-ba-open-marks` from `f1a59fcd` (BA-R4 part 2, BA-Q3 (b)).
     and covers a second call.
 
 Overhead not measured; measured at the milestone's close.
+
+### BA-S12 - the WAL append's I/O out from under the latch, built 2026-10-09
+
+On `worktree-ba-open-marks` from `91a14db0`. This is BA-R9's first half, as
+restated in BA-Q9's mark.
+
+- **The next segment's body is built ahead.** Once the current segment is
+  half full, `WalStream::Append` asks the device for the next one
+  (`LogDevice::PrepareSegment`, asynchronous). `FileLogDevice` builds it on
+  a thread of its own, not the WAL writer's, so a 64 MiB zeroing never
+  sits in front of a parked committer's sync. The thread reserves the
+  segment, zeroes it and fsyncs it under the temporary name that `Open`
+  never adopts. The roll then writes the header, `fdatasync`s it, renames
+  and syncs the directory, so the header is still durable before the
+  name. With nothing built ahead, the creation builds the body itself, as
+  before. Both paths share one body builder (`BuildBody`).
+  - BC's rule stands. The roll still syncs the segment it leaves through
+    the sync gate before the next one exists, so preparation and zeroing
+    are all that moved.
+- **A flush writes outside the latch.** Under the latch it claims the
+  flush, swaps the staged ring for a second buffer and records the range.
+  The `pwrite` runs unlatched, so appenders keep staging across it.
+  - Only one flush is in flight at a time.
+  - A flush under the latch (the seal before a roll) and a detach each
+    wait the one in flight out first. So records reach a segment in LSN
+    order, and the device's segment table never changes beside a write.
+  - `Sync` takes the unlatched flush.
+  - `flushed_lsn_` is stored with release and read with acquire.
+- **Not built:**
+  - The CRC's LSN-independent part, BA-R9's third bullet. A record's
+    payload is about 100 B, so there is nothing material to take out from
+    under the latch. Adopted on the operator's standing go-ahead.
+  - The ring-full wait, which is BA-R9's second half (BA-Q9: not now).
+- **Text:** `wal.md` §4.1, §6-1 and §6-5, `stream.hpp`'s concurrency
+  header, `file_log_device.hpp`'s concurrency note, and `latch.hpp`.
+
+**Cells** (`tests/wal_append_off_latch_test.cpp`):
+- Past half a segment the next one is built ahead and the roll adopts it.
+  A reopened device scans through it.
+- A body built ahead and never adopted is not part of the log, and the
+  next creation replaces it.
+- An append is not held behind a flush's write.
+- A roll waits out a flush in flight, and the log stays in order.
+- A detach waits out a flush in flight (added by the reviewer).
+
+**Mutations**, each killed:
+- the flush writing under the latch;
+- a latched flush not waiting for the one in flight;
+- no build ahead asked for;
+- a creation ignoring the body built ahead;
+- a detach not waiting (run by the reviewer).
+
+**The review** (`critics-developer`).
+- **Two races, fixed by the reviewer:**
+  - a failed unlatched write released its claim before stopping the
+    stream, so a flush claimed in between could publish a durable point
+    past the hole. Now the stream stops first, and the claim is tested
+    before `stopped()`;
+  - a detach could change the segment table beside an unlatched write.
+- **Also fixed by the reviewer:** a data race on the preparer's read of
+  `end_segment()`.
+- **Applied by CLA:**
+  - the two body builders merged, with `Prewrite` losing its header half;
+  - a dead reset deleted;
+  - a misplaced comment moved;
+  - release/acquire on `flushed_lsn_`;
+  - the text the reviewer listed as owed.
+- **Kept as is:**
+  - The flush waiters yield-spin through another thread's `pwrite`,
+    which is one ring's worth, at most 1 MiB.
+  - A clean shutdown can leave one 64 MiB temporary body. The next
+    creation removes it.
+  - The device's destructor can wait out a body build.
+  - The simulation harness's in-memory device builds nothing ahead, so
+    the adoption's crash points are covered by the cells, not by the sim.
+  - The shared tail of `Flush` and `FlushLocked`, about 6 lines.
+
+Overhead not measured; measured at the milestone's close.

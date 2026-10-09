@@ -1,11 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "kds/base/file_descriptor.hpp"
@@ -47,6 +50,11 @@
 // and does its `fdatasync`s outside it. The unlocked reads in
 // `WriteAt`/`ReadAt` are safe because the contract serializes every one of
 // them against both table changes - the stream's latch, or its one thread.
+// **A flush's `WriteAt` runs outside the latch since BA-S12**, and stays
+// serialized all the same: the stream claims it under the latch, and a roll
+// or a detach waits a claimed write out before it changes the table
+// (`WalStream::WaitOutFlushInFlight`). The preparer thread reads the table
+// under `segments_mutex_`.
 // Concurrent `pwrite` and `fdatasync` on one descriptor need no lock at all
 // (the note beside the mutex below).
 //
@@ -97,6 +105,18 @@ public:
 
     Status CreateSegment(std::uint64_t segment_no,
                          std::span<const std::byte> header = {}) override;
+    // Hands the number to this device's preparer thread, which builds the
+    // body under the temporary name `Open` never adopts - the reservation,
+    // the zeroing and their fsync. `CreateSegment` of the same number then
+    // writes the header, syncs it, and renames.
+    void PrepareSegment(std::uint64_t segment_no) override;
+    ~FileLogDevice() override;
+    // The number of the segment built ahead, or none: what BA-S12's cells
+    // wait on before a creation that should adopt it.
+    std::uint64_t PreparedSegmentForTest() {
+        std::lock_guard<std::mutex> guard(prepare_mutex_);
+        return prepared_no_;
+    }
     Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                    std::span<const std::byte> in) override;
     Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,
@@ -141,6 +161,33 @@ private:
     std::uint32_t core_id_;
     std::uint64_t segment_size_;
     FileDescriptor dir_fd_;
+
+    // **The one segment built ahead** (`PrepareSegment`), its number and
+    // its descriptor on the temporary name. `prepare_mutex_` serializes a
+    // preparation against the creation that adopts it; it is held across
+    // the preparation's I/O, so a roll that reaches the same number while
+    // the writer is still building it waits that out - no longer than the
+    // creation would have taken itself. Taken before `segments_mutex_`,
+    // never under it.
+    std::mutex prepare_mutex_;
+    std::uint64_t prepared_no_ = std::numeric_limits<std::uint64_t>::max();  // under prepare_mutex_
+    FileDescriptor prepared_fd_;                                             // under prepare_mutex_
+    // The building itself, on a thread of its own rather than the WAL
+    // writer's: a 64 MiB zeroing on the writer would hold every sync a
+    // committer is parked on behind it. Started at the first request, so a
+    // device nobody rolls owns no thread. A failed build is dropped - the
+    // creation then builds the segment itself, as it did before BA-S12.
+    void BuildAhead(std::uint64_t segment_no);
+    // A segment body under the temporary name `temp`: the leftover removed,
+    // the reservation, the zeroing and their fsync. The header is the
+    // creation's (`CreateSegment`).
+    StatusOr<FileDescriptor> BuildBody(const std::string& temp);
+    void RunPreparer();
+    std::mutex request_mutex_;
+    std::condition_variable request_cv_;
+    std::uint64_t requested_no_ = std::numeric_limits<std::uint64_t>::max();  // under request_mutex_
+    bool stopping_ = false;                                                   // under request_mutex_
+    std::thread preparer_;
     // `SyncDirectory`'s serialization and its sticky failure. Innermost.
     std::mutex dir_sync_mutex_;
     bool dir_sync_failed_ = false;  // under dir_sync_mutex_; never cleared

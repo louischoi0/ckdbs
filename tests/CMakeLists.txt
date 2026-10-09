@@ -192,6 +192,7 @@ add_executable(kds_tests
     wal_checkpointer_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
+    wal_append_off_latch_test.cpp
     sim_rng_test.cpp
     sim_loop_test.cpp
     bounded_pool_test.cpp

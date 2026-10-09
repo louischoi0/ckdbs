@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "kds/wal/log_scanner.hpp"
@@ -14,7 +15,9 @@ WalStream::WalStream(LogDevice* device, std::uint32_t core_id, std::size_t ring_
     : device_(device),
       core_id_(core_id),
       segment_size_(device->segment_size()),
+      ring_capacity_(ring_capacity),
       ring_(ring_capacity),
+      flush_buf_(ring_capacity),
       latch_(shared ? &latch_storage_ : nullptr),
       header_block_(kSegmentHeaderSize) {}
 
@@ -186,6 +189,10 @@ Status WalStream::Seal() {
 
 Status WalStream::DetachBelow(Lsn lsn) {
     LatchGuard guard(latch_);
+    // A flush in flight is inside the device's `WriteAt`, which reads the
+    // segment table unlocked on the promise that no table change runs beside
+    // it (file_log_device.hpp); the detach waits it out, as a roll does.
+    WaitOutFlushInFlight();
     const std::uint64_t end = device_->end_segment();
     if (end == 0) return Status::OK();
     // Segment `s` is wholly below `lsn` exactly when `s < lsn / segment_size`;
@@ -244,7 +251,7 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
         return Status::InvalidArgument("WalStream: record of " + std::to_string(total) +
                                        " bytes cannot fit a segment; records never span segments");
     }
-    if (total > ring_.size()) {
+    if (total > ring_capacity_) {
         return Status::InvalidArgument("WalStream: record of " + std::to_string(total) +
                                        " bytes is larger than the ring");
     }
@@ -262,11 +269,11 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
     }
 
     const std::size_t used = ring_used();
-    if (ring_.size() - used < total) {
+    if (ring_capacity_ - used < total) {
         // wal.md section 6-4: the appending task waits for the drain. There
         // is no task to suspend yet, so the caller is told to drain.
         return Status::OutOfSpace("WalStream: ring full (" + std::to_string(used) + "/" +
-                                  std::to_string(ring_.size()) + " bytes staged)");
+                                  std::to_string(ring_capacity_) + " bytes staged)");
     }
 
     const Lsn lsn = append_lsn();
@@ -276,16 +283,73 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
     }
     ring_used_.store(used + written.value(), std::memory_order_relaxed);
     append_lsn_.store(lsn + written.value(), std::memory_order_relaxed);
+    // **Past half a segment, the next one's body is asked for** (BA-S12):
+    // built off this path by the device, so the roll that creates it writes
+    // only a header and a name. Half way rather than at the roll, so it is
+    // ready before it is needed, and rather than at once, so a log that
+    // never fills a segment never builds a second one.
+    const std::uint64_t next = SegmentOf(lsn) + 1;
+    if (prepare_asked_ != next && OffsetOf(lsn) > segment_size_ / 2) {
+        device_->PrepareSegment(next);
+        prepare_asked_ = next;
+    }
     return lsn;
 }
 
 Status WalStream::Flush() {
-    LatchGuard guard(latch_);
-    if (stopped()) return StoppedStatus();
-    return FlushLocked();
+    // Everything appended before this call reaches the device before it
+    // returns: this thread writes what is staged when it claims the flush,
+    // and a flush already in flight is waited out and the claim retried.
+    for (;;) {
+        std::size_t used = 0;
+        Lsn from = 0;
+        Lsn to = 0;
+        {
+            LatchGuard guard(latch_);
+            // The claim is tested before the stop: a failed flush stops the
+            // log before it releases its claim, so a thread that sees the
+            // claim free sees that stop too.
+            if (!flush_in_flight_.load(std::memory_order_acquire)) {
+                if (stopped()) return StoppedStatus();
+                used = ring_used();
+                if (used == 0) return Status::OK();
+                std::swap(ring_, flush_buf_);
+                ring_used_.store(0, std::memory_order_relaxed);
+                from = flushed_lsn();
+                to = append_lsn();
+                flush_in_flight_.store(true, std::memory_order_relaxed);
+            }
+        }
+        if (used == 0) {
+            // Another thread's flush is writing; it finishes without the latch.
+            WaitOutFlushInFlight();
+            continue;
+        }
+        // The ring never spans a segment boundary - the seal drains before a
+        // roll, and a roll waits out this write - so this is one write into
+        // one segment.
+        const Status status =
+            device_->WriteAt(SegmentOf(from), OffsetOf(from), std::span(flush_buf_).first(used));
+        // Fail-stop (stream.hpp), as `FlushLocked` says - and **before the
+        // claim is released**: released first, another thread could claim,
+        // write the bytes above this failed range, sync them and publish
+        // them durable before the stop landed - a hole acknowledged.
+        const Status result = status.ok() ? status : FailStop(status);
+        if (status.ok()) flushed_lsn_.store(to, std::memory_order_release);
+        flush_in_flight_.store(false, std::memory_order_release);
+        return result;
+    }
+}
+
+void WalStream::WaitOutFlushInFlight() const noexcept {
+    while (flush_in_flight_.load(std::memory_order_acquire)) std::this_thread::yield();
 }
 
 Status WalStream::FlushLocked() {
+    // An unlatched flush in flight wrote bytes below the staged ones; they
+    // reach the segment first.
+    WaitOutFlushInFlight();
+    if (stopped()) return StoppedStatus();
     const std::size_t used = ring_used();
     if (used == 0) {
         return Status::OK();
@@ -303,7 +367,7 @@ Status WalStream::FlushLocked() {
         return FailStop(status);
     }
     ring_used_.store(0, std::memory_order_relaxed);
-    flushed_lsn_.store(append_lsn(), std::memory_order_relaxed);
+    flushed_lsn_.store(append_lsn(), std::memory_order_release);
     return Status::OK();
 }
 
@@ -312,15 +376,12 @@ Status WalStream::Sync() {
     // confirms is everything handed over before the call, and `flushed` is
     // the watermark as it stood when this thread stopped holding the
     // latch - a later flush by another thread is not this sync's to claim.
-    Lsn flushed = 0;
-    {
-        LatchGuard guard(latch_);
-        if (stopped()) return StoppedStatus();
-        if (Status s = FlushLocked(); !s.ok()) {
-            return s;
-        }
-        flushed = flushed_lsn();
-    }
+    //
+    // Through the unlatched flush (BA-S12): every byte below `flushed_lsn()`
+    // was written before this read, so the device sync that follows covers
+    // it whoever wrote it.
+    if (Status s = Flush(); !s.ok()) return s;
+    const Lsn flushed = flushed_lsn();
     if (Status s = SyncDevice(); !s.ok()) {
         // durable_lsn_ deliberately untouched, and the stream is stopped
         // (`SyncDevice`): a sync that failed proves nothing about what

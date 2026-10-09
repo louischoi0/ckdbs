@@ -20,7 +20,9 @@
 // measured in nanoseconds". Three of the WAL stream's four sections are
 // not that: the flush holds it across a `pwrite`, and the segment roll
 // holds it across `posix_fallocate`, a 64 MiB zero-filling prewrite and
-// two `fsync`s (`wal/file_log_device.cpp`'s `CreateSegment`). Against a
+// two `fsync`s (`wal/file_log_device.cpp`'s `CreateSegment`; since BA-S12
+// the body is usually built ahead and the flush writes outside the latch,
+// but a roll still syncs the segment it leaves under it). Against a
 // holder blocked in `fsync`, `sched_yield` on Linux returns immediately
 // when no other thread is runnable on that CPU, so N-1 pinned reactor
 // threads would burn at 100% for the length of a segment creation. A
