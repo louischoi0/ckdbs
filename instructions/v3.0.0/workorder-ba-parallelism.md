@@ -5,9 +5,7 @@ Written 2026-10-02 on `worktree-parallelism-workorder` from `d3d90b5`
 부족한 부분에 대해 개선을 할거야. 원인을 분석한 항목 별로 개선점을 플래닝하고
 작업문서를 작성해야해"*. It plans one fix per cause, for every place where
 work on one core waits for work on another, and PostgreSQL 18.6's work does
-not. **Not opened.** The letter, the scope and every §4 item wait for the
-operator's mark, and each stage then waits for its own word. It cuts no
-tag. Like AS and AZ it sits outside AR0 §8's chain: it depends on no open
+not. **Opened 2026-10-09** (below). It cuts no tag. Like AS and AZ it sits outside AR0 §8's chain: it depends on no open
 order and gates none.
 
 **Paused 2026-10-06 for its sub-milestone BB** (`raft-marks-2026-10-06.md`
@@ -16,6 +14,11 @@ defect A in BA-S1b's place. BA resumes at BB's close (BB-S5).
 **Resumed 2026-10-08**: BB closed (`raft-marks-2026-10-08.md` §6), and BD-S6
 had rebased these rows (§6, "BA rebased on BD"). BA-S2 waits for its own
 word.
+**Opened 2026-10-09** (`raft-marks-2026-10-09.md` §1), on the operator's
+*"BA 중단된 작업부터 진행해줘 BA를 마무리하려고해"*: BA-Q0..Q13 were reviewed
+one by one and marked in §4, eight of them in wording restated to the tree
+at `d43845a0` (§1.14). Stages run from BA-S2 in §5's order. A question a
+stage raises goes back to the operator.
 
 **Where the items came from.** The starting point was
 `bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`, plus a
@@ -606,7 +609,66 @@ corrected by the stage named:
   says a failed autocommit commit leaks its transaction, but `EndWrite`
   aborts it now (`command_dispatcher.cpp:8522-8524`).
 
-## 2. Rulings — CLA's proposals, not marked
+### 1.14 Re-read at `d43845a0`, for the marks
+
+§1 was read at `d3d90b5`. Before §4 was marked, every item was re-read at
+`c47fbeff`, by reading and not running; the citations below are
+`d43845a0`'s, which adds BH (`PURGE`) on top. Where it differs, this
+section wins over §0 and §1.1-§1.13 until a stage restates them:
+
+- **P1.** One `frames_latch_` over one `unordered_map` still
+  (`device_page_store.hpp:1658`, `:1828`), pins plain under it. BE rewrote
+  the sweep (one slot at a time, bounded reclaim batches inline and on core
+  0's 50 ms tick) and made `buffer_pool_frames` required, so §1.1's sorted
+  copy and its "default 0" are gone. **New:** BE-Q11's no-refuse window
+  takes the latch twice more per inserted row (`device_page_store.cpp:879`,
+  `:903`). BF-S2's `FreePage`, which replaced `EvictClean`, is one of the
+  table's three erasers, which an atomic pin must exclude. BG's scan queue
+  (BG-S2, not built) is designed under the same latch.
+- **P2, P3, P4, P8** hold as stated; line numbers moved. AZ-S5's
+  `ReleaseIf` gives back only a failed foreign-key check's borrows; the
+  decide's release is unchanged.
+- **P5.** Defect A is closed (BB, then BD). On a btree the issue still
+  holds page 7 but no leaf since BD-R6, with BD's bounded re-draw. The
+  `before_mark` hook is gone. **New:** every named key on a btree, below the
+  mark too, takes page 7 with a write fetch (`AdmitExplicitRowId` ->
+  `ForFirstRow`, `catalog.cpp:2600-2623`), logging only at or above the
+  mark. BH gives K1 its one named exception: invariant 11 now reads *"never
+  rebound except by `PURGE`"* (`heap-and-tuple.md:371`), the text BA-R8's
+  change lands on.
+- **P6.** Wider: a roll under the stream latch now syncs every live segment
+  through the sync gate (`stream.cpp:70-75`, `:92-95`), behind `sync_mutex_`, so it can
+  wait out the writer's `fdatasync`. `CreateSegment` adds a temp-name build,
+  a `renameat2` and a directory fsync. A ring still full after 4 drains
+  fail-stops the log (BC-S4).
+- **P7.** Defect C closed (BA-S1); defect B closed for the session's own
+  commit (BA-S1c), the other-session remainder open. BC recycles segments
+  below the durable redo start, so a sync covers live segments only.
+- **P9.** Holds. BD-R6 moved issue, borrow and encode before the descent;
+  BD-R3 E5's take-back needs the leaf held for every failure after
+  placement, a new reason the post-placement steps stay under it.
+- **P10.** Holds. **New:** BF-R9's statement epoch keeps one slot per core
+  because the executor never parks (`statement_epoch.hpp:22-31`); a yield
+  breaks that. BH's `PURGE` waits by polling between whole re-runs
+  (`command_dispatcher.cpp:731-760`), never inside a walk.
+- **P11.** Holds. Migration at a transaction boundary is
+  `docs/pending/session-load-balancing.md`'s.
+- **P12.** Attributed since §1.12 was written:
+  `docs/inflight/bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
+  (`c0e0868a`) measured stalls up to 5.7 s ending at the core's own
+  checkpoint anchor. `workorder-bi-checkpoint-off-the-reactor.md` (written,
+  not opened) asks in BI-Q1 (a) to take the checkpoint half; BA keeps the
+  carve.
+- **§1.0** holds, with the sync gate's `sync_mutex_` added as a blocking
+  wait. Pinning is `PinToCore` (`expeditor.cpp:1246-1256`): peer k on CPU k,
+  core 0 unpinned. The reactor-k-on-CPU-2k map does not exist yet: BB-S5's
+  pinned `cores = 2` cell ran core 1 on CPU 1, core 0's SMT sibling.
+- **The driver.** `tools/bb_concurrent_benchmark.py` already has
+  multi-process clients, the client-bound mark, per-session `core=`, and
+  one relation or one per client, but no PostgreSQL twin; BA-S3 starts
+  from it.
+
+## 2. Rulings — CLA's proposals, marked in §4
 
 **BA-R0 — measure first, with an instrument that does not saturate first.**
 
@@ -822,6 +884,9 @@ from a 2-core host. The census re-measures the hand-off's p50 and p99, under
   that clears its bit (`page.md` §5, BF-R5; the reason this bullet gave,
   "nothing frees a page", BF made false). It stays on the miss and create
   paths.
+- **What stays global** (BA-Q5 as marked): BE-R1's free list and CLOCK
+  hand, BE-Q11's `window_promised_` and BG-R1's scan queue, under one
+  remaining latch. BG-S2 lands before BA-S8.
 - **This re-opens AM-S2's decision** that pin accounting lives under the
   structure latch (`device_page_store.hpp:801-805`): BA-Q5.
 
@@ -879,28 +944,29 @@ ahead (P5).**
 - **Named keys.** A named key at or above the cursor raises the cursor by
   compare-and-swap, and raises the ceiling with it if needed. The heap
   relation's below-mark refusal compares against the cursor, not the
-  ceiling.
+  ceiling. A btree named key below the cursor takes no page 7 (BA-Q8).
 - **`next_id`.** On disk it becomes the ceiling for an omitted key, as it
   already is for a named one. `DESCRIBE` and `SHOW BUDGET` read the cursor.
 - **Placement order.** The cursor issues faster, and it must not widen
-  defect A. Whatever BA-S1b chose holds under it, and BA-S11's cells test
-  placement order, not only issue order.
+  defect A. BD-R2's sorted placement holds under it, and BA-S11's cells
+  test placement order, not only issue order.
 - **Text changes.**
-  - Invariant 11's *"every core bumps the one mark under its page latch"*
-    becomes *"every core issues from the one cursor; the mark is raised
-    under its page latch"*.
-  - `keystoneid-invariant.md:134-139` (*"none caches"*) is restated with it.
+  - Invariant 11's `next_id` sentence (`heap-and-tuple.md:371`, *"a
+    high-water mark on what has been placed"*) becomes the persisted
+    ceiling above one instance cursor every core issues from.
+  - `keystoneid-invariant.md` §2's *"Every core issues, and none caches"*
+    (`:180`) is restated with it.
 
   Both are the operator's (BA-Q8).
-- **The `before_mark` hook.** Its two partition latches move out from under
-  page 7 (§1.5).
 
 **BA-R9 — the WAL append's I/O moves out from under the latch (P6).**
 
 *The first half,* whenever P6 is material:
 
-- **The segment is prepared ahead.** The writer creates the next segment
-  ahead of need, so a roll under the latch only swaps in a prepared segment.
+- **The segment is prepared ahead.** The writer preallocates and prewrites
+  the next segment under its temporary name ahead of need. A roll under the
+  latch still syncs through the sync gate before it switches (BC,
+  `stream.cpp:92-95`), so that sync stays under it (BA-Q9).
 - **The flush writes outside the latch.** The flush stages into a second
   buffer; the latch swaps the buffers, and the `pwrite` runs outside it. A
   flush sequence keeps the durable watermark from passing a gap.
@@ -910,7 +976,8 @@ ahead (P5).**
 *The second half* is the reserve/copy/publish split that AL-R1 abandoned
 (BA-Q9). After the first half, nothing rolls under a reservation, and an
 oversized record is refused before it reserves. What remains is a full ring,
-which waits for space rather than unwinding. Whether to build it is decided
+which waits for space rather than unwinding; that wait replaces BC-S4's
+ring-full fail-stop rather than sitting beside it (BA-Q9). Whether to build it is decided
 from the census's stream-latch numbers after the first half.
 
 **BA-R10 — the periodic stalls shrink (P12).**
@@ -934,7 +1001,8 @@ runs dry. Both still run on a reactor; what shrinks is the stall.
 
 *The checkpoint runs through its own `Step()`*, `pages_per_step` at a time,
 one per reactor iteration, instead of `RunToCompletion`. The anchor is
-published after the last step.
+published after the last step. This paragraph is BI's if BI-Q1 is marked
+(a) (BA-Q1).
 
 **BA-R11 — the rightmost leaf (P9).**
 
@@ -960,9 +1028,10 @@ published after the last step.
     every earlier row of a multi-row `INSERT`. Those keep today's refusal,
     because statement-level rollback is out of scope (`txn.md` §9).
   - Scenario 0's refused trade is a single-row insert.
-- **Not proposed: B-link move-right.** It needs a high key per node: a node
-  format change, and a superblock bump that refuses every older volume (D14).
-  BA-Q10.
+- **Not proposed: B-link move-right.** It needs a high key per node, a node
+  format change, and BD-R3 E5's take-back still needs the leaf held after
+  placement. The superblock bump it brings is routine under the standing
+  order of 2026-10-07 and is not the cost. BA-Q10.
 
 **BA-R12 — a statement yields at its walk boundary (P10).**
 
@@ -975,6 +1044,9 @@ published after the last step.
     suspended.** `Revalidate` frees what a suspended statement holds
     (§1.10), and every btree root growth anywhere moves the schema word
     (`catalog.cpp:2682`).
+  - **No dropped relation's pages are freed under a suspended statement.**
+    BF-R9's statement epoch becomes the minimum over a core's suspended
+    statements, not one slot per running statement (§1.14, BA-Q11).
   - **Every per-statement `CommandDispatcher` member becomes
     statement-local** (§1.10).
   - **A walk resumed after a split neither misses nor repeats a row.** Other
@@ -1017,9 +1089,9 @@ census.
 | BA-S8 | **The frame table** (BA-R5) | the store's suites green, and `cores = 1` byte-identical. A sweep racing a fetch of the same page, forced by a barrier and repeated. **Mutation**: the compare-and-swap made a plain store, killed. `page.md` §6 and `eviction.md` restated | L |
 | BA-S9 | **The visibility window** (BA-R6) | AN's visibility cells green. A two-core cell interleaving a reclaim with a lookup of a winner reclaimed in that pass answers visible. **Mutation**: the reclaim's floor-first order swapped, killed | M |
 | BA-S10 | **The relation borrow** (BA-R7) | for (1): an N-row insert takes the partition once, not N times. For (2), if marked: the fast-path and strong-ask race forced and repeated, and a DDL `X` waiting on a fast-path `IX` held on another core. The lock suites green | M, or L with (2) |
-| BA-S11 | **The pk cursor** (BA-R8) | the Keystone suites green. A sim crash between a ceiling raise and the placement reissues no id and burns at most 32. Two cores issuing into one relation: one sequence, and every leaf in key order (or the relation `kUnordered`, per BA-S1b). A named key inside [cursor, ceiling) is never issued. **Mutation**: the ceiling logged after the placement, killed | M |
+| BA-S11 | **The pk cursor** (BA-R8) | the Keystone suites green. A sim crash between a ceiling raise and the placement reissues no id and burns at most 32. Two cores issuing into one relation: one sequence, and every leaf in key order. An issue that draws an id a named key inside [cursor, ceiling) placed first is re-drawn, never placed. A btree named key below the cursor takes no page 7 (BA-Q8). **Mutation**: the ceiling logged after the placement, killed | M |
 | BA-S12 | **The WAL append** (BA-R9), first half | sim crash cells across a prepared roll and across a buffer swap. The stream latch's wait in the census shape. The second half only on BA-Q9's mark | M |
-| BA-S13 | **The periodic stalls** (BA-R10) | the stall counters under 10 ms in the census shape. A crash between a carve's persist and its first issue reissues no trx id, with another core's writeback racing the page-0 write. A crash mid-steps replays from the previous anchor | M |
+| BA-S13 | **The periodic stalls** (BA-R10; the checkpoint half BI's if BI-Q1 is marked (a), BA-Q1) | the stall counters under 10 ms in the census shape. A crash between a carve's persist and its first issue reissues no trx id, with another core's writeback racing the page-0 write. A crash mid-steps replays from the previous anchor | M |
 | BA-S14 | **The rightmost leaf** (BA-R11) | the survey's table, with a reason per step. Scenario 0's `c8-s` cell with no refusal. A forced root grown over is re-run and succeeds. **Mutation**: the re-run removed, killed | M |
 | BA-S15 | **The walk-boundary yield** (BA-R12) | `sched.md:42` true. A point read sharing a core with a long walk is bounded by one slice. A root growth on another core during a suspension frees no memo the walk holds. A split between two slices misses and repeats no row. Cancel cells | L |
 | BA-S16 | **Placement by load** (BA-R13) | 8 connections at `cores = 4` land 2 per core. The census's per-core session counts | S |
@@ -1027,28 +1099,28 @@ census.
 
 ## 4. Items for the operator
 
-| # | item | class | CLA proposal |
-|---|---|---|---|
-| BA-Q0 | **The letter and the scope**: one letter; twelve items and three defects; and the not-planned list of §0 | scope | Yes. BA is the next free letter: AQ and AR are held for AR1 (`raft-marks-2026-10-02.md` §4) |
-| BA-Q1 | **The premise gate**: no fix stage before the census, and only for an item BA-R0's materiality test marks. BA-S1, BA-S1b, BA-S1c (defects) and BA-S15 (a spec promise the code breaks) are exempt | process | Yes. It is `CLAUDE.md`'s *"re-measure a premise before building the fix"*, applied per item |
-| BA-Q2 | **The host and method**: this host, reactor k on CPU 2k and the clients on CPUs 4–7, so `cores = 2` is the largest clean cell; multi-process clients with the client-bound mark. Or a second host for the clients | method | This host, with its limit stated in every results file |
-| BA-Q3 | **`strict`'s shape** (BA-R4 part 2, BA-R1c): (a) publish then park, visible before durable like D2; (b) park before the publish, the marker held across the park, with BA-S1c first - and the synchronous `Dispatch`'s BA-R1c wait made a park before it, or it spins on its own core's marker (BA-S1c's review, C2); (c) snapshots carry their in-flight set, as their own order | user-visible | (b) now: it keeps D1's meaning and takes D1 off the reactor. (c) as a later order if the census finds the marker's cap material |
-| BA-Q4 | **Statistics freshness**: another core's counts arrive up to one cadence (100 ms) late, and CC13's sentence is struck (BA-R2) | user-visible | Yes |
-| BA-Q5 | **AM-S2's pin decision re-opened**: a partitioned frame table with atomic pins (BA-R5) | architecture | Yes |
-| BA-Q6 | **The window's read side**: (a) per-core commit tables with a block-to-core range table, or (b) an open-addressed atomic array with the latched fallback (BA-R6) | architecture | (b): it needs no block table and no per-core reclaim |
-| BA-Q7 | **The relation borrow**: (1) always; (2) the fast path only if material after (1); (3) AZ-Q4 re-opened only if the decide's release is material (BA-R7) | architecture | As stated |
-| BA-Q8 | **The pk cursor**: the text of invariant 11 and of `keystoneid-invariant.md` §2, the meaning of `next_id`, and `kRowIdLogAhead` = 32 (BA-R8) | invariant | Yes. K3 already licenses the burned ids |
-| BA-Q9 | **The WAL split** that AL-R1 abandoned (BA-R9's second half) | architecture | Not now. Decide on the first half's numbers |
-| BA-Q10 | **Structural refusals re-run at the statement level, with no move-right** (BA-R11) | user-visible | Yes |
-| BA-Q11 | **A yield every 64 pages, and a `C_CANCEL` handler** (BA-R12) | user-visible | Yes, with 64 re-measured in the stage |
-| BA-Q12 | **Placement**: the least-loaded hand-off as the default above one core, only if material (BA-R13) | user-visible | As stated |
-| BA-Q13 | **Waits stay blocking**: no suspending latch primitive (§1.0); every fix holds less, less often | architecture | Yes |
-| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back. **Marked (b) by the operator, 2026-10-06** (`raft-marks-2026-10-06.md` §4), as its own sub-milestone BB |
+| # | item | class | CLA proposal | mark (2026-10-09, `raft-marks-2026-10-09.md` §1) |
+|---|---|---|---|---|
+| BA-Q0 | **The letter and the scope**: one letter; twelve items and three defects; and the not-planned list of §0 | scope | Yes. BA is the next free letter: AQ and AR are held for AR1 (`raft-marks-2026-10-02.md` §4) | **as proposed**; defects A and C and B's own-session case are closed (§1.14) |
+| BA-Q1 | **The premise gate**: no fix stage before the census, and only for an item BA-R0's materiality test marks. BA-S1, BA-S1b, BA-S1c (defects) and BA-S15 (a spec promise the code breaks) are exempt | process | Yes. It is `CLAUDE.md`'s *"re-measure a premise before building the fix"*, applied per item | **as restated**: BA-S1b is struck (BB, BD); if BI-Q1 is marked (a), BI-S1's gate replaces the census for P12's checkpoint half and BA-S13 keeps the carve |
+| BA-Q2 | **The host and method**: this host, reactor k on CPU 2k and the clients on CPUs 4–7, so `cores = 2` is the largest clean cell; multi-process clients with the client-bound mark. Or a second host for the clients | method | This host, with its limit stated in every results file | **as proposed**; the reactor-k-on-CPU-2k map is BA-S2's to build (§1.14) |
+| BA-Q3 | **`strict`'s shape** (BA-R4 part 2, BA-R1c): (a) publish then park, visible before durable like D2; (b) park before the publish, the marker held across the park, with BA-S1c first - and the synchronous `Dispatch`'s BA-R1c wait made a park before it, or it spins on its own core's marker (BA-S1c's review, C2); (c) snapshots carry their in-flight set, as their own order | user-visible | (b) now: it keeps D1's meaning and takes D1 off the reactor. (c) as a later order if the census finds the marker's cap material | **(b)**, (c) a later order if the census finds the marker's cap material |
+| BA-Q4 | **Statistics freshness**: another core's counts arrive up to one cadence (100 ms) late, and CC13's sentence is struck (BA-R2) | user-visible | Yes | **as proposed** |
+| BA-Q5 | **AM-S2's pin decision re-opened**: a partitioned frame table with atomic pins (BA-R5) | architecture | Yes | **as restated**: the hit path (lookup and pin) partitioned over BE's slot array, 128 partitions, pins and the dirty generation atomic; BE-R1's free list and hand, BE-Q11's `window_promised_` and BG-R1's scan queue stay under one remaining global latch; `IsAllocated` leaves the hit path on BF-R5's invariant; BG-S2 lands before BA-S8 |
+| BA-Q6 | **The window's read side**: (a) per-core commit tables with a block-to-core range table, or (b) an open-addressed atomic array with the latched fallback (BA-R6) | architecture | (b): it needs no block table and no per-core reclaim | **(b)** |
+| BA-Q7 | **The relation borrow**: (1) always; (2) the fast path only if material after (1); (3) AZ-Q4 re-opened only if the decide's release is material (BA-R7) | architecture | As stated | **as proposed** |
+| BA-Q8 | **The pk cursor**: the text of invariant 11 and of `keystoneid-invariant.md` §2, the meaning of `next_id`, and `kRowIdLogAhead` = 32 (BA-R8) | invariant | Yes. K3 already licenses the burned ids | **as restated, on BD-R6**: issue a `fetch_add` under no page hold with BD's bounded re-draw; the ceiling raised under page 7 and the WAL append; invariant 11's `next_id` sentence (`heap-and-tuple.md` §4.1) and `keystoneid-invariant.md` §2 restated, `next_id` the persisted ceiling, `kRowIdLogAhead` = 32; **and a btree named key below the cursor takes no page 7** |
+| BA-Q9 | **The WAL split** that AL-R1 abandoned (BA-R9's second half) | architecture | Not now. Decide on the first half's numbers | **as proposed: not now**; the first half restated to BC: a roll still syncs the left segment through the sync gate, so only preallocation and the prewrite under the temporary name move ahead, and a ring-full wait replaces BC-S4's fail-stop rather than sitting beside it |
+| BA-Q10 | **Structural refusals re-run at the statement level, with no move-right** (BA-R11) | user-visible | Yes | **as proposed**; the cost cited against a B-link tree is the node format and BD-R3 E5's take-back under the hold, not a superblock bump, which is routine under the standing order of 2026-10-07 |
+| BA-Q11 | **A yield every 64 pages, and a `C_CANCEL` handler** (BA-R12) | user-visible | Yes, with 64 re-measured in the stage | **as proposed, with** BF-R9's statement epoch made the minimum over a core's suspended statements |
+| BA-Q12 | **Placement**: the least-loaded hand-off as the default above one core, only if material (BA-R13) | user-visible | As stated | **as proposed**; migration at a transaction boundary is not decided here and stays with `docs/pending/session-load-balancing.md` |
+| BA-Q13 | **Waits stay blocking**: no suspending latch primitive (§1.0); every fix holds less, less often | architecture | Yes | **as proposed**; §1.0's list restated with `sync_mutex_` (§1.14); BA-S1c's and BI-R2's parks wait where nothing is held and are not a suspending latch |
+| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back. **Marked (b) by the operator, 2026-10-06** (`raft-marks-2026-10-06.md` §4), as its own sub-milestone BB | (b), 2026-10-06 (above) |
 
 ## 5. Sequencing
 
 1. **The defects first**, independently of everything else and of each
-   other: BA-S1, BA-S1b and BA-S1c.
+   other: BA-S1 and BA-S1c, both built; BA-S1b superseded by BB.
 2. **Then BA-S2, BA-S3 and BA-S4, in that order.** BA-Q1 says what waits for
    BA-S4.
 3. **Then the fix stages, in the order the census ranks them.** CLA's prior,
@@ -1058,9 +1130,9 @@ census.
    - S1 before S7: both touch `wal/manager.cpp` and the store's gate.
    - S1c before S7's part 2.
    - S7 before S12: `stream.cpp` and `manager.cpp`.
+   - BG-S2 before S8 (BA-Q5).
    - S8 before S13: both touch the store's writeback paths.
-   - S1b before S11, and S11 before S14: all three touch the insert path in
-     `command_dispatcher.cpp`.
+   - S11 before S14: both touch the insert path in `command_dispatcher.cpp`.
    - S15 after S10: the read borrow's scope across a suspension.
 5. **BA-S17 last.** The overhead is measured once over the whole change,
    from the commit BA opens at to the commit that closes it.
@@ -1385,3 +1457,12 @@ BB on its medians and is unresolved at ten runs
 (`bench/v3.0.0/results-bb-s5-overhead-v2.7.0-640-gb76261bb.md`). BA's census
 takes the wait breakdown BB did not, on an engine where BD-R6 took the issue
 back out from under the leaf. BA-S2 waits for its own word.
+
+### BA opened - 2026-10-09
+
+On `worktree-ba-open-marks` from `d43845a0`, on the operator's *"BA 중단된
+작업부터 진행해줘 BA를 마무리하려고해"* and the item-by-item review that
+followed (`raft-marks-2026-10-09.md` §1). Before marking, every item was
+re-read at `c47fbeff`: §1.14 records what moved. §4 carries the marks; eight
+items (Q1, Q5, Q8, Q9, Q10, Q11, Q12, Q13) were marked in wording restated
+to the tree. BA-S2 is the next stage.
