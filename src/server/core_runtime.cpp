@@ -518,7 +518,10 @@ void CoreRuntime::Run() {
     // `docs/inflight/known-gaps.md`.)
     if (config_.core_id != 0 && config_.wal_drain_interval_ns > 0) {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
-                                [this] { (void)txn_manager_->MaybeBurnIdleBlock(); });
+                                [this] {
+                                    (void)txn_manager_->MaybeBurnIdleBlock();
+                                    txn_manager_->CarveAheadIfLow();
+                                });
     }
 
     // The `system`-group checkpoint cadence of wal.md §11, per core since

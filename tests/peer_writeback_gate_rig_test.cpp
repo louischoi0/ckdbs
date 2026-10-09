@@ -278,11 +278,14 @@ TEST(PeerWritebackGateRigTest, APeersAnchorPublishWaitsOnTheWriter) {
     ExpectWrittenBack(*rig, p);
 }
 
-TEST(PeerWritebackGateRigTest, APeersTrxIdCarveWaitsOnTheWriter) {
-    // The order's third path: a carve persists page 0 through the store's
-    // `Sync()` (the rig's `PersistSuperBlock`, `Expeditor::
-    // PersistTrxIdCeiling`'s shape). `BurnWindow` - the idle burn's call -
-    // carves unconditionally, where a `BEGIN` carves only on a spent window.
+TEST(PeerWritebackGateRigTest, APeersTrxIdCarvePersistsPageZeroAloneAndWaitsOnNoRecord) {
+    // The order's third path, since BA-S13: a carve persists page 0 alone
+    // (`DevicePageStore::PersistPage`; the rig's `PersistSuperBlock` is
+    // `Expeditor::PersistTrxIdCeiling`'s shape). Page 0 is unlogged, so the
+    // carve writes no other page and asks no log for a sync - before BA-S13
+    // it synced the whole pool, so it wrote this page back and waited on the
+    // writer for its record. `BurnWindow` - the idle burn's call - carves
+    // unconditionally, where a `BEGIN` carves only on a spent window.
     auto rig = OpenRig();
     ASSERT_NE(rig, nullptr);
     Stamped p;
@@ -297,8 +300,16 @@ TEST(PeerWritebackGateRigTest, APeersTrxIdCarveWaitsOnTheWriter) {
     EXPECT_GT(trx_ids.ceiling(), ceiling_before) << "no window was carved";
 
     ExpectTheOwnerDidNotSync(*rig, before);
-    ExpectTheWriterSyncedPast(*rig, before, p.lsn);
-    ExpectWrittenBack(*rig, p);
+    // Nothing else went out: the stamped page is still dirty, its record
+    // still not durable, and no log was asked.
+    const std::vector<PageId> dirty = rig->store().DirtyPageIds();
+    EXPECT_NE(std::find(dirty.begin(), dirty.end(), p.page), dirty.end())
+        << "the carve wrote back a page other than page 0";
+    EXPECT_FALSE(rig->wal().IsDurable(p.lsn)) << "the carve made an unrelated record durable";
+    EXPECT_EQ(Gauges::Read(*rig).writer_syncs, before.writer_syncs)
+        << "the carve asked the writer for a sync it does not need";
+    EXPECT_EQ(std::find(dirty.begin(), dirty.end(), server::kSuperBlockPageId), dirty.end())
+        << "page 0 is still dirty after the carve";
 }
 
 TEST(PeerWritebackGateRigTest, AClientSyncOnAPeerWaitsOnTheWriter) {

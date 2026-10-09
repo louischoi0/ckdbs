@@ -574,6 +574,19 @@ public:
     // something else may have flushed them since the caller's snapshot.
     Status FlushPages(std::span<const PageId> page_ids);
 
+    // **One page made durable, and nothing else** (BA-S13, BA-R10): written
+    // back through `WriteBack`'s claim (AT-S10e) and then the data file
+    // synced **unconditionally** - unlike `FlushPages`, which skips its sync
+    // when another core's writeback carried the page, because a caller here
+    // has no anchor publish behind it to cover the skip. What a
+    // transaction-id carve persists the superblock through: before BA-S13 it
+    // synced the whole pool, every dirty page written for one page's sake,
+    // and BA-S4's census measured carves of up to 2.2 s. The one data file
+    // means the `fdatasync` covers every write issued before it, so the
+    // anchor's order (every page a checkpoint vouches for written before the
+    // anchor rises) is untouched.
+    Status PersistPage(PageId page_id);
+
     // **BF-R5's free, in one hold of the frame table then the free map**
     // (the declared order). The resident frame - dirty or not - is erased,
     // the bit cleared, `allocated_pages()` decremented, the region marked

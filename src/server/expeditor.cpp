@@ -1273,7 +1273,7 @@ Status Expeditor::PersistSuperBlock() {
 
 Status Expeditor::PersistTrxIdCeiling() {
     if (Status s = EncodeSuperBlock(); !s.ok()) return s;
-    return store_->Sync();
+    return store_->PersistPage(kSuperBlockPageId);
 }
 
 OptimizerSurface Expeditor::Optimizer() {
@@ -2054,7 +2054,11 @@ Status Expeditor::Start() {
         // first, so its block is the lowest in the instance, and an
         // instance whose sessions all land on peers has core 0 idle and
         // pinning from the first commit.
-        if (txn_manager_.has_value()) (void)txn_manager_->MaybeBurnIdleBlock();
+        if (txn_manager_.has_value()) {
+            (void)txn_manager_->MaybeBurnIdleBlock();
+            // And the early carve (BA-S13), on the same tick.
+            txn_manager_->CarveAheadIfLow();
+        }
     });
 
     // The other `system`-group task of wal.md section 6-2/6-3. It is what

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -701,6 +702,21 @@ public:
     // alone: an instance whose window drains has nothing to buy.
     BurnOutcome MaybeBurnIdleBlock();
 
+    // The early carve (BA-S13, `TrxIdSequence::CarveAheadIfLow`), on the
+    // same `system`-group tick: the next block carved once three-quarters
+    // of this core's window is issued. A failure is the next tick's to
+    // retry - the `Begin` that drains the window carves for itself.
+    //
+    // **Only on a core that issued since the previous tick.** An idle core
+    // would carve a block its next burn drops, and a core that has begun
+    // nothing since boot would carve one it may never use.
+    void CarveAheadIfLow() {
+        const std::uint64_t cursor = ids_.peek();
+        const bool issued = cursor != last_ahead_cursor_;
+        last_ahead_cursor_ = cursor;
+        if (issued) (void)ids_.CarveAheadIfLow();
+    }
+
     // **The oldest snapshot LSN any live reader on any core holds**
     // (AN-R3, AN-Q4): the minimum over every core's published bound, which
     // this core publishes from its active transactions' views and its
@@ -774,6 +790,9 @@ private:
     // is what "idle" means for a floor bound that only moves when ids are
     // issued.
     std::uint64_t last_burn_cursor_ = 0;
+    // `ids_.peek()` as `CarveAheadIfLow` last saw it. The first tick only
+    // records it: a core that has issued nothing yet has nothing to run dry.
+    std::uint64_t last_ahead_cursor_ = std::numeric_limits<std::uint64_t>::max();
 
     // How large the commit window must be before a burn is worth a
     // superblock write or a granted block. `[PROPOSED]`, not measured:

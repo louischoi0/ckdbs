@@ -1969,3 +1969,84 @@ restated in BA-Q9's mark.
   - The shared tail of `Flush` and `FlushLocked`, about 6 lines.
 
 Overhead not measured; measured at the milestone's close.
+
+### BA-S13 - the carve's stall, built 2026-10-09 (the checkpoint half waits for BI-Q1)
+
+On `worktree-ba-open-marks` from `7fa2bd96`.
+
+- **A carve persists page 0 alone** (`DevicePageStore::PersistPage`, used
+  by `Expeditor::PersistTrxIdCeiling` and mirrored by the rig). Page 0 is
+  written back through `WriteBack`'s claim (AT-S10e), and then the data
+  file is synced **unconditionally**: a writeback that carried the newer
+  image is covered too, because the claim is released only after its
+  write. Before this, a carve synced the whole pool, so it waited for
+  every dirty page's writeback and every one of their log records. BA-S4
+  measured carves of up to 2.2 s. Page 0 is unlogged, so the carve now
+  waits on no log record.
+- **The next block is carved ahead** (`TrxIdSequence::CarveAheadIfLow`).
+  Once three-quarters of a core's window is issued, the `system`-group tick
+  carves the next block, on core 0's tick and on each peer's. The `Begin`
+  that drains the window installs that block without carving on its own
+  path. A burn drops the block carved ahead, so this core's ids never move
+  backwards.
+- **The anchor publish is not disturbed.** Both write page 0 under the
+  superblock latch with the page held exclusive, and the claims keep the
+  device writes in order, so an older image never lands after a newer one.
+- **The mount's raise still syncs everything** (`PersistSuperBlock`), once
+  per mount, ahead of the completion checkpoint. Its comment is restated.
+- **The checkpoint half is not built.** BA-R10's third paragraph waits
+  for the operator's mark on BI-Q1 (the BA-S4 entry says why). It is
+  carried to BA's close as a stop.
+- **Text:** `wal.md` §11a and `txn.md`'s carve paragraph.
+
+**Cells:**
+- `peer_writeback_gate_rig_test`'s carve cell is rewritten. A peer's carve
+  persists page 0 and nothing else: the stamped page stays dirty, its
+  record undurable, and no log sync is asked.
+- `trx_id_carve_crash_rig_test`: a crash image taken right after a carve
+  holds a ceiling at or above the carved window. Even rounds carve alone.
+  Odd rounds race a writeback that holds page 0's claim with an older image
+  across the carve, forced by `SetAfterWritebackCopyForTest` (the
+  reviewer's fix).
+  - The image copies through the page cache, so it checks the write and
+    its order against the claim. It cannot see the `fdatasync`.
+- `trx_id_test`'s two early-carve cells: carved ahead at three-quarters and
+  installed without a carve, and a burn that drops the block ahead.
+
+**Mutations**, each killed:
+- the carve syncing the whole pool;
+- the carve writing page 0 nowhere;
+- the claim skipped (`kSkip`, run by the reviewer);
+- a burn keeping the block ahead;
+- a drained window ignoring the block ahead.
+
+**The review** (`critics-developer`): no bug in the production change.
+- **The crash cell's race arm did not race.** Its writeback usually
+  snapshotted the dirty pages before the carve's encode, so a carve that
+  skipped a claimed frame passed. The reviewer forced the interleaving.
+- **The early carve.** CLA first left it out, reasoning that a carve was
+  now one page write and one `fdatasync`. The reviewer pointed out that
+  BA-R10 states it as part of the stage, and that the data file's
+  `fdatasync` flushes everything else unsynced in the file too. A carve
+  right after a large checkpoint write could still take long. CLA built
+  it.
+- **Applied:** the `wal.md` and `txn.md` text, and the restated
+  `PersistSuperBlock` comment.
+- **Not applied:** deleting `PersistSuperBlock` in favour of
+  `PersistTrxIdCeiling` at the mount. That would drop the mount's log and
+  pool sync at that point, which is a behaviour change the stage does not
+  need.
+- **The early carve's own review:** no bug. Per-core monotonicity, the
+  floor, durability and threading all hold.
+  - **Applied:** the carve ahead runs only on a core that issued since the
+    previous tick, which avoids a carve an idle core's burn would drop and
+    one at boot; `ahead_` was moved off the sequence's hot offsets; and
+    `txn.md` states that core 0's tick carves at `cores = 1` too and that
+    a peer's tick needs `wal_drain_interval_us` above 0.
+  - **Not added:** a two-sequence cell for a carve by another core between
+    a carve ahead and its install. It is safe by construction, since every
+    block starts at the superblock's high-water.
+- **Not measured yet:** the "< 10 ms" exit. BA-S17's census re-run reads
+  `carve_longest_us`.
+
+Overhead not measured; measured at the milestone's close.

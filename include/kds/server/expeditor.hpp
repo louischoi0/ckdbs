@@ -603,18 +603,18 @@ public:
     // raise of the transaction-id ceiling calls it; a carve calls
     // `PersistTrxIdCeiling` below, which skips the log drain.
     //
-    // A full Sync() rather than a page write, because a superblock in the
-    // page cache is a ceiling that a crash still loses - which is the whole
-    // thing the durable write is bought for.
+    // A full Sync() - the log and the pool - which the mount's raise, its
+    // one caller, runs once before the completion checkpoint. A carve needs
+    // only page 0 made durable, which is `PersistTrxIdCeiling`.
     Status PersistSuperBlock();
 
     // **What every core's transaction-id carve persists through** (AT-S10b):
-    // the same encode, then the store's sync alone - callable from any
-    // core, because the encode is under the superblock latch and a store
-    // flush is (`DevicePageStore::Flush`), where `Sync()`'s log drain is
-    // core 0's WAL manager's. The drain was never what made the ceiling
-    // durable: page 0 is unlogged, and every other page a flush writes
-    // waits on the WAL gate for its own record.
+    // the same encode, then page 0 alone made durable (BA-S13,
+    // `DevicePageStore::PersistPage`) - callable from any core, because the
+    // encode is under the superblock latch and the writeback takes the
+    // page's claim. Page 0 is unlogged, so its writeback waits on no log
+    // record; until BA-S13 this synced the whole pool, and a carve waited
+    // for every dirty page's writeback and every one of their records.
     Status PersistTrxIdCeiling();
 
     // Runs one checkpoint to completion: snapshot the dirty table, flush

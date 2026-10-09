@@ -2232,6 +2232,12 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
     return dirty;
 }
 
+Status DevicePageStore::PersistPage(PageId page_id) {
+    const PageId ids[] = {page_id};
+    if (auto written = WriteBack(ids); !written.ok()) return written.status();
+    return device_.Sync();
+}
+
 Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // The checkpointer's route through the one writeback primitive - §4's
     // "consumer of the machinery, not a parallel implementation".

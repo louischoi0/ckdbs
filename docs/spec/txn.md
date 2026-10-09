@@ -586,8 +586,15 @@ with recovery. This mirrors PostgreSQL's `FrozenTransactionId`, which is what
 **Every core carves its own block from the one ceiling since AT-S10b.**
 Each core's `TrxIdSequence` is built over the instance's one `SuperBlock`,
 the superblock latch and one persist callback, which encodes page 0 under
-the latch and syncs the store (`CoreRuntime::Config::trx_id_ceiling`,
-handed by `Expeditor`; `Expeditor::PersistTrxIdCeiling`). `Carve()` reads
+the latch and writes page 0 alone through `WriteBack`'s claim, then syncs
+the data file unconditionally (BA-S13; `CoreRuntime::Config::trx_id_ceiling`,
+handed by `Expeditor`; `Expeditor::PersistTrxIdCeiling`). The next block is
+carved ahead on the `system`-group tick once three-quarters of the window
+is issued (`TrxIdSequence::CarveAheadIfLow`), by a core that issued an id
+since the previous tick; a burn drops it. Core 0's tick runs at every core
+count, so at `cores = 1` the carve's stall moves from a `BEGIN` onto that
+tick; a peer's tick runs only while `wal_drain_interval_us` is above 0, and
+without it a peer carves on `BEGIN`'s path as before. `Carve()` reads
 the ceiling and raises it **in one step under the latch** - two cores
 carving at once get two disjoint blocks - and the raised ceiling is durable
 before the block is issued from, because a mount refuses a log naming an id

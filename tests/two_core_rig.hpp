@@ -287,7 +287,7 @@ private:
     explicit TwoCoreRig(Options options) : options_(options) {}
 
     // `Expeditor::PersistTrxIdCeiling`'s shape over the bootstrap image:
-    // the encode under the superblock latch, the store's sync outside it.
+    // the encode under the superblock latch, page 0's persist outside it.
     Status PersistSuperBlock() {
         {
             LatchGuard hold(&superblock_latch_);
@@ -295,7 +295,9 @@ private:
             if (!page.ok()) return page.status();
             boot_->superblock.Encode(page.value().bytes());
         }
-        return store_->Sync();
+        // Page 0 alone, as `Expeditor::PersistTrxIdCeiling` persists it
+        // (BA-S13).
+        return store_->PersistPage(server::kSuperBlockPageId);
     }
 
     Status Build() {
