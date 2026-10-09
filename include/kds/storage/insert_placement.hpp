@@ -66,6 +66,25 @@ inline constexpr std::uint16_t kMaxBtreeDepth = 16;
 // loop nothing reports.
 inline constexpr int kMaxDescentRestarts = 4;
 
+// **A structural refusal, noted for the statement** (BA-S14, BA-R11). The
+// four clustered-tree sites that give up a stale descent - descend, parent,
+// secure and lookup - mark the calling thread before they return their `TxnConflict`, so the
+// dispatcher can tell that refusal from a lock's or a write conflict's,
+// which carry the same code. A reactor runs one statement at a time, so a
+// thread-local is per statement: the dispatcher clears it before a
+// statement runs and reads it after. **A caller that recovers from the
+// refusal clears it** (a scan or walk fallback, the named-key pre-check),
+// or a later, unrelated `TxnConflict` of the same statement would be
+// re-run as though it were this one. The index tree's three sites do not
+// mark: their refusal comes during index maintenance, after the row is
+// placed, and a re-run would leave earlier indexes' entries behind.
+namespace detail {
+inline thread_local bool g_structural_refusal = false;
+}  // namespace detail
+inline void NoteStructuralRefusal() noexcept { detail::g_structural_refusal = true; }
+inline bool StructuralRefusalNoted() noexcept { return detail::g_structural_refusal; }
+inline void ClearStructuralRefusal() noexcept { detail::g_structural_refusal = false; }
+
 // One insert records at most: the new page, the old page whose link moved,
 // **two** nodes per level it propagated a split back up (`depth <=
 // kMaxBtreeDepth - 1`, since depth indexes a kMaxBtreeDepth-element path),

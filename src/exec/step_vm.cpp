@@ -1950,7 +1950,11 @@ private:
                 // A descent that failed is a reason to walk, not to fail:
                 // the walk is the authoritative path and reaches the same
                 // rows.
-                if (first.ok()) cur = first.value();
+                if (first.ok()) {
+                    cur = first.value();
+                } else {
+                    storage::ClearStructuralRefusal();  // the walk answers it (BA-S14)
+                }
             }
             if (cur == kInvalidPageId) {
                 auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);

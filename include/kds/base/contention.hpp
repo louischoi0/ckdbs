@@ -82,6 +82,7 @@ enum class Tally : std::uint8_t {
     kRefusalIndexDescend,
     kRefusalIndexParent,
     kRefusalIndexSecure,
+    kStructuralReruns,    // a statement re-run after a structural refusal (BA-S14)
     kCount,
 };
 
@@ -93,7 +94,7 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "ceiling_wait_us",        "carves",                 "checkpoint_runs",
     "refused_btree_descend",  "refused_btree_parent",   "refused_btree_secure",
     "refused_btree_lookup",   "refused_index_descend",  "refused_index_parent",
-    "refused_index_secure",
+    "refused_index_secure",   "structural_reruns",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
 

@@ -734,6 +734,38 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     sched::MonoTimeNs statement_deadline_ns = 0;
     co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns);
 
+    // ---- BA-S14: a structural refusal waits a turn and runs again --------
+    //
+    // **A stale descent's `TxnConflict` stops reaching the client** (BA-R11,
+    // BA-Q10). Seven sites give up a descent whose path another core's split
+    // or root growth made stale; until BA-S14 that refusal went to the client
+    // as `retryable=1`, and BA-S4's census counted 20 of them. A statement
+    // that wrote nothing before the refusal is re-run here from the top,
+    // after one yield so the core that split runs on: the re-run re-reads
+    // the root, which a growth moved through the schema word. Bounded by the
+    // statement's one deadline, the fault net, like every other wait in
+    // this function; the refusal that outlasts it is answered, and poisons
+    // an explicit transaction where a write's refusal would have (a read's
+    // never does). A statement that wrote rows first keeps today's refusal
+    // (`txn.md` §9: no statement-level rollback) - `EndWrite` clears the
+    // note for it. No B-link move-right (BA-Q10).
+    while (out->status.code() == StatusCode::kTxnConflict &&
+           storage::StructuralRefusalNoted() && txn_ != nullptr && clock_ != nullptr) {
+        if (statement_deadline_ns == 0) statement_deadline_ns = NowNs() + lock_wait_fault_net_ns_;
+        if (NowNs() >= statement_deadline_ns) break;
+        Contention::Add(Tally::kStructuralReruns);
+        co_await sched::Yield{};
+        {
+            const MayParkScope parking(*this, /*allowed=*/true);
+            *out = DispatchAndStage(line, session);
+        }
+        co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns);
+    }
+    // The poison `EndWrite` withheld for a re-run is owed by whatever ends
+    // the re-runs as a refusal - the deadline, or a last run whose outcome
+    // is no longer the structural refusal.
+    if (structural_poison_withheld_) (session != nullptr ? *session : autocommit_session_).Poison();
+
     // ---- BH: a `PURGE` waits out a key it may not free yet (PU4, PU5) ----
     //
     // **Polled, and bounded by `kPurgeHorizonWaitNs`, not the fault net**
@@ -855,6 +887,9 @@ CommandDispatcher::StatementEpochScope::~StatementEpochScope() {
 }
 
 DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Session* session) {
+    // BA-S14's two per-statement facts, cleared before the statement runs.
+    structural_poison_withheld_ = false;
+    storage::ClearStructuralRefusal();
     // The statement boundary is where the catalog asks whether the schema
     // moved (AT-S2; `Catalog::Revalidate`): before this statement resolves
     // anything and after the previous one released everything it held. And
@@ -5507,7 +5542,12 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
             }
             auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, supplied_id);
-            if (!present.ok()) return Status::OK();
+            if (!present.ok()) {
+                // Answered by the placement's own descent, so a structural
+                // refusal here is not the statement's (BA-S14).
+                storage::ClearStructuralRefusal();
+                return Status::OK();
+            }
             auto version =
                 heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
             if (!version.ok()) return Status::OK();
@@ -5586,11 +5626,16 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
             attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
                                                /*trx_id=*/WriterId(scope), ta.oid));
-            if (attempt->ok() || attempt->status().code() != StatusCode::kAlreadyExists ||
+            if (attempt->ok()) break;
+            // Nothing was placed, so the burned id's borrow is given back
+            // whatever refused it: a structural refusal inside `BEGIN` is
+            // re-run (BA-S14) rather than rolled back, and would otherwise
+            // hold one burned id per re-run until the decide.
+            give_back(unit, /*held_before=*/false);
+            if (attempt->status().code() != StatusCode::kAlreadyExists ||
                 round + 1 == kMaxIssueRounds) {
                 break;
             }
-            give_back(unit, /*held_before=*/false);
         }
     } else {
         // A heap (BB-R2, kept by BD-Q4): the descent to the tail first, then
@@ -6422,6 +6467,7 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
                                     " failed, falling back to a scan: " +
                                     found.status().message());
         }
+        storage::ClearStructuralRefusal();  // the scan answers it (BA-S14)
         return PkLookup{PkLookup::Kind::kScan, {}};
     }
 
@@ -9137,6 +9183,17 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         if (locks_ != nullptr) locks_->DropWake(lock_wait_->key, lock_wait_->slot);
         lock_wait_.reset();
     }
+    // **A structural refusal from a statement that wrote nothing is re-run**
+    // (BA-S14): `DispatchAsync` waits a turn and runs it again, so it does
+    // not poison - the refusal that ends the re-runs does, there. Any other
+    // end - rows written (BA-R11's "who it reaches"), no park to re-run
+    // from - clears the note, so `DispatchAsync` answers it as before. Not
+    // a test on `result`'s code: the write paths hand this an
+    // `InvalidArgument` verdict built from the rendered line.
+    const bool structural_rerun = may_park_ && !result.ok() &&
+                                  storage::StructuralRefusalNoted() &&
+                                  scope.txn->trail().size() == statement_trail_mark_;
+    if (!structural_rerun) storage::ClearStructuralRefusal();
 
     if (!scope.owned) {
         // Inside an explicit transaction. A failure does **not** unwind:
@@ -9165,7 +9222,13 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // aborted" - non-retryable - where the client used to get a
         // relation dropped. The refusal that ends the wait poisons like any
         // other, because by then `lock_wait_` is empty.
-        if (!result.ok() && blocking_writer_ == 0 && !lock_wait_.has_value()) session.Poison();
+        if (!result.ok() && blocking_writer_ == 0 && !lock_wait_.has_value()) {
+            if (structural_rerun) {
+                structural_poison_withheld_ = true;
+            } else {
+                session.Poison();
+            }
+        }
         return Status::OK();
     }
 

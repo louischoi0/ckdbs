@@ -2231,6 +2231,14 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
 
+    // **`EndWrite` withheld an explicit transaction's poison for a
+    // structural re-run** (BA-S14). Read where the re-runs give up: only a
+    // statement whose poison was withheld is poisoned there - a read never
+    // poisons, so its refusal at the deadline must not either. Which
+    // statements re-run at all is `EndWrite`'s call, made by clearing
+    // `storage::StructuralRefusalNoted()` for any it ends otherwise.
+    bool structural_poison_withheld_ = false;
+
     // **`strict` commits parked before their publish** (BA-S7 part 2,
     // BA-Q3 (b)). A commit that may park stages its record for the writer
     // (`TransactionManager::CommitDeferred`), holds its marker, and leaves

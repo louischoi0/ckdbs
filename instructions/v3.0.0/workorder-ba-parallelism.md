@@ -2050,3 +2050,81 @@ On `worktree-ba-open-marks` from `7fa2bd96`.
   `carve_longest_us`.
 
 Overhead not measured; measured at the milestone's close.
+
+### BA-S14 - the rightmost leaf, built 2026-10-09
+
+On `worktree-ba-open-marks` from `18f002e1` (BA-R11, BA-Q10).
+
+**The survey: no step moves.** Under the leaf's hold, after placement, each
+step falls in one of two kinds:
+- **The records AT-S21 logs under the hold:** the WAL append
+  (`LogInsert`), and the new root's publish after a split.
+- **Steps whose failure BD-R3 E5 takes back with the leaf still held:**
+  - the Cabin witness (a row no Cabin knows of must not outlive it);
+  - index maintenance;
+  - the assertion reservation (`ReserveInsert`, held until it is logged);
+  - the spill and undo notes (`NoteSpills`, `NoteInsert`, whose failure
+    E5's take-back answers).
+
+Issue, borrow, encode and `AdmitInsert` already run before the descent
+since BD-R6. Nothing left can run before it.
+
+**A structural refusal becomes a re-run.**
+- The four clustered-tree sites that give up a stale descent (descend,
+  parent, secure, lookup) note the statement through a thread-local
+  (`storage::NoteStructuralRefusal`). A caller that recovers from such a
+  refusal clears the note.
+- `DispatchAsync` takes a statement that wrote nothing before the refusal,
+  yields one turn, and re-runs it from the top under the statement's one
+  deadline, the fault net. The re-run re-reads the root, which a growth
+  moved through the schema word.
+- Inside `BEGIN`, `EndWrite` withholds the poison for such a refusal. The
+  poison is applied only if the re-runs end in a refusal. A read's refusal
+  never poisons, as before.
+- A statement that wrote rows first, or whose spills were noted, keeps
+  today's refusal (`txn.md` §9).
+- The index tree's three sites keep reaching the client. Their refusal
+  comes during index maintenance, after the row is placed, and a re-run
+  would leave earlier indexes' entries behind (adopted on the go-ahead,
+  from the review's residual).
+- Reads are re-run too, since `BtreeLookup` is one of the four sites. That
+  is wider than BA-R11's "single-row insert", for the same reason.
+- `SHOW META` gains `contention_structural_reruns`.
+- **Text:** `heap-and-tuple.md` §5, the `client-manual.md` `SHOW META`
+  note, and `btree.cpp`'s comment.
+
+**Cells** (`tests/structural_rerun_rig_test.cpp`): two cores insert into one
+relation without a client retry, in autocommit and inside `BEGIN`, repeated
+until the re-run counter moves. No reply is a refusal.
+
+**Mutations**, each killed:
+- the re-run disabled;
+- the poison applied regardless (inside `BEGIN`, run by the reviewer).
+
+**Not met in this stage:**
+- **"A forced root grown over is re-run and succeeds."** The cells' refusals
+  are `btree_descend`. Forcing `secure` deterministically needs a test seam
+  between `DescendTo` and `SecureParents`, and it is not built. The re-run
+  loop is the same for every site.
+- **"Scenario 0's `c8-s` cell with no refusal"** is a measurement, read at
+  BA-S17.
+
+**The review** (`critics-developer`). Four bugs, fixed by the reviewer:
+- B1: a re-run inside `BEGIN` always failed. `EndWrite` keyed on
+  `kTxnConflict`, but write paths hand it an `InvalidArgument` verdict, so
+  the transaction was poisoned.
+- B2: a read's refusal could poison a transaction at the deadline.
+- B3: three callers that recover from a structural refusal left the note
+  set, turning a later unrelated conflict into a re-run.
+- B4: a re-run kept the lock on each burned id until commit.
+
+**Applied by CLA:**
+- the index sites stop noting;
+- a redundant condition removed;
+- the text.
+
+**Not applied:** one helper for the three re-run blocks in `DispatchAsync`.
+Each differs in what it re-runs on, and one helper would need a mode for
+each.
+
+Overhead not measured; measured at the milestone's close.

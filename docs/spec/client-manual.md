@@ -400,7 +400,10 @@ marker, BA-S1c); `contention_carves`, `contention_checkpoint_runs`,
 `contention_carve_longest_us` and `contention_checkpoint_longest_us`; and
 one `contention_refused_<site>` per site a stale descent is refused
 `TXN_CONFLICT` at (`btree_descend`, `btree_parent`, `btree_secure`,
-`btree_lookup`, `index_descend`, `index_parent`, `index_secure`). Every
+`btree_lookup`, `index_descend`, `index_parent`, `index_secure`).
+Since BA-S14 a clustered-tree refusal is re-run inside the engine rather
+answered, for a statement that wrote nothing before it, and
+`contention_structural_reruns` counts the re-runs. Every
 field is printed at every core count; at `cores = 1` only the latches that
 are armed there (the window, the superblock, the WAL sync gate, the Cabin
 store's) can move, and only if another thread takes them - the sync gate
