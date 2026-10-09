@@ -31,6 +31,7 @@
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
 #include "kds/txn/lock_table.hpp"
+#include "kds/wal/durability.hpp"
 
 namespace kds::server {
 namespace {
@@ -120,6 +121,11 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     ASSERT_FALSE(StartsWith(held, "ERR")) << held;
 
     Session waiter;
+    // `relaxed`, so the re-run commits without parking on its sync: this
+    // cell holds every kick in the sim, and since BA-S7 a parked
+    // committer is woken by the writer's kick, which this cell would then
+    // also have to deliver. The wake under test is the release's.
+    waiter.set_durability(wal::DurabilityClass::kRelaxed);
     Statement update{&waiter, "UPDATE t SET v = 2 WHERE id = 1"};
     Statement commit{&holder, "COMMIT"};
     commit.go.store(false, std::memory_order_release);
@@ -190,6 +196,11 @@ TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore
     ASSERT_FALSE(StartsWith(held, "ERR")) << held;
 
     Session waiter;
+    // `relaxed`, so the re-run commits without parking on its sync: this
+    // cell holds every kick in the sim, and since BA-S7 a parked
+    // committer is woken by the writer's kick, which this cell would then
+    // also have to deliver. The wake under test is the release's.
+    waiter.set_durability(wal::DurabilityClass::kRelaxed);
     Statement update{&waiter, "UPDATE t SET v = 2 WHERE id >= 1"};
     Statement commit{&holder, "COMMIT"};
     commit.go.store(false, std::memory_order_release);

@@ -801,6 +801,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         const std::function<bool()> durable = [this, lsn] {
             return wal_->IsDurable(lsn) || wal_->stopped();
         };
+        // Counted in before the wait's first read, so the writer kicks this
+        // core when the watermark passes (BA-R4 part 1).
+        const wal::WalManager::DurableWait waiting(*wal_, core_id_);
         co_await sched::WaitUntil{&durable};
         out->pending_lsn = wal::kNoLsn;
         if (Status refused = wal_->EnsureDurable(lsn); !refused.ok()) {

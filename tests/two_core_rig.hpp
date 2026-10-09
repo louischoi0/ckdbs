@@ -361,6 +361,9 @@ private:
         // And a commit marker's lift kicks a statement parked on the ceiling
         // (BA-R1c), through the same sim.
         visibility_->SetWakeRegistry(&*sim_);
+        // BA-R4 part 1, as `Expeditor` wires it: the writer kicks a core
+        // whose committer parked on a durability point.
+        wal_->SetWakeRegistry(&*sim_);
 
         if (options_.fold_anchor) {
             fold_anchor_.emplace(boot_->superblock, *store_);

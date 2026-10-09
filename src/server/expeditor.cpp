@@ -1705,6 +1705,9 @@ Status Expeditor::Start() {
         // BA-R1c: and a commit marker's lift kicks a core whose statement
         // parked until the snapshot ceiling covered its session's last commit.
         visibility_->SetWakeRegistry(&*wakers_);
+        // BA-R4 part 1: and the writer kicks a core whose committer parked on
+        // a durability point, so no drain spins its reactor polling for it.
+        wal_->SetWakeRegistry(&*wakers_);
 
         // Arms core 0's wake path too (sched/waker.hpp): core 0 is a
         // destination like any other - a peer's STOP and a lock decide on
@@ -2062,13 +2065,15 @@ Status Expeditor::Start() {
         // The bool is the post-task hook's answer to the idle policy: a
         // tick with a commit staged did work a parked statement is waiting
         // on (Scheduler::SetPostTaskHook). Read before the drain clears it.
-        const bool had_staged_commits = wal_->HasPendingGroupCommits();
+        // Not once the writer kicks a parked committer (BA-R4 part 1,
+        // `WalManager::StagedCommitIsWork`).
+        const bool staged_commit_is_work = wal_->StagedCommitIsWork();
         if (Status s = wal_->DrainOnce(); !s.ok()) {
             // Same shape as the checkpoint timer: no caller to return
             // to, so the log is the only place this becomes visible.
             logger_->Error("wal", "drain failed: " + s.message());
         }
-        return had_staged_commits;
+        return staged_commit_is_work;
     };
 
     // **The group committer.** Once per reactor iteration, after every

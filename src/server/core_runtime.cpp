@@ -488,13 +488,15 @@ void CoreRuntime::Run() {
         // would sleep between the staging and the wake-up, putting the
         // drain interval on every commit (Scheduler::SetPostTaskHook).
         // Read before the drain, which is what clears it.
-        const bool had_staged_commits = wal_->HasPendingGroupCommits();
+        // Not once the writer kicks a parked committer (BA-R4 part 1,
+        // `WalManager::StagedCommitIsWork`).
+        const bool staged_commit_is_work = wal_->StagedCommitIsWork();
         if (Status s = wal_->DrainOnce(); !s.ok() && log_ != nullptr &&
                                           log_->enabled(LogLevel::kError)) {
             log_->Error("wal", "core " + std::to_string(config_.core_id) +
                                    ": drain failed: " + s.message());
         }
-        return had_staged_commits;
+        return staged_commit_is_work;
     };
 
     // **After every iteration's tasks**, which is what makes group commit a

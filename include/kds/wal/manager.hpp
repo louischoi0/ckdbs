@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -61,12 +62,11 @@
 // ---- Waiting, and who runs the drain ------------------------------------
 //
 // A D2 committer does not block here. It takes the commit LSN Commit()
-// returned and waits for `IsDurable(lsn)` to go true; the scheduler has no
-// future/promise primitive yet (sched.md section 3 leaves the task
-// representation open), so the wait is a task that polls that predicate
-// and returns kSuspended until it holds. Building that task is the
-// transaction layer's job, not this one's - the manager exposes the
-// predicate and stays out of the scheduler.
+// returned and parks on `IsDurable(lsn)`; building that wait is the
+// dispatcher's job, not this one's. **At `cores > 1` the writer kicks the
+// parked core when the watermark passes** (BA-R4 part 1, `DurableWait`);
+// at one core the drain syncs inline and its hook reports the staged
+// commit as work, so the parked task is polled until it holds.
 //
 // What the manager does require is that **something calls DrainOnce()**: a
 // `system`-group task, once per reactor iteration (wal.md section 6-2/6-3
@@ -323,6 +323,54 @@ public:
     // drain looks at, and what a shutdown path must clear before it can
     // claim every acknowledged commit is safe.
     bool HasPendingGroupCommits() const noexcept { return pending_group_commits_ > 0; }
+
+    // **BA-R4 part 1: a parked committer is kicked by the writer.** Set on
+    // the owning manager, after `StartWriter`, once the instance has a wake
+    // registry (`cores > 1`), and carried to its writer. From then on the
+    // drain hands an owning manager's `group` sync to the writer as an
+    // attached manager's always was, and every core's drain stops reporting
+    // a staged commit as work, so a reactor with nothing else to do blocks
+    // until the writer's kick. At one core nothing sets it and both stay as
+    // they were.
+    void SetWakeRegistry(const sched::WakeRegistry* wake) noexcept {
+        assert(owned_writer_ != nullptr && "SetWakeRegistry before StartWriter");
+        if (owned_writer_ != nullptr) owned_writer_->SetWakeRegistry(wake);
+    }
+    bool KicksDurableWaiters() const noexcept {
+        return writer_ != nullptr && writer_->kicks_durable_waiters();
+    }
+
+    // What a drain hook answers the idle policy, read **before** the drain
+    // that clears it: a staged commit is work for the reactor only while
+    // nothing else will wake its parked committer. Once the writer kicks,
+    // reporting it only spun the reactor until the sync landed - BA-S4's
+    // census counted 2.2 billion such passes. One home for the rule, since
+    // core 0's drain (`expeditor.cpp`) and a peer's (`core_runtime.cpp`)
+    // both answer it.
+    bool StagedCommitIsWork() const noexcept {
+        return HasPendingGroupCommits() && !KicksDurableWaiters();
+    }
+
+    // A statement parked on a durability point, counted into its core for
+    // the life of its wait so the writer kicks that core when the watermark
+    // moves (`WalWriter::EnterDurableWait`). Constructed before the wait's
+    // first read of `IsDurable`; a no-op without a writer.
+    class DurableWait {
+    public:
+        DurableWait(const WalManager& manager, std::uint32_t core) noexcept
+            : writer_(manager.writer_), core_(core) {
+            if (writer_ != nullptr) writer_->EnterDurableWait(core_);
+        }
+        ~DurableWait() {
+            if (writer_ != nullptr) writer_->LeaveDurableWait(core_);
+        }
+        DurableWait(const DurableWait&) = delete;
+        DurableWait& operator=(const DurableWait&) = delete;
+
+    private:
+        WalWriter* writer_;
+        std::uint32_t core_;
+    };
 
     // **Recycling's one entry** (BC-R1, BC-R5): detaches every segment wholly
     // below `durable_redo_start` - the redo start of an anchor already

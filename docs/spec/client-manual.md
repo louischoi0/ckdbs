@@ -406,6 +406,13 @@ are armed there (the window, the superblock, the WAL sync gate, the Cabin
 store's) can move, and only if another thread takes them - the sync gate
 does, since the WAL writer thread syncs through it beside the reactor.
 
+**Above one core, core 0's `group` syncs moved from `wal_syncs`'s inline
+half to the writer's at BA-S7** (`docs/spec/wal.md` §3):
+`contention_syncs_inline` counts only `strict` commits, `SYNC` and
+write-ahead gates there, and `contention_drain_passes_pending` counts every
+drain taken with a commit staged, a pass reported as work or not. At one
+core nothing moved.
+
 **A failed log write stops the instance's writes** (`docs/spec/wal.md`
 §6-5). Once the log device refuses a write or a sync, every statement that writes is
 refused with the `IoError` category, naming the stop, and `SHOW META` prints `wal_stopped=1`.

@@ -140,7 +140,19 @@ void WalWriter::Run() {
             }
         }
         done_.notify_all();
+        KickDurableWaiters();
         if (reclaim) Reclaim();
+    }
+}
+
+void WalWriter::KickDurableWaiters() const noexcept {
+    const sched::WakeRegistry* wake = wake_.load(std::memory_order_acquire);
+    if (wake == nullptr) return;
+    // The other half of `EnterDurableWait`'s fence (writer.hpp): the
+    // watermark moved above, so a waiter not counted here reads it.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    for (std::uint32_t core = 0; core < kWaitSlots; ++core) {
+        if (durable_waiters_[core].load(std::memory_order_relaxed) > 0) wake->Kick(core);
     }
 }
 

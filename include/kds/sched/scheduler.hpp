@@ -228,7 +228,8 @@ public:
     // idle policy (§7, `IdleTimeoutMs`) lets the reactor sleep on an
     // iteration where nothing advanced, and this hook is the one source of
     // progress that is neither a task poll nor an event: a statement parks
-    // on `durable_lsn` and it is *this* that moves it. A hook that answered
+    // on `durable_lsn` and at one core it is *this* that moves it (above one
+    // core the WAL writer kicks the parked core instead, BA-R4 part 1). A hook that answered
     // "nothing happened" while it was syncing would let the reactor block
     // between the staging and the wake-up, adding the drain interval to
     // every commit - the one regression this whole change must not cause.

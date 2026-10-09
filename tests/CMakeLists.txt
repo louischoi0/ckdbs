@@ -65,6 +65,7 @@ add_executable(kds_tests
     row_wait_wake_rig_test.cpp
     strict_marker_snapshot_rig_test.cpp
     contention_counters_test.cpp
+    durable_kick_rig_test.cpp
     issue_under_the_leaf_rig_test.cpp
     lock_family_test.cpp
     insert_log_crash_rig_test.cpp

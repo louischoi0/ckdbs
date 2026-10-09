@@ -1720,3 +1720,83 @@ CLA's proposal; none is the operator's own mark.
   mark on BI-Q1.
 
 No code changed in this stage. The suite is unchanged from `c390a624`.
+
+### BA-S7 part 1 - `group` commits leave every reactor, built 2026-10-09
+
+On `worktree-ba-open-marks` from `66bb11b2` (BA-R4 part 1, no semantic
+change).
+
+- **The writer kicks a parked committer.** `WalWriter` keeps a per-core
+  count of statements parked on a durability point (`WalManager::DurableWait`,
+  taken by the dispatcher's group-commit park). After every sync, and after
+  a failed one, it kicks each core with a waiter through the wake registry.
+  The waiter counts itself in, fences, and then reads the watermark; the
+  writer moves the watermark, fences, and then reads the counts. So the
+  writer always sees a waiter that missed the new watermark. The kick
+  itself is best-effort, as every kick in the engine is: a skipped one
+  costs one idle block, which is 10 ms in production.
+- **Core 0's `group` sync goes to the writer** once the instance has a wake
+  registry (`cores > 1`), as a peer's always did.
+- **No drain reports a staged commit as work** once the writer kicks
+  (`WalManager::StagedCommitIsWork`, one rule for core 0's drain and for a
+  peer's). So the polling pass is gone: a reactor with nothing else to do
+  blocks.
+- **At `cores = 1` nothing changed.** `Expeditor` sets no registry there,
+  so the drain syncs inline and still reports the staged commit as work.
+- **Text:** `wal.md` §3, the `client-manual.md` `SHOW META` note,
+  `manager.hpp`'s header, `Sync()`'s comment, and `scheduler.hpp`'s
+  post-task hook.
+
+**Cells** (`tests/durable_kick_rig_test.cpp`):
+- A peer's five `group` commits, each answered inside 2 s against the
+  rig's 5 s idle block, so each one was kicked. Every sync was the
+  writer's.
+- A reactor with its commit parked behind a held log gate takes fewer than
+  100 drain passes in 300 ms, and is kicked at the release.
+- An owning manager's `group` drain syncs on the writer when a registry is
+  set, and inline when none is.
+
+**Mutations**, each killed:
+- the writer's kick removed (every kick cell);
+- the peer's drain reporting the commit (the spin cell);
+- the owning manager syncing inline (the owning cell).
+
+A first harness run restored files with `copy2`, which brought back the
+old mtimes, so make kept a mutant object and reported a spin that was not
+in the source. The files were touched, rebuilt and re-run, and the three
+results above are from that run.
+
+`tests/row_wait_wake_rig_test.cpp`'s two release-kick cells now give the
+waiter a `relaxed` session. The sim holds every kick, the writer's
+included, so a `group` re-run would wait for a writer kick the cell never
+delivers. The wake those cells test is the release's.
+
+**The work order's "spin counter at 0" is read as "no pass reported as
+work".** `contention_drain_passes_pending` still counts each drain taken
+with a commit staged. A blocked reactor takes one on each wake, not one
+per iteration.
+
+**The review** (`critics-developer`): the kick protocol is correct.
+- **Fixed by the reviewer:** a flake in the new cells. A single test kick
+  delivering the start could be skipped, leaving the reactor in its 5 s
+  block, so `go` is now set before `Start()`. 100 repeats then passed.
+- **Applied by CLA:**
+  - `WalManager::wake_` deleted (every caller sets the registry after
+    `StartWriter`, now asserted);
+  - the drain hooks' rule moved into `StagedCommitIsWork`;
+  - the writer's slot index taken as the core id, since `CheckCoreCount`
+    bounds it;
+  - the three stale comments corrected;
+  - the duplicate rig core-0 cell removed;
+  - `wal.md` and the `SHOW META` note updated.
+- **Rejected:**
+  - Kicking without the sleeping check, which would close the
+    skipped-kick window. "Best-effort, a skipped kick costing one idle
+    block" is the engine-wide contract for every kick (`CLAUDE.md`'s
+    cross-core row, the lock table's included). Changing it for one caller
+    belongs to the wake registry's owner, not to BA-S7.
+  - A wake for waiters when another core's write fail-stops the log. A
+    parked peer learns of the stop at its next idle block (10 ms), and
+    only the speed of an already-refused commit's reply is at stake.
+
+Overhead not measured; measured at the milestone's close.
