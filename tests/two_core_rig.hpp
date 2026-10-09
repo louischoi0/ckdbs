@@ -92,6 +92,9 @@ public:
     void Hold() noexcept { held_.store(true, std::memory_order_release); }
     void Release() noexcept { held_.store(false, std::memory_order_release); }
     int parked() const noexcept { return parked_.load(std::memory_order_acquire); }
+    // Every `Sync` from here on fails, after any hold: a device that loses
+    // its sync, which fail-stops the log.
+    void FailSyncs() noexcept { fail_.store(true, std::memory_order_release); }
 
     std::uint64_t segment_size() const noexcept override { return inner_.segment_size(); }
     std::uint64_t first_segment() const noexcept override { return inner_.first_segment(); }
@@ -123,11 +126,13 @@ public:
             }
             parked_.fetch_sub(1, std::memory_order_acq_rel);
         }
+        if (fail_.load(std::memory_order_acquire)) return Status::IoError("gated sync failed");
         return inner_.Sync();
     }
 
 private:
     wal::LogDevice& inner_;
+    std::atomic<bool> fail_{false};
     std::atomic<bool> held_{false};
     std::atomic<int> parked_{0};
 };

@@ -678,6 +678,11 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
 
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
                                              DispatchOutcome* out) {
+    // A deferred `strict` commit this statement leaves behind (BA-S7 part 2)
+    // is parked on below even if a re-run's outcome no longer names it: an
+    // entry nobody parks on would hold its marker, and so cap every
+    // snapshot on the instance, until some other statement's park ran it.
+    const std::size_t deferred_at_entry = deferred_commits_.size();
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -787,6 +792,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // went at AT-S9 with the fan-in and the two-step pipeline, the last two
     // routes that opened a stage.
 
+    if (out->pending_lsn == wal::kNoLsn && deferred_commits_.size() > deferred_at_entry) {
+        out->pending_lsn = deferred_commits_.back().lsn;
+    }
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
         // statement is the whole change: every other runnable connection
@@ -805,9 +813,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // core when the watermark passes (BA-R4 part 1).
         const wal::WalManager::DurableWait waiting(*wal_, core_id_);
         co_await sched::WaitUntil{&durable};
+        // A deferred `strict` commit publishes here, after its record is
+        // durable (BA-S7 part 2) - this statement's and any other this
+        // core parked that the same sync covered.
+        FinishDeferredCommits();
         out->pending_lsn = wal::kNoLsn;
         if (Status refused = wal_->EnsureDurable(lsn); !refused.ok()) {
             *out = {ErrorReply(refused), out->should_stop, 0, refused};
+            // A refused commit is no bound: a deferred one was aborted, so
+            // no ceiling would ever cover it. The session's earlier bound
+            // was covered before this statement ran (BA-R1c).
+            (session != nullptr ? *session : autocommit_session_)
+                .set_acknowledged_commit_lsn(wal::kNoLsn);
         }
     }
     co_return Status::OK();
@@ -999,6 +1016,34 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
 // statement itself is finished either way before this runs, so nothing is
 // held across the wait.
 
+bool CommandDispatcher::DefersCommit(std::uint64_t txn_id) const {
+    return effective_durability_ == wal::DurabilityClass::kStrict && may_park_ &&
+           wal_ != nullptr && wal_->KicksDurableWaiters() &&
+           std::find(ddl_txns_.begin(), ddl_txns_.end(), txn_id) == ddl_txns_.end();
+}
+
+void CommandDispatcher::DeferCommit(txn::Transaction* txn, wal::Lsn lsn) {
+    pending_commit_lsn_ = lsn;
+    deferred_commits_.push_back({lsn, txn});
+}
+
+void CommandDispatcher::FinishDeferredCommits() {
+    std::size_t done = 0;
+    for (; done < deferred_commits_.size(); ++done) {
+        const DeferredCommit& d = deferred_commits_[done];
+        if (wal_->IsDurable(d.lsn)) {
+            txn_->FinishDeferredCommit(*d.txn);
+        } else if (wal_->stopped()) {
+            (void)txn_->Abort(*d.txn, RowLocatorForRollback());
+        } else {
+            break;
+        }
+        txn_->Release(*d.txn);
+    }
+    deferred_commits_.erase(deferred_commits_.begin(),
+                            deferred_commits_.begin() + static_cast<std::ptrdiff_t>(done));
+}
+
 wal::Lsn CommandDispatcher::UncoveredCommit(Session* session) {
     Session& bound_session = session != nullptr ? *session : autocommit_session_;
     const wal::Lsn bound = bound_session.acknowledged_commit_lsn();
@@ -1018,7 +1063,18 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
     // spins on its own core's marker for good.
     if (const wal::Lsn bound = UncoveredCommit(session); bound != wal::kNoLsn) {
         const txn::TransactionManager::CeilingWait waiting(*txn_);
-        while (!txn_->CeilingCovers(bound)) std::this_thread::yield();
+        while (!txn_->CeilingCovers(bound)) {
+            // **This core's own parked `strict` commits hold markers too**
+            // (BA-S7 part 2), and their statements cannot run while this
+            // wait holds the reactor: make their records durable and
+            // publish them here, or this loop waits for itself.
+            if (!deferred_commits_.empty()) {
+                (void)wal_->EnsureDurable(deferred_commits_.back().lsn);
+                FinishDeferredCommits();
+                continue;
+            }
+            std::this_thread::yield();
+        }
     }
     DispatchOutcome outcome = DispatchAndStage(line, session);
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
@@ -8267,7 +8323,8 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     if (Status s = enforcer_->CommitTxn(page_store_, wal_, id); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
-    auto committed = txn_->Commit(*txn, effective_durability_);
+    const bool deferred = DefersCommit(id);
+    auto committed = deferred ? txn_->CommitDeferred(*txn) : txn_->Commit(*txn, effective_durability_);
 
     if (!committed.ok()) {
         // **A failed commit must abort, not merely be reported.**
@@ -8300,6 +8357,18 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
                     false};
         }
         return {ErrorReply(committed.status()), false, 0, committed.status()};
+    }
+
+    if (deferred) {
+        // **Parked before its publish** (BA-S7 part 2): the statement parks
+        // on the record's durability, and the second half runs then. No
+        // catalog write is in this transaction (`DefersCommit`), so
+        // `EndDdlScope` has nothing to settle and the session's own
+        // bookkeeping can go now.
+        session.Finish();
+        session.set_acknowledged_commit_lsn(committed.value());
+        DeferCommit(txn, committed.value());
+        return {"COMMIT trx_id=" + std::to_string(id), false};
     }
 
     // Its catalog rows are committed now, so every reader may see them
@@ -9136,12 +9205,20 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     if (Status s = enforcer_->CommitTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
         return AbortOwnedScope(scope, s);
     }
-    auto committed = txn_->Commit(*scope.txn, effective_durability_);
+    const bool deferred = DefersCommit(scope.txn->id());
+    auto committed = deferred ? txn_->CommitDeferred(*scope.txn)
+                              : txn_->Commit(*scope.txn, effective_durability_);
     if (!committed.ok()) {
         return AbortOwnedScope(scope, committed.status());
     }
     // The session's next statement mints no snapshot below this (BA-R1c).
     session.set_acknowledged_commit_lsn(committed.value());
+    if (deferred) {
+        // Parked before its publish (BA-S7 part 2; `CommitLocal` says how).
+        DeferCommit(scope.txn, committed.value());
+        scope.txn = nullptr;
+        return Status::OK();
+    }
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
         !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();

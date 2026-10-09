@@ -2231,6 +2231,38 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
 
+    // **`strict` commits parked before their publish** (BA-S7 part 2,
+    // BA-Q3 (b)). A commit that may park stages its record for the writer
+    // (`TransactionManager::CommitDeferred`), holds its marker, and leaves
+    // its second half here; the statement then parks on durability like a
+    // `group` commit. Whoever first finds the record durable runs the
+    // second half - the parked statement on its kick, or `Dispatch`'s
+    // synchronous wait on its own core's marker, which could otherwise wait
+    // for a statement that cannot run until it returns. In LSN order, since
+    // the writer's watermark only rises. This core's alone.
+    struct DeferredCommit {
+        wal::Lsn lsn = wal::kNoLsn;
+        txn::Transaction* txn = nullptr;
+    };
+    std::vector<DeferredCommit> deferred_commits_;
+
+    // Both commit arms' deferred tail: the statement parks on `lsn`, and
+    // `FinishDeferredCommits` owns `txn` from here.
+    void DeferCommit(txn::Transaction* txn, wal::Lsn lsn);
+
+    // Whether a commit of `txn` here takes the deferred path: `strict`, a
+    // statement that may park, a writer that kicks (above one core - at one
+    // core the commit syncs inline, as before), and no catalog write in the
+    // transaction, whose second half `EndDdlScope` owns.
+    bool DefersCommit(std::uint64_t txn_id) const;
+
+    // Runs the second half of every deferred commit whose record is
+    // durable, in order. Once the log is stopped, every one whose record is
+    // not durable is aborted instead: D1 never publishes a commit that is
+    // not durable, and a failed sync aborts on both paths (txn.md §6). The
+    // statement answers with the refusal (`DispatchAsync`).
+    void FinishDeferredCommits();
+
     // **The allowance, taken and given back structurally** (AO-S6d). The
     // argument for it is the one the `DispatchAsync` site already makes
     // about a hand-placed pair: it is correct today and silently wrong the

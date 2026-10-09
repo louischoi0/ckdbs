@@ -313,6 +313,14 @@ public:
     // nothing waits.
     StatusOr<Lsn> Commit(std::uint64_t txn_id, DurabilityClass durability);
 
+    // **A `strict` commit staged rather than synced** (BA-S7 part 2, BA-Q3
+    // (b)): appends TXN_COMMIT and stages it as a `group` commit is staged,
+    // so the drain asks the writer for its sync and the committer parks.
+    // D1 and D2 share a durability point (wal.md §1); what keeps this D1 is
+    // the caller's, which publishes only once `IsDurable` holds. Counted as
+    // a strict commit.
+    StatusOr<Lsn> StageStrictCommit(std::uint64_t txn_id);
+
     // Appends TXN_ABORT. No durability class and no wait: a transaction
     // whose abort record did not survive is a transaction with no commit
     // record, which recovery rolls back anyway (wal.md section 12-1). The

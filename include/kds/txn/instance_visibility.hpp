@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "kds/base/latch.hpp"
 #include "kds/server/superblock.hpp"
@@ -86,10 +87,13 @@ class WakeRegistry;
 // publishes first; "the highest published LSN" is then 200 while 100 is
 // still unpublished, and a snapshot minted at 200 flips on 100 when it
 // lands. AN-R9 rules that the ceiling a snapshot takes must exclude every
-// commit reserved and not yet published, and the shape here is **one
-// marker per core, set before the append**: a core about to commit stores
+// commit reserved and not yet published, and the shape here is **a marker
+// per open commit, set before the append**: a core about to commit stores
 // the ceiling it can see into its slot (`pending_commit_bound`), appends,
-// publishes, and clears the marker. Its commit's LSN is assigned after
+// publishes, and clears the marker. A core can hold several since BA-S7
+// part 2 - a parked `strict` commit keeps its marker while the core runs
+// others - and the slot then carries the lowest open one, which is the
+// earliest set (`CoreVisibilitySlot::open_bounds`). Its commit's LSN is assigned after
 // every commit that ceiling covers, so it is strictly above the marker -
 // and the ceiling a mint reads is the published maximum capped by every
 // marker, so no snapshot ever covers an unpublished commit. Set *before*
@@ -279,6 +283,14 @@ struct CoreVisibilitySlot {
     // commit (the header's "snapshot ceiling" note).
     std::atomic<std::uint64_t> pending_commit_bound{kUnboundedBound};
 
+    // **The open markers behind it** (BA-S7 part 2): a `strict` commit that
+    // parks before its publish holds its marker across the park, so more
+    // than one commit per core can be between its append and its
+    // publication. Each one's bound, in begin order - non-decreasing, since
+    // the ceiling they are read from only rises - and `pending_commit_bound`
+    // is the first. Written and read by this core's thread alone.
+    std::vector<std::uint64_t> open_bounds;
+
     // Statements on this core parked until the ceiling covers their
     // session's last commit (BA-R1c; the header's "acknowledged-commit
     // bound" note). A marker's lift kicks this core while it is non-zero.
@@ -419,12 +431,14 @@ public:
     // **Before the append** of a commit on `core`: caps the snapshot
     // ceiling below the LSN that append will be assigned, until
     // `EndCommit`. The header's "snapshot ceiling" note is the argument.
-    // At most one commit per core is ever between its append and its
-    // publication - `TransactionManager::Commit` is synchronous on its
-    // core - which is why this is a slot field and not a set. Takes the
-    // window latch (the header says why) and releases it before returning,
-    // so nothing is held across the append that follows.
-    void BeginCommit(std::uint32_t core);
+    // More than one commit per core can be open at once since BA-S7
+    // part 2 - a parked `strict` commit holds its marker - so the slot
+    // publishes the lowest open bound (`CoreVisibilitySlot::open_bounds`).
+    // Returns the bound this commit registered, which its `EndCommit` names.
+    // Takes the window latch (the header says why) and releases it before
+    // returning, so nothing is held across the append that follows. Called
+    // on `core`'s own thread, as `EndCommit` is.
+    std::uint64_t BeginCommit(std::uint32_t core);
 
     // `BeginCommit` on construction, `EndCommit` on destruction: a marker
     // left set - by a throw between the two, say - would cap every mint on
@@ -433,16 +447,15 @@ public:
     class PendingCommit {
     public:
         PendingCommit(InstanceVisibility& visibility, std::uint32_t core)
-            : visibility_(visibility), core_(core) {
-            visibility_.BeginCommit(core_);
-        }
-        ~PendingCommit() { visibility_.EndCommit(core_); }
+            : visibility_(visibility), core_(core), bound_(visibility_.BeginCommit(core_)) {}
+        ~PendingCommit() { visibility_.EndCommit(core_, bound_); }
         PendingCommit(const PendingCommit&) = delete;
         PendingCommit& operator=(const PendingCommit&) = delete;
 
     private:
         InstanceVisibility& visibility_;
         std::uint32_t core_;
+        std::uint64_t bound_;
     };
 
     // Records that `trx_id` committed at `commit_lsn`. Called where the
@@ -461,7 +474,7 @@ public:
     // After the publication - or after an append that failed - on `core`:
     // lifts the cap `BeginCommit` put on the ceiling, then kicks every core
     // with a statement parked on the ceiling (BA-R1c).
-    void EndCommit(std::uint32_t core) noexcept;
+    void EndCommit(std::uint32_t core, std::uint64_t bound) noexcept;
 
     // **A statement on `core` waits for the ceiling, or stops waiting**
     // (BA-R1c; the header's "acknowledged-commit bound" note). Counted in,

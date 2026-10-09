@@ -1800,3 +1800,94 @@ per iteration.
     only the speed of an already-refused commit's reply is at stake.
 
 Overhead not measured; measured at the milestone's close.
+
+### BA-S7 part 2 - `strict` parks before its publish, built 2026-10-09
+
+On `worktree-ba-open-marks` from `f1a59fcd` (BA-R4 part 2, BA-Q3 (b)).
+
+- **The commit in two halves.** `TransactionManager::CommitDeferred` sets
+  the marker and stages the commit record for the writer
+  (`WalManager::StageStrictCommit`, staged as a `group` commit is and
+  counted as strict). The transaction stays active, in flight and holding
+  its borrows. `FinishDeferredCommit` is the rest of `Commit`: the publish,
+  the marker's lift, the retire and the release, in the same order. Both
+  share one body (`FinishCommitBody`).
+- **The dispatcher defers** a `strict` commit when the statement may park,
+  the writer kicks (`cores > 1`), and the transaction wrote no catalog row
+  (`DefersCommit`). This covers both an explicit `COMMIT` and an autocommit
+  statement. The statement parks on the record's durability like a `group`
+  commit. After the park, `FinishDeferredCommits` publishes every durable
+  entry in order. A statement that left an entry parks on it even if a
+  re-run's outcome no longer names it.
+- **Several markers per core.** A parked commit holds its marker, so a core
+  keeps its open bounds in begin order and its slot publishes the lowest
+  (`InstanceVisibility::BeginCommit` and `EndCommit`). The bounds are
+  non-decreasing, so `SnapshotCeiling`'s argument holds unchanged.
+- **The synchronous `Dispatch` (BA-S1c's review, C2).** Its BA-R1c wait can
+  be capped by a commit parked on its own core, whose statement cannot run
+  until `Dispatch` returns. The wait makes the last deferred record durable
+  and publishes the core's deferred commits itself.
+- **A failed sync aborts the parked commit** (D1, `txn.md` §6). The commit
+  is never published. Its session's acknowledged bound is cleared, so its
+  next statement does not wait for a ceiling that will never cover it.
+- **A checkpoint does not list a parked commit as active.** Its record is
+  below the checkpoint's begin, and the anchor is published only once the
+  end record is durable.
+- **At `cores = 1` nothing changed**: no registry, so no deferral.
+- **New for a synchronous caller on the same core.** One that meets a row
+  or relation a parked commit still holds is refused `TxnConflict` for up
+  to one sync (`txn.md` §4).
+- **Text:** `txn.md` §4 (when a commit becomes visible, and the BA-R1c
+  paragraph), `wal.md` §3, and `instance_visibility.hpp`'s snapshot-ceiling
+  note.
+
+**Cells** (`tests/strict_park_rig_test.cpp`, plus one in
+`instance_visibility_test.cpp`):
+- A core serves its other sessions while a `strict` commit awaits its sync.
+  The commit is invisible on every core until then, and a checkpoint
+  snapshot taken meanwhile does not list it.
+- An explicit `COMMIT` parks and publishes at its sync.
+- The synchronous wait on its own core's parked marker finishes the commit.
+- A parked commit whose sync fails is aborted, never visible, and its
+  session goes on.
+- Four `strict` commits staged during one held sync complete in at most two
+  syncs.
+- Several open markers on one core cap at the lowest, ended in reverse
+  order.
+
+**Mutations**, each killed:
+- no deferral (the serving and batching cells);
+- the synchronous wait not finishing its own core's commits (the cell
+  hangs);
+- an autocommit commit published at its stage (the serving and
+  synchronous cells);
+- publishing on a stopped log, and keeping the refused commit's bound (the
+  failure cell; run by the reviewer);
+- the newest bound published (the unit cell; run by the reviewer);
+- the checkpoint guard removed (the serving cell; run by the reviewer).
+
+**The review** (`critics-developer`).
+- **Two bugs, fixed by the reviewer:**
+  - B1: a parked commit was listed as active in a checkpoint taken during
+    its park, so a crash could undo a durable, acknowledged commit;
+  - B2: a stopped log published the parked commit beside its refusal,
+    which broke D1.
+- **Also by the reviewer:**
+  - one `DeferCommit` helper over a plain `txn*` per entry;
+  - the multi-marker unit cell;
+  - the header note.
+- **Applied by CLA:**
+  - the batching cell;
+  - parking on a statement's own deferred entry whatever its outcome says;
+  - `FinishCommitBody` moved into the private section;
+  - the `txn.md` and `wal.md` text;
+  - the new synchronous-caller refusal window stated.
+- **Checked, and nothing to change:** a shutdown with a parked commit does
+  not touch a freed wake registry. `EndCommit` reaches the registry only
+  while a ceiling waiter is counted, and the reactors are joined first.
+- **Kept as is:**
+  - the four copies of the cells' stop guard;
+  - the "finished already" guard in `FinishDeferredCommit`, which is cheap
+    and covers a second call.
+
+Overhead not measured; measured at the milestone's close.

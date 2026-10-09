@@ -430,6 +430,15 @@ StatusOr<Lsn> WalManager::Commit(std::uint64_t txn_id, DurabilityClass durabilit
     return lsn.value();
 }
 
+StatusOr<Lsn> WalManager::StageStrictCommit(std::uint64_t txn_id) {
+    auto lsn = Append({RecordType::kTxnCommit, txn_id, kInvalidPageId, 0});
+    if (!lsn.ok()) return lsn.status();
+    ++pending_group_commits_;
+    highest_group_commit_lsn_ = lsn.value();
+    ++stats_.strict_commits;
+    return lsn.value();
+}
+
 StatusOr<Lsn> WalManager::Abort(std::uint64_t txn_id) {
     return Append({RecordType::kTxnAbort, txn_id, kInvalidPageId, 0});
 }

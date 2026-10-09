@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -194,6 +195,10 @@ private:
     LockHoldings borrows_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     bool active_ = false;
+    // A deferred commit's first half (`TransactionManager::CommitDeferred`):
+    // its marker, held until `FinishDeferredCommit`, and its record's LSN.
+    std::optional<InstanceVisibility::PendingCommit> deferred_marker_;
+    wal::Lsn deferred_lsn_ = wal::kNoLsn;
     bool wrote_catalog_ = false;
 };
 
@@ -406,6 +411,19 @@ public:
     // client that acknowledgement and owns the wait, exactly as the
     // dispatcher's INSERT path already does.
     StatusOr<wal::Lsn> Commit(Transaction& txn, wal::DurabilityClass durability);
+
+    // **A `strict` commit in two halves** (BA-S7 part 2, BA-Q3 (b)): the
+    // commit record is staged for the writer's sync and the marker set, and
+    // nothing else - the transaction stays active, in flight and holding its
+    // borrows, invisible to every snapshot on every core, across the park
+    // the caller takes until the record is durable. `FinishDeferredCommit`
+    // is the rest of `Commit`: the publish, the marker's lift, the retire
+    // and the release, in `Commit`'s order. A failed first half leaves the
+    // transaction as a failed `Commit` does; the caller owes an `Abort`. So
+    // does a record the log stopped before it was durable: a failed sync
+    // aborts on both paths (txn.md §6), and `Abort` lifts the marker.
+    StatusOr<wal::Lsn> CommitDeferred(Transaction& txn);
+    void FinishDeferredCommit(Transaction& txn);
 
     // ---- Re-locating a row whose address moved --------------------------
     //
@@ -708,6 +726,10 @@ public:
 private:
     friend class ReaderLease;
 
+    // The part of a commit after its record is appended, shared by `Commit`
+    // and `FinishDeferredCommit`.
+    void FinishCommitBody(Transaction& txn, wal::Lsn lsn,
+                          std::optional<InstanceVisibility::PendingCommit>& pending);
     void UnregisterReader(std::uint32_t slot) noexcept;
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);

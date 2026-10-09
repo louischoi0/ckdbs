@@ -299,38 +299,11 @@ void TransactionManager::MoveSchemaWordIfCatalogWriter(const Transaction& txn) n
     }
 }
 
-StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
-                                              wal::DurabilityClass durability) {
-    if (!txn.active_) {
-        return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
-                                       " is no longer active");
-    }
-    wal::Lsn lsn = wal::kNoLsn;
-    // **Before the append** (AN-R9, `instance_visibility.hpp`'s "snapshot
-    // ceiling" note): from here until the marker is released, no snapshot
-    // minted on any core covers the LSN this commit is about to be
-    // assigned. Set before rather than after the append, because the gap
-    // between the append returning and a marker being stored is exactly
-    // the interval AN-Q3 names, and a marker stored inside it closes
-    // nothing. Released on every exit, including a throw: a marker left
-    // set caps every mint on the instance for good.
-    std::optional<InstanceVisibility::PendingCommit> pending;
-    pending.emplace(*visibility_, core_);
-    if (wal_ != nullptr) {
-        auto committed = wal_->Commit(txn.id_, durability);
-        // **The borrows stay held here, and that is the contract, not an
-        // oversight** (AO-R6). The append failed, so this transaction is
-        // still active and may yet be rolled back; releasing its tenancies
-        // now would admit another writer to rows this one can still undo.
-        // The caller owes an `Abort`, which releases them -
-        // `command_dispatcher.cpp`'s failed-commit path does exactly that
-        // and says why. The autocommit write scope does **not**, and
-        // already leaks the `Transaction` itself; AO-S3 inherits that as a
-        // borrow leak and owns fixing it.
-        if (!committed.ok()) return committed.status();
-        lsn = committed.value();
-    }
-
+// The part of a commit after its record is appended: shared by `Commit`
+// and a deferred commit's second half, so the two can never order the
+// publish, the lift, the retire and the release differently.
+void TransactionManager::FinishCommitBody(Transaction& txn, wal::Lsn lsn,
+                                          std::optional<InstanceVisibility::PendingCommit>& pending) {
     // Dropped, not kept: a committed write needs no compensation, and the
     // undo records stay behind for readers whose snapshots predate it.
     //
@@ -379,6 +352,66 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     // in-flight to every observer, and refuse itself for a conflict that no
     // longer exists.
     if (locks_ != nullptr) locks_->Release(txn.id_, txn.borrows_);
+}
+
+StatusOr<wal::Lsn> TransactionManager::CommitDeferred(Transaction& txn) {
+    if (!txn.active_) {
+        return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
+                                       " is no longer active");
+    }
+    if (wal_ == nullptr) {
+        return Status::InvalidArgument("a deferred commit needs a log to stage its record in");
+    }
+    // Before the append, as `Commit` sets its marker (AN-R9).
+    txn.deferred_marker_.emplace(*visibility_, core_);
+    auto staged = wal_->StageStrictCommit(txn.id_);
+    if (!staged.ok()) {
+        // The borrows stay held, as on `Commit`'s failure: the caller aborts.
+        txn.deferred_marker_.reset();
+        return staged.status();
+    }
+    txn.deferred_lsn_ = staged.value();
+    return staged.value();
+}
+
+void TransactionManager::FinishDeferredCommit(Transaction& txn) {
+    if (!txn.deferred_marker_.has_value()) return;  // finished already
+    FinishCommitBody(txn, txn.deferred_lsn_, txn.deferred_marker_);
+}
+
+StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
+                                              wal::DurabilityClass durability) {
+    if (!txn.active_) {
+        return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
+                                       " is no longer active");
+    }
+    wal::Lsn lsn = wal::kNoLsn;
+    // **Before the append** (AN-R9, `instance_visibility.hpp`'s "snapshot
+    // ceiling" note): from here until the marker is released, no snapshot
+    // minted on any core covers the LSN this commit is about to be
+    // assigned. Set before rather than after the append, because the gap
+    // between the append returning and a marker being stored is exactly
+    // the interval AN-Q3 names, and a marker stored inside it closes
+    // nothing. Released on every exit, including a throw: a marker left
+    // set caps every mint on the instance for good.
+    std::optional<InstanceVisibility::PendingCommit> pending;
+    pending.emplace(*visibility_, core_);
+    if (wal_ != nullptr) {
+        auto committed = wal_->Commit(txn.id_, durability);
+        // **The borrows stay held here, and that is the contract, not an
+        // oversight** (AO-R6). The append failed, so this transaction is
+        // still active and may yet be rolled back; releasing its tenancies
+        // now would admit another writer to rows this one can still undo.
+        // The caller owes an `Abort`, which releases them -
+        // `command_dispatcher.cpp`'s failed-commit path does exactly that
+        // and says why. The autocommit write scope does **not**, and
+        // already leaks the `Transaction` itself; AO-S3 inherits that as a
+        // borrow leak and owns fixing it.
+        if (!committed.ok()) return committed.status();
+        lsn = committed.value();
+    }
+
+    FinishCommitBody(txn, lsn, pending);
     return lsn;
 }
 
@@ -562,6 +595,13 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     // back and go on rather than be refused (`page_store.hpp`).
     const storage::DrainOnPressure drain(store_);
 
+    // **A deferred commit whose record never became durable** (BA-S7 part
+    // 2): its marker lifts first. Nothing will publish, so a view that now
+    // covers the record's LSN finds the transaction in flight and then
+    // absent - invisible either way - and the borrows below go after it, as
+    // at commit (the AT-S5e review's C8).
+    txn.deferred_marker_.reset();
+
     // **In reverse**, and as ordinary logged page mutations - the shape
     // wal.md section 12-3 asks for, so recovery-driven rollback later
     // reuses this path verbatim.
@@ -713,10 +753,19 @@ std::vector<wal::CheckpointActiveTxn> TransactionManager::Snapshot() const {
     // whole reason a checkpoint is sufficient for undo: it lets recovery
     // walk a loser's records backwards from here, however far below the
     // redo start they were written.
+    //
+    // **Nor a deferred commit whose record is appended** (BA-S7 part 2): it
+    // stays active across its park, but its TXN_COMMIT lies below this
+    // checkpoint's BEGIN, and a scan that starts above that record would
+    // read the BEGIN's entry as a loser and undo a committed transaction.
+    // Leaving it out is sound: any mount that starts from this checkpoint
+    // found the log durable past BEGIN, so the commit record is durable too.
     std::vector<wal::CheckpointActiveTxn> out;
     out.reserve(live_.size());
     for (const std::unique_ptr<Transaction>& t : live_) {
-        if (t->active_) out.push_back({t->id_, t->last_undo_ptr_});
+        if (t->active_ && t->deferred_lsn_ == wal::kNoLsn) {
+            out.push_back({t->id_, t->last_undo_ptr_});
+        }
     }
     return out;
 }
