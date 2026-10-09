@@ -434,6 +434,15 @@ def run_one(args, run):
             # One distribution per statement kind: a shape that mixes reads
             # and writes (recent) reports each apart, beside the pooled one.
             "by_kind": by_kind,
+            # One per client, with the core its session landed on: BA-R4's
+            # premise is the writer hand-off's cost, read as a peer session's
+            # commit latency against core 0's, which syncs inline.
+            "by_client": [{"core": o["core"], "statements": n,
+                           **({f"p{q}_us": round(nearest_rank(xs, q) * 1e6, 1) for q in (50, 99)}
+                              if n else {})}
+                          for o in outs
+                          for xs in [sorted(x for v in o["lat"].values() for x in v)]
+                          for n in [len(xs)]],
             "refusals": sum(o["refusals"] for o in outs), "errors": sum(o["errors"] for o in outs),
             "first_error": next((o["first_error"] for o in outs if o["first_error"]), None),
             "client_cpu_share": shares, "client_bound": max(shares) > CLIENT_BOUND,
