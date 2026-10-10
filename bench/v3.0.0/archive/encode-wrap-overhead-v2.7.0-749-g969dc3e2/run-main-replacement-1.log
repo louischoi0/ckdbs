@@ -1,0 +1,2 @@
+n10000-run1 rc 0 load 2.68 -> 2.95 dur 5s cpu6/7=0.337/0.328 others_max=0.425 comp=no
+ALLDONE
