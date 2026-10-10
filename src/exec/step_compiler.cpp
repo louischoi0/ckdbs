@@ -1363,11 +1363,26 @@ Status CompileAssignments(const catalog::TableAccess& access,
     }
     const std::string_view pk_name = catalog::NameView(access.schema.columns.front().name);
 
+    // The columns already named, by resolved column rather than by spelling,
+    // so a name the catalog folds is still one column.
+    std::vector<const catalog::SysColumnRow*> assigned;
     for (const parser::Assignment& a : assignments) {
-        if (access.schema.FindColumn(a.col_name) == nullptr) {
+        const auto* column = access.schema.FindColumn(a.col_name);
+        if (column == nullptr) {
             return Status::InvalidArgument("unknown column '" + a.col_name + "' at byte " +
                                            std::to_string(a.byte_offset));
         }
+        // BJ-R2 (the standard's rule): one assignment per column. Last-wins
+        // was never a meaning a client could rely on, and on a foreign-key
+        // column it was a bypass - the check read the first value and the
+        // write kept the last (docs/inflight/bugs/a-column-assigned-twice-
+        // checks-its-first-foreign-key-value-and-writes-its-last.md).
+        if (std::find(assigned.begin(), assigned.end(), column) != assigned.end()) {
+            return Status::InvalidArgument("column '" + a.col_name +
+                                           "' is assigned more than once at byte " +
+                                           std::to_string(a.byte_offset));
+        }
+        assigned.push_back(column);
         // K2, and the reason it is `Unsupported` rather than
         // `InvalidArgument`: the statement is understood and declined. The
         // column exists and the value would encode; what cannot happen is

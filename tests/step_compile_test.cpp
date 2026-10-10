@@ -1321,6 +1321,23 @@ TEST_F(CompileAssignmentsTest, AnOrdinarySetListCompiles) {
     EXPECT_TRUE(Check("UPDATE acct SET name = 'x', tier = 'y'").ok());
 }
 
+TEST_F(CompileAssignmentsTest, AColumnAssignedTwiceIsInvalidAndNamesTheSecondByte) {
+    // BJ-R2, and the live foreign-key bypass it closes: the hoist paired the
+    // first assignment and the write kept the last. Refused, not last-wins.
+    const std::string sql = "UPDATE acct SET name = 'x', tier = 'y', name = 'z'";
+    const Status s = Check(sql);
+    ASSERT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument) << s.message();
+    EXPECT_NE(s.message().find("at byte " + std::to_string(sql.rfind("name"))),
+              std::string::npos)
+        << s.message();
+}
+
+TEST_F(CompileAssignmentsTest, TwoDifferentColumnsAreNotADuplicate) {
+    // The control for the cell above: the check is per column, not per list.
+    EXPECT_TRUE(Check("UPDATE acct SET name = 'x', tier = 'y'").ok());
+}
+
 TEST_F(CompileAssignmentsTest, APkNamedOnAnotherRelationIsNotThisRelationsPk) {
     // `acct_id` is trade's second column and an ordinary field. Nothing
     // about the *name* is what makes a column refusable - position 0 is.

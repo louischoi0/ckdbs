@@ -569,6 +569,20 @@ TEST_F(ForeignKeyCheckTest, UpdatingAnFkColumnIsChecked) {
     EXPECT_NE(Run("SELECT * FROM trades WHERE id = 1").find("1,2,"), std::string::npos);
 }
 
+// BJ-R2 / BJ-Q12: a column named twice checked its first value and wrote its
+// last, so a child could be written pointing at an absent parent with no
+// error. It is refused, and nothing is written.
+TEST_F(ForeignKeyCheckTest, AFkColumnAssignedTwiceIsRefusedNotCheckedByItsFirstValue) {
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (1, 100)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("UPDATE trades SET account_id = 2 WHERE id = 1"), "UPDATED 1");
+
+    const std::string out = Run("UPDATE trades SET account_id = 1, account_id = 99 WHERE id = 1");
+    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
+    EXPECT_NE(out.find("more than once"), std::string::npos) << out;
+    EXPECT_EQ(Run("SELECT * FROM trades WHERE id = 1").find(",99"), std::string::npos);
+    EXPECT_NE(Run("SELECT * FROM trades WHERE id = 1").find("1,2,"), std::string::npos);
+}
+
 TEST_F(ForeignKeyCheckTest, AnUpdateThatTouchesNoFkColumnIsNotChecked) {
     ASSERT_EQ(Run("INSERT INTO trades VALUES (1, 100)").substr(0, 8), "INSERTED");
     EXPECT_EQ(Run("UPDATE trades SET qty = 250 WHERE id = 1"), "UPDATED 1");
