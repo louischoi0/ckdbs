@@ -1,0 +1,200 @@
+{
+ "durability": "group",
+ "rows": 1000,
+ "run": 11,
+ "tag": "n1000-r11",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "5.15 5.59 5.74 9/391 2587398",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2586928 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -i '\"'\"'s|^#include <atomic>$|#include <algorithm>\\n#include <atomic>|'\"'\"' tests/bj_single_write_rig_test.cpp && cmake -S . -B build > /dev/null && cmake --build build -j8 2>&1 | grep -E \"error\" | head -20' && pwd -P >| /tmp/claude-8303-cwd",
+   "2586932 cmake --build build -j8",
+   "2586933 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -i '\"'\"'s|^#include <atomic>$|#include <algorithm>\\n#include <atomic>|'\"'\"' tests/bj_single_write_rig_test.cpp && cmake -S . -B build > /dev/null && cmake --build build -j8 2>&1 | grep -E \"error\" | head -20' && pwd -P >| /tmp/claude-8303-cwd",
+   "2587347 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/lock_family_test.cpp.d -MF CMakeFiles/kds_tests.dir/lock_family_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/lock_family_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/lock_family_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase lock_family_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccUCd2oh.s",
+   "2587349 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/issue_under_the_leaf_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/issue_under_the_leaf_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/issue_under_the_leaf_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/issue_under_the_leaf_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase issue_under_the_leaf_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccNZKcf0.s",
+   "2587365 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/insert_log_crash_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/insert_log_crash_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/insert_log_crash_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/insert_log_crash_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase insert_log_crash_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc7IVeUq.s",
+   "2587373 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/ddl_fence_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/ddl_fence_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/ddl_fence_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/ddl_fence_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase ddl_fence_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccRA0VYf.s",
+   "2587379 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/assertion_publish_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/assertion_publish_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/assertion_publish_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/assertion_publish_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase assertion_publish_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccJSYzCd.s"
+  ]
+ },
+ "host_after": {
+  "loadavg": "6.54 5.88 5.83 9/395 2587676",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2586928 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -i '\"'\"'s|^#include <atomic>$|#include <algorithm>\\n#include <atomic>|'\"'\"' tests/bj_single_write_rig_test.cpp && cmake -S . -B build > /dev/null && cmake --build build -j8 2>&1 | grep -E \"error\" | head -20' && pwd -P >| /tmp/claude-8303-cwd",
+   "2586932 cmake --build build -j8",
+   "2586933 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -i '\"'\"'s|^#include <atomic>$|#include <algorithm>\\n#include <atomic>|'\"'\"' tests/bj_single_write_rig_test.cpp && cmake -S . -B build > /dev/null && cmake --build build -j8 2>&1 | grep -E \"error\" | head -20' && pwd -P >| /tmp/claude-8303-cwd",
+   "2587623 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/insert_wal_test.cpp.d -MF CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/insert_wal_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase insert_wal_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccqSk9eR.s",
+   "2587628 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.d -MF CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/command_dispatcher_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase command_dispatcher_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccpx1IWw.s",
+   "2587638 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/supplied_key_test.cpp.d -MF CMakeFiles/kds_tests.dir/supplied_key_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/supplied_key_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/supplied_key_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase supplied_key_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccQtqfFH.s",
+   "2587649 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/sorted_leaf_named_keys_test.cpp.d -MF CMakeFiles/kds_tests.dir/sorted_leaf_named_keys_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/sorted_leaf_named_keys_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/sorted_leaf_named_keys_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase sorted_leaf_named_keys_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccBXzN5L.s",
+   "2587657 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/purge_key_test.cpp.d -MF CMakeFiles/kds_tests.dir/purge_key_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/purge_key_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/purge_key_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase purge_key_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccbYWrYu.s",
+   "2587665 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/purge_key_crash_test.cpp.d -MF CMakeFiles/kds_tests.dir/purge_key_crash_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/purge_key_crash_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/purge_key_crash_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase purge_key_crash_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cca9vuhs.s"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 14248.0,
+  "B": 15528.0
+ },
+ "count_be_a": {
+  "A": "count(*) 4000",
+  "B": "count(*) 4000"
+ },
+ "rss_hwm_kb": {
+  "A": 75180,
+  "B": 76256
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71620.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71620.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.573249,
+    "qps": 656.0,
+    "mean_us": 1520.9,
+    "p0_us": 980.3,
+    "p25_us": 1150.3,
+    "p50_us": 1239.5,
+    "p95_us": 2805.6,
+    "p99_us": 5973.9,
+    "max_us": 24479.6,
+    "p90_us": 1997.3,
+    "p999_us": 11372.6
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.212449,
+    "qps": 575.5,
+    "mean_us": 1733.9,
+    "p0_us": 1024.7,
+    "p25_us": 1160.3,
+    "p50_us": 1237.1,
+    "p95_us": 3127.6,
+    "p99_us": 7190.5,
+    "max_us": 156127.2,
+    "p90_us": 2010.2,
+    "p999_us": 46575.4
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 1.004356,
+    "qps": 2987.0,
+    "mean_us": 333.9,
+    "p0_us": 53.1,
+    "p25_us": 118.6,
+    "p50_us": 191.5,
+    "p95_us": 1000.0,
+    "p99_us": 1077.1,
+    "max_us": 3984.0,
+    "p90_us": 996.2,
+    "p999_us": 3751.4
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.327068,
+    "qps": 563.2,
+    "mean_us": 1772.2,
+    "p0_us": 1000.3,
+    "p25_us": 1161.9,
+    "p50_us": 1238.3,
+    "p95_us": 2768.1,
+    "p99_us": 7142.1,
+    "max_us": 156872.6,
+    "p90_us": 1963.1,
+    "p999_us": 138913.5
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.467586,
+    "qps": 671.5,
+    "mean_us": 1485.6,
+    "p0_us": 999.5,
+    "p25_us": 1163.8,
+    "p50_us": 1241.7,
+    "p95_us": 2590.2,
+    "p99_us": 5240.9,
+    "max_us": 18153.1,
+    "p90_us": 1993.0,
+    "p999_us": 10746.7
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.961709,
+    "qps": 3119.4,
+    "mean_us": 319.7,
+    "p0_us": 60.2,
+    "p25_us": 125.7,
+    "p50_us": 181.8,
+    "p95_us": 998.4,
+    "p99_us": 1191.5,
+    "max_us": 17032.7,
+    "p90_us": 792.3,
+    "p999_us": 3665.1
+   }
+  }
+ }
+}

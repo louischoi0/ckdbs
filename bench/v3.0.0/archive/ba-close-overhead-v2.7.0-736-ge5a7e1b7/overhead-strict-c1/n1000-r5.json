@@ -1,0 +1,201 @@
+{
+ "durability": "strict",
+ "rows": 1000,
+ "run": 5,
+ "tag": "n1000-r5",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "4.22 4.80 6.22 9/419 2611006",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2610490 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I - <<'\"'\"'EOF'\"'\"' p='\"'\"'include/kds/exec/row_codec.hpp'\"'\"' s=open(p).read() anchor=\"Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);\\n\" assert anchor in s s=s.replace(anchor,anchor+\"\"\" // Whether an integer `value` fits the integer or `uint64` column `col`, by // the gate a row'\"'\"'s encode applies (`EncodeOneValue`), so a compile-time check // of a literal and the per-row write cannot disagree about which integers // fit (BJ-S3). `value` is not changed. Any other column type is a caller // error and answers `InvalidArgument`. Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value); \"\"\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/row_codec.cpp'\"'\"' s=open(p).read() anchor=\"StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,\" assert s.count(anchor)==1 s=s.replace(anchor,\"\"\"Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value) {     switch (col.type_val) {         case kTypeValInt8:         case kTypeValInt16:         case kTypeValInt32:         case kTypeValInt64:         case kTypeValUint64: {             std::array<std::byte, 8> cell{};             return EncodeOneValue(col, value, cell, VarHeapSink{});         }         default:             return Status::InvalidArgument(\"column type \" + std::to_string(col.type_val) +                                            \" is not an integer type\");     } }  \"\"\"+anchor,1) if \"#include <array>\" not in s:     s=s.replace(\"#include <algorithm>\",\"#include <algorithm>\\n#include <array>\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/set_expr.cpp'\"'\"' s=open(p).read() a=s.index(\"// The scratch cell an integer literal\") b=s.index(\"class Typer {\") s=s[:a]+s[b:] s=s.replace(\"CheckIntegerFits(col, n.literal)\",\"CheckIntegerLiteralFits(col, n.literal)\") s=s.replace(\"#include <array>\\n\",\"\") open(p,'\"'\"'w'\"'\"').write(s) EOF grep -n \"^#include <array>\\|^#include <algorithm>\" src/exec/row_codec.cpp | head; cmake --build build -j8 2>&1 | grep -E \"error\" -A3 | head -30' && pwd -P >| /tmp/claude-e0ad-cwd",
+   "2610495 cmake --build build -j8",
+   "2610496 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I - <<'\"'\"'EOF'\"'\"' p='\"'\"'include/kds/exec/row_codec.hpp'\"'\"' s=open(p).read() anchor=\"Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);\\n\" assert anchor in s s=s.replace(anchor,anchor+\"\"\" // Whether an integer `value` fits the integer or `uint64` column `col`, by // the gate a row'\"'\"'s encode applies (`EncodeOneValue`), so a compile-time check // of a literal and the per-row write cannot disagree about which integers // fit (BJ-S3). `value` is not changed. Any other column type is a caller // error and answers `InvalidArgument`. Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value); \"\"\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/row_codec.cpp'\"'\"' s=open(p).read() anchor=\"StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,\" assert s.count(anchor)==1 s=s.replace(anchor,\"\"\"Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value) {     switch (col.type_val) {         case kTypeValInt8:         case kTypeValInt16:         case kTypeValInt32:         case kTypeValInt64:         case kTypeValUint64: {             std::array<std::byte, 8> cell{};             return EncodeOneValue(col, value, cell, VarHeapSink{});         }         default:             return Status::InvalidArgument(\"column type \" + std::to_string(col.type_val) +                                            \" is not an integer type\");     } }  \"\"\"+anchor,1) if \"#include <array>\" not in s:     s=s.replace(\"#include <algorithm>\",\"#include <algorithm>\\n#include <array>\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/set_expr.cpp'\"'\"' s=open(p).read() a=s.index(\"// The scratch cell an integer literal\") b=s.index(\"class Typer {\") s=s[:a]+s[b:] s=s.replace(\"CheckIntegerFits(col, n.literal)\",\"CheckIntegerLiteralFits(col, n.literal)\") s=s.replace(\"#include <array>\\n\",\"\") open(p,'\"'\"'w'\"'\"').write(s) EOF grep -n \"^#include <array>\\|^#include <algorithm>\" src/exec/row_codec.cpp | head; cmake --build build -j8 2>&1 | grep -E \"error\" -A3 | head -30' && pwd -P >| /tmp/claude-e0ad-cwd",
+   "2610900 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/cabin_serve_across_cores_test.cpp.d -MF CMakeFiles/kds_tests.dir/cabin_serve_across_cores_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/cabin_serve_across_cores_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/cabin_serve_across_cores_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase cabin_serve_across_cores_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccnL4J6a.s",
+   "2610911 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/read_borrow_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/read_borrow_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/read_borrow_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/read_borrow_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase read_borrow_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccawemL4.s",
+   "2610939 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/txn_session_test.cpp.d -MF CMakeFiles/kds_tests.dir/txn_session_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/txn_session_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/txn_session_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase txn_session_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccAsO32w.s",
+   "2610969 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/fk_parent_hold_test.cpp.d -MF CMakeFiles/kds_tests.dir/fk_parent_hold_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/fk_parent_hold_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/fk_parent_hold_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase fk_parent_hold_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccmWKFN7.s",
+   "2610975 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/index_key_test.cpp.d -MF CMakeFiles/kds_tests.dir/index_key_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/index_key_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/index_key_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase index_key_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccWuC438.s",
+   "2610990 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/index_ddl_test.cpp.d -MF CMakeFiles/kds_tests.dir/index_ddl_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/index_ddl_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/index_ddl_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase index_ddl_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccBNhqeC.s",
+   "2610996 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/assertion_catalog_test.cpp.d -MF CMakeFiles/kds_tests.dir/assertion_catalog_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/assertion_catalog_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/assertion_catalog_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase assertion_catalog_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccrm8xuc.s",
+   "2611003 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/assertion_violation_test.cpp.d -MF CMakeFiles/kds_tests.dir/assertion_violation_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/assertion_violation_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/assertion_violation_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase assertion_violation_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccpUvqvz.s"
+  ]
+ },
+ "host_after": {
+  "loadavg": "5.80 5.12 6.29 9/410 2611301",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2610490 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I - <<'\"'\"'EOF'\"'\"' p='\"'\"'include/kds/exec/row_codec.hpp'\"'\"' s=open(p).read() anchor=\"Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);\\n\" assert anchor in s s=s.replace(anchor,anchor+\"\"\" // Whether an integer `value` fits the integer or `uint64` column `col`, by // the gate a row'\"'\"'s encode applies (`EncodeOneValue`), so a compile-time check // of a literal and the per-row write cannot disagree about which integers // fit (BJ-S3). `value` is not changed. Any other column type is a caller // error and answers `InvalidArgument`. Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value); \"\"\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/row_codec.cpp'\"'\"' s=open(p).read() anchor=\"StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,\" assert s.count(anchor)==1 s=s.replace(anchor,\"\"\"Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value) {     switch (col.type_val) {         case kTypeValInt8:         case kTypeValInt16:         case kTypeValInt32:         case kTypeValInt64:         case kTypeValUint64: {             std::array<std::byte, 8> cell{};             return EncodeOneValue(col, value, cell, VarHeapSink{});         }         default:             return Status::InvalidArgument(\"column type \" + std::to_string(col.type_val) +                                            \" is not an integer type\");     } }  \"\"\"+anchor,1) if \"#include <array>\" not in s:     s=s.replace(\"#include <algorithm>\",\"#include <algorithm>\\n#include <array>\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/set_expr.cpp'\"'\"' s=open(p).read() a=s.index(\"// The scratch cell an integer literal\") b=s.index(\"class Typer {\") s=s[:a]+s[b:] s=s.replace(\"CheckIntegerFits(col, n.literal)\",\"CheckIntegerLiteralFits(col, n.literal)\") s=s.replace(\"#include <array>\\n\",\"\") open(p,'\"'\"'w'\"'\"').write(s) EOF grep -n \"^#include <array>\\|^#include <algorithm>\" src/exec/row_codec.cpp | head; cmake --build build -j8 2>&1 | grep -E \"error\" -A3 | head -30' && pwd -P >| /tmp/claude-e0ad-cwd",
+   "2610495 cmake --build build -j8",
+   "2610496 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I - <<'\"'\"'EOF'\"'\"' p='\"'\"'include/kds/exec/row_codec.hpp'\"'\"' s=open(p).read() anchor=\"Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);\\n\" assert anchor in s s=s.replace(anchor,anchor+\"\"\" // Whether an integer `value` fits the integer or `uint64` column `col`, by // the gate a row'\"'\"'s encode applies (`EncodeOneValue`), so a compile-time check // of a literal and the per-row write cannot disagree about which integers // fit (BJ-S3). `value` is not changed. Any other column type is a caller // error and answers `InvalidArgument`. Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value); \"\"\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/row_codec.cpp'\"'\"' s=open(p).read() anchor=\"StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,\" assert s.count(anchor)==1 s=s.replace(anchor,\"\"\"Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value) {     switch (col.type_val) {         case kTypeValInt8:         case kTypeValInt16:         case kTypeValInt32:         case kTypeValInt64:         case kTypeValUint64: {             std::array<std::byte, 8> cell{};             return EncodeOneValue(col, value, cell, VarHeapSink{});         }         default:             return Status::InvalidArgument(\"column type \" + std::to_string(col.type_val) +                                            \" is not an integer type\");     } }  \"\"\"+anchor,1) if \"#include <array>\" not in s:     s=s.replace(\"#include <algorithm>\",\"#include <algorithm>\\n#include <array>\",1) open(p,'\"'\"'w'\"'\"').write(s) p='\"'\"'src/exec/set_expr.cpp'\"'\"' s=open(p).read() a=s.index(\"// The scratch cell an integer literal\") b=s.index(\"class Typer {\") s=s[:a]+s[b:] s=s.replace(\"CheckIntegerFits(col, n.literal)\",\"CheckIntegerLiteralFits(col, n.literal)\") s=s.replace(\"#include <array>\\n\",\"\") open(p,'\"'\"'w'\"'\"').write(s) EOF grep -n \"^#include <array>\\|^#include <algorithm>\" src/exec/row_codec.cpp | head; cmake --build build -j8 2>&1 | grep -E \"error\" -A3 | head -30' && pwd -P >| /tmp/claude-e0ad-cwd",
+   "2611237 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/fixed_length_tuple_test.cpp.d -MF CMakeFiles/kds_tests.dir/fixed_length_tuple_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/fixed_length_tuple_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/fixed_length_tuple_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase fixed_length_tuple_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccHfJKCJ.s",
+   "2611252 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/range_scan_test.cpp.d -MF CMakeFiles/kds_tests.dir/range_scan_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/range_scan_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/range_scan_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase range_scan_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccx9yq0T.s",
+   "2611257 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/access_stats_test.cpp.d -MF CMakeFiles/kds_tests.dir/access_stats_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/access_stats_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/access_stats_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase access_stats_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc2CrlR5.s",
+   "2611285 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/relayout_planner_test.cpp.d -MF CMakeFiles/kds_tests.dir/relayout_planner_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/relayout_planner_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/relayout_planner_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase relayout_planner_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccdKz54p.s"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 330195.0,
+  "B": 8387.0
+ },
+ "count_be_a": {
+  "A": "count(*) 4000",
+  "B": "count(*) 4000"
+ },
+ "rss_hwm_kb": {
+  "A": 75192,
+  "B": 76208
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71620.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71620.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.079726,
+    "qps": 590.6,
+    "mean_us": 1689.7,
+    "p0_us": 1009.1,
+    "p25_us": 1177.7,
+    "p50_us": 1265.1,
+    "p95_us": 2989.7,
+    "p99_us": 5626.6,
+    "max_us": 164828.6,
+    "p90_us": 2003.5,
+    "p999_us": 36328.4
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.567067,
+    "qps": 538.9,
+    "mean_us": 1852.0,
+    "p0_us": 1006.2,
+    "p25_us": 1186.0,
+    "p50_us": 1288.3,
+    "p95_us": 2817.2,
+    "p99_us": 7294.1,
+    "max_us": 155034.5,
+    "p90_us": 2000.7,
+    "p999_us": 128650.4
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.543633,
+    "qps": 5518.4,
+    "mean_us": 180.3,
+    "p0_us": 45.0,
+    "p25_us": 85.2,
+    "p50_us": 113.0,
+    "p95_us": 625.3,
+    "p99_us": 1060.5,
+    "max_us": 2005.6,
+    "p90_us": 304.9,
+    "p999_us": 1387.0
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.918184,
+    "qps": 610.0,
+    "mean_us": 1635.8,
+    "p0_us": 1026.6,
+    "p25_us": 1180.3,
+    "p50_us": 1273.5,
+    "p95_us": 2846.0,
+    "p99_us": 5910.8,
+    "max_us": 93746.9,
+    "p90_us": 2000.1,
+    "p999_us": 14575.4
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.759748,
+    "qps": 630.3,
+    "mean_us": 1583.2,
+    "p0_us": 998.2,
+    "p25_us": 1159.5,
+    "p50_us": 1255.4,
+    "p95_us": 2819.8,
+    "p99_us": 6006.9,
+    "max_us": 39875.8,
+    "p90_us": 2008.0,
+    "p999_us": 13259.0
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.50293,
+    "qps": 5965.0,
+    "mean_us": 166.8,
+    "p0_us": 52.9,
+    "p25_us": 94.3,
+    "p50_us": 121.2,
+    "p95_us": 425.2,
+    "p99_us": 997.4,
+    "max_us": 3420.2,
+    "p90_us": 264.5,
+    "p999_us": 1934.2
+   }
+  }
+ }
+}

@@ -1,0 +1,187 @@
+{
+ "durability": "group",
+ "rows": 200,
+ "run": 15,
+ "tag": "n200-r15",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "2.06 4.88 6.37 2/388 2639910",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2639871 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \"error|warning\" | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTypingTest.*'\"'\"' 2>&1 | tail -6' < /dev/null && pwd -P >| /tmp/claude-f7aa-cwd",
+   "2639872 cmake --build build -j8 --target kds_tests",
+   "2639873 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \"error|warning\" | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTypingTest.*'\"'\"' 2>&1 | tail -6' < /dev/null && pwd -P >| /tmp/claude-f7aa-cwd",
+   "2639907 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/set_expr_typing_test.cpp.d -MF CMakeFiles/kds_tests.dir/set_expr_typing_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/set_expr_typing_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/set_expr_typing_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase set_expr_typing_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccFZuVpn.s"
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.89 4.70 6.29 2/361 2640032",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 3977.0,
+  "B": 3771.0
+ },
+ "count_be_a": {
+  "A": "count(*) 3200",
+  "B": "count(*) 3200"
+ },
+ "rss_hwm_kb": {
+  "A": 74584,
+  "B": 76216
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 101.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42647.0,
+   "pool_misses": 101.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 101.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42648.0,
+   "pool_misses": 101.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.525951,
+    "qps": 850.8,
+    "mean_us": 1174.2,
+    "p0_us": 870.6,
+    "p25_us": 984.9,
+    "p50_us": 1018.3,
+    "p95_us": 1742.8,
+    "p99_us": 4648.1,
+    "max_us": 18465.6,
+    "p90_us": 1160.5,
+    "p999_us": 10722.7
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.172733,
+    "qps": 719.0,
+    "mean_us": 1389.8,
+    "p0_us": 872.7,
+    "p25_us": 959.6,
+    "p50_us": 990.1,
+    "p95_us": 1843.6,
+    "p99_us": 5848.3,
+    "max_us": 156599.9,
+    "p90_us": 1179.2,
+    "p999_us": 129040.1
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.139366,
+    "qps": 21526.1,
+    "mean_us": 46.2,
+    "p0_us": 35.0,
+    "p25_us": 44.6,
+    "p50_us": 45.2,
+    "p95_us": 57.1,
+    "p99_us": 66.2,
+    "max_us": 110.8,
+    "p90_us": 51.2,
+    "p999_us": 75.5
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.739837,
+    "qps": 802.2,
+    "mean_us": 1245.3,
+    "p0_us": 900.5,
+    "p25_us": 997.2,
+    "p50_us": 1035.8,
+    "p95_us": 2343.0,
+    "p99_us": 5495.6,
+    "max_us": 15514.2,
+    "p90_us": 1301.6,
+    "p999_us": 11718.4
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.702136,
+    "qps": 810.3,
+    "mean_us": 1232.8,
+    "p0_us": 887.6,
+    "p25_us": 978.1,
+    "p50_us": 1011.5,
+    "p95_us": 2268.3,
+    "p99_us": 5506.4,
+    "max_us": 65326.2,
+    "p90_us": 1240.9,
+    "p999_us": 10836.7
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.158597,
+    "qps": 18915.9,
+    "mean_us": 52.6,
+    "p0_us": 45.3,
+    "p25_us": 49.7,
+    "p50_us": 50.3,
+    "p95_us": 64.0,
+    "p99_us": 74.6,
+    "max_us": 726.2,
+    "p90_us": 57.3,
+    "p999_us": 135.5
+   }
+  }
+ }
+}

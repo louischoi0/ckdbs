@@ -1,0 +1,189 @@
+{
+ "durability": "strict",
+ "rows": 1000,
+ "run": 2,
+ "tag": "n1000-r2",
+ "wait_s": 0.0,
+ "order_first": "B",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "1.92 1.95 2.35 2/502 2703950",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2703915 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \" error \" -A3 | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTwoCoreRigTest.*'\"'\"' --gtest_repeat=10 --gtest_output=xml:/tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml 2>&1 | grep -E \"FAILED|PASSED\" | sort | uniq -c; grep -o '\"'\"'retried_refusals\" value=\"[0-9]*\"'\"'\"' /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml' < /dev/null && pwd -P >| /tmp/claude-e65e-cwd",
+   "2703916 cmake --build build -j8 --target kds_tests",
+   "2703917 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \" error \" -A3 | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTwoCoreRigTest.*'\"'\"' --gtest_repeat=10 --gtest_output=xml:/tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml 2>&1 | grep -E \"FAILED|PASSED\" | sort | uniq -c; grep -o '\"'\"'retried_refusals\" value=\"[0-9]*\"'\"'\"' /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml' < /dev/null && pwd -P >| /tmp/claude-e65e-cwd",
+   "2703949 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/set_expr_two_core_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/set_expr_two_core_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/set_expr_two_core_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/set_expr_two_core_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase set_expr_two_core_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc78m8lz.s"
+  ]
+ },
+ "host_after": {
+  "loadavg": "2.08 1.99 2.36 3/501 2704122",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2703915 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \" error \" -A3 | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTwoCoreRigTest.*'\"'\"' --gtest_repeat=10 --gtest_output=xml:/tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml 2>&1 | grep -E \"FAILED|PASSED\" | sort | uniq -c; grep -o '\"'\"'retried_refusals\" value=\"[0-9]*\"'\"'\"' /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml' < /dev/null && pwd -P >| /tmp/claude-e65e-cwd",
+   "2704034 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \" error \" -A3 | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTwoCoreRigTest.*'\"'\"' --gtest_repeat=10 --gtest_output=xml:/tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml 2>&1 | grep -E \"FAILED|PASSED\" | sort | uniq -c; grep -o '\"'\"'retried_refusals\" value=\"[0-9]*\"'\"'\"' /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/tc.xml' < /dev/null && pwd -P >| /tmp/claude-e65e-cwd"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 12421.0,
+  "B": 7940.0
+ },
+ "count_be_a": {
+  "A": "count(*) 4000",
+  "B": "count(*) 4000"
+ },
+ "rss_hwm_kb": {
+  "A": 75212,
+  "B": 76256
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71619.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71619.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "iso": {
+    "phase": "iso",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.152426,
+    "qps": 19681.7,
+    "mean_us": 50.6,
+    "p0_us": 38.5,
+    "p25_us": 43.7,
+    "p50_us": 46.9,
+    "p95_us": 64.6,
+    "p99_us": 77.0,
+    "max_us": 98.4,
+    "p90_us": 61.5,
+    "p999_us": 87.6
+   },
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.621803,
+    "qps": 828.3,
+    "mean_us": 1206.0,
+    "p0_us": 905.8,
+    "p25_us": 1013.6,
+    "p50_us": 1050.3,
+    "p95_us": 1759.3,
+    "p99_us": 4710.0,
+    "max_us": 18927.3,
+    "p90_us": 1229.2,
+    "p999_us": 10403.9
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.844958,
+    "qps": 619.2,
+    "mean_us": 1613.4,
+    "p0_us": 875.0,
+    "p25_us": 982.8,
+    "p50_us": 1020.1,
+    "p95_us": 2101.0,
+    "p99_us": 5527.5,
+    "max_us": 187278.6,
+    "p90_us": 1269.0,
+    "p999_us": 151550.6
+   }
+  },
+  "B": {
+   "iso": {
+    "phase": "iso",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.151676,
+    "qps": 19778.9,
+    "mean_us": 50.3,
+    "p0_us": 39.4,
+    "p25_us": 43.8,
+    "p50_us": 47.1,
+    "p95_us": 65.2,
+    "p99_us": 79.5,
+    "max_us": 99.1,
+    "p90_us": 61.3,
+    "p999_us": 95.4
+   },
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.734707,
+    "qps": 803.3,
+    "mean_us": 1243.7,
+    "p0_us": 892.8,
+    "p25_us": 1014.0,
+    "p50_us": 1054.2,
+    "p95_us": 1917.4,
+    "p99_us": 5197.7,
+    "max_us": 25903.5,
+    "p90_us": 1272.2,
+    "p999_us": 13540.8
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 6.164861,
+    "qps": 486.6,
+    "mean_us": 2053.3,
+    "p0_us": 891.0,
+    "p25_us": 988.0,
+    "p50_us": 1026.0,
+    "p95_us": 2366.1,
+    "p99_us": 6921.2,
+    "max_us": 210097.9,
+    "p90_us": 1371.1,
+    "p999_us": 201355.9
+   }
+  }
+ }
+}
