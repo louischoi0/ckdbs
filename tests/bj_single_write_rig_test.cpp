@@ -29,6 +29,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
+#include "kds/wal/durability.hpp"
 
 namespace kds::server {
 namespace {
@@ -145,6 +146,11 @@ struct ParkedWalk {
         if (StartsWith(held_out, "ERR")) return false;
 
         applied.Attach(d1);
+        // `relaxed`, so the resumed statement commits without parking on its
+        // sync: this rig holds every kick in the sim, and since BA-S7 a
+        // parked committer is woken by the writer's kick. The wake under
+        // test is the holder's release, as in `row_wait_wake_rig_test.cpp`.
+        waiter.set_durability(wal::DurabilityClass::kRelaxed);
         update.session = &waiter;
         update.line = "UPDATE t SET v = 2 WHERE v >= 0";
         decide.session = &holder;
