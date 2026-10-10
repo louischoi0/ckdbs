@@ -21,6 +21,7 @@
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/fk_check.hpp"
+#include "kds/exec/set_expr.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/cabin_ddl.hpp"
@@ -2085,9 +2086,26 @@ private:
     DispatchOutcome DeleteInner(std::string_view line, WriteScope& scope,
                                 const txn::Snapshot& snapshot, WalkCursor resume_from,
                                 const exec::StatementContext& context);
+    //
+    // `subqueries` carries the statement's scalar-subquery answers (BJ-S7): empty
+    // on the first run, which fills it, and handed back on a resume, which reads
+    // it, so a subquery is run once for the whole statement however often it
+    // is compiled.
     DispatchOutcome UpdateInner(std::string_view line, WriteScope& scope,
                                 const txn::Snapshot& snapshot, WalkCursor resume_from,
-                                const exec::StatementContext& context);
+                                const exec::StatementContext& context,
+                                std::vector<exec::SubqueryResult>& subqueries);
+
+    // **A scalar subquery in an UPDATE's SET value** (BJ-S7, BJ-Q6): run once,
+    // before the walk, through the SELECT path under the session's view, and
+    // answered as a single typed value (NULL for no row). More than one row or
+    // column is refused, and so is a correlated one - a per-row sub-chain under
+    // the write walk's exclusive leaf is the open page-latch cycle
+    // (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`),
+    // and the view would show it this statement's own earlier rows.
+    StatusOr<exec::SubqueryResult> RunScalarSubquery(const parser::Expr& node,
+                                                     const parser::UpdateStmt& stmt,
+                                                     WriteScope& scope);
     DispatchOutcome HandleSync();
 
 

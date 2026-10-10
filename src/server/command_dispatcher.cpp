@@ -7693,6 +7693,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     txn::Snapshot snap;
     WalkCursor resume_from;
     exec::StatementContext context;  // NOW()'s instant, carried across a park (AP-S4)
+    std::vector<exec::SubqueryResult> subquery_answers;  // BJ-S7, carried the same way
 
     // **AO-S3b: a resume re-enters the scope and the view it already had.**
     // Not `BeginWrite` and not `SnapshotFor`: the rows this statement has
@@ -7710,6 +7711,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // would say this statement had written nothing.
         statement_trail_mark_ = parked.trail_mark;
         context = parked.context;
+        subquery_answers = parked.subqueries;
         // **And so is its statement boundary** (BH-S1, Census A row 5). The
         // re-dispatch cleared it, and a READ COMMITTED transaction would
         // otherwise re-mint its registered view at the next `ViewFor`
@@ -7746,7 +7748,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         snap = snapshot.value().snap;
     }
 
-    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from, context);
+    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from, context, subquery_answers);
 
     // **AO-S3b: parked in the middle of the walk - the scope stays open.**
     // Every other pending arm below ends its scope, because the statement
@@ -7759,7 +7761,8 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     if (out.parked_mid_walk) {
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,
-                                                      /*is_delete=*/false, context});
+                                                      /*is_delete=*/false, context,
+                                                      std::move(subquery_answers)});
         return out;
     }
 
@@ -7772,10 +7775,136 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     return out;
 }
 
+namespace {
+
+// What a scalar subquery's rows land in: the first column of at most one row.
+class ScalarSubquerySink final : public ResultSink {
+public:
+    Status Describe(std::vector<wire::FieldDescription> fields) override {
+        if (fields.size() != 1) {
+            return Status::InvalidArgument("a subquery used as an expression must return one "
+                                           "column, and this one returns " +
+                                           std::to_string(fields.size()));
+        }
+        field_ = std::move(fields[0]);
+        described_ = true;
+        return Status::OK();
+    }
+    Status EncodeProjectedRow(std::span<const exec::ColumnRef> projection,
+                              std::span<const std::uint32_t>, const exec::ChainFrame& frame,
+                              std::string& out) override {
+        out.clear();
+        if (!projection.empty()) pending_ = frame.Get(projection[0]);
+        return Status::OK();
+    }
+    Status EncodeValueRow(std::span<const std::uint32_t>, std::span<const parser::AstValue> values,
+                          std::string& out) override {
+        out.clear();
+        if (!values.empty()) pending_ = values[0];
+        return Status::OK();
+    }
+    Status Emit(std::string_view) override {
+        if (++rows_ > 1) {
+            return Status::InvalidArgument(
+                "more than one row returned by a subquery used as an expression");
+        }
+        value_ = std::move(pending_);
+        return Status::OK();
+    }
+
+    bool described() const noexcept { return described_; }
+    const wire::FieldDescription& field() const noexcept { return field_; }
+    parser::AstValue TakeValue() { return std::move(value_); }
+
+private:
+    bool described_ = false;
+    wire::FieldDescription field_;
+    std::uint64_t rows_ = 0;
+    parser::AstValue pending_;
+    parser::AstValue value_;  // NULL until a row arrives
+};
+
+}  // namespace
+
+StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser::Expr& node,
+                                                                    const parser::UpdateStmt& stmt,
+                                                                    WriteScope& scope) {
+    const std::string at = " (byte " + std::to_string(node.byte_offset) + ")";
+    Session local;
+    Session& session = scope.session != nullptr ? *scope.session : local;
+
+    // Correlated or not is the SELECT compiler's own classification: the
+    // subquery is compiled as an `EXISTS` predicate over the target relation,
+    // where a reference that resolves outward makes its sub-chain correlated.
+    // A compile that fails here is left for the real run to report in its own
+    // words.
+    {
+        const std::string probe = "SELECT * FROM " +
+                                  (stmt.schema.empty() ? std::string() : stmt.schema + ".") +
+                                  stmt.table_name + " WHERE EXISTS (" + node.subquery_sql + ")";
+        auto parsed = parser::Parse(probe);
+        if (parsed.ok() && std::holds_alternative<parser::SelectStmt>(parsed.value())) {
+            const std::optional<txn::ReadView> view = ViewFor(session);
+            auto chain = exec::Compile(catalog_, std::get<parser::SelectStmt>(parsed.value()),
+                                       view.has_value() ? &*view : nullptr);
+            if (chain.ok()) {
+                for (const exec::Step& step : chain.value().steps) {
+                    for (const exec::SubChain& sub : step.sub_chains) {
+                        if (sub.correlated) {
+                            return Status::NotImplemented(
+                                "a subquery that reads the row being updated is not supported "
+                                "in a SET value yet (BJ-Q6)" + at);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ScalarSubquerySink sink;
+    ResultSink* const previous = session.result_sink();
+    session.set_result_sink(&sink);
+    struct Restore {
+        Session& session;
+        ResultSink* sink;
+        ~Restore() { session.set_result_sink(sink); }
+    } restore{session, previous};
+
+    DispatchOutcome out = HandleSelect(node.subquery_sql, session, /*analyze=*/false);
+    // The walk is handed on for a yield; a SET value's subquery is run to its
+    // end here, before the statement's own walk begins.
+    if (out.select_run != nullptr) {
+        const std::shared_ptr<SelectRun> run = std::move(out.select_run);
+        out = run->RunInline();
+    }
+    if (!out.status.ok()) return out.status.WithMessage(out.status.message() + at);
+    if (out.response.rfind("ERR", 0) == 0) {
+        return Status::InvalidArgument(out.response.substr(4) + at);
+    }
+    if (!sink.described()) {
+        return Status::NotImplemented("a subquery over a catalog view is not supported as a SET "
+                                      "value" + at);
+    }
+
+    const wire::FieldDescription& field = sink.field();
+    if (field.type_oid == 0) {
+        return Status::InvalidArgument("the subquery's column has no type to assign" + at);
+    }
+    exec::SubqueryResult result;
+    result.type.kind = exec::SetType::Kind::kConcrete;
+    result.type.type_val = field.type_oid == catalog::kTypeValChar ? catalog::kTypeValVarchar
+                                                                    : field.type_oid;
+    result.type.len = field.type_mod;
+    result.value = sink.TakeValue();
+    result.value.byte_offset = node.byte_offset;
+    return result;
+}
+
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
                                                const txn::Snapshot& snapshot,
                                                WalkCursor resume_from,
-                                               const exec::StatementContext& context) {
+                                               const exec::StatementContext& context,
+                                               std::vector<exec::SubqueryResult>& subqueries) {
     // AO-S3b: set by the row callback when it meets a row held by a writer
     // that has not decided and the wait is one this statement may make.
     // The callback cannot park - it runs under a page span, which AO-R2
@@ -7849,7 +7978,17 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // BJ-S4: the typed expressions come back with it, and a column-reading
     // expression into a foreign-key column is refused here (BJ-Q10).
     std::vector<exec::CompiledAssignment> compiled;
-    if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled); !s.ok()) {
+    std::size_t subqueries_asked = 0;
+    const exec::SubqueryResolver resolve_subquery =
+        [&](const parser::Expr& node) -> StatusOr<exec::SubqueryResult> {
+        const std::size_t index = subqueries_asked++;
+        if (index < subqueries.size()) return subqueries[index];  // a resume: the first run's
+        auto answer = RunScalarSubquery(node, stmt, scope);
+        if (answer.ok()) subqueries.push_back(answer.value());
+        return answer;
+    };
+    if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled, &resolve_subquery);
+        !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
     // One value per assignment for the row in hand. A bare literal's slot is

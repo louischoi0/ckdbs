@@ -145,6 +145,10 @@ private:
     // `( SELECT ... )` in predicate position. Consumes both parens and
     // enforces kMaxSubqueryDepth.
     StatusOr<std::shared_ptr<SelectStmt>> ParseSubquery(std::uint32_t depth);
+    // The rest of a subquery whose `(` is already consumed and whose `SELECT` is
+    // next, parsed as a block at `select_depth`. `last_subquery_close_` is the
+    // byte of the `)` that ended it.
+    StatusOr<std::shared_ptr<SelectStmt>> ParseSubqueryAfterOpen(std::uint32_t select_depth);
 
     // FROM-list productions (V05). ParseRelationRef takes `<name> [AS
     // <alias>]`; ParseJoins takes zero or more `JOIN <rel> ON <q> = <q>`
@@ -287,6 +291,7 @@ private:
     // Nesting of parentheses and unary signs in a SET value, bounded so a
     // hostile statement cannot recurse the stack away.
     std::uint32_t expr_depth_ = 0;
+    std::uint32_t last_subquery_close_ = 0;
 
 };
 

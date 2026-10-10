@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -97,11 +98,27 @@ struct TypedSetExpr {
     std::vector<std::unique_ptr<TypedSetExpr>> args;
 };
 
+// A scalar subquery's answer (BJ-S7): the single value it returned, or NULL
+// for no row, and the type of its one column.
+struct SubqueryResult {
+    SetType type;
+    parser::AstValue value;
+};
+
+// Runs one `(SELECT ...)` of a SET value and answers it. The dispatcher's,
+// because running a query needs the catalog, the pages and a snapshot, none of
+// which a typer has; null where a caller has none, and a subquery is then
+// refused `NotImplemented`.
+using SubqueryResolver = std::function<StatusOr<SubqueryResult>(const parser::Expr& node)>;
+
 // Types `expr` for assignment to `target`. The result is concrete and
-// assignable to `target`, or the status says why not.
+// assignable to `target`, or the status says why not. **A subquery is run
+// here, once, and its answer is a constant of the tree** (BJ-Q6): every row
+// reads the value the statement's snapshot gave before the walk began.
 StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAccess& access,
                                                           const parser::Expr& expr,
-                                                          const catalog::SysColumnRow& target);
+                                                          const catalog::SysColumnRow& target,
+                                                          const SubqueryResolver* subqueries = nullptr);
 
 // Whether the expression reads no column - a constant, which BJ-Q10 folds
 // at compile so a foreign-key column keeps its hoisted parent.

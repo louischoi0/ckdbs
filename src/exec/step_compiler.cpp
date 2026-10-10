@@ -1355,7 +1355,8 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 
 Status CompileAssignments(const catalog::TableAccess& access,
                           const std::vector<parser::Assignment>& assignments,
-                          std::vector<CompiledAssignment>* compiled) {
+                          std::vector<CompiledAssignment>* compiled,
+                          const SubqueryResolver* subqueries) {
     // An empty schema cannot happen for a relation the catalog resolved
     // (invariant 11 makes column 0 mandatory), but the pk name is read
     // from `front()` and a check costs nothing against a wrong answer.
@@ -1412,7 +1413,7 @@ Status CompileAssignments(const catalog::TableAccess& access,
         } else {
             // Typed first (BJ-S3): a mistyped expression is refused here by
             // what is wrong with it, whether or not a row matches.
-            auto typed = TypeSetExpression(access, *a.expr, *column);
+            auto typed = TypeSetExpression(access, *a.expr, *column, subqueries);
             if (!typed.ok()) return typed.status();
             entry.expr = std::move(typed.value());
             if (fk != nullptr) {

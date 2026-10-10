@@ -57,6 +57,7 @@ std::string Render(const Expr& e) {
                    Render(*e.rhs) + ")";
         }
         case Expr::Kind::kCall: return "(call)";
+        case Expr::Kind::kSubquery: return "(subquery)";
     }
     return "?";
 }
@@ -207,7 +208,6 @@ TEST(SetExpressionParseTest, AFormALaterStageBuildsIsRefusedByNameAtItsByte) {
     };
     const std::string head = "UPDATE t SET a = ";
     const std::vector<Case> cases = {
-        {"(SELECT 1)", "BJ-S7", 0},      {"1 + (SELECT 1)", "BJ-S7", 4},
         {"t.b", "qualified", 0},
         // The comparison forms BJ leaves out (BJ-R1 family 2).
         {"a IN (1)", "not supported", 2}, {"a BETWEEN 1 AND 2", "not supported", 2},
@@ -329,6 +329,31 @@ TEST(SetExpressionParseTest, ANestedSimpleCaseIsBoundedBySizeNotOnlyHeight) {
     ASSERT_FALSE(big.ok());
     EXPECT_EQ(big.status().code(), StatusCode::kUnsupported);
     EXPECT_NE(big.status().message().find("nodes"), std::string::npos) << big.status().message();
+}
+
+TEST(SetExpressionParseTest, AScalarSubqueryKeepsItsTextAndItsStatement) {
+    const std::string sql = "UPDATE t SET a = 1 + (SELECT SUM(x) FROM u WHERE y > 2) * 3";
+    auto parsed = Parse(sql);
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& stmt = std::get<UpdateStmt>(parsed.value());
+    const Expr& add = *stmt.assignments[0].expr;
+    ASSERT_EQ(add.op, ExprOp::kAdd);
+    const Expr& sub = *add.rhs->lhs;
+    ASSERT_EQ(sub.kind, Expr::Kind::kSubquery);
+    EXPECT_EQ(sub.byte_offset, sql.find("(SELECT"));
+    EXPECT_EQ(sub.subquery_sql, "SELECT SUM(x) FROM u WHERE y > 2");
+    ASSERT_NE(sub.subquery, nullptr);
+    EXPECT_EQ(sub.subquery->from.table_name, "u");
+    // The subquery is the whole value, nested, and bounded by the SELECT grammar's own depth.
+    EXPECT_TRUE(Parse("UPDATE t SET a = (SELECT x FROM u WHERE id IN (SELECT id FROM u WHERE y > 1))").ok());
+    for (const char* bad : {"UPDATE t SET a = (SELECT x FROM u", "UPDATE t SET a = (SELECT)",
+                            "UPDATE t SET a = (SELECT x FROM u) (SELECT 1)"}) {
+        EXPECT_FALSE(Parse(bad).ok()) << bad;
+    }
+    // A row of subquery values stays refused by name.
+    auto row = Parse("UPDATE t SET (a, b) = (SELECT 1, 2)");
+    ASSERT_FALSE(row.ok());
+    EXPECT_EQ(row.status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(SetExpressionParseTest, AFunctionCallParsesByNameAndTheTyperJudgesTheName) {

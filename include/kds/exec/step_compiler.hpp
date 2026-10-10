@@ -153,6 +153,7 @@ struct CompiledAssignment {
 
 Status CompileAssignments(const catalog::TableAccess& access,
                           const std::vector<parser::Assignment>& assignments,
-                          std::vector<CompiledAssignment>* compiled = nullptr);
+                          std::vector<CompiledAssignment>* compiled = nullptr,
+                          const SubqueryResolver* subqueries = nullptr);
 
 }  // namespace kds::exec

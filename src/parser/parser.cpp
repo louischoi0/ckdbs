@@ -923,9 +923,18 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             lexer_.Next();
             const Token& inner = lexer_.Peek();
             if (inner.type == TokenType::kIdent && IEquals(inner.text, "SELECT")) {
-                return Status::NotImplemented(
-                    "a subquery in a SET value is not supported yet (BJ-S7) (byte " +
-                    std::to_string(tok.byte_offset) + ")");
+                // A scalar subquery (BJ-S7). It runs as a SELECT of its own, so
+                // it is parsed as an outermost block (an aggregate is allowed);
+                // what it nests is counted from here.
+                auto sub = ParseSubqueryAfterOpen(0);
+                if (!sub.ok()) return sub.status();
+                auto node = std::make_shared<Expr>();
+                node->kind = Expr::Kind::kSubquery;
+                node->byte_offset = tok.byte_offset;
+                node->subquery = std::move(sub.value());
+                node->subquery_sql = std::string(sql_.substr(
+                    tok.byte_offset + 1, last_subquery_close_ - tok.byte_offset - 1));
+                return std::shared_ptr<const Expr>(std::move(node));
             }
             StatusOr<std::shared_ptr<const Expr>> e = Status::OK();
             {
@@ -983,7 +992,10 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubquery(std::uint32_t depth)
     }
 
     if (Status s = ExpectToken(TokenType::kLParen, "'(' before a subquery"); !s.ok()) return s;
+    return ParseSubqueryAfterOpen(depth + 1);
+}
 
+StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubqueryAfterOpen(std::uint32_t select_depth) {
     // One token of lookahead is enough to know a subquery from anything
     // else here, because this grammar has no parenthesized expressions
     // (spec I10) - a '(' in predicate position can only open a SELECT or
@@ -996,9 +1008,10 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubquery(std::uint32_t depth)
     }
     lexer_.Next();  // consume SELECT
 
-    auto inner = ParseSelect(depth + 1);
+    auto inner = ParseSelect(select_depth);
     if (!inner.ok()) return inner.status();
 
+    last_subquery_close_ = lexer_.Peek().byte_offset;
     if (Status s = ExpectToken(TokenType::kRParen, "')' closing a subquery"); !s.ok()) return s;
     return std::make_shared<SelectStmt>(std::move(inner.value()));
 }

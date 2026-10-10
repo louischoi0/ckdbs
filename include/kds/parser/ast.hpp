@@ -772,7 +772,7 @@ enum class ExprOp : std::uint8_t {
 };
 
 struct Expr {
-    enum class Kind : std::uint8_t { kLiteral, kColumn, kUnary, kBinary, kCall };
+    enum class Kind : std::uint8_t { kLiteral, kColumn, kUnary, kBinary, kCall, kSubquery };
 
     Kind kind = Kind::kLiteral;
 
@@ -811,6 +811,11 @@ struct Expr {
     std::vector<std::shared_ptr<const Expr>> args;  // kCall
     TypeSpec cast_to;                               // kUnary with kCast
     std::string function;                           // kCall with kFunction, as written
+    // kSubquery (BJ-S7): `(SELECT ...)` as a value. The statement as parsed, and
+    // its text without the parentheses - the dispatcher runs the text through
+    // the SELECT path once, before the walk.
+    std::shared_ptr<const SelectStmt> subquery;
+    std::string subquery_sql;
 };
 
 struct Assignment {

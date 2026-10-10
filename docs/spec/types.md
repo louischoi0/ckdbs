@@ -305,6 +305,23 @@ are NULL of whatever type the context wants. Nothing in the engine reads a funct
 these), so none is declared for them: `NOW()` and `CURRENT_DATE` are the two
 stable ones, and the rest are pure.
 
+**A scalar subquery (BJ-S7, BJ-Q6).** A `(SELECT ...)` is a value of the SET,
+and it is **run once, before the walk**, through the SELECT path in the
+statement's own view: inside `BEGIN` it sees the transaction's writes, and a
+statement that parks keeps its first answer across the park. It returns one
+column and at most one row - more is `InvalidArgument`, **even over a WHERE
+that matches no row**, because the answer is taken before any row is - and no
+row is NULL. Its type is its column's, and the assignment needs it to be the
+target's like any other value. So `SET v = v + (SELECT SUM(v) FROM t)` raises
+every row by the sum the table had before the statement, not by a sum that
+grows as the walk writes: **a WHERE-position subquery is re-run per row and
+sees the statement's earlier rows; a SET-position one does not.** A subquery
+that reads the row being updated (a correlated one) is `NotImplemented`, as is
+one over a catalog view and the row form `SET (a, b) = (SELECT ...)`: a per-row
+sub-chain under the write walk's exclusive leaf is the open page-latch cycle
+(`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`),
+and a view always sees its own transaction's writes.
+
 `NULL` types as its context's type, and a NULL operand yields NULL (BJ-R4).
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The
 whole expression must be the target column's type, or the statement is

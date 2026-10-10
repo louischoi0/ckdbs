@@ -1022,3 +1022,38 @@ function through `CURRENT_DATE` (identifiers are folded, so they are one name);
 a cell for `NOW()` carried across a parked `SET` (the WHERE one exists in
 `function_conjunct_test.cpp`; the carried context is the same
 `ParkedWrite::context`, read, not run) - listed for `known-gaps.md` at BJ-S8.
+
+### BJ-S7 — the scalar subquery (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `3292b20d`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **`(SELECT ...)` in a SET value** (BJ-Q6, as revised): `Expr::Kind::kSubquery`
+  carries the parsed statement and its text. The parser takes it as an
+  outermost SELECT (an aggregate is allowed, which a nested one is not),
+  so `SET v = v + (SELECT SUM(v) FROM t)` parses.
+- **Run once, before the walk.** `TypeSetExpression` asks a
+  `SubqueryResolver` (the dispatcher's `RunScalarSubquery`), which runs the text
+  through `HandleSelect` with a one-column collecting `ResultSink` in the
+  session's view (inside `BEGIN`, the transaction's own writes included) and
+  returns the value and its column's type. The node becomes a **typed
+  constant** of the tree - a literal of that type - so every later stage (the
+  evaluator, the foreign-key fold) needs nothing new. No row is NULL; more than
+  one row or column is `InvalidArgument`, **even when the WHERE matches
+  nothing**, the stated difference from a per-row evaluation.
+- **Correlation is the SELECT compiler's own classification**: the subquery is
+  compiled as an `EXISTS` over the target relation, and a sub-chain it marks
+  correlated is refused `NotImplemented` at the subquery's byte. `SELECT SUM(v)
+  FROM t` inside `UPDATE t` is not correlated - its `v` is its own.
+- **A park keeps its answer.** The resume compiles the statement again, which
+  would run the subquery again and set the rows after the park from another state
+  of the database than the rows before it. `Session::ParkedWrite` carries the
+  answers; a mutant that ignores them is killed by `bj_single_write_rig_test.cpp`
+  (rows 3..5 became 777).
+- **Not built**: a subquery over a catalog view, the row form `SET (a, b) =
+  (SELECT ...)`, and a correlated one - each refused by name.
+- **Cells**: `tests/set_expr_subquery_test.cpp` (9: the pinned BJ-Q6 cell, another
+  relation, aggregates, no row, more than one row, correlated by qualifier and
+  by an outward name, types, the subquery's own errors, a foreign-key column, a
+  transaction's own writes), a parser cell, the parked rig cell, and the corpus
+  (two verdicts and three lines).

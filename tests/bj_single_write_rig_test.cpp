@@ -139,6 +139,9 @@ struct ParkedWalk {
         CommandDispatcher& d1 = rig->core(1).dispatcher();
         FillT(d0, rows);
         if (::testing::Test::HasFatalFailure()) return false;
+        for (const std::string& statement : setup) {
+            if (StartsWith(d0.Dispatch(statement).response, "ERR")) return false;
+        }
 
         if (!StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN")) return false;
         const std::string held_out =
@@ -152,10 +155,15 @@ struct ParkedWalk {
         // test is the holder's release, as in `row_wait_wake_rig_test.cpp`.
         waiter.set_durability(wal::DurabilityClass::kRelaxed);
         update.session = &waiter;
-        update.line = "UPDATE t SET v = 2 WHERE v >= 0";
+        update.line = update_sql;
         decide.session = &holder;
         decide.line = decide_line;
         decide.go.store(false, std::memory_order_release);
+        mid.session = &mid_session;
+        mid.line = between;
+        mid.go.store(false, std::memory_order_release);
+        rig->core(0).scheduler().Submit(
+            sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, mid)));
         rig->core(1).scheduler().Submit(
             sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, update)));
         rig->core(0).scheduler().Submit(
@@ -169,6 +177,12 @@ struct ParkedWalk {
             parked_counts.push_back(applied.Of(static_cast<std::uint64_t>(pk)));
         }
 
+        // A statement that changes the world while the walk is parked, if the
+        // cell wants one: it runs on core 0 and commits before the decide.
+        mid.go.store(true, std::memory_order_release);
+        if (!KickUntil(*rig, 0, [&] { return mid.done.load(std::memory_order_acquire); })) {
+            return false;
+        }
         decide.go.store(true, std::memory_order_release);
         if (!KickUntil(*rig, 0, [&] { return decide.done.load(std::memory_order_acquire); })) {
             return false;
@@ -194,8 +208,15 @@ struct ParkedWalk {
     std::unique_ptr<TwoCoreRig> rig;
     Session holder;
     Session waiter;
+    // What the cell runs: the waiter's statement, the tables beside `t` it
+    // needs, and a statement run between the park and the holder's decide.
+    std::string update_sql = "UPDATE t SET v = 2 WHERE v >= 0";
+    std::vector<std::string> setup;
+    std::string between = "SELECT id FROM t WHERE id = 1";
+    Session mid_session;
     Statement update;
     Statement decide;
+    Statement mid;
     Applied applied;
     bool parked_before_decide = false;
     std::vector<int> parked_counts;  // per pk 1..rows, read while the walk was parked
@@ -249,6 +270,25 @@ TEST(BjSingleWriteRigTest, AStatementThatWroteNothingBeforeItsParkRunsOnceAfterI
         EXPECT_EQ(w.applied.Of(pk), 1) << "row " << pk << " was written "
                                        << w.applied.Of(pk) << " time(s)";
     }
+}
+
+TEST(BjSingleWriteRigTest, AParkedStatementReadsItsSubqueryAnswerFromBeforeThePark) {
+    // BJ-S7: a subquery is run once, before the walk. The resume compiles the
+    // statement again; if that ran the subquery again, the rows written after
+    // the park would be set from what the world became during it.
+    ParkedWalk w(/*rows=*/5, /*held_id=*/3, "ROLLBACK");
+    w.setup = {"CREATE TABLE u (id int64, x int64)", "INSERT INTO u VALUES (1, 5)"};
+    w.update_sql = "UPDATE t SET v = (SELECT x FROM u WHERE id = 1) WHERE v >= 0";
+    w.between = "UPDATE u SET x = 777 WHERE id = 1";
+    ASSERT_TRUE(w.Run()) << "the parked statement did not finish; saw '" << w.Seen() << "'";
+    EXPECT_TRUE(w.parked_before_decide) << "the walk did not park behind the holder";
+    EXPECT_EQ(w.parked_counts, (std::vector<int>{1, 1, 0, 0, 0}));
+    EXPECT_TRUE(StartsWith(w.update.out.response, "UPDATED 5")) << w.update.out.response;
+    CommandDispatcher& d0 = w.rig->core(0).dispatcher();
+    EXPECT_EQ(d0.Dispatch("SELECT v FROM t WHERE id >= 1").response,
+              "v\\n5\\n5\\n5\\n5\\n5")
+        << "every row was set from the answer the statement began with";
+    EXPECT_EQ(d0.Dispatch("SELECT x FROM u WHERE id = 1").response, "x\\n777");
 }
 
 }  // namespace

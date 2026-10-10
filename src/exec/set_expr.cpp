@@ -288,7 +288,8 @@ StatusOr<SetType> DecimalTypeOfLiteral(const parser::AstValue& v) {
 
 class Typer {
 public:
-    Typer(const catalog::TableAccess& access) : access_(access) {}
+    Typer(const catalog::TableAccess& access, const SubqueryResolver* subqueries)
+        : access_(access), subqueries_(subqueries) {}
 
     using Node = std::unique_ptr<TypedSetExpr>;
 
@@ -302,6 +303,7 @@ public:
             case Expr::Kind::kUnary: return Unary(e);
             case Expr::Kind::kBinary: return Binary(e);
             case Expr::Kind::kCall: return Call(e);
+            case Expr::Kind::kSubquery: return Subquery(e);
         }
         return Status::Corruption("an expression node of an unknown kind");
     }
@@ -312,7 +314,8 @@ public:
         if (n.type.concrete()) return Status::OK();
         switch (n.kind) {
             case Expr::Kind::kLiteral: return CoerceInto(n, want);
-            case Expr::Kind::kColumn: return Status::OK();  // always concrete
+            case Expr::Kind::kColumn:
+            case Expr::Kind::kSubquery: return Status::OK();  // always concrete
             case Expr::Kind::kUnary: {
                 if (Status s = Resolve(*n.lhs, want); !s.ok()) return s;
                 n.type = n.lhs->type;
@@ -1115,7 +1118,24 @@ private:
         return Bad();
     }
 
+    // A `(SELECT ...)` value: run once by the dispatcher, and from here on a
+    // typed constant - a literal of the type its one column has.
+    StatusOr<Node> Subquery(const Expr& e) {
+        if (subqueries_ == nullptr || !*subqueries_) {
+            return Status::NotImplemented("a subquery in a SET value needs a statement to run it" +
+                                          At(e.byte_offset));
+        }
+        auto answer = (*subqueries_)(e);
+        if (!answer.ok()) return answer.status();
+        Node n = Make(e);
+        n->kind = Expr::Kind::kLiteral;
+        n->literal = std::move(answer.value().value);
+        n->type = answer.value().type;
+        return n;
+    }
+
     const catalog::TableAccess& access_;
+    const SubqueryResolver* subqueries_;
 };
 
 // ---- Evaluation (BJ-S4) --------------------------------------------------
@@ -1201,6 +1221,8 @@ public:
             case Expr::Kind::kUnary: return Unary(e);
             case Expr::Kind::kBinary: return Binary(e);
             case Expr::Kind::kCall: return Call(e);
+            case Expr::Kind::kSubquery:
+                return Status::Corruption("a subquery reached evaluation untyped");
         }
         return Status::Corruption("an expression node of an unknown kind");
     }
@@ -1824,7 +1846,8 @@ private:
 bool IsConstantSetExpression(const TypedSetExpr& expr) {
     switch (expr.kind) {
         case Expr::Kind::kLiteral: return true;
-        case Expr::Kind::kColumn: return false;
+        case Expr::Kind::kColumn:
+        case Expr::Kind::kSubquery: return false;
         case Expr::Kind::kUnary: return IsConstantSetExpression(*expr.lhs);
         case Expr::Kind::kBinary:
             return IsConstantSetExpression(*expr.lhs) && IsConstantSetExpression(*expr.rhs);
@@ -1881,9 +1904,10 @@ std::string SetTypeName(const SetType& t) {
 
 StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAccess& access,
                                                           const parser::Expr& expr,
-                                                          const catalog::SysColumnRow& target) {
+                                                          const catalog::SysColumnRow& target,
+                                                          const SubqueryResolver* subqueries) {
     const SetType want = Concrete(target.type_val, target.len);
-    Typer typer(access);
+    Typer typer(access, subqueries);
     auto typed = typer.Type(expr);
     if (!typed.ok()) return typed;
     if (Status st = typer.Resolve(*typed.value(), want); !st.ok()) return st;
