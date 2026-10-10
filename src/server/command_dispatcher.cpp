@@ -7846,9 +7846,19 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // CompileWhere rather than here: the two halves of an UPDATE's compile
     // belong at one layer, and a check the dispatcher owns is one a second
     // write path can be written without.
-    if (Status s = exec::CompileAssignments(ta, stmt.assignments); !s.ok()) {
+    // BJ-S4: the typed expressions come back with it, and a column-reading
+    // expression into a foreign-key column is refused here (BJ-Q10).
+    std::vector<exec::CompiledAssignment> compiled;
+    if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
+    // One value per assignment for the row in hand: the bare literal's, or
+    // what the expression evaluated to. Owned by the statement so no row
+    // allocates for it after the first.
+    std::vector<parser::AstValue> evaluated(compiled.size());
+    const auto assigned_value = [&](std::size_t i) -> const parser::AstValue& {
+        return compiled[i].expr != nullptr ? evaluated[i] : stmt.assignments[i].val;
+    };
 
     // The WHERE clause compiles to the same resolved predicates a chain
     // step carries, and is evaluated by the same evaluator (V16). UPDATE
@@ -7877,13 +7887,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // Resolved once, here: an UPDATE that changes no fk column must cost
     // nothing, and asking per row would mean a name comparison per row per
     // foreign key to answer a question about the *statement*.
-    std::vector<std::pair<const catalog::ForeignKeyRef*, const parser::AstValue*>> fk_assignments;
+    // Each pairs a foreign key with the index of the assignment that sets its
+    // column. BJ-S4: that assignment is a bare literal or an expression, and
+    // `CompileAssignments` already refused one that reads a column.
+    std::vector<std::pair<const catalog::ForeignKeyRef*, std::size_t>> fk_assignments;
     for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
         if (fk.column_no >= ta.schema.columns.size()) continue;
-        const std::string_view column = catalog::NameView(ta.schema.columns[fk.column_no].name);
-        for (const auto& assignment : stmt.assignments) {
-            if (assignment.col_name != column) continue;
-            fk_assignments.emplace_back(&fk, &assignment.val);
+        for (std::size_t i = 0; i < compiled.size(); ++i) {
+            if (compiled[i].column_no != fk.column_no) continue;
+            fk_assignments.emplace_back(&fk, i);
             break;
         }
     }
@@ -7906,12 +7918,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // So the verdict is *held* here and *applied* per matched row: an
         // unmatched statement resolves a parent, uses nothing, and reports
         // what it always reported.
-        for (const auto& [fk, value] : fk_assignments) {
+        for (const auto& [fk, index] : fk_assignments) {
+            // A constant expression is folded at compile (BJ-Q10); one whose
+            // fold failed has nothing to resolve, and the row that meets the
+            // failure raises it before any foreign-key check.
+            if (!compiled[index].constant.has_value()) continue;
             std::vector<parser::AstValue> one(ta.schema.columns.size() > 0
                                                   ? ta.schema.columns.size() - 1
                                                   : 0);
             if (fk->column_no == 0 || fk->column_no > one.size()) continue;
-            one[fk->column_no - 1] = *value;
+            one[fk->column_no - 1] = *compiled[index].constant;
             if (Status s = ResolveForeignKeyParents(ta, one, fk_held, scope); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
@@ -8111,8 +8127,30 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // this row, which is what keeps an UPDATE matching zero rows
         // answering `UPDATED 0` rather than a violation it never used to
         // report.
-        for (const auto& [fk, value] : fk_assignments) {
-            if (Status s = CheckForeignKeyOnWrite(ta, *fk, *value, fk_held, scope); !s.ok()) {
+        //
+        // **BJ-S4: every expression is evaluated here, against the row as
+        // the walk read it** (BJ-R2) - after the row qualified and its
+        // conflict was decided, before anything of it is written and before
+        // the no-refuse window opens (an evaluation can fail, BJ-R10). The
+        // values are collected first and written second, so a later
+        // assignment never reads an earlier one's result. A failure names
+        // the expression's first byte and the row's pk and fails the
+        // statement like every mid-statement write failure (the AS9
+        // resolution).
+        for (std::size_t i = 0; i < compiled.size(); ++i) {
+            if (compiled[i].expr == nullptr) continue;
+            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row.value());
+            if (!value.ok()) {
+                return value.status().WithMessage(
+                    value.status().message() + " in the expression at byte " +
+                    std::to_string(stmt.assignments[i].expr->byte_offset) + ", row id " +
+                    std::to_string(id.value()));
+            }
+            evaluated[i] = std::move(value.value());
+        }
+        for (const auto& [fk, index] : fk_assignments) {
+            if (Status s = CheckForeignKeyOnWrite(ta, *fk, assigned_value(index), fk_held, scope);
+                !s.ok()) {
                 return s;
             }
         }
@@ -8134,13 +8172,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             previous = row.value();
         }
 
-        for (const auto& assignment : stmt.assignments) {
-            for (std::size_t c = 0; c < ta.schema.columns.size(); ++c) {
-                if (catalog::NameView(ta.schema.columns[c].name) == assignment.col_name) {
-                    row.value()[c] = assignment.val;
-                    break;
-                }
-            }
+        for (std::size_t i = 0; i < compiled.size(); ++i) {
+            row.value()[compiled[i].column_no] = assigned_value(i);
         }
 
         // The pk is unchanged by construction (rejected above), so it was

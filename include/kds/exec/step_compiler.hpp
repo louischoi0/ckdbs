@@ -1,7 +1,13 @@
 #pragma once
 
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <vector>
+
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/set_expr.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
@@ -125,7 +131,28 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 // Both messages carry `Assignment::byte_offset`. Called at compile time,
 // once per statement, so the row loop below it can assume every target is
 // a real, assignable column.
+//
+// **BJ-S4 - what the row loop reads.** `compiled`, when given, receives one
+// entry per assignment in list order: the target's schema position, and for
+// an expression the typed tree (`set_expr.hpp`) the loop evaluates against
+// each qualifying row's before-image. A **constant** expression (no column
+// reference) into a foreign-key column is folded here, and `constant` keeps
+// the foreign-key hoist's value; a non-constant one is refused
+// `NotImplemented` at its byte (BJ-Q10: a per-row parent descent under the
+// write walk's exclusive leaf is the open page-latch cycle).
+struct CompiledAssignment {
+    std::size_t column_no = 0;
+    // Null for a bare literal, whose value is `Assignment::val`.
+    std::shared_ptr<const TypedSetExpr> expr;
+    // The value a foreign-key column's hoist resolves: the bare literal's, or
+    // the folded constant. Unset for every other assignment, and for a
+    // constant whose fold failed - the row that meets that failure raises it
+    // before any foreign-key check.
+    std::optional<parser::AstValue> constant;
+};
+
 Status CompileAssignments(const catalog::TableAccess& access,
-                          const std::vector<parser::Assignment>& assignments);
+                          const std::vector<parser::Assignment>& assignments,
+                          std::vector<CompiledAssignment>* compiled = nullptr);
 
 }  // namespace kds::exec

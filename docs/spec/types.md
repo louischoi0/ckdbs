@@ -192,13 +192,21 @@ Two scalar functions, in a WHERE comparison only (`parser-v2.md` I10;
 Both sides of a comparison must be of one type: `v = NOW()` over an
 `int64` column is refused `InvalidArgument` at the call's byte.
 
-### 3.2b A SET value is typed at compile (BJ-S3)
+### 3.2b A SET value is typed at compile and evaluated per row (BJ-S3, BJ-S4)
 
-**Built: parsing and typing. Not built: evaluation** - a statement whose SET
-value is an expression that types is refused `NotImplemented` until BJ-S4
-(`instructions/v3.0.0/workorder-bj-expression-update.md`), and one that does
-not type is refused for what is wrong with it, at compile, whether or not a
-row matches. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
+**Built: parsing, typing and evaluation of the core family (BJ-S2..S4)** - a
+SET value that is an expression is typed at compile and evaluated per row
+against the row's before-image (`instructions/v3.0.0/workorder-bj-expression-update.md`),
+and one that does not type is refused for what is wrong with it, at compile,
+whether or not a row matches. **Evaluation**: integer, uint64 and decimal
+arithmetic is checked in its own type at every node, so a result outside the
+type is `OutOfRange` at that row (never a wrap), integer `/` truncates toward
+zero and `%` takes the dividend's sign, a division by zero is `InvalidArgument`,
+a NULL operand yields NULL before a zero divisor is judged, and `||` yields
+the concatenation (a `char(N)` target's length and a NOT NULL target are the
+row's encode verdicts). Every assignment reads the before-image and the values
+are written together. A failure names the failing operator's byte, the
+expression's first byte and the row's pk. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
 one place the rules below live. §3.2's "there is none" stands for every other
 position: the grammar admits an expression in a SET value only.
 

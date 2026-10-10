@@ -4,6 +4,9 @@
 #include <string_view>
 #include <utility>
 
+#include <cstdint>
+
+#include "kds/base/int128.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -400,7 +403,182 @@ private:
     const catalog::TableAccess& access_;
 };
 
+// ---- Evaluation (BJ-S4) --------------------------------------------------
+
+// Whole-number values, decimals' unscaled values and uint64 all ride one
+// 128-bit integer, so one checked arithmetic serves every type and the range
+// of the node's own type is what judges the result.
+Int128 PowerOfTen(unsigned exponent) {
+    Int128 v = 1;
+    for (unsigned i = 0; i < exponent; ++i) v *= 10;
+    return v;
+}
+
+bool InRange(Int128 v, const SetType& t) {
+    switch (t.type_val) {
+        case kTypeValInt8: return v >= INT8_MIN && v <= INT8_MAX;
+        case kTypeValInt16: return v >= INT16_MIN && v <= INT16_MAX;
+        case kTypeValInt32: return v >= INT32_MIN && v <= INT32_MAX;
+        case kTypeValInt64: return v >= INT64_MIN && v <= INT64_MAX;
+        case kTypeValUint64: return v >= 0 && v <= static_cast<Int128>(UINT64_MAX);
+        case kTypeValDecimal:
+        case kTypeValDecimalWide: {
+            const Int128 bound = PowerOfTen(catalog::DecimalPrecisionOf(t.len));
+            return v > -bound && v < bound;
+        }
+        default: return true;
+    }
+}
+
+std::string Int128Text(Int128 v) {
+    if (v == 0) return "0";
+    const bool negative = v < 0;
+    std::string digits;
+    // The magnitude as unsigned, so the most negative value needs no case.
+    unsigned __int128 m = negative ? -static_cast<unsigned __int128>(v)
+                                   : static_cast<unsigned __int128>(v);
+    while (m != 0) {
+        digits.push_back(static_cast<char>('0' + static_cast<int>(m % 10)));
+        m /= 10;
+    }
+    if (negative) digits.push_back('-');
+    return std::string(digits.rbegin(), digits.rend());
+}
+
+StatusOr<Int128> NumberOf(const parser::AstValue& v, const SetType& t) {
+    switch (v.type) {
+        case ValueType::kInt:
+            if (t.type_val == kTypeValUint64) {
+                auto u = ValueAsUint64(v);
+                if (!u.ok()) return u.status();
+                return static_cast<Int128>(u.value());
+            }
+            return static_cast<Int128>(v.int_val);
+        case ValueType::kDecimal: return static_cast<Int128>(v.int_val);
+        case ValueType::kDecimalWide: return Int128FromHalves(v.dec_hi, v.int_val);
+        default:
+            return Status::Corruption("a value that is not a number reached arithmetic");
+    }
+}
+
+parser::AstValue ValueOf(Int128 v, const SetType& t) {
+    parser::AstValue out;
+    if (IsDecimal(t.type_val)) {
+        out.type = t.type_val == kTypeValDecimal ? ValueType::kDecimal : ValueType::kDecimalWide;
+        out.scale = catalog::DecimalScaleOf(t.len);
+        out.int_val = Int128Low(v);
+        if (t.type_val == kTypeValDecimalWide) out.dec_hi = Int128High(v);
+        return out;
+    }
+    out.type = ValueType::kInt;
+    out.int_val = Int128Low(v);
+    // The digits carry a uint64 above INT64_MAX, which `int_val` cannot
+    // (`ValueAsUint64`'s rule).
+    if (t.type_val == kTypeValUint64 && v > static_cast<Int128>(INT64_MAX)) {
+        out.raw_int_text = Int128Text(v);
+    }
+    return out;
+}
+
+class Evaluator {
+public:
+    explicit Evaluator(const std::vector<parser::AstValue>& row) : row_(row) {}
+
+    StatusOr<parser::AstValue> Eval(const TypedSetExpr& e) const {
+        switch (e.kind) {
+            case Expr::Kind::kLiteral: return e.literal;
+            case Expr::Kind::kColumn:
+                if (e.column_no >= row_.size()) {
+                    return Status::Corruption("an expression names a column past the row");
+                }
+                return row_[e.column_no];
+            case Expr::Kind::kUnary: return Unary(e);
+            case Expr::Kind::kBinary: return Binary(e);
+        }
+        return Status::Corruption("an expression node of an unknown kind");
+    }
+
+private:
+    StatusOr<parser::AstValue> Unary(const TypedSetExpr& e) const {
+        auto operand = Eval(*e.lhs);
+        if (!operand.ok()) return operand;
+        if (operand.value().type == ValueType::kNull) return operand;
+        if (e.op == ExprOp::kPos) return operand;
+        auto n = NumberOf(operand.value(), e.lhs->type);
+        if (!n.ok()) return n.status();
+        return Checked(-n.value(), e);
+    }
+
+    StatusOr<parser::AstValue> Binary(const TypedSetExpr& e) const {
+        auto l = Eval(*e.lhs);
+        if (!l.ok()) return l;
+        auto r = Eval(*e.rhs);
+        if (!r.ok()) return r;
+        // A NULL operand yields NULL, before a division by zero is judged
+        // (BJ-R4): `NULL / 0` is NULL.
+        if (l.value().type == ValueType::kNull || r.value().type == ValueType::kNull) {
+            return parser::AstValue{};
+        }
+        if (e.op == ExprOp::kConcat) {
+            parser::AstValue out;
+            out.type = ValueType::kStr;
+            out.str_val = l.value().str_val + r.value().str_val;
+            return out;
+        }
+        auto a = NumberOf(l.value(), e.lhs->type);
+        if (!a.ok()) return a.status();
+        auto b = NumberOf(r.value(), e.rhs->type);
+        if (!b.ok()) return b.status();
+
+        Int128 result = 0;
+        bool overflow = false;
+        switch (e.op) {
+            case ExprOp::kAdd: overflow = __builtin_add_overflow(a.value(), b.value(), &result); break;
+            case ExprOp::kSub: overflow = __builtin_sub_overflow(a.value(), b.value(), &result); break;
+            case ExprOp::kMul: overflow = __builtin_mul_overflow(a.value(), b.value(), &result); break;
+            case ExprOp::kDiv:
+            case ExprOp::kMod:
+                if (b.value() == 0) {
+                    return Status::InvalidArgument("division by zero" + At(e.op_byte_offset));
+                }
+                result = e.op == ExprOp::kDiv ? a.value() / b.value() : a.value() % b.value();
+                break;
+            default: return Status::Corruption("an operator the evaluator does not know");
+        }
+        if (overflow) return OutOfRangeResult(e);
+        return Checked(result, e);
+    }
+
+    static Status OutOfRangeResult(const TypedSetExpr& e) {
+        return Status::OutOfRange("the result of operator " + std::string(OpText(e.op)) +
+                                  " is outside " + SetTypeName(e.type) + At(e.op_byte_offset));
+    }
+
+    static StatusOr<parser::AstValue> Checked(Int128 v, const TypedSetExpr& e) {
+        if (!InRange(v, e.type)) return OutOfRangeResult(e);
+        return ValueOf(v, e.type);
+    }
+
+    const std::vector<parser::AstValue>& row_;
+};
+
 }  // namespace
+
+bool IsConstantSetExpression(const TypedSetExpr& expr) {
+    switch (expr.kind) {
+        case Expr::Kind::kLiteral: return true;
+        case Expr::Kind::kColumn: return false;
+        case Expr::Kind::kUnary: return IsConstantSetExpression(*expr.lhs);
+        case Expr::Kind::kBinary:
+            return IsConstantSetExpression(*expr.lhs) && IsConstantSetExpression(*expr.rhs);
+    }
+    return false;
+}
+
+StatusOr<parser::AstValue> EvaluateSetExpression(const TypedSetExpr& expr,
+                                                 const std::vector<parser::AstValue>& row) {
+    return Evaluator(row).Eval(expr);
+}
 
 std::string SetTypeName(const SetType& t) {
     switch (t.kind) {

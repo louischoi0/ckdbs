@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
@@ -30,9 +31,7 @@
 // literal), and an integer literal scaling a decimal is scale 0 (BJ-R3).
 //
 // Pure: no page is read, no state is kept. The tree it returns is what
-// BJ-S4's evaluator walks; until then `CompileAssignments` types an
-// assignment's expression for the refusals alone and still refuses it
-// `NotImplemented` (BJ-S2's rule).
+// BJ-S4's evaluator walks (`EvaluateSetExpression`), once per qualifying row.
 
 namespace kds::exec {
 
@@ -81,5 +80,23 @@ struct TypedSetExpr {
 StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAccess& access,
                                                           const parser::Expr& expr,
                                                           const catalog::SysColumnRow& target);
+
+// Whether the expression reads no column - a constant, which BJ-Q10 folds
+// at compile so a foreign-key column keeps its hoisted parent.
+bool IsConstantSetExpression(const TypedSetExpr& expr);
+
+// Evaluates a typed expression against `row`, the decoded before-image of the
+// row being updated (BJ-R2: every assignment reads the row as the walk read
+// it, never an earlier assignment's result). The value is in the form
+// `EncodeOneValue` takes for the expression's type: `kInt`, `kDecimal`,
+// `kDecimalWide`, `kStr` or `kNull`.
+//
+// Arithmetic is checked (BJ-R3): a result outside its type's range is
+// `OutOfRange`, never a wrap, and a division by zero is `InvalidArgument`;
+// each names the failing operator's byte. A NULL operand yields NULL (BJ-R4).
+// Whether a NULL fits a `NOT NULL` target is the row's verdict, not this
+// function's. Pure: no page is read.
+StatusOr<parser::AstValue> EvaluateSetExpression(const TypedSetExpr& expr,
+                                                 const std::vector<parser::AstValue>& row);
 
 }  // namespace kds::exec

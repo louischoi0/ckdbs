@@ -1354,7 +1354,8 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 }
 
 Status CompileAssignments(const catalog::TableAccess& access,
-                          const std::vector<parser::Assignment>& assignments) {
+                          const std::vector<parser::Assignment>& assignments,
+                          std::vector<CompiledAssignment>* compiled) {
     // An empty schema cannot happen for a relation the catalog resolved
     // (invariant 11 makes column 0 mandatory), but the pk name is read
     // from `front()` and a check costs nothing against a wrong answer.
@@ -1365,7 +1366,13 @@ Status CompileAssignments(const catalog::TableAccess& access,
     const std::string_view pk_name = catalog::NameView(access.schema.columns.front().name);
 
     std::vector<const catalog::SysColumnRow*> assigned;
-    const parser::Expr* first_expression = nullptr;
+    // A refusal that is only a `NotImplemented` waits until every assignment
+    // has been judged, so a later one's own refusal is not hidden behind it.
+    std::optional<Status> deferred;
+    if (compiled != nullptr) {
+        compiled->clear();
+        compiled->reserve(assignments.size());
+    }
     for (const parser::Assignment& a : assignments) {
         const auto* column = access.schema.FindColumn(a.col_name);
         if (column == nullptr) {
@@ -1391,27 +1398,45 @@ Status CompileAssignments(const catalog::TableAccess& access,
                                        std::to_string(a.byte_offset) +
                                        "; it is the tuple's identity, not a field of it");
         }
-        // BJ-S2 parses a SET expression and BJ-S4 evaluates it. Between the
-        // two, refusing here - before any row is read - is what keeps a
-        // half-built evaluator from writing one: the foreign-key hoist and
-        // the apply loop read `Assignment::val`, which an expression leaves
-        // unset.
-        if (a.expr != nullptr) {
+
+        CompiledAssignment entry;
+        entry.column_no = static_cast<std::size_t>(column - access.schema.columns.data());
+        const catalog::ForeignKeyRef* fk = nullptr;
+        for (const catalog::ForeignKeyRef& candidate : access.fkeys_out) {
+            if (candidate.column_no == entry.column_no) fk = &candidate;
+        }
+        if (a.expr == nullptr) {
+            // A bare literal keeps today's per-row type gate (BJ-Q3 (c)); a
+            // foreign-key column hoists its parent from the value itself.
+            if (fk != nullptr) entry.constant = a.val;
+        } else {
             // Typed first (BJ-S3): a mistyped expression is refused here by
             // what is wrong with it, whether or not a row matches.
-            if (auto typed = TypeSetExpression(access, *a.expr, *column); !typed.ok()) {
-                return typed.status();
+            auto typed = TypeSetExpression(access, *a.expr, *column);
+            if (!typed.ok()) return typed.status();
+            entry.expr = std::move(typed.value());
+            if (fk != nullptr) {
+                if (!IsConstantSetExpression(*entry.expr)) {
+                    // BJ-Q10: the parent is a per-row value, and resolving it
+                    // per row under the walk's exclusive leaf is the open
+                    // page-latch cycle (a-write-walks-subquery-reads-pages-
+                    // under-its-exclusive-leaf-hold.md). Refused rather than
+                    // checked against a key the row never gets.
+                    if (!deferred.has_value()) {
+                        deferred = Status::NotImplemented(
+                            "an expression that reads a column cannot be assigned to "
+                            "foreign-key column '" +
+                            a.col_name + "' yet (BJ-Q10) (byte " +
+                            std::to_string(a.expr->byte_offset) + ")");
+                    }
+                } else if (auto folded = EvaluateSetExpression(*entry.expr, {}); folded.ok()) {
+                    entry.constant = std::move(folded.value());
+                }
             }
-            if (first_expression == nullptr) first_expression = a.expr.get();
         }
+        if (compiled != nullptr) compiled->push_back(std::move(entry));
     }
-    // Only after every assignment has been judged, so that a later one's
-    // refusal is not hidden behind this one.
-    if (first_expression != nullptr) {
-        return Status::NotImplemented(
-            "an expression in a SET value is parsed and not yet evaluated (BJ-S4) (byte " +
-            std::to_string(first_expression->byte_offset) + ")");
-    }
+    if (deferred.has_value()) return *deferred;
     return Status::OK();
 }
 

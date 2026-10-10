@@ -1,11 +1,11 @@
 // **A SET expression is typed at compile** (BJ-S3, BJ-R3, BJ-R4, BJ-R5,
 // BJ-Q2 (b), BJ-Q3).
 //
-// Until BJ-S4 evaluates an expression, a statement whose expression types is
-// refused `NotImplemented (BJ-S4)` and one that does not is refused for what
-// is wrong with it - so each cell reads which of the two it got. The point
-// is the second kind: a mistyped expression is refused whether or not a row
-// matches, naming both types and the byte.
+// Each cell runs its statement over a WHERE that matches no row: one whose
+// expression types answers `UPDATED 0`, and one that does not is refused for
+// what is wrong with it. The point is the second kind: a mistyped expression
+// is refused whether or not a row matches, naming both types and the byte.
+// Evaluation, over rows that do match, is `set_expr_eval_test.cpp`.
 
 #include <optional>
 #include <string>
@@ -39,15 +39,16 @@ protected:
 
     std::string Run(const std::string& line) { return dispatcher_->Dispatch(line).response; }
 
-    // The statement typed and reached BJ-S4's refusal.
+    // The statement typed: it ran over a WHERE that matches no row, so the
+    // answer is `UPDATED 0` and nothing was evaluated or written. Typing is
+    // judged at compile, whether or not a row matches.
     bool Types(const std::string& set) {
-        const std::string out = Run("UPDATE t SET " + set + " WHERE id = 1");
-        return out.find("(BJ-S4)") != std::string::npos;
+        return Run("UPDATE t SET " + set + " WHERE id = 999").rfind("UPDATED 0", 0) == 0;
     }
     // The refusal, or the empty string when the statement typed.
     std::string Refusal(const std::string& set) {
-        const std::string out = Run("UPDATE t SET " + set + " WHERE id = 1");
-        return out.find("(BJ-S4)") != std::string::npos ? "" : out;
+        const std::string out = Run("UPDATE t SET " + set + " WHERE id = 999");
+        return out.rfind("UPDATED 0", 0) == 0 ? "" : out;
     }
 
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -181,12 +182,11 @@ TEST_F(SetExprTypingTest, AnUnknownColumnInAnExpressionIsPositioned) {
     EXPECT_NE(out.find("byte " + std::to_string(sql.find("nope"))), std::string::npos) << out;
 }
 
-TEST_F(SetExprTypingTest, AnExpressionNeverWritesBeforeBjS4) {
-    // The compile refusal is what keeps the foreign-key hoist and the apply
-    // loop, which read `Assignment::val`, from meeting an expression.
+TEST_F(SetExprTypingTest, AMistypedExpressionNeverWritesAnyRow) {
+    // The compile refusal keeps a statement that does not type from reaching
+    // the row loop, so a row that matches is left exactly as it was.
     const std::string before = Run("SELECT i64 FROM t WHERE id = 1");
-    const std::string out = Run("UPDATE t SET i64 = i64 + 1 WHERE id = 1");
-    EXPECT_NE(out.find("NOT_IMPLEMENTED"), std::string::npos) << out;
+    const std::string out = Run("UPDATE t SET i64 = i64 + 'x' WHERE id = 1");
     EXPECT_EQ(out.find("UPDATED"), std::string::npos) << out;
     EXPECT_EQ(Run("SELECT i64 FROM t WHERE id = 1"), before);
 }
