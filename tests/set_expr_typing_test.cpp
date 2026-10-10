@@ -119,7 +119,7 @@ TEST_F(SetExprTypingTest, ADecimalProductAddsScalesAndMustBeNarrowedToItsTarget)
     // BJ-Q3 (a): an implicit narrowing is refused, `*` of two decimals adds
     // the scales, and `price * 2` keeps the decimal's own.
     const std::string r = Refusal("d = d * e");
-    EXPECT_NE(r.find("decimal128(20,4) but column 'd' is decimal(10,2)"), std::string::npos) << r;
+    EXPECT_NE(r.find("decimal(20,4) but column 'd' is decimal(10,2)"), std::string::npos) << r;
     EXPECT_TRUE(Types("d = d * 2"));
     EXPECT_NE(Refusal("d = d * i64").find("decimal(10,2) and int64"), std::string::npos)
         << "only a literal scales a decimal; an int64 column is another type";
@@ -189,6 +189,100 @@ TEST_F(SetExprTypingTest, AnExpressionNeverWritesBeforeBjS4) {
     EXPECT_NE(out.find("NOT_IMPLEMENTED"), std::string::npos) << out;
     EXPECT_EQ(out.find("UPDATED"), std::string::npos) << out;
     EXPECT_EQ(Run("SELECT i64 FROM t WHERE id = 1"), before);
+}
+
+TEST_F(SetExprTypingTest, ALongChainOfLiteralsIsTypedInLinearTime) {
+    // A node's children are typed once and a context's type then walks the
+    // untyped literals once; re-typing a left subtree at every level made a
+    // chain of n literals cost n^2 (a debug build took 66 ms at 254 terms).
+    // 200 terms must answer at once.
+    std::string literals = "1";
+    for (int i = 0; i < 200; ++i) literals += " + 1";
+    EXPECT_TRUE(Types("i64 = " + literals));
+    std::string mixed = "i64";
+    for (int i = 0; i < 200; ++i) mixed += " + 1";
+    EXPECT_TRUE(Types("i64 = " + mixed));
+    std::string unary = "5";
+    for (int i = 0; i < 20; ++i) unary = "-(" + unary + " + 1)";
+    EXPECT_TRUE(Types("i64 = " + unary));
+}
+
+TEST_F(SetExprTypingTest, ALiteralOnlyTreeTakesItsTargetsType) {
+    EXPECT_TRUE(Types("i8 = 100 + 20 - 3 * 2"));
+    EXPECT_NE(Refusal("i8 = 100 + 300").find("byte"), std::string::npos)
+        << "each literal must fit the type the context gives it";
+    EXPECT_NE(Refusal("i64 = 1 + 'x'").find("operator + cannot apply to integer literal and string literal"),
+              std::string::npos);
+    EXPECT_NE(Refusal("d = 2 * 3").find("is int64 but column 'd' is decimal(10,2)"),
+              std::string::npos)
+        << "integer literals multiplied are an integer";
+    EXPECT_TRUE(Types("d = 2 + 3")) << "a sum of integer literals takes the decimal's type";
+}
+
+TEST_F(SetExprTypingTest, OnlyALiteralScalesADecimal) {
+    EXPECT_TRUE(Types("d = d * (2)"));
+    EXPECT_TRUE(Types("d = d * -2"));
+    EXPECT_TRUE(Types("d = 2 * d"));
+    EXPECT_NE(Refusal("d = d * (i64)").find("decimal(10,2) and int64"), std::string::npos);
+    EXPECT_NE(Refusal("d = (i64) * d").find("int64 and decimal(10,2)"), std::string::npos);
+}
+
+TEST_F(SetExprTypingTest, TheScalarRuleIsOneRuleForEveryShapeOfALiteral) {
+    // BJ-S3's review: an integer literal, an expression of them, a NULL and
+    // a decimal literal beside an integer all scale a decimal alike, however
+    // the literal is spelled or ordered.
+    for (const char* v : {"d * -2", "d * - 2", "d * (2)", "d * -(2)", "d * 2 * 3", "2 * 3 * d",
+                          "d * (1 + 1)", "(1 + 1) * d", "d * NULL", "NULL * d", "1.5 * 2",
+                          "2 * 1.5"}) {
+        const std::string set = std::string("d = ") + v;
+        EXPECT_TRUE(Types(set)) << v << ": " << Refusal(set);
+    }
+    for (const char* v : {"d * i64", "d * (i64)", "d * -i64", "i64 * d"}) {
+        EXPECT_NE(Refusal(std::string("d = ") + v).find(" and "), std::string::npos) << v;
+    }
+}
+
+TEST_F(SetExprTypingTest, ALaterAssignmentIsNotHiddenBehindAnEarlierExpression) {
+    // BJ-S3's review: the first typed expression's NotImplemented used to
+    // hide a later assignment's own refusal.
+    EXPECT_NE(Run("UPDATE t SET i64 = i64 + 1, id = 5 WHERE id = 1").find("UNSUPPORTED"),
+              std::string::npos);
+    EXPECT_NE(Run("UPDATE t SET i64 = i64 + 1, i64 = 2 WHERE id = 1").find("more than once"),
+              std::string::npos);
+    EXPECT_NE(Run("UPDATE t SET i64 = i64 + 1, i32 = i32 + 'x' WHERE id = 1")
+                  .find("string literal cannot be used as int32"),
+              std::string::npos);
+}
+
+TEST_F(SetExprTypingTest, ARefusalNamesTheTypesNotAnEmptyColumn) {
+    const std::string fit = Refusal("i8 = i8 + 200");
+    EXPECT_NE(fit.find("integer literal does not fit int8"), std::string::npos) << fit;
+    EXPECT_EQ(fit.find("''"), std::string::npos) << fit;
+    const std::string neg = Refusal("u = u + -1");
+    EXPECT_NE(neg.find("does not fit uint64"), std::string::npos) << neg;
+    EXPECT_EQ(neg.find("''"), std::string::npos) << neg;
+    EXPECT_NE(Refusal("i64 = NULL || NULL").find("yields a string, not int64"), std::string::npos);
+    EXPECT_TRUE(Types("s = NULL || NULL"));
+    EXPECT_NE(Refusal("i64 = i64 + 'x'").find("BJ-R3"), std::string::npos);
+}
+
+TEST_F(SetExprTypingTest, AnIntegerLiteralPastInt64IsRefusedNotWrapped) {
+    // BJ-S3's review: `EncodeOneValue` stored the literal the lexer wrapped
+    // (18446744073709551615 as -1), and the typer's fit gate copied it.
+    for (const std::string col : {"i8", "i32", "i64"}) {
+        const std::string out =
+            Run("UPDATE t SET " + col + " = 18446744073709551615 WHERE id = 1");
+        EXPECT_NE(out.find("does not fit column '" + col + "'"), std::string::npos)
+            << col << ": " << out;
+        EXPECT_NE(Refusal(col + " = " + col + " + 9223372036854775808").find("does not fit"),
+                  std::string::npos)
+            << col;
+    }
+    EXPECT_EQ(Run("SELECT i8, i32, i64 FROM t WHERE id = 1").find("-1"), std::string::npos);
+    EXPECT_NE(Run("INSERT INTO t VALUES (2, 1, 1, 9223372036854775808, 1, '1.00', '1.00', "
+                  "'1.0000', 'x', 'y', '2026-01-01', '2026-01-01 00:00:00', NULL)")
+                  .find("does not fit column 'i64'"),
+              std::string::npos);
 }
 
 TEST_F(SetExprTypingTest, AColumnReferenceAloneMustBeTheTargetsType) {

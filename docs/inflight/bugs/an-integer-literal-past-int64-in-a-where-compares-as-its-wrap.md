@@ -35,7 +35,10 @@ A **quiet wrong answer**, reachable from any client that sends an
 out-of-range integer, for example one passing an unsigned 64-bit value
 through.
 
-`INSERT` is not affected: BD-R5 judges a named pk from the literal's own
+The write path is fixed since BJ-S3's review (`EncodeOneValue`'s signed
+integer arm refuses a wrapped literal `OutOfRange`, so an `INSERT` and an
+`UPDATE ... SET` no longer store the wrap); what stays open is the WHERE.
+A named pk was never affected: BD-R5 judges it from the literal's own
 digits and refuses it `OutOfRange`. `PURGE` is not affected either:
 BH-S5's fix makes the window's fold treat the literal as unread, and the
 statement refuses it `InvalidArgument`.

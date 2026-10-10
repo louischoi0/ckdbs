@@ -26,8 +26,8 @@
 // exact type. The only conversions are the literal's - an untyped literal
 // takes the other operand's type, or the target's - and the explicit `CAST`
 // BJ-S5 builds. `varchar` and `char` are one family for `||` and for an
-// assignment (their length is a per-row check, as it is for a bare literal),
-// and an integer literal scaling a decimal is scale 0 (BJ-R3).
+// assignment (a `char`'s length is a per-row check, as it is for a bare
+// literal), and an integer literal scaling a decimal is scale 0 (BJ-R3).
 //
 // Pure: no page is read, no state is kept. The tree it returns is what
 // BJ-S4's evaluator walks; until then `CompileAssignments` types an

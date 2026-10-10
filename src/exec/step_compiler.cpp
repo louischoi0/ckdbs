@@ -1365,6 +1365,7 @@ Status CompileAssignments(const catalog::TableAccess& access,
     const std::string_view pk_name = catalog::NameView(access.schema.columns.front().name);
 
     std::vector<const catalog::SysColumnRow*> assigned;
+    const parser::Expr* first_expression = nullptr;
     for (const parser::Assignment& a : assignments) {
         const auto* column = access.schema.FindColumn(a.col_name);
         if (column == nullptr) {
@@ -1401,10 +1402,15 @@ Status CompileAssignments(const catalog::TableAccess& access,
             if (auto typed = TypeSetExpression(access, *a.expr, *column); !typed.ok()) {
                 return typed.status();
             }
-            return Status::NotImplemented(
-                "an expression in a SET value is parsed and not yet evaluated (BJ-S4) (byte " +
-                std::to_string(a.expr->byte_offset) + ")");
+            if (first_expression == nullptr) first_expression = a.expr.get();
         }
+    }
+    // Only after every assignment has been judged, so that a later one's
+    // refusal is not hidden behind this one.
+    if (first_expression != nullptr) {
+        return Status::NotImplemented(
+            "an expression in a SET value is parsed and not yet evaluated (BJ-S4) (byte " +
+            std::to_string(first_expression->byte_offset) + ")");
     }
     return Status::OK();
 }

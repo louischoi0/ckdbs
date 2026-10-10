@@ -208,21 +208,27 @@ and a scale difference is TY6's refusal. An untyped literal takes the other
 operand's type, or the target's, through `CoerceLiteralToColumn` and the
 integer gate `CheckIntegerLiteralFits`, so a literal that does not fit is a
 positioned compile error. `varchar` and `char` are one family for `||` and for
-the assignment (their length is a per-row check, as for a bare literal). An
-integer literal beside a decimal under `*` is scale 0.
+the assignment (a `char(N)`'s length is a per-row check, as for a bare
+literal; a `varchar`'s N is a cell width and a longer value spills). Under
+`*` or `/`, beside a decimal, an integer literal (or an expression of them)
+is scale 0 and a `NULL` keeps the decimal's type, however the literal is
+spelled or ordered; an `int64` column is never one. A literal past int64 is
+refused `OutOfRange` where it is written, never stored as the number the
+lexer wrapped it to.
 
 | operator | operands | result | refused |
 |---|---|---|---|
 | `+` `-` `*` `/` `%` | two of one integer type (`int8`..`int64`, `uint64`) | that type | `bool`, text, a mix of two types |
 | `+` `-` `%` | two `decimal(p,s)` of one `(p,s)` | that decimal | a different `(p,s)` |
-| `*` | two decimals | `decimal(min(p1+p2,38), s1+s2)`, which must be the target's | |
+| `*` | two decimals of one `(p,s)` | `decimal(min(p1+p2,38), s1+s2)`, which must be the target's | a different `(p,s)` |
 | `*` | a decimal and an integer **literal** | that decimal | an `int64` column |
 | `/` | a decimal | `NotImplemented` (needs `ROUND`/`CAST`, BJ-S5/S6) | |
 | `||` | `varchar`/`char` and string literals | `varchar` | any other type |
 | unary `-` | a signed integer or a decimal | that type | `uint64` ("an unsigned value has no negation"), text, `bool` |
 | unary `+` | an integer or a decimal | that type | text, `bool` |
-| any arithmetic | `date` | `NotImplemented` (BJ-S6) | |
-| any arithmetic | `timestamp` | `Unsupported` (there is no `INTERVAL`) | |
+| binary arithmetic | `date` | `NotImplemented` (BJ-S6) | |
+| binary arithmetic | `timestamp` | `Unsupported` (there is no `INTERVAL`) | |
+| unary `-` `+` | `date`, `timestamp` | `InvalidArgument` | |
 
 `NULL` types as its context's type, and a NULL operand yields NULL (BJ-R4).
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The

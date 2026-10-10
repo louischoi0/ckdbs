@@ -139,6 +139,12 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             if (val.type != parser::ValueType::kInt) {
                 return Status::InvalidArgument("column '" + NameOf() + "' expects an integer");
             }
+            // A literal past int64 wrapped in the lexer, so `int_val` is not
+            // its value: stored, it would be another number (BJ-S3's review).
+            if (parser::IntLiteralWrapped(val)) {
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " does not fit column '" + NameOf() + "'");
+            }
             int width = IntWidthFor(col.type_val);
             if (!FitsSigned(val.int_val, width)) {
                 return Status::InvalidArgument("value " + std::to_string(val.int_val) +

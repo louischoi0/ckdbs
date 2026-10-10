@@ -381,8 +381,9 @@ BJ-Q7's.
   sign; `uint64` arithmetic is unsigned and a negative result is
   `OutOfRange`; `DECIMAL` `+`/`-` need one scale and keep it, `*` of two
   decimals adds the scales, `/` and a scale change are BJ-Q3's; a division
-  by zero is refused; `||` yields a string whose length must fit the
-  target's `N`, or the row is refused - nothing is truncated.
+  by zero is refused; `||` yields a string whose length must fit a
+  `char(N)` target's `N`, or the row is refused - nothing is truncated (a
+  `varchar`'s N is a cell width, so a longer value spills, BJ-S3's review).
 - **Only `CAST` converts**, with the reference dialect's rules for which
   pairs it admits, and its rounding for a scale it narrows (BJ-Q3).
 
@@ -714,3 +715,42 @@ measured at the milestone's close** (§5).
 - **Stopped here.** BJ-S4 starts only after BA's code is on `main` (§3's
   order), and `worktree-ba-open-marks` is not merged at `080cd55`. BJ-S5..S8
   build on S4's evaluator, so they wait with it.
+
+### BJ-S3 — the `critics-developer` review of `c3cf85fd`, applied
+
+On `worktree-bj-expression-update`, after `c3cf85fd`, the review found, and
+the tree now fixes:
+- **A quiet-wrong write (high), older than BJ.** `EncodeOneValue`'s
+  int8..int64 arm stored the literal the lexer wrapped
+  (`SET i8 = 18446744073709551615` answered `UPDATED 1` and stored `-1`), and
+  the typer's fit gate copied it. The arm refuses a wrapped literal
+  `OutOfRange`, which covers an `INSERT`, a bare `SET` and the typer. The WHERE
+  half of the same wrap stays in `an-integer-literal-past-int64-in-a-where-...md`.
+- **Typing cost** was quadratic (a re-typed left subtree per level), not
+  exponential as an earlier note said; the typer now types bottom-up with no
+  hint and `Resolve` gives a context's type to the untyped literals in one
+  walk. The `hint` parameter is gone.
+- **The decimal-scalar rule was two rules** (`d * -2` typed, `d * - 2` did
+  not; `d * NULL` and `d = 1.5 * 2` were refused). One `Settle` decides: under
+  `*`/`/` against a decimal an integer literal or an expression of them is
+  scale 0 and a NULL keeps the decimal's type.
+- **A later assignment's refusal was hidden** behind the first expression's
+  `NotImplemented`; `CompileAssignments` now judges every assignment and
+  refuses `NotImplemented` last.
+- **Refusal wording**: a literal's refusal named `column ''`; it now names the
+  literal's kind and the target type. `NULL || NULL` into a number says the
+  operator yields a string. `SetTypeName` spells the wide decimal
+  `decimal(p,s)`, the only spelling a statement can write. Every typing
+  refusal carries `(BJ-R3)`.
+- **Spec text**: `types.md` §3.2b read "two decimals" for `*` (one `(p,s)`),
+  "any arithmetic" for a date (binary), and a `varchar` length check that does
+  not exist (only `char(N)` has one); all corrected, here and in BJ-R3.
+- **Cells**: four new (the scalar rule over twelve spellings, the later
+  assignment, the wording, the wrapped literal), 23 in the file.
+
+**Rejected:** deleting the `Mismatch` helper into one message (it names a
+different thing than `DoesNotFit`); folding constant expressions at compile so
+`i8 = 200 - 100` types (the review lists it as by design, and BJ-S4's
+evaluator is where a value is known); making `i64 = (NULL)` a compile
+refusal (the NOT NULL verdict is the row's, BJ-R4). **Not done:** the
+WHERE-side wrap, which is outside this order.
