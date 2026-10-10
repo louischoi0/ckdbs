@@ -337,5 +337,33 @@ TEST_F(AssertionEnforceTest, AFreshDispatcherOverTheSameStoreReportsAndDoesNotEn
               "INSERTED");
 }
 
+TEST_F(AssertionEnforceTest, ACreateOnARelationTheSessionCannotSeeIsRefusedAndBuildsNothing) {
+    // A relation another session's open transaction created is not the
+    // creating session's to read. `CREATE ASSERTION` resolves its target
+    // under the session's view to take the relation `X` that fences the
+    // writers, and used to take no `X` when that lookup failed - then build
+    // over the relation resolved unfiltered, which no writer was fenced
+    // from: a row its creator wrote between the scan and the adoption was
+    // in neither the directory nor any check.
+    Session creator;
+    ASSERT_EQ(Run(creator, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(creator, "CREATE TABLE ghost (id int64, g int64) BTREE").substr(0, 7),
+              "CREATED");
+
+    // The other session cannot see it ...
+    ASSERT_EQ(Run("SELECT * FROM ghost").substr(0, 3), "ERR");
+    // ... so it cannot put an assertion on it either.
+    const std::string out =
+        Run("CREATE ASSERTION cap ON ghost GROUP BY (g) CHECK COUNT(*) <= 1");
+    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
+    EXPECT_NE(Run("SHOW ASSERTIONS").find("assertions=0"), std::string::npos)
+        << "the refused create published an assertion: " << Run("SHOW ASSERTIONS");
+
+    // The creator's own table is untouched by the refusal.
+    EXPECT_EQ(Run(creator, "INSERT INTO ghost VALUES (1)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run(creator, "INSERT INTO ghost VALUES (1)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run(creator, "ROLLBACK").substr(0, 8), "ROLLBACK");
+}
+
 }  // namespace
 }  // namespace kds::server

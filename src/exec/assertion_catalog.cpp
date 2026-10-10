@@ -419,10 +419,16 @@ StatusOr<AssertionColumns> ResolveAssertionColumns(const catalog::TableAccess& a
     return out;
 }
 
-// The relation, or §3.1's refusal with the byte the parser recorded.
+}  // namespace
+
+// The relation, or §3.1's refusal with the byte the parser recorded. Under
+// `view` when one is given: the dispatcher resolves the target under the
+// session's view, so a relation another session's open transaction created
+// is no relation to this one, and what it fenced is what the build reads.
 StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
-                                          const parser::AssertionStmt& stmt) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name);
+                                          const parser::AssertionStmt& stmt,
+                                          const txn::ReadView* view) {
+    auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
                                 std::to_string(stmt.table_byte_offset) + ")");
@@ -435,6 +441,8 @@ StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
     }
     return oid.value();
 }
+
+namespace {
 
 
 // ---- `CREATE ASSERTION` in its three steps -----------------------------

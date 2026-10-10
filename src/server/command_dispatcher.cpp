@@ -3093,8 +3093,16 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // rather than by who the table reports (the review's C7): with it and
     // another writer both holding the relation, the table may name the
     // other, and waiting for it would end in the same refusal. Resolved
-    // under the session's view, as `HandleIndex` resolves; a name that does
-    // not resolve takes no borrow and falls to `PrepareAssertionDef`.
+    // under the session's view, as `HandleIndex` resolves, **and a name the
+    // view does not resolve is refused here**: it used to take no borrow and
+    // fall to a build that resolved the name unfiltered, so a relation
+    // another session's open transaction had created was built over with
+    // none of its writers fenced, and a row it wrote after the scan passed
+    // was in no check.
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto target = exec::AssertionTargetOid(catalog_, stmt, view.has_value() ? &*view : nullptr);
+    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
+
     struct BuildLock {
         txn::TransactionManager* manager = nullptr;
         txn::Transaction* txn = nullptr;
@@ -3105,27 +3113,22 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         }
     } build_lock;
     if (locks_ != nullptr && txn_ != nullptr) {
-        const std::optional<txn::ReadView> view = ViewFor(session);
-        if (auto rel = catalog_.FindTableOidByName(stmt.table_name,
-                                                   view.has_value() ? &*view : nullptr);
-            rel.ok()) {
-            const txn::Transaction* own = session.transaction();
-            if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(rel.value()))) {
-                const Status mine = Status::TxnConflict(
-                    "relation '" + stmt.table_name +
-                    "' is held by this session's own transaction; CREATE ASSERTION reads "
-                    "settled state - retry when it has ended");
-                return {ErrorReply(mine), false, 0, mine};
-            }
-            auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
-            if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
-            build_lock.manager = txn_;
-            build_lock.txn = begun.value();
-            if (std::optional<Status> held =
-                    BorrowRelationForDdl(build_lock.txn, rel.value(), /*poisons=*/false);
-                held.has_value()) {
-                return {ErrorReply(*held), false, 0, *held};
-            }
+        const txn::Transaction* own = session.transaction();
+        if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(target.value()))) {
+            const Status mine = Status::TxnConflict(
+                "relation '" + stmt.table_name +
+                "' is held by this session's own transaction; CREATE ASSERTION reads "
+                "settled state - retry when it has ended");
+            return {ErrorReply(mine), false, 0, mine};
+        }
+        auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
+        if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
+        build_lock.manager = txn_;
+        build_lock.txn = begun.value();
+        if (std::optional<Status> held =
+                BorrowRelationForDdl(build_lock.txn, target.value(), /*poisons=*/false);
+            held.has_value()) {
+            return {ErrorReply(*held), false, 0, *held};
         }
     }
 

@@ -254,6 +254,15 @@ StatusOr<AssertionDdlResult> CreateAssertion(
     const txn::ReadView& check_view, wal::WalManager* wal, AssertionEnforcer& enforcer,
     const std::function<void()>& after_publish_run_for_test = {});
 
+// The statement's target relation, or the §3.1 refusal with its byte. `view`
+// is the catalog visibility the name resolves under (null: every relation).
+// **The dispatcher resolves under the session's view before it takes the
+// build's relation `X`**: a relation the view cannot see is refused here, so
+// no build ever runs over a relation whose writers were not fenced.
+StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
+                                          const parser::AssertionStmt& stmt,
+                                          const txn::ReadView* view = nullptr);
+
 // `DROP ASSERTION`: the catalog row retired, `ASSERT_DROP` logged when
 // `wal` is attached (before the row goes - WAL before data), and the
 // catalog version bumped. Returns the dropped assertion's id so the caller
