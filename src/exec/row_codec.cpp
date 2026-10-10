@@ -816,6 +816,21 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             return Status::OK();
         }
 
+        case catalog::kTypeValInt8:
+        case catalog::kTypeValInt16:
+        case catalog::kTypeValInt32:
+        case catalog::kTypeValInt64:
+            // A signed integer column has no value outside int64, so a
+            // wrapped literal names nothing it holds: `= 18446744073709551621`
+            // is not `= 5`. Refused here, as the INSERT's encode refuses it,
+            // so a WHERE, an UPDATE's and a DELETE's cannot read or touch a
+            // row the client never named.
+            if (int_literal_wrapped) {
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " is outside the range of an int64 column");
+            }
+            return Status::OK();
+
         default:
             // Every other type keeps the behaviour it had before this task.
             return Status::OK();

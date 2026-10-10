@@ -448,5 +448,55 @@ TEST(TypesContract, Item8_TheTypesAreVisibleThroughTheCatalogViews) {
     EXPECT_NE(columns.find("decimal(9,3)"), std::string::npos) << columns;
 }
 
+// An integer literal past int64 wraps in the lexer (`18446744073709551621`
+// lexes as 5), so `int_val` is not its value. A WHERE that compared it as
+// the wrap answered, updated or deleted a row the client never named.
+TEST(TypesContract, AWrappedIntegerLiteralInAWhereIsRefusedNotCompared) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, qty int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (5, 1)").substr(0, 8), "INSERTED");
+
+    // 2^64 + 5 wraps to 5, the pk; 2^64 + 1 wraps to 1, the qty.
+    for (const char* sql : {"SELECT * FROM t WHERE id = 18446744073709551621",
+                            "SELECT * FROM t WHERE qty = 18446744073709551617",
+                            "SELECT * FROM t WHERE id >= 18446744073709551621 AND "
+                            "id <= 18446744073709551621",
+                            "UPDATE t SET qty = 9 WHERE qty = 18446744073709551617",
+                            "DELETE FROM t WHERE id = 18446744073709551621",
+                            "DELETE FROM t WHERE qty = 18446744073709551617"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql;
+        EXPECT_NE(out.find("outside the range of an int64 column"), std::string::npos)
+            << sql << " -> " << out;
+    }
+    // Nothing was touched by any of them.
+    EXPECT_EQ(db.Run("SELECT * FROM t"), "id,qty\\n5,1");
+
+    // The widest value int64 holds is still an ordinary literal.
+    EXPECT_EQ(db.Run("SELECT * FROM t WHERE id = 9223372036854775807"), "id,qty");
+
+    // An index probe and a pk range are keyed from the coerced literal too.
+    ASSERT_EQ(db.Run("CREATE INDEX t_qty ON t (qty)").substr(0, 7), "CREATED");
+    for (const char* sql : {"SELECT * FROM t WHERE qty = 18446744073709551617",
+                            "SELECT * FROM t WHERE id BETWEEN 18446744073709551621 AND "
+                            "18446744073709551622"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql;
+        EXPECT_NE(out.find("outside the range of an int64 column"), std::string::npos)
+            << sql << " -> " << out;
+    }
+    EXPECT_EQ(db.Run("SELECT * FROM t"), "id,qty\\n5,1");
+}
+
+TEST(TypesContract, AUint64ColumnStillTakesItsFullUnsignedRange) {
+    // The digits of a wrapped literal are the value for a uint64 column.
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE u (id int64, big uint64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO u VALUES (18446744073709551615)").substr(0, 8), "INSERTED");
+    EXPECT_NE(db.Run("SELECT * FROM u WHERE big = 18446744073709551615")
+                  .find("18446744073709551615"),
+              std::string::npos);
+}
+
 }  // namespace
 }  // namespace kds::server
