@@ -124,10 +124,13 @@ TEST_F(SetExprTypingTest, ADecimalProductAddsScalesAndMustBeNarrowedToItsTarget)
     EXPECT_TRUE(Types("d = d * 2"));
     EXPECT_NE(Refusal("d = d * i64").find("decimal(10,2) and int64"), std::string::npos)
         << "only a literal scales a decimal; an int64 column is another type";
-    // Division needs an explicit narrowing, which BJ-S5/S6 build.
-    EXPECT_NE(Run("UPDATE t SET d = d / 2 WHERE id = 1").find("BJ-S6"), std::string::npos);
-    EXPECT_NE(Run("UPDATE t SET d = d / e WHERE id = 1").find("NOT_IMPLEMENTED"),
+    // A quotient has the dividend's scale and 16 more places, and ROUND or
+    // CAST is how the client narrows it (BJ-Q3 (a)).
+    EXPECT_NE(Refusal("d = d / 2").find("decimal(26,18) but column 'd' is decimal(10,2)"),
               std::string::npos);
+    EXPECT_NE(Refusal("d = d / e").find("but column 'd' is decimal(10,2)"), std::string::npos);
+    EXPECT_TRUE(Types("d = ROUND(d / 3, 2)")) << Refusal("d = ROUND(d / 3, 2)");
+    EXPECT_TRUE(Types("d = CAST(d / e AS decimal(10, 2))"));
 }
 
 TEST_F(SetExprTypingTest, TextConcatenatesAcrossVarcharAndChar) {
@@ -144,7 +147,11 @@ TEST_F(SetExprTypingTest, ArithmeticOnTextBoolDateAndTimestampIsRefused) {
     EXPECT_NE(Refusal("s = s + s").find("operator + cannot apply to varchar and varchar"),
               std::string::npos);
     EXPECT_NE(Refusal("s = -s").find("operator -"), std::string::npos);
-    EXPECT_NE(Run("UPDATE t SET dt = dt + 1 WHERE id = 1").find("BJ-S6"), std::string::npos);
+    EXPECT_TRUE(Types("dt = dt + 1")) << "a date and a number of days (BJ-Q4)";
+    EXPECT_NE(Refusal("dt = dt * 2").find("operator * cannot apply to date"), std::string::npos);
+    EXPECT_NE(Refusal("dt = dt + dt").find("operator + cannot apply to date and date"),
+              std::string::npos);
+    EXPECT_NE(Refusal("dt = 1 - dt").find("operator - cannot apply to"), std::string::npos);
     const std::string ts = Run("UPDATE t SET ts = ts + 1 WHERE id = 1");
     EXPECT_NE(ts.find("INTERVAL"), std::string::npos) << ts;
     EXPECT_NE(ts.find("UNSUPPORTED"), std::string::npos) << ts;

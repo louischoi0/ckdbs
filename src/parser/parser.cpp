@@ -751,6 +751,57 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCall(const Token& name) {
     return call;
 }
 
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprFunction(const Token& name) {
+    if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(name.byte_offset);
+    DepthScope scope(expr_depth_);
+
+    std::vector<std::shared_ptr<const Expr>> args;
+    const bool position = IEquals(name.text, "POSITION");
+    if (lexer_.Peek().type != TokenType::kRParen) {
+        for (;;) {
+            // `POSITION(sub IN string)`: the first operand stops before `IN`,
+            // which a comparison would otherwise refuse.
+            auto arg = position && args.empty() ? ParseExprConcat() : ParseExprOr();
+            if (!arg.ok()) return arg;
+            args.push_back(std::move(arg.value()));
+            if (args.size() > kMaxExprArgs) {
+                return Status::Unsupported("more than " + std::to_string(kMaxExprArgs) +
+                                           " arguments (byte " + std::to_string(name.byte_offset) +
+                                           ")");
+            }
+            if (position && args.size() == 1) {
+                if (lexer_.Peek().type != TokenType::kKeyword || lexer_.Peek().kw != Keyword::kIn) {
+                    return Status::InvalidArgument("expected IN in POSITION (byte " +
+                                                   std::to_string(lexer_.Peek().byte_offset) + ")");
+                }
+                lexer_.Next();
+                continue;
+            }
+            if (!position && lexer_.Peek().type == TokenType::kComma) {
+                lexer_.Next();
+                continue;
+            }
+            break;
+        }
+    }
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing the argument list"); !s.ok()) {
+        return s;
+    }
+    // `MOD(a, b)` is `a % b`.
+    if (IEquals(name.text, "MOD") && args.size() == 2) {
+        auto e = std::make_shared<Expr>(*MakeBinary(ExprOp::kMod, name.byte_offset,
+                                                    std::move(args[0]), std::move(args[1])));
+        e->byte_offset = name.byte_offset;  // the expression starts at `MOD`
+        if (TooBig(*e)) return ExprTooDeep(name.byte_offset);
+        return std::shared_ptr<const Expr>(std::move(e));
+    }
+    auto call = std::make_shared<Expr>(
+        *MakeCall(ExprOp::kFunction, name.byte_offset, name.byte_offset, std::move(args)));
+    call->function = std::string(name.text);
+    if (TooBig(*call)) return ExprTooDeep(name.byte_offset);
+    return std::shared_ptr<const Expr>(std::move(call));
+}
+
 // `CASE [operand] WHEN a THEN b [WHEN ...] [ELSE e] END`. The `CASE` keyword
 // is consumed. A simple CASE becomes the searched form, `WHEN operand = a`.
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCase(const Token& kw) {
@@ -831,9 +882,8 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
                     return ParseExprCall(tok);
                 }
                 // Every other call is a scalar function, BJ-S6's.
-                return Status::NotImplemented(
-                    "a function call in a SET value is not supported yet (BJ-S6) (byte " +
-                    std::to_string(tok.byte_offset) + ")");
+                lexer_.Next();  // the '('
+                return ParseExprFunction(tok);
             }
             if (after.type == TokenType::kDot) {
                 return Status::NotImplemented(

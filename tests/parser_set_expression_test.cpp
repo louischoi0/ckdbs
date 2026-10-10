@@ -56,6 +56,7 @@ std::string Render(const Expr& e) {
             return "(" + Render(*e.lhs) + " " + kOps[static_cast<int>(e.op)] + " " +
                    Render(*e.rhs) + ")";
         }
+        case Expr::Kind::kCall: return "(call)";
     }
     return "?";
 }
@@ -206,7 +207,6 @@ TEST(SetExpressionParseTest, AFormALaterStageBuildsIsRefusedByNameAtItsByte) {
     };
     const std::string head = "UPDATE t SET a = ";
     const std::vector<Case> cases = {
-        {"abs(a)", "BJ-S6", 0},          {"a + abs(b)", "BJ-S6", 4},
         {"(SELECT 1)", "BJ-S7", 0},      {"1 + (SELECT 1)", "BJ-S7", 4},
         {"t.b", "qualified", 0},
         // The comparison forms BJ leaves out (BJ-R1 family 2).
@@ -329,6 +329,28 @@ TEST(SetExpressionParseTest, ANestedSimpleCaseIsBoundedBySizeNotOnlyHeight) {
     ASSERT_FALSE(big.ok());
     EXPECT_EQ(big.status().code(), StatusCode::kUnsupported);
     EXPECT_NE(big.status().message().find("nodes"), std::string::npos) << big.status().message();
+}
+
+TEST(SetExpressionParseTest, AFunctionCallParsesByNameAndTheTyperJudgesTheName) {
+    auto abs = SetOf("abs(a) + 1");
+    ASSERT_TRUE(abs.ok()) << abs.status().message();
+    EXPECT_EQ(abs.value().expr->lhs->kind, Expr::Kind::kCall);
+    EXPECT_EQ(abs.value().expr->lhs->op, ExprOp::kFunction);
+    EXPECT_EQ(abs.value().expr->lhs->function, "abs");
+    EXPECT_EQ(abs.value().expr->lhs->args.size(), 1u);
+    // No arguments, several, nested, and the two spellings that are not f(a, b).
+    for (const char* v : {"NOW()", "substring(s, 2, 3)", "upper(trim(s))", "concat(a, b, 'x')",
+                          "POSITION('a' IN s)", "MOD(a, 3)", "nosuchfunction(a)"}) {
+        EXPECT_TRUE(SetOf(v).ok()) << v << ": " << SetOf(v).status().message();
+    }
+    auto mod = SetOf("MOD(a, 3)");
+    EXPECT_EQ(mod.value().expr->kind, Expr::Kind::kBinary) << "MOD(a, b) is a % b";
+    EXPECT_EQ(mod.value().expr->op, ExprOp::kMod);
+    auto position = SetOf("POSITION('a' IN s)");
+    EXPECT_EQ(position.value().expr->args.size(), 2u);
+    for (const char* v : {"abs(", "abs(a,)", "POSITION('a', s)", "POSITION('a' IN)", "now(1"}) {
+        EXPECT_FALSE(SetOf(v).ok()) << v;
+    }
 }
 
 TEST(SetExpressionParseTest, ARowValueIsOneAssignmentPerColumn) {

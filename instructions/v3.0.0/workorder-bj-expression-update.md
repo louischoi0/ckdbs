@@ -929,3 +929,43 @@ resolves to int64 first (the bare `SET u = 18446744073709551615` works) and
 unbounded `char(N)` in a CAST, and the byte named by `CASE END` / `<>` errors
 (cosmetic, no wrong answer); `ColumnDef` holding a `TypeSpec` (touches every
 CREATE TABLE reader for no behaviour).
+
+### BJ-S6 — scalar functions, date arithmetic and decimal division (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `022e5e46`. **Not measured;
+measured at the milestone's close** (§5). **Suite 3472/3472** at this stage's
+tree, `HeapSuspensionIsLifted` disabled as before.
+
+- **Functions** (BJ-Q5, as adopted): `ABS SIGN CEIL FLOOR ROUND TRUNC MOD`, `UPPER
+  LOWER LENGTH SUBSTRING TRIM LTRIM RTRIM POSITION(a IN b) REPLACE LPAD RPAD
+  CONCAT`, and `NOW()`, `CURRENT_DATE`, `DATE(ts)` (BJ-Q4); anything else is
+  refused `unknown function` at its byte, as AP-S4 refuses one. The parser takes
+  any `name(...)` (`Expr::kFunction`; `MOD(a, b)` becomes `a % b`, `POSITION`
+  its `IN` form); the typer owns the table (`Typer::Function`), the evaluator
+  the semantics. Strings are bytes (`LENGTH` counts bytes, `UPPER` touches
+  ASCII), because that is how `char(N)` and a `varchar`'s width are measured.
+- **Date arithmetic** (BJ-Q4 (a)): `date + n`, `n + date`, `date - n` (a date,
+  refused outside the supported range) and `date - date` (an `int32` of days);
+  every other operator over a date is refused, and timestamp arithmetic stays
+  `Unsupported`.
+- **Decimal `/`** (BJ-Q3 (a)): `decimal(P, S)` with `S = min(s + 16, 38)` and the
+  digits a quotient can need, exact then rounded half away from zero, never
+  narrowed implicitly.
+- **A scaled decimal** (`SetType::Kind::kScaled`): `ROUND/TRUNC/CEIL/FLOOR` over a
+  decimal yield a fixed scale and take the precision of what they are assigned to
+  or combined with, so `SET price = ROUND(price / 3, 2)` types for a
+  `decimal(10, 2)` column. **This is a departure from BJ-Q2 (b)'s exact type,
+  recorded as a CLA proposal under the standing go-ahead**: without it the
+  explicit narrowing BJ-Q3 (a) names ("`ROUND(x, s)` or `CAST` is how to narrow
+  it") could not produce the column's type for any precision but the argument's.
+  `CAST` still names the whole type.
+- **Purity** is not declared in `functions.hpp`. The order's §3 asked for it
+  there; that catalog's entries are what a WHERE conjunct compiles, with a
+  single argument type, and its own rule is that a field nothing reads is a
+  promise nothing checks - an UPDATE has no determinism class until AQ. `NOW()`
+  and `CURRENT_DATE` are the stable two (`StatementContext`, carried across a
+  park); the rest are pure; `IsConstantSetExpression` treats the first two as
+  not constant, so BJ-Q10 never folds them.
+- **Cells**: `tests/set_expr_functions_test.cpp` (11), eight parser cells' worth of
+  corpus lines (the golden corpus: one verdict moved, no stored hash moved), the
+  typing and function-conjunct pins moved to what is now true.

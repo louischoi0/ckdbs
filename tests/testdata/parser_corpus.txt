@@ -659,7 +659,7 @@ ok	eb8b616452e2f285	b5d410774c7ffc00	eb8b616452e2f285	UPDATE t SET a = (5)
 InvalidArgument	cc8f6a935f77b8a8	cbf29ce484222325	cc8f6a935f77b8a8	UPDATE t SET a = a + ?
 ok	cc8f6a935f77b8a8	064a8a899bed480c	cc8f6a935f77b8a8	UPDATE t SET a = a + 1.5
 ok	aa83919ff0528ad9	78f78d99c4196c83	aa83919ff0528ad9	UPDATE t SET a = a + 1 WHERE id = 7
-NotImplemented	7b3adf6c34d61c58	cbf29ce484222325	7b3adf6c34d61c58	UPDATE t SET a = abs(a)
+ok	7b3adf6c34d61c58	cbf29ce484222325	7b3adf6c34d61c58	UPDATE t SET a = abs(a)
 ok	cc7e6c935f6948db	b5d414774c8002cc	cc7e6c935f6948db	UPDATE t SET a = a = 1
 ok	232684ff8e5fbf44	b5d414774c8002cc	232684ff8e5fbf44	UPDATE t SET a = CASE WHEN a THEN 1 END
 NotImplemented	cf4cc03d7b43c48f	78f79399c41976b5	cf4cc03d7b43c48f	UPDATE t SET a = 1 + (SELECT 1)
@@ -689,3 +689,11 @@ NotImplemented	5d48bca78de857b1	cbf29ce484222325	5d48bca78de857b1	UPDATE t SET a
 InvalidArgument	45f85ef79e9c279e	cbf29ce484222325	45f85ef79e9c279e	UPDATE t SET a = a < b < c
 InvalidArgument	760a1b5e5eb5171a	b5d414774c8002cc	760a1b5e5eb5171a	UPDATE t SET (a, b) = (1)
 InvalidArgument	b6321892d5f456d4	78f79099c419719c	b6321892d5f456d4	UPDATE t SET (a) = (1, 2)
+ok	b8f0f5dedd381438	cbf29ce484222325	b8f0f5dedd381438	UPDATE t SET a = abs(b) + sign(c)
+ok	15393d6e4b12892e	92551aeebeb7e06e	15393d6e4b12892e	UPDATE t SET d = round(a / 3, 2)
+ok	0ce7476d764897bb	0b2d6aff2942c66a	0ce7476d764897bb	UPDATE t SET s = upper(trim(s)) || lpad(s, 8, '0')
+ok	a97604e8a21657be	84710b9045511414	a97604e8a21657be	UPDATE t SET a = length(s) + position('x' IN s)
+ok	7fb2f471f73dcbb6	b5d412774c7fff66	7fb2f471f73dcbb6	UPDATE t SET dt = dt + 7
+ok	0ecbabcd2bdf2a2a	cbf29ce484222325	0ecbabcd2bdf2a2a	UPDATE t SET ts = now()
+ok	a27ac03666838837	b5d416774c800632	a27ac03666838837	UPDATE t SET a = mod(b, 3)
+InvalidArgument	79d41c37107c3d4e	84710b9045511414	79d41c37107c3d4e	UPDATE t SET a = position('x', s)

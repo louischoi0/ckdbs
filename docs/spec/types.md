@@ -230,11 +230,13 @@ lexer wrapped it to.
 | `+` `-` `%` | two `decimal(p,s)` of one `(p,s)` | that decimal | a different `(p,s)` |
 | `*` | two decimals of one `(p,s)` | `decimal(min(p1+p2,38), s1+s2)`, which must be the target's | a different `(p,s)` |
 | `*` | a decimal and an integer **literal** | that decimal | an `int64` column |
-| `/` | a decimal | `NotImplemented` (needs `ROUND`, BJ-S6) | |
+| `/` | two decimals of one `(p,s)`, or a decimal and an integer literal | `decimal(P, S)`, `S = min(s+16, 38)`, `P = min(p-s+s2+S, 38)` | a different `(p,s)`; the result is never narrowed implicitly - `ROUND` or `CAST` does it (BJ-Q3 (a)) |
 | `||` | `varchar`/`char` and string literals | `varchar` | any other type |
 | unary `-` | a signed integer or a decimal | that type | `uint64` ("an unsigned value has no negation"), text, `bool` |
 | unary `+` | an integer or a decimal | that type | text, `bool` |
-| binary arithmetic | `date` | `NotImplemented` (BJ-S6) | |
+| `date + n`, `n + date`, `date - n` | `date` and an integer type or literal (days) | `date` | a decimal or text operand, `date + date`, `n - date` |
+| `date - date` | two dates | `int32` (days) | |
+| any other binary operator | `date` | `InvalidArgument` | |
 | binary arithmetic | `timestamp` | `Unsupported` (there is no `INTERVAL`) | |
 | unary `-` `+` | `date`, `timestamp` | `InvalidArgument` | |
 | `=` `!=` `<` `<=` `>` `>=` | two of one type (the text family counts as one), or a literal and a column | `bool` | two types, a bare number with a point beside another literal |
@@ -258,6 +260,42 @@ rounding half away from zero and refuses a result its target cannot hold
 date floors to its day. `SET (a, b) = (x, y)` is `a = x, b = y`, both read from
 the before-image. `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS TRUE`, `<>` and a
 boolean literal are not in the grammar.
+
+**Scalar functions (BJ-S6, BJ-Q5).** A name that is not in the table is refused
+`unknown function` at its byte; an argument that is the wrong type is refused
+naming the function, what it needs and what it was given. Every function is
+NULL for a NULL argument except `CONCAT`, which skips them.
+
+| function | arguments | result |
+|---|---|---|
+| `ABS(x)`, `SIGN(x)` | an integer or a decimal | the argument's type (`SIGN` of a decimal is `-1`, `0` or `1` at its scale) |
+| `CEIL(x)`, `FLOOR(x)` | an integer or a decimal | an integer: itself; a decimal: scale 0 (see below) |
+| `ROUND(x [, n])`, `TRUNC(x [, n])` | a number, and `n` a whole-number **literal** 0..38 | an integer: itself; a decimal: scale `n` (see below). `ROUND` rounds half away from zero |
+| `MOD(a, b)` | as `%` | as `%` |
+| `UPPER`, `LOWER` | text | `varchar`; ASCII letters only, other bytes are left as they are |
+| `LENGTH(s)` | text | `int32`, in **bytes** (as `char(N)` and `varchar` widths are) |
+| `SUBSTRING(s, from [, count])` | text, whole numbers | `varchar`; 1-based, a position before the first counts against `count`, a negative `count` is refused |
+| `TRIM`, `LTRIM`, `RTRIM(s [, chars])` | text | `varchar`; strips spaces, or any of `chars` |
+| `POSITION(sub IN s)` | text, text | `int32`, 0 when absent |
+| `REPLACE(s, from, to)` | text | `varchar`; an empty `from` replaces nothing |
+| `LPAD`, `RPAD(s, n [, fill])` | text, a whole number, text | `varchar` of `n` bytes: a longer `s` is cut on the right, as the reference dialect does; refused past 1 MiB |
+| `CONCAT(a, b, ...)` | text | `varchar` |
+| `NOW()` | none | `timestamp`: **one value per statement**, the statement's clock (`StatementContext`), carried across a park |
+| `CURRENT_DATE` | none, written without parentheses | `date`; a column of that name wins, so the function is unreachable on a relation that has one (BJ-Q4) |
+| `DATE(ts)` | a timestamp | `date`, the day it falls in |
+
+**A scaled decimal.** `ROUND`, `TRUNC`, `CEIL` and `FLOOR` over a decimal yield a
+decimal of a fixed scale and **no precision of their own**: it takes the
+precision of the column it is assigned to, or of the decimal it is added to or
+compared with, and is refused if that is another scale. So `SET price =
+ROUND(price / 3, 2)` is a `decimal(10, 2)` whatever the quotient's width; a
+value too wide for the precision it lands in is `OutOfRange` at the row. Used
+with nothing to take a precision from it is the argument's own precision at
+that scale. An untyped scaled decimal under `*` or `/`, or two of different
+scales, needs a `CAST`. Nothing in the engine reads a function's purity yet
+(`functions.hpp` declares it for the WHERE catalog, whose entries are not
+these), so none is declared for them: `NOW()` and `CURRENT_DATE` are the two
+stable ones, and the rest are pure.
 
 `NULL` types as its context's type, and a NULL operand yields NULL (BJ-R4).
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The

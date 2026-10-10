@@ -8133,7 +8133,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         for (std::size_t i = 0; i < compiled.size(); ++i) {
             if (compiled[i].expr == nullptr) continue;
             const std::uint32_t expression_byte = stmt.assignments[i].expr->byte_offset;
-            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row.value());
+            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row.value(), context);
             if (!value.ok()) {
                 return value.status().WithMessage(
                     value.status().message() + " in the expression at byte " +

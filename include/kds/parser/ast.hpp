@@ -766,6 +766,9 @@ enum class ExprOp : std::uint8_t {
     kCase, kCoalesce, kNullif, kGreatest, kLeast,
     // `kUnary`: `lhs` converted to `cast_to`.
     kCast,
+    // `kCall`: a scalar function by name (`Expr::function`), BJ-S6. Which
+    // names exist, their signatures and their results are the typer's.
+    kFunction,
 };
 
 struct Expr {
@@ -807,6 +810,7 @@ struct Expr {
     std::shared_ptr<const Expr> rhs;  // kBinary's right
     std::vector<std::shared_ptr<const Expr>> args;  // kCall
     TypeSpec cast_to;                               // kUnary with kCast
+    std::string function;                           // kCall with kFunction, as written
 };
 
 struct Assignment {

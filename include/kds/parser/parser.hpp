@@ -261,6 +261,9 @@ private:
     StatusOr<std::shared_ptr<const Expr>> ParseExprPrimary();
     StatusOr<std::shared_ptr<const Expr>> ParseExprCall(const Token& name);
     StatusOr<std::shared_ptr<const Expr>> ParseExprCase(const Token& kw);
+    // `name ( [expr, ...] )` for a scalar function (BJ-S6); `POSITION(a IN b)`
+    // and `MOD(a, b)` are the two spellings that are not that shape.
+    StatusOr<std::shared_ptr<const Expr>> ParseExprFunction(const Token& name);
     // A type name with its optional `(width)` or `(precision, scale)`.
     Status ParseTypeSpec(TypeSpec& out);
     // Any `::type` after `operand`.

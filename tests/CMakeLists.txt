@@ -146,6 +146,7 @@ add_executable(kds_tests
     parser_set_expression_test.cpp
     set_expr_conditional_test.cpp
     set_expr_eval_test.cpp
+    set_expr_functions_test.cpp
     set_expr_two_core_rig_test.cpp
     set_expr_typing_test.cpp
     parser_golden_test.cpp

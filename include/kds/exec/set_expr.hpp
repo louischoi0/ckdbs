@@ -8,6 +8,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/functions.hpp"
 #include "kds/parser/ast.hpp"
 
 // **Typing a SET value expression at compile** (BJ-S3,
@@ -44,6 +45,11 @@ struct SetType {
         kInteger,   // an integer literal
         kNumeric,   // a bare number with a point, `1.5`
         kString,    // a quoted string
+        // A decimal of a fixed scale whose precision its context gives: what
+        // `ROUND(x, 2)` yields, so `SET price = ROUND(price / 3, 2)` is a
+        // `decimal(10, 2)` whatever precision the quotient had (BJ-Q3 (a)).
+        // `type_val` and `len` carry the natural type a context-free use takes.
+        kScaled,
         kConcrete,  // a column's type: `type_val`, and `len` for char and decimal
     };
     Kind kind = Kind::kNull;
@@ -56,6 +62,17 @@ struct SetType {
 // `int64`, `decimal(10,2)`, `char(8)`, `integer literal`, ... - what a
 // refusal names.
 std::string SetTypeName(const SetType& t);
+
+// The scalar functions a SET value may call (BJ-Q5, BJ-Q4). All are pure
+// functions of their arguments except `NOW()` and `CURRENT_DATE`, which are
+// stable - one value per statement (`StatementContext`). **No purity is
+// declared in `functions.hpp`'s catalog**: that catalog's entries are what a
+// WHERE conjunct compiles, and its own rule is that a field nothing reads is a
+// promise nothing checks; an UPDATE has no determinism class until AQ.
+enum class SetFunction : std::uint8_t {
+    kNone, kAbs, kSign, kCeil, kFloor, kRound, kTrunc, kUpper, kLower, kLength, kSubstring,
+    kTrim, kLtrim, kRtrim, kPosition, kReplace, kLpad, kRpad, kConcat, kNow, kCurrentDate, kDate,
+};
 
 struct TypedSetExpr {
     parser::Expr::Kind kind = parser::Expr::Kind::kLiteral;
@@ -70,6 +87,9 @@ struct TypedSetExpr {
     // kColumn: the position in the relation's schema (0 is the pk, which an
     // expression may read, BJ-R5).
     std::size_t column_no = 0;
+    // kCall with kFunction: which one, and ROUND/TRUNC's number of places.
+    SetFunction function = SetFunction::kNone;
+    std::uint32_t places = 0;
 
     std::unique_ptr<TypedSetExpr> lhs;  // kUnary's operand, kBinary's left
     std::unique_ptr<TypedSetExpr> rhs;
@@ -99,6 +119,7 @@ bool IsConstantSetExpression(const TypedSetExpr& expr);
 // Whether a NULL fits a `NOT NULL` target is the row's verdict, not this
 // function's. Pure: no page is read.
 StatusOr<parser::AstValue> EvaluateSetExpression(const TypedSetExpr& expr,
-                                                 const std::vector<parser::AstValue>& row);
+                                                 const std::vector<parser::AstValue>& row,
+                                                 const StatementContext& context);
 
 }  // namespace kds::exec

@@ -1429,7 +1429,7 @@ Status CompileAssignments(const catalog::TableAccess& access,
                             a.col_name + "' yet (BJ-Q10) (byte " +
                             std::to_string(a.expr->byte_offset) + ")");
                     }
-                } else if (auto folded = EvaluateSetExpression(*entry.expr, {}); folded.ok()) {
+                } else if (auto folded = EvaluateSetExpression(*entry.expr, {}, StatementContext{}); folded.ok()) {
                     entry.constant = std::move(folded.value());
                 }
             }
