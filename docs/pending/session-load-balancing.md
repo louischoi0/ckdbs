@@ -12,9 +12,8 @@ BA-Q12, BA-S16); `docs/conceptnotes/cn10-unbounded-sessions-bounded-transactions
 
 `[operator]` The operator started a server at `cores = 4` and observed only
 core 0 doing work, then asked whether a session's requests all go to the
-core it first landed on, and said: *"이걸 연결당 고정이 아닌 중간 로드
-밸런싱이 있어야 할거같은데"* - placement should not be fixed per connection;
-there should be load balancing in between.
+core it first landed on, and said: *"I think this should not be fixed per
+connection; there should be load balancing in between"*.
 
 ## 2. What the tree does
 

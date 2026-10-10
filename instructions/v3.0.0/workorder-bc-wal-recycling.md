@@ -2,7 +2,7 @@
 
 Written 2026-10-07 on `worktree-wal-recycling` from `6dc792c9`
 (`v2.7.0-627-g6dc792c9`), on the operator's
-*"main을 동기화하고 먼저 wal 회수 기능에 대한 작업 지시서를 작성해줘"*.
+*"sync main, and first write the work order for WAL recycling"*.
 
 **Opened 2026-10-07** (`raft-marks-2026-10-07.md` §2): BC-Q0..Q6 are
 marked as CLA proposed them, BC-Q2 on its condition, which BC-S1 decides.
@@ -673,7 +673,7 @@ SLOT_RETIRE at lsn 135168 on page 133: slot index out of range`.
   `SLOT_RETIRE` for a slot no record had placed.
 - **Bisection.** The failure stands with recycling, redo's floor and the fold
   floor all off. Small segments make rolls frequent enough to reach it.
-- **The fix: fail-stop**, on the operator's mark (*"(a)로 진행해줘"*, then
+- **The fix: fail-stop**, on the operator's mark (*"go ahead with (a)"*, then
   *"Fail-stop"*; `docs/spec/wal.md` §6-5):
   - a failed stream write, or a ring-full refusal once its drains are spent,
     stops the log, and every later write is refused until a restart;

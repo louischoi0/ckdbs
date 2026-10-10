@@ -1,9 +1,9 @@
 # Work order BA — parallelism against the PostgreSQL floor: twelve serialisation points
 
 Written 2026-10-02 on `worktree-parallelism-workorder` from `d3d90b5`
-(`v2.7.0-588-gd3d90b5`), on the operator's *"postgres와 비교해서 병렬성이
-부족한 부분에 대해 개선을 할거야. 원인을 분석한 항목 별로 개선점을 플래닝하고
-작업문서를 작성해야해"*. It plans one fix per cause, for every place where
+(`v2.7.0-588-gd3d90b5`), on the operator's *"we will improve where
+parallelism falls short compared with postgres. Plan an improvement for each
+cause analysed and write the work document"*. It plans one fix per cause, for every place where
 work on one core waits for work on another, and PostgreSQL 18.6's work does
 not. **Opened 2026-10-09** (below). It cuts no tag. Like AS and AZ it sits outside AR0 §8's chain: it depends on no open
 order and gates none.
@@ -1310,7 +1310,7 @@ acquire load per `WriteBack`.
 
 ### BA-S1c — built 2026-10-06
 
-Started on the operator's word (*"BA-S1c 진행해줘"*, 2026-10-06) and built
+Started on the operator's word (*"go ahead with BA-S1c"*, 2026-10-06) and built
 on `worktree-ba-s1c-strict-marker-snapshot` from `dfabae1`. BA-R1c is
 built: a session's statement never misses that session's own acknowledged
 commit. **BA-Q3 is not marked by it**; the other-session remainder stays in

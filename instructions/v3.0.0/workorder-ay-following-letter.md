@@ -726,8 +726,9 @@ Overhead not measured; measured at the milestone's close (`CLAUDE.md` step
 ### AY-S10 — struck 2026-09-30: the split relation retired
 
 On `worktree-retire-split-relations` from `7c51f82`, on the operator's
-*"split relation 이라는 개념을 아예 폐기 해야해"* and *"하위 호환성은 고려하지
-않아도 돼. 나는 해당 테이블을 제거했으면 좋겠어"* (`raft-marks-2026-09-30.md`
+*"the concept of a split relation must be discarded altogether"* and
+*"backward compatibility need not be considered. I would like that table
+removed"* (`raft-marks-2026-09-30.md`
 §9). It replaces AY-S10 and answers AY-Q5 and AY-Q10: with no split relation
 there is no gate to lift and no E10 subject.
 

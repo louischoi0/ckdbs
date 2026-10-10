@@ -1,20 +1,16 @@
 # Work order BH — PURGE: an explicit statement frees a deleted key, and K1 gains one named exception
 
 Written 2026-10-08 on `worktree-bh-purge-key` from `0446b3b0`
-(`v2.7.0-691-g0446b3b0`), on the operator's words, verbatim:
+(`v2.7.0-691-g0446b3b0`), on the operator's words:
 
-- **W1:** *"아냐 Invariant에 pk 값으로 오류가 나는 경우는 중복되거나 2^40-1이
-  모두 소진되었을때 뿐이니까 이미 삭제된 pk키값으로 삽입하는건 허용되어야해"* -
-  no: under the invariant a pk is refused only as a duplicate or once
-  2^40 - 1 is exhausted, so an insert naming an already-deleted pk must be
-  admitted.
-- **W2:** *"그러면 규칙을 폐기하지 말고 pk 정보 자체를 purge하는 다른 api를
-  작성하는것은 어떄? (delete와 구분 되는 구문이고 이 경우 재삽입이 가능함)"* -
-  then, instead of discarding the rule, how about another API that purges the
-  pk information itself (a statement distinct from DELETE, after which
-  re-insertion is possible)?
-- **W3:** *"제안 대로 작업 명세와 지시서를 작성해줘"* - write the
-  specification and the work order as proposed.
+- **W1:** *"no: under the invariant, a pk value fails only when it
+  is a duplicate or when all of 2^40-1 is exhausted, so inserting with an
+  already-deleted pk key value must be allowed"*.
+- **W2:** *"then, instead of discarding the rule, how about writing
+  another API that purges the pk information itself? (a statement distinct
+  from DELETE, and in this case re-insertion is possible)"*
+- **W3:** *"write the work specification and the work order as
+  proposed"*.
 
 **What the words settle, and what they leave open.**
 

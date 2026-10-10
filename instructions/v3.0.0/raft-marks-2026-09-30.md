@@ -2,8 +2,8 @@
 
 **The operator's words of 2026-09-30**, recorded by CLA on
 `ay-s9-assertion-every-chain` from `b5465a9` (`v2.7.0-502-gb5465a9`; the
-v3.0.0 tag is not cut - `raft-marks-2026-09-26.md` §4, Q3). All of it is
-**verbatim**: the words as typed in the session.
+v3.0.0 tag is not cut - `raft-marks-2026-09-26.md` §4, Q3). Every word is
+recorded **in English**, translated where it was typed in Korean.
 
 ---
 
@@ -115,9 +115,9 @@ is always heap.
 
 | | |
 |---|---|
-| **Word** | *"split relation 이라는 개념을 아예 폐기 해야해"*; and, to the question CLA put on what becomes of a volume that already carries ranges - *"하위 호환성은 고려하지 않아도 돼. 나는 해당 테이블을 제거했으면 좋겠어"* |
+| **Word** | *"the concept of a split relation must be discarded altogether"*; and, to the question CLA put on what becomes of a volume that already carries ranges - *"backward compatibility need not be considered. I would like that table removed"* |
 | **Mark** | **The split relation is retired as a concept, and `sys.ranges` is removed.** A relation is one structure headed by `sys.tables.desc_page_id`, always: the range directory, its row and codec, the resolver, the per-range chain routing and `RefuseAuxiliaryOnSplitRelation` are deleted. No compatibility is kept |
-| **Reading** | *"해당 테이블"* read as `sys.ranges`, the table the question named. *No compatibility* read as D14's rule rather than as silence: the superblock version moves 17 -> 18, so a volume from before is refused at mount instead of being read with every chain but its first missing. Page 15 and oid 133 are left unused, not reissued - moving `kCatalogOverflowFirst` back to 15 buys one page |
+| **Reading** | *"that table"* read as `sys.ranges`, the table the question named. *No compatibility* read as D14's rule rather than as silence: the superblock version moves 17 -> 18, so a volume from before is refused at mount instead of being read with every chain but its first missing. Page 15 and oid 133 are left unused, not reissued - moving `kCatalogOverflowFirst` back to 15 buys one page |
 | **Answers** | AY-S10 (struck: no gate is left to lift), AY-Q5 and AY-Q10 (no subject); D7's last gate, which goes with the function |
 | **Does not settle** | Heap relations themselves - SUS-1 stands, and an existing heap relation still mounts and serves; any other stage of AY |
 | **Recorded at** | `workorder-ay-following-letter.md` §4 and §6, `crosscore.md`, `CLAUDE.md` |
@@ -165,7 +165,7 @@ with AY-S6 on `main` at `24cf703`.
 | | |
 |---|---|
 | **Question** | AY-Q6: an `ASSERT_SNAPSHOT` written before AY-S8 carries `reserved == 0`, which AY-R7's `chunk_index:u16 \| chunk_count:u16` can tell apart (a new record's count is at least 1). The order offered (A) read it by today's rule - the two under-counts kept for an old log's first mount - or (B) not a base, the assertion unenforcing and its relation's writes refused. CLA put a third, which the order did not weigh at `58198cb`: `Decode` refuses any superblock version but its own (`superblock.cpp:69`), and since `62a6cb3` moved it 17 -> 18 a pre-AY log lives only on a v18 volume made between `62a6cb3` and AY-S8's landing; **(C)** moves the superblock 18 -> 19 in AY-S8, and no pre-AY log can be read at all |
-| **Word** | *"AY-Q6 (C)로 마킹해줘"* |
+| **Word** | *"mark AY-Q6 as (C)"* |
 | **Mark** | **AY-Q6 (C)**: AY-S8 moves `kSuperBlockVersion` 18 -> 19, so a volume whose log may hold a snapshot with no chunk count is refused at mount (D14's rule, as §9 applied it: no compatibility kept). Neither (A) nor (B) is built; recovery has no pre-AY arm, and an `ASSERT_SNAPSHOT` whose `chunk_count` is 0 is `Corruption` |
 | **Reading** | The cost is every v18 volume - development volumes, made since `62a6cb3` - which must be recreated. The survey's "room for the count with no format bump" (§1.3 of the order) is given up: the word still carries the count, and the version is what keeps an old log from being read. |
 | **Does not settle** | AY-Q7 (a run torn at scan end), and so AY-S8's start; AY-Q11; AY-S11 |
@@ -179,7 +179,7 @@ with AY-Q6's mark on `main` at `e7eba85`.
 | | |
 |---|---|
 | **Question** | AY-Q7: after the scan, `close_bases` (`assertion_recover.cpp:292-296`) adopts every base still open, so a run a crash cut after `k` of its `n` chunks is taken as whole and its missing groups under-count. With AY-R7's count the cut is visible. (A) keep adopting it; (B) the order's proposal, not a base: the assertion is unrecovered, `NoteUnenforceable` refuses its relation's writes on every core. CLA's reading, not run: a torn run is adopted only when it is the assertion's first run in range - a completed checkpoint's run is always in range (the scan starts at `redo_start_lsn`, at or below core 0's `CHECKPOINT_BEGIN`, and the anchor moves only at `Complete()`), and `CREATE ASSERTION`'s snapshot precedes its publish in the one stream - so (B) fires only where one of those has already failed |
-| **Word** | *"AY-Q7 (B)로 마킹해줘"* |
+| **Word** | *"mark AY-Q7 as (B)"* |
 | **Mark** | **AY-Q7 (B)**: a run with fewer chunks than its `chunk_count` when the scan ends is not a base. The assertion is not recovered, its relation's writes are refused `CannotEnforce` on every core, and the mount reports it (`assertions_unrecovered`, the recovery log's error). A torn run after a whole base of the same assertion is still skipped as a later checkpoint's |
 | **Reading** | The refusal lasts until `DROP ASSERTION` and `CREATE ASSERTION`: no checkpoint snapshots an unenforceable assertion (`SnapshotLocked` walks `live_` only, `assertion_check.cpp:118-128`), so no later mount finds a base, and `Evict` clears the record. The order's AY-Q6 row said "until its next checkpoint" of the same state; that was wrong, and is corrected there. **The Question's "only where one of those has already failed" misses one path in normal operation** (the mark's review, source read at `e7eba85`, not run): a peer's `CREATE ASSERTION` logs its publish run, and is adopted into `live_` only after `CreateAssertion` returns (`command_dispatcher.cpp:2834`); a core-0 checkpoint whose `CHECKPOINT_BEGIN` and snapshot fall between the two is in range and whole but does not carry the assertion, and once every page dirtied before the publish run is clean at that `BEGIN` - the redo start ignores active transactions (`RedoStartFrom`, `analysis.cpp:23-31`) - the anchor passes the publish run. The assertion's first run in range is then the next core-0 checkpoint's, torn if a crash cuts it; (B) fails closed there too. With no torn run the same path leaves the assertion no base at all - unenforcing after an ordinary restart, a defect of its own and not AY-Q7's (`docs/inflight/bugs/a-peers-create-assertion-can-miss-every-snapshot-in-the-mounts-scan.md`) |
 | **Does not settle** | AY-Q11; AY-S8's start, which waits for the word; the no-base path the Reading names; AY-S11 |
@@ -205,8 +205,8 @@ Recorded on `worktree-az-ay-carry-forward-order` at `e8bacf7`
 
 | | |
 |---|---|
-| **Word** | *"CLA 제안대로 진행하고 main에 push해줘"* |
+| **Word** | *"proceed as CLA proposed and push to main"* |
 | **Mark** | **AZ-Q0 as proposed**: AY §7's seven items open as one letter, **AZ**. **AZ-Q1 as proposed**: adopt the assertion and log its publish run under one hold of the registry latch (AZ-R2). **AZ-Q2 as proposed**: an assertion write the snapshot cannot carry is refused at admission, `NotImplemented`, and a checkpoint that meets such a cabin anyway completes with the assertion evicted and unenforceable (AZ-R3). **AZ-Q3 as proposed**: a failed check releases its own tuple `S`, never the `IS` and never an `S` held before the ask (AZ-R5), so AZ-S5 exists. **AZ-Q4 as proposed**: the decide's cost is accepted as priced, so AZ-S6 is struck. **AZ-Q5 as proposed**: AR1's order is AP first, on AR1-V2's remaining ground |
-| **Reading** | "진행" read as the marks: every item takes CLA's proposal, and the order is landed on `main`. It is not read as a word to start AZ-S1..S7. Each stage waits for its own word, as §3 of the order says; AY's close (§15) was started by a word that named the close |
+| **Reading** | "proceed" read as the marks: every item takes CLA's proposal, and the order is landed on `main`. It is not read as a word to start AZ-S1..S7. Each stage waits for its own word, as §3 of the order says; AY's close (§15) was started by a word that named the close |
 | **Does not settle** | Any AZ stage's start; AQ's and AR's letters, which AP's order unblocks but does not open; the v3.0.0 tag, which waits on M4 |
 | **Recorded at** | `workorder-az-ay-carry-forward.md` header, §0, §2, §3, §4 and §6, `ar1-architecture-revision-cabin-function.md` (status line), `index.md` |

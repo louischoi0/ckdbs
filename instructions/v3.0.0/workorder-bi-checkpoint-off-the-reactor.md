@@ -2,21 +2,22 @@
 
 Written 2026-10-08 on `worktree-checkpoint-reactor-workorder` from
 `65a28553` (`v2.7.0-703-g65a28553`). It follows the operator's words of
-2026-10-08, verbatim (`raft-marks-2026-10-08.md` §2-§5):
+2026-10-08, translated into English (`raft-marks-2026-10-08.md` §2-§5):
 
-- **W0:** *"작업 지시서 하나를 새로 작성해 push하라. 주제: checkpoint가
-  코어의 reactor를 동기적으로 막는 문제를 없앤다."*
-- **W1:** *"(1) Step 하나를 reactor task 하나로 실행해 step 사이에
-  yield한다."*
-- **W2:** *"(2) data file sync와 EnsureDurable은 writer/I/O thread로 넘기고,
-  호출한 task는 park한다(RequestSyncNow와 같은 모양)."*
-- **W3:** *"S1은 측정만 한다. checkpoint 구간의 reactor 정지 시간과 같은
-  코어 다른 세션의 p99를 build-release로 잰다. 코드 변경은 계측뿐이다."*
-- **W4:** *"세션 배치(BA-R13, CN-10 §3.4)와 core 0 commit drain의 inline
-  fdatasync는 범위에서 뺀다."*
-- **W5:** *"기존 작업 지시서와 같은 구조를 따르고, 모든 주장에
-  [source-read]/[design]/[measured] 태그를 붙인다."* and *"Q 항목은 전부
-  미마킹 상태로 둔다."*
+- **W0:** *"Write one new work order and push it. Subject: remove the
+  problem of the checkpoint synchronously blocking a core's reactor."*
+- **W1:** *"(1) Run one Step as one reactor task, yielding between
+  steps."*
+- **W2:** *"(2) Hand the data file sync and EnsureDurable to the writer/I/O
+  thread, and park the calling task (the same shape as RequestSyncNow)."*
+- **W3:** *"S1 only measures. It measures, in build-release, the reactor's
+  stall time during a checkpoint and the p99 of other sessions on the same
+  core. The only code change is instrumentation."*
+- **W4:** *"Session placement (BA-R13, CN-10 §3.4) and the inline
+  fdatasync of core 0's commit drain are out of scope."*
+- **W5:** *"Follow the same structure as the existing work orders, and tag
+  every claim [source-read]/[design]/[measured]."* and *"Leave every Q item
+  unmarked."*
 
 **Written, not opened.** W1 and W2 are the operator's decisions, and they
 stand here as BI-R1 and BI-R2. Every BI-Q item is unmarked (W5), BI-Q0
@@ -497,7 +498,7 @@ CLA's, and BI-Q0 opens them.
   - a failure fails the step or the publish, with the run left in
     progress, as a failed step is today (`checkpointer.cpp:214-226`);
   - BI-Q3 decides what a failure does beyond that.
-- `[design]` **"RequestSyncNow와 같은 모양"** is read as two things: a
+- `[design]` **"the same shape as RequestSyncNow"** is read as two things: a
   request that does no I/O on the caller's thread and returns at once, and
   a park on a predicate that the thread's progress satisfies. The commit's
   park (`command_dispatcher.cpp:755-773`) is the template, including the

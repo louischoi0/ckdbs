@@ -3,7 +3,7 @@
 **The operator's words of 2026-10-02**, recorded by CLA on
 `worktree-az-q3-release-any-failed-check` from `2e8d213`
 (`v2.7.0-571-g2e8d213`; the v3.0.0 tag is not cut - `raft-marks-2026-09-26.md`
-§4, Q3). All of it is **verbatim**: the words as typed in the session.
+§4, Q3). Every word is recorded **in English**, translated where it was typed in Korean.
 
 ---
 
@@ -39,7 +39,7 @@
 
 | | |
 |---|---|
-| **Word** | *"CLA 제안대로 진행하고 main에 push해줘"* |
+| **Word** | *"proceed as CLA proposed and push to main"* |
 | **Mark** | AP-Q0..Q5 are marked as CLA proposed them (`workorder-ap-function-catalog-fetch-id.md` §4). **AP-Q0:** AP opens, and the trail's re-key to `fetch_id` is AP's, not AR's "Waystone re-key". **AP-Q1:** the first functions are `DATE(timestamp) → date` (`kImmutable`, with a cover) and `NOW()` (`kStable`), on the column side of a WHERE conjunct only; no `kVolatileRow` function ships. **AP-Q2 (b):** the existing row is keyed by `fetch_id` and `kFingerprintVersion` moves 1 → 2. **AP-Q3:** `InvalidArgument` for a name not in the catalog. **AP-Q4:** the wire's `pattern_id` stays the statement's. **AP-Q5:** D1's fold is deferred to AQ |
 | **Amends** | AR1 D6 ("`SysPatternRow` gains `fetch_id`") and AR1-3's "`kFingerprintVersion` does not move", both by AP-Q2 (b); AR1-2's D1 fold is deferred to AQ by AP-Q5. The `pattern_id` values do not move |
 | **Does not settle** | any AP stage's start - each waits for its own word; AQ's and AR's letters; the v3.0.0 tag, which waits on M4 |
@@ -69,7 +69,7 @@
 
 | | |
 |---|---|
-| **Word** | *"push 해줘"*, then *"BA-S1 진행해줘"*, then *"진행해줘"* |
+| **Word** | *"push it"*, then *"go ahead with BA-S1"*, then *"go ahead"* |
 | **Mark** | BA's order lands on `main` at `e7617b2`: `workorder-ba-parallelism.md` with BA-S0 and its review, and the three bug entries. The first push passed the gate (3,091 tests) but was refused because `main` had moved during the run. The merge with AP-S4 passed the gate again (3,108 tests) and went in. **BA-S1 starts**: the fix for defect C, the peer-thread sync |
 | **Reading** | BA-S1 is one of the stages BA-Q1 exempts from the census. A defect's fix needs no other §4 item, so starting it marks none of them |
 | **Does not settle** | BA-Q0..Q14, the letter included; any other BA stage's start - each waits for its own word |

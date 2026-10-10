@@ -3,10 +3,10 @@
 Written 2026-10-07 on `worktree-pool-budget-required` from `e352eac0`
 (`v2.7.0-657-ge352eac0`). It follows the operator's words, in order:
 
-- *"buffer_pool_frames=0은 오류. 이 값이 최대 값이 됨"*
-- for the missing key, *"부팅 거부 (필수 키)"*
-- *"결정만 기록"*, which `e352eac0` did
-- *"작업 지시서를 작성하고 handoff를 준비해줘"*
+- *"buffer_pool_frames=0 is an error. This value becomes the maximum"*
+- for the missing key, *"refuse boot (required key)"*
+- *"record the decision only"*, which `e352eac0` did
+- *"write the work order and prepare the handoff"*
 - **W1:** *"push it, and mark BE-Q0..Q10 as proposed"*
 
 **Opened 2026-10-07 by W1** (`raft-marks-2026-10-07.md` §16), and **every
