@@ -17,6 +17,9 @@ void* operator new(std::size_t size) {
     if (kds::test_support::g_fail_after != 0 &&
         ++kds::test_support::g_fail_seen == kds::test_support::g_fail_after) {
         kds::test_support::g_fail_after = 0;  // once
+        // As the standard's allocation loop does: the new-handler first, and
+        // only without one is `std::bad_alloc` thrown.
+        if (const std::new_handler handler = std::get_new_handler()) handler();
         throw std::bad_alloc();
     }
     void* p = std::malloc(size == 0 ? 1 : size);

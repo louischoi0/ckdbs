@@ -128,18 +128,9 @@ public:
 
         void return_value(Status s) { result = std::move(s); }
 
-        // rules.md forbids exceptions in engine logic, but the standard
-        // library throws `std::bad_alloc` from every container the engine
-        // grows and nothing catches it. **An exception that reaches here
-        // stops the process.** This used to do nothing, and a statement whose
-        // body threw then reached `final_suspend` as done with its result
-        // still `Status::OK()` and its outcome never assigned: it was
-        // reported to the client as a success - an aggregated `SELECT` with
-        // no rows, a `COMMIT` that never ran as one that had. Nothing here can
-        // say what the statement left behind (a page written and its record
-        // not yet appended, a hold released by unwinding mid-protocol), so the
-        // answer is the log's: stop, and let the mount restore it - as the
-        // engine's other fail-stops do (`std::abort` on a failed log write).
+        // **An exception that escapes the body stops the process**
+        // (`docs/spec/sched.md` §3): returning here would complete the
+        // statement as `Status::OK()`.
         [[noreturn]] void unhandled_exception() noexcept { StopOnEscapedException(); }
     };
 

@@ -1,21 +1,6 @@
-// An allocation failure inside a statement must stop the process, not
-// complete the statement as OK.
-//
-// The standard library throws `std::bad_alloc` from every container the
-// engine grows, exceptions are enabled in the build, and nothing catches
-// them. A statement on the default port runs inside a `sched::Coro`, and
-// `Coro::promise_type::unhandled_exception()` used to do nothing: the throw
-// unwound to the coroutine body, was swallowed, and the coroutine reached
-// `final_suspend` as done with its result still the default `Status::OK()`
-// and the statement's outcome never assigned. A statement that threw
-// therefore answered as a success - an aggregated `SELECT` with no rows, a
-// `COMMIT` that never ran reported as one that had.
-//
-// What a write leaves behind when interrupted between a page write and its
-// record is not something to continue from, so the rule is one for every
-// statement: **an exception that escapes a coroutine stops the process**, and
-// the log restores what the stop interrupted. The cells run in death tests,
-// since the process is not left usable.
+// An allocation failure inside a statement stops the process; it does not
+// complete the statement as OK (`docs/spec/sched.md` §3). The cells run in
+// death tests, since the process is not left usable.
 
 #include <cstddef>
 #include <cstdlib>
@@ -26,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "alloc_counter.hpp"
+#include "kds/base/fail_stop.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -43,11 +29,22 @@ sched::Coro ThrowsBadAlloc() {
     co_return Status::OK();
 }
 
+// Runs a coroutine that never parks; a park would be a hang, so it is bounded.
 void Drive(sched::Coro& c) {
-    while (!c.done()) c.TryResumeDeepest();
+    for (int turns = 0; !c.done(); ++turns) {
+        ASSERT_LT(turns, 1'000'000) << "the coroutine parked on a wait nothing delivers";
+        c.TryResumeDeepest();
+    }
 }
 
-TEST(BadAllocDeathTest, AnExceptionEscapingACoroutineStopsTheProcess) {
+class BadAllocDeathTest : public ::testing::Test {
+protected:
+    // Death tests fork; with threads alive from other tests in the binary only
+    // the re-exec style is safe.
+    void SetUp() override { GTEST_FLAG_SET(death_test_style, "threadsafe"); }
+};
+
+TEST_F(BadAllocDeathTest, AnExceptionEscapingACoroutineStopsTheProcess) {
     EXPECT_DEATH(
         {
             sched::Coro c = ThrowsBadAlloc();
@@ -56,9 +53,10 @@ TEST(BadAllocDeathTest, AnExceptionEscapingACoroutineStopsTheProcess) {
         "exception escaped a coroutine");
 }
 
-class BadAllocStatementTest : public ::testing::Test {
+class BadAllocStatementTest : public BadAllocDeathTest {
 protected:
     void SetUp() override {
+        BadAllocDeathTest::SetUp();
         auto boot = bootstrap::BootstrapDatabase(store_, 7000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
@@ -82,35 +80,57 @@ protected:
         return out;
     }
 
+    // The statement's allocations once it is warm (compiled, registered): what
+    // the failing run, which is also a second run, will make.
+    std::size_t AllocationsOf(const std::string& sql) {
+        RunAsync(sql);
+        CountAllocations counting;
+        const DispatchOutcome whole = RunAsync(sql);
+        EXPECT_NE(whole.response.find("count(*)"), std::string::npos) << whole.response;
+        return counting.count();
+    }
+
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-TEST_F(BadAllocStatementTest, AnAggregatedSelectThatMeetsAFailedAllocationDoesNotAnswerOk) {
+TEST_F(BadAllocStatementTest, AnAggregatedSelectThatMeetsAFailedAllocationStopsAtTheAllocation) {
     const std::string sql = "SELECT k, COUNT(*) FROM t GROUP BY k";
-    std::size_t total = 0;
-    {
-        CountAllocations counting;
-        const DispatchOutcome whole = RunAsync(sql);
-        total = counting.count();
-        ASSERT_NE(whole.response.find("count(*)"), std::string::npos) << whole.response;
-    }
+    const std::size_t total = AllocationsOf(sql);
     ASSERT_GT(total, 8u);
 
+    // A server's `main` installs the new-handler: the stop is at the failing
+    // allocation, before `std::bad_alloc` is thrown and anything unwinds.
     // Inside the statement, past the coroutine's own frame, at three depths.
     for (const std::size_t at : {total / 4, total / 2, (total * 3) / 4}) {
         EXPECT_DEATH(
             {
+                base::InstallAllocationFailStop();
                 FailNthAllocation fail(at);
-                const DispatchOutcome out = RunAsync(sql);
-                // Reaching here is the defect: the statement came back, as a
-                // success or an empty answer.
-                std::exit(out.response.empty() ? 3 : 4);
+                RunAsync(sql);
+                // Reaching here is the defect: the statement came back.
+                std::exit(1);
             },
-            "exception escaped a coroutine")
+            "allocation failed; stopping")
             << "allocation " << at << " of " << total;
     }
+}
+
+TEST_F(BadAllocStatementTest, WithNoNewHandlerTheThrownBadAllocStillStopsAtTheCoroutine) {
+    const std::string sql = "SELECT k, COUNT(*) FROM t GROUP BY k";
+    const std::size_t total = AllocationsOf(sql);
+    ASSERT_GT(total, 8u);
+
+    // The backstop: a process that never installed the handler, or an
+    // allocation that throws without reaching it.
+    EXPECT_DEATH(
+        {
+            FailNthAllocation fail(total / 2);
+            RunAsync(sql);
+            std::exit(1);
+        },
+        "exception escaped a coroutine");
 }
 
 }  // namespace
