@@ -38,7 +38,9 @@ const parser::AstValue& ValueAt(std::span<const parser::AstValue> values,
 // departed from a group no insert had used. Through the codec's one coercion
 // (`NoteCabinWrite` does the same for Cabins), so every path keys on the
 // decoded kind. A value that does not coerce keeps its written form: the row
-// is refused at encode, and nothing reserved under it survives that.
+// is refused at encode, and nothing reserved under it survives that (an
+// INSERT gives its hold back; an UPDATE's reservation is compensated by the
+// statement's abort).
 std::string KeyFor(const LiveAssertion& a, std::span<const parser::AstValue> values,
                    std::size_t first_col_pos) {
     std::vector<parser::AstValue> group(a.group_cols.size());

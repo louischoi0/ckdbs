@@ -360,6 +360,15 @@ fire-and-forget message to forget the directory until AT-S5d.
 On a checked write (per §4.2), executed inline in the writing statement:
 
 1. Compute the group key from the row; hash into the group directory.
+   **The key is built from each BY value coerced to its column's decoded
+   kind** (`CoerceLiteralToColumn`), so an `INSERT`'s literal (a `date` or
+   `timestamp` as a string, a `decimal` as text), a `SET` literal and a
+   decoded row all key one stored value the same way; the build's backfill
+   keys from decoded rows. Group keys are logged as bytes and replay never
+   recomputes one, so an assertion on a `date`, `timestamp` or `decimal`
+   column that reserved under the written form before this rule holds
+   groups no later write reaches - `DROP` and `CREATE ASSERTION` rebuilds
+   them. No other BY type is affected, and no format changed.
 2. **Admission check:** would `count + Δcount` / `sum + Δsum`, with every
    held contribution to the group counted, exceed the bound? (Checked int64
    arithmetic; overflow ⇒ statement error, AG3.)
