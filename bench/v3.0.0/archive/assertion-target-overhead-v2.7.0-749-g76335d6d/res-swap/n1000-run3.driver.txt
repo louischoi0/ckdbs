@@ -1,0 +1,13 @@
+== B rows=1000  create p50=638.7 drop p50=118.9
+  insert-assert-existing   ops=16000 p50=77.8 p99=110.3 err=0
+  insert-none-existing     ops=16000 p50=72.8 p99=103.3 err=0
+  insert-none-again        ops=16000 p50=72.9 p99=103.2 err=0
+  select                   ops=16000 p50=98.0 p99=132.8 err=0
+  ping                     ops=16000 p50=71.7 p99=93.5 err=0
+== A rows=1000  create p50=636.0 drop p50=136.1
+  insert-assert-existing   ops=16000 p50=77.1 p99=111.4 err=0
+  insert-none-existing     ops=16000 p50=72.8 p99=105.0 err=0
+  insert-none-again        ops=16000 p50=72.8 p99=101.3 err=0
+  select                   ops=16000 p50=97.0 p99=130.5 err=0
+  ping                     ops=16000 p50=71.3 p99=92.6 err=0
+verify_ok True
