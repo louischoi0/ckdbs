@@ -1100,3 +1100,63 @@ need not include `set_expr.hpp` (a header split for one struct); a
 answers (the parked write is read through a const reference and cleared two
 lines later; the vector is a handful of values); the sink keeping only the
 type oid and modifier (it keeps the field it was given).
+
+### BJ-S8 — the close (2026-10-10)
+
+On `worktree-bj-expression-update`. The restatements of §1.6 are done in the
+same stage: `types.md` §3.2, §3.2b and TY8, `parser-v2.md` I10, `foreign-keys.md`
+§2a, `manual/sql/sql.md`'s UPDATE, `client-manual.md`, `CLAUDE.md`'s row,
+`known-gaps.md`'s BJ section, `raft-marks-2026-10-10.md` §4 and the index row.
+
+**The measurement** (§5, `ck-tester`, `build-release`, interleaved A/B, relaxed
+durability, `cores` 1 and 2, 16 runs per cell, the host busy with other
+sessions' builds throughout and every discarded run kept in the archive):
+- **A is a real commit, not a constructed one**: `e5a7e1b7`
+  (`v2.7.0-736-ge5a7e1b7`, BA's close). `080cd555` is its ancestor, so "BJ's base
+  plus BA" is `e5a7e1b7`; between A and BJ's close `src` and `include` differ in
+  BJ's 18 files only.
+- **First close, B = `8e37baf4`** (`bench/v3.0.0/results-bj-close-v2.7.0-756-g8e37baf4.md`):
+  **a point `UPDATE ... SET v = <literal> WHERE id = k` was 1.6-1.9 µs slower
+  (+3.0 to +3.7 % at p50)**, in all six cells, a fixed price per statement,
+  against §5's "the expectation is flat". `INSERT`/`DELETE`/`SELECT` by pk and
+  the `SHOW META` control did not move. A stage bisection put about 0.65-0.95 µs
+  of it in by the parser and typer stages (BJ-S2/S3) and about 0.7 µs more with
+  BJ-S4's evaluator and row loop (intervals 0.6-1.7 µs wide: a trend).
+- **The remedy, `e458e272`** (`v2.7.0-757-ge458e272`; BJ-R7 gates nothing, so this
+  is the go-ahead skill's "propose a remedy within the milestone, apply it, measure
+  again", one attempt): a SET value's leading literal is read ahead of the
+  expression chain (a bare literal no longer pays eleven grammar levels and a
+  heap node), and the subquery resolver - a `std::function` whose capture was a
+  heap allocation per UPDATE - is built only for a statement with an expression.
+  **Re-measured** (`results-bj-close-v2.7.0-757-ge458e272.md`): the point literal
+  is **+0.25 to +0.70 µs (+0.5 to +1.3 %)** over A, the two-assignment form
+  +0.65 to +0.95 µs, and a B-against-B' pair recovered 1.1-1.35 µs. **What
+  remains is 16-41 % of the original and is not attributed**: no stage build
+  separates the parser change from the `UpdateInner` change, and `perf` is
+  locked out. A second attempt was not made.
+- **The every-row literal `UPDATE`** is +0.4 to +2.0 % at p50 (+6 to +19 ns a
+  row) in both files; a per-statement remedy does not touch it, and no cell
+  resolves it against its own noise floor.
+- **The expression's price** (on B'): `SET v = v + 1` is +2.9 µs a point
+  statement over a literal, the swap +2.4, a three-way `CASE` +9.15; 108-130 ns
+  more per row for `v + 1` over an every-row statement; `SET v = (SELECT
+  COUNT(*) FROM t)` costs one walk of the relation per statement. **What BJ saves
+  a client**: `SELECT v` then `UPDATE` is 124-128 µs at p50, one `UPDATE ... SET v
+  = v + 1` is 55-56 µs, **69-72 µs (56 %) less, 2.3 times the operations per
+  second**.
+- **Not run**: 200 rows at B', `cores = 2` at 10,000 rows, `strict` and `group`,
+  more than two cores, multi-client contention, a PostgreSQL floor, other types
+  and indexed, foreign-key or Cabin-managed target columns. **The suite was not
+  executed by the measurement.**
+- **A finding that is not BJ's**: a 0.2-0.45 s carve stall hits every server in
+  every run, A and B alike, and lands in the `INSERT` arm more often in B (13 of
+  16 runs against 3 of 16 at 1,000 rows) for a reason the file could not
+  establish; it is BA-S13's area (`known-gaps.md`, "Carve and checkpoint stalls").
+
+**The suite at the closing code** (`e458e272`): 3492 of 3493 passed under
+`ctest -j8`; the one failure, `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`,
+is a `TXN_CONFLICT retryable=1` from a btree descent that the cell does not retry,
+reproduced alone on the same loaded host (2 of 5, 1 of 8) and passing on a quiet
+one; BJ does not touch `INSERT` or the descent. `IdAllocationAcrossCores` failed
+under `-j8` in about half the plain runs and never alone (memory
+`suite-parallel-ctest`); the pre-push gate runs ctest serially.
